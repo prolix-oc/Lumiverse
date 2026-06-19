@@ -1,3 +1,19 @@
+// ── Transpiler cache pinning ────────────────────────────────────────────────
+// Bun mmap's its transpiler cache files. If the cache lives in /tmp and gets
+// cleaned by systemd-tmpfiles / tmpwatch while the process is running, the
+// stale mmap triggers SIGBUS. Tmux can also freeze the environment so the
+// cache path inherits a stale or empty value. Pin it to a deterministic
+// project-local directory before any other code runs.
+import { resolve as _resolve } from "path";
+if (!("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env)) {
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = _resolve(
+    import.meta.dir,
+    "..",
+    "data",
+    ".bun-transpiler-cache",
+  );
+}
+
 // ── Bun version gate ────────────────────────────────────────────────────────
 // CompressionStream (Brotli) and other APIs we depend on require Bun >= 1.3.3.
 const [_bunMaj = 0, _bunMin = 0, _bunPat = 0] = Bun.version.split(".").map(Number);

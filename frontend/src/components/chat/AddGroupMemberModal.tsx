@@ -8,7 +8,7 @@ import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import type { CharacterSummary } from '@/types/api'
-import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
+import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { toast } from '@/lib/toast'
 import { Spinner } from '@/components/shared/Spinner'
 import Pagination from '@/components/shared/Pagination'
@@ -181,9 +181,7 @@ export default function AddGroupMemberModal() {
               <div className={styles.charGrid}>
                 {pageChars.map((char) => {
                   const isAdding = addingId === char.id
-                  const avatarUrl = char.image_id
-                    ? getCharacterAvatarThumbUrlById(char.id, char.image_id)
-                    : null
+                  const avatarUrl = char.image_id ? getCharacterAvatarThumbUrl(char) : null
                   return (
                     <button
                       key={char.id}

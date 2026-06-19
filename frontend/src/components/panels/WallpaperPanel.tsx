@@ -5,6 +5,7 @@ import { useStore } from '@/store'
 import { imagesApi } from '@/api/images'
 import { chatsApi } from '@/api/chats'
 import { FormField, Select, EditorSection } from '@/components/shared/FormComponents'
+import { Toggle } from '@/components/shared/Toggle'
 import { flushSettingsNow } from '@/store/slices/settings'
 import type { WallpaperRef } from '@/types/store'
 import styles from './WallpaperPanel.module.css'
@@ -24,6 +25,8 @@ export default function WallpaperPanel() {
   const { t } = useTranslation('panels')
   const wallpaper = useStore((s) => s.wallpaper)
   const setWallpaper = useStore((s) => s.setWallpaper)
+  const useCharacterBackground = useStore((s) => s.useCharacterBackground)
+  const setSetting = useStore((s) => s.setSetting)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
@@ -118,6 +121,22 @@ export default function WallpaperPanel() {
         style={{ display: 'none' }}
         onChange={onFileSelected}
       />
+
+      {/* Character avatar background toggle */}
+      <div className={styles.actions} style={{ alignItems: 'center' }}>
+        <Toggle.Switch
+          checked={useCharacterBackground}
+          onChange={(v) => setSetting('useCharacterBackground', v)}
+        />
+        <span style={{ fontSize: 'calc(13px * var(--lumiverse-font-scale, 1))' }}>
+          Use Character Avatar as Background
+        </span>
+      </div>
+      <div className={styles.info}>
+        Automatically uses the character's art as the chat background when no wallpaper is set.
+      </div>
+
+      <hr className={styles.divider} />
 
       {/* Global wallpaper section */}
       <span className={styles.scopeLabel}>{t('wallpaperPanel.globalWallpaper')}</span>
@@ -215,6 +234,17 @@ export default function WallpaperPanel() {
             step={5}
             value={Math.round((wallpaper.opacity ?? 0.3) * 100)}
             onChange={(e) => setWallpaper({ opacity: Number(e.target.value) / 100 })}
+          />
+        </FormField>
+        <FormField label={`Blur (${wallpaper.blur ?? 0}px)`}>
+          <input
+            className={styles.slider}
+            type="range"
+            min={0}
+            max={20}
+            step={1}
+            value={wallpaper.blur ?? 0}
+            onChange={(e) => setWallpaper({ blur: Number(e.target.value) })}
           />
         </FormField>
         <FormField label={t('wallpaperPanel.fitMode')}>

@@ -22,6 +22,15 @@ export function translateSettingsField(
   return resolve('settings', `tabs.${tabId}.${field}`, fallback)
 }
 
+/**
+ * Resolve a settings section title by its existing i18n key (e.g. 'chat.widthTitle'),
+ * falling back to the English string when the key is missing. Used by the in-modal
+ * settings search to label section results with the same text shown in the panel.
+ */
+export function translateSettingsSectionTitle(key: string, fallback: string): string {
+  return resolve('settings', key, fallback)
+}
+
 export function translateCommand(cmd: Command): Command {
   return {
     ...cmd,

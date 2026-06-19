@@ -1309,6 +1309,10 @@
   background: #06b6d4;
 }
 
+.salienceBarFloor {
+  background: #f59e0b;
+}
+
 .salienceBarTooltip {
   display: flex;
   flex-direction: column;

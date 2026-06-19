@@ -24,6 +24,7 @@ A **persona** represents *you* in the conversation. While you can chat without o
 | **Avatar** | Your profile image |
 | **Folder** | Organizational grouping in the persona panel |
 | **Default** | Whether this persona activates automatically |
+| **Narrator** | Marks this persona as a narrator rather than a self-insert — exposes `{{isNarrator}}` for preset creators |
 | **Attached World Book** | A lorebook that activates whenever this persona is active |
 
 ---

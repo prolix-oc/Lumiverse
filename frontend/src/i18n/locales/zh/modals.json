@@ -74,6 +74,7 @@
     "filesSelected": "已选择 {{count}} 个文件",
     "duplicate": "重复",
     "wiEntries": "{{count}} 条 WI 条目",
+    "loraReference": "LoRA：{{name}} @ {{weight}}",
     "failed": "失败",
     "imported": "已导入 {{count}}",
     "skipped": "已跳过 {{count}}",
@@ -243,7 +244,7 @@
     "showFull": "显示全文（{{count}} 字符）",
     "chars": "{{count}} 字符",
     "lines": "{{count}} 行",
-    "tokens": "{{count}} token"
+    "tokens": "{{count, number}} token"
   },
   "dryRun": {
     "title": "提示词试运行",
@@ -255,7 +256,7 @@
     "showFull": "显示全文（{{count}} 字符）",
     "assistantPrefill": "助手预填",
     "assemblyBreakdown": "组装明细（{{count}}）",
-    "totalTokens": "共 {{count}} tokens",
+    "totalTokens": "共 {{count, number}} tokens",
     "viaTokenizer": "via {{name}}",
     "cacheReadWrite": "读 {{read}} • 写 {{write}}",
     "cache5m": " • 5m {{count}}",
@@ -271,8 +272,8 @@
     "contextBudget": "上下文预算",
     "clippingDisabled": "（未设置 max_context_length — 未启用裁剪）",
     "budgetInvalid": "（预算无效 — 上下文 ≤ 预留回复 tokens）",
-    "messagesClipped": "（裁剪 {{messages}} 条消息，{{tokens}} tokens）",
-    "messagesClipped_plural": "（裁剪 {{messages}} 条消息，{{tokens}} tokens）",
+    "messagesClipped_one": "（裁剪 {{messages}} 条消息，{{tokens}} tokens）",
+    "messagesClipped_other": "（裁剪 {{messages}} 条消息，{{tokens}} tokens）",
     "fitsBudget": "（在预算内）",
     "budgetNoHistory": "预算无法容纳任何聊天历史",
     "budgetNoHistoryDetail": "输入预算 = max_context ({{max}}) − max_tokens ({{reserved}}) − 安全余量 ({{safety}}) = {{input}}。请提高上下文长度或降低最大 tokens。",
@@ -310,7 +311,7 @@
       "settingsSource": "设置来源",
       "queryPreview": "查询预览",
       "retrievedChunks": "检索到的块",
-      "chunkLine": "#{{index}} — 分数: {{score}}，约 {{tokens}} tokens"
+      "chunkLine": "#{{index}} — 分数: {{score}}，约 {{tokens, number}} tokens"
     },
     "databank": {
       "embeddingsEnabled": "嵌入已启用",
@@ -320,7 +321,7 @@
       "activeBankIds": "活动资料库 ID",
       "queryPreview": "查询预览",
       "retrievedChunks": "检索到的块",
-      "chunkLine": "#{{index}} — {{document}}，分数: {{score}}，约 {{tokens}} tokens"
+      "chunkLine": "#{{index}} — {{document}}，分数: {{score}}，约 {{tokens, number}} tokens"
     },
     "budget": {
       "maxContext": "最大上下文长度",
@@ -336,7 +337,7 @@
       "tokensDropped": "丢弃 tokens",
       "tokenizerUsed": "使用的分词器",
       "unset": "—（未设置）",
-      "tokens": "{{count}} tokens"
+      "tokens": "{{count, number}} tokens"
     },
     "yes": "是",
     "no": "否"
@@ -541,7 +542,10 @@
     "saveFailed": "保存附加项失败",
     "createFailed": "创建附加项失败",
     "deleteFailed": "删除附加项失败",
-    "duplicateFailed": "复制附加项失败"
+    "duplicateFailed": "复制附加项失败",
+    "deleteConfirmTitle": "删除附加项",
+    "deleteConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。",
+    "deleteConfirmMessageUnnamed": "确定删除此附加项吗？此操作无法撤销。"
   },
   "personaAddons": {
     "title": "人格附加项",

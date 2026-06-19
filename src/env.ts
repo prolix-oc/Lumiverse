@@ -44,6 +44,13 @@ export interface EnvConfig {
   stForceNewMigration: boolean;
   /** Optional Pollinations BYOP app key (publishable pk_...) */
   pollinationsAppKey: string;
+  /**
+   * Enable SQLite memory-mapped I/O (PRAGMA mmap_size > 0). OFF by default:
+   * mmap faults are uncatchable and surface as SIGBUS/SIGSEGV on disk-full,
+   * copy-on-write overcommit (APFS/overlayfs), and file truncation. Opt in only
+   * on a known-good filesystem with disk headroom. See CLAUDE.md.
+   */
+  sqliteMmapEnabled: boolean;
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -133,6 +140,11 @@ export function loadEnv(): EnvConfig {
   const stForceNewMigration = process.env.LUMIVERSE_FORCE_NEW_MIGRATION === "true";
   // Publishable BYOP app key default used when no per-instance override is set.
   const pollinationsAppKey = process.env.POLLINATIONS_APP_KEY || "pk_Y3z2ooD6zSWfLdL3";
+  // mmap is OFF by default (uncatchable SIGBUS/SIGSEGV risk). Opt in explicitly;
+  // the legacy *_DISABLED kill-switch still wins, for back-compat.
+  const sqliteMmapEnabled =
+    process.env.LUMIVERSE_SQLITE_MMAP_ENABLED === "true" &&
+    process.env.LUMIVERSE_SQLITE_MMAP_DISABLED !== "true";
 
   return {
     port,
@@ -155,6 +167,7 @@ export function loadEnv(): EnvConfig {
     stMigrationTarget,
     stForceNewMigration,
     pollinationsAppKey,
+    sqliteMmapEnabled,
   };
 }
 

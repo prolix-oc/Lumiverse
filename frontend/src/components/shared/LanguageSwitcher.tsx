@@ -9,6 +9,7 @@ const LANGUAGES = [
   { code: 'zh-TW', labelKey: 'language.zh-TW' },
   { code: 'ja', labelKey: 'language.ja' },
   { code: 'fr', labelKey: 'language.fr' },
+  { code: 'it', labelKey: 'language.it' },
 ] as const
 
 interface LanguageSwitcherProps {

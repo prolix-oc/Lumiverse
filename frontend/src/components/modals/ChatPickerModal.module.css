@@ -40,6 +40,32 @@
   align-self: flex-start;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.deleteAllBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-danger);
+  background: transparent;
+  border: 1px solid var(--lumiverse-danger-020);
+  border-radius: 8px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.deleteAllBtn:hover {
+  background: var(--lumiverse-danger-015);
+  border-color: var(--lumiverse-danger);
+}
+
 /* ── List ── */
 .list {
   padding: 20px 28px 28px;
@@ -281,6 +307,18 @@
 
 .cardPreview {
   margin: 4px 0 0;
+}
+
+.previewText {
+  margin: 0 0 6px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  color: var(--lumiverse-text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .metaRow {

@@ -19,7 +19,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable'
-import { uiScaledTransform } from '@/lib/dndUiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { CloseButton } from '@/components/shared/CloseButton'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
@@ -53,7 +53,8 @@ import McpServerSettings from '@/components/settings/mcp-servers/McpServerSettin
 import DataPortability from '@/components/settings/DataPortability'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
-import { getVisibleSettingsTabs } from '@/lib/settings-tab-registry'
+import { getVisibleSettingsTabs, sectionAnchorId } from '@/lib/settings-tab-registry'
+import SettingsSearch from './SettingsSearch'
 import styles from './SettingsModal.module.css'
 import clsx from 'clsx'
 
@@ -69,11 +70,48 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   const VIEWS = useMemo(() => getVisibleSettingsTabs(user?.role), [user?.role])
 
+  const contentRef = useRef<HTMLDivElement>(null)
+  const navNonce = useRef(0)
+  const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
+
   useEffect(() => {
     if (!VIEWS.some((tab) => tab.id === activeView) && VIEWS.length > 0) {
       setActiveView(VIEWS[0].id)
     }
   }, [VIEWS, activeView])
+
+  // Open a tab from the in-modal search and remember where to scroll.
+  const handleSearchNavigate = (tabId: string, anchorId: string | null) => {
+    setActiveView(tabId)
+    setScrollTarget({ anchorId, nonce: navNonce.current++ })
+  }
+
+  // After the target tab renders, scroll its anchor into view and flash it.
+  useEffect(() => {
+    if (!scrollTarget) return
+    const { anchorId } = scrollTarget
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const container = contentRef.current
+        if (!container) return
+        const el = anchorId
+          ? container.querySelector<HTMLElement>(`#${CSS.escape(anchorId)}`)
+          : null
+        if (el) {
+          el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          el.classList.add(styles.sectionFlash)
+          window.setTimeout(() => el.classList.remove(styles.sectionFlash), 1400)
+        } else {
+          container.scrollTo({ top: 0, behavior: 'smooth' })
+        }
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [scrollTarget])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>
@@ -87,6 +125,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       >
         <div className={styles.header}>
           <h2 className={styles.title}>{ts('title')}</h2>
+          <SettingsSearch onNavigate={handleSearchNavigate} />
           <CloseButton onClick={onClose} />
         </div>
 
@@ -108,7 +147,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             })}
           </nav>
 
-          <div className={styles.content}>
+          <div className={styles.content} ref={contentRef}>
             <SettingsView view={activeView} />
             <div
               className={clsx(
@@ -206,7 +245,7 @@ function DisplaySettings() {
     <div className={styles.settingsSection}>
       <LanguageSwitcher />
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 16 }}>{t('display.modalWidth.title')}</h3>
+      <h3 id={sectionAnchorId('display', 'modalWidth')} className={styles.sectionTitle} style={{ marginTop: 16 }}>{t('display.modalWidth.title')}</h3>
       <p className={styles.helperText}>
         {t('display.modalWidth.helper')}
       </p>
@@ -245,7 +284,7 @@ function DisplaySettings() {
         </div>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('display.drawer.title')}</h3>
+      <h3 id={sectionAnchorId('display', 'drawer')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('display.drawer.title')}</h3>
 
       <div className={styles.drawerRow}>
         <div className={styles.field}>
@@ -316,17 +355,10 @@ function DisplaySettings() {
         <div className={styles.segmented}>
           <button
             type="button"
-            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode === 'default' && styles.segmentedBtnActive)}
+            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode !== 'custom' && styles.segmentedBtnActive)}
             onClick={() => updateDrawer({ panelWidthMode: 'default' })}
           >
             {t('display.drawer.panelDefault')}
-          </button>
-          <button
-            type="button"
-            className={clsx(styles.segmentedBtn, drawerSettings.panelWidthMode === 'stChat' && styles.segmentedBtnActive)}
-            onClick={() => updateDrawer({ panelWidthMode: 'stChat' })}
-          >
-            {t('display.drawer.panelStChat')}
           </button>
           <button
             type="button"
@@ -341,18 +373,22 @@ function DisplaySettings() {
       {drawerSettings.panelWidthMode === 'custom' && (
         <div className={styles.field}>
           <label className={styles.fieldLabel}>{t('display.drawer.customWidthVw')}</label>
-          <NumericInput
-            className={styles.numberInput}
-            min={20}
-            max={80}
-            value={drawerSettings.customPanelWidth}
-            integer
-            onChange={(value) => updateDrawer({ customPanelWidth: value ?? 35 })}
-          />
+          <div className={styles.rangeRow}>
+            <input
+              type="range"
+              className={styles.rangeSlider}
+              min={20}
+              max={80}
+              step={1}
+              value={drawerSettings.customPanelWidth}
+              onChange={(e) => updateDrawer({ customPanelWidth: parseInt(e.target.value, 10) })}
+            />
+            <span className={styles.rangeValue}>{drawerSettings.customPanelWidth}vw</span>
+          </div>
         </div>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('display.toast.title')}</h3>
+      <h3 id={sectionAnchorId('display', 'toast')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('display.toast.title')}</h3>
 
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('display.toast.position')}</label>
@@ -377,7 +413,7 @@ function DisplaySettings() {
         </div>
       </div>
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>{t('display.chatHeads.title')}</h3>
+      <h3 id={sectionAnchorId('display', 'chatHeads')} className={styles.sectionTitle} style={{ marginTop: 8 }}>{t('display.chatHeads.title')}</h3>
 
       <Toggle.Checkbox
         checked={chatHeadsEnabled}
@@ -452,7 +488,7 @@ function DisplaySettings() {
         </>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 8 }}>{t('display.landing.title')}</h3>
+      <h3 id={sectionAnchorId('display', 'landing')} className={styles.sectionTitle} style={{ marginTop: 8 }}>{t('display.landing.title')}</h3>
 
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('display.landing.layout')}</label>
@@ -640,6 +676,7 @@ function ChatSettings() {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
+  const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
@@ -652,7 +689,7 @@ function ChatSettings() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('chat.title')}</h3>
+      <h3 id={sectionAnchorId('chat', 'general')} className={styles.sectionTitle}>{t('chat.title')}</h3>
 
       <div className={styles.field}>
         <label className={styles.fieldLabel}>{t('chat.displayMode')}</label>
@@ -758,10 +795,26 @@ function ChatSettings() {
             label={t('chat.bubbleAvatarBg')}
             hint={t('chat.bubbleAvatarBgHint')}
           />
+
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('chat.bubbleOpacity', { pct: Math.round(bubbleOpacity * 100) })}</label>
+            <div className={styles.rangeRow}>
+              <input
+                type="range"
+                className={styles.rangeSlider}
+                min={20}
+                max={100}
+                step={5}
+                value={Math.round(bubbleOpacity * 100)}
+                onChange={(e) => setSetting('bubbleOpacity', parseInt(e.target.value, 10) / 100)}
+              />
+              <span className={styles.rangeValue}>{Math.round(bubbleOpacity * 100)}%</span>
+            </div>
+          </div>
         </>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.widthTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'width')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.widthTitle')}</h3>
       <p className={styles.helperText}>
         {t('chat.widthHelper')}
       </p>
@@ -800,7 +853,7 @@ function ChatSettings() {
         </div>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.messagesPerPageTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'messagesPerPage')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.messagesPerPageTitle')}</h3>
       <p className={styles.helperText}>
         {t('chat.messagesPerPageHelper')}
       </p>
@@ -846,7 +899,7 @@ function ChatSettings() {
         </div>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.inputTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'input')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.inputTitle')}</h3>
 
       <Toggle.Checkbox
         checked={enterToSend}
@@ -877,7 +930,7 @@ function ChatSettings() {
         </select>
       </div>
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.regenTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'regen')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.regenTitle')}</h3>
       <p className={styles.helperText}>
         {t('chat.regenHelper')}
       </p>
@@ -914,7 +967,7 @@ function ChatSettings() {
         </div>
       )}
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.messageInfoTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'messageInfo')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.messageInfoTitle')}</h3>
 
       <Toggle.Checkbox
         checked={useStore((s) => s.showMessageTokenCount ?? true)}
@@ -930,7 +983,7 @@ function ChatSettings() {
         hint={t('chat.contextMenuHint')}
       />
 
-      <h3 className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.swipeTitle')}</h3>
+      <h3 id={sectionAnchorId('chat', 'swipe')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.swipeTitle')}</h3>
       <p className={styles.helperText}>
         {t('chat.swipeHelper')}
       </p>
@@ -951,7 +1004,7 @@ function ExtensionSettingsView() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('extensions.title')}</h3>
+      <h3 id={sectionAnchorId('extensions', 'general')} className={styles.sectionTitle}>{t('extensions.title')}</h3>
       <p className={styles.placeholder}>
         {t('extensions.placeholder')}
         {frontendCount > 0
@@ -974,8 +1027,8 @@ interface SortableGuideRowProps {
 function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpdate, onRemove }: SortableGuideRowProps) {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: guide.id })
-  const style = { transform: uiScaledTransform(transform), transition }
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: guide.id })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const positionLabel = {
     system: t('guided.positionSystem'),
     user_prefix: t('guided.positionBefore'),
@@ -1086,7 +1139,7 @@ function GuidedGenerationSettings() {
   return (
     <div className={styles.settingsSection}>
       <div className={styles.inlineHeader}>
-        <h3 className={styles.sectionTitle}>{t('guided.title')}</h3>
+        <h3 id={sectionAnchorId('guided', 'general')} className={styles.sectionTitle}>{t('guided.title')}</h3>
         <Button size="sm" onClick={addGuide}>{t('guided.newGuide')}</Button>
       </div>
       <p className={styles.placeholder}>{t('guided.helper')}</p>
@@ -1173,7 +1226,7 @@ function QuickRepliesSettings() {
   return (
     <div className={styles.settingsSection}>
       <div className={styles.inlineHeader}>
-        <h3 className={styles.sectionTitle}>{t('quickReplies.title')}</h3>
+        <h3 id={sectionAnchorId('quickReplies', 'general')} className={styles.sectionTitle}>{t('quickReplies.title')}</h3>
         <Button size="sm" onClick={addSet}>{t('quickReplies.newSet')}</Button>
       </div>
       <p className={styles.placeholder}>{t('quickReplies.helper')}</p>
@@ -1485,7 +1538,7 @@ function ExtensionPoolSettings() {
   return (
     <div className={styles.settingsSection}>
       <div className={styles.inlineHeader}>
-        <h3 className={styles.sectionTitle}>{t('extensionPools.title')}</h3>
+        <h3 id={sectionAnchorId('extensionPools', 'general')} className={styles.sectionTitle}>{t('extensionPools.title')}</h3>
         <Button
           size="icon"
           onClick={() => load(true)}
@@ -1916,7 +1969,7 @@ function EmbeddingsSettings() {
   if (loading || !cfg) {
     return (
       <div className={styles.settingsSection}>
-        <h3 className={styles.sectionTitle}>{t('embeddings.title')}</h3>
+        <h3 id={sectionAnchorId('embeddings', 'general')} className={styles.sectionTitle}>{t('embeddings.title')}</h3>
         <p className={styles.placeholder}>{t('embeddings.loading')}</p>
       </div>
     )
@@ -1966,7 +2019,7 @@ function EmbeddingsSettings() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('embeddings.title')}</h3>
+      <h3 id={sectionAnchorId('embeddings', 'general')} className={styles.sectionTitle}>{t('embeddings.title')}</h3>
       <p className={styles.placeholder}>{t('embeddings.helper')}</p>
 
       {inherited && (
@@ -2484,7 +2537,7 @@ function WebSearchSettings() {
   if (loading) {
     return (
       <div className={styles.settingsSection}>
-        <h3 className={styles.sectionTitle}>{t('webSearch.title')}</h3>
+        <h3 id={sectionAnchorId('webSearch', 'general')} className={styles.sectionTitle}>{t('webSearch.title')}</h3>
         <p className={styles.placeholder}>{t('webSearch.loading')}</p>
       </div>
     )
@@ -2492,7 +2545,7 @@ function WebSearchSettings() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('webSearch.title')}</h3>
+      <h3 id={sectionAnchorId('webSearch', 'general')} className={styles.sectionTitle}>{t('webSearch.title')}</h3>
       <p className={styles.placeholder}>{t('webSearch.helper')}</p>
 
       {error && <p className={styles.errorText}>{error}</p>}
@@ -2800,7 +2853,7 @@ function AdvancedSettings() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('advanced.title')}</h3>
+      <h3 id={sectionAnchorId('advanced', 'general')} className={styles.sectionTitle}>{t('advanced.title')}</h3>
 
       {/* Image Optimization accordion */}
       <CollapsibleSection title={t('advanced.imageOptimization')} defaultExpanded={false}>
@@ -3134,7 +3187,7 @@ function LumiHubSettings() {
   if (loading) {
     return (
       <div className={styles.settingsSection}>
-        <h3 className={styles.sectionTitle}>{t('lumihub.title')}</h3>
+        <h3 id={sectionAnchorId('lumihub', 'general')} className={styles.sectionTitle}>{t('lumihub.title')}</h3>
         <span className={styles.helperText}>{t('lumihub.loading')}</span>
       </div>
     )
@@ -3142,7 +3195,7 @@ function LumiHubSettings() {
 
   return (
     <div className={styles.settingsSection}>
-      <h3 className={styles.sectionTitle}>{t('lumihub.title')}</h3>
+      <h3 id={sectionAnchorId('lumihub', 'general')} className={styles.sectionTitle}>{t('lumihub.title')}</h3>
       <span className={styles.helperText}>
         {t('lumihub.helper')}
       </span>

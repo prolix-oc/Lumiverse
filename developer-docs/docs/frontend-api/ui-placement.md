@@ -130,6 +130,70 @@ widget.destroy()
 | `tooltip` | `string` | — | Hover tooltip text |
 | `chromeless` | `boolean` | `false` | Strip the default container chrome (border, background, shadow, border-radius). The extension fully owns the visual presentation. |
 
+## Tab Mobility (requires `app_manipulation` or `ui_panels`)
+
+Move any built-in or extension drawer tab between the main drawer and any registered container. Built-in tabs (like `'profile'`, `'connections'`, etc.) are addressable by their stable id. Extension tabs are addressable by the id assigned at registration time.
+
+```ts
+// Move a tab to a registered container (by container id)
+ctx.ui.requestTabLocation('connections', { kind: 'container', containerId: 'canvas-secondary' })
+
+// Move it back to the main drawer
+ctx.ui.requestTabLocation('connections', { kind: 'main-drawer' })
+
+// Query current location
+const loc = ctx.ui.getTabLocation('profile')
+// { kind: 'main-drawer' } | { kind: 'container', containerId: string }
+```
+
+### TabLocation
+
+| Value | Description |
+|---|---|
+| `{ kind: 'main-drawer' }` | Default location — the tab lives in the main left sidebar drawer |
+| `{ kind: 'container', containerId }` | Moved to a registered container. The `containerId` is the id passed to `registerContainer`. If no container with that id is registered, the tab resets to `main-drawer`. |
+
+### Method: `requestTabLocation`
+
+```ts
+ctx.ui.requestTabLocation(tabId, location): void
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | `string` | yes | The tab to move (built-in id or extension-assigned id) |
+| `location` | `TabLocation` | yes | Target location (see `TabLocation` above) |
+
+### Notes
+
+- Built-in tabs are addressable by their id (`'profile'`, `'connections'`, `'presets'`, etc.). Extension tabs use the id assigned at registration time.
+- When a tab is routed to a container id that has no matching registered entry, `ContainerTabContent` automatically resets the tab to `{ kind: 'main-drawer' }` so it remains visible.
+- `requestTabLocation` requires the `app_manipulation` permission; `getBuiltInTabRoot` requires the `ui_panels` permission; `getTabLocation` is a read-only query and is free.
+
+### Method: `getBuiltInTabRoot`
+
+```ts
+ctx.ui.getBuiltInTabRoot(tabId): HTMLElement | undefined
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | `string` | yes | The built-in tab id |
+
+Returns the lazy-mounted DOM root of a built-in tab, so extensions can mount it into their own UI. Requires `ui_panels`.
+
+### Method: `getBuiltInTabTitle`
+
+```ts
+ctx.ui.getBuiltInTabTitle(tabId): string | undefined
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `tabId` | `string` | yes | The built-in tab id |
+
+Returns the header title for the built-in tab. Read-only.
+
 ## Dock Panels (requires `ui_panels`)
 
 Create an always-visible panel fixed to a screen edge. Max 1 per edge per extension, 2 per edge global.

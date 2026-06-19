@@ -18,13 +18,14 @@ import { presetsRoutes } from "./routes/presets.routes";
 import { connectionsRoutes } from "./routes/connections.routes";
 import { generateRoutes } from "./routes/generate.routes";
 import { imagesRoutes } from "./routes/images.routes";
+import { audioRoutes } from "./routes/audio.routes";
 import { providersRoutes } from "./routes/providers.routes";
 import { macrosRoutes } from "./routes/macros.routes";
 import { spindleRoutes } from "./routes/spindle.routes";
 import { usersRoutes } from "./routes/users.routes";
 import { packsRoutes } from "./routes/packs.routes";
 import { councilRoutes } from "./routes/council.routes";
-import { dreamWeaverRoutes } from "./routes/dream-weaver.routes";
+import { weaverRoutes } from "./routes/weaver.routes";
 import { imageGenRoutes } from "./routes/image-gen.routes";
 import { imageGenConnectionsRoutes } from "./routes/image-gen-connections.routes";
 import { characterGalleryRoutes } from "./routes/character-gallery.routes";
@@ -151,6 +152,7 @@ app.use("/api/*", async (c, next) => {
     GALLERY_PATH_RE.test(path) ||
     EXPRESSIONS_ZIP_PATH_RE.test(path) ||
     path === "/api/v1/stt/transcribe" ||
+    path === "/api/v1/tts/save-message-audio" ||
     path === "/api/v1/chats/import" ||
     path === "/api/v1/chats/import-st" ||
     path === "/api/v1/user-data/import"
@@ -397,6 +399,7 @@ app.route("/api/v1/connections", connectionsRoutes);
 app.route("/api/v1/openrouter", openrouterRoutes);
 app.route("/api/v1/files", filesRoutes);
 app.route("/api/v1/images", imagesRoutes);
+app.route("/api/v1/audio", audioRoutes);
 app.route("/api/v1/theme-assets", themeAssetsRoutes);
 app.route("/api/v1/notification-sounds", notificationSoundsRoutes);
 app.route("/api/v1/generate", generateRoutes);
@@ -406,7 +409,7 @@ app.route("/api/v1/spindle", spindleRoutes);
 app.route("/api/v1/users", usersRoutes);
 app.route("/api/v1/packs", packsRoutes);
 app.route("/api/v1/council", councilRoutes);
-app.route("/api/v1/dream-weaver", dreamWeaverRoutes);
+app.route("/api/v1/weaver", weaverRoutes);
 app.route("/api/v1/image-gen", imageGenRoutes);
 app.route("/api/v1/image-gen-connections", imageGenConnectionsRoutes);
 app.route("/api/v1/characters/:characterId/gallery", characterGalleryRoutes);

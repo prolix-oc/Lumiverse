@@ -31,6 +31,53 @@
   outline: none;
 }
 
+/* ── Expand affordance ── */
+.textareaWrapper {
+  position: relative;
+  width: 100%;
+}
+
+.textareaWrapper > textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.expandBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: var(--lumiverse-btn-icon-sm);
+  height: var(--lumiverse-btn-icon-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--lumiverse-bg, #0f0d15);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  z-index: 1;
+}
+
+.textareaWrapper:hover .expandBtn,
+.textareaWrapper:focus-within .expandBtn {
+  opacity: 1;
+}
+
+.expandBtn:hover {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+}
+
+/* Touch devices have no hover — keep the affordance softly visible. */
+@media (any-hover: none) {
+  .expandBtn {
+    opacity: 0.7;
+  }
+}
+
 /* ── Reasoning section ── */
 .reasoningSection {
   display: flex;

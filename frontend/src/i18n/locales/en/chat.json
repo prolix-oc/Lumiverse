@@ -8,6 +8,8 @@
     "delete": "Delete",
     "playTts": "Play with TTS",
     "stopPlayback": "Stop playback",
+    "cancelTtsGeneration": "Cancel TTS generation",
+    "regenerateTtsAudio": "Regenerate TTS audio",
     "hideFromAi": "Hide from AI context",
     "unhideFromAi": "Unhide from AI context",
     "hide": "Hide",
@@ -53,9 +55,12 @@
     "alternateFields": "Alternate fields",
     "alternateFieldsActive": "Alternate fields - {{details}}",
     "groupAlternateFields": "Group alternate fields",
+    "switchConnection": "Switch connection",
+    "switchConnectionActive": "Connection: {{name}}",
     "attachFiles": "Attach files",
     "attachFile": "Attach file",
     "attachImageOrAudio": "Attach image or audio",
+    "dropToAttach": "Drop files to attach",
     "removeAttachment": "Remove attachment",
     "message": "Message",
     "stopGeneration": "Stop generation",
@@ -87,6 +92,8 @@
     "clearOneShotPersona": "Clear one-shot persona",
     "noPersonas": "No personas available.",
     "manageChats": "Manage Chats",
+    "manageConnections": "Manage Connections",
+    "noConnections": "No connections available.",
     "groupSettings": "Group Settings",
     "chatSettings": "Chat Settings",
     "convertToGroupChat": "Convert to Group Chat",
@@ -337,7 +344,9 @@
   },
   "swipe": {
     "previous": "Previous swipe",
-    "next": "Next swipe"
+    "next": "Next swipe",
+    "live": "Generating swipe (still streaming)",
+    "ready": "New swipe ready"
   },
   "portrait": {
     "setChatBackground": "Set as Chat Background"

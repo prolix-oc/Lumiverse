@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import * as svc from "../services/chats.service";
 import * as personasSvc from "../services/personas.service";
 import * as charactersSvc from "../services/characters.service";
+import * as regexScriptsSvc from "../services/regex-scripts.service";
+import * as managerSvc from "../spindle/manager.service";
+import { pruneOrphanedWiState } from "../services/wi-state-prune.service";
 import { parsePagination } from "../services/pagination";
 import { RECENT_CHATS_DEFAULT_LIMIT } from "../types/pagination";
 import { parseStChatJsonl, parseStGroupChatJsonl } from "../migration/st-reader";
@@ -11,6 +14,7 @@ import {
 } from "../spindle/message-content-processor";
 import { resolveRenderedMessageContent } from "../services/chat-macro-render.service";
 import { contentHasMacroHints } from "../services/vectorization-content.service";
+import { computeMessageTokenCount } from "../services/message-token-count";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -142,6 +146,12 @@ app.get("/character-chats/:characterId", (c) => {
   return c.json(svc.listChatSummaries(userId, characterId));
 });
 
+app.delete("/character-chats/:characterId", (c) => {
+  const userId = c.get("userId");
+  const deleted = svc.deleteAllChatsForCharacter(userId, c.req.param("characterId"));
+  return c.json({ success: true, deleted });
+});
+
 app.get("/group-chats", (c) => {
   const userId = c.get("userId");
   const rawCharacterIds = c.req.query("character_ids");
@@ -158,6 +168,30 @@ app.post("/", async (c) => {
   const chat = svc.createChat(userId, body);
   await processChatGreeting(userId, chat);
   return c.json(chat, 201);
+});
+
+// Temporary character-less, persona-less chat for trying out a connection
+// profile. No greeting, hidden from recent lists, swept when the user
+// returns to the landing page (DELETE below). Registered before the /:id
+// routes so "temporary" never matches as a chat id.
+app.post("/temporary", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const chat = svc.createChat(userId, {
+    character_id: null,
+    name: typeof body?.name === "string" && body.name.trim() ? body.name : "Temporary Chat",
+    // no_preset opts the chat out of presets entirely (raw model test):
+    // generation skips preset blocks/parameters and the active/connection
+    // preset fallbacks.
+    metadata: { temporary: true, ...(body?.no_preset === true ? { no_preset: true } : {}) },
+  });
+  return c.json(chat, 201);
+});
+
+app.delete("/temporary", (c) => {
+  const userId = c.get("userId");
+  const deleted = svc.deleteTemporaryChats(userId);
+  return c.json({ success: true, deleted });
 });
 
 app.post("/group", async (c) => {
@@ -240,9 +274,13 @@ app.get("/:id", (c) => {
   const userId = c.get("userId");
   const chat = svc.getChat(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
-  if (c.req.query("messages") === "false") return c.json(chat);
+  const ownerCandidates = managerSvc.getEnabledExtensionIdentifiers();
+  const character_display_owner = chat.character_id
+    ? charactersSvc.getCharacterDisplayOwner(userId, chat.character_id, ownerCandidates)
+    : null;
+  if (c.req.query("messages") === "false") return c.json({ ...chat, character_display_owner });
   const messages = svc.getMessages(userId, chat.id);
-  return c.json({ ...chat, messages });
+  return c.json({ ...chat, character_display_owner, messages });
 });
 
 app.put("/:id", async (c) => {
@@ -250,7 +288,16 @@ app.put("/:id", async (c) => {
   const chat = svc.getChat(userId, c.req.param("id"));
   if (!chat) return c.json({ error: "Not found" }, 404);
   const body = await c.req.json();
-  const updated = svc.updateChat(userId, chat.id, body);
+  let updated = svc.updateChat(userId, chat.id, body);
+  // PUT replaces metadata wholesale, so book attachments can change (or
+  // vanish) on any metadata write.
+  if (updated && body?.metadata !== undefined) {
+    const beforeIds = JSON.stringify(chat.metadata?.chat_world_book_ids ?? []);
+    const afterIds = JSON.stringify(updated.metadata?.chat_world_book_ids ?? []);
+    if (beforeIds !== afterIds) {
+      updated = pruneOrphanedWiState(userId, updated);
+    }
+  }
   return c.json(updated);
 });
 
@@ -293,8 +340,13 @@ app.patch("/:id/metadata", async (c) => {
     }
     partial[key] = value;
   }
-  const updated = svc.mergeChatMetadata(userId, chatId, partial);
+  let updated = svc.mergeChatMetadata(userId, chatId, partial);
   if (!updated) return c.json({ error: "Not found" }, 404);
+
+  if ("chat_world_book_ids" in body) {
+    updated = pruneOrphanedWiState(userId, updated);
+  }
+
   return c.json(updated);
 });
 
@@ -527,14 +579,19 @@ app.get("/:chatId/messages", (c) => {
   const chat = svc.getChat(userId, chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
+  // Lists ship the light projection (active swipe only, no per-swipe extra
+  // arrays) — non-active swipe data dominated the payload but is only needed
+  // by swipe actions, which re-fetch the full message. ?full=true opts out.
+  const light = c.req.query("full") !== "true";
+
   // tail=true fetches the last N messages efficiently (single index scan from end)
   if (c.req.query("tail") === "true") {
     const limit = Math.min(Math.max(parseInt(c.req.query("limit") || "50", 10) || 50, 1), 1000);
-    return c.json(svc.listMessagesTail(userId, chatId, limit));
+    return c.json(svc.listMessagesTail(userId, chatId, limit, { light }));
   }
 
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
-  return c.json(svc.listMessages(userId, chatId, pagination));
+  return c.json(svc.listMessages(userId, chatId, pagination, { light }));
 });
 
 app.post("/:chatId/messages/bulk-hide", async (c) => {
@@ -597,6 +654,14 @@ app.post("/:chatId/messages", async (c) => {
   body.content = processed.content;
   if (processed.extra !== undefined) body.extra = processed.extra;
 
+  // Tokenize user-sent (and any manually-created) messages so they carry a
+  // tokenCount just like assistant messages do. Inline so the count rides the
+  // creation response/MESSAGE_SENT broadcast, avoiding a follow-up edit event.
+  const tokenCount = await computeMessageTokenCount(userId, body.content, body.connection_id);
+  if (tokenCount != null) {
+    body.extra = { ...(body.extra || {}), tokenCount };
+  }
+
   const msg = svc.createMessage(chatId, body, userId);
   return c.json(msg, 201);
 });
@@ -622,6 +687,33 @@ app.put("/:chatId/messages/:id", async (c) => {
     );
     body.content = processed.content;
     if (processed.extra !== undefined) body.extra = processed.extra;
+
+    const chat = svc.getChat(userId, chatId);
+    if (chat) {
+      const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
+        characterId: chat.character_id ?? undefined,
+        chatId,
+      });
+      if (editScripts.length > 0) {
+        const existing = svc.getMessage(userId, messageId);
+        const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
+        body.content = await regexScriptsSvc.applyRegexScripts(
+          body.content,
+          editScripts,
+          placement,
+          0,
+        );
+      }
+    }
+
+    // Content changed → refresh the stored tokenCount so it doesn't reflect the
+    // pre-edit text. Merge onto the extra being saved (the edit may omit extra,
+    // in which case base off the message's current extra to avoid clobbering it).
+    const tokenCount = await computeMessageTokenCount(userId, body.content, body.connection_id);
+    if (tokenCount != null) {
+      const baseExtra = body.extra ?? svc.getMessage(userId, messageId)?.extra ?? {};
+      body.extra = { ...baseExtra, tokenCount };
+    }
   }
 
   const msg = svc.updateMessage(userId, messageId, body);
@@ -694,7 +786,26 @@ app.put("/:chatId/messages/:id/swipe/:idx", async (c) => {
     c.req.raw.signal,
   );
 
-  const msg = svc.updateSwipe(userId, messageId, idx, processed.content);
+  let finalContent = processed.content;
+  const chat = svc.getChat(userId, chatId);
+  if (chat) {
+    const editScripts = regexScriptsSvc.getRunOnEditScripts(userId, {
+      characterId: chat.character_id ?? undefined,
+      chatId,
+    });
+    if (editScripts.length > 0) {
+      const existing = svc.getMessage(userId, messageId);
+      const placement = existing?.is_user ? "user_input" as const : "ai_output" as const;
+      finalContent = await regexScriptsSvc.applyRegexScripts(
+        finalContent,
+        editScripts,
+        placement,
+        0,
+      );
+    }
+  }
+
+  const msg = svc.updateSwipe(userId, messageId, idx, finalContent);
   if (!msg) return c.json({ error: "Not found or invalid swipe index" }, 404);
   return c.json(msg);
 });

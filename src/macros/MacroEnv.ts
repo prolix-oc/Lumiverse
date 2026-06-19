@@ -6,7 +6,6 @@ import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { GenerationType } from "../llm/types";
 import type { MacroEnv, MacroHandler, MacroDefinition } from "./types";
-import { stripLegacyDreamWeaverVoiceSection } from "../services/dream-weaver/runtime-prompt";
 
 export interface BuildEnvContext {
   character: Character;
@@ -57,6 +56,15 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   const groupLastSpeaker = isGroup
     ? (findLast(messages, (m) => !m.is_user)?.name || "")
     : "";
+  // Resolve the card composition mode. Mirrors the gate in prompt-assembly's
+  // getGroupCardMode — anything not explicitly "merge" / "merge_ignore_muted"
+  // falls back to "swap". Solo chats short-circuit to "solo".
+  const rawCardMode = chat.metadata?.group_card_mode;
+  const groupCardMode = !isGroup
+    ? "solo"
+    : (rawCardMode === "merge" || rawCardMode === "merge_ignore_muted")
+      ? rawCardMode
+      : "swap";
 
   return {
     commit: ctx.commit !== false,
@@ -72,7 +80,9 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
         : "",
       groupMemberCount: isGroup && allGroupNames ? String(allGroupNames.length) : "0",
       isGroupChat: isGroup ? "yes" : "no",
+      isNarrator: persona?.is_narrator ? "yes" : "no",
       groupLastSpeaker,
+      groupCardMode,
     },
     character: {
       name: character.name,
@@ -85,7 +95,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       personaPossessivePronoun: personaPronouns.possessive,
       mesExamples: character.mes_example || "",
       mesExamplesRaw: character.mes_example || "",
-      systemPrompt: stripLegacyDreamWeaverVoiceSection(character.system_prompt || "", character),
+      systemPrompt: character.system_prompt || "",
       postHistoryInstructions: character.post_history_instructions || "",
       depthPrompt: (character.extensions?.depth_prompt as string) || "",
       creatorNotes: character.creator_notes || "",

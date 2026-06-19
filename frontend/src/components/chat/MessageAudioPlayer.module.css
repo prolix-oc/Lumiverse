@@ -1,0 +1,414 @@
+/* ── Wrapper: hosts the load-in animation so the player can grow into
+   place from 0-height instead of popping into the message and shoving
+   surrounding content. Uses grid-template-rows: 0fr → 1fr which is the
+   only pure-CSS way to animate height: 0 → auto.
+   Browsers without grid-template-rows animation (older Safari) get an
+   instant height jump but still see the opacity+scale fade.            */
+
+.wrapper {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.wrapperInner {
+  /* `min-height: 0` lets the grid track shrink past content size during
+     the animation. We intentionally do NOT set overflow:hidden here at
+     base — that was clipping the volume popover after the animation
+     finished, making volume controls inaccessible. Overflow is clipped
+     only while the load-in animation is running (see .wrapperFresh
+     selector below) so the popover renders freely in static state.   */
+  min-height: 0;
+}
+
+.wrapperFresh {
+  /* `both` keeps the end-state styles applied while we wait for
+     onAnimationEnd to flip animationDone — avoids a one-frame snap-back
+     to the from-state at the end of the run. */
+  animation: ttsAudioLoadIn 280ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.wrapperExiting {
+  /* Reverse of the load-in animation. Slightly shorter (220ms) so the
+     departure feels snappier than the arrival — common UX pattern that
+     keeps removal from feeling like a drawn-out fade. */
+  animation: ttsAudioLoadOut 220ms cubic-bezier(0.4, 0, 0.6, 1) both;
+}
+
+.wrapperFresh .wrapperInner,
+.wrapperExiting .wrapperInner {
+  /* Clip while the height is animating in either direction. Once the
+     animation lands and the class is removed, overflow returns to
+     visible so the volume popover isn't clipped by the wrapper. */
+  overflow: hidden;
+}
+
+@keyframes ttsAudioLoadIn {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ttsAudioLoadOut {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Respect the reduce-motion preference — collapse the animations to
+     short fades so the player still distinguishes its arrival/departure
+     without doing the scale/height movement. */
+  .wrapperFresh {
+    animation: ttsAudioLoadInReduced 120ms ease-out both;
+  }
+
+  .wrapperExiting {
+    animation: ttsAudioLoadOutReduced 120ms ease-out both;
+  }
+
+  @keyframes ttsAudioLoadInReduced {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes ttsAudioLoadOutReduced {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+}
+
+.player {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px 0 4px;
+  min-width: 220px;
+  max-width: 360px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
+  transition:
+    border-color var(--lcs-transition-fast, 120ms ease),
+    background var(--lcs-transition-fast, 120ms ease);
+}
+
+.player:hover {
+  border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
+}
+
+.playerUser {
+  align-self: flex-end;
+}
+
+/* While a save-first regen is in flight: visually de-emphasize the
+   controls so the regenerating overlay reads as the foreground state.
+   We don't disable pointer events on the controls — the user might
+   still want to click Cancel via the bubble's TTS button — but they
+   aren't intended to be the primary interaction target right now. */
+.playerRegenerating .playBtn,
+.playerRegenerating .slider,
+.playerRegenerating .time,
+.playerRegenerating .volumeBtn,
+.playerRegenerating .deleteBtn {
+  opacity: 0.35;
+  transition: opacity var(--lcs-transition-fast, 120ms ease);
+}
+
+.regenOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* Match the pill's rounded corners so the overlay doesn't appear to
+     bleed outside the player. */
+  border-radius: inherit;
+  /* Transparent — we want the dimmed controls visible underneath so the
+     regen feels in-place rather than masked. */
+  pointer-events: none;
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.regenSpinner {
+  animation: ttsAudioSpin 800ms linear infinite;
+  color: var(--lumiverse-primary, #9370db);
+}
+
+.regenLabel {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+@keyframes ttsAudioSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .regenSpinner {
+    /* Hold the spinner static rather than churning; the label still
+       communicates the in-flight state. */
+    animation: none;
+  }
+}
+
+.playBtn,
+.volumeBtn,
+.volumeMuteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--lumiverse-primary, #9370db);
+  color: var(--lumiverse-on-primary, #fff);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--lcs-transition-fast, 120ms ease),
+    transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.playBtn:hover,
+.volumeBtn:hover,
+.volumeMuteBtn:hover {
+  background: var(--lumiverse-primary-hover, color-mix(in srgb, var(--lumiverse-primary, #9370db) 88%, white));
+}
+
+.playBtn:active,
+.volumeBtn:active {
+  transform: scale(0.94);
+}
+
+.volumeBtn,
+.volumeMuteBtn {
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.6));
+  width: 22px;
+  height: 22px;
+}
+
+.volumeBtn:hover,
+.volumeMuteBtn:hover {
+  background: var(--lumiverse-fill-strong, rgba(255, 255, 255, 0.08));
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+}
+
+/* Tiny delete button at the trailing edge. Defaults to a subtle dim
+   colour so it doesn't compete with the playback controls visually,
+   then shifts to the theme's danger colour on hover/focus to signal
+   the destructive action. Sized down vs the play button (22 vs 24) so
+   it reads as secondary. */
+.deleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background var(--lcs-transition-fast, 120ms ease),
+    color var(--lcs-transition-fast, 120ms ease),
+    transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.deleteBtn:hover:not(:disabled),
+.deleteBtn:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 18%, transparent);
+  color: var(--lumiverse-danger, #ef4444);
+}
+
+.deleteBtn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.deleteBtn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+/* ── Shared slider base ─────────────────────────────────────────────────
+   Both seek and volume use native <input type="range"> so we inherit
+   keyboard (arrow keys / Home / End), screen reader announcements
+   (aria-valuenow surfaced as a percentage automatically), and the
+   browser's native touch handling — no custom pointer event plumbing.
+
+   The visible track is rendered via a linear-gradient that splits at
+   --progress (a CSS custom property the component updates via inline
+   style). This is the cross-browser way to draw a "filled" portion in
+   WebKit, since ::-webkit-slider-runnable-track has no ::progress
+   pseudo. Firefox additionally supports ::-moz-range-progress which we
+   set separately below for a crisper fill.                              */
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  /* The input height is the pointer hit zone — keep it ~18px so finger
+     and mouse pointers both have comfortable target without making the
+     player taller. The visible track is much thinner (4px). */
+  height: 18px;
+  --progress: 0%;
+}
+
+.slider:focus {
+  outline: none;
+}
+
+.slider:focus-visible {
+  /* Keyboard-only focus ring — pointer interactions don't show it so
+     it doesn't add visual noise when scrubbing with a mouse. */
+  outline: 2px solid var(--lumiverse-primary, #9370db);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* WebKit / Blink / new Edge track */
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--lumiverse-primary, #9370db) 0,
+    var(--lumiverse-primary, #9370db) var(--progress),
+    var(--lumiverse-fill-strong, rgba(255, 255, 255, 0.18)) var(--progress),
+    var(--lumiverse-fill-strong, rgba(255, 255, 255, 0.18)) 100%
+  );
+}
+
+/* WebKit / Blink / new Edge thumb */
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--lumiverse-primary, #9370db);
+  /* Half-thumb shift up so the thumb centers on the 4px track. */
+  margin-top: -4px;
+  border: none;
+  box-shadow: 0 0 0 2px var(--lumiverse-surface, rgba(20, 20, 28, 0.85));
+  transition: transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.slider:hover::-webkit-slider-thumb,
+.slider:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+
+/* Firefox track + progress + thumb */
+.slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--lumiverse-fill-strong, rgba(255, 255, 255, 0.18));
+}
+
+.slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--lumiverse-primary, #9370db);
+}
+
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--lumiverse-primary, #9370db);
+  border: none;
+  box-shadow: 0 0 0 2px var(--lumiverse-surface, rgba(20, 20, 28, 0.85));
+  transition: transform var(--lcs-transition-fast, 120ms ease);
+}
+
+.slider:hover::-moz-range-thumb,
+.slider:active::-moz-range-thumb {
+  transform: scale(1.18);
+}
+
+/* Seek slider takes the remaining horizontal space. */
+.sliderSeek {
+  flex: 1 1 auto;
+  min-width: 60px;
+}
+
+/* Volume slider in the popover has a fixed compact width. */
+.sliderVolume {
+  width: 96px;
+}
+
+.time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.55));
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  min-width: 70px;
+  text-align: right;
+}
+
+.volumeWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.volumePopover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: -4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--lumiverse-surface-raised, rgba(28, 28, 38, 0.98));
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+
+@media (max-width: 480px) {
+  .player {
+    min-width: 180px;
+    max-width: 100%;
+  }
+
+  .time {
+    min-width: 64px;
+  }
+
+  .sliderVolume {
+    width: 80px;
+  }
+}

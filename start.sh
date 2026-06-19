@@ -11,6 +11,7 @@ set -euo pipefail
 #   ./start.sh --dev            Start backend in watch mode (no frontend build)
 #   ./start.sh --setup          Run setup wizard only
 #   ./start.sh --reset-password  Reset owner account password
+#   ./start.sh --edit-env       Edit the .env configuration file in a terminal editor
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
@@ -95,7 +96,7 @@ _proot_bun() {
 
 # ─── Parse arguments ─────────────────────────────────────────────────────────
 
-MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | migrate-st | kill-pkgs
+MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | edit-env | migrate-st | kill-pkgs
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
@@ -109,13 +110,14 @@ for arg in "$@"; do
     --dev)          MODE="dev" ;;
     --setup)        MODE="setup" ;;
     --reset-password) MODE="reset-password" ;;
+    --edit-env)     MODE="edit-env" ;;
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
     --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
     --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
-      sed -n '3,18p' "$0" | sed 's/^# *//'
+      sed -n '3,19p' "$0" | sed 's/^# *//'
       exit 0
       ;;
     *) err "Unknown argument: $arg"; exit 1 ;;
@@ -511,6 +513,12 @@ run_migrate_st() {
   (cd "$BACKEND_DIR" && _bun run migrate:st)
 }
 
+run_edit_env() {
+  # No dep install — edit-env.ts only uses Bun built-ins + local ui/input
+  # helpers, so it's a quick hop to the editor (handy before first setup).
+  (cd "$BACKEND_DIR" && _bun run scripts/edit-env.ts)
+}
+
 open_browser() {
   local url="$1"
 
@@ -644,6 +652,16 @@ start_backend() {
     set +a
   fi
 
+  # smol (low-memory GC mode) defaults on; operators disable it persistently
+  # via LUMIVERSE_SMOL=false in .env (survives auto-updates, unlike bunfig.toml).
+  # The visual runner applies this itself in scripts/runner/server-manager.ts;
+  # this only covers the plain (no-runner) launch below. Use a scalar (not an
+  # array) so the empty case expands cleanly under macOS bash 3.2 + `set -u`.
+  local smol_flag="--smol"
+  case "$(printf '%s' "${LUMIVERSE_SMOL:-}" | tr '[:upper:]' '[:lower:]')" in
+    false|0|off|no) smol_flag="" ;;
+  esac
+
   # Decide: visual runner or plain process
   if [[ "$USE_RUNNER" == true ]] && [[ -t 1 ]]; then
     # Interactive terminal — use the visual runner (fall back to plain if it crashes)
@@ -675,10 +693,11 @@ start_backend() {
       (sleep 2; open_browser "$url") &
     fi
 
+    # $smol_flag is intentionally unquoted: empty -> no arg, "--smol" -> one arg.
     if [[ "$MODE" == "dev" ]]; then
-      (cd "$BACKEND_DIR" && _bun run dev)
+      (cd "$BACKEND_DIR" && _bun $smol_flag --watch src/index.ts)
     else
-      (cd "$BACKEND_DIR" && _bun run start)
+      (cd "$BACKEND_DIR" && _bun $smol_flag src/index.ts)
     fi
   fi
 }
@@ -740,6 +759,9 @@ case "$MODE" in
     ;;
   migrate-st)
     run_migrate_st
+    ;;
+  edit-env)
+    run_edit_env
     ;;
   kill-pkgs)
     kill_pkgs

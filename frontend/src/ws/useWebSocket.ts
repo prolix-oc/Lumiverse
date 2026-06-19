@@ -18,7 +18,7 @@ import {
   invalidateDisplayRegexCacheForVars,
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
-import { recoverPooledGeneration } from '@/lib/generation-recovery'
+import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
 import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
@@ -26,6 +26,8 @@ import type {
   GenerationInProgressPayload,
   GenerationPhaseChangedPayload,
   GenerationEndedPayload,
+  GenerationMetricsReadyPayload,
+  GenerationBreakdownReadyPayload,
   GenerationAcknowledgedPayload,
   MessageSentPayload,
   MessageEditedPayload,
@@ -52,8 +54,32 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
   )
 }
 
+const MAX_TOAST_ERROR_LENGTH = 800
+// Last-line-of-defense sanitizer for error strings rendered in toasts. The
+// backend already strips HTML/oversize bodies from provider errors, but this
+// keeps a misbehaving provider (or a stale backend) from wedging the toast
+// layout with a 50KB Cloudflare 503 page.
+function sanitizeToastMessage(raw: string | undefined | null): string {
+  if (!raw) return 'Generation failed'
+  const stripped = /<\w[^>]*>/.test(raw)
+    ? raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    : raw
+  return stripped.length > MAX_TOAST_ERROR_LENGTH
+    ? `${stripped.slice(0, MAX_TOAST_ERROR_LENGTH - 1)}…`
+    : stripped
+}
+
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
 const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
+
+// Set on first SYSTEM_DISK_LOW receipt to silence the rebroadcasts the
+// backend fires every 5 min while the disk stays over threshold. Module
+// scope (not state) — survives WS reconnects, resets only on full page load.
+let diskWarningShown = false
 
 interface VarChangeSummary {
   bagWideVarChange: boolean
@@ -88,6 +114,61 @@ function summarizeVarChanges(changedFields: readonly string[]): VarChangeSummary
 function fetchLatestMessages(chatId: string) {
   const pageSize = useStore.getState().messagesPerPage || 50
   return messagesApi.list(chatId, { limit: pageSize, tail: true })
+}
+
+// Deferred generation metrics (tokenCount / TTFT / TPS / model / provider) are
+// persisted *after* GENERATION_ENDED and pushed via GENERATION_METRICS_READY,
+// which races that event's reconciliation re-fetch (the fetch can read the row
+// before the metrics land). Buffer the last few keyed by message id so the
+// reconciliation can re-apply them if its setMessages won the race and wiped the
+// live patch. Bounded FIFO — only the most recent generations matter.
+const PENDING_METRICS_MAX = 20
+const pendingGenerationMetrics = new Map<string, GenerationMetricsReadyPayload>()
+
+/** Patch buffered/live metrics onto the in-store message (no-op if absent). */
+function applyGenerationMetrics(payload: GenerationMetricsReadyPayload): void {
+  const state = useStore.getState()
+  if (payload.chatId !== state.activeChatId || !payload.messageId) return
+  if (payload.tokenCount == null && !payload.generationMetrics) return
+  const msg = state.messages.find((m) => m.id === payload.messageId)
+  if (!msg) return
+  // Metrics are anchored to the generated swipe; top-level extra is the active
+  // swipe's projection. Skip when the user is viewing a different swipe — the
+  // persisted value surfaces when they navigate to it.
+  if (payload.swipeId != null && msg.swipe_id !== payload.swipeId) return
+  state.updateMessage(payload.messageId, {
+    extra: {
+      ...msg.extra,
+      ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
+      ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
+    },
+  })
+}
+
+/**
+ * Push the current extension-registered drawer tab list to the backend so
+ * `spindle.ui.getDrawerTabs()` can enumerate them. Built-in drawer tabs are
+ * mirrored backend-side; only extension tabs need to be synced.
+ */
+function sendDrawerTabRegistrySnapshot(drawerTabs: ReadonlyArray<{
+  id: string
+  extensionId: string
+  title: string
+  shortName?: string
+  description?: string
+  keywords?: string[]
+}>) {
+  wsClient.send({
+    type: 'SPINDLE_UI_REGISTRY_SYNC',
+    drawerTabs: drawerTabs.map((t) => ({
+      id: t.id,
+      extensionId: t.extensionId,
+      tabName: t.title,
+      shortName: t.shortName,
+      tabDescription: t.description,
+      keywords: t.keywords,
+    })),
+  })
 }
 
 async function refreshLoomRegistry() {
@@ -190,6 +271,9 @@ export function useWebSocket() {
       // back to true (socket open → CONNECTED with role → pong received).
       wsClient.on(WS_OPEN, () => {
         store.getState().setWsConnected(true)
+        // Push the current extension drawer-tab snapshot so the backend's
+        // spindle.ui.getDrawerTabs() can enumerate extension-added tabs.
+        sendDrawerTabRegistrySnapshot(store.getState().drawerTabs)
       }),
       wsClient.on(WS_CLOSE, () => {
         store.getState().setWsConnected(false)
@@ -291,6 +375,11 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           state.updateMessage(payload.message.id, payload.message)
+          // Deleting a swipe shifts indices, so a pending "new swipe" pointer is
+          // no longer trustworthy — drop it.
+          if (payload.action === 'deleted' && payload.message?.id) {
+            state.clearUnseenSwipe(payload.message.id)
+          }
           if (payload.message?.id) invalidateDisplayRegexCacheForMessage(payload.message.id)
         }
       }),
@@ -330,6 +419,12 @@ export function useWebSocket() {
             // called without a targetMessageId (e.g. regeneration flow).
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Anchor the streaming buffer to its swipe so the user can navigate to
+          // other swipes mid-generation without smearing live tokens onto them.
+          state.setStreamingSwipeId(payload.targetSwipeId ?? null)
+          // A new generation supersedes any stale "new swipe ready" badge on this
+          // message — the upcoming completion will re-flag the fresh swipe if needed.
+          if (payload.targetMessageId) state.clearUnseenSwipe(payload.targetMessageId)
         }
         // Track as a chat head so it appears if user navigates away
         state.addChatHead({
@@ -352,6 +447,9 @@ export function useWebSocket() {
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
+          // Refine (never clobber) the swipe anchor — GENERATION_STARTED is the
+          // authoritative source; only overwrite if this event actually carries it.
+          if (payload.targetSwipeId != null) state.setStreamingSwipeId(payload.targetSwipeId)
 
           // Surface context clipping once the final assembly metadata is ready.
           const clip = payload.contextClipStats
@@ -400,14 +498,16 @@ export function useWebSocket() {
       wsClient.on(EventType.STREAM_TOKEN_RECEIVED, (payload: StreamTokenPayload) => {
         const state = store.getState()
         if (payload.generationId === state.activeGenerationId) {
-          // Skip tokens already included in the pooled recovery content
-          if (state.lastPooledSeq != null && payload.seq != null && payload.seq <= state.lastPooledSeq) return
-          // Clear the watermark after the first new token arrives
-          if (state.lastPooledSeq != null) state.setLastPooledSeq(null as any)
-          if (payload.type === 'reasoning') {
-            state.appendStreamReasoning(payload.token)
-          } else {
-            state.appendStreamToken(payload.token)
+          // `offset` (char position of the segment in the server's cumulative
+          // buffer) gives exact reconciliation: overlap with recovery-backfilled
+          // content is sliced off inside the append, and a segment starting
+          // beyond our buffer means we missed tokens — pull the authoritative
+          // pool immediately instead of waiting for the 4s watchdog.
+          const result = payload.type === 'reasoning'
+            ? state.appendStreamReasoning(payload.token, payload.offset)
+            : state.appendStreamToken(payload.token, payload.offset)
+          if (result === 'gap' && payload.chatId) {
+            requestStreamGapRecovery(payload.chatId)
           }
         }
         // Phase transitions are now handled explicitly by GENERATION_PHASE_CHANGED
@@ -442,10 +542,14 @@ export function useWebSocket() {
             // Surface that in the toast so users know their partial response
             // wasn't lost — it'll appear in the chat after reconciliation.
             const partialSaved = !!payload.messageId && !!payload.content
+            // Defense-in-depth: cap the toast message so a misbehaving provider
+            // (Cloudflare 503 HTML page, etc.) cannot wedge the toast layout
+            // even if it slips past the backend sanitizer.
+            const safeError = sanitizeToastMessage(payload.error)
             toast.error(
               partialSaved
-                ? i18n.t('common.toast.partialResponseSaved', { error: payload.error })
-                : payload.error,
+                ? i18n.t('common.toast.partialResponseSaved', { error: safeError })
+                : safeError,
               { title: i18n.t('common.toast.generationFailedTitle') },
             )
             // Reconcile message list on error so any backend-staged empty messages
@@ -459,37 +563,10 @@ export function useWebSocket() {
               }).catch(() => { /* ignore */ })
             }
           } else {
-            // Cache breakdown data from WS event if present
-            if (payload.messageId && (payload as any).breakdown) {
-              const bd = (payload as any).breakdown
-              state.cacheBreakdown(payload.messageId, {
-                entries: bd.entries || [],
-                totalTokens: bd.totalTokens || 0,
-                maxContext: bd.maxContext || 0,
-                model: bd.model || '',
-                provider: bd.provider || '',
-                parameters: bd.parameters,
-                usage: bd.usage,
-                presetName: bd.presetName,
-                tokenizer_name: bd.tokenizer_name || null,
-                chatId: payload.chatId,
-              })
-            }
-
-            // Patch generation metrics onto the in-store message immediately so the
-            // detail pill can display tokenCount/TTFT/TPS before reconciliation completes.
-            if (payload.messageId && (payload.tokenCount != null || payload.generationMetrics)) {
-              const msg = state.messages.find((m) => m.id === payload.messageId)
-              if (msg) {
-                state.updateMessage(payload.messageId, {
-                  extra: {
-                    ...msg.extra,
-                    ...(payload.tokenCount != null ? { tokenCount: payload.tokenCount } : {}),
-                    ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
-                  },
-                })
-              }
-            }
+            // Token count / TTFT / TPS and the prompt breakdown are computed
+            // after this event (deferred so the stop button clears fast) and
+            // delivered separately via GENERATION_METRICS_READY /
+            // GENERATION_BREAKDOWN_READY — see those handlers below.
 
             // In group chats, mark the character as spoken and clear responding state
             if (state.isGroupChat && state.activeGroupCharacterId) {
@@ -534,6 +611,11 @@ export function useWebSocket() {
             }
 
             const optimisticMessageId = state.regeneratingMessageId
+            // Captured before endStreaming clears it: the swipe this generation
+            // filled. If the user chose to stay on a different swipe, we flag the
+            // fresh one as unseen so a "new swipe ready" badge points them to it.
+            const completedSwipeId = state.streamingSwipeId
+            const completedMessageId = payload.messageId
 
             // Reconcile before clearing streaming. Clearing first collapses long
             // streamed rows back to their blank/original content for a frame; on
@@ -547,6 +629,24 @@ export function useWebSocket() {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
                 s.setMessages(res.data, res.total)
+                // Deferred metrics may have arrived (and been wiped by the
+                // setMessages above) before this re-fetch could read them —
+                // re-apply from the buffer so the pill/hover survive the race.
+                if (completedMessageId) {
+                  const buffered = pendingGenerationMetrics.get(completedMessageId)
+                  if (buffered) {
+                    applyGenerationMetrics(buffered)
+                    pendingGenerationMetrics.delete(completedMessageId)
+                  }
+                }
+                if (completedSwipeId != null && completedMessageId) {
+                  const msg = res.data.find((m) => m.id === completedMessageId)
+                  // Only badge when there's actually another swipe to navigate to
+                  // and the user isn't already viewing the freshly-generated one.
+                  if (msg && msg.swipes.length > 1 && completedSwipeId < msg.swipes.length && msg.swipe_id !== completedSwipeId) {
+                    s.setUnseenSwipe(completedMessageId, completedSwipeId)
+                  }
+                }
                 s.endStreaming()
               }
             }).catch(() => {
@@ -672,6 +772,32 @@ export function useWebSocket() {
         }
       }),
 
+      // Deferred metrics (tokenCount / TTFT / TPS / model / provider) arrive after
+      // GENERATION_ENDED — and may land before or after its reconciliation
+      // re-fetch. Apply live, and buffer so the reconciliation can re-apply if its
+      // setMessages won the race and wiped this patch (see GENERATION_ENDED).
+      wsClient.on(EventType.GENERATION_METRICS_READY, (payload: GenerationMetricsReadyPayload) => {
+        if (!payload.messageId) return
+        pendingGenerationMetrics.set(payload.messageId, payload)
+        if (pendingGenerationMetrics.size > PENDING_METRICS_MAX) {
+          const oldest = pendingGenerationMetrics.keys().next().value
+          if (oldest !== undefined) pendingGenerationMetrics.delete(oldest)
+        }
+        applyGenerationMetrics(payload)
+      }),
+
+      // Deferred prompt breakdown arrives after GENERATION_ENDED. Cache it (keyed
+      // by message id, regardless of active chat) so opening the Prompt Breakdown
+      // modal renders instantly instead of re-fetching. No reconciliation race:
+      // it lives in its own cache, not the message's extra.
+      wsClient.on(EventType.GENERATION_BREAKDOWN_READY, (payload: GenerationBreakdownReadyPayload) => {
+        if (!payload.messageId || !payload.breakdown) return
+        store.getState().cacheBreakdown(payload.messageId, {
+          ...payload.breakdown,
+          chatId: payload.chatId,
+        })
+      }),
+
       wsClient.on(EventType.GENERATION_STOPPED, (payload: { generationId?: string; chatId?: string }) => {
         const state = store.getState()
         // Guard: only stop streaming if this event matches the active generation
@@ -790,7 +916,7 @@ export function useWebSocket() {
         // Re-sync any pooled generation for the active chat. Covers sockets
         // that were killed during backgrounding (mobile OS suspend, long tab
         // switch) — tokens streamed while we were offline are pulled from the
-        // server pool and the seq watermark de-dupes the live WS replay.
+        // server pool and segment offsets de-dupe the live WS replay exactly.
         const activeChatId = store.getState().activeChatId
         if (activeChatId) {
           recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
@@ -1052,6 +1178,27 @@ export function useWebSocket() {
         toastFn(payload.message, { title: attributedTitle, duration: payload.duration })
       }),
 
+      wsClient.on(EventType.SYSTEM_DISK_LOW, (payload: { path: string; usagePercent: number; freeBytes: number; totalBytes: number; thresholdPercent: number }) => {
+        // Backend re-emits this on every 5-min interval while the disk is
+        // over threshold so late-connecting admins still get notified. Dedupe
+        // here so existing sessions only see one toast per page-load.
+        if (diskWarningShown) return
+        diskWarningShown = true
+        const formatBytes = (bytes: number): string => {
+          const GIB = 1024 * 1024 * 1024
+          const MIB = 1024 * 1024
+          if (bytes >= GIB) return `${(bytes / GIB).toFixed(1)} GiB`
+          if (bytes >= MIB) return `${(bytes / MIB).toFixed(0)} MiB`
+          return `${bytes} B`
+        }
+        const pct = (payload.usagePercent * 100).toFixed(0)
+        const free = formatBytes(payload.freeBytes)
+        toast.warning(
+          `The disk hosting Lumiverse is ${pct}% full (${free} free). Free up space to avoid crashes — writes to memory-mapped files may fault if the disk fills.`,
+          { title: 'Storage almost full', duration: 30_000 },
+        )
+      }),
+
       wsClient.on(EventType.SPINDLE_THEME_OVERRIDES, (payload: { extensionId: string; extensionName: string; overrides: { paletteAccent?: { h: number; s: number; l: number }; variables?: Record<string, string>; variablesByMode?: { dark?: Record<string, string>; light?: Record<string, string> } } | null }) => {
         // Always record the latest payload so re-enabling a muted theme applies
         // immediately without waiting for the extension to re-fire. The theme
@@ -1075,12 +1222,48 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.SPINDLE_CHAT_STYLE_MODE, (payload: { extensionId: string; extensionName: string; chatId: string | null; mode: 'bounded' | 'extension-relaxed' }) => {
+        if (typeof payload?.extensionId !== 'string' || payload.extensionId.length === 0) return
+        // chatId === null signals extension dispose, drop all of its claims.
+        if (payload.chatId === null) {
+          store.getState().clearExtensionChatStyleModes(payload.extensionId)
+          return
+        }
+        if (typeof payload.chatId !== 'string' || payload.chatId.length === 0) return
+        if (payload.mode !== 'bounded' && payload.mode !== 'extension-relaxed') return
+        store.getState().setChatStyleMode(payload.chatId, payload.extensionId, payload.mode)
+      }),
+
       wsClient.on(EventType.SPINDLE_COMMANDS_CHANGED, (payload: { extensionId: string; extensionName: string; commands: Array<{ id: string; label: string; description: string; keywords?: string[]; scope?: 'global' | 'chat' | 'chat-idle' | 'landing' | 'character' }> }) => {
         store.getState().setExtensionCommands({
           extensionId: payload.extensionId,
           extensionName: payload.extensionName,
           commands: payload.commands,
         })
+      }),
+
+      wsClient.on(EventType.SPINDLE_UI_NAVIGATE, (payload: { extensionId: string; extensionName: string; action: 'open_drawer_tab' | 'close_drawer' | 'open_settings' | 'close_settings' | 'open_command_palette' | 'close_command_palette'; tabId?: string; viewId?: string }) => {
+        const s = store.getState()
+        switch (payload.action) {
+          case 'open_drawer_tab':
+            if (payload.tabId) s.openDrawer(payload.tabId)
+            break
+          case 'close_drawer':
+            s.closeDrawer()
+            break
+          case 'open_settings':
+            s.openSettings(payload.viewId)
+            break
+          case 'close_settings':
+            s.closeSettings()
+            break
+          case 'open_command_palette':
+            s.openCommandPalette()
+            break
+          case 'close_command_palette':
+            s.closeCommandPalette()
+            break
+        }
       }),
 
       // Legacy/event-bus bridge for message tag intercept notifications.
@@ -1245,7 +1428,7 @@ export function useWebSocket() {
     // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
     // even when the WS stays open; the server pool is authoritative, so a
     // status poll on every visible transition restores all accumulated content
-    // (and the tokenSeq watermark drops tokens the client already rendered).
+    // (segment offsets slice off anything the client already rendered).
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
       const activeChatId = store.getState().activeChatId
@@ -1274,10 +1457,24 @@ export function useWebSocket() {
       store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
     }, 4000)
 
+    // Re-sync the drawer-tab registry whenever extensions register or remove
+    // a tab. Selector compares by id+title shape so unrelated state churn
+    // (e.g. badge updates) doesn't trigger a redundant WS round-trip.
+    const drawerTabsKey = (tabs: ReadonlyArray<{ id: string; title: string; extensionId: string }>) =>
+      tabs.map((t) => `${t.id}:${t.extensionId}:${t.title}`).join('|')
+    let lastDrawerTabsKey = drawerTabsKey(store.getState().drawerTabs)
+    const unsubDrawerTabs = store.subscribe((state) => {
+      const key = drawerTabsKey(state.drawerTabs)
+      if (key === lastDrawerTabsKey) return
+      lastDrawerTabsKey = key
+      sendDrawerTabRegistrySnapshot(state.drawerTabs)
+    })
+
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       clearInterval(recoveryWatchdog)
       clearInterval(chatHeadReconcile)
+      unsubDrawerTabs()
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }

@@ -362,7 +362,7 @@
     padding-bottom: calc(32px + var(--app-keyboard-inset-bottom, 0px));
     /* Let content push taller than viewport when keyboard is open */
     justify-content: flex-start;
-    padding-top: calc(18vh / var(--lumiverse-ui-scale, 1));
+    padding-top: max(24px, calc(18dvh / var(--lumiverse-ui-scale, 1)));
   }
 
   .card {
@@ -387,6 +387,16 @@
 
   .logoBlock {
     margin-bottom: 24px;
+  }
+}
+
+/* Touch devices with inflated viewports (e.g. browser zoom < 100%)
+   skip the max-width breakpoint above — catch them by input type. */
+@media (pointer: coarse) {
+  .content {
+    justify-content: flex-start;
+    padding-top: max(24px, calc(18dvh / var(--lumiverse-ui-scale, 1)));
+    padding-bottom: calc(32px + var(--app-keyboard-inset-bottom, 0px));
   }
 }
 

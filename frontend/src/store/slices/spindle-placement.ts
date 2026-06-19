@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { SpindlePlacementSlice } from '@/types/store'
 import type { SpindleDockEdge } from 'lumiverse-spindle-types'
+import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
 
 // ── Capacity limits ──
 
@@ -127,6 +128,10 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   inputBarActions: [],
   extensionCommands: [],
   hiddenPlacements: loadHiddenPlacements(),
+
+  // ── Tab Mobility ──
+  tabLocations: {},
+  pendingActiveTabReset: null,
 
   // ── Drawer Tabs ──
 
@@ -339,4 +344,22 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     saveHiddenPlacements(allIds)
     set({ hiddenPlacements: allIds })
   },
+
+  // ── Tab Mobility Actions ──
+
+  moveTabTo: (tabId: string, location: TabLocation) => {
+    set((state) => {
+      const next = { ...state.tabLocations, [tabId]: location }
+
+      // Signal ViewportDrawer to reset active tab when the moved tab leaves main-drawer
+      let pendingActiveTabReset = state.pendingActiveTabReset
+      if (location.kind !== 'main-drawer') {
+        pendingActiveTabReset = tabId
+      }
+
+      return { tabLocations: next, pendingActiveTabReset }
+    })
+  },
+
+  clearPendingActiveTabReset: () => set({ pendingActiveTabReset: null }),
 })

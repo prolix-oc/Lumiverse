@@ -16,6 +16,8 @@
 
 import { useStore } from '@/store'
 import { ttsApi } from '@/api/tts'
+import { audioApi } from '@/api/audio'
+import { markFreshlyAttached } from '@/lib/ttsPersistence'
 import { sanitizeForTts, parseSegments, type TextSegment } from '@/lib/speechDetection'
 import {
   resolveMessageSpeaker,
@@ -112,6 +114,13 @@ export function startMessageTtsPlayback(args: {
   messageIsUser: boolean
   /** Stop in-flight playback before starting. Defaults to true. */
   preempt?: boolean
+  /**
+   * When true, persist the synthesized audio even if the message already has
+   * a saved audio attachment (the backend replaces it). Used by the
+   * "Regenerate" flow after the user confirms in the modal. Default false
+   * keeps auto-save from silently overwriting a saved recording.
+   */
+  replaceExistingAudio?: boolean
 }): boolean {
   const state = useStore.getState()
   const voiceSettings = state.voiceSettings
@@ -148,6 +157,11 @@ export function startMessageTtsPlayback(args: {
   // order map is established before any slot can resolve.
   speakSegments(slots, args.messageId)
 
+  // Parallel record of (buffer, mime) per slot so we can upload the same
+  // bytes the audio engine just played. Indexed by slot so out-of-order
+  // resolution doesn't shuffle the playback order on persist.
+  const persistBuffers: Array<{ data: ArrayBuffer; mime: string } | null> = new Array(plan.length).fill(null)
+
   // Run synth tasks with bounded concurrency. We use a simple cursor-based
   // worker pool — N workers pull the next index, fetch + handoff, repeat.
   let cursor = 0
@@ -167,7 +181,12 @@ export function startMessageTtsPlayback(args: {
           resolvers[idx](null)
           continue
         }
+        const mime = response.headers.get('content-type') || 'audio/mpeg'
         const buffer = await response.arrayBuffer()
+        // Clone the buffer for persistence — the audio engine decodes the
+        // original via AudioContext, which can detach the underlying memory
+        // on some engines and leave the persist payload empty.
+        persistBuffers[idx] = { data: buffer.slice(0), mime }
         resolvers[idx](buffer)
       } catch (err) {
         console.error('[TTS Playback] Segment synth threw:', err)
@@ -178,5 +197,276 @@ export function startMessageTtsPlayback(args: {
 
   for (let i = 0; i < concurrency; i++) void runOne()
 
+  // Capture chat id + the target swipe at the moment playback starts. If
+  // the user switches chats or swipes to a different variant while the
+  // upload is in flight, we still attach to the original message + swipe
+  // — the audio belongs to the content that was just spoken, not whatever
+  // is now active.
+  const chatId = state.activeChatId
+  const targetSwipeId = readMessageSwipeId(args.messageId)
+  void persistAfterPlayback({
+    chatId,
+    messageId: args.messageId,
+    swipeId: targetSwipeId,
+    slots,
+    persistBuffers,
+    replaceExistingAudio: !!args.replaceExistingAudio,
+  })
+
   return true
+}
+
+/**
+ * Read the current swipe_id for a message from the store. Used by both
+ * synth flows to capture the target swipe at synth start, before any
+ * user swiping can race the save round-trip. Returns undefined when the
+ * message isn't in the store (e.g. it was deleted between trigger and
+ * read) — the save endpoint falls back to the message's then-current
+ * swipe_id in that case.
+ */
+function readMessageSwipeId(messageId: string): number | undefined {
+  const msg = useStore.getState().messages.find((m) => m.id === messageId)
+  return msg?.swipe_id
+}
+
+/**
+ * After every synth slot resolves, gather successful buffers in playback
+ * order and POST them as one multipart upload. The server muxes the
+ * segments into a single MP3 (ffmpeg when available, naive concat
+ * fallback for MP3-only inputs) and attaches the result to the message.
+ *
+ * Skip persistence when:
+ *   • The original chat id isn't known (defensive — TTS without an active
+ *     chat shouldn't reach this code path, but guard anyway).
+ *   • Any segment failed to synthesize. Persisting a partial recording would
+ *     leave the user with a corrupted "saved" version and we'd never re-try.
+ *   • The message already has a saved audio attachment. The save endpoint
+ *     would overwrite it, but the user explicitly clicks "Regenerate" in
+ *     that flow — the auto-save path should never silently replace.
+ *   • No segments were captured (all nulls).
+ *
+ * Failures are logged and swallowed — playback already succeeded; not being
+ * able to persist is a degradation, not an error worth toasting to the user.
+ */
+async function persistAfterPlayback(args: {
+  chatId: string | null
+  messageId: string
+  /** The swipe the audio was synthesized for. May be undefined when the
+   *  message couldn't be read from the store at synth start; the backend
+   *  falls back to the message's current swipe_id in that case. */
+  swipeId: number | undefined
+  slots: Array<Promise<ArrayBuffer | null>>
+  persistBuffers: Array<{ data: ArrayBuffer; mime: string } | null>
+  replaceExistingAudio: boolean
+}): Promise<void> {
+  if (!args.chatId) return
+
+  // Wait for all synth tasks to settle (resolved with buffer or null on failure).
+  await Promise.all(args.slots)
+
+  const captured = args.persistBuffers
+  if (captured.some((c) => c === null)) {
+    // Don't persist a partial recording — re-playing later would give the
+    // user a silent gap mid-message with no way to recover.
+    return
+  }
+
+  const segments = captured.filter((c): c is { data: ArrayBuffer; mime: string } => c !== null)
+  if (segments.length === 0) return
+
+  if (!args.replaceExistingAudio) {
+    // Re-check the live message for an existing audio attachment FOR THE
+    // SAME SWIPE. The bubble routes "regenerate" through a separate flow
+    // (replaceExistingAudio=true) which explicitly accepts the replace,
+    // so the auto-save path bails if one is already there. Other swipes'
+    // recordings are irrelevant — they don't conflict with saving this
+    // swipe's audio.
+    const liveMessage = useStore.getState().messages.find((m) => m.id === args.messageId)
+    const existingAttachments = Array.isArray((liveMessage?.extra as any)?.attachments)
+      ? (liveMessage!.extra as any).attachments
+      : []
+    const alreadySaved = existingAttachments.some((a: any) =>
+      a && a.type === 'audio' && (
+        // Match either the captured swipe_id, or legacy audio without a
+        // swipe_id (which the player treats as visible on all swipes, so
+        // we shouldn't double-save under it).
+        a.swipe_id === args.swipeId || a.swipe_id === undefined
+      ),
+    )
+    if (alreadySaved) return
+  }
+
+  try {
+    const result = await audioApi.saveForMessage(args.chatId, args.messageId, segments, {
+      swipeId: args.swipeId,
+    })
+    if (result?.message) {
+      // Mark BEFORE pushing the new message into the store. The Zustand update
+      // synchronously re-renders MessageAttachments which mounts the
+      // MessageAudioPlayer — that mount checks the registry. autoPlay=false
+      // because the in-memory engine has already played the audio for the
+      // user; we only want the load-in animation, not a second playback.
+      markFreshlyAttached(args.messageId, { autoPlay: false })
+      useStore.getState().updateMessage(args.messageId, result.message)
+    }
+  } catch (err) {
+    console.warn('[TTS Playback] Failed to persist audio for message', args.messageId, err)
+  }
+}
+
+/**
+ * Auto-play pipeline that routes playback through the persistent audio
+ * attachment rather than the in-memory engine.
+ *
+ * Order of operations:
+ *   1. Plan + synthesize every segment in parallel (capped concurrency).
+ *   2. Wait for all segments to settle. If any failed, fall back to in-memory
+ *      playback so the user still hears the message — partial audio over
+ *      silence is the right trade.
+ *   3. Save all segments to the server (ffmpeg mux on the backend).
+ *   4. Mark the message as freshly attached with autoPlay=true and push the
+ *      updated message into the store. MessageAudioPlayer mounts, plays its
+ *      load-in animation, and then auto-plays through the saved file.
+ *   5. If saving fails, fall back to in-memory playback from the buffers we
+ *      already have so the user isn't left silent on a network blip.
+ *
+ * Unlike `startMessageTtsPlayback`, this is asynchronous from the caller's
+ * point of view — auto-play accepts the synth latency because the alternative
+ * (in-memory plays now, persistent player appears later disconnected from the
+ * audio) was the UX problem we were solving.
+ */
+export async function synthesizeSaveAndAutoPlay(args: {
+  messageId: string
+  messageName: string
+  messageContent: string
+  messageIsUser: boolean
+  /**
+   * Optional abort signal. When fired, in-flight synth + save fetches are
+   * aborted, the result is discarded (no fresh marker, no store update,
+   * no in-memory fallback), and the function returns false. Used by the
+   * regen flow's "Cancel TTS generation" affordance.
+   */
+  signal?: AbortSignal
+}): Promise<boolean> {
+  const state = useStore.getState()
+  const voiceSettings = state.voiceSettings
+  if (!voiceSettings.ttsEnabled) return false
+
+  const plan = planMessagePlayback({
+    messageName: args.messageName,
+    messageContent: args.messageContent,
+    messageIsUser: args.messageIsUser,
+  })
+  if (plan.length === 0) return false
+
+  const chatId = state.activeChatId
+  if (!chatId) return false
+
+  // Capture the target swipe at synth start so a mid-synth user swipe
+  // doesn't misroute the recording. Falls back to undefined when the
+  // message has gone (deleted between trigger and read); the backend
+  // resolves to the message's then-current swipe_id in that case.
+  const targetSwipeId = readMessageSwipeId(args.messageId)
+
+  // Stop any in-flight in-memory playback (e.g. the user clicked play on an
+  // older message right before generation finished) so playback ownership
+  // unambiguously belongs to whatever the persistent player plays next.
+  stop()
+  unlockTTSAudio()
+  setTTSVolume(voiceSettings.ttsVolume)
+  setTTSSpeed(1.0)
+
+  const persistBuffers: Array<{ data: ArrayBuffer; mime: string } | null> =
+    new Array(plan.length).fill(null)
+
+  let cursor = 0
+  const runOne = async (): Promise<void> => {
+    while (true) {
+      const idx = cursor++
+      if (idx >= plan.length) return
+      if (args.signal?.aborted) return
+      const item = plan[idx]
+      try {
+        const response = await ttsApi.synthesize(item.voice.connectionId, item.text, {
+          voice: item.voice.voice || undefined,
+          speed: item.voice.parameters?.speed ?? voiceSettings.ttsSpeed,
+          signal: args.signal,
+        })
+        if (!response.ok) {
+          const body = await response.text().catch(() => '')
+          console.error('[TTS AutoPlay] Segment synth failed:', response.status, body)
+          continue
+        }
+        const mime = response.headers.get('content-type') || 'audio/mpeg'
+        const buffer = await response.arrayBuffer()
+        persistBuffers[idx] = { data: buffer, mime }
+      } catch (err) {
+        // AbortError is expected when the user cancels — don't noise the
+        // console for it.
+        if ((err as any)?.name !== 'AbortError') {
+          console.error('[TTS AutoPlay] Segment synth threw:', err)
+        }
+      }
+    }
+  }
+
+  const concurrency = Math.min(MAX_CONCURRENT_SYNTH, plan.length)
+  await Promise.all(Array.from({ length: concurrency }, () => runOne()))
+
+  // Cancelled mid-synth → bail without persisting or falling back to in-memory.
+  // The user explicitly asked us to stop, so don't start audio they no longer
+  // want.
+  if (args.signal?.aborted) return false
+
+  // Partial failure → don't persist a corrupt file. Play whatever we got
+  // through the in-memory engine so the user still hears audio.
+  if (persistBuffers.some((b) => b === null)) {
+    playInMemoryFromBuffers(args.messageId, persistBuffers)
+    return false
+  }
+
+  const segments = persistBuffers as Array<{ data: ArrayBuffer; mime: string }>
+
+  try {
+    const result = await audioApi.saveForMessage(chatId, args.messageId, segments, {
+      signal: args.signal,
+      swipeId: targetSwipeId,
+    })
+    if (args.signal?.aborted) return false
+    if (result?.message) {
+      // Mark BEFORE store update — see note in persistAfterPlayback.
+      markFreshlyAttached(args.messageId, { autoPlay: true })
+      useStore.getState().updateMessage(args.messageId, result.message)
+      return true
+    }
+    // Save returned no message (shouldn't happen) — fall through to in-memory.
+    playInMemoryFromBuffers(args.messageId, persistBuffers)
+    return false
+  } catch (err) {
+    // Cancelled during the save round-trip — silent return, no fallback
+    // playback (user wanted to stop).
+    if ((err as any)?.name === 'AbortError' || args.signal?.aborted) return false
+    console.warn(
+      '[TTS AutoPlay] Save failed, falling back to in-memory playback:',
+      err,
+    )
+    playInMemoryFromBuffers(args.messageId, persistBuffers)
+    return false
+  }
+}
+
+/**
+ * Hand pre-fetched buffers to the in-memory audio engine. Used as the
+ * fallback when the save-first auto-play flow can't persist (synth failure
+ * or network/server save error). The user still hears audio — they just
+ * don't get the persistent attachment for replay.
+ */
+function playInMemoryFromBuffers(
+  messageId: string,
+  buffers: Array<{ data: ArrayBuffer; mime: string } | null>,
+): void {
+  const slots: Array<Promise<ArrayBuffer | null>> = buffers.map((b) =>
+    Promise.resolve(b ? b.data : null),
+  )
+  speakSegments(slots, messageId)
 }

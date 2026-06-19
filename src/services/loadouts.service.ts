@@ -1,6 +1,5 @@
 import * as settingsSvc from "./settings.service";
 import * as chatsSvc from "./chats.service";
-import { getCouncilSettings, putCouncilSettings } from "./council/council-settings.service";
 import type { Loadout, LoadoutSnapshot, LoadoutBinding, ResolvedLoadout } from "../types/loadout";
 
 // ---------------------------------------------------------------------------
@@ -97,7 +96,6 @@ export function deleteLoadout(userId: string, loadoutId: string): boolean {
 
 export function captureSnapshot(userId: string): LoadoutSnapshot {
   const settingsMap = settingsSvc.getSettingsByKeys(userId, SNAPSHOT_SETTINGS_KEYS);
-  const councilSettings = getCouncilSettings(userId);
 
   return {
     selectedDefinition: settingsMap.get("selectedDefinition") ?? null,
@@ -107,7 +105,6 @@ export function captureSnapshot(userId: string): LoadoutSnapshot {
     chimeraMode: settingsMap.get("chimeraMode") ?? false,
     lumiaQuirks: settingsMap.get("lumiaQuirks") ?? "",
     lumiaQuirksEnabled: settingsMap.get("lumiaQuirksEnabled") ?? true,
-    councilSettings,
     selectedLoomStyles: settingsMap.get("selectedLoomStyles") ?? [],
     selectedLoomUtils: settingsMap.get("selectedLoomUtils") ?? [],
     selectedLoomRetrofits: settingsMap.get("selectedLoomRetrofits") ?? [],
@@ -144,10 +141,10 @@ export function applySnapshot(userId: string, snapshot: LoadoutSnapshot): void {
 
   settingsSvc.putMany(userId, batch);
 
-  // Council settings use a separate key with merge logic
-  if (snapshot.councilSettings) {
-    putCouncilSettings(userId, snapshot.councilSettings);
-  }
+  // Council is intentionally NOT applied here. Council members, tool toggles and
+  // sidecar are owned solely by the council-profile system (Character/Chat/
+  // Defaults binds) so the two can no longer override each other. Older loadout
+  // snapshots may still carry a `councilSettings` blob; it is ignored.
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +217,7 @@ export function resolveLoadout(userId: string, chatId: string): ResolvedLoadout 
 
   // 2. Character-level binding
   const chat = chatsSvc.getChat(userId, chatId);
-  if (chat) {
+  if (chat?.character_id) {
     const charBinding = getCharacterBinding(userId, chat.character_id);
     if (charBinding) {
       const loadout = getLoadout(userId, charBinding.loadout_id);

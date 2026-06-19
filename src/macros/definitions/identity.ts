@@ -76,6 +76,17 @@ export function registerNamesMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    name: "isNarrator",
+    category: "Names",
+    description: "Whether the active persona is a narrator (not a self-insert)",
+    returns: "\"yes\" or \"no\"",
+    returnType: "string",
+    aliases: ["is_narrator"],
+    handler: (ctx) => ctx.env.names.isNarrator,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
     name: "groupOthers",
     category: "Names",
     description: "Comma-separated group member names excluding the focused character. Empty in non-group chats.",
@@ -102,5 +113,16 @@ export function registerNamesMacros(): void {
     returnType: "string",
     aliases: ["group_last_speaker"],
     handler: (ctx) => ctx.env.names.groupLastSpeaker,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "groupCardMode",
+    category: "Names",
+    description: "Card composition mode for the active chat.",
+    returns: "\"solo\" | \"swap\" | \"merge\" | \"merge_ignore_muted\"",
+    returnType: "string",
+    aliases: ["group_card_mode"],
+    handler: (ctx) => ctx.env.names.groupCardMode,
   });
 }

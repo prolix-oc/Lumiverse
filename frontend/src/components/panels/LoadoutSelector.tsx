@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Save, ChevronDown, MoreVertical, RefreshCw, Trash2, Link, Unlink, Pencil, Check, X } from 'lucide-react'
 import { useStore } from '@/store'
 import { loadoutsApi } from '@/api/loadouts'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { toast } from '@/lib/toast'
 import type { Loadout, LoadoutBinding } from '@/api/loadouts'
 import styles from './LoadoutSelector.module.css'
@@ -27,6 +28,7 @@ export default function LoadoutSelector() {
   const [saveName, setSaveName] = useState('')
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameName, setRenameName] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [chatBinding, setChatBinding] = useState<LoadoutBinding | null>(null)
   const [charBinding, setCharBinding] = useState<LoadoutBinding | null>(null)
 
@@ -97,9 +99,9 @@ export default function LoadoutSelector() {
   const handleDelete = useCallback(async () => {
     if (!activeLoadoutId) return
     const name = activeLoadout?.name
+    setConfirmDelete(false)
     await deleteLoadout(activeLoadoutId)
     toast.success(t('loadoutSelector.deleted', { name }))
-    setMenuOpen(false)
   }, [activeLoadoutId, activeLoadout, deleteLoadout, t])
 
   const handleRename = useCallback(async () => {
@@ -289,7 +291,7 @@ export default function LoadoutSelector() {
                     </button>
                   )
                 )}
-                <button type="button" className={clsx(styles.menuItem, styles.menuItemDanger)} onClick={handleDelete}>
+                <button type="button" className={clsx(styles.menuItem, styles.menuItemDanger)} onClick={() => { setMenuOpen(false); setConfirmDelete(true) }}>
                   <Trash2 size={11} /> {t('loadoutSelector.delete')}
                 </button>
               </div>
@@ -297,6 +299,18 @@ export default function LoadoutSelector() {
           </div>
         )}
       </div>
+
+      {confirmDelete && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('loadoutSelector.deleteConfirmTitle')}
+          message={t('loadoutSelector.deleteConfirmMessage', { name: activeLoadout?.name })}
+          variant="danger"
+          confirmText={t('loadoutSelector.delete')}
+          onConfirm={() => { void handleDelete() }}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   )
 }

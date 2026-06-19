@@ -19,6 +19,7 @@ export interface Persona {
   attached_world_book_id: string | null;
   folder: string;
   is_default: boolean;
+  is_narrator: boolean;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -33,6 +34,7 @@ export interface CreatePersonaInput {
   possessive_pronoun?: string;
   folder?: string;
   is_default?: boolean;
+  is_narrator?: boolean;
   attached_world_book_id?: string;
   metadata?: Record<string, any>;
 }

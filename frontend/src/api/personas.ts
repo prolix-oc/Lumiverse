@@ -37,9 +37,10 @@ export const personasApi = {
     return post<Persona>(`/personas/${id}/duplicate`)
   },
 
-  uploadAvatar(id: string, file: File) {
+  uploadAvatar(id: string, file: File, originalFile?: File) {
     const form = new FormData()
     form.append('avatar', file)
+    if (originalFile) form.append('original_avatar', originalFile)
     return upload<Persona>(`/personas/${id}/avatar`, form)
   },
 

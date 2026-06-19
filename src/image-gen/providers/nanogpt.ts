@@ -106,9 +106,7 @@ export class NanoGPTImageProvider implements ImageProvider {
       signal: request.signal,
     });
 
-    if (!res.ok) {
-      throw new Error(`Nano-GPT API error ${res.status}: ${await res.text().catch(() => "Unknown error")}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "image generate", res);
 
     const data = await res.json();
     const b64 = data?.data?.[0]?.b64_json;

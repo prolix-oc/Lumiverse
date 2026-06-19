@@ -116,7 +116,7 @@ export default function RegexEditorModal() {
   const [replaceString, setReplaceString] = useState('')
   const [flags, setFlags] = useState('gi')
   const [placement, setPlacement] = useState<RegexPlacement[]>(['ai_output'])
-  const [target, setTarget] = useState<RegexTarget>('response')
+  const [target, setTarget] = useState<RegexTarget[]>(['response'])
   const [scope, setScope] = useState<RegexScope>('global')
   const [minDepth, setMinDepth] = useState<string>('')
   const [maxDepth, setMaxDepth] = useState<string>('')
@@ -140,7 +140,7 @@ export default function RegexEditorModal() {
       setReplaceString(script.replace_string)
       setFlags(script.flags)
       setPlacement([...script.placement])
-      setTarget(script.target)
+      setTarget([...script.target])
       setScope(script.scope)
       setMinDepth(script.min_depth != null ? String(script.min_depth) : '')
       setMaxDepth(script.max_depth != null ? String(script.max_depth) : '')
@@ -373,7 +373,7 @@ export default function RegexEditorModal() {
               <div className={styles.targetCol}>
                 <div className={styles.field}>
                   <label className={styles.fieldLabel}>{tr('pipeline')}</label>
-                  <div className={styles.segmented}>
+                  <div className={styles.placementGrid}>
                     {([
                       { key: 'prompt' as const, label: tr('targetPrompt') },
                       { key: 'response' as const, label: tr('targetResponse') },
@@ -382,8 +382,8 @@ export default function RegexEditorModal() {
                       <button
                         key={key}
                         type="button"
-                        className={clsx(styles.segmentedBtn, target === key && styles.segmentedBtnActive)}
-                        onClick={() => setTarget(key)}
+                        className={clsx(styles.placementChip, target.includes(key) && styles.placementChipActive)}
+                        onClick={() => setTarget((prev) => prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key])}
                       >
                         {label}
                       </button>

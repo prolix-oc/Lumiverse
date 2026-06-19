@@ -209,6 +209,28 @@ export function listDocuments(
   );
 }
 
+/**
+ * Cheap existence check: do any of the given databanks hold at least one
+ * vectorized, searchable chunk? Used to short-circuit retrieval *before* the
+ * expensive query embedding — an attached-but-empty bank should cost nothing.
+ * A document is only searchable once vectorization marks it `ready` with
+ * chunks in LanceDB, so `pending`/`processing`/`error` docs (and empty files)
+ * don't count.
+ */
+export function hasSearchableChunks(userId: string, databankIds: string[]): boolean {
+  if (databankIds.length === 0) return false;
+  const placeholders = databankIds.map(() => "?").join(", ");
+  const row = getDb()
+    .query(
+      `SELECT 1 AS present FROM databank_documents
+       WHERE user_id = ? AND status = 'ready' AND total_chunks > 0
+         AND databank_id IN (${placeholders})
+       LIMIT 1`,
+    )
+    .get(userId, ...databankIds) as { present: number } | null;
+  return row !== null;
+}
+
 export function renameDocument(userId: string, id: string, newName: string): DatabankDocument | null {
   const now = Math.floor(Date.now() / 1000);
   const slug = nameToSlug(newName);

@@ -638,6 +638,7 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
     depth: [],
     emBefore: [],
     emAfter: [],
+    atMarker: [],
   };
 
   for (const entry of entries) {
@@ -672,6 +673,9 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
         break;
       case 6:
         cache.emAfter.push({ content, role, entryLabel });
+        break;
+      case 7:
+        cache.atMarker.push({ content, role, entryLabel });
         break;
       default:
         // Unknown position — treat as "before"

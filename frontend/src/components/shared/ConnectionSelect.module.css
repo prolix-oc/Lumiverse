@@ -1,0 +1,14 @@
+/* Vertical stack for the connection selector + its paired model combobox. */
+.withModel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Square off SearchableSelect's leading slot (default is a 50% circle) so the
+   provider chip reads like the rounded icon in the connection panels, and drop
+   the slot's default fill so the per-provider tint shows through. */
+.leadingSlot {
+  border-radius: 6px;
+  background: transparent;
+}

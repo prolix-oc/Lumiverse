@@ -25,11 +25,13 @@ export class LocalFileSystem implements FileSystem {
 
   async stat(path: string): Promise<FileStat> {
     const s = statSync(path);
+    const birthSec = s.birthtimeMs > 0 ? Math.floor(s.birthtimeMs / 1000) : undefined;
     return {
       isDirectory: s.isDirectory(),
       isFile: s.isFile(),
       size: s.size,
       modifiedAt: Math.floor(s.mtimeMs / 1000),
+      createdAt: birthSec,
     };
   }
 

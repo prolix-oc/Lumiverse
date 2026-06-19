@@ -49,7 +49,17 @@
     "createNew": "Créer un nouveau dossier..."
   },
   "imageLightbox": {
-    "loadFailed": "Échec du chargement image"
+    "loadFailed": "Échec du chargement image",
+    "copyImage": "Copier l'image",
+    "downloadImage": "Télécharger l'image",
+    "deleteImage": "Supprimer l'image",
+    "copied": "Image copiée dans le presse-papiers",
+    "copyFailed": "Impossible de copier l'image dans le presse-papiers",
+    "downloadFailed": "Impossible de télécharger l'image",
+    "deleteFailed": "Impossible de supprimer l'image",
+    "deleteTitle": "Supprimer l'image ?",
+    "deleteMessage": "Cette action est irréversible.",
+    "delete": "Supprimer"
   },
   "inputPrompt": {
     "submit": "Soumettre"
@@ -95,5 +105,11 @@
     "hide": "Masquer",
     "hideWidget": "Cacher le widget",
     "resetPosition": "Réinitialiser la position"
+  },
+  "modelCombobox": {
+    "refreshModels": "Actualiser les modèles",
+    "noMatching": "Aucun modèle correspondant",
+    "loading": "Chargement des modèles...",
+    "emptyDefault": "Aucun modèle trouvé. Saisissez-en un manuellement."
   }
 }

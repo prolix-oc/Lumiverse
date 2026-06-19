@@ -169,12 +169,14 @@
   padding: 8px 12px;
   border-radius: var(--lcs-radius-sm, 8px);
   border: 1px solid var(--lumiverse-border);
-  background: var(--lumiverse-bg-darker);
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
   color: var(--lumiverse-text);
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.5;
   font-family: inherit;
-  transition: border-color var(--lumiverse-transition-fast);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
 }
 
 .textArea {
@@ -187,6 +189,7 @@
 .textArea:focus {
   outline: none;
   border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  box-shadow: 0 0 0 3px var(--lumiverse-primary-010, rgba(147, 112, 219, 0.1));
 }
 
 .sliderRow {
@@ -214,6 +217,31 @@
   margin-top: 2px;
   display: flex;
   justify-content: space-between;
+}
+
+/* ---- Switch toggle wrapper (uses shared Toggle.Switch) ---- */
+
+.switchRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.switchStateLabel {
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+}
+
+/* ---- Multiselect / select empty-state ---- */
+
+.multiselectEmpty {
+  padding: 8px 10px;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  font-style: italic;
 }
 
 .footer {

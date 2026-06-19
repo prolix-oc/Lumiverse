@@ -46,7 +46,7 @@ interface ChatMemoryCacheRow {
 }
 
 export interface CachedChatMemoryResult {
-  chunks: Array<{ content: string; score: number; metadata: any }>;
+  chunks: Array<{ content: string; score: number | null; metadata: any }>;
   formatted: string;
   count: number;
   enabled: boolean;
@@ -54,6 +54,10 @@ export interface CachedChatMemoryResult {
   settingsSource: "global" | "per_chat";
   chunksAvailable: number;
   chunksPending: number;
+  /** How these chunks were retrieved. Surfaced in dry-run diagnostics so a
+   *  recency fallback (e.g. the query embed failed) isn't mistaken for real
+   *  vector similarity. Absent until the cache has been populated. */
+  retrievalMode?: ChatMemoryCacheRow["retrieval_mode"];
 }
 
 interface RefreshJob {
@@ -149,7 +153,7 @@ async function buildQueryText(
 }
 
 function formatMemoryOutput(
-  chunks: Array<{ content: string; score: number; metadata: any }>,
+  chunks: Array<{ content: string; score: number | null; metadata: any }>,
   settings: embeddingsSvc.ChatMemorySettings,
 ): string {
   if (chunks.length === 0) return "";
@@ -157,7 +161,7 @@ function formatMemoryOutput(
   const renderedChunks = chunks.map(c => {
     let rendered = settings.chunkTemplate;
     rendered = rendered.replace(/\{\{content\}\}/g, c.content);
-    rendered = rendered.replace(/\{\{score\}\}/g, c.score.toFixed(4));
+    rendered = rendered.replace(/\{\{score\}\}/g, c.score != null ? c.score.toFixed(4) : "n/a");
     const meta = c.metadata ?? {};
     rendered = rendered.replace(/\{\{startIndex\}\}/g, String(meta.startIndex ?? "?"));
     rendered = rendered.replace(/\{\{endIndex\}\}/g, String(meta.endIndex ?? "?"));
@@ -199,7 +203,15 @@ function getVisibleMessageCount(messages: MemoryMessageView[]): number {
   return messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0).length;
 }
 
-function getRecentFallbackChunks(chatId: string, limit: number): Array<{ content: string; score: number; metadata: any }> {
+function getRecentFallbackChunks(
+  chatId: string,
+  limit: number,
+  excludeMessageIds?: Set<string>,
+): Array<{ content: string; score: number | null; metadata: any }> {
+  // Over-fetch when excluding so we can drop just-seen chunks (the exclusion
+  // window) and still return up to `limit` genuinely older chunks.
+  const hasExclusions = !!excludeMessageIds && excludeMessageIds.size > 0;
+  const fetchLimit = hasExclusions ? limit + Math.min(excludeMessageIds!.size, 50) : limit;
   const rows = getDb()
     .query(
       `SELECT id, content, message_ids FROM chat_chunks
@@ -207,16 +219,22 @@ function getRecentFallbackChunks(chatId: string, limit: number): Array<{ content
        ORDER BY created_at DESC
        LIMIT ?`,
     )
-    .all(chatId, limit) as Array<{ id: string; content: string; message_ids: string | null }>;
+    .all(chatId, fetchLimit) as Array<{ id: string; content: string; message_ids: string | null }>;
 
-  return rows.map((row) => ({
-    content: row.content,
-    score: 0,
-    metadata: {
-      chunkId: row.id,
-      messageIds: safeJsonArray<string>(row.message_ids, []),
-    },
-  }));
+  const out: Array<{ content: string; score: number | null; metadata: any }> = [];
+  for (const row of rows) {
+    const messageIds = safeJsonArray<string>(row.message_ids, []);
+    if (hasExclusions && messageIds.some((id) => excludeMessageIds!.has(id))) continue;
+    out.push({
+      content: row.content,
+      // Recency fallback carries no vector measurement — null (not 0) so it is
+      // not mistaken for a perfect-distance match in diagnostics or filters.
+      score: null,
+      metadata: { chunkId: row.id, messageIds },
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function getChatMemoryContext(userId: string, chatId: string): {
@@ -265,6 +283,7 @@ function toCachedResult(row: ChatMemoryCacheRow): CachedChatMemoryResult {
     settingsSource: row.settings_source,
     chunksAvailable: row.chunks_available,
     chunksPending: row.chunks_pending,
+    retrievalMode: row.retrieval_mode,
   };
 }
 
@@ -402,8 +421,19 @@ async function computeFreshMemoryResult(
   const effectiveExclusionWindow = Math.max(5, Math.min(50, rawExclusionWindow));
   const effectiveThreshold = settings.similarityThreshold;
 
+  // Recent messages are excluded from retrieval (they're already in live
+  // context). Computed up front so the recency fallback paths can honor it too
+  // instead of returning just-seen messages as "long-term" memory.
+  const excludeIds = new Set<string>();
+  {
+    const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
+    for (const message of visibleMessages.slice(-effectiveExclusionWindow)) {
+      excludeIds.add(message.id);
+    }
+  }
+
   if (chunksPending > 0) {
-    const chunks = getRecentFallbackChunks(chatId, effectiveTopK);
+    const chunks = getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
     return {
       settingsKey,
       sourceMessageCount,
@@ -422,7 +452,10 @@ async function computeFreshMemoryResult(
   }
 
   try {
-    const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText]);
+    // Shrink-and-retry on oversized-input errors so a long multi-message query
+    // doesn't silently collapse to the recency fallback on token-limited
+    // embedding backends (llama.cpp n_ubatch, 512-token models, etc.).
+    const queryVector = await embeddingsSvc.embedQueryAdaptive(userId, queryText);
     if (!queryVector || queryVector.length === 0) {
       return {
         settingsKey,
@@ -437,13 +470,6 @@ async function computeFreshMemoryResult(
         },
         retrievalMode: "empty",
       };
-    }
-
-    const excludeIds = new Set<string>();
-    const visibleMessages = messages.filter(m => !(m.extra?.hidden) && m.content.trim().length > 0);
-    const recentMessages = visibleMessages.slice(-effectiveExclusionWindow);
-    for (const message of recentMessages) {
-      excludeIds.add(message.id);
     }
 
     const hits = await embeddingsSvc.searchChatChunks(
@@ -464,8 +490,12 @@ async function computeFreshMemoryResult(
       { skipVectorFetch: true },
     );
 
+    // The similarity threshold gates on vector distance (lower = closer). A
+    // keyword-only hit has no distance (score === null) and can't clear a
+    // distance cutoff, so drop it when filtering is active. With threshold 0
+    // (the default) nothing is filtered and keyword hits are kept.
     const filteredHits = effectiveThreshold > 0
-      ? hits.filter(h => h.score <= effectiveThreshold)
+      ? hits.filter(h => h.score != null && h.score <= effectiveThreshold)
       : hits;
 
     const chunks = filteredHits.map(h => ({
@@ -491,7 +521,7 @@ async function computeFreshMemoryResult(
     };
   } catch (err) {
     console.warn("[chat-memory-cache] Background refresh failed, storing recency fallback:", err);
-    const chunks = getRecentFallbackChunks(chatId, effectiveTopK);
+    const chunks = getRecentFallbackChunks(chatId, effectiveTopK, excludeIds);
     return {
       settingsKey,
       sourceMessageCount,

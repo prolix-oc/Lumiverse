@@ -8,6 +8,8 @@
  */
 
 import type { AssemblyContext, PrefetchedData } from "../llm/types";
+import { makeAssistantCharacter } from "../types/character";
+import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as personasSvc from "./personas.service";
@@ -20,6 +22,8 @@ import * as globalAddonsSvc from "./global-addons.service";
 import { applyPersonaAddonStates } from "./persona-addon-states";
 import { normalizeCortexConfig, DEFAULT_CORTEX_CONFIG } from "./memory-cortex/config";
 import { getCharacterWorldBookIds } from "../utils/character-world-books";
+import { getCharacterDatabankIds } from "../utils/character-databanks";
+import { resolveActiveDatabankIds } from "./databank/scope-resolver.service";
 import type { BookSource } from "./prompt-assembly.service";
 import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 
@@ -97,29 +101,30 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   }
 
   const characterId = ctx.targetCharacterId || chat.character_id;
+  // Temporary chats are character-less and persona-less: a synthetic
+  // "Assistant" stands in for prompt assembly, and persona resolution is
+  // skipped (no default-persona fallback).
   const character = profiler.measureSync("character", () =>
-    charactersSvc.getCharacter(ctx.userId, characterId)
+    characterId
+      ? charactersSvc.getCharacter(ctx.userId, characterId)
+      : makeAssistantCharacter()
   );
   if (!character) throw new Error("Character not found");
 
+  const isTemporaryChat = isTemporaryChatMetadata(chat.metadata);
   let persona = profiler.measureSync("persona", () =>
-    applyPersonaAddonStates(
-      personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
-      ctx.personaAddonStates,
-    )
+    isTemporaryChat
+      ? null
+      : applyPersonaAddonStates(
+          personasSvc.resolvePersonaOrDefault(ctx.userId, ctx.personaId),
+          ctx.personaAddonStates,
+        )
   );
 
-  // Resolve attached global add-ons for the persona
-  if (persona) {
-    const attachedRefs = (persona.metadata?.attached_global_addons as Array<{ id: string; enabled: boolean }>) ?? [];
-    const enabledIds = attachedRefs.filter(a => a.enabled).map(a => a.id);
-    if (enabledIds.length > 0) {
-      const resolved = profiler.measureSync("global-addons", () =>
-        globalAddonsSvc.getGlobalAddonsByIds(ctx.userId, enabledIds)
-      );
-      persona = { ...persona, metadata: { ...persona.metadata, _resolvedGlobalAddons: resolved } };
-    }
-  }
+  // Resolve attached global add-ons for the persona so {{persona}} includes them
+  persona = profiler.measureSync("global-addons", () =>
+    globalAddonsSvc.resolvePersonaGlobalAddons(ctx.userId, persona)
+  );
 
   const connection = profiler.measureSync("connection", () =>
     ctx.connectionId
@@ -127,7 +132,11 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
       : connectionsSvc.getDefaultConnection(ctx.userId)
   );
 
-  const resolvedPresetId = ctx.presetId || connection?.preset_id;
+  // No-preset temp chats skip preset loading entirely (assembly re-checks the
+  // same flag and falls back to the raw legacy message mapping).
+  const resolvedPresetId = isNoPresetChatMetadata(chat.metadata)
+    ? null
+    : ctx.presetId || connection?.preset_id;
   const preset = profiler.measureSync("preset", () =>
     resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null
   );
@@ -138,6 +147,52 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   );
 
   if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+
+  // ── 3a. Pre-warm the databank query embedding (fire-and-forget) ──────
+  // The dominant cost of databank-retrieval is the embed round-trip
+  // (~500ms typical; LanceDB itself returns in <20ms for small corpora).
+  // Starting the embedding here, while the rest of prefetch + the first
+  // ~50ms of assembly run, lets the assembly-side `cachedEmbedTexts` call
+  // hit the in-memory cache instead of waiting on the upstream provider.
+  // The 10-minute cache TTL keeps the entry alive across retries / regens.
+  if (embeddingConfig.enabled && messages.length > 0) {
+    const memoryIsolated = chat.metadata?.memory_isolation === true;
+    const databankCharIds =
+      memoryIsolated || !character.id ? [] : [character.id];
+    const activeDatabankIds = resolveActiveDatabankIds(
+      ctx.userId,
+      ctx.chatId,
+      databankCharIds,
+      {
+        characterDatabankIds: memoryIsolated
+          ? []
+          : getCharacterDatabankIds(character.extensions),
+        chatDatabankIds:
+          (chat.metadata?.chat_databank_ids as string[] | undefined) ?? [],
+      },
+    );
+    if (activeDatabankIds.length > 0) {
+      // Must match the exact string assembly will embed (prompt-assembly.service.ts:1240),
+      // otherwise the cache key won't line up and the warm-up is wasted.
+      const databankQueryPreview = messages
+        .slice(-6)
+        .map((m) => m.content)
+        .join(" ");
+      if (databankQueryPreview.trim().length > 0) {
+        // Fire-and-forget cache warm-up: the result is consumed only via the
+        // shared cache, never awaited here. We deliberately do NOT pass the
+        // generation signal — if the user regenerates, aborting an in-flight
+        // embedding fetch mid-receive can trigger a Bun HTTPThread use-after-free
+        // (AsyncHTTP.onAsyncHTTPCallback). The embedding service's internal
+        // timeout still bounds the request.
+        void embeddingsSvc
+          .cachedEmbedTexts(ctx.userId, [databankQueryPreview])
+          .catch(() => {
+            /* Surface errors at the consumer site, not the warm-up. */
+          });
+      }
+    }
+  }
 
   // ── 4. World book entries (2 queries total) ──────────────────────────
   const globalWorldBooks = (allSettings.get("globalWorldBooks") as string[] | undefined) ?? [];
@@ -170,10 +225,27 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   const entriesByBook = profiler.measureSync("world-book-entries", () =>
     worldBooksSvc.listEntriesForBooks(ctx.userId, allBookIds)
   );
+  const embeddedCharacterBook = character.extensions?.character_book;
   const allEntries: import("../types/world-book").WorldBookEntry[] = [];
   for (const bookId of allBookIds) {
     const bookEntries = entriesByBook.get(bookId);
-    if (bookEntries) allEntries.push(...bookEntries);
+    if (bookEntries && bookEntries.length > 0) {
+      allEntries.push(...bookEntries);
+      continue;
+    }
+    if (!embeddedCharacterBook) continue;
+    const book = worldBooksSvc.getWorldBook(ctx.userId, bookId);
+    if (
+      book?.metadata?.source === "character" &&
+      book.metadata?.source_character_id === character.id
+    ) {
+      allEntries.push(
+        ...worldBooksSvc.materializeCharacterBookEntriesForRuntime(
+          bookId,
+          embeddedCharacterBook,
+        ),
+      );
+    }
   }
 
   // Large lorebooks make listEntriesForBooks + row hydration a noticeable

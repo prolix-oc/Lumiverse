@@ -14,10 +14,12 @@ import {
   ALLOWED_EVENT_PROPS,
   ALLOWED_JSX_TAGS,
   FORBIDDEN_PROPERTY_NAMES,
+  HOST_SLOTS_PROP,
   MAX_MAP_ITEMS,
   MAX_RENDER_DEPTH,
   MAX_RENDER_NODES,
   isAllowedJsxProp,
+  isSlotTag,
   isUrlProp,
   sanitizeUrl,
 } from './componentOverrideCapabilities'
@@ -31,9 +33,11 @@ interface RenderBudget {
 
 export function createTrustedOverrideComponent(program: ComponentAstProgram): TrustedOverrideComponent {
   function TrustedAstOverride(props: Record<string, unknown>) {
+    const hostSlots = props[HOST_SLOTS_PROP]
     const context: RuntimeOverrideContext = {
       props,
       actions: typeof props.actions === 'object' && props.actions ? props.actions as Record<string, unknown> : {},
+      slots: typeof hostSlots === 'object' && hostSlots ? hostSlots as Record<string, React.ReactNode> : {},
     }
     const scope = createInitialScope(program, props)
 
@@ -73,6 +77,7 @@ function renderNode(node: Node, scope: Scope, budget: RenderBudget, depth: numbe
 
   if (node.type === 'JSXElement') {
     const tag = getJsxTagName(node.openingElement.name)
+    if (tag && isSlotTag(tag)) return { kind: 'slot', name: tag }
     if (!tag || !ALLOWED_JSX_TAGS.has(tag)) throw new Error(`JSX tag <${tag || 'unknown'}> is not supported.`)
     const props = renderProps(tag, node.openingElement.attributes || [], scope)
     return { kind: 'element', tag, props, children: renderChildren(node.children || [], scope, budget, depth + 1) }
@@ -257,6 +262,10 @@ function renderSafeNode(node: SafeRenderNode | SafeRenderNode[] | null, context:
   if (!node) return null
   if (node.kind === 'text') return node.value
   if (node.kind === 'fragment') return <React.Fragment key={key}>{node.children.map((child, index) => renderSafeNode(child, context, `${key}:${index}`))}</React.Fragment>
+  if (node.kind === 'slot') {
+    const slot = context.slots[node.name]
+    return slot == null ? null : <React.Fragment key={key}>{slot}</React.Fragment>
+  }
 
   if (!ALLOWED_JSX_TAGS.has(node.tag)) return null
   const props: Record<string, unknown> = { key }

@@ -83,6 +83,7 @@ const deleted = await spindle.personas.delete(newPersona.id)
   attached_world_book_id: string | null // linked world book
   folder: string                        // organizational grouping
   is_default: boolean
+  is_narrator: boolean                  // narrator (non-self-insert) flag
   metadata: Record<string, unknown>
   created_at: number                    // unix epoch seconds
   updated_at: number
@@ -98,6 +99,7 @@ const deleted = await spindle.personas.delete(newPersona.id)
 | `description` | `string` | No | Full persona description |
 | `folder` | `string` | No | Organizational folder label |
 | `is_default` | `boolean` | No | Set as the default persona (clears previous default) |
+| `is_narrator` | `boolean` | No | Mark as a narrator persona (exposes `{{isNarrator}}` macro) |
 | `attached_world_book_id` | `string` | No | World book ID to attach |
 | `metadata` | `Record<string, unknown>` | No | Custom metadata |
 

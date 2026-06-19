@@ -2,7 +2,7 @@
  * Default BubbleMessage renderer — the original implementation extracted
  * so it can be used as a fallback when a user override crashes or is disabled.
  */
-import { useRef, useCallback, useState, useMemo } from 'react'
+import { useRef, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
@@ -10,6 +10,7 @@ import { IconGitFork } from '@tabler/icons-react'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
+import MessageAudioSlot from './MessageAudioSlot'
 import SwipeControls from './SwipeControls'
 import GreetingNav from './GreetingNav'
 import ReasoningBlock from './ReasoningBlock'
@@ -17,11 +18,13 @@ import StreamingIndicator from './StreamingIndicator'
 import BubbleActions from './BubbleActions'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import useSwipeAction from '@/hooks/useSwipeAction'
 import useSwipeGesture from '@/hooks/useSwipeGesture'
 import { useLongPress } from '@/hooks/useLongPress'
 import { useMessagePlayback } from '@/hooks/useMessagePlayback'
 import { copyTextToClipboard, getSelectionTextWithin } from '@/lib/clipboard'
+import { replay as replaySpindleInjections } from '@/lib/spindle/dom-injection-registry'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
@@ -52,6 +55,7 @@ export interface BubbleMessageDefaultProps {
   generationMetrics: GenerationMetrics | undefined
   avatarUrl: string | null
   fullAvatarUrl: string | null
+  displayAvatarUrl: string | null
   displayName: string
   macroUserName: string
   isHidden: boolean
@@ -171,7 +175,7 @@ export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayName, macroUserName, isHidden, userLeft,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, userLeft,
   handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
   handleFork, handlePromptBreakdown,
 }: BubbleMessageDefaultProps) {
@@ -181,13 +185,61 @@ export default function BubbleMessageDefault({
   const swipeGesturesEnabled = useStore((s) => s.swipeGesturesEnabled)
   const showMessageTokenCount = useStore((s) => s.showMessageTokenCount ?? true)
   const messageContextMenuEnabled = useStore((s) => s.messageContextMenuEnabled ?? true)
+  // Keep a MessageAudioSlot wrapper mounted on every assistant bubble
+  // when TTS is enabled, OR whenever an audio attachment already exists.
+  // The slot itself is height-zero when no audio is attached (no wasted
+  // space, no contribution to row height) and transitions smoothly to
+  // its natural height when audio arrives. Always-mounted is required
+  // for the grid-template-rows transition to have somewhere to animate
+  // from — and the smooth transition is what keeps the chat virtualizer
+  // from seeing an instant height delta during audio attach/detach.
+  const ttsEnabled = useStore((s) => s.voiceSettings.ttsEnabled)
+  // Audio is per-swipe: a recording is only visible when its swipe_id
+  // matches the message's current swipe_id. Legacy recordings (saved
+  // before the swipe_id field existed) carry no swipe_id and remain
+  // visible on every swipe so we don't strand them.
+  const audioAttachment = useMemo(() => {
+    const attachments = message.extra?.attachments ?? []
+    return attachments.find((a: any) =>
+      a && a.type === 'audio' && (a.swipe_id === undefined || a.swipe_id === message.swipe_id),
+    ) ?? null
+  }, [message.extra?.attachments, message.swipe_id])
+  const renderAudioSlot = !isEditing && (ttsEnabled || !!audioAttachment) && !message.is_user
   const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const cardRef = useRef<HTMLDivElement>(null)
+
+  // Re-inject any Spindle extension DOM that was registered for this
+  // message id but lost when the virtualizer unmounted the row (or this
+  // is the first mount and an extension injected before the row existed).
+  // useLayoutEffect — not useEffect — so the injection lands in the same
+  // paint as the bubble's mount, avoiding a flash of "no extension DOM".
+  // The dep is just message.id, so it only fires when this row genuinely
+  // hosts a different message; it won't re-replay on every re-render
+  // (which is what we want — replay is idempotent but still pointless
+  // work to do on every prop change).
+  useLayoutEffect(() => {
+    if (!cardRef.current) return
+    replaySpindleInjections(message.id, cardRef.current)
+  }, [message.id])
+
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const { handleSwipe } = useSwipeAction(message, chatId)
   const onSwipeLeft = useCallback(() => handleSwipe('left'), [handleSwipe])
   const onSwipeRight = useCallback(() => handleSwipe('right'), [handleSwipe])
-  const { canPlay, isPlaying, toggle: togglePlayback } = useMessagePlayback(message.id, message.content, message.name, message.is_user)
+  const {
+    canPlay,
+    isPlaying,
+    hasSavedAudio,
+    isGenerating,
+    toggle: togglePlayback,
+    regenModalOpen,
+    confirmRegen,
+    cancelRegen,
+    requestDelete,
+    deleteModalOpen,
+    confirmDelete,
+    cancelDelete,
+  } = useMessagePlayback(message.id, message.content, message.name, message.is_user)
   const canOpenContextMenu = !isEditing && !isSelectMode && messageContextMenuEnabled
 
   const closeContextMenu = useCallback(() => setContextMenuPos(null), [])
@@ -228,8 +280,14 @@ export default function BubbleMessageDefault({
     },
     ...(canPlay ? [{
       key: 'play',
-      label: isPlaying ? t('messageActions.stopPlayback') : t('messageActions.playTts'),
-      icon: isPlaying ? <Square size={14} /> : <Volume2 size={14} />,
+      label: isGenerating
+        ? t('messageActions.cancelTtsGeneration')
+        : isPlaying
+          ? t('messageActions.stopPlayback')
+          : hasSavedAudio
+            ? t('messageActions.regenerateTtsAudio')
+            : t('messageActions.playTts'),
+      icon: (isGenerating || isPlaying) ? <Square size={14} /> : <Volume2 size={14} />,
       onClick: () => contextAction(togglePlayback),
     }] satisfies ContextMenuEntry[] : []),
     {
@@ -261,7 +319,7 @@ export default function BubbleMessageDefault({
     },
   ], [
     canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
-    handlePromptBreakdown, handleToggleHidden, isHidden, isPlaying, isUser,
+    handlePromptBreakdown, handleToggleHidden, hasSavedAudio, isGenerating, isHidden, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
 
@@ -293,9 +351,9 @@ export default function BubbleMessageDefault({
       onTouchMove={canOpenContextMenu ? longPress.onTouchMove : undefined}
       onTouchEnd={canOpenContextMenu ? longPress.onTouchEnd : undefined}
     >
-      {avatarUrl && (
+      {displayAvatarUrl && (
         <div className={styles.avatarBg}>
-          <img className={styles.avatarBgImg} src={avatarUrl} alt="" />
+          <img className={styles.avatarBgImg} src={displayAvatarUrl} alt="" />
           <div className={styles.avatarBgScrim} />
         </div>
       )}
@@ -308,9 +366,9 @@ export default function BubbleMessageDefault({
               style={fullAvatarUrl ? { cursor: 'pointer' } : undefined}
               onClick={fullAvatarUrl ? (e) => { e.stopPropagation(); openFloatingAvatar(fullAvatarUrl, displayName) } : undefined}
             >
-              {avatarUrl ? (
+              {displayAvatarUrl ? (
                 <LazyImage
-                  src={avatarUrl}
+                  src={displayAvatarUrl}
                   alt={displayName}
                   fallback={
                     <div className={styles.avatarFallback}>
@@ -389,6 +447,15 @@ export default function BubbleMessageDefault({
           </div>
         )}
 
+        {renderAudioSlot && (
+          <MessageAudioSlot
+            audio={audioAttachment}
+            messageId={message.id}
+            isUser={isUser}
+            onDelete={hasSavedAudio ? requestDelete : undefined}
+          />
+        )}
+
         {!isUser && !isEditing && message.index_in_chat !== 0 && (
           <SwipeControls message={message} chatId={chatId} variant="bubble" />
         )}
@@ -407,6 +474,8 @@ export default function BubbleMessageDefault({
           onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
           onPlay={canPlay ? togglePlayback : undefined}
           isPlaying={isPlaying}
+          isGenerating={isGenerating}
+          hasSavedAudio={hasSavedAudio}
           isHidden={isHidden}
           content={message.content}
           className={styles.actionsPill}
@@ -414,6 +483,28 @@ export default function BubbleMessageDefault({
       )}
 
       <ContextMenu position={contextMenuPos} items={contextMenuItems} onClose={closeContextMenu} />
+
+      <ConfirmationModal
+        isOpen={regenModalOpen}
+        onCancel={cancelRegen}
+        onConfirm={confirmRegen}
+        title="Regenerate TTS audio?"
+        message="This will replace the saved audio attached to this message with a new TTS synthesis. The current recording will be deleted."
+        confirmText="Regenerate"
+        cancelText="Keep current"
+        variant="warning"
+      />
+
+      <ConfirmationModal
+        isOpen={deleteModalOpen}
+        onCancel={cancelDelete}
+        onConfirm={confirmDelete}
+        title="Delete saved audio?"
+        message="This removes the TTS recording attached to this message swipe. Other swipes' recordings are unaffected. You can always regenerate it later."
+        confirmText="Delete"
+        cancelText="Keep"
+        variant="danger"
+      />
     </div>
   )
 }

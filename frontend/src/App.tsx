@@ -7,6 +7,7 @@ import { useThemeApplicator } from '@/hooks/useThemeApplicator'
 import { useCharacterTheme } from '@/hooks/useCharacterTheme'
 import { useCustomCSSApplicator } from '@/hooks/useCustomCSSApplicator'
 import { useAppInit } from '@/hooks/useAppInit'
+import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
@@ -21,6 +22,7 @@ import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { useAutoSummarization } from '@/hooks/useAutoSummarization'
 import { usePresetRegexActivation } from '@/hooks/usePresetRegexActivation'
 import { useBoundPresetSelection } from '@/hooks/useBoundPresetSelection'
+import { RouterContextExporter } from '@/lib/router-bridge'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
 import styles from './App.module.css'
@@ -31,6 +33,7 @@ export default function App() {
   useCharacterTheme()
   useCustomCSSApplicator()
   useAppInit()
+  useDocumentTitle()
   useBadging()
   useTTSAutoPlay()
   useAutoSummarization()
@@ -161,6 +164,8 @@ export default function App() {
             } as React.CSSProperties}
           >
             <ErrorBoundary label="App">
+              {/* Mirrors react-router context out to detached drawer-tab roots */}
+              <RouterContextExporter />
               <main className={styles.main}>
                 <Outlet />
               </main>

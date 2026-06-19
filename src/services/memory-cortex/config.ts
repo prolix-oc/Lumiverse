@@ -74,6 +74,19 @@ export interface SidecarReliabilityConfig {
   gradesExistingRecords: boolean;
 }
 
+export interface FactManagementConfig {
+  /** Minimum chunk importance (0–10) required for facts to be persisted.
+   *  Chunks scoring below this threshold contribute no facts. Default: 3. */
+  importanceThreshold: number;
+  /** Maximum facts stored per entity. When exceeded, lowest-importance facts
+   *  are trimmed first. Default: 30. */
+  maxFactsPerEntity: number;
+  /** When true and the sidecar is active, exceeding maxFactsPerEntity triggers
+   *  an LLM call to curate which facts to keep/merge/discard instead of
+   *  purely score-based trimming. ("Fact Auto-Pilot") Default: false. */
+  autopilot: boolean;
+}
+
 export interface ThoughtMarkerConfig {
   /** Prefix marking a character thought block, e.g. <thinking> */
   prefix: string;
@@ -184,6 +197,9 @@ export interface MemoryCortexConfig {
     coreMemoryFlags: string[];
   };
 
+  /** Fact persistence and curation policy */
+  factManagement: FactManagementConfig;
+
   /** Entity lifecycle management */
   entityPruning: {
     /** Auto-archive entities with 1 mention and no recent activity */
@@ -271,6 +287,11 @@ export const DEFAULT_CORTEX_CONFIG: MemoryCortexConfig = {
     coreMemoryThreshold: 0.7,
     coreMemoryFlags: ["death", "promise", "first_meeting", "transformation", "confession"],
   },
+  factManagement: {
+    importanceThreshold: 3,
+    maxFactsPerEntity: 30,
+    autopilot: false,
+  },
   entityPruning: {
     enabled: true,
     staleAfterMessages: 200,
@@ -333,16 +354,31 @@ function applyStandardPreset(config: MemoryCortexConfig): MemoryCortexConfig {
 
 // ─── Settings Resolution ───────────────────────────────────────
 
+// Per-user cortex config cache. Resolving the config requires a settings-table
+// read + normalize on every call; the cortex warmup hot path hits this on
+// every chat open. Cache entries are invalidated by every write path
+// (putCortexConfig, applyCortexPreset). Values are deep-cloned on read so
+// callers can't mutate the cached instance.
+const cortexConfigCache = new Map<string, MemoryCortexConfig>();
+
+function invalidateCortexConfigCache(userId: string): void {
+  cortexConfigCache.delete(userId);
+}
+
 /**
  * Load the cortex configuration for a user.
  * Returns defaults if no config has been saved.
  */
 export function getCortexConfig(userId: string): MemoryCortexConfig {
-  const row = settingsSvc.getSetting(userId, SETTINGS_KEY);
-  if (!row?.value) return { ...DEFAULT_CORTEX_CONFIG };
+  const cached = cortexConfigCache.get(userId);
+  if (cached) return structuredClone(cached);
 
-  const saved = row.value as Partial<MemoryCortexConfig>;
-  return normalizeCortexConfig(saved);
+  const row = settingsSvc.getSetting(userId, SETTINGS_KEY);
+  const resolved = !row?.value
+    ? { ...DEFAULT_CORTEX_CONFIG }
+    : normalizeCortexConfig(row.value as Partial<MemoryCortexConfig>);
+  cortexConfigCache.set(userId, structuredClone(resolved));
+  return resolved;
 }
 
 /**
@@ -355,6 +391,7 @@ export function putCortexConfig(
   const current = getCortexConfig(userId);
   const merged = normalizeCortexConfig({ ...current, ...update });
   settingsSvc.putSetting(userId, SETTINGS_KEY, merged);
+  invalidateCortexConfigCache(userId);
   return merged;
 }
 
@@ -385,6 +422,7 @@ export function applyCortexPreset(
   }
 
   settingsSvc.putSetting(userId, SETTINGS_KEY, config);
+  invalidateCortexConfigCache(userId);
   return config;
 }
 
@@ -487,6 +525,19 @@ export function normalizeCortexConfig(
       reinforcementWeight: input.decay?.reinforcementWeight ?? defaults.decay.reinforcementWeight,
       coreMemoryThreshold: input.decay?.coreMemoryThreshold ?? defaults.decay.coreMemoryThreshold,
       coreMemoryFlags: input.decay?.coreMemoryFlags ?? defaults.decay.coreMemoryFlags,
+    },
+    factManagement: {
+      importanceThreshold: Math.max(0, Math.min(10,
+        typeof input.factManagement?.importanceThreshold === "number"
+          ? Math.floor(input.factManagement.importanceThreshold)
+          : defaults.factManagement.importanceThreshold,
+      )),
+      maxFactsPerEntity: Math.max(5, Math.min(100,
+        typeof input.factManagement?.maxFactsPerEntity === "number"
+          ? Math.floor(input.factManagement.maxFactsPerEntity)
+          : defaults.factManagement.maxFactsPerEntity,
+      )),
+      autopilot: input.factManagement?.autopilot ?? defaults.factManagement.autopilot,
     },
     entityPruning: {
       enabled: input.entityPruning?.enabled ?? defaults.entityPruning.enabled,

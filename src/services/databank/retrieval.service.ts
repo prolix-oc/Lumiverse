@@ -55,6 +55,11 @@ const DEFAULT_SEPARATOR = "\n---\n";
 
 /**
  * Search active databanks by vector similarity. Caches result for assembly consumption.
+ *
+ * `onTiming` (optional) is invoked with sub-phase wall times so the prompt
+ * profiler can attribute the cost between the embedding round-trip and the
+ * LanceDB hybrid search. The callback fires even when the call aborts or
+ * returns early — partial timings still tell us what was waiting.
  */
 export async function searchDatabanks(
   userId: string,
@@ -63,8 +68,16 @@ export async function searchDatabanks(
   queryText: string,
   limit = 4,
   signal?: AbortSignal,
+  onTiming?: (phase: string, ms: number) => void,
 ): Promise<DatabankRetrievalResult> {
   if (databankIds.length === 0) {
+    return { chunks: [], formatted: "", count: 0 };
+  }
+
+  // Skip everything — most importantly the query embedding round-trip — when
+  // the active banks hold nothing searchable. An attached-but-empty databank
+  // would otherwise pay ~500ms to embed a query against zero chunks.
+  if (!crud.hasSearchableChunks(userId, databankIds)) {
     return { chunks: [], formatted: "", count: 0 };
   }
 
@@ -72,11 +85,15 @@ export async function searchDatabanks(
     if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
     // Embed the query
+    const embedStart = performance.now();
     const [queryVector] = await embeddingsSvc.cachedEmbedTexts(userId, [queryText], { signal });
+    onTiming?.("databank-embed", performance.now() - embedStart);
     if (signal?.aborted) return { chunks: [], formatted: "", count: 0 };
 
     // Search LanceDB
+    const searchStart = performance.now();
     const raw = await embeddingsSvc.searchDatabankChunks(userId, databankIds, queryVector, limit, queryText, signal);
+    onTiming?.("databank-lancedb", performance.now() - searchStart);
 
     const chunks: DatabankSearchResult[] = raw.map((r) => ({
       chunkId: r.chunk_id,

@@ -37,6 +37,7 @@ describe("persona add-on states", () => {
       avatar_path: null,
       image_id: null,
       is_default: false,
+      is_narrator: false,
       attached_world_book_id: null,
       folder: "",
       metadata: {

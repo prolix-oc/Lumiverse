@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, type ChangeEvent, type ReactNode } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, type ChangeEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { Minimize2, Maximize2, Hash, Search } from 'lucide-react'
@@ -6,18 +6,6 @@ import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
 import s from './ExpandedTextEditor.module.css'
-
-type TextareaSelection = {
-  start: number
-  end: number
-  direction: HTMLTextAreaElement['selectionDirection']
-}
-
-function clampSelection(selection: TextareaSelection, valueLength: number): TextareaSelection {
-  const start = Math.min(selection.start, valueLength)
-  const end = Math.min(selection.end, valueLength)
-  return { start, end, direction: selection.direction }
-}
 
 // ============================================================================
 // SYNTAX HIGHLIGHTING
@@ -198,9 +186,7 @@ export default function ExpandedTextEditor({
 }: ExpandedTextEditorProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const highlightRef = useRef<HTMLDivElement>(null)
   const overlayMouseDownRef = useRef<EventTarget | null>(null)
-  const pendingSelectionRef = useRef<TextareaSelection | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
@@ -243,18 +229,6 @@ export default function ExpandedTextEditor({
     })).filter(g => g.macros.length > 0)
   }, [resolvedMacros, macroSearch])
 
-  useLayoutEffect(() => {
-    const selection = pendingSelectionRef.current
-    const ta = textareaRef.current
-    if (!selection) return
-
-    pendingSelectionRef.current = null
-    if (!ta || document.activeElement !== ta) return
-
-    const nextSelection = clampSelection(selection, value.length)
-    ta.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
-  }, [value])
-
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -280,20 +254,7 @@ export default function ExpandedTextEditor({
     }
   }, [])
 
-  // Sync scroll between textarea and highlight overlay
-  const handleScroll = useCallback(() => {
-    if (textareaRef.current && highlightRef.current) {
-      highlightRef.current.scrollTop = textareaRef.current.scrollTop
-      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft
-    }
-  }, [])
-
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    pendingSelectionRef.current = {
-      start: e.currentTarget.selectionStart,
-      end: e.currentTarget.selectionEnd,
-      direction: e.currentTarget.selectionDirection,
-    }
     onChange(e.currentTarget.value)
   }, [onChange])
 
@@ -370,18 +331,17 @@ export default function ExpandedTextEditor({
         <div className={s.editorArea}>
           {showHighlight ? (
             <div className={s.highlightContainer}>
-              <div ref={highlightRef} className={s.highlightBackdrop} aria-hidden="true">
-                <pre className={s.highlightPre}>{highlightNodes}{'\n'}</pre>
+              <div className={s.highlightInner}>
+                <pre className={s.highlightPre} aria-hidden="true">{highlightNodes}{'\n'}</pre>
+                <textarea
+                  ref={textareaRef}
+                  className={s.textareaHighlighted}
+                  value={value}
+                  onChange={handleTextareaChange}
+                  placeholder={placeholder}
+                  spellCheck={false}
+                />
               </div>
-              <textarea
-                ref={textareaRef}
-                className={s.textareaHighlighted}
-                value={value}
-                onChange={handleTextareaChange}
-                onScroll={handleScroll}
-                placeholder={placeholder}
-                spellCheck={false}
-              />
             </div>
           ) : (
             <textarea
@@ -447,19 +407,6 @@ export function ExpandableTextarea({
   const [expanded, setExpanded] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cursorPosRef = useRef<number | null>(null)
-  const pendingSelectionRef = useRef<TextareaSelection | null>(null)
-
-  useLayoutEffect(() => {
-    const selection = pendingSelectionRef.current
-    const ta = textareaRef.current
-    if (!selection) return
-
-    pendingSelectionRef.current = null
-    if (!ta || document.activeElement !== ta) return
-
-    const nextSelection = clampSelection(selection, value.length)
-    ta.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
-  }, [value])
 
   // Track cursor position continuously so it's correct even after
   // the expand button steals focus via mousedown before click fires
@@ -468,11 +415,6 @@ export function ExpandableTextarea({
   }, [])
 
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    pendingSelectionRef.current = {
-      start: e.currentTarget.selectionStart,
-      end: e.currentTarget.selectionEnd,
-      direction: e.currentTarget.selectionDirection,
-    }
     cursorPosRef.current = e.currentTarget.selectionStart
     onChange(e.currentTarget.value)
   }, [onChange])

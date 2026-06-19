@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "摘要",
     "thinkingDisplayOmitted": "省略",
     "thinkingDisplayDisabledHint": "仅在启用 API 推理时发送。",
-    "thinkingDisplayHint": "Opus 4.7 与 Mythos Preview 默认省略，选择“摘要”可接收总结文本。",
+    "thinkingDisplayHint": "Opus 4.7/4.8 与 Mythos Preview 默认省略，选择“摘要”可接收总结文本。",
     "keepInHistory": "历史保留",
     "keepAllReasoning": "在提示词中保留全部推理",
     "stripAllReasoning": "从提示词中移除全部推理",
@@ -348,6 +348,8 @@
     "resetsIn": "重置倒计时",
     "unknown": "未知",
     "imagesLeft": "剩余图片",
+    "daily": "每日",
+    "monthly": "每月",
     "comfyWorkflow": "ComfyUI 工作流",
     "loadComfyWorkflowFailed": "加载 ComfyUI 工作流失败"
   },
@@ -566,7 +568,16 @@
     "restoreServerDefault": "恢复服务器默认",
     "reset": "重置",
     "summarizationSystemPrompt": "摘要系统提示词",
-    "summarizationUserPrompt": "摘要用户提示词"
+    "summarizationUserPrompt": "摘要用户提示词",
+    "rebuildFromScratch": "从头重建",
+    "rebuilding": "重建中...",
+    "rebuildInProgress": "正在重建",
+    "rebuildBatchProgress": "正在处理第 {{current}}/{{total}} 批…",
+    "clearModalTitle": "清空摘要",
+    "rebuildModalTitle": "重建摘要",
+    "rebuildModalMessage": "这将分 <strong>{{batchCount}}</strong> 个批次处理全部 <strong>{{totalMessages}}</strong> 条消息。如果重建中途失败，现有摘要将被保留。",
+    "rebuildModalLoading": "正在从头重建摘要…",
+    "rebuildConfirm": "重建"
   },
   "regexPanel": {
     "title": "正则脚本",
@@ -580,6 +591,9 @@
     "clickPlus": "点击 + 创建。",
     "uncategorized": "未分类",
     "deleteFolderConfirm": "删除“{{folder}}”中的 {{count}} 个正则脚本？此操作不可撤销。",
+    "deleteFolderTitle": "删除文件夹脚本",
+    "deleteScriptTitle": "删除正则脚本",
+    "deleteScriptConfirm": "确定删除“{{name}}”吗？此操作无法撤销。",
     "deleteSomeFailed": "有 {{count}} 个脚本删除失败",
     "deletedScripts": "已删除 {{count}} 个脚本",
     "selectPresetFirstScript": "请先选择 Loom 预设再绑定正则脚本",
@@ -724,13 +738,32 @@
       "generating": "正在生成图像…",
       "starting": "启动中…",
       "step": "{{step}}/{{total}}（{{pct}}%）",
-      "previewAlt": "生成预览"
+      "previewAlt": "生成预览",
+      "finalizing": "正在完成…"
     },
     "enable": "启用图像生成",
     "enableHint": "通过议会场景工具生成具备场景感知的聊天背景",
+    "importExport": "导入 / 导出",
+    "exportModalTitle": "导出图像生成配置",
+    "exportIncludeSettings": "包含设置",
+    "exportIncludeParameters": "包含生成参数",
+    "exportIncludeParametersHint": "活动连接的步数、CFG、尺寸、种子等参数。导入时如果服务商匹配，将应用到活动连接。",
+    "exportIncludeConnections": "包含服务商连接",
+    "exportIncludeConnectionsHint": "包括连接参数、工作流和服务器 URL。绝不会导出 API 密钥。",
+    "exportPresets": "提示词预设",
+    "selectAll": "全选",
+    "selectNone": "全不选",
+    "noPresetsToExport": "没有可导出的已保存预设",
+    "selectedCount": "已选择 {{selected}}/{{total}} 个预设",
+    "exportConfig": "导出",
+    "importConfig": "导入",
+    "importSuccess": "已导入图像生成配置（{{presets}} 个预设、{{connections}} 个连接）",
+    "importFailed": "导入失败",
+    "exportFailed": "导出失败",
     "connection": "连接",
     "createConnectionFirst": "请先在 Connections 标签页创建连接",
     "selectConnection": "选择连接...",
+    "noConnection": "无连接",
     "promptMode": "提示模式",
     "mode": "模式",
     "modeHint": "Scene 会分析聊天生成场景提示词；Custom 直接发送你的提示词；Chat-aware custom 会根据聊天上下文重写为最终图像提示词。",
@@ -748,22 +781,27 @@
     "mainPreset": "主预设",
     "characterPreset": "角色预设",
     "personaPreset": "人设预设",
+    "captioningPreset": "图像描述预设",
     "activeMainPreset": "当前主预设",
     "boundCharacterPreset": "已绑定角色预设",
     "boundPersonaPreset": "已绑定人设预设",
+    "boundCaptioningPreset": "图像描述预设",
     "pickMainPresetHint": "选择一个已保存主预设加载到下方编辑器，并将其设为生成时使用的活动提示词。",
     "pickCharacterPresetHint": "选择角色预设并加载到编辑器，同时绑定到当前聊天角色。",
     "openChatBindPreset": "请先打开聊天后再绑定角色预设，否则选择不会持久化。",
     "pickPersonaPresetHint": "选择人设预设并加载到编辑器，同时绑定到当前人设。",
     "selectActivePersona": "请选择一个活动人设后再绑定。",
+    "pickCaptioningPresetHint": "选择一个已保存的图像描述预设以加载。这些预设定义图像描述器如何描述上传的图像。",
     "parserInstructions": "解析器指令",
     "prompt": "提示词",
     "characterSnippet": "角色片段",
     "personaSnippet": "人设片段",
+    "captioningInstructions": "图像描述指令",
     "parserInstructionsHint": "用于指导解析器 LLM 如何将聊天上下文转成最终图像提示词，此内容不会直接发送给图像提供商。",
     "sentDirectlyHint": "将直接发送给图像提供商。",
     "characterSnippetHint": "会在主预设中出现 {{character_prompt}} 的位置插入该文本。",
     "personaSnippetHint": "会在主预设中出现 {{persona_prompt}} 的位置插入该文本。",
+    "captioningInstructionsHint": "在图像描述器弹窗中与上传图像一同发送给解析器 LLM 的指令。",
     "editingPresetTitle": "编辑中：{{name}}",
     "editTargetPromptTitle": "{{target}} 提示词",
     "parserPromptExample": "示例：聚焦当前姿态、表情、服装、光照和房间细节，使用精炼的生图标签。",
@@ -773,6 +811,7 @@
     "negativePrompt": "负向提示词",
     "character": "角色",
     "persona": "人设",
+    "captioning": "图像描述",
     "negativeSnippet": "负向片段",
     "negativeSnippetHint": "会替换主预设负向提示词中的对应宏。",
     "editingPresetNegativeTitle": "编辑中：{{name}} - 负向",
@@ -783,6 +822,8 @@
     "saveChanges": "保存更改",
     "saveAsNew": "另存为新预设",
     "delete": "删除",
+    "deletePresetConfirmTitle": "删除提示词预设",
+    "deletePresetConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。",
     "boundToActiveCharacter": "已绑定到当前角色",
     "boundToActivePersona": "已绑定到当前人设",
     "promptParser": "提示词解析器",
@@ -838,6 +879,8 @@
     "workflowDefault": "（工作流默认）",
     "workflowOrConnectionDefault": "（工作流 / 连接默认）",
     "advanced": "高级",
+    "rawOverrideInvalidJson": "JSON 无效 — 在修复或清空此字段之前，生成将失败",
+    "rawOverrideNotObject": "必须是请求字段的 JSON 对象，例如 {\"steps\": 30}",
     "directorReferences": "导演参考图",
     "includeCharacterAvatar": "包含角色头像",
     "includeCharacterAvatarHint": "将当前角色头像作为导演参考图发送",
@@ -868,6 +911,8 @@
     "addGeneratedToGalleryHint": "开启后，每张生成图都会关联到当前聊天角色图库。关闭则不入库。",
     "generatedImagesResend": "可重复发送的生成图数量",
     "generatedImagesResendHint": "仅最近生成的图片会进入多模态上下文。",
+    "contextMessageLimit": "上下文中的聊天消息数",
+    "contextMessageLimitHint": "发送给提示词解析器用于场景分析和解析自定义提示词的最近聊天消息数量。",
     "sceneChangeSensitivity": "场景变化敏感度",
     "backgroundDisplay": "背景显示",
     "opacity": "透明度",
@@ -970,6 +1015,7 @@
     "noWorldBooks": "没有可用的世界书",
     "unknown": "未知",
     "removeWorldBook": "移除世界书",
+    "openInLorebook": "在世界书标签页中打开",
     "noWorldBooksAttached": "未关联世界书",
     "embeddedLorebook": "内嵌世界书",
     "embeddedLorebookEntries": "角色卡中发现 {{count}} 条条目",
@@ -1061,6 +1107,10 @@
       "expressionsCount": "{{count}} 个表情",
       "switchToSingle": "切换为单角色",
       "removeGroup": "删除组",
+      "deleteLabelConfirmTitle": "删除表情",
+      "deleteLabelConfirmMessage": "确定删除表情“{{label}}”吗？此操作无法撤销。",
+      "deleteGroupConfirmTitle": "移除分组",
+      "deleteGroupConfirmMessage": "确定移除分组“{{name}}”及其所有表情吗？此操作无法撤销。",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1099,7 +1149,9 @@
       "saved": "已保存。",
       "saveFailed": "保存失败。",
       "cleared": "已清除。",
-      "clearFailed": "清除失败。"
+      "clearFailed": "清除失败。",
+      "clearConfirmTitle": "清除 LoRA 绑定",
+      "clearConfirmMessage": "确定移除此角色已保存的 LoRA 绑定吗？此操作无法撤销。"
     }
   },
   "characterBrowser": {
@@ -1129,7 +1181,7 @@
     "importingTags": "正在导入标签...",
     "importUrl": "从 URL 导入",
     "importFromUrlTitle": "从 URL 导入",
-    "importFromUrlHint": "粘贴来自 Chub、JannyAI 或其他支持源的角色 URL。",
+    "importFromUrlHint": "粘贴来自 Chub、JannyAI、BotBooru 或其他支持源的角色 URL。",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "取消",
     "dropToImport": "拖放角色文件以导入",
@@ -1159,6 +1211,7 @@
     "searchWorldBooks": "搜索世界书…",
     "noWorldBooksAvailable": "没有可用的世界书",
     "removeFromAlwaysActive": "从始终激活中移除",
+    "editBook": "编辑此世界书",
     "noGlobalActive": "没有全局激活的世界书",
     "thisChatOnly": "仅当前聊天",
     "openChatToAdd": "打开聊天以添加聊天范围的世界书",
@@ -1272,7 +1325,10 @@
       "keywordPlaceholder": "输入关键词",
       "keywordList": "关键词列表",
       "keywordPrimary": "主关键词",
-      "keywordSecondary": "次关键词"
+      "keywordSecondary": "次关键词",
+      "setPositionTitle": "设置位置",
+      "position": "位置",
+      "depth": "深度"
     },
     "entryEditor": {
       "sections": {
@@ -1644,7 +1700,9 @@
     "boundCharacter": "配置已绑定到当前角色",
     "unboundCharacter": "已解除角色绑定",
     "bindFailed": "绑定配置失败",
-    "unbindFailed": "解除绑定失败"
+    "unbindFailed": "解除绑定失败",
+    "deleteConfirmTitle": "删除配置",
+    "deleteConfirmMessage": "确定删除“{{name}}”吗？此操作无法撤销。"
   },
   "groupChatsPanel": {
     "loading": "正在加载群聊...",
@@ -2045,7 +2103,9 @@
       "reattributeTitle": "重新归属到…",
       "detach": "（取消归属）",
       "pickEntity": "选择实体…",
-      "unattributed": "未归属 ({{count}})"
+      "unattributed": "未归属 ({{count}})",
+      "deleteConfirmTitle": "删除颜色",
+      "deleteConfirmMessage": "确定删除颜色 {{hex}} 吗？此操作无法撤销。"
     },
     "stats": {
       "loading": "正在加载统计…",
@@ -2115,7 +2175,8 @@
         "thought": "内心",
         "words": "{{count}} 词",
         "heuristic": "启发式"
-      }
+      },
+      "deleteRelationTitle": "删除关系"
     },
     "editors": {
       "cancel": "取消",
@@ -2234,6 +2295,13 @@
       "vaultDeleteFailed": "删除保险库失败",
       "vaultRenameFailed": "重命名保险库失败",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "删除实体",
+      "entityMessage": "确定删除实体“{{name}}”吗？此操作无法撤销。",
+      "bulkTitle": "删除所选实体",
+      "bulkMessage_one": "确定删除所选的 {{count}} 个实体吗？此操作无法撤销。",
+      "bulkMessage_other": "确定删除所选的 {{count}} 个实体吗？此操作无法撤销。"
     }
   },
   "councilFeedback": {
@@ -2296,6 +2364,7 @@
     "fontScale": "字体缩放",
     "uiScale": "界面缩放",
     "glassEffects": "玻璃效果",
+    "useFullAvatar": "使用全尺寸头像",
     "extensionThemesTitle": "扩展主题",
     "overridesApplied_one": "已应用 {{count}} 项覆盖",
     "overridesApplied_other": "已应用 {{count}} 项覆盖",
@@ -2874,6 +2943,7 @@
       "create": "创建",
       "renameAction": "重命名",
       "lumihubBadge": "LumiHub 预设",
+      "version": "v{{version}}",
       "blocks_one": "{{count}} 个块",
       "blocks_other": "{{count}} 个块",
       "coverAria": "{{name}} 的封面图",
@@ -3006,7 +3076,9 @@
       "legacyExportMessage": "Lumiverse 专用宏（如 {{lumiaDef}}、{{loomStyle}}、{{lumiaOOC}}）在 SillyTavern 中无法解析。仅 {{char}}、{{user}}、{{persona}} 等标准宏可移植。使用 Lumiverse 宏的块将按原始宏文本导出。",
       "exportAnyway": "仍要导出",
       "deleteBlockTitle": "删除块",
-      "deleteBlockMessage": "确定要删除此块？此操作无法撤销。"
+      "deleteBlockMessage": "确定要删除此块？此操作无法撤销。",
+      "deletePresetTitle": "删除预设",
+      "deletePresetMessage": "确定删除“{{name}}”吗？其所有块都将被移除。此操作无法撤销。"
     },
     "toast": {
       "exportFailed": "导出预设失败",
@@ -3088,7 +3160,9 @@
         "loadFailed": "加载主题资源失败",
         "uploaded": "已上传 {{name}}",
         "uploadFailed": "上传主题资源失败"
-      }
+      },
+      "deleteConfirmTitle": "删除主题资源",
+      "deleteConfirmMessage": "确定删除“{{name}}”吗？引用该资源的 CSS 将无法再加载它。此操作无法撤销。"
     }
   }
 }

@@ -20,6 +20,7 @@ import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-d
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
 import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
+import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
@@ -67,6 +68,13 @@ interface ImageGenSettings {
    * Defaults to 300 (5 minutes). Set to 0 to disable the timeout entirely.
    */
   generationTimeoutSeconds?: number;
+  /**
+   * Maximum recent chat messages sent to the prompt parser for scene analysis
+   * and parsed custom prompts. Defaults to 3. Minimum 1.
+   */
+  promptContextMessageLimit?: number;
+  /** Frontend-owned: show the resolved prompt in an editable modal before generating. */
+  previewPromptBeforeGenerate?: boolean;
   // Legacy fields preserved for auto-migration
   provider?: string;
   google?: any;
@@ -97,7 +105,16 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   fadeTransitionMs: 800,
   promptGenerationTimeoutSeconds: 60,
   generationTimeoutSeconds: 300,
+  promptContextMessageLimit: 3,
 };
+
+const DEFAULT_PROMPT_CONTEXT_MESSAGE_LIMIT = 3;
+
+function resolveContextMessageLimit(settings: ImageGenSettings): number {
+  const raw = Number(settings.promptContextMessageLimit);
+  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_PROMPT_CONTEXT_MESSAGE_LIMIT;
+  return Math.floor(raw);
+}
 
 export interface SceneData {
   environment: string;
@@ -145,7 +162,7 @@ export type ImageGenOutputTarget =
   | "preview"
   | "attach_to_message";
 
-export type ImageGenPresetKind = "main" | "character" | "persona";
+export type ImageGenPresetKind = "main" | "character" | "persona" | "captioning";
 
 export interface ImageGenPromptPreset {
   id: string;
@@ -347,6 +364,21 @@ export async function generateSceneBackground(
       if (charTags.length > 0) {
         params.characterTags = charTags;
       }
+    }
+
+    // Resolve img2img source images (init image) for providers that accept
+    // image input. Reuses the reference-image config surface; SwarmUI/ComfyUI
+    // consume the first image, Gemini/OpenRouter/SD API consume all of them.
+    if (
+      connection.provider === "swarmui" ||
+      connection.provider === "comfyui" ||
+      connection.provider === "google_gemini" ||
+      connection.provider === "openrouter" ||
+      connection.provider === "openai" ||
+      connection.provider === "sdapi"
+    ) {
+      const sources = await resolveSourceImages(userId, chatId, params);
+      if (sources.length > 0) params.resolvedSourceImages = sources;
     }
 
     if (connection.provider === "comfyui" || connection.provider === "swarmui") {
@@ -606,6 +638,78 @@ export async function previewImagePrompt(
   }
 }
 
+export interface CaptionImageInput {
+  image: string;
+  mimeType: string;
+  prompt?: string;
+  presetId?: string | null;
+  parserConnectionId?: string | null;
+  parserModel?: string;
+  parserParameters?: Record<string, any>;
+  timeoutSeconds?: number;
+}
+
+export async function captionImage(
+  userId: string,
+  input: CaptionImageInput,
+): Promise<{ caption: string }> {
+  const settings = getImageGenSettings(userId);
+
+  const promptText =
+    input.prompt?.trim() ||
+    (input.presetId
+      ? (settings.promptPresets || []).find((p) => p.id === input.presetId)?.prompt
+      : undefined) ||
+    "Describe this image in detail using concise image-generation tags. Include subject, composition, style, lighting, mood, and colors.";
+
+  const parser = await resolvePromptParser(userId, settings, {
+    id: "",
+    name: "",
+    mode: "parsed_custom",
+    prompt: "",
+    parserConnectionId: input.parserConnectionId || null,
+    parserModel: input.parserModel || "",
+    parserParameters: input.parserParameters || {},
+  });
+
+  const timeoutSecs = resolveTimeoutSeconds(input.timeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
+  const controller = new AbortController();
+  const timeout = createPhaseTimeoutSignal(
+    controller.signal,
+    timeoutSecs,
+    `Image captioning timed out after ${timeoutSecs}s`,
+  );
+
+  try {
+    const response = await rawGenerate(userId, {
+      provider: parser.connection.provider,
+      model: parser.model,
+      connection_id: parser.connection.id,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an image analyst producing concise, detailed descriptions suitable for image generation prompts. Follow the user's instructions for style and format. Return only the caption text, no markdown fences or JSON.",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "image", data: input.image, mime_type: input.mimeType },
+            { type: "text", text: promptText },
+          ],
+        },
+      ],
+      parameters: parser.parameters,
+      signal: timeout.signal,
+    });
+    return { caption: (response.content || "").trim() };
+  } catch (err) {
+    throw resolveAbortReason(timeout.signal) ?? err;
+  } finally {
+    timeout.cleanup();
+  }
+}
+
 function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : fallback;
   if (!Number.isFinite(parsed)) return fallback;
@@ -695,6 +799,30 @@ async function applyComfyUIWorkflowConfig(
     Object.assign(patchValues, extraFieldValues);
   }
   patchValues.seed = resolveComfySeedParam(patchValues.seed ?? params.seed);
+
+  // img2img: only engage when the workflow actually maps an init_image field
+  // (i.e. it's an img2img graph). This keeps the denoise param from clobbering
+  // the KSampler denoise of a plain txt2img workflow, whose `denoise` field may
+  // be auto-detected as a mapping but must stay at its embedded value (1.0).
+  const hasInitImageMapping = mappings.some((mapping) => mapping.mappedAs === "init_image");
+  if (hasInitImageMapping) {
+    if (patchValues.denoise === undefined) patchValues.denoise = numberParam(params.denoise);
+
+    // Upload the resolved source image and inject the returned filename. A
+    // mapping without a configured source image is a no-op (the workflow keeps
+    // its embedded LoadImage default).
+    const sourceImage = Array.isArray(params.resolvedSourceImages)
+      ? params.resolvedSourceImages[0]
+      : undefined;
+    if (sourceImage?.data && patchValues.init_image === undefined) {
+      const uploaded = await uploadComfyImage(
+        target.baseUrl,
+        { data: sourceImage.data, mimeType: sourceImage.mimeType },
+        { cookie: target.cookie },
+      );
+      patchValues.init_image = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
+    }
+  }
 
   params.workflow = patchWorkflow(normalizedWorkflow.apiWorkflow, mappings, patchValues);
   params.workflowFormat = "api_prompt";
@@ -853,9 +981,9 @@ async function resolvePromptInput(
     mode: requestedMode === "parsed_custom" ? "parsed_custom" : "custom",
     prompt,
     negativePrompt,
-    parserConnectionId: preset?.parserConnectionId ?? settings.promptParserConnectionId ?? null,
-    parserModel: preset?.parserModel ?? settings.promptParserModel ?? "",
-    parserParameters: preset?.parserParameters ?? settings.promptParserParameters ?? {},
+    parserConnectionId: settings.promptParserConnectionId ?? preset?.parserConnectionId ?? null,
+    parserModel: settings.promptParserModel ?? preset?.parserModel ?? "",
+    parserParameters: settings.promptParserParameters ?? preset?.parserParameters ?? {},
   };
 }
 
@@ -1005,7 +1133,7 @@ async function parseCustomPrompt(
         role: "system",
         content: CUSTOM_PROMPT_PARSER_SYSTEM,
       },
-      ...buildContextMessages(userId, chatId, settings.includeCharacters),
+      ...buildContextMessages(userId, chatId, settings),
       {
         role: "user",
         content: `Parser instructions from the user:\n${input.prompt}\n\nReturn the final image prompt now.`,
@@ -1081,7 +1209,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
         role: "system",
         content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
-      ...buildContextMessages(userId, chatId, settings.includeCharacters),
+      ...buildContextMessages(userId, chatId, settings),
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
@@ -1093,11 +1221,12 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
   return parseSceneJson(response.content || "");
 }
 
-function buildContextMessages(userId: string, chatId: string, includeCharacters = false): LlmMessage[] {
+function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings): LlmMessage[] {
+  const includeCharacters = settings.includeCharacters;
   const msgs: LlmMessage[] = [];
   const chat = chatsSvc.getChat(userId, chatId);
   if (chat) {
-    const char = charactersSvc.getCharacter(userId, chat.character_id);
+    const char = chat.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
     if (char) {
       const charInfo = [
         char.name && `Name: ${char.name}`,
@@ -1124,7 +1253,7 @@ function buildContextMessages(userId: string, chatId: string, includeCharacters 
       if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
     }
   }
-  for (const m of chatsSvc.getMessages(userId, chatId).slice(-24)) {
+  for (const m of chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings))) {
     msgs.push({ role: m.is_user ? "user" : "assistant", content: m.content });
   }
   return msgs;
@@ -1279,33 +1408,68 @@ async function gatherDirectorImages(
     if (ref?.data) images.push({ data: ref.data, strength, infoExtracted, refType: manualRefType });
   }
 
-  // Character avatar
-  if (params.includeCharacterAvatar) {
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (chat) {
-      const character = charactersSvc.getCharacter(userId, chat.character_id);
-      if (character?.image_id) {
-        const path = await imagesSvc.getImageFilePath(userId, character.image_id);
-        if (path) {
-          const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-          images.push({ data: uint8ToBase64(bytes), strength, infoExtracted, refType: avatarRefType });
-        }
-      }
-    }
+  // Character + persona avatars (shared loader)
+  for (const avatar of await loadConfiguredAvatarImages(userId, chatId, params)) {
+    images.push({ data: avatar.data, strength, infoExtracted, refType: avatarRefType });
   }
 
-  // Persona avatar
+  return images;
+}
+
+/**
+ * Load the character and/or persona avatars selected via the
+ * `includeCharacterAvatar` / `includePersonaAvatar` params as raw-base64
+ * `{ data, mimeType }` images. Shared by NovelAI's director-reference flow and
+ * the generic img2img source resolver below.
+ */
+async function loadConfiguredAvatarImages(
+  userId: string,
+  chatId: string,
+  params: Record<string, any>,
+): Promise<Array<{ data: string; mimeType: string }>> {
+  const out: Array<{ data: string; mimeType: string }> = [];
+
+  const loadById = async (imageId: string) => {
+    const path = await imagesSvc.getImageFilePath(userId, imageId);
+    if (!path) return;
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    const mimeType = imagesSvc.getImage(userId, imageId)?.mime_type || "image/png";
+    out.push({ data: uint8ToBase64(bytes), mimeType });
+  };
+
+  if (params.includeCharacterAvatar) {
+    const chat = chatsSvc.getChat(userId, chatId);
+    const character = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+    if (character?.image_id) await loadById(character.image_id);
+  }
+
   if (params.includePersonaAvatar) {
     const personas = personasSvc.listPersonas(userId, { limit: 100, offset: 0 }).data;
     const persona = personas.find((p) => p.is_default) || personas[0];
-    if (persona?.image_id) {
-      const path = await imagesSvc.getImageFilePath(userId, persona.image_id);
-      if (path) {
-        const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-        images.push({ data: uint8ToBase64(bytes), strength, infoExtracted, refType: avatarRefType });
-      }
-    }
+    if (persona?.image_id) await loadById(persona.image_id);
   }
+
+  return out;
+}
+
+/**
+ * Resolve the shared img2img source image set for providers that accept image
+ * input (SwarmUI, ComfyUI, Gemini). Reuses the same config surface as the
+ * reference-image feature: manually uploaded `referenceImages` first, then any
+ * selected character/persona avatars. Returns raw-base64 `{ data, mimeType }`.
+ */
+async function resolveSourceImages(
+  userId: string,
+  chatId: string,
+  params: Record<string, any>,
+): Promise<Array<{ data: string; mimeType: string }>> {
+  const images: Array<{ data: string; mimeType: string }> = [];
+
+  for (const ref of params.referenceImages || []) {
+    if (ref?.data) images.push({ data: ref.data, mimeType: ref.mimeType || "image/png" });
+  }
+
+  images.push(...(await loadConfiguredAvatarImages(userId, chatId, params)));
 
   return images;
 }
@@ -1455,4 +1619,337 @@ async function maybeAutoMigrate(userId: string, settings: ImageGenSettings): Pro
       activeImageGenConnectionId: defaultConnectionId,
     });
   }
+}
+
+// --- Import / Export ---
+
+export const IMAGE_GEN_EXPORT_TYPE = "lumiverse_image_gen_config";
+const IMAGE_GEN_EXPORT_VERSION = 1;
+
+/**
+ * Settings keys that travel in an export, with the value type expected on
+ * import. Install-specific fields never transfer: the `enabled` flag (don't
+ * silently toggle the feature on the receiving install), connection ID
+ * references (meaningless on another install), the legacy provider blobs, and
+ * the parser model/parameters (model IDs depend on the importer's parser
+ * connection, so the importer keeps their own parser setup).
+ */
+const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string" | "object"> = {
+  includeCharacters: "boolean",
+  promptMode: "string",
+  customPrompt: "string",
+  customNegativePrompt: "string",
+  outputTarget: "string",
+  previewPromptBeforeGenerate: "boolean",
+  sceneChangeThreshold: "number",
+  autoGenerate: "boolean",
+  forceGeneration: "boolean",
+  recycleGeneratedImages: "boolean",
+  recycledImageLimit: "number",
+  addToGallery: "boolean",
+  backgroundOpacity: "number",
+  fadeTransitionMs: "number",
+  promptGenerationTimeoutSeconds: "number",
+  generationTimeoutSeconds: "number",
+  promptContextMessageLimit: "number",
+};
+
+const PROMPT_MODES: ImageGenPromptMode[] = ["scene", "custom", "parsed_custom"];
+const OUTPUT_TARGETS: ImageGenOutputTarget[] = ["background", "chat_attachment", "preview", "attach_to_message"];
+const PRESET_KINDS: ImageGenPresetKind[] = ["main", "character", "persona", "captioning"];
+
+export interface ImageGenConnectionExport {
+  name: string;
+  provider: string;
+  api_url: string;
+  model: string;
+  default_parameters: Record<string, any>;
+  metadata: Record<string, any>;
+}
+
+export interface ImageGenConfigExport {
+  version: number;
+  type: typeof IMAGE_GEN_EXPORT_TYPE;
+  exported_at: number;
+  settings?: Partial<ImageGenSettings>;
+  presets?: ImageGenPromptPreset[];
+  connections?: ImageGenConnectionExport[];
+  /** Generation parameters (steps, cfg, size, seed, …) of the active connection. */
+  generation_parameters?: { provider: string; parameters: Record<string, any> };
+}
+
+export interface ImageGenConfigExportOptions {
+  includeSettings?: boolean;
+  includePresets?: boolean;
+  includeConnections?: boolean;
+  includeParameters?: boolean;
+  presetIds?: string[];
+  connectionIds?: string[];
+}
+
+export function exportImageGenConfig(
+  userId: string,
+  options?: ImageGenConfigExportOptions,
+): ImageGenConfigExport {
+  const settings = getImageGenSettings(userId);
+  const out: ImageGenConfigExport = {
+    version: IMAGE_GEN_EXPORT_VERSION,
+    type: IMAGE_GEN_EXPORT_TYPE,
+    exported_at: Math.floor(Date.now() / 1000),
+  };
+
+  if (options?.includePresets !== false) {
+    let presets = settings.promptPresets || [];
+    // A provided ID list is authoritative — an explicit empty selection
+    // exports no presets rather than falling back to all of them.
+    if (options?.presetIds) {
+      const wanted = new Set(options.presetIds);
+      presets = presets.filter((p) => wanted.has(p.id));
+    }
+    // Parser connection IDs reference this install's LLM connections, and the
+    // parser model/parameters only make sense relative to one — the importer
+    // configures their own parser.
+    out.presets = presets.map(({ parserConnectionId, parserModel, parserParameters, ...rest }) => rest);
+  }
+
+  if (options?.includeSettings !== false) {
+    const transferable: Partial<ImageGenSettings> = {};
+    for (const key of Object.keys(TRANSFERABLE_SETTING_TYPES)) {
+      const value = (settings as any)[key];
+      if (value !== undefined) (transferable as any)[key] = value;
+    }
+    // The active preset reference only travels alongside the preset itself.
+    if (settings.activePromptPresetId && out.presets?.some((p) => p.id === settings.activePromptPresetId)) {
+      transferable.activePromptPresetId = settings.activePromptPresetId;
+    }
+    out.settings = transferable;
+  }
+
+  if (options?.includeConnections !== false) {
+    let connections = imageGenConnSvc.listConnections(userId, { limit: 1000, offset: 0 }).data;
+    if (options?.connectionIds) {
+      const wanted = new Set(options.connectionIds);
+      connections = connections.filter((c) => wanted.has(c.id));
+    }
+    out.connections = connections.map(sanitizeConnectionForExport);
+  }
+
+  if (options?.includeParameters !== false) {
+    const activeId = settings.activeImageGenConnectionId;
+    const active = activeId ? imageGenConnSvc.getConnection(userId, activeId) : null;
+    if (active) {
+      out.generation_parameters = {
+        provider: active.provider,
+        parameters: sanitizeGenerationParameters(active.default_parameters),
+      };
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Strips personal base64 image payloads (reference/source images) from a
+ * generation parameter bag. Everything else — steps, cfg, size, seed,
+ * sampler, etc. — travels.
+ */
+function sanitizeGenerationParameters(parameters: Record<string, any>): Record<string, any> {
+  const { referenceImages, resolvedSourceImages, resolvedReferenceImages, ...params } =
+    parameters || {};
+  return params;
+}
+
+function sanitizeConnectionForExport(conn: ImageGenConnectionProfile): ImageGenConnectionExport {
+  // API keys live in the encrypted secrets store and never appear on the row.
+  return {
+    name: conn.name,
+    provider: conn.provider,
+    api_url: conn.api_url,
+    model: conn.model,
+    default_parameters: sanitizeGenerationParameters(conn.default_parameters),
+    metadata: conn.metadata || {},
+  };
+}
+
+export interface ImageGenConfigImportResult {
+  settings: ImageGenSettings;
+  imported: { settings: boolean; presets: number; connections: number; parameters: boolean };
+  errors: string[];
+}
+
+/**
+ * Merges an exported config into the user's image gen setup. Presets are
+ * matched by ID — re-importing an updated export overwrites the preset in
+ * place, which keeps existing character/persona bindings intact. Connections
+ * are always created fresh (without API keys — the user supplies their own).
+ */
+export async function importImageGenConfig(
+  userId: string,
+  payload: any,
+): Promise<ImageGenConfigImportResult> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Invalid import payload");
+  }
+  if (payload.type !== IMAGE_GEN_EXPORT_TYPE) {
+    throw new Error("Not a Lumiverse image generation config export");
+  }
+  if (Number(payload.version) > IMAGE_GEN_EXPORT_VERSION) {
+    throw new Error(`Unsupported export version ${payload.version}`);
+  }
+
+  const errors: string[] = [];
+  const current = getImageGenSettings(userId);
+  const presets = [...(current.promptPresets || [])];
+
+  let importedPresets = 0;
+  if (Array.isArray(payload.presets)) {
+    payload.presets.forEach((entry: any, index: number) => {
+      const preset = sanitizePresetForImport(entry, index, errors);
+      if (!preset) return;
+      const existing = presets.findIndex((p) => p.id === preset.id);
+      if (existing >= 0) {
+        // Overwrite the shared content but keep the parser setup the importer
+        // configured locally on this preset.
+        const local = presets[existing];
+        presets[existing] = {
+          ...preset,
+          parserConnectionId: local.parserConnectionId,
+          parserModel: local.parserModel,
+          parserParameters: local.parserParameters,
+        };
+      } else {
+        presets.push(preset);
+      }
+      importedPresets++;
+    });
+  }
+
+  const next: ImageGenSettings = { ...current, promptPresets: presets };
+  let importedSettings = false;
+  if (payload.settings && typeof payload.settings === "object" && !Array.isArray(payload.settings)) {
+    for (const [key, type] of Object.entries(TRANSFERABLE_SETTING_TYPES)) {
+      const value = payload.settings[key];
+      if (value === undefined || value === null) continue;
+      if (!isTransferableValue(key, type, value)) {
+        errors.push(`Setting "${key}" has an unexpected value and was skipped`);
+        continue;
+      }
+      (next as any)[key] = value;
+      importedSettings = true;
+    }
+    const activeId = payload.settings.activePromptPresetId;
+    if (typeof activeId === "string" && presets.some((p) => p.id === activeId && (p.kind ?? "main") === "main")) {
+      next.activePromptPresetId = activeId;
+      importedSettings = true;
+    }
+  }
+
+  if (importedSettings || importedPresets > 0) {
+    settingsSvc.putSetting(userId, IMAGE_SETTINGS_KEY, next);
+  }
+
+  let importedConnections = 0;
+  if (Array.isArray(payload.connections)) {
+    for (let i = 0; i < payload.connections.length; i++) {
+      const entry = payload.connections[i];
+      const provider = typeof entry?.provider === "string" ? entry.provider : "";
+      if (!provider || !getImageProvider(provider)) {
+        errors.push(`Connection ${i}: unknown provider "${provider || "(missing)"}"`);
+        continue;
+      }
+      await imageGenConnSvc.createConnection(userId, {
+        name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : `Imported ${provider}`,
+        provider,
+        api_url: typeof entry.api_url === "string" ? entry.api_url : "",
+        model: typeof entry.model === "string" ? entry.model : "",
+        default_parameters:
+          entry.default_parameters && typeof entry.default_parameters === "object" && !Array.isArray(entry.default_parameters)
+            ? entry.default_parameters
+            : {},
+        metadata:
+          entry.metadata && typeof entry.metadata === "object" && !Array.isArray(entry.metadata)
+            ? entry.metadata
+            : {},
+      });
+      importedConnections++;
+    }
+  }
+
+  // Generation parameters apply to the importer's active connection so a
+  // preset share carries its steps/cfg/size recipe. Skipped on provider
+  // mismatch — NovelAI samplers mean nothing to a ComfyUI workflow.
+  let importedParameters = false;
+  const generationParams = payload.generation_parameters;
+  if (generationParams && typeof generationParams === "object" && !Array.isArray(generationParams)) {
+    const provider = typeof generationParams.provider === "string" ? generationParams.provider : "";
+    const parameters =
+      generationParams.parameters && typeof generationParams.parameters === "object" && !Array.isArray(generationParams.parameters)
+        ? generationParams.parameters
+        : null;
+    const activeId = current.activeImageGenConnectionId;
+    const active = activeId ? imageGenConnSvc.getConnection(userId, activeId) : null;
+    if (!parameters) {
+      errors.push("Generation parameters entry is malformed and was skipped");
+    } else if (!active) {
+      // When the same payload ships full connections the parameters already
+      // arrived inside them — only flag the gap for parameter-only imports.
+      if (importedConnections === 0) {
+        errors.push("Generation parameters skipped: no active image generation connection to apply them to");
+      }
+    } else if (provider && active.provider !== provider) {
+      errors.push(
+        `Generation parameters skipped: they target provider "${provider}" but the active connection uses "${active.provider}"`,
+      );
+    } else {
+      await imageGenConnSvc.updateConnection(userId, active.id, {
+        default_parameters: { ...active.default_parameters, ...sanitizeGenerationParameters(parameters) },
+      });
+      importedParameters = true;
+    }
+  }
+
+  return {
+    settings: getImageGenSettings(userId),
+    imported: {
+      settings: importedSettings,
+      presets: importedPresets,
+      connections: importedConnections,
+      parameters: importedParameters,
+    },
+    errors,
+  };
+}
+
+function isTransferableValue(key: string, type: string, value: unknown): boolean {
+  if (key === "promptMode") return PROMPT_MODES.includes(value as ImageGenPromptMode);
+  if (key === "outputTarget") return OUTPUT_TARGETS.includes(value as ImageGenOutputTarget);
+  if (type === "object") return typeof value === "object" && !Array.isArray(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  return typeof value === type;
+}
+
+function sanitizePresetForImport(
+  entry: any,
+  index: number,
+  errors: string[],
+): ImageGenPromptPreset | null {
+  if (!entry || typeof entry !== "object") {
+    errors.push(`Preset ${index}: not an object`);
+    return null;
+  }
+  const name = typeof entry.name === "string" ? entry.name.trim() : "";
+  if (!name) {
+    errors.push(`Preset ${index}: missing name`);
+    return null;
+  }
+  // Parser connection/model/parameters never import — they're bound to the
+  // importer's own parser connection profile.
+  return {
+    id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID(),
+    name,
+    mode: entry.mode === "parsed_custom" ? "parsed_custom" : "custom",
+    prompt: typeof entry.prompt === "string" ? entry.prompt : "",
+    negativePrompt: typeof entry.negativePrompt === "string" ? entry.negativePrompt : undefined,
+    kind: PRESET_KINDS.includes(entry.kind) ? entry.kind : "main",
+  };
 }

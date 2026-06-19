@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import * as linkSvc from "../services/lumihub-link.service";
 import { getLumiHubClient } from "../lumihub/client";
-import { validateHost, SSRFError } from "../utils/safe-fetch";
+import { safeFetch, validateHost, SSRFError } from "../utils/safe-fetch";
 
 // --- PKCE state storage (in-memory, same pattern as spindle/oauth-state.ts) ---
 
@@ -70,17 +70,28 @@ lumihubCallbackRoute.get("/callback", async (c) => {
   // Consume the state
   pkceStateMap.delete(stateKey);
 
-  // Exchange the code for a link token
+  // Exchange the code for a link token. Use safeFetch so the LumiHub URL is
+  // re-validated at the fetch site itself — defense in depth in case anything
+  // about pkceState.lumihubUrl flipped between /link and /callback (DNS
+  // rebinding, stale state, etc.).
   try {
     const tokenUrl = `${pkceState.lumihubUrl}/api/v1/link/token`;
-    const response = await fetch(tokenUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        code_verifier: pkceState.codeVerifier,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await safeFetch(tokenUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          code_verifier: pkceState.codeVerifier,
+        }),
+      });
+    } catch (err: any) {
+      if (err instanceof SSRFError) {
+        return c.html(errorHtml("Blocked LumiHub URL", err.message), 400);
+      }
+      throw err;
+    }
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ error: "Unknown error" }));

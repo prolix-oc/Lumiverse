@@ -14,6 +14,8 @@ export enum EventType {
   GENERATION_STARTED = 'GENERATION_STARTED',
   GENERATION_IN_PROGRESS = 'GENERATION_IN_PROGRESS',
   GENERATION_PHASE_CHANGED = 'GENERATION_PHASE_CHANGED',
+  GENERATION_METRICS_READY = 'GENERATION_METRICS_READY',
+  GENERATION_BREAKDOWN_READY = 'GENERATION_BREAKDOWN_READY',
   STREAM_TOKEN_RECEIVED = 'STREAM_TOKEN_RECEIVED',
   GENERATION_ENDED = 'GENERATION_ENDED',
   GENERATION_STOPPED = 'GENERATION_STOPPED',
@@ -58,8 +60,14 @@ export enum EventType {
   // Spindle command palette commands
   SPINDLE_COMMANDS_CHANGED = 'SPINDLE_COMMANDS_CHANGED',
 
+  // Spindle UI automation (extension navigates the user to a tab/settings/etc.)
+  SPINDLE_UI_NAVIGATE = 'SPINDLE_UI_NAVIGATE',
+
   // Spindle theme overrides
   SPINDLE_THEME_OVERRIDES = 'SPINDLE_THEME_OVERRIDES',
+
+  // Per-chat CSS containment mode (Spindle, app_manipulation)
+  SPINDLE_CHAT_STYLE_MODE = 'SPINDLE_CHAT_STYLE_MODE',
 
   // Spindle text editor
   SPINDLE_TEXT_EDITOR_OPEN = 'SPINDLE_TEXT_EDITOR_OPEN',
@@ -106,17 +114,10 @@ export enum EventType {
   IMAGE_GEN_COMPLETE = 'IMAGE_GEN_COMPLETE',
   IMAGE_GEN_ERROR = 'IMAGE_GEN_ERROR',
 
-  // Dream Weaver
-  DREAM_WEAVER_MESSAGE_CREATED = 'DREAM_WEAVER_MESSAGE_CREATED',
-  DREAM_WEAVER_MESSAGE_UPDATED = 'DREAM_WEAVER_MESSAGE_UPDATED',
-  DREAM_WEAVER_MESSAGE_DELETED = 'DREAM_WEAVER_MESSAGE_DELETED',
-  DREAM_WEAVER_FINALIZED = 'DREAM_WEAVER_FINALIZED',
-
-  // Dream Weaver Visual Jobs
-  DREAM_WEAVER_VISUAL_JOB_CREATED = 'DREAM_WEAVER_VISUAL_JOB_CREATED',
-  DREAM_WEAVER_VISUAL_JOB_PROGRESS = 'DREAM_WEAVER_VISUAL_JOB_PROGRESS',
-  DREAM_WEAVER_VISUAL_JOB_COMPLETED = 'DREAM_WEAVER_VISUAL_JOB_COMPLETED',
-  DREAM_WEAVER_VISUAL_JOB_FAILED = 'DREAM_WEAVER_VISUAL_JOB_FAILED',
+  WEAVER_VISUAL_JOB_CREATED = 'WEAVER_VISUAL_JOB_CREATED',
+  WEAVER_VISUAL_JOB_PROGRESS = 'WEAVER_VISUAL_JOB_PROGRESS',
+  WEAVER_VISUAL_JOB_COMPLETED = 'WEAVER_VISUAL_JOB_COMPLETED',
+  WEAVER_VISUAL_JOB_FAILED = 'WEAVER_VISUAL_JOB_FAILED',
 
   // SillyTavern Migration
   MIGRATION_PROGRESS = 'MIGRATION_PROGRESS',
@@ -141,8 +142,22 @@ export enum EventType {
 
   // Loom summary auto-summarization
   SUMMARIZATION_STARTED = 'SUMMARIZATION_STARTED',
+  SUMMARIZATION_PROGRESS = 'SUMMARIZATION_PROGRESS',
   SUMMARIZATION_COMPLETED = 'SUMMARIZATION_COMPLETED',
   SUMMARIZATION_FAILED = 'SUMMARIZATION_FAILED',
+
+  // System health
+  SYSTEM_DISK_LOW = 'SYSTEM_DISK_LOW',
+}
+
+export interface SystemDiskLowPayload {
+  path: string
+  /** 0..1, e.g. 0.93 = 93% full */
+  usagePercent: number
+  freeBytes: number
+  totalBytes: number
+  /** 0..1, the threshold that was crossed */
+  thresholdPercent: number
 }
 
 export interface SummarizationStartedPayload {
@@ -154,6 +169,15 @@ export interface SummarizationStartedPayload {
 export interface SummarizationCompletedPayload {
   chatId: string
   generationId: string
+  summaryText?: string
+}
+
+export interface SummarizationProgressPayload {
+  chatId: string
+  generationId: string
+  batchNumber: number
+  totalBatches: number
+  messagesProcessed: number
 }
 
 export interface SummarizationFailedPayload {
@@ -213,7 +237,15 @@ export interface StreamTokenPayload {
   chatId: string
   token: string
   type?: 'text' | 'reasoning'
+  // seq is the tokenSeq of the LAST token coalesced into this segment; startSeq
+  // is the FIRST. Retained for Spindle extensions; reconciliation now uses
+  // `offset` instead.
   seq?: number
+  startSeq?: number
+  // Char position of this segment's start within the server's cumulative
+  // buffer for its stream type (content vs reasoning). Drives exact overlap
+  // dedupe after recovery and immediate gap detection (missed segments).
+  offset?: number
 }
 
 export interface ContextClipStats {
@@ -237,6 +269,8 @@ export interface GenerationStartedPayload {
   generationId: string
   chatId: string
   targetMessageId?: string
+  /** Swipe index the generation streams into (for swipe-gated streaming display). */
+  targetSwipeId?: number
   characterId?: string
   characterName?: string
   contextClipStats?: ContextClipStats
@@ -278,6 +312,33 @@ export interface GenerationEndedPayload {
   error?: string
   tokenCount?: number
   generationMetrics?: GenerationMetrics
+}
+
+/**
+ * Follow-up to GENERATION_ENDED carrying the deferred metrics (token count,
+ * TTFT/TPS, model/provider) once they've been computed and persisted. `swipeId`
+ * is the swipe these metrics belong to, so the client can avoid patching them
+ * onto a different swipe the user navigated to mid-stream.
+ */
+export interface GenerationMetricsReadyPayload {
+  generationId: string
+  chatId: string
+  messageId: string
+  swipeId?: number
+  tokenCount?: number
+  generationMetrics?: GenerationMetrics
+}
+
+/**
+ * Follow-up to GENERATION_ENDED carrying the prompt breakdown once its deferred
+ * tokenization finishes, so an opened Prompt Breakdown modal renders from cache.
+ * `messages` is intentionally omitted server-side (derived/fetched on demand).
+ */
+export interface GenerationBreakdownReadyPayload {
+  generationId: string
+  chatId: string
+  messageId: string
+  breakdown: Omit<import('@/types/store').BreakdownCacheEntry, 'chatId'>
 }
 
 export interface GenerationAcknowledgedPayload {

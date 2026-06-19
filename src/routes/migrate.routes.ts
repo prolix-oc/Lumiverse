@@ -155,7 +155,7 @@ app.post("/world-books", async (c) => {
         name: wb.name,
         description: wb.description,
         entries: wb.entries,
-      });
+      }, { signal: c.req.raw.signal });
 
       result.results.push({
         name,

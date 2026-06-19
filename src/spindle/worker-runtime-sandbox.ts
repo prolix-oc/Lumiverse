@@ -2,11 +2,22 @@
  * Runtime sandbox for Spindle extension workers / subprocesses.
  *
  * Called immediately before the extension entry is dynamically imported.
- * It patches global APIs that are common bypass vectors for static-analysis
- * defences (dynamic imports, eval, indirect Bun API access, etc.).
+ * It patches global APIs that are common bypass vectors: eval, the Function
+ * constructor, indirect Bun/process API access, and sensitive env vars.
  *
  * IMPORTANT: This is a *cooperative* sandbox. It raises the cost of escape
  * but does not replace OS-level isolation (sandbox-exec, containers, etc.).
+ *
+ * KNOWN LIMITATION — dynamic import(): the `globalThis.import` override below
+ * does NOT intercept the native ESM `import()` operator. `import()` is a
+ * syntactic form resolved by the runtime, not a property read on globalThis,
+ * so overriding the global has no effect on `await import("node:fs")`; Bun
+ * loader plugins likewise cannot intercept `node:` builtins. Blocking
+ * dangerous module specifiers is enforced UPSTREAM by the static scan
+ * (`detectDangerousBackendCapabilities`, which fails closed on any non-constant
+ * specifier) and, when enabled, by the OS-level sandbox. The override here is
+ * kept only as best-effort defence against code that reads `globalThis.import`
+ * explicitly — treat it as belt-and-suspenders, not a boundary.
  */
 
 const BLOCKED_SPECIFIERS = new Set([
@@ -141,7 +152,11 @@ function createMaskedEnv(rawEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 export function initializeSandbox(): void {
-  // ── Guard dynamic import ──
+  // ── Guard dynamic import (best-effort only) ──
+  // NOTE: this overrides the `globalThis.import` property, which the native
+  // `import()` operator does NOT consult. It does not stop `await import(...)`.
+  // See the file header — real enforcement is the upstream static scan / OS
+  // sandbox. Kept for the rare case of explicit `globalThis.import(...)` use.
   try {
     const originalImport = (globalThis as any).import;
     Object.defineProperty(globalThis, "import", {

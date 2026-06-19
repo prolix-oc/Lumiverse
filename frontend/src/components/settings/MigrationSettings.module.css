@@ -82,6 +82,15 @@
   color: var(--lumiverse-text-dim);
 }
 
+/* Soft accent hint shown before validation when the browsed folder matches the
+   SillyTavern install shape — distinct from the green "valid" confirmation. */
+.validHint {
+  composes: validationRow;
+  background: color-mix(in srgb, var(--lumiverse-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-accent) 30%, transparent);
+  color: var(--lumiverse-accent);
+}
+
 .selectRow {
   display: flex;
   flex-direction: column;

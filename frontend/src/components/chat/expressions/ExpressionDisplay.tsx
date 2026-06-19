@@ -29,6 +29,8 @@ export default function ExpressionDisplay() {
   // Group chat state
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
+  const mutedCharacterIds = useStore((s) => s.mutedCharacterIds)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const groupExpressions = useStore((s) => s.groupExpressions)
   const respondingCharacterId = useStore((s) => s.respondingCharacterId)
   const isStreaming = useStore((s) => s.isStreaming)
@@ -153,8 +155,16 @@ export default function ExpressionDisplay() {
   // Derived group values
   const groupExpressionCharIds = useMemo(() => {
     if (!isGroupChat) return []
-    return groupCharacterIds.filter((id) => groupConfigs.has(id))
-  }, [isGroupChat, groupCharacterIds, groupConfigs])
+    // Hide muted characters from the display — except one that's currently the
+    // active speaker (e.g. force-summoned via @mention), so their reaction
+    // still shows for that turn. The stored expression is kept either way, so
+    // un-muting restores it immediately.
+    return groupCharacterIds.filter(
+      (id) =>
+        groupConfigs.has(id) &&
+        (!mutedCharacterIds.includes(id) || id === activeGroupCharacterId)
+    )
+  }, [isGroupChat, groupCharacterIds, groupConfigs, mutedCharacterIds, activeGroupCharacterId])
 
   const isGroupExpressionMode = isGroupChat && groupExpressionCharIds.length > 0
 

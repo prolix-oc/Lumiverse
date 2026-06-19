@@ -4,13 +4,16 @@
  */
 import * as charactersSvc from "../services/characters.service";
 import * as worldBooksSvc from "../services/world-books.service";
+import * as presetsSvc from "../services/presets.service";
 
 export interface ManifestEntry {
   slug: string;
-  type: "character" | "worldbook";
+  type: "character" | "worldbook" | "preset";
   name: string;
   creator: string;
   source: "local" | "chub" | "lumihub";
+  /** Installed version label (presets), so the hub can flag outdated installs. */
+  version?: string;
   installed_at: number;
 }
 
@@ -74,6 +77,31 @@ export function buildInstallManifest(userId: string): ManifestEntry[] {
       creator,
       source: source === "chub" ? "chub" : source === "lumihub" ? "lumihub" : "local",
       installed_at: wb.created_at,
+    });
+  }
+
+  // Presets — LumiHub-installed ones carry a canonical slug + version for update tracking.
+  const presets = presetsSvc.listPresetsForManifest(userId);
+  for (const pr of presets) {
+    const md = pr.metadata || {};
+    const source = md._lumiverse_install_source as string | undefined;
+    const storedSlug = typeof md._lumiverse_preset_slug === "string" ? md._lumiverse_preset_slug : null;
+    const creator =
+      typeof md._lumiverse_preset_creator === "string" && md._lumiverse_preset_creator
+        ? md._lumiverse_preset_creator
+        : storedSlug
+          ? storedSlug.split("/")[0]
+          : "unknown";
+    const slug = storedSlug || buildSlug(creator, pr.name);
+    const version = typeof md._lumiverse_preset_version === "string" ? md._lumiverse_preset_version : undefined;
+    entries.push({
+      slug,
+      type: "preset",
+      name: pr.name,
+      creator,
+      source: source === "chub" ? "chub" : source === "lumihub" ? "lumihub" : "local",
+      version,
+      installed_at: pr.created_at,
     });
   }
 

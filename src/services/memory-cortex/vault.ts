@@ -789,7 +789,7 @@ function vaultEntitiesToSnapshots(entities: VaultEntity[]): EntitySnapshot[] {
     description: e.description,
     lastSeenAt: null,
     mentionCount: 0,
-    topFacts: e.facts,
+    topFacts: e.facts.map((f: string) => f.replace(/^\[i:\d+\]\s*/, "").replace(/^\[branch:[^\]]+\]\s*/, "")),
     emotionalProfile: e.emotionalValence,
     relationships: [],
   }));

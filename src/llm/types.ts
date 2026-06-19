@@ -46,6 +46,25 @@ export type LlmMessagePart =
   | LlmToolUsePart
   | LlmToolResultPart;
 
+/**
+ * A provider-native reasoning block that must be replayed verbatim on tool-use
+ * continuations to preserve interleaved thinking. Currently produced by
+ * Anthropic (extended/adaptive thinking): a `thinking` block carries the
+ * model's reasoning text plus an opaque `signature` that the server decrypts to
+ * reconstruct the full thinking; a `redacted_thinking` block carries an opaque
+ * encrypted `data` payload. Both are opaque to Lumiverse and must be passed
+ * back unmodified, in order, before the assistant turn's `tool_use` blocks.
+ */
+export interface LlmThinkingBlock {
+  type: "thinking" | "redacted_thinking";
+  /** Reasoning text for `thinking` blocks (may be summarized or empty when display is omitted). */
+  thinking?: string;
+  /** Opaque signature for `thinking` blocks — replay unmodified. */
+  signature?: string;
+  /** Opaque encrypted payload for `redacted_thinking` blocks — replay unmodified. */
+  data?: string;
+}
+
 export interface LlmMessage {
   role: "system" | "user" | "assistant";
   content: string | LlmMessagePart[];
@@ -53,6 +72,14 @@ export interface LlmMessage {
   cache_control?: Record<string, unknown>;
   /** Provider-returned reasoning payload required by some OpenAI-compatible tool-call continuations. */
   reasoning_content?: string;
+  /** Provider-native reasoning blocks (Anthropic thinking blocks with
+   *  signatures) replayed verbatim on tool-use continuations for interleaved
+   *  thinking. Providers that don't use this carrier ignore the field. */
+  thinking_blocks?: LlmThinkingBlock[];
+  /** OpenRouter's opaque, normalized reasoning blocks (`reasoning_details`).
+   *  Replayed verbatim (entire sequence, unmodified) on the assistant message
+   *  to preserve chain-of-thought across tool calls. Opaque to Lumiverse. */
+  reasoning_details?: Record<string, unknown>[];
 }
 
 /** Helper: extract the text content from an LlmMessage regardless of format. */
@@ -116,6 +143,12 @@ export interface GenerationResponse {
   finish_reason: string;
   /** Present when the LLM requested function calls instead of (or in addition to) generating text. */
   tool_calls?: ToolCallResult[];
+  /** Provider-native reasoning blocks captured this turn (Anthropic), to replay
+   *  on tool-use continuations for interleaved thinking. */
+  thinking_blocks?: LlmThinkingBlock[];
+  /** OpenRouter `reasoning_details` captured this turn, to replay on tool-use
+   *  continuations. */
+  reasoning_details?: Record<string, unknown>[];
   usage?: GenerationUsage;
 }
 
@@ -125,6 +158,13 @@ export interface StreamChunk {
   finish_reason?: string;
   /** Accumulated function calls (set on the final chunk when finish_reason indicates tool use). */
   tool_calls?: ToolCallResult[];
+  /** Provider-native reasoning blocks (set on the final chunk alongside
+   *  tool_calls) — Anthropic thinking blocks with signatures for interleaved
+   *  thinking continuations. */
+  thinking_blocks?: LlmThinkingBlock[];
+  /** OpenRouter `reasoning_details`, accumulated across stream chunks and set on
+   *  the final chunk alongside tool_calls. */
+  reasoning_details?: Record<string, unknown>[];
   usage?: GenerationUsage;
 }
 
@@ -166,6 +206,9 @@ export interface AssemblyContext {
   regenFeedback?: string;
   /** Where to inject regen feedback: 'system' (last system msg) or 'user' (last user msg). */
   regenFeedbackPosition?: "system" | "user";
+  /** When true, an extension owns this chat's `target:prompt` regex and the
+   *  host skips its own per-message prompt-regex pass. */
+  skipPromptRegex?: boolean;
   /** Pre-fetched data to avoid redundant DB calls during assembly.
    *  When provided, assembly reads from this instead of querying DB. */
   prefetched?: PrefetchedData;
@@ -229,8 +272,12 @@ export interface MemoryStats {
   chunksAvailable: number;
   chunksPending: number;
   injectionMethod: "macro" | "fallback" | "disabled";
+  /** How chunks were retrieved: real vector/hybrid search vs. the recency
+   *  fallback (e.g. when the query embedding failed). null score = a
+   *  keyword-only or recency hit with no vector distance. */
+  retrievalMode?: "vector" | "recency" | "empty" | "disabled";
   retrievedChunks: Array<{
-    score: number;
+    score: number | null;
     tokenEstimate: number;
     messageRange: [number, number];
     preview: string;

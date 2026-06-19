@@ -76,6 +76,10 @@ function migratePreset(preset: LoomPreset): LoomPreset {
   preset.coverUrl = typeof preset.coverUrl === 'string' && preset.coverUrl.trim()
     ? preset.coverUrl.trim()
     : null
+  preset.presetVersion = typeof preset.presetVersion === 'string' && preset.presetVersion.trim()
+    ? preset.presetVersion.trim()
+    : null
+  preset.lumihubMeta = isRecord(preset.lumihubMeta) ? preset.lumihubMeta : null
   if (Array.isArray(preset.blocks)) {
     for (const block of preset.blocks) {
       if (!Array.isArray(block.injectionTrigger)) {
@@ -92,6 +96,26 @@ function migratePreset(preset: LoomPreset): LoomPreset {
 
 function isRecord(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Version key is surfaced separately as `presetVersion`; the rest of the bag round-trips verbatim. */
+const LUMIHUB_VERSION_META_KEY = '_lumiverse_preset_version'
+
+/**
+ * Pull the LumiHub provenance bag (install source, hub id, slug, creator) out of a stored
+ * preset's metadata so it survives the marshal/unmarshal round-trip. `marshalUpdate` rewrites
+ * the metadata column wholesale, so without this these fields would be wiped on the first edit,
+ * breaking manifest sync and re-install update tracking. The version key is excluded — it is
+ * surfaced as `presetVersion` and re-applied authoritatively on marshal.
+ */
+function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> | null {
+  const bag: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(meta)) {
+    if (key.startsWith('_lumiverse_') && key !== LUMIHUB_VERSION_META_KEY) {
+      bag[key] = value
+    }
+  }
+  return Object.keys(bag).length > 0 ? bag : null
 }
 
 function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
@@ -260,6 +284,9 @@ export function marshalPreset(loom: LoomPreset): CreatePresetInput {
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
       promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
+      // Preserve LumiHub provenance + version so an edit doesn't strip them from the metadata column.
+      ...(loom.lumihubMeta ?? {}),
+      ...(loom.presetVersion ? { _lumiverse_preset_version: loom.presetVersion } : {}),
     },
   }
 }
@@ -274,6 +301,8 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     name: preset.name,
     description: meta.description || '',
     coverUrl: typeof meta.coverUrl === 'string' ? meta.coverUrl : (typeof meta.cover_url === 'string' ? meta.cover_url : null),
+    presetVersion: typeof meta._lumiverse_preset_version === 'string' ? meta._lumiverse_preset_version : null,
+    lumihubMeta: extractLumihubMeta(meta),
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
@@ -318,6 +347,9 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
       isDefault: loom.isDefault,
       lastProfileKey: loom.lastProfileKey,
       promptVariables: pruneOrphanPromptVariables(loom.promptVariables, blocks),
+      // Preserve LumiHub provenance + version so an edit doesn't strip them from the metadata column.
+      ...(loom.lumihubMeta ?? {}),
+      ...(loom.presetVersion ? { _lumiverse_preset_version: loom.presetVersion } : {}),
     },
   }
 }
@@ -693,6 +725,8 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     name,
     description: `Imported from legacy preset "${stPresetData.name || name}"`,
     coverUrl: null,
+    presetVersion: null,
+    lumihubMeta: null,
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
@@ -859,6 +893,8 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
     name,
     description,
     coverUrl: null,
+    presetVersion: null,
+    lumihubMeta: null,
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,

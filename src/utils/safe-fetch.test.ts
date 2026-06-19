@@ -18,6 +18,21 @@ describe("validateHost loopback allowance", () => {
   });
 });
 
+describe("validateHost DNS timeout", () => {
+  test("fails fast when DNS resolution exceeds the budget", async () => {
+    // Unique random hostname guarantees cache miss, forcing a real network
+    // lookup that cannot complete within a 1ms budget. The timer fires first
+    // and we surface a `timed out` SSRFError instead of stalling for minutes
+    // (the Termux/.spot regression).
+    const uniqueHost = `ssrf-timeout-${crypto.randomUUID()}.invalid`;
+    const start = Date.now();
+    await expect(
+      validateHost(uniqueHost, { dnsTimeoutMs: 1 })
+    ).rejects.toBeInstanceOf(SSRFError);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+});
+
 describe("safeFetch SSRF protections", () => {
   test("re-validates redirect targets before fetching them", async () => {
     const originalFetch = globalThis.fetch;

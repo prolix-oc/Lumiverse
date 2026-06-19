@@ -6,6 +6,7 @@ import * as embeddingsSvc from "../services/embeddings.service";
 import * as personasSvc from "../services/personas.service";
 import * as settingsSvc from "../services/settings.service";
 import { parsePagination } from "../services/pagination";
+import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
 import {
   collectWorldInfoSources,
   collectVectorActivatedWorldInfoDetailed,
@@ -17,7 +18,9 @@ import {
 import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
 import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import type { WorldBookEntry } from "../types/world-book";
+import { makeAssistantCharacter } from "../types/character";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { loadWorldBookVectorSettings } from "../services/world-book-vector-settings.service";
 
@@ -369,6 +372,16 @@ function resolveDiagnosticVectorTraceOutcome(
 app.get("/", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
+
+  // ETag off a cheap list signature so re-opening the Lorebook tab returns 304
+  // (no body) until a book or any entry changes.
+  const sig = svc.getWorldBookListSignature(userId);
+  const etag = `"wb-list-${sig.count}-${sig.maxUpdatedAt}-${pagination.limit}-${pagination.offset}"`;
+  if (ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE } });
+  }
+  c.header("ETag", etag);
+  c.header("Cache-Control", REVALIDATE_PRIVATE);
   return c.json(svc.listWorldBooks(userId, pagination));
 });
 
@@ -384,6 +397,17 @@ app.get("/:id", (c) => {
   const book = svc.getWorldBook(userId, c.req.param("id"));
   if (!book) return c.json({ error: "Not found" }, 404);
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
+
+  // book.updated_at is bumped on any entry mutation (touchWorldBook), and the
+  // entries signature covers count/content; together they version the embedded
+  // entries page so an unchanged book+page returns 304 without re-serializing.
+  const sig = svc.getWorldBookEntriesSignature(book.id);
+  const etag = `"wb-${book.id}-${book.updated_at}-${sig.count}-${sig.maxUpdatedAt}-${pagination.limit}-${pagination.offset}"`;
+  if (ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE } });
+  }
+  c.header("ETag", etag);
+  c.header("Cache-Control", REVALIDATE_PRIVATE);
   const entries = svc.listEntriesPaginated(userId, book.id, pagination);
   return c.json({ ...book, entries });
 });
@@ -458,7 +482,9 @@ app.post("/:id/diagnostics", async (c) => {
   const chat = chatsSvc.getChat(userId, body.chatId);
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
-  const character = charSvc.getCharacter(userId, chat.character_id);
+  const character = chat.character_id
+    ? charSvc.getCharacter(userId, chat.character_id)
+    : makeAssistantCharacter();
   if (!character) return c.json({ error: "Character not found" }, 404);
 
   const persona = personasSvc.resolvePersonaOrDefault(userId);
@@ -740,21 +766,47 @@ app.post("/import", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   try {
-    const result = svc.importWorldBook(userId, body);
+    const result = svc.importWorldBook(userId, body, { signal: c.req.raw.signal });
     return c.json({ world_book: result.worldBook, entry_count: result.entryCount }, 201);
   } catch (err: any) {
     return c.json({ error: err.message || "Import failed" }, 400);
   }
 });
 
+/**
+ * Accept either a lorebook-shaped payload ({ entries, ... }) or a character
+ * card, reducing the latter to its embedded lorebook. This lets a pasted
+ * character source (e.g. a BotBooru card JSON) import as a world book rather
+ * than failing with zero entries.
+ */
+function coerceLorebookPayload(payload: any): any {
+  if (!payload || typeof payload !== "object") return payload;
+  if (payload.entries) return payload; // already lorebook-shaped
+
+  const card = payload.data && typeof payload.data === "object" ? payload.data : payload;
+  const book = card.character_book ?? card.extensions?.character_book ?? payload.character_book;
+  if (book && typeof book === "object" && book.entries) {
+    return {
+      name: book.name || (card.name ? `${card.name} Lorebook` : undefined),
+      description: book.description || "",
+      entries: book.entries,
+    };
+  }
+  return payload;
+}
+
 app.post("/import-url", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.url) return c.json({ error: "url is required" }, 400);
 
+  // BotBooru hosts character cards; rewrite to the JSON download so the embedded
+  // lorebook can be extracted below. Other URLs are fetched as-is.
+  const fetchUrl = rewriteBotBooruUrl(body.url, "json") ?? body.url;
+
   let payload: any;
   try {
-    const res = await safeFetch(body.url, {
+    const res = await safeFetch(fetchUrl, {
       maxBytes: MAX_IMPORT_RESPONSE_BYTES,
       timeoutMs: 10_000,
     });
@@ -764,7 +816,7 @@ app.post("/import-url", async (c) => {
     if (text.length > MAX_IMPORT_RESPONSE_BYTES) {
       return c.json({ error: "Response too large" }, 400);
     }
-    payload = JSON.parse(text);
+    payload = coerceLorebookPayload(JSON.parse(text));
   } catch (err: any) {
     if (err instanceof SSRFError) {
       return c.json({ error: err.message }, 400);
@@ -772,8 +824,12 @@ app.post("/import-url", async (c) => {
     return c.json({ error: "Failed to fetch or parse URL" }, 400);
   }
 
+  if (svc.countImportedWorldBookEntries(payload?.entries) === 0) {
+    return c.json({ error: "No lorebook entries found at that URL" }, 400);
+  }
+
   try {
-    const result = svc.importWorldBook(userId, payload);
+    const result = svc.importWorldBook(userId, payload, { signal: c.req.raw.signal });
     return c.json({ world_book: result.worldBook, entry_count: result.entryCount }, 201);
   } catch (err: any) {
     return c.json({ error: err.message || "Import failed" }, 400);
@@ -796,7 +852,9 @@ app.post("/import-character-book", async (c) => {
     return c.json({ error: "No embedded character book found" }, 400);
   }
 
-  const result = svc.importCharacterBook(userId, characterId, character.name, characterBook);
+  const result = svc.importCharacterBook(userId, characterId, character.name, characterBook, {
+    signal: c.req.raw.signal,
+  });
   const currentIds = getCharacterWorldBookIds(character.extensions);
   const nextExtensions = setCharacterWorldBookIds(
     { ...(character.extensions || {}) },
@@ -820,6 +878,20 @@ app.get("/:id/entries", (c) => {
   const sortBy = rawSortBy && VALID_ENTRY_SORT_KEYS.has(rawSortBy) ? (rawSortBy as svc.EntrySortKey) : undefined;
   const sortDir = rawSortDir === "desc" || rawSortDir === "asc" ? rawSortDir : undefined;
   const search = c.req.query("search") || undefined;
+
+  // Selecting a book for edit loads a page of (full-content) entries — the
+  // heavy read. ETag from book.updated_at (bumped on any entry mutation) + the
+  // entries signature + the safe sort/page params lets a re-select return 304.
+  // The search string is omitted from the ETag on purpose (the browser cache is
+  // keyed by the full URL, so distinct searches never collide), keeping any
+  // user input out of the response header.
+  const sig = svc.getWorldBookEntriesSignature(book.id);
+  const etag = `"wb-entries-${book.id}-${book.updated_at}-${sig.count}-${sig.maxUpdatedAt}-${pagination.limit}-${pagination.offset}-${sortBy ?? ""}-${sortDir ?? ""}"`;
+  if (ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE } });
+  }
+  c.header("ETag", etag);
+  c.header("Cache-Control", REVALIDATE_PRIVATE);
   return c.json(svc.listEntriesPaginated(userId, book.id, pagination, { sortBy, sortDir, search }));
 });
 

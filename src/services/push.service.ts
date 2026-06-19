@@ -34,6 +34,7 @@ const DEFAULT_PREFERENCES: PushNotificationPreferences = {
 // 24h maximum is brittle because small clock skew between us and the push
 // service can push exp over the spec limit and trigger a 403.
 const PUSH_TTL_SECONDS = 23 * 60 * 60;
+const PUSH_FETCH_TIMEOUT_MS = 15_000;
 
 // ── Subscription CRUD ───────────────────────────────────────────────
 
@@ -125,11 +126,16 @@ export async function sendPushToUser(
           method: "POST",
           headers: request.headers,
           body: request.body,
+          signal: AbortSignal.timeout(PUSH_FETCH_TIMEOUT_MS),
         });
 
         if (response.ok || response.status === 201) {
+          // Drain the body so the pooled socket is released promptly instead of
+          // lingering until GC.
+          void response.body?.cancel().catch(() => {});
           sent++;
         } else if (response.status === 410 || response.status === 404) {
+          void response.body?.cancel().catch(() => {});
           // Subscription expired — auto-cleanup
           getDb()
             .query("DELETE FROM push_subscriptions WHERE id = ?")

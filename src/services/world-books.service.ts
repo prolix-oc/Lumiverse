@@ -65,7 +65,17 @@ function buildStoredEntryExtensions(raw: unknown, outletValue: unknown): string 
 }
 
 function rowToBook(row: any): WorldBook {
-  return { ...row, folder: row.folder ?? "", metadata: JSON.parse(row.metadata) };
+  // Explicit field mapping rather than `...row` so internal columns (user_id)
+  // aren't shipped to the client.
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    folder: row.folder ?? "",
+    metadata: JSON.parse(row.metadata),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 function normalizeVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
@@ -153,7 +163,7 @@ function normalizeKeywordList(values: string[]): string[] {
   return normalized;
 }
 
-function normalizeImportedEntries(raw: unknown): any[] {
+export function normalizeImportedEntries(raw: unknown): any[] {
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === "object") return Object.values(raw as Record<string, any>);
   return [];
@@ -211,7 +221,7 @@ function normalizeImportedPosition(position: unknown): number {
   return 0;
 }
 
-function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
+export function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
   const keys: string[] = Array.isArray(raw.keys) ? raw.keys
     : Array.isArray(raw.key) ? raw.key
     : typeof raw.key === "string" ? raw.key.split(",").map((k: string) => k.trim()).filter(Boolean)
@@ -417,6 +427,32 @@ export function getWorldBook(userId: string, id: string): WorldBook | null {
   return row ? rowToBook(row) : null;
 }
 
+/**
+ * Cheap signature of a user's world-book list for ETag generation: count +
+ * max(updated_at). Creating/deleting a book changes the count; editing a book
+ * OR any of its entries bumps updated_at (entry mutations call touchWorldBook),
+ * so this uniquely identifies the list without serializing it.
+ */
+export function getWorldBookListSignature(userId: string): { count: number; maxUpdatedAt: number } {
+  const row = getDb()
+    .query("SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as maxUpdatedAt FROM world_books WHERE user_id = ?")
+    .get(userId) as { count: number; maxUpdatedAt: number };
+  return { count: row.count, maxUpdatedAt: row.maxUpdatedAt };
+}
+
+/**
+ * Cheap signature of a book's entries for ETag generation: count +
+ * max(updated_at) over world_book_entries (index-backed by world_book_id).
+ * Caller must have already verified ownership of the book. Combined with the
+ * book's own updated_at this covers entry CRUD, content edits, and reorders.
+ */
+export function getWorldBookEntriesSignature(worldBookId: string): { count: number; maxUpdatedAt: number } {
+  const row = getDb()
+    .query("SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as maxUpdatedAt FROM world_book_entries WHERE world_book_id = ?")
+    .get(worldBookId) as { count: number; maxUpdatedAt: number };
+  return { count: row.count, maxUpdatedAt: row.maxUpdatedAt };
+}
+
 export function createWorldBook(userId: string, input: CreateWorldBookInput): WorldBook {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -462,7 +498,6 @@ export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId
     `SELECT id
        FROM world_books
       WHERE user_id = ?
-        AND json_extract(metadata, '$.source') = 'character'
         AND json_extract(metadata, '$.auto_managed_by_character') = 1
         AND json_extract(metadata, '$.source_character_id') = ?`
   ).all(userId, characterId) as Array<{ id: string }>;
@@ -1123,6 +1158,25 @@ export function bulkOperateEntries(
     return { action: input.action, affected: uniqueIds.length };
   }
 
+  if (input.action === "set_position") {
+    const position = Number.isFinite(input.position) ? Math.trunc(input.position) : 0;
+    if (position < 0 || position > 7) {
+      throw new Error("position must be between 0 and 7");
+    }
+    const depth = position === 4 && Number.isFinite(input.depth) ? Math.trunc(input.depth!) : 4;
+    db.transaction(() => {
+      const stmt = db.query(
+        "UPDATE world_book_entries SET position = ?, depth = ?, updated_at = ? WHERE id = ? AND world_book_id = ?",
+      );
+      uniqueIds.forEach((entryId) => {
+        stmt.run(position, position === 4 ? depth : orderedEntries.find((e) => e.id === entryId)!.depth, now, entryId, worldBookId);
+      });
+      touchWorldBook(worldBookId, now);
+    })();
+    emitWorldBookChanged(userId, worldBookId);
+    return { action: input.action, affected: uniqueIds.length };
+  }
+
   throw new Error("Unsupported bulk action");
 }
 
@@ -1155,57 +1209,51 @@ function resolveImportOrder(raw: any, index: number): number {
   return index;
 }
 
-// --- World Book Import (standalone JSON) ---
+// --- World Book Import (shared helpers) ---
 
-export function importWorldBook(
-  userId: string,
-  payload: any
-): { worldBook: WorldBook; entryCount: number } {
-  // Accept imported lorebook format or a plain {entries} object.
-  // Imported lorebooks may wrap entries in an object keyed by numeric index,
-  // or provide them as an array.
-  const bookName = payload.name || payload.originalName || "Imported World Book";
-  const description = payload.description || "";
+const IMPORT_DEFAULT_CHUNK_SIZE = 500;
 
-  const worldBook = createWorldBook(userId, {
-    name: bookName,
-    description,
-    metadata: { source: "import" },
-  });
-
-  const rawEntries = normalizeImportedEntries(payload.entries);
-
-  let entryCount = 0;
-  for (let i = 0; i < rawEntries.length; i++) {
-    createEntry(userId, worldBook.id, normalizeImportedEntryInput(rawEntries[i], i), { emitEvent: false });
-    entryCount++;
-  }
-
-  emitWorldBookChanged(userId, worldBook.id);
-  return { worldBook, entryCount };
+export interface ImportWorldBookOptions {
+  signal?: AbortSignal;
 }
 
-/**
- * Bulk import variant that skips per-entry embedding indexing and
- * runs all inserts in a single transaction. Used by migration endpoints.
- */
-export function importWorldBookBulk(
-  userId: string,
-  payload: any
-): { worldBook: WorldBook; entryCount: number } {
-  const bookName = payload.name || payload.originalName || "Imported World Book";
-  const description = payload.description || "";
+export interface ImportResult {
+  worldBook: WorldBook;
+  entryCount: number;
+  aborted?: boolean;
+}
 
-  const worldBook = createWorldBook(userId, {
-    name: bookName,
-    description,
-    metadata: { source: "import" },
-  });
+interface BulkInsertEntriesResult {
+  insertedIds: string[];
+  vectorizedIds: string[];
+  aborted: boolean;
+}
 
-  const rawEntries = normalizeImportedEntries(payload.entries);
+interface BulkInsertEntriesOptions {
+  forceVectorizedOff?: boolean;
+  signal?: AbortSignal;
+  chunkSize?: number;
+}
 
+// Inserts pre-normalized entries in chunked transactions with a reused
+// prepared statement. A 1k-entry import becomes ~2 fsyncs instead of ~1k.
+// Between chunks we check the optional AbortSignal so a client disconnect
+// stops further work. world_books.updated_at is touched once at the end.
+// Vectorization is NOT queued here — the caller enqueues from the returned IDs.
+function bulkInsertEntries(
+  worldBookId: string,
+  inputs: CreateWorldBookEntryInput[],
+  options: BulkInsertEntriesOptions = {},
+): BulkInsertEntriesResult {
+  const chunkSize = Math.max(1, options.chunkSize ?? IMPORT_DEFAULT_CHUNK_SIZE);
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
+  const insertedIds: string[] = [];
+  const vectorizedIds: string[] = [];
+
+  if (inputs.length === 0) {
+    return { insertedIds, vectorizedIds, aborted: false };
+  }
 
   const insert = db.query(
     `INSERT INTO world_book_entries (
@@ -1220,66 +1268,146 @@ export function importWorldBookBulk(
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
-  let entryCount = 0;
+  let aborted = false;
 
-  const tx = db.transaction(() => {
-    for (let i = 0; i < rawEntries.length; i++) {
-      const normalized = normalizeImportedEntryInput(rawEntries[i], i);
-      const extensionsJson = buildStoredEntryExtensions(
-        normalized.extensions,
-        normalized.outlet_name,
-      );
-
-      insert.run(
-        crypto.randomUUID(), worldBook.id, crypto.randomUUID(),
-        JSON.stringify(normalized.key || []),
-        JSON.stringify(normalized.keysecondary || []),
-        normalized.content || "",
-        normalized.comment || "",
-        normalized.position ?? 0,
-        normalized.depth ?? 4,
-        normalized.role || null,
-        normalized.order_value ?? 100,
-        normalized.selective ? 1 : 0,
-        normalized.constant ? 1 : 0,
-        normalized.disabled ? 1 : 0,
-        normalized.group_name || "",
-        normalized.group_override ? 1 : 0,
-        normalized.group_weight ?? 100,
-        normalized.probability ?? 100,
-        normalized.scan_depth ?? null,
-        normalized.case_sensitive ? 1 : 0,
-        normalized.match_whole_words ? 1 : 0,
-        normalized.automation_id || null,
-        normalized.use_regex ? 1 : 0,
-        normalized.prevent_recursion ? 1 : 0,
-        normalized.exclude_recursion ? 1 : 0,
-        normalized.delay_until_recursion ? 1 : 0,
-        normalized.priority ?? 10,
-        normalized.sticky ?? 0,
-        normalized.cooldown ?? 0,
-        normalized.delay ?? 0,
-        normalized.selective_logic ?? 0,
-        normalized.use_probability !== false ? 1 : 0,
-        0, // vectorized is always false for bulk import; user can re-enable it later
-        "not_enabled",
-        null,
-        null,
-        extensionsJson,
-        now, now
-      );
-      entryCount++;
+  for (let start = 0; start < inputs.length; start += chunkSize) {
+    if (options.signal?.aborted) {
+      aborted = true;
+      break;
     }
-  });
+    const end = Math.min(start + chunkSize, inputs.length);
 
-  tx();
+    const tx = db.transaction(() => {
+      for (let i = start; i < end; i++) {
+        const input = inputs[i];
+        const id = crypto.randomUUID();
+        const uid = crypto.randomUUID();
+        const vectorized = options.forceVectorizedOff ? false : !!input.vectorized;
+        const vectorIndexState = getPendingVectorIndexState(vectorized);
+        const extensionsJson = buildStoredEntryExtensions(input.extensions, input.outlet_name);
 
-  if (entryCount > 0) {
-    db.query("UPDATE world_books SET updated_at = ? WHERE id = ?").run(now, worldBook.id);
+        insert.run(
+          id, worldBookId, uid,
+          JSON.stringify(input.key || []),
+          JSON.stringify(input.keysecondary || []),
+          input.content || "",
+          input.comment || "",
+          input.position ?? 0,
+          input.depth ?? 4,
+          input.role || null,
+          input.order_value ?? 100,
+          input.selective ? 1 : 0,
+          input.constant ? 1 : 0,
+          input.disabled ? 1 : 0,
+          input.group_name || "",
+          input.group_override ? 1 : 0,
+          input.group_weight ?? 100,
+          input.probability ?? 100,
+          input.scan_depth ?? null,
+          input.case_sensitive ? 1 : 0,
+          input.match_whole_words ? 1 : 0,
+          input.automation_id || null,
+          input.use_regex ? 1 : 0,
+          input.prevent_recursion ? 1 : 0,
+          input.exclude_recursion ? 1 : 0,
+          input.delay_until_recursion ? 1 : 0,
+          input.priority ?? 10,
+          input.sticky ?? 0,
+          input.cooldown ?? 0,
+          input.delay ?? 0,
+          input.selective_logic ?? 0,
+          input.use_probability !== false ? 1 : 0,
+          vectorized ? 1 : 0,
+          vectorIndexState.vector_index_status,
+          vectorIndexState.vector_indexed_at,
+          vectorIndexState.vector_index_error,
+          extensionsJson,
+          now, now,
+        );
+
+        insertedIds.push(id);
+        if (vectorized) vectorizedIds.push(id);
+      }
+    });
+    tx();
   }
 
+  if (insertedIds.length > 0) {
+    db.query("UPDATE world_books SET updated_at = ? WHERE id = ?").run(now, worldBookId);
+  }
+
+  return { insertedIds, vectorizedIds, aborted };
+}
+
+function queueVectorizationsBatch(userId: string, ids: string[]): void {
+  for (const id of ids) {
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, id);
+  }
+}
+
+// --- World Book Import (standalone JSON) ---
+
+export function importWorldBook(
+  userId: string,
+  payload: any,
+  options: ImportWorldBookOptions = {},
+): ImportResult {
+  // Accept imported lorebook format or a plain {entries} object.
+  // Imported lorebooks may wrap entries in an object keyed by numeric index,
+  // or provide them as an array.
+  const bookName = payload.name || payload.originalName || "Imported World Book";
+  const description = payload.description || "";
+
+  const worldBook = createWorldBook(userId, {
+    name: bookName,
+    description,
+    metadata: { source: "import" },
+  });
+
+  const rawEntries = normalizeImportedEntries(payload.entries);
+  const inputs = rawEntries.map((raw, i) => normalizeImportedEntryInput(raw, i));
+
+  const result = bulkInsertEntries(worldBook.id, inputs, { signal: options.signal });
+  queueVectorizationsBatch(userId, result.vectorizedIds);
+
   emitWorldBookChanged(userId, worldBook.id);
-  return { worldBook, entryCount };
+  return {
+    worldBook,
+    entryCount: result.insertedIds.length,
+    aborted: result.aborted || undefined,
+  };
+}
+
+// Bulk import variant that forces vectorization off for every entry. Used by
+// migration endpoints — users opt in to embeddings per-book afterwards.
+export function importWorldBookBulk(
+  userId: string,
+  payload: any,
+  options: ImportWorldBookOptions = {},
+): ImportResult {
+  const bookName = payload.name || payload.originalName || "Imported World Book";
+  const description = payload.description || "";
+
+  const worldBook = createWorldBook(userId, {
+    name: bookName,
+    description,
+    metadata: { source: "import" },
+  });
+
+  const rawEntries = normalizeImportedEntries(payload.entries);
+  const inputs = rawEntries.map((raw, i) => normalizeImportedEntryInput(raw, i));
+
+  const result = bulkInsertEntries(worldBook.id, inputs, {
+    forceVectorizedOff: true,
+    signal: options.signal,
+  });
+
+  emitWorldBookChanged(userId, worldBook.id);
+  return {
+    worldBook,
+    entryCount: result.insertedIds.length,
+    aborted: result.aborted || undefined,
+  };
 }
 
 // --- Character Book Import / Export ---
@@ -1289,8 +1417,8 @@ export function importCharacterBook(
   characterId: string,
   characterName: string,
   characterBook: any,
-  options: { autoManagedByCharacter?: boolean } = {}
-): { worldBook: WorldBook; entryCount: number } {
+  options: { autoManagedByCharacter?: boolean; signal?: AbortSignal } = {},
+): ImportResult {
   const bookName = characterBook.name || `${characterName}'s Lorebook`;
   const importedAt = new Date().toLocaleString();
   const description = characterBook.description || `Imported from ${characterName} at ${importedAt}`;
@@ -1304,27 +1432,29 @@ export function importCharacterBook(
     },
   });
 
-  const entries = normalizeImportedEntries(characterBook?.entries);
-  let entryCount = 0;
+  const rawEntries = normalizeImportedEntries(characterBook?.entries);
+  const inputs = rawEntries.map((raw, i) => normalizeImportedEntryInput(raw, i));
 
-  for (let i = 0; i < entries.length; i++) {
-    createEntry(userId, worldBook.id, normalizeImportedEntryInput(entries[i], i), { emitEvent: false });
-    entryCount++;
-  }
+  const result = bulkInsertEntries(worldBook.id, inputs, { signal: options.signal });
+  queueVectorizationsBatch(userId, result.vectorizedIds);
 
   emitWorldBookChanged(userId, worldBook.id);
-  return { worldBook, entryCount };
+  return {
+    worldBook,
+    entryCount: result.insertedIds.length,
+    aborted: result.aborted || undefined,
+  };
 }
 
-/**
- * Import a world book from the Lumiverse export format (used in lumiverse_modules.json).
- * Entries are already in the internal schema, so field mapping is simpler than importCharacterBook.
- */
+// Import a world book from the Lumiverse export format (used in lumiverse_modules.json).
+// Entries already use the internal schema, so normalizeImportedEntryInput is a no-op for
+// the canonical fields and only kicks in for the legacy aliases it tolerates.
 export function importLumiverseWorldBook(
   userId: string,
   characterId: string,
   data: Record<string, any>,
-): { worldBook: WorldBook; entryCount: number } {
+  options: ImportWorldBookOptions = {},
+): ImportResult {
   const bookName = data.name || "Imported Lorebook";
   const description = data.description || `Imported from CharX at ${new Date().toLocaleString()}`;
   const worldBook = createWorldBook(userId, {
@@ -1333,49 +1463,18 @@ export function importLumiverseWorldBook(
     metadata: { ...(data.metadata || {}), source: "charx_import", source_character_id: characterId },
   });
 
-  const entries = data.entries || [];
-  let entryCount = 0;
+  const rawEntries = normalizeImportedEntries(data.entries);
+  const inputs = rawEntries.map((raw, i) => normalizeImportedEntryInput(raw, i));
 
-  for (const raw of entries) {
-    createEntry(userId, worldBook.id, {
-      outlet_name: raw.outlet_name ?? raw.outletName,
-      key: Array.isArray(raw.key) ? raw.key : [],
-      keysecondary: Array.isArray(raw.keysecondary) ? raw.keysecondary : [],
-      content: raw.content || "",
-      comment: raw.comment || "",
-      disabled: raw.disabled ?? false,
-      order_value: raw.order_value ?? 0,
-      position: raw.position ?? 0,
-      depth: raw.depth ?? 4,
-      role: raw.role || undefined,
-      selective: raw.selective ?? false,
-      constant: raw.constant ?? false,
-      case_sensitive: raw.case_sensitive ?? false,
-      match_whole_words: raw.match_whole_words ?? false,
-      group_name: raw.group_name || "",
-      group_override: raw.group_override ?? false,
-      group_weight: raw.group_weight ?? 100,
-      probability: raw.probability ?? 100,
-      scan_depth: raw.scan_depth ?? undefined,
-      automation_id: raw.automation_id || undefined,
-      selective_logic: raw.selective_logic ?? 0,
-      use_probability: raw.use_probability ?? true,
-      use_regex: raw.use_regex ?? false,
-      prevent_recursion: raw.prevent_recursion ?? false,
-      exclude_recursion: raw.exclude_recursion ?? false,
-      delay_until_recursion: raw.delay_until_recursion ?? false,
-      priority: raw.priority ?? 10,
-      sticky: raw.sticky ?? 0,
-      cooldown: raw.cooldown ?? 0,
-      delay: raw.delay ?? 0,
-      vectorized: raw.vectorized ?? false,
-      extensions: raw.extensions || {},
-    }, { emitEvent: false });
-    entryCount++;
-  }
+  const result = bulkInsertEntries(worldBook.id, inputs, { signal: options.signal });
+  queueVectorizationsBatch(userId, result.vectorizedIds);
 
   emitWorldBookChanged(userId, worldBook.id);
-  return { worldBook, entryCount };
+  return {
+    worldBook,
+    entryCount: result.insertedIds.length,
+    aborted: result.aborted || undefined,
+  };
 }
 
 // --- World Book Export ---

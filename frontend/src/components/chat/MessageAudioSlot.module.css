@@ -1,0 +1,73 @@
+/* Outer container — always in the DOM so the grid-template-rows
+   transition has somewhere to animate from. Defaults to 0fr (fully
+   collapsed) which means zero contribution to the bubble's measured
+   height when no audio is present. */
+.slot {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.slotActive {
+  grid-template-rows: 1fr;
+}
+
+/* Inner wrapper — overflow:hidden is required for grid-template-rows: 0fr
+   to actually collapse to zero height (otherwise the player's natural
+   height pushes the grid track open). min-height: 0 is the grid-item
+   counterpart that allows the track to shrink past content size. */
+.inner {
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  /* Horizontal padding matches the bubble's .content padding so the
+     player aligns flush with the message text above. Vertical padding is
+     only applied in the active state so the collapsed slot is truly
+     0-height (including no top/bottom padding). */
+  padding: 0 24px;
+}
+
+.slotActive .inner {
+  /* Breathing room above + below the player when expanded. Transitions
+     in alongside the height growth so the gap appears gradually. */
+  padding: 6px 24px 14px;
+  transition: padding 280ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.slot:not(.slotActive) .inner {
+  transition: padding 280ms cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.slotUser .inner {
+  justify-content: flex-end;
+}
+
+/* Mobile: match the bubble's tighter mobile content padding. */
+@media (max-width: 600px) {
+  .inner,
+  .slotActive .inner {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .inner,
+  .slotActive .inner {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Reduced-motion users get an instant collapse/expand rather than the
+     280ms animation. We still need the grid-template-rows mechanism for
+     the 0-height-when-empty property, just without the transition. */
+  .slot,
+  .inner,
+  .slotActive .inner,
+  .slot:not(.slotActive) .inner {
+    transition: none;
+  }
+}

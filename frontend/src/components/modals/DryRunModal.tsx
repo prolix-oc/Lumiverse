@@ -12,6 +12,7 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { dryRunToRawPromptInput, formatRawPrompt, type RawPromptView } from '@/lib/formatRawPrompt'
 import i18n from '@/i18n'
 import { getAnthropicBreakdownCacheHints, getAnthropicCacheUsageSummary } from '@/lib/anthropic-breakdown-cache'
+import { getNanoGptCacheUsageSummary } from '@/lib/nanogpt-breakdown-cache'
 import styles from './DryRunModal.module.css'
 import clsx from 'clsx'
 
@@ -223,6 +224,10 @@ export default function DryRunModal() {
     () => getAnthropicCacheUsageSummary(provider, modalProps.usage),
     [provider, modalProps.usage],
   )
+  const nanoGptCacheUsage = useMemo(
+    () => getNanoGptCacheUsageSummary(provider, modalProps.usage),
+    [provider, modalProps.usage],
+  )
 
   const parametersJson = useMemo(
     () => JSON.stringify(parameters, null, 2),
@@ -360,6 +365,15 @@ export default function DryRunModal() {
                             })}
                             {anthropicCacheUsage.cacheCreation5mInputTokens > 0 && t('cache5m', { count: anthropicCacheUsage.cacheCreation5mInputTokens })}
                             {anthropicCacheUsage.cacheCreation1hInputTokens > 0 && t('cache1h', { count: anthropicCacheUsage.cacheCreation1hInputTokens })}
+                          </span>
+                        )}
+                        {nanoGptCacheUsage && (
+                          <span className={styles.breakdownSource}>
+                            {[
+                              nanoGptCacheUsage.cacheReadInputTokens > 0 && `read ${nanoGptCacheUsage.cacheReadInputTokens.toLocaleString()}`,
+                              nanoGptCacheUsage.cacheCreationInputTokens > 0 && `write ${nanoGptCacheUsage.cacheCreationInputTokens.toLocaleString()}`,
+                              nanoGptCacheUsage.cachedTokensOpenAiStyle > 0 && `cached ${nanoGptCacheUsage.cachedTokensOpenAiStyle.toLocaleString()}`,
+                            ].filter(Boolean).join(' • ')}
                           </span>
                         )}
                       </div>
@@ -515,6 +529,20 @@ export default function DryRunModal() {
                         <span className={styles.breakdownLabel}>{t('memory.injectionMethod')}</span>
                         <span className={styles.breakdownTokens}>{memoryStats.injectionMethod}</span>
                       </div>
+                      {memoryStats.retrievalMode && (
+                        <div className={styles.breakdownEntry}>
+                          <span className={styles.breakdownLabel}>Retrieval mode</span>
+                          <span
+                            className={styles.breakdownTokens}
+                            style={memoryStats.retrievalMode === 'recency' ? { color: '#ffab00' } : undefined}
+                            title={memoryStats.retrievalMode === 'recency'
+                              ? 'Vector search was unavailable (e.g. the query embedding failed); chunks were chosen by recency and have no similarity score.'
+                              : undefined}
+                          >
+                            {memoryStats.retrievalMode === 'recency' ? 'recency fallback' : memoryStats.retrievalMode}
+                          </span>
+                        </div>
+                      )}
                       <div className={styles.breakdownEntry}>
                         <span className={styles.breakdownLabel}>{t('memory.chunksAvailable')}</span>
                         <span className={styles.breakdownTokens}>{memoryStats.chunksAvailable}</span>
@@ -545,7 +573,7 @@ export default function DryRunModal() {
                           {memoryStats.retrievedChunks.map((chunk, i) => (
                             <div key={i} className={styles.breakdownEntry} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4, paddingLeft: 8 }}>
                               <span className={styles.breakdownLabel}>
-                                {t('memory.chunkLine', { index: i + 1, score: chunk.score.toFixed(4), tokens: chunk.tokenEstimate })}
+                                {t('memory.chunkLine', { index: i + 1, score: chunk.score != null ? chunk.score.toFixed(4) : 'n/a', tokens: chunk.tokenEstimate })}
                               </span>
                               <ChunkPreview text={chunk.preview} />
                             </div>

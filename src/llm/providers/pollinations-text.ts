@@ -1,6 +1,7 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
+import { throwProviderResponseError } from "../../utils/provider-errors";
 
 export class PollinationsTextProvider extends OpenAICompatibleProvider {
   readonly name = "pollinations_text";
@@ -37,19 +38,15 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "generate", res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const choice = data.choices?.[0];
     const normalized = this.splitMirroredReasoning(
       choice?.message?.content,
@@ -86,10 +83,7 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "stream", res);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -97,10 +91,11 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
     let reasoningKey: "reasoning" | "reasoning_content" | null = null;
     const maybeYield = createCooperativeYielder(64, request.signal);
 
+    let streamDoneNaturally = false;
     try {
       while (true) {
         const { done, value } = await readWithAbort(reader, request.signal);
-        if (done) break;
+        if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -143,7 +138,7 @@ export class PollinationsTextProvider extends OpenAICompatibleProvider {
         }
       }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 }

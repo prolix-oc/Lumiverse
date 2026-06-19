@@ -2,7 +2,7 @@ import type { ImageProvider } from "../provider"
 import type { ImageProviderCapabilities, ImageParameterSchemaMap } from "../param-schema"
 import type { ImageGenRequest, ImageGenResponse } from "../types"
 import { applyRawOverride } from "../types"
-import { ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors"
+import { parseProviderErrorBody, ProviderRequestError, readBoundedText, throwProviderResponseError } from "../../utils/provider-errors"
 import { openWebSocket } from "./ws-helpers"
 import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
 
@@ -57,6 +57,16 @@ const PARAMETERS: ImageParameterSchemaMap = {
   negativePrompt: {
     type: "string",
     description: "Negative prompt",
+  },
+  denoise: {
+    type: "number",
+    min: 0,
+    max: 1,
+    step: 0.05,
+    default: 0.6,
+    description:
+      "Init image creativity (img2img) — applied when a reference/source image is supplied. Higher = more deviation from the source image, lower = stays closer to it.",
+    group: "img2img",
   },
   vae: {
     type: "string",
@@ -119,9 +129,29 @@ const PARAMETERS: ImageParameterSchemaMap = {
   },
   rawRequestOverride: {
     type: "string",
-    description: "Raw JSON merged into the request body for advanced usage",
+    description:
+      'Raw JSON merged into the request body — flat SwarmUI params (e.g. {"refinermethod": "PostApply", "refinercontrolpercentage": 0.45}), {"presets": ["name"]} to apply a preset saved in SwarmUI, or a pasted SwarmUI preset export',
     group: "advanced",
   },
+}
+
+/**
+ * SwarmUI preset exports wrap their params in `param_map`
+ * ({"title": ..., "param_map": {"refinerupscale": "1.25"}}). Users paste these
+ * wholesale, so unwrap the map — SwarmUI stringifies param values server-side,
+ * so the export's string values apply as-is.
+ */
+function unwrapPresetExport(rawJson: unknown): string | undefined {
+  if (typeof rawJson !== "string" || !rawJson.trim()) return undefined
+  try {
+    const paramMap = JSON.parse(rawJson)?.param_map
+    if (paramMap && typeof paramMap === "object" && !Array.isArray(paramMap)) {
+      return JSON.stringify(paramMap)
+    }
+  } catch {
+    // Leave invalid JSON for applyRawOverride to reject with a clear error.
+  }
+  return rawJson
 }
 
 /** Cached SwarmUI session entry. */
@@ -132,6 +162,15 @@ interface SessionEntry {
 
 /** 25 minutes — SwarmUI sessions typically last 30. */
 const SESSION_TTL_MS = 25 * 60 * 1000
+
+/**
+ * Short-lived cache for ListModels responses. Opening the image-gen panel
+ * fires several identical ListModels walks (e.g. seven text_encoders fields),
+ * each a depth=10 directory scan. A brief TTL collapses those to one call,
+ * mirroring the ComfyUI provider's cached model listing.
+ */
+const MODEL_LIST_TTL_MS = 5 * 60 * 1000
+const modelListCache = new Map<string, { at: number; models: Array<{ id: string; label: string }> }>()
 
 export class SwarmUIImageProvider implements ImageProvider {
   readonly name = "swarmui"
@@ -231,6 +270,19 @@ export class SwarmUIImageProvider implements ImageProvider {
     const neg = request.negativePrompt || p.negativePrompt
     if (neg) body.negativeprompt = String(neg)
 
+    // img2img: a resolved source image (or manual reference image) activates
+    // SwarmUI's init-image path. `initimagecreativity` is SwarmUI's denoise
+    // (0–1, higher = more deviation from the source).
+    const source = (Array.isArray(p.resolvedSourceImages) && p.resolvedSourceImages[0])
+      || (Array.isArray(p.referenceImages) && p.referenceImages[0])
+      || undefined
+    if (source?.data) {
+      body.initimage = `data:${source.mimeType || "image/png"};base64,${source.data}`
+      body.initimagecreativity = p.denoise != null && Number.isFinite(Number(p.denoise))
+        ? Number(p.denoise)
+        : 0.6
+    }
+
     // Model component overrides (VAE, text encoders)
     // Parameter IDs match SwarmUI's CleanTypeName: lowercase-letters-only of the display name
     if (p.vae) body.vae = String(p.vae)
@@ -251,7 +303,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         : String(p.loraWeights)
     }
 
-    return applyRawOverride(body, p.rawRequestOverride)
+    return applyRawOverride(body, unwrapPresetExport(p.rawRequestOverride))
   }
 
   /** Fetch an image from a SwarmUI-relative path and return a data URL. */
@@ -330,7 +382,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
       // Retry once on invalid session
       if (!res.ok) {
-        const text = await res.text().catch(() => "")
+        const text = await readBoundedText(res)
         if (text.includes("invalid_session_id") || text.includes("Invalid session")) {
           this.invalidateSession(base, token)
           sessionId = await this.getSession(base, token, request.signal)
@@ -343,7 +395,18 @@ export class SwarmUIImageProvider implements ImageProvider {
           })
         }
         if (!res.ok) {
-          throw new Error(`SwarmUI generation error ${res.status}: ${text || await res.text().catch(() => "Unknown")}`)
+          // Body of the first response has already been read into `text`; the
+          // retry (if any) has its own untouched body.
+          const rawBody = res.bodyUsed ? text : await readBoundedText(res)
+          const parsed = parseProviderErrorBody(rawBody)
+          throw new ProviderRequestError({
+            provider: "SwarmUI",
+            operation: "image generate",
+            status: res.status,
+            code: parsed.code || res.statusText || undefined,
+            detail: parsed.detail || res.statusText || undefined,
+            rawBody,
+          })
         }
       }
 
@@ -517,6 +580,12 @@ export class SwarmUIImageProvider implements ImageProvider {
     query: { path: string; depth: number; subtype: string },
   ): Promise<Array<{ id: string; label: string }>> {
     const base = this.baseUrl(apiUrl)
+    const cacheKey = `${base} ${query.path} ${query.subtype} ${query.depth}`
+    const cached = modelListCache.get(cacheKey)
+    if (cached && Date.now() - cached.at < MODEL_LIST_TTL_MS) {
+      return cached.models
+    }
+
     const token = apiKey || undefined
     const sessionId = await this.getSession(base, token)
 
@@ -547,6 +616,7 @@ export class SwarmUIImageProvider implements ImageProvider {
       if (id) models.push({ id, label: modelLabel(id) })
     }
 
+    modelListCache.set(cacheKey, { at: Date.now(), models })
     return models
   }
 

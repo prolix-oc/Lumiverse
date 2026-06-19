@@ -179,6 +179,15 @@ export function validateInstallPresetPayload(
   if (JSON.stringify(raw.presetData).length > MAX_PRESET_DATA_BYTES) {
     return { ok: false, error: `presetData exceeds ${MAX_PRESET_DATA_BYTES} bytes` };
   }
+  if (raw.presetVersion != null && !isString(raw.presetVersion, 64)) {
+    return { ok: false, error: "presetVersion must be a string ≤64 chars" };
+  }
+  if (raw.presetCreator != null && !isString(raw.presetCreator, 256)) {
+    return { ok: false, error: "presetCreator must be a string ≤256 chars" };
+  }
+  if (raw.presetSlug != null && !isString(raw.presetSlug, 512)) {
+    return { ok: false, error: "presetSlug must be a string ≤512 chars" };
+  }
 
   return { ok: true, value: raw as unknown as InstallPresetPayload };
 }

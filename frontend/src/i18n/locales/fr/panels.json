@@ -282,7 +282,7 @@
     "thinkingDisplaySummarized": "Résumé",
     "thinkingDisplayOmitted": "Omis",
     "thinkingDisplayDisabledHint": "Envoyé uniquement lorsque le raisonnement API est activé.",
-    "thinkingDisplayHint": "Opus 4.7 et Mythos Preview sont par défaut Omis. Choisissez Résumé pour recevoir le texte récapitulatif.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 et Mythos Preview sont par défaut Omis. Choisissez Résumé pour recevoir le texte récapitulatif.",
     "keepInHistory": "Conserver l'historique",
     "keepAllReasoning": "Conserver tous les raisonnements dans l'invite",
     "stripAllReasoning": "Supprimer tous les raisonnements de l'invite",
@@ -348,6 +348,8 @@
     "resetsIn": "Réinitialisé dans",
     "unknown": "Inconnu",
     "imagesLeft": "Images restantes",
+    "daily": "Quotidien",
+    "monthly": "Mensuel",
     "comfyWorkflow": "Flux de travail ComfyUI",
     "loadComfyWorkflowFailed": "Échec du chargement du flux de travail ComfyUI"
   },
@@ -566,7 +568,16 @@
     "restoreServerDefault": "Restaurer les paramètres par défaut du serveur",
     "reset": "Réinitialiser",
     "summarizationSystemPrompt": "Invite système de récapitulation",
-    "summarizationUserPrompt": "Invite utilisateur de récapitulation"
+    "summarizationUserPrompt": "Invite utilisateur de récapitulation",
+    "rebuildFromScratch": "Reconstruire de zéro",
+    "rebuilding": "Reconstruction...",
+    "rebuildInProgress": "Reconstruction en cours",
+    "rebuildBatchProgress": "Traitement du lot {{current}}/{{total}}…",
+    "clearModalTitle": "Effacer le résumé",
+    "rebuildModalTitle": "Reconstruire le résumé",
+    "rebuildModalMessage": "Cela traitera l'ensemble des <strong>{{totalMessages}}</strong> messages en <strong>{{batchCount}}</strong> lot(s). Le résumé existant sera conservé si la reconstruction échoue en cours de route.",
+    "rebuildModalLoading": "Reconstruction du résumé de zéro…",
+    "rebuildConfirm": "Reconstruire"
   },
   "regexPanel": {
     "title": "Scripts Regex",
@@ -580,6 +591,9 @@
     "clickPlus": "Cliquez sur + pour en créer un.",
     "uncategorized": "non classé",
     "deleteFolderConfirm": "Supprimez tous les scripts regex {{count}} dans \"{{folder}}\" ? Cela ne peut pas être annulé.",
+    "deleteFolderTitle": "Supprimer les scripts du dossier",
+    "deleteScriptTitle": "Supprimer le script regex",
+    "deleteScriptConfirm": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
     "deleteSomeFailed": "Les scripts {{count}} n'ont pas pu être supprimés",
     "deletedScripts": "Scripts {{count}} supprimés",
     "selectPresetFirstScript": "Sélectionnez un préréglage Loom avant de lier les scripts regex",
@@ -724,13 +738,32 @@
       "generating": "Génération d'image…",
       "starting": "départ…",
       "step": "{{step}}/{{total}} ({{pct}}%)",
-      "previewAlt": "Aperçu de la génération"
+      "previewAlt": "Aperçu de la génération",
+      "finalizing": "Finalisation…"
     },
     "enable": "Activer la génération d'image",
     "enableHint": "Générer des arrière-plans de discussion tenant compte de la scène via l'outil de scène du conseil",
+    "importExport": "Importer / Exporter",
+    "exportModalTitle": "Exporter la configuration de génération d'images",
+    "exportIncludeSettings": "Inclure les réglages",
+    "exportIncludeParameters": "Inclure les paramètres de génération",
+    "exportIncludeParametersHint": "Steps, CFG, taille, seed et autres paramètres de la connexion active. Appliqués à l'importation à la connexion active si le fournisseur correspond.",
+    "exportIncludeConnections": "Inclure les connexions du fournisseur",
+    "exportIncludeConnectionsHint": "Paramètres de connexion, workflows et URL du serveur. Les clés API ne sont jamais exportées.",
+    "exportPresets": "Préréglages de prompt",
+    "selectAll": "Tout sélectionner",
+    "selectNone": "Tout désélectionner",
+    "noPresetsToExport": "Aucun préréglage enregistré à exporter",
+    "selectedCount": "{{selected}} préréglage(s) sur {{total}} sélectionné(s)",
+    "exportConfig": "Exporter",
+    "importConfig": "Importer",
+    "importSuccess": "Configuration de génération d'images importée ({{presets}} préréglages, {{connections}} connexions)",
+    "importFailed": "Échec de l'importation",
+    "exportFailed": "Échec de l'exportation",
     "connection": "Connexion",
     "createConnectionFirst": "Créez d'abord une connexion dans l'onglet Connexions",
     "selectConnection": "Sélectionnez une connexion...",
+    "noConnection": "Aucune connexion",
     "promptMode": "Mode invite",
     "mode": "Mode",
     "modeHint": "La scène analyse la discussion dans une invite de scène. Custom envoie votre invite directement. Chat-aware personnalisé utilise vos instructions pour réécrire le contexte de chat actuel dans l'invite d'image finale.",
@@ -748,22 +781,27 @@
     "mainPreset": "Préréglage principal",
     "characterPreset": "Persona preset",
     "personaPreset": "Préréglage de personnalité",
+    "captioningPreset": "Préréglage de légendage",
     "activeMainPreset": "Préréglage principal actif",
     "boundCharacterPreset": "Préréglage de caractères liés",
     "boundPersonaPreset": "Préréglage de personnalité lié",
+    "boundCaptioningPreset": "Préréglage de légendage",
     "pickMainPresetHint": "Choisissez un préréglage principal enregistré pour le charger dans l'éditeur ci-dessous. Il devient également l'invite active envoyée au moment de la génération.",
     "pickCharacterPresetHint": "Choisissez un caractère prédéfini pour le charger dans l'éditeur et liez-le au personnage du chat actuel.",
     "openChatBindPreset": "Ouvrez un chat pour lier un préréglage à son personnage. Jusque-là, les choix ne persisteront pas.",
     "pickPersonaPresetHint": "Choisissez un préréglage de personnage pour le charger dans l'éditeur et liez-le au personnage actif.",
     "selectActivePersona": "Sélectionnez un personnage actif pour lui lier un préréglage.",
+    "pickCaptioningPresetHint": "Choisissez un préréglage de légendage enregistré pour le charger. Ces préréglages définissent comment l'Image Captioner décrit les images téléversées.",
     "parserInstructions": "Instructions de l'analyseur",
     "prompt": "Invite",
     "characterSnippet": "Extrait de personnage",
     "personaSnippet": "Extrait de personnage",
+    "captioningInstructions": "Instructions de légendage",
     "parserInstructionsHint": "Instructions sur la façon dont l'analyseur LLM doit transformer le contexte de discussion en invite d'image finale. Ceci n'est pas envoyé directement au fournisseur d'images.",
     "sentDirectlyHint": "Envoyé directement au fournisseur d'images.",
     "characterSnippetHint": "Texte ajouté partout où {{character_prompt}} apparaît dans le préréglage principal.",
     "personaSnippetHint": "Texte ajouté partout où {{persona_prompt}} apparaît dans le préréglage principal.",
+    "captioningInstructionsHint": "Instructions envoyées avec l'image téléversée à l'analyseur LLM dans la fenêtre Image Captioner.",
     "editingPresetTitle": "Édition : {{name}}",
     "editTargetPromptTitle": "Invite {{target}}",
     "parserPromptExample": "Exemple : Concentrez-vous sur la pose actuelle, les expressions, les vêtements, l'éclairage et les détails de la pièce. Utilisez des balises de génération d'image concises.",
@@ -773,6 +811,7 @@
     "negativePrompt": "Invite négative",
     "character": "Personnage",
     "persona": "Personnage",
+    "captioning": "Légendage",
     "negativeSnippet": "extrait négatif",
     "negativeSnippetHint": "Remplace la macro négative correspondante dans l'invite négative du préréglage principal.",
     "editingPresetNegativeTitle": "Édition : {{name}} - Négatif",
@@ -783,6 +822,8 @@
     "saveChanges": "Enregistrer les modifications",
     "saveAsNew": "Enregistrer sous Nouveau",
     "delete": "Supprimer",
+    "deletePresetConfirmTitle": "Supprimer le préréglage de prompt",
+    "deletePresetConfirmMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
     "boundToActiveCharacter": "lié au personnage actif",
     "boundToActivePersona": "lié au personnage actif",
     "promptParser": "Analyseur d'invite",
@@ -838,6 +879,8 @@
     "workflowDefault": "(workflow par défaut)",
     "workflowOrConnectionDefault": "(workflow/connexion par défaut)",
     "advanced": "Avancé",
+    "rawOverrideInvalidJson": "JSON invalide — la génération échouera tant que ce champ n'est pas corrigé ou vidé",
+    "rawOverrideNotObject": "Doit être un objet JSON de champs de requête, p. ex. {\"steps\": 30}",
     "directorReferences": "Références du réalisateur",
     "includeCharacterAvatar": "Inclure l'avatar du personnage",
     "includeCharacterAvatarHint": "Envoyer l'avatar du personnage actuel comme référence du réalisateur",
@@ -868,6 +911,8 @@
     "addGeneratedToGalleryHint": "Lorsque cette option est activée, chaque image générée est également liée à la galerie de personnages du chat actif. Désactivez cette option pour empêcher les générations d'accéder à la galerie.",
     "generatedImagesResend": "Images générées à renvoyer",
     "generatedImagesResendHint": "Seules les images générées les plus récentes sont incluses dans un contexte multimodal.",
+    "contextMessageLimit": "Messages de chat dans le contexte",
+    "contextMessageLimitHint": "Nombre de messages de chat les plus récents envoyés à l'analyseur de prompt pour l'analyse de scène et les prompts personnalisés analysés.",
     "sceneChangeSensitivity": "Sensibilité du changement de scène",
     "backgroundDisplay": "Affichage de l'arrière-plan",
     "opacity": "Opacité",
@@ -970,6 +1015,7 @@
     "noWorldBooks": "Aucun livre du monde disponible",
     "unknown": "Inconnu",
     "removeWorldBook": "Supprimer le livre du monde",
+    "openInLorebook": "Ouvrir dans l'onglet Lorebook",
     "noWorldBooksAttached": "Aucun livre du monde attaché",
     "embeddedLorebook": "Livre d'histoire intégré",
     "embeddedLorebookEntries": "{{count}} entrées trouvées dans la carte de personnage",
@@ -1061,6 +1107,10 @@
       "expressionsCount": "expressions {{count}}",
       "switchToSingle": "Passer à un seul caractère",
       "removeGroup": "Supprimer le groupe",
+      "deleteLabelConfirmTitle": "Supprimer l'expression",
+      "deleteLabelConfirmMessage": "Supprimer l'expression \"{{label}}\" ? Cela ne peut pas être annulé.",
+      "deleteGroupConfirmTitle": "Supprimer le groupe",
+      "deleteGroupConfirmMessage": "Supprimer le groupe \"{{name}}\" et toutes ses expressions ? Cela ne peut pas être annulé.",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1099,7 +1149,9 @@
       "saved": "Enregistré.",
       "saveFailed": "Échec de l'enregistrement.",
       "cleared": "Effacer.",
-      "clearFailed": "Échec de la suppression."
+      "clearFailed": "Échec de la suppression.",
+      "clearConfirmTitle": "Effacer la liaison LoRA",
+      "clearConfirmMessage": "Supprimer la liaison LoRA enregistrée de ce personnage ? Cela ne peut pas être annulé."
     }
   },
   "characterBrowser": {
@@ -1129,7 +1181,7 @@
     "importingTags": "Importer des balises...",
     "importUrl": "Importer une URL",
     "importFromUrlTitle": "Importer depuis une URL",
-    "importFromUrlHint": "Coller une URL de personnage depuis Chub, JannyAI ou d'autres sources prises en charge.",
+    "importFromUrlHint": "Coller une URL de personnage depuis Chub, JannyAI, BotBooru ou d'autres sources prises en charge.",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "Annuler",
     "dropToImport": "Déposez les fichiers de caractères pour importer",
@@ -1159,6 +1211,7 @@
     "searchWorldBooks": "Rechercher des livres du monde…",
     "noWorldBooksAvailable": "Aucun livre du monde disponible",
     "removeFromAlwaysActive": "Supprimer de toujours actif",
+    "editBook": "Modifier ce livre de monde",
     "noGlobalActive": "Aucun livre du monde global actif",
     "thisChatOnly": "Ce chat uniquement",
     "openChatToAdd": "Ouvrir un chat pour ajouter des livres du monde à l'échelle du chat",
@@ -1272,7 +1325,10 @@
       "keywordPlaceholder": "Entrer le mot-clé",
       "keywordList": "Liste de mots-clés",
       "keywordPrimary": "Principal",
-      "keywordSecondary": "Secondaire"
+      "keywordSecondary": "Secondaire",
+      "setPositionTitle": "Définir la position",
+      "position": "Position",
+      "depth": "Profondeur"
     },
     "entryEditor": {
       "sections": {
@@ -1644,7 +1700,9 @@
     "boundCharacter": "Chargement lié à ce personnage",
     "unboundCharacter": "Liaison de personnage supprimée",
     "bindFailed": "Échec de la liaison du chargement",
-    "unbindFailed": "Échec de la suppression de la liaison"
+    "unbindFailed": "Échec de la suppression de la liaison",
+    "deleteConfirmTitle": "Supprimer le loadout",
+    "deleteConfirmMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé."
   },
   "groupChatsPanel": {
     "loading": "Chargement du groupe chats...",
@@ -2045,7 +2103,9 @@
       "reattributeTitle": "Réattribuer à…",
       "detach": "(détacher)",
       "pickEntity": "Choisir l'entité…",
-      "unattributed": "Non attribué ({{count}})"
+      "unattributed": "Non attribué ({{count}})",
+      "deleteConfirmTitle": "Supprimer la couleur",
+      "deleteConfirmMessage": "Supprimer la couleur {{hex}} ? Cela ne peut pas être annulé."
     },
     "stats": {
       "loading": "Chargement des statistiques...",
@@ -2115,7 +2175,8 @@
         "thought": "pensée",
         "words": "{{count}} mots",
         "heuristic": "heuristique"
-      }
+      },
+      "deleteRelationTitle": "Supprimer la relation"
     },
     "editors": {
       "cancel": "Annuler",
@@ -2234,6 +2295,13 @@
       "vaultDeleteFailed": "Échec de la suppression du coffre-fort",
       "vaultRenameFailed": "Échec de la renommage du coffre-fort",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Supprimer l'entité",
+      "entityMessage": "Supprimer \"{{name}}\" ? Cela ne peut pas être annulé.",
+      "bulkTitle": "Supprimer les entités sélectionnées",
+      "bulkMessage_one": "Supprimer {{count}} entité sélectionnée ? Cela ne peut pas être annulé.",
+      "bulkMessage_other": "Supprimer {{count}} entités sélectionnées ? Cela ne peut pas être annulé."
     }
   },
   "councilFeedback": {
@@ -2296,6 +2364,7 @@
     "fontScale": "Échelle de police",
     "uiScale": "Échelle UI",
     "glassEffects": "Effets de verre",
+    "useFullAvatar": "Utiliser des avatars pleine taille",
     "extensionThemesTitle": "Thèmes d'extension",
     "overridesApplied_one": "{{count}} remplacement appliqué",
     "overridesApplied_other": "{{count}} remplacements appliqués",
@@ -2874,6 +2943,7 @@
       "create": "Créer",
       "renameAction": "Rebaptiser",
       "lumihubBadge": "Préréglage LumiHub",
+      "version": "v{{version}}",
       "blocks_one": "{{count}} bloc",
       "blocks_other": "Blocs {{count}}",
       "coverAria": "Image de couverture pour {{name}}",
@@ -3006,7 +3076,9 @@
       "legacyExportMessage": "Les macros spécifiques à Lumiverse (par exemple {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) ne seront pas résolues dans SillyTavern. Seules les macros standards telles que {{char}}, {{user}} et {{persona}} sont portables. Les blocs utilisant les macros Lumiverse seront exportés tels quels avec leur texte de macro brut.",
       "exportAnyway": "Exporter quand même",
       "deleteBlockTitle": "Supprimer le bloc",
-      "deleteBlockMessage": "Êtes-vous sûr de vouloir supprimer ce bloc ? Cette action ne peut pas être annulée."
+      "deleteBlockMessage": "Êtes-vous sûr de vouloir supprimer ce bloc ? Cette action ne peut pas être annulée.",
+      "deletePresetTitle": "Supprimer le préréglage",
+      "deletePresetMessage": "Supprimer \"{{name}}\" ? Tous ses blocs seront supprimés. Cette action ne peut pas être annulée."
     },
     "toast": {
       "exportFailed": "Échec de l'exportation du préréglage",
@@ -3088,7 +3160,9 @@
         "loadFailed": "Échec du chargement des éléments du thème",
         "uploaded": "Téléchargé {{name}}",
         "uploadFailed": "Échec du téléchargement du thème actif"
-      }
+      },
+      "deleteConfirmTitle": "Supprimer l'actif du thème",
+      "deleteConfirmMessage": "Supprimer \"{{name}}\" ? Tout CSS faisant référence à cet actif ne pourra plus le charger. Cela ne peut pas être annulé."
     }
   }
 }

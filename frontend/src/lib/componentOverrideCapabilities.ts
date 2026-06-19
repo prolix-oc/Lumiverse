@@ -4,6 +4,30 @@ export const MAX_RENDER_NODES = 1_000
 export const MAX_RENDER_DEPTH = 40
 export const MAX_MAP_ITEMS = 100
 
+/**
+ * Reserved prop key used to hand the runtime a map of pre-built, host-trusted
+ * React elements (see ALLOWED_SLOT_TAGS). It is stripped from user scope via
+ * FORBIDDEN_PROPERTY_NAMES so override source can never read or forge it.
+ */
+export const HOST_SLOTS_PROP = '__hostSlots'
+
+/**
+ * Built-in "slot" tags. Unlike ALLOWED_JSX_TAGS (which the interpreter builds
+ * from scratch), a slot tag is replaced at render time with a trusted React
+ * element the host supplied — e.g. the real <MessageContent /> with full
+ * markdown, code highlighting, macros and interactivity. Override authors can
+ * place a slot but cannot pass any data into it, so this adds no XSS surface.
+ */
+export const ALLOWED_SLOT_TAGS = new Set([
+  'Content',
+  'Reasoning',
+  'Attachments',
+])
+
+export function isSlotTag(tag: string): boolean {
+  return ALLOWED_SLOT_TAGS.has(tag)
+}
+
 export const ALLOWED_JSX_TAGS = new Set([
   'a',
   'article',
@@ -71,6 +95,7 @@ export const FORBIDDEN_PROPERTY_NAMES = new Set([
   'prototype',
   'ownerDocument',
   'defaultView',
+  HOST_SLOTS_PROP,
 ])
 
 export const FORBIDDEN_IDENTIFIERS = new Set([

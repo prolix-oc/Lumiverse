@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS, type CouncilSettings } from 'lumiverse-spindle-types'
 import { useStore } from '@/store'
 import { councilApi, type CouncilProfileBinding, type CouncilSidecarConfig, type ResolvedCouncilProfile } from '@/api/council'
 import { settingsApi } from '@/api/settings'
@@ -39,6 +40,49 @@ export function councilSourceToTarget(
     case 'none':
     default:
       return { type: 'global' }
+  }
+}
+
+/** Merge a (possibly partial) council snapshot up to the full default shape so
+ *  consumers can read every field regardless of where the snapshot came from. */
+function normalizeCouncilSettings(settings: Partial<CouncilSettings> | undefined): CouncilSettings {
+  return {
+    ...COUNCIL_SETTINGS_DEFAULTS,
+    ...(settings ?? {}),
+    toolsSettings: { ...COUNCIL_TOOLS_DEFAULTS, ...(settings?.toolsSettings ?? {}) },
+  }
+}
+
+export interface ResolvedCouncilForChat {
+  council_settings: CouncilSettings
+  sidecar_settings: CouncilSidecarConfig
+  /** The council-profile source — drives the binding indicator. */
+  source: ResolvedCouncilProfile['source']
+  target: CouncilPersistenceTarget
+}
+
+/**
+ * Single source of truth for "which council settings apply to this chat".
+ *
+ * Council (members, tool toggles and sidecar) is owned exclusively by the
+ * council-profile system — chat binding > character binding > defaults > none.
+ * Loadouts no longer carry council, so there is nothing to reconcile here; this
+ * helper just centralises the resolve + persistence-target mapping shared by
+ * ChatView and the council panel.
+ */
+export async function resolveCouncilForChat(
+  chatId: string,
+  ctx: { characterId: string | null; characterBindingEnabled: boolean },
+): Promise<ResolvedCouncilForChat> {
+  const profileRes = await councilApi.resolve(chatId)
+  return {
+    council_settings: normalizeCouncilSettings(profileRes.council_settings),
+    sidecar_settings: profileRes.sidecar_settings,
+    source: profileRes.source,
+    target: councilSourceToTarget(profileRes.source, {
+      chatId,
+      characterId: ctx.characterBindingEnabled ? ctx.characterId : null,
+    }),
   }
 }
 
@@ -94,18 +138,6 @@ export function useCouncilProfiles() {
 
   const characterBindingEnabled = !isGroupChat
 
-  const applyResolved = useCallback((resolved: ResolvedCouncilProfile) => {
-    setCouncilSettings(resolved.council_settings)
-    setCouncilPersistenceTarget(
-      councilSourceToTarget(resolved.source, {
-        chatId: activeChatId,
-        characterId: characterBindingEnabled ? activeCharacterId : null,
-      }),
-    )
-    setSidecarConfig({ ...SIDECAR_DEFAULTS, ...resolved.sidecar_settings })
-    setActiveSource(resolved.source)
-  }, [activeChatId, activeCharacterId, characterBindingEnabled, setCouncilPersistenceTarget, setCouncilSettings])
-
   const refreshDefaults = useCallback(async () => {
     try {
       const binding = await councilApi.getDefaults()
@@ -124,9 +156,17 @@ export function useCouncilProfiles() {
       setActiveSource('none')
       return
     }
-    const resolved = await councilApi.resolve(activeChatId)
-    applyResolved(resolved)
-  }, [activeChatId, applyResolved, setCouncilPersistenceTarget, setCouncilSettings])
+    // Loadout-aware unified resolution so a bound loadout's council roster is no
+    // longer clobbered by the council-profile/defaults resolver.
+    const resolved = await resolveCouncilForChat(activeChatId, {
+      characterId: activeCharacterId,
+      characterBindingEnabled,
+    })
+    setCouncilSettings(resolved.council_settings)
+    setCouncilPersistenceTarget(resolved.target)
+    setSidecarConfig({ ...SIDECAR_DEFAULTS, ...resolved.sidecar_settings })
+    setActiveSource(resolved.source)
+  }, [activeChatId, activeCharacterId, characterBindingEnabled, setCouncilPersistenceTarget, setCouncilSettings])
 
   useEffect(() => {
     void refreshDefaults()

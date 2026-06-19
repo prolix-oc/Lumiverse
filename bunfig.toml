@@ -1,5 +1,9 @@
-[run]
-smol = true
+# NOTE: `smol` (low-memory GC mode) is intentionally NOT set here.
+# Bun has no `--no-smol`, so a value forced in this committed file can't be
+# overridden per-machine, and auto-updates would clobber a local edit. Instead
+# it's decided at launch from the LUMIVERSE_SMOL env var (default: on) — set
+# LUMIVERSE_SMOL=false in .env to disable. See scripts/runner/server-manager.ts,
+# start.sh, and start.ps1.
 
 [install]
 peer = false

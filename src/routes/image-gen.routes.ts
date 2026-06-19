@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import * as svc from "../services/image-gen.service";
 import * as bindingsSvc from "../services/image-gen-preset-bindings.service";
+import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 
 const app = new Hono();
 
@@ -29,7 +30,7 @@ app.post("/generate", async (c) => {
     });
     return c.json(result);
   } catch (err: any) {
-    const msg = String(err?.message || "Image generation failed");
+    const msg = clampErrorMessage(describeProviderError(err, "Image generation failed"));
     const status = /required|not found|unsupported|parse|No API key|missing|connection/i.test(msg) ? 400 : 502;
     return c.json({ error: msg }, status);
   }
@@ -50,9 +51,60 @@ app.post("/preview-prompt", async (c) => {
     });
     return c.json(result);
   } catch (err: any) {
-    const msg = String(err?.message || "Prompt preview failed");
+    const msg = clampErrorMessage(describeProviderError(err, "Prompt preview failed"));
     const status = /required|not found|unsupported|parse|No API key|missing|connection/i.test(msg) ? 400 : 502;
     return c.json({ error: msg }, status);
+  }
+});
+
+app.post("/caption", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body?.image || !body?.mimeType) return c.json({ error: "image and mimeType are required" }, 400);
+
+  try {
+    const result = await svc.captionImage(userId, {
+      image: body.image,
+      mimeType: body.mimeType,
+      prompt: body.prompt,
+      presetId: body.presetId,
+      parserConnectionId: body.parserConnectionId,
+      parserModel: body.parserModel,
+      parserParameters: body.parserParameters,
+      timeoutSeconds: body.timeoutSeconds,
+    });
+    return c.json(result);
+  } catch (err: any) {
+    const msg = clampErrorMessage(describeProviderError(err, "Image captioning failed"));
+    const status = /required|not found|unsupported|parse|No API key|missing|connection/i.test(msg) ? 400 : 502;
+    return c.json({ error: msg }, status);
+  }
+});
+
+// ─── Config import/export ──────────────────────────────────────────────
+
+app.post("/export", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  return c.json(
+    svc.exportImageGenConfig(userId, {
+      includeSettings: body?.include_settings !== false,
+      includePresets: body?.include_presets !== false,
+      includeConnections: body?.include_connections !== false,
+      includeParameters: body?.include_parameters !== false,
+      presetIds: Array.isArray(body?.preset_ids) ? body.preset_ids.map(String) : undefined,
+      connectionIds: Array.isArray(body?.connection_ids) ? body.connection_ids.map(String) : undefined,
+    }),
+  );
+});
+
+app.post("/import", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  try {
+    return c.json(await svc.importImageGenConfig(userId, body), 201);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Import failed" }, 400);
   }
 });
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UserRound, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, MicOff, LoaderCircle } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
@@ -12,7 +12,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
-import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
+import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
@@ -21,6 +21,7 @@ import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import { databankApi } from '@/api/databank'
 import { resolveMacros } from '@/api/macros'
 import type { AutocompleteResult } from '@/api/databank'
@@ -185,8 +186,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
-  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
-  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember'>(null)
+  const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
+  const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
@@ -194,6 +195,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const dragCounterRef = useRef(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const mirrorRef = useRef<HTMLDivElement>(null)
@@ -211,7 +214,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const databankDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [atQuery, setAtQuery] = useState<string | null>(null)
   const [atStartIndex, setAtStartIndex] = useState(0)
-  const [atResults, setAtResults] = useState<Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null }>>([])
+  const [atResults, setAtResults] = useState<Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null; extensions?: Record<string, any> }>>([])
   const [atActiveIdx, setAtActiveIdx] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
@@ -229,7 +232,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
+  const profiles = useStore((s) => s.profiles)
+  const setActiveProfile = useStore((s) => s.setActiveProfile)
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || null
   const voiceSettings = useStore((s) => s.voiceSettings)
+  // Temporary chats are persona-less: messages send as plain "User" and no
+  // persona_id is attached to message extras or generation requests.
+  const isTemporaryChat = useStore((s) => s.activeChatMetadata?.temporary === true)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
@@ -585,6 +594,15 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
   }, [storePersonas, activePersonaId])
 
+  // Mirror per-chat add-on states into the shared chat metadata so other
+  // surfaces (notably the Persona editor's "rebind add-ons" snapshot) read the
+  // live selections rather than the copy captured when the chat first opened.
+  const syncChatAddonMetadata = useCallback((states: Record<string, Record<string, boolean>>) => {
+    const store = useStore.getState()
+    if (store.activeChatId !== chatId) return
+    store.setActiveChatMetadata({ ...(store.activeChatMetadata ?? {}), persona_addon_states: states })
+  }, [chatId])
+
   const persistChatAddonOverride = useCallback(async (addonId: string, enabled: boolean) => {
     if (!activePersonaId) return false
     const previous = chatAddonStatesByPersona
@@ -596,15 +614,17 @@ export default function InputArea({ chatId }: InputAreaProps) {
       },
     }
     setChatAddonStatesByPersona(nextByPersona)
+    syncChatAddonMetadata(nextByPersona)
     try {
       await chatsApi.patchMetadata(chatId, { persona_addon_states: nextByPersona })
       return true
     } catch {
       setChatAddonStatesByPersona(previous)
+      syncChatAddonMetadata(previous)
       toast.error(t('toast.failedSaveAddonState'))
       return false
     }
-  }, [activePersonaId, chatId, chatAddonStatesByPersona])
+  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata])
 
   const handleToggleAddonState = useCallback((addonId: string) => {
     void persistChatAddonOverride(addonId, !(effectivePersonaAddonStates[addonId] ?? false))
@@ -858,9 +878,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
           slug: slugifyName(c.name),
           muted: mutedCharacterIds.includes(id),
           image_id: (c as any).image_id ?? null,
+          extensions: (c as any).extensions ?? undefined,
         }
       })
-      .filter(Boolean) as Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null }>
+      .filter(Boolean) as Array<{ id: string; name: string; slug: string; muted: boolean; image_id: string | null; extensions?: Record<string, any> }>
     const ranked = members
       .map((m) => {
         const lname = m.name.toLowerCase()
@@ -954,7 +975,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       if (e.key === 'Escape' && isStreaming) {
         e.preventDefault()
         e.stopPropagation()
-        generateApi.stop(activeGenerationId || undefined).catch(console.error)
+        generateApi.stop(activeGenerationId || undefined, chatId).catch(console.error)
         // If in optimistic phase, revert locally
         if (!activeGenerationId) {
           stopStreaming()
@@ -963,7 +984,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   useEffect(() => {
     if (openPopover !== 'persona') return
@@ -997,7 +1018,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     return DOCUMENT_EXTENSIONS.has(ext)
   }, [DOCUMENT_EXTENSIONS])
 
-  const handleAttachFiles = useCallback(async (files: FileList | null) => {
+  const handleAttachFiles = useCallback(async (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return
     setUploading(true)
     try {
@@ -1050,6 +1071,61 @@ export default function InputArea({ chatId }: InputAreaProps) {
     setPendingAttachments((prev) => prev.filter((a) => a.image_id !== imageId))
   }, [])
 
+  // Paste-to-attach: pull any files (e.g. screenshots) out of the clipboard and
+  // route them through the same pipeline as the file picker. Plain-text pastes
+  // contain no files, so we leave the default behavior untouched for those.
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (!file) continue
+      // Clipboard images arrive with a generic name like "image.png"; stamp a
+      // friendlier, unique name so the attachment strip and saved filename read clearly.
+      if (file.type.startsWith('image/') && /^image\.\w+$/i.test(file.name)) {
+        const ext = file.name.slice(file.name.lastIndexOf('.'))
+        files.push(new File([file], `pasted-image-${Date.now()}${ext}`, { type: file.type }))
+      } else {
+        files.push(file)
+      }
+    }
+    if (files.length === 0) return
+    e.preventDefault()
+    handleAttachFiles(files)
+  }, [handleAttachFiles])
+
+  // Drag-and-drop: a counter tracks enter/leave across child elements so the
+  // overlay doesn't flicker as the cursor moves over nested nodes.
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    e.preventDefault()
+    dragCounterRef.current += 1
+    setDragActive(true)
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return
+    e.preventDefault()
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragCounterRef.current === 0) return
+    e.preventDefault()
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current === 0) setDragActive(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setDragActive(false)
+    handleAttachFiles(files)
+  }, [handleAttachFiles])
+
   // Detect trailing consecutive user messages (queued messages awaiting generation)
   const hasQueuedMessages = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -1082,7 +1158,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = sendPersonaId || activePersonaId
+      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const extra: Record<string, any> = {}
       if (effectivePersonaId) extra.persona_id = effectivePersonaId
@@ -1103,7 +1179,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
@@ -1130,7 +1206,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = sendPersonaId || activePersonaId
+      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
@@ -1238,7 +1314,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1442,9 +1518,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
     try {
-      // If we have a generation ID, stop that specific generation.
-      // Otherwise (optimistic phase), stop all user generations.
-      await generateApi.stop(activeGenerationId || undefined)
+      // Stop the specific generation when we know its ID; the chat id lets the
+      // backend fall back to the chat's active generation if the ID is stale
+      // (or, in the optimistic phase, not yet known).
+      await generateApi.stop(activeGenerationId || undefined, chatId)
     } catch (err) {
       console.error('[InputArea] Failed to stop:', err)
     }
@@ -1452,7 +1529,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (!activeGenerationId) {
       stopStreaming()
     }
-  }, [isStreaming, activeGenerationId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
 
   const handleNewChat = useCallback(async () => {
     // For group chats, open group creator pre-populated with current members
@@ -1946,6 +2023,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
       data-component="InputArea"
       ref={containerRef}
       className={styles.container}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       style={(() => {
         const s: CSSProperties = {}
         if (screenCornerRadius) {
@@ -1957,6 +2038,13 @@ export default function InputArea({ chatId }: InputAreaProps) {
         return Object.keys(s).length ? s : undefined
       })()}
     >
+      {dragActive && (
+        <div className={styles.dropOverlay} aria-hidden="true">
+          <Paperclip size={20} />
+          <span>{t('input.dropToAttach')}</span>
+        </div>
+      )}
+
       {/* Author's Note Panel */}
       <AuthorsNotePanel
         chatId={chatId}
@@ -1993,6 +2081,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
             >
               <UserCircle size={14} />
               {sendPersonaId && <span className={styles.badge}>1</span>}
+            </button>
+            <button
+              type="button"
+              className={clsx(styles.actionBtn, openPopover === 'connections' && styles.actionBtnActive)}
+              onClick={() => setOpenPopover((p) => (p === 'connections' ? null : 'connections'))}
+              title={activeProfile ? t('input.switchConnectionActive', { name: activeProfile.name }) : t('input.switchConnection')}
+            >
+              <Link2 size={14} />
             </button>
             {hasAltFields && (() => {
               const selectionCount = activeAltSelectionCount
@@ -2185,6 +2281,35 @@ export default function InputArea({ chatId }: InputAreaProps) {
                   </span>
                 </button>
               ))}
+            </div>
+          )}
+
+          {renderPopover === 'connections' && (
+            <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              {profiles.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noConnections')}</div>}
+              {profiles.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={clsx(styles.popRowBtn, activeProfileId === p.id && styles.popRowBtnActive)}
+                  onClick={() => {
+                    setActiveProfile(p.id)
+                    setOpenPopover(null)
+                  }}
+                >
+                  <span className={styles.personaMain}>
+                    <ProviderIcon kind="llm" provider={p.provider} size={22} />
+                    <span className={styles.personaNameGroup}>
+                      <span>{p.name}</span>
+                      <span className={styles.popMeta}>{p.provider}{p.model ? ` / ${p.model}` : ''}</span>
+                    </span>
+                  </span>
+                </button>
+              ))}
+              <button type="button" className={styles.popLink} onClick={() => {
+                setOpenPopover(null)
+                useStore.getState().openDrawer('connections')
+              }}>{t('quickMenu.manageConnections')}</button>
             </div>
           )}
 
@@ -2487,7 +2612,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
                             {char.avatar_path || char.image_id ? (
                               <img
                                 className={styles.personaAvatarImg}
-                                src={getCharacterAvatarThumbUrlById(char.id, char.image_id) || undefined}
+                                src={getCharacterAvatarThumbUrl(char) || undefined}
                                 alt={char.name}
                                 loading="lazy"
                               />
@@ -2733,7 +2858,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
               <div className={styles.quickSetName}>{t('quickMenu.mentionMember')}</div>
               {atResults.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noMatchingMembers')}</div>}
               {atResults.map((r, i) => {
-                const avatarUrl = getCharacterAvatarThumbUrlById(r.id, r.image_id)
+                const avatarUrl = getCharacterAvatarThumbUrl(r)
                 return (
                   <button
                     key={r.id}
@@ -2924,6 +3049,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
               onChange={handleInput}
               onScroll={handleTextareaScroll}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               onFocus={() => setInputFocused(true)}

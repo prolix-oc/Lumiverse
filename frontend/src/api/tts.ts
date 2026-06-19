@@ -8,12 +8,13 @@ export const ttsApi = {
   async synthesize(
     connectionId: string,
     text: string,
-    options?: { voice?: string; model?: string; speed?: number; outputFormat?: string }
+    options?: { voice?: string; model?: string; speed?: number; outputFormat?: string; signal?: AbortSignal }
   ): Promise<Response> {
     return fetch(`${BASE_URL}/tts/synthesize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
+      signal: options?.signal,
       body: JSON.stringify({
         connectionId,
         text,

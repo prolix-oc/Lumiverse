@@ -13,8 +13,6 @@ import { chunkDocument } from "./document-chunker.service";
 import { loadDatabankSettings } from "./databank-settings.service";
 import type { DatabankDocument } from "./types";
 
-const BATCH_SIZE = 50;
-
 class DocumentProcessingAbortedError extends Error {
   constructor(docId: string) {
     super(`Document ${docId} processing aborted`);
@@ -221,14 +219,16 @@ async function vectorizeChunks(
   userId: string,
   doc: DatabankDocument,
   chunks: Array<{ id: string; content: string; chunkIndex: number }>,
-  cfg: { model: string },
+  cfg: { model: string; batch_size: number },
   signal: AbortSignal,
 ): Promise<void> {
   const failures: Error[] = [];
   await embeddingsSvc.embedWithAdaptiveBatching(
     userId,
     chunks,
-    BATCH_SIZE,
+    // Respect the user's configured embedding batch size (clamped) instead of a
+    // hardcoded 50, matching the other vectorization call sites.
+    Math.max(1, Math.min(cfg.batch_size, 200)),
     (c) => c.content,
     async (batch, _texts, vectors) => {
       if (signal.aborted || !crud.getDocument(userId, doc.id)) {

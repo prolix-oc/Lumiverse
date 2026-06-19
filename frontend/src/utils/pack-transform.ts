@@ -25,8 +25,8 @@ export function transformLucidPack(packData: any, catalogEntry: any) {
     author: packData.author ?? packData.packAuthor ?? catalogEntry.packAuthor ?? '',
     coverUrl: packData.coverUrl || catalogEntry.coverUrl || undefined,
     version: String(packData.version || 1),
-    sourceUrl: catalogEntry.slug ? `https://lucid.cards/api/lumia-dlc/${catalogEntry.slug}` : undefined,
-    extras: packData.packExtras?.length ? { items: packData.packExtras } : {},
+    sourceUrl: packData.sourceUrl || packData.source_url || (catalogEntry.slug ? `https://lucid.cards/api/lumia-dlc/${catalogEntry.slug}` : undefined),
+    extras: packData.extras ?? (packData.packExtras?.length ? { items: packData.packExtras } : {}),
     lumiaItems: (packData.lumiaItems || []).map((item: any) => ({
       name: item.lumiaName || item.name || 'Unknown',
       avatarUrl: item.avatarUrl || undefined,
@@ -55,6 +55,8 @@ export function transformLucidPack(packData: any, catalogEntry: any) {
       authorName: tool.authorName || '',
       version: String(tool.version || 1),
     })),
+    // Pass regex scripts through untouched; the backend importer normalizes them.
+    regexScripts: packData.regexScripts || packData.regex_scripts || undefined,
   }
 }
 

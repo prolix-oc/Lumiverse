@@ -64,6 +64,7 @@ nav = [
     { "Frontend Process Lifecycle" = "backend-api/frontend-processes.md" },
     { "Backend Process Lifecycle" = "backend-api/backend-processes.md" },
     { "Commands" = "backend-api/commands.md" },
+    { "UI Automation" = "backend-api/ui-automation.md" },
     { "Version" = "backend-api/version.md" },
   ] },
   { "Frontend API" = [

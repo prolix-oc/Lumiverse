@@ -123,11 +123,17 @@ export async function importCharacters(
         continue;
       }
 
-      const buffer = await fs.readFile(filePath);
+      const [buffer, fileStat] = await Promise.all([
+        fs.readFile(filePath),
+        fs.stat(filePath).catch(() => null),
+      ]);
       const bytes = new Uint8Array(buffer);
       const file = new File([bytes], filename, { type: "image/png" });
 
       const cardInput = await extractCardFromPng(file);
+      if (cardInput.created_at == null && fileStat) {
+        cardInput.created_at = fileStat.createdAt ?? fileStat.modifiedAt;
+      }
       const character = createCharacter(userId, cardInput);
       setCharacterSourceFilename(userId, character.id, filename);
 

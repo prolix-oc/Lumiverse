@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
+import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ImageGenConnectionForm from './ImageGenConnectionForm'
@@ -54,7 +55,7 @@ export default function ImageGenConnectionManager() {
       if (!cacheHit) setLoading(true)
       try {
         const [profilesResult, providersResult] = await Promise.allSettled([
-          imageGenConnectionsApi.list({ limit: 100 }),
+          listAllConnections(imageGenConnectionsApi),
           imageGenConnectionsApi.providers(),
         ])
 

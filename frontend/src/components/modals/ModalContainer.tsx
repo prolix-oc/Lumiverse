@@ -27,7 +27,8 @@ import ChatSettingsModal from './GroupSettingsModal'
 import CustomCSSModal from './CustomCSSModal'
 import ConfigureDrawerTabsModal from './ConfigureDrawerTabsModal'
 import ImagePromptPreviewModal from './ImagePromptPreviewModal'
-import { DreamWeaverStudio } from '@/components/dream-weaver/DreamWeaverStudio'
+import ImageCaptionModal from './ImageCaptionModal'
+import { WeaverStudio } from '@/components/weaver/WeaverStudio'
 
 export default function ModalContainer() {
   const { t } = useTranslation('modals')
@@ -139,9 +140,8 @@ export default function ModalContainer() {
 
       {activeModal === 'customCSS' && <CustomCSSModal />}
       {activeModal === 'imagePromptPreview' && <ImagePromptPreviewModal />}
-      {activeModal === 'dreamWeaverStudio' && modalProps.sessionId && (
-        <DreamWeaverStudio sessionId={modalProps.sessionId} />
-      )}
+      {activeModal === 'imageCaptioner' && <ImageCaptionModal />}
+      {activeModal === 'weaver' && <WeaverStudio />}
 
       <PermissionRequestModal />
       <CommandPalette />

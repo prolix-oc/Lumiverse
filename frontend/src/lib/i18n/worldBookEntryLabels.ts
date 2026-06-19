@@ -21,6 +21,7 @@ export function useWorldBookEntryLabels() {
       { value: 2, label: t('entryPosition.beforeAN') },
       { value: 3, label: t('entryPosition.afterAN') },
       { value: 4, label: t('entryPosition.atDepth') },
+      { value: 7, label: t('entryPosition.atMarker') },
     ] as const
 
     const typeOptions = [
@@ -58,7 +59,9 @@ export function useWorldBookEntryLabels() {
     ] as const
 
     const positionLabel = (position: number) =>
-      positionShort[position] ?? t('entryPosition.fallback', { position })
+      position === 7
+        ? t('entryPosition.markerShort')
+        : positionShort[position] ?? t('entryPosition.fallback', { position })
 
     const entryTypeLabel = (entry: WorldBookEntry) =>
       entry.constant ? t('entryType.constant') : entry.vectorized ? t('entryType.vector') : t('entryType.trigger')

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw, X } from 'lucide-react'
+import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw, X, BookOpen } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
@@ -93,6 +93,7 @@ export default function PersonaEditor({
   const [descRole, setDescRole] = useState<string>(persona.metadata?.description_role ?? 'system')
   const openModal = useStore((s) => s.openModal)
   const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
@@ -347,7 +348,11 @@ export default function PersonaEditor({
     return activeCharacter.tags.filter((tag) => !selected.has(tag.trim().toLowerCase())).slice(0, 8)
   }, [activeCharacter, tagBinding])
 
-  /** Build a snapshot of current addon enabled states. */
+  /** Build a snapshot of the *effective* addon enabled states — the persona's
+   *  saved defaults with the live per-chat overrides layered on top. In-chat
+   *  toggles persist to the chat's `persona_addon_states`, never to the persona
+   *  metadata, so reading metadata alone would capture stale defaults and make
+   *  "rebind add-ons" appear to do nothing. */
   const snapshotAddonStates = useCallback((): Record<string, boolean> => {
     const states: Record<string, boolean> = {}
     const addons = persona.metadata?.addons
@@ -358,8 +363,14 @@ export default function PersonaEditor({
     if (Array.isArray(globalRefs)) {
       for (const r of globalRefs) states[r.id] = r.enabled
     }
+    const chatOverrides = activeChatMetadata?.persona_addon_states?.[persona.id]
+    if (chatOverrides && typeof chatOverrides === 'object') {
+      for (const [id, enabled] of Object.entries(chatOverrides)) {
+        if (typeof enabled === 'boolean') states[id] = enabled
+      }
+    }
     return states
-  }, [persona.metadata])
+  }, [persona.metadata, persona.id, activeChatMetadata])
 
   const handleToggleCharacterBinding = useCallback(() => {
     if (!activeCharacterId) return
@@ -570,6 +581,15 @@ export default function PersonaEditor({
         >
           <Crown size={13} />
           <span>{t('personaEditor.default')}</span>
+        </button>
+        <button
+          type="button"
+          className={clsx(styles.toggleBtn, persona.is_narrator && styles.toggleBtnActive)}
+          onClick={() => onUpdate(persona.id, { is_narrator: !persona.is_narrator })}
+          title={persona.is_narrator ? 'Unmark as narrator' : 'Mark as narrator — this persona narrates rather than self-inserts'}
+        >
+          <BookOpen size={13} />
+          <span>Narrator</span>
         </button>
         <div className={styles.lorebookRow}>
           <SearchableSelect

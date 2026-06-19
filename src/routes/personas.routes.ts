@@ -124,6 +124,7 @@ app.post("/:id/avatar", async (c) => {
 
   const formData = await c.req.formData();
   const file = formData.get("avatar") as File | null;
+  const originalFile = formData.get("original_avatar") as File | null;
   if (!file) return c.json({ error: "avatar file is required" }, 400);
 
   // Clean up old image if present
@@ -135,6 +136,16 @@ app.post("/:id/avatar", async (c) => {
   const image = await images.uploadImage(userId, file);
   svc.setPersonaImage(userId, persona.id, image.id);
   svc.setPersonaAvatar(userId, persona.id, image.filename);
+
+  const nextMetadata = { ...(persona.metadata ?? {}) };
+  if (originalFile) {
+    const originalImage = await images.uploadImage(userId, originalFile);
+    nextMetadata.original_image_id = originalImage.id;
+  } else {
+    delete nextMetadata.original_image_id;
+  }
+  svc.updatePersona(userId, persona.id, { metadata: nextMetadata });
+
   const updated = svc.getPersona(userId, persona.id);
   if (!updated) return c.json({ error: "Not found" }, 404);
 

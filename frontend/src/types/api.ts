@@ -59,11 +59,13 @@ export interface TagCount {
 // ---- Chat ----
 export interface Chat {
   id: string;
-  character_id: string;
+  /** Null for temporary character-less chats (metadata.temporary). */
+  character_id: string | null;
   name: string;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  character_display_owner?: string | null;
 }
 
 export interface CreateChatInput {
@@ -105,6 +107,8 @@ export interface ChatSummary {
   message_count: number;
   created_at: number;
   updated_at: number;
+  /** Truncated (<=280 chars) content of the most recent message, for list previews. */
+  last_message_preview: string;
 }
 
 // ---- Chat Branch Tree ----
@@ -162,6 +166,14 @@ export interface MessageAttachment {
   original_filename: string;
   width?: number;
   height?: number;
+  /**
+   * Audio-only: the message swipe this audio was generated for. The
+   * player is only visible when `message.swipe_id` matches. Undefined
+   * on legacy audio (saved before this field existed) and on images —
+   * interpreted as "applies to all swipes" so pre-existing recordings
+   * aren't lost across the migration window.
+   */
+  swipe_id?: number;
 }
 
 // ---- Message ----
@@ -185,7 +197,13 @@ export interface Message {
   content: string;
   send_date: number;
   swipe_id: number;
-  swipes: string[];
+  /**
+   * List endpoints deliver a light projection: only the active swipe's text
+   * is populated, non-active slots are null (length is preserved for the n/m
+   * indicator and at-first/at-last checks). Swipe actions and single-message
+   * fetches return fully populated arrays.
+   */
+  swipes: (string | null)[];
   swipe_dates: number[];
   extra: MessageExtra;
   parent_message_id: string | null;
@@ -273,12 +291,13 @@ export interface NanoGptUsageWindow {
 
 export interface NanoGptSubscriptionUsage {
   active: boolean
+  enforceDailyLimit: boolean
   limits: {
-    weeklyInputTokens: number | null
-    dailyImages: number | null
+    daily: number | null
+    monthly: number | null
   }
-  weeklyInputTokens: NanoGptUsageWindow | null
-  dailyImages: NanoGptUsageWindow | null
+  daily: NanoGptUsageWindow | null
+  monthly: NanoGptUsageWindow | null
   period: {
     currentPeriodEnd: string | null
   }
@@ -595,6 +614,7 @@ export interface Persona {
   attached_world_book_id: string | null;
   folder: string;
   is_default: boolean;
+  is_narrator: boolean;
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
@@ -609,6 +629,7 @@ export interface CreatePersonaInput {
   possessive_pronoun?: string;
   folder?: string;
   is_default?: boolean;
+  is_narrator?: boolean;
   attached_world_book_id?: string;
   metadata?: Record<string, any>;
 }
@@ -1000,11 +1021,19 @@ export interface WorldBookEntryBulkAddKeywordInput {
   target?: 'primary' | 'secondary';
 }
 
+export interface WorldBookEntryBulkSetPositionInput {
+  action: 'set_position';
+  entry_ids: string[];
+  position: number;
+  depth?: number;
+}
+
 export type WorldBookEntryBulkActionInput =
   | WorldBookEntryBulkDeleteInput
   | WorldBookEntryBulkMoveInput
   | WorldBookEntryBulkRenumberInput
-  | WorldBookEntryBulkAddKeywordInput;
+  | WorldBookEntryBulkAddKeywordInput
+  | WorldBookEntryBulkSetPositionInput;
 
 export interface WorldBookEntryBulkActionResult {
   action: WorldBookEntryBulkActionInput['action'];
@@ -1213,9 +1242,23 @@ export interface CreateLoomToolInput {
 export type UpdateLoomToolInput = Partial<CreateLoomToolInput>;
 
 // ---- Import / Batch ----
+/**
+ * Portable LoRA hint embedded on a character card (extensions.lumiverse_image_gen_lora).
+ * Surfaced on import so the UI can show "this character expects <file>" — never
+ * used to auto-create a binding (the runtime binding is per-user).
+ */
+export interface PortableLoraReference {
+  version: 1
+  lora_filename: string
+  weight: number
+  base_tags?: string
+  source_url?: string
+}
+
 export interface ImportResult {
   character: Character
   message?: string
+  lumiverse_lora?: PortableLoraReference
 }
 
 export interface BulkImportResultItem {
@@ -1223,6 +1266,7 @@ export interface BulkImportResultItem {
   success: boolean
   character?: Character
   lorebook?: { name: string; entryCount: number }
+  lumiverse_lora?: PortableLoraReference
   error?: string
   skipped?: boolean
 }

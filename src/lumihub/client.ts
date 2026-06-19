@@ -378,6 +378,8 @@ class LumiHubWSClient {
     eventBus.on(EventType.CHARACTER_CREATED, trigger);
     eventBus.on(EventType.CHARACTER_EDITED, trigger);
     eventBus.on(EventType.CHARACTER_DELETED, trigger);
+    eventBus.on(EventType.PRESET_CHANGED, trigger);
+    eventBus.on(EventType.PRESET_DELETED, trigger);
     eventBus.on(EventType.LUMIHUB_INSTALL_COMPLETED, trigger);
   }
 

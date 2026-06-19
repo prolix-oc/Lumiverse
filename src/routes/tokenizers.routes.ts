@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { requireOwner } from "../auth/middleware";
 import * as adminSvc from "../services/tokenizer-admin.service";
 import * as tokenizerSvc from "../services/tokenizer.service";
+import * as resolveSvc from "../services/tokenizer-resolve.service";
+import * as hfSvc from "../services/huggingface.service";
 
 const app = new Hono();
 app.use("/*", requireOwner);
@@ -68,6 +70,43 @@ app.post("/count", async (c) => {
     token_count: count,
     char_count: body.text.length,
   });
+});
+
+// Resolve a pasted HuggingFace model URL / slug into a verified, installable
+// tokenizer suggestion (or a reason it can't be used). Always 200 on a valid
+// request so the UI can render the unavailable/unsupported reason cleanly.
+app.post("/resolve", async (c) => {
+  const body = await c.req.json();
+  if (!body.url || typeof body.url !== "string") return c.json({ error: "url is required" }, 400);
+  const result = await resolveSvc.resolveTokenizer(body.url);
+  return c.json(result);
+});
+
+// HuggingFace access token (owner-only, write-only — never echoes the token).
+app.get("/hf-token", async (c) => {
+  return c.json({ configured: await hfSvc.hasHfToken() });
+});
+
+app.put("/hf-token", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const token = typeof body.token === "string" ? body.token : null;
+  try {
+    return c.json(await hfSvc.setHfToken(token));
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+// Install a resolved tokenizer (config + optional model-match rule) atomically.
+app.post("/install", async (c) => {
+  const body = await c.req.json();
+  if (!body.name || !body.type) return c.json({ error: "name and type are required" }, 400);
+  try {
+    const result = adminSvc.installResolved(body);
+    return c.json(result, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
 });
 
 // ---- Model Patterns ----

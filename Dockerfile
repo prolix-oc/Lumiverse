@@ -8,12 +8,17 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build frontend (Vite + TypeScript)
 # ---------------------------------------------------------------------------
-FROM oven/bun:1-slim AS frontend-build
+FROM oven/bun:canary-slim AS frontend-build
 WORKDIR /app/frontend
 
 # Install dependencies first (cache layer)
 COPY frontend/package.json frontend/bun.lock* ./
-RUN bun install --frozen-lockfile 2>/dev/null || bun install
+COPY frontend/scripts/postinstall-bindings.cjs ./scripts/
+# Fail loudly if the lockfile is missing or out of sync. Do NOT fall back to a
+# non-frozen `bun install` — that silently re-resolves caret ranges and lets the
+# dependency tree drift away from what was tested (see the kysely/better-auth
+# DEFAULT_MIGRATION_LOCK_TABLE startup crash). The lockfile is committed.
+RUN bun install --frozen-lockfile
 
 # FRONTEND_REFRESH: cache-busting marker for the Vite build layer below. Mirrors
 # the CA_REFRESH pattern in the runtime stage — bump (or pass via --build-arg)
@@ -30,17 +35,19 @@ RUN echo "frontend-refresh: ${FRONTEND_REFRESH}" && bun run build
 # ---------------------------------------------------------------------------
 # Stage 2: Install backend production dependencies
 # ---------------------------------------------------------------------------
-FROM oven/bun:1-slim AS backend-deps
+FROM oven/bun:canary-slim AS backend-deps
 
 WORKDIR /app
 
 COPY package.json bun.lock* ./
-RUN bun install --production --frozen-lockfile 2>/dev/null || bun install --production
+# Fail loudly if the lockfile is missing or out of sync — no silent re-resolve.
+# (See the frontend stage above for the rationale.) The lockfile is committed.
+RUN bun install --production --frozen-lockfile
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime
 # ---------------------------------------------------------------------------
-FROM oven/bun:1-slim
+FROM oven/bun:canary-slim
 
 # CA_REFRESH: cache-busting marker for the apt layer below. Bump (or pass via
 # --build-arg) to force apt-get to re-fetch the `ca-certificates` package so the

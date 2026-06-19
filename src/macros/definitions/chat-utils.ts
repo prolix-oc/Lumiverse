@@ -108,6 +108,39 @@ export function registerChatUtilsMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    volatile: true,
+    name: "rcounter",
+    category: "Chat Utils",
+    description:
+      "Increment a render-scoped counter and return the new value. The counter lives on env.extra and resets at the start of every prompt build — it is never written to env.variables.local and therefore never persists to chat metadata. Use 'reset' as the second arg to zero the counter.",
+    returnType: "integer",
+    args: [
+      { name: "name", description: "Counter name" },
+      { name: "reset", optional: true, description: "Pass 'reset' to zero the counter" },
+    ],
+    handler: (ctx) => {
+      const key = (ctx.args[0] || "").trim();
+      if (!key) return "0";
+      const extra = ctx.env.extra as Record<string, any>;
+      let bag = extra._renderVars as Map<string, string> | undefined;
+      if (!bag) {
+        bag = new Map<string, string>();
+        extra._renderVars = bag;
+      }
+      if ((ctx.args[1] || "").trim().toLowerCase() === "reset") {
+        bag.set(key, "0");
+        return "0";
+      }
+      const current = parseInt(bag.get(key) || "0", 10) || 0;
+      const next = String(current + 1);
+      bag.set(key, next);
+      return next;
+    },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
     name: "charTags",
     category: "Chat Utils",
     description: "Comma-separated list of the character's tags",

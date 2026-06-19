@@ -55,10 +55,10 @@ export const createLoadoutsSlice: StateCreator<LoadoutsSlice> = (set, get) => ({
     try {
       await loadoutsApi.apply(id)
       set({ activeLoadoutId: id })
-      // Reload settings to reflect the applied loadout values
+      // Reload settings to reflect the applied loadout values. Council is no
+      // longer part of a loadout, so it is not reloaded here.
       const store = get() as any
       if (store.loadSettings) await store.loadSettings()
-      if (store.loadCouncilSettings) await store.loadCouncilSettings()
     } catch {
       // noop
     }

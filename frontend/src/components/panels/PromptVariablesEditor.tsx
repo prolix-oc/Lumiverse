@@ -10,8 +10,13 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import NumberStepper from '@/components/shared/NumberStepper'
+import { Toggle } from '@/components/shared/Toggle'
 import { generateUUID } from '@/lib/uuid'
-import type { PromptVariableDef, PromptVariableType } from '@/lib/loom/types'
+import type {
+  PromptVariableDef,
+  PromptVariableOption,
+  PromptVariableType,
+} from '@/lib/loom/types'
 import css from './PromptVariablesEditor.module.css'
 
 // ============================================================================
@@ -28,6 +33,9 @@ const TYPE_ACCENT_CLASS: Record<PromptVariableType, string> = {
   textarea: css.typeTextarea,
   number: css.typeNumber,
   slider: css.typeSlider,
+  select: css.typeSelect,
+  switch: css.typeSwitch,
+  multiselect: css.typeMultiselect,
 }
 
 function makeNewVariable(): PromptVariableDef {
@@ -38,6 +46,10 @@ function makeNewVariable(): PromptVariableDef {
     type: 'text',
     defaultValue: '',
   }
+}
+
+function makeNewOption(index: number): PromptVariableOption {
+  return { id: generateUUID(), label: `Option ${index + 1}`, value: '' }
 }
 
 // Type-preserving migration. Swapping types shouldn't nuke the user's work —
@@ -108,6 +120,53 @@ function coerceVariableType(
         step: (current as { step?: number }).step ?? 1,
       }
     }
+    case 'select': {
+      const existing = (current as { options?: PromptVariableOption[] }).options ?? []
+      const options = existing.length ? existing : [makeNewOption(0)]
+      const validIds = new Set(options.map((o) => o.id))
+      const candidate =
+        typeof current.defaultValue === 'string' && validIds.has(current.defaultValue)
+          ? current.defaultValue
+          : options[0].id
+      return {
+        ...base,
+        type: 'select',
+        defaultValue: candidate,
+        options,
+      }
+    }
+    case 'switch': {
+      // Accept anything truthy from prior types as a hint, but bias to 0.
+      const dv = current.defaultValue as unknown
+      const on =
+        dv === 1 ||
+        dv === '1' ||
+        dv === true ||
+        (typeof dv === 'string' && ['true', 'on', 'yes'].includes(dv.toLowerCase()))
+      return {
+        ...base,
+        type: 'switch',
+        defaultValue: on ? 1 : 0,
+      }
+    }
+    case 'multiselect': {
+      const existing = (current as { options?: PromptVariableOption[] }).options ?? []
+      const options = existing.length ? existing : [makeNewOption(0)]
+      const validIds = new Set(options.map((o) => o.id))
+      const prior = current.defaultValue
+      const def = Array.isArray(prior)
+        ? prior.filter((id): id is string => typeof id === 'string' && validIds.has(id))
+        : typeof prior === 'string' && validIds.has(prior)
+        ? [prior]
+        : []
+      return {
+        ...base,
+        type: 'multiselect',
+        defaultValue: def,
+        options,
+        separator: (current as { separator?: string }).separator ?? '\n\n',
+      }
+    }
   }
 }
 
@@ -173,7 +232,7 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
       </div>
 
       <p className={css.hint}>
-        {t('promptVariablesEditor.hint', { varName: '{{var::name}}' })}
+        {t('promptVariablesEditor.hint', { varName: '{{var::name}}', multiselectName: '{{var::name::ison::keyA,keyB}}' })}
       </p>
 
       {expanded && (
@@ -220,7 +279,7 @@ function VariableRow({
   const { t } = useTranslation('panels')
   const typeOptions = useMemo(
     () =>
-      (['text', 'textarea', 'number', 'slider'] as const).map((value) => ({
+      (['text', 'textarea', 'number', 'slider', 'select', 'switch', 'multiselect'] as const).map((value) => ({
         value,
         label: t(`promptVariablesEditor.types.${value}`),
       })),
@@ -228,6 +287,9 @@ function VariableRow({
   )
   const isNumeric = variable.type === 'number' || variable.type === 'slider'
   const isSlider = variable.type === 'slider'
+  const isSelect = variable.type === 'select'
+  const isMultiselect = variable.type === 'multiselect'
+  const isSwitch = variable.type === 'switch'
 
   const sliderMin = isSlider ? (variable as { min: number }).min : 0
   const sliderMax = isSlider ? (variable as { max: number }).max : 100
@@ -300,44 +362,60 @@ function VariableRow({
         />
       </div>
 
-      {/* Row 3: default value — type-specific control */}
-      <div className={clsx(css.field, variable.type === 'slider' ? css.colHalf : css.colFull)}>
-        <label className={css.fieldLabel}>{t('promptVariablesEditor.default')}</label>
-        {variable.type === 'textarea' ? (
-          <textarea
-            className={css.textarea}
-            value={String(variable.defaultValue ?? '')}
-            rows={3}
-            placeholder={t('promptVariablesEditor.defaultTextareaPlaceholder')}
-            onChange={(e) =>
-              onUpdate({ defaultValue: e.target.value } as Partial<PromptVariableDef>)
-            }
-          />
-        ) : variable.type === 'text' ? (
-          <input
-            className={css.input}
-            value={String(variable.defaultValue ?? '')}
-            placeholder={t('promptVariablesEditor.defaultTextPlaceholder')}
-            onChange={(e) =>
-              onUpdate({ defaultValue: e.target.value } as Partial<PromptVariableDef>)
-            }
-          />
-        ) : (
-          <NumberStepper
-            value={
-              typeof variable.defaultValue === 'number'
-                ? variable.defaultValue
-                : Number(variable.defaultValue) || 0
-            }
-            onChange={(n) =>
-              onUpdate({ defaultValue: n ?? 0 } as Partial<PromptVariableDef>)
-            }
-            min={(variable as { min?: number }).min}
-            max={(variable as { max?: number }).max}
-            step={(variable as { step?: number }).step ?? 1}
-          />
-        )}
-      </div>
+      {/* Row 3: default value — type-specific control.
+          For select/multiselect the default is set via the options list below. */}
+      {!isSelect && !isMultiselect && (
+        <div className={clsx(css.field, isSlider ? css.colHalf : css.colFull)}>
+          <label className={css.fieldLabel}>{t('promptVariablesEditor.default')}</label>
+          {variable.type === 'textarea' ? (
+            <textarea
+              className={css.textarea}
+              value={String(variable.defaultValue ?? '')}
+              rows={3}
+              placeholder={t('promptVariablesEditor.defaultTextareaPlaceholder')}
+              onChange={(e) =>
+                onUpdate({ defaultValue: e.target.value } as Partial<PromptVariableDef>)
+              }
+            />
+          ) : variable.type === 'text' ? (
+            <input
+              className={css.input}
+              value={String(variable.defaultValue ?? '')}
+              placeholder={t('promptVariablesEditor.defaultTextPlaceholder')}
+              onChange={(e) =>
+                onUpdate({ defaultValue: e.target.value } as Partial<PromptVariableDef>)
+              }
+            />
+          ) : isSwitch ? (
+            <div className={css.switchToggleRow}>
+              <Toggle.Switch
+                checked={(variable as { defaultValue: 0 | 1 }).defaultValue === 1}
+                onChange={(next) =>
+                  onUpdate({ defaultValue: next ? 1 : 0 } as Partial<PromptVariableDef>)
+                }
+              />
+              <span className={css.switchToggleLabel}>
+                {(variable as { defaultValue: 0 | 1 }).defaultValue === 1 ? t('promptVariablesEditor.switchOn') : t('promptVariablesEditor.switchOff')}
+              </span>
+              <span className={css.switchToggleHint}>
+                {t('promptVariablesEditor.switchHint')}
+              </span>
+            </div>
+          ) : (
+            <NumberStepper
+              value={
+                Number((variable as { defaultValue?: unknown }).defaultValue) || 0
+              }
+              onChange={(n) =>
+                onUpdate({ defaultValue: n ?? 0 } as Partial<PromptVariableDef>)
+              }
+              min={(variable as { min?: number }).min}
+              max={(variable as { max?: number }).max}
+              step={(variable as { step?: number }).step ?? 1}
+            />
+          )}
+        </div>
+      )}
 
       {/* Slider-only preview: what end-users will see. Lives beside the
           stepper so the creator can cross-check. */}
@@ -363,6 +441,31 @@ function VariableRow({
             <span>{sliderMin}</span>
             <span>{sliderMax}</span>
           </div>
+        </div>
+      )}
+
+      {/* Options list — select & multiselect */}
+      {(isSelect || isMultiselect) && (
+        <OptionsListEditor
+          variable={variable as Extract<PromptVariableDef, { type: 'select' | 'multiselect' }>}
+          mode={isMultiselect ? 'multiple' : 'single'}
+          onUpdate={onUpdate}
+        />
+      )}
+
+      {/* Multiselect: separator */}
+      {isMultiselect && (
+        <div className={clsx(css.field, css.colFull)}>
+          <label className={css.fieldLabel}>Separator (inserted between selected values)</label>
+          <textarea
+            className={css.textarea}
+            rows={2}
+            value={(variable as { separator?: string }).separator ?? '\n\n'}
+            placeholder={'Two newlines by default'}
+            onChange={(e) =>
+              onUpdate({ separator: e.target.value } as Partial<PromptVariableDef>)
+            }
+          />
         </div>
       )}
 
@@ -424,6 +527,127 @@ function VariableRow({
           onChange={(e) => onUpdate({ description: e.target.value || undefined })}
         />
       </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// OptionsListEditor — used by select + multiselect
+// ============================================================================
+
+interface OptionsListEditorProps {
+  variable: Extract<PromptVariableDef, { type: 'select' | 'multiselect' }>
+  mode: 'single' | 'multiple'
+  onUpdate: (patch: Partial<PromptVariableDef>) => void
+}
+
+function OptionsListEditor({ variable, mode, onUpdate }: OptionsListEditorProps) {
+  const options = variable.options ?? []
+  const selectedIds = useMemo(() => {
+    if (variable.type === 'multiselect') {
+      return new Set(Array.isArray(variable.defaultValue) ? variable.defaultValue : [])
+    }
+    return new Set(typeof variable.defaultValue === 'string' ? [variable.defaultValue] : [])
+  }, [variable])
+
+  const patchOptions = (next: PromptVariableOption[]) => {
+    if (variable.type === 'multiselect') {
+      const validIds = new Set(next.map((o) => o.id))
+      const filtered = (Array.isArray(variable.defaultValue) ? variable.defaultValue : []).filter(
+        (id) => validIds.has(id),
+      )
+      onUpdate({ options: next, defaultValue: filtered } as Partial<PromptVariableDef>)
+      return
+    }
+    // single-select: keep the previous default if still present; otherwise first option
+    const validIds = new Set(next.map((o) => o.id))
+    const currentDefault =
+      typeof variable.defaultValue === 'string' && validIds.has(variable.defaultValue)
+        ? variable.defaultValue
+        : next[0]?.id ?? ''
+    onUpdate({ options: next, defaultValue: currentDefault } as Partial<PromptVariableDef>)
+  }
+
+  const updateOption = (id: string, patch: Partial<PromptVariableOption>) => {
+    patchOptions(options.map((o) => (o.id === id ? { ...o, ...patch } : o)))
+  }
+
+  const removeOption = (id: string) => {
+    patchOptions(options.filter((o) => o.id !== id))
+  }
+
+  const addOption = () => {
+    patchOptions([...options, makeNewOption(options.length)])
+  }
+
+  const setDefault = (id: string, checked: boolean) => {
+    if (mode === 'single') {
+      onUpdate({ defaultValue: id } as Partial<PromptVariableDef>)
+      return
+    }
+    const prior = new Set(Array.isArray(variable.defaultValue) ? variable.defaultValue : [])
+    if (checked) prior.add(id)
+    else prior.delete(id)
+    // Preserve declaration order so the persisted default matches option order.
+    const ordered = options.filter((o) => prior.has(o.id)).map((o) => o.id)
+    onUpdate({ defaultValue: ordered } as Partial<PromptVariableDef>)
+  }
+
+  return (
+    <div className={css.optionsList}>
+      <div className={css.optionsListHeader}>
+        <span>
+          Options{' '}
+          <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+            ({mode === 'single' ? 'pick one default' : 'pick the default selection'})
+          </span>
+        </span>
+        <button type="button" className={css.optionAddBtn} onClick={addOption}>
+          <Plus size={11} /> Add option
+        </button>
+      </div>
+
+      {options.length === 0 ? (
+        <div className={css.optionsEmpty}>No options yet — add one to give end users a choice.</div>
+      ) : (
+        options.map((opt) => (
+          <div key={opt.id} className={css.optionRow}>
+            <div className={css.optionDefaultCell}>
+              <input
+                type={mode === 'single' ? 'radio' : 'checkbox'}
+                className={css.optionDefaultInput}
+                name={mode === 'single' ? `default-${variable.id}` : undefined}
+                checked={selectedIds.has(opt.id)}
+                onChange={(e) => setDefault(opt.id, e.target.checked)}
+                aria-label="Use as default"
+                title="Use as default"
+              />
+            </div>
+            <input
+              className={css.optionLabelInput}
+              value={opt.label}
+              placeholder="Label shown to user"
+              onChange={(e) => updateOption(opt.id, { label: e.target.value })}
+            />
+            <textarea
+              className={css.optionValueInput}
+              value={opt.value}
+              rows={1}
+              placeholder="Value substituted into the prompt"
+              onChange={(e) => updateOption(opt.id, { value: e.target.value })}
+            />
+            <button
+              type="button"
+              className={css.optionDelete}
+              onClick={() => removeOption(opt.id)}
+              aria-label="Remove option"
+              title="Remove option"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        ))
+      )}
     </div>
   )
 }

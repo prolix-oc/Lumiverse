@@ -297,11 +297,11 @@ export function decodeRisuModule(data: Uint8Array): RisuModule | null {
   return null;
 }
 
-const RISU_TYPE_TO_TARGET: Record<string, RegexTarget> = {
-  editdisplay: "display",
-  editprocess: "prompt",
-  editoutput: "response",
-  editinput: "prompt",
+const RISU_TYPE_TO_TARGET: Record<string, RegexTarget[]> = {
+  editdisplay: ["display"],
+  editprocess: ["prompt"],
+  editoutput: ["response"],
+  editinput: ["prompt"],
 };
 
 /**
@@ -317,7 +317,7 @@ export function convertRisuRegexScripts(
     const r = regexes[i];
     if (!r.in) continue;
 
-    const target = RISU_TYPE_TO_TARGET[r.type] ?? "display";
+    const target = RISU_TYPE_TO_TARGET[r.type] ?? ["display"];
 
     results.push({
       name: r.comment || `Imported RisuAI Script ${i + 1}`,
@@ -373,7 +373,30 @@ function mapCardToInput(data: Record<string, any>): CreateCharacterInput {
 
   if (Object.keys(extensions).length > 0) input.extensions = extensions;
 
+  const createDate = data.create_date ?? data.created_at;
+  if (createDate != null) {
+    const parsed = typeof createDate === "number"
+      ? createDate
+      : parseCardDate(String(createDate));
+    if (Number.isFinite(parsed) && parsed > 0) {
+      input.created_at = parsed > 1e12 ? Math.floor(parsed / 1000) : parsed;
+    }
+  }
+
   return input;
+}
+
+// ST uses a custom date format: "2025-8-30 @05h 10m 11s 122ms"
+const ST_DATE_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})\s+@(\d{2})h\s+(\d{2})m\s+(\d{2})s\s+(\d+)ms$/;
+
+function parseCardDate(str: string): number {
+  const native = Date.parse(str);
+  if (Number.isFinite(native)) return native;
+  const m = ST_DATE_RE.exec(str);
+  if (m) {
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], +m[7]);
+  }
+  return NaN;
 }
 
 function hasNonEmptyText(value: unknown): value is string {
@@ -431,9 +454,13 @@ export function parseCardJson(json: unknown): CreateCharacterInput {
 
   const obj = json as Record<string, any>;
 
-  // V2/V3 wrapped format
+  // V2/V3 wrapped format — create_date lives on the wrapper, not inside data
   if ((obj.spec === "chara_card_v2" || obj.spec === "chara_card_v3") && obj.data) {
-    return mapCardToInput(obj.data);
+    const data = obj.data as Record<string, any>;
+    if (obj.create_date != null && data.create_date == null) {
+      data.create_date = obj.create_date;
+    }
+    return mapCardToInput(data);
   }
 
   // V1 flat format or plain CreateCharacterInput
@@ -609,7 +636,7 @@ export interface BundledRegexScript {
   placement: string[];
   scope: string;
   scope_id: string | null;
-  target: string;
+  target: string | string[];
   min_depth: number | null;
   max_depth: number | null;
   trim_strings: string[];

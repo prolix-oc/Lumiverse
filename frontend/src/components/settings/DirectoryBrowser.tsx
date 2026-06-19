@@ -6,11 +6,22 @@ import styles from './DirectoryBrowser.module.css'
 
 interface DirectoryBrowserProps {
   onNavigate?: (path: string) => void
+  /** Fired on each load with whether the current directory matches the core
+   *  SillyTavern install shape (a soft hint — Validate remains authoritative). */
+  onShapeChange?: (looksLikeSillyTavern: boolean) => void
   initialPath?: string
   connection?: FileConnectionConfig
 }
 
-export default function DirectoryBrowser({ onNavigate, initialPath, connection }: DirectoryBrowserProps) {
+// A SillyTavern install root contains both data/ (per-user data) and public/
+// (web root) on modern installs, or public/ alongside default/ on legacy ones.
+// These are the same folders the backend /validate endpoint keys off of.
+function looksLikeSillyTavernRoot(entries: { name: string }[]): boolean {
+  const names = new Set(entries.map((e) => e.name.toLowerCase()))
+  return names.has('public') && (names.has('data') || names.has('default'))
+}
+
+export default function DirectoryBrowser({ onNavigate, onShapeChange, initialPath, connection }: DirectoryBrowserProps) {
   const { t } = useTranslation('settings')
   const [data, setData] = useState<BrowseResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -27,12 +38,14 @@ export default function DirectoryBrowser({ onNavigate, initialPath, connection }
       setData(result)
       setManualPath(result.path)
       onNavigate?.(result.path)
+      onShapeChange?.(looksLikeSillyTavernRoot(result.entries))
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('directoryBrowser.browseFailed'))
+      onShapeChange?.(false)
     } finally {
       setLoading(false)
     }
-  }, [onNavigate, connection, t])
+  }, [onNavigate, onShapeChange, connection, t])
 
   useEffect(() => {
     // For remote connections, start at root. For local, use default (home dir).

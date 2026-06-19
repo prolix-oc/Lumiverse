@@ -356,7 +356,7 @@ export default function CustomCSSModal() {
     openModal('confirm', {
       title: t('resetTitle'),
       message: t('resetMessage'),
-      variant: 'destructive',
+      variant: 'danger',
       confirmText: t('resetConfirm'),
       onConfirm: () => {
         resetAllOverrides()

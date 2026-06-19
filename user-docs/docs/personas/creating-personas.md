@@ -29,6 +29,14 @@ Only one persona can be default at a time — setting a new default automaticall
 
 ---
 
+## Narrator Mode
+
+Toggle the **Narrator** flag on any persona to mark it as a narrator rather than a self-insert. When active, `{{isNarrator}}` resolves to `"yes"` in prompts.
+
+This is useful for players who don't role-play as a specific character — they're directing the story rather than participating as a persona. Preset creators can use `{{if::{{isNarrator}}}}` to adjust instructions accordingly (e.g., shifting from second-person to third-person narration, or omitting persona descriptions).
+
+---
+
 ## Switching Personas
 
 You can switch personas at any time:

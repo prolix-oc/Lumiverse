@@ -50,10 +50,36 @@ export interface QuietGenerateRequest {
   chat_id?: string
 }
 
+/** Request for the /summarize endpoint — backend fetches messages and builds the prompt. */
+export interface SummarizeRequest {
+  /** Chat ID to summarize. */
+  chat_id: string
+  /** Number of recent messages to include in the prompt. */
+  message_context: number
+  /** Previously stored summary text (may be empty). */
+  existingSummary?: string
+  /** Active persona / user name. */
+  userName: string
+  /** Active character name. */
+  characterName: string
+  /** Optional custom system prompt template. */
+  systemPromptOverride?: string | null
+  /** Optional custom user prompt template. */
+  userPromptOverride?: string | null
+  /** Connection profile ID for the LLM call. */
+  connection_id?: string
+}
+
 export interface SummarizeStatusResponse {
   active: boolean
   generationId?: string
   startedAt?: number
+}
+
+export interface RebuildSummaryResponse {
+  generationId: string
+  totalBatches: number
+  totalMessages: number
 }
 
 export interface QuietGenerateResponse {
@@ -153,8 +179,9 @@ export interface DryRunResponse {
     chunksAvailable: number
     chunksPending: number
     injectionMethod: 'macro' | 'fallback' | 'disabled'
+    retrievalMode?: 'vector' | 'recency' | 'empty' | 'disabled'
     retrievedChunks: Array<{
-      score: number
+      score: number | null
       tokenEstimate: number
       messageRange: [number, number]
       preview: string
@@ -236,9 +263,14 @@ export interface GenerationStatusResponse {
   }
   content?: string
   reasoning?: string
+  /** Char position where the returned content/reasoning slice begins (0 = full
+   *  buffer). Non-zero only when the poll sent matching known lengths. */
+  contentOffset?: number
+  reasoningOffset?: number
   tokenSeq?: number
   generationType?: string
   targetMessageId?: string
+  targetSwipeId?: number
   characterName?: string
   characterId?: string
   model?: string
@@ -268,8 +300,13 @@ export const generateApi = {
     return post<GenerateResponse>('/generate', request, LONG)
   },
 
-  stop(generationId?: string) {
-    return post<void>('/generate/stop', generationId ? { generation_id: generationId } : {})
+  stop(generationId?: string, chatId?: string) {
+    // chat_id lets the backend fall back to stopping whatever is actually
+    // running for the chat when generation_id is stale (or not yet known).
+    const body: Record<string, string> = {}
+    if (generationId) body.generation_id = generationId
+    if (chatId) body.chat_id = chatId
+    return post<void>('/generate/stop', body)
   },
 
   async regenerate(request: GenerateRequest) {
@@ -286,7 +323,7 @@ export const generateApi = {
     return post<QuietGenerateResponse>('/generate/quiet', request, LONG)
   },
 
-  summarize(request: QuietGenerateRequest, options: RequestOptions = LONG) {
+  summarize(request: SummarizeRequest, options: RequestOptions = LONG) {
     return post<QuietGenerateResponse>('/generate/summarize', request, options)
   },
 
@@ -298,6 +335,19 @@ export const generateApi = {
     return get<SummarizeStatusResponse>(`/generate/summarize/status/${chatId}`)
   },
 
+  rebuildSummary(chatId: string, batchSize: number, userName: string, options?: {
+    system_prompt_override?: string | null
+    user_prompt_override?: string | null
+    connection_id?: string
+  }) {
+    return post<RebuildSummaryResponse>('/generate/summarize/rebuild', {
+      chat_id: chatId,
+      batch_size: batchSize,
+      user_name: userName,
+      ...options,
+    }, LONG)
+  },
+
   async dryRun(request: GenerateRequest) {
     await flushSettingsNow()
     return post<DryRunResponse>('/generate/dry-run', request, LONG)
@@ -307,8 +357,8 @@ export const generateApi = {
     return get<BreakdownResponse>(`/generate/breakdown/${messageId}`)
   },
 
-  getStatus(chatId: string) {
-    return get<GenerationStatusResponse>(`/generate/status/${chatId}`)
+  getStatus(chatId: string, known?: { generationId: string; contentLen: number; reasoningLen: number }) {
+    return get<GenerationStatusResponse>(`/generate/status/${chatId}`, known)
   },
 
   getActive() {

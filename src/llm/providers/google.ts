@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
@@ -40,6 +40,12 @@ export class GoogleProvider implements LlmProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "google",
+    // Gemini preserves reasoning across tool calls via the opaque
+    // `thoughtSignature` attached to each functionCall part. generate()/
+    // generateStream() capture it onto ToolCallResult.thought_signature and
+    // formatParts re-emits it, so the structured continuation round-trips the
+    // signature (mandatory on Gemini 3 when thinking is enabled).
+    interleavedThinking: true,
   };
 
   private baseUrl(apiUrl: string): string {
@@ -54,19 +60,15 @@ export class GoogleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/v1beta/models/${request.model}:generateContent?key=${apiKey}`;
     const body = this.buildBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Google API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "generate", res);
 
-    const data = await res.json() as any;
+    const data = await readJsonWithAbort<any>(res, request.signal) as any;
     const candidate = data.candidates?.[0];
     const parts = candidate?.content?.parts || [];
 
@@ -115,20 +117,18 @@ export class GoogleProvider implements LlmProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Google API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "stream", res);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const maybeYield = createCooperativeYielder(64, request.signal);
 
+    let streamDoneNaturally = false;
     try {
     while (true) {
       const { done, value } = await readWithAbort(reader, request.signal);
-      if (done) break;
+      if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -187,7 +187,7 @@ export class GoogleProvider implements LlmProvider {
       }
     }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 

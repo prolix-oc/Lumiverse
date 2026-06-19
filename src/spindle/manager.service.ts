@@ -353,16 +353,87 @@ function decodeSimpleStringExpression(raw: string): string | null {
   return literalParts.length > 0 ? literalParts.join("") : null;
 }
 
-function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
-  for (const match of matchOutsideIgnored(source, /\b(?:require|import)\s*\(\s*String\.fromCharCode\s*\(([^)]*)\)\s*\)/)) {
-    const moduleName = decodeSimpleStringExpression(`String.fromCharCode(${match[1]})`);
-    const label = moduleName ? DANGEROUS_MODULE_LABELS.get(moduleName) : undefined;
-    if (label) hits.add(label);
+/**
+ * Resolve a dynamic `import()` / `require()` specifier ONLY when the entire
+ * expression is a provably-constant string: a single string literal, a `+`
+ * concatenation of string literals, or `String.fromCharCode(<int literals>)`.
+ * Returns the resolved module string, or `null` if any part is non-constant
+ * (template interpolation `${…}`, a variable, member/computed access, a
+ * function call, etc.).
+ *
+ * This is deliberately STRICTER than {@link decodeSimpleStringExpression},
+ * which strips `${…}` and concatenates whatever literals it can find — that
+ * leniency let a specifier like `` `node:${seg}` `` decode to the harmless
+ * "node:" and slip past the dangerous-module check. The import/require gate
+ * must fail CLOSED: anything we cannot fully prove constant is reported as
+ * "dynamic module access" and hard-blocked (there is no capability opt-in,
+ * because the unresolved string could be `node:fs`, `child_process`, etc.).
+ */
+function resolveStaticModuleSpecifier(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // `String.fromCharCode(<int literals>)` — constant only when every argument
+  // is an integer literal (a variable arg makes the whole call non-constant).
+  const charCode = trimmed.match(/^String\.fromCharCode\s*\(([^)]*)\)$/);
+  if (charCode) {
+    const parts = charCode[1].split(",").map((p) => p.trim());
+    if (parts.length === 0 || parts.some((p) => !/^\d+$/.test(p))) return null;
+    const codes = parts.map(Number);
+    if (codes.some((n) => !Number.isInteger(n) || n < 0 || n > 0x10ffff)) return null;
+    return String.fromCodePoint(...codes);
   }
 
-  for (const match of matchOutsideIgnored(source, /\b(?:require|import)\s*\(([^;\n]{1,300})\)/)) {
-    const moduleName = decodeSimpleStringExpression(match[1]);
-    const label = moduleName ? DANGEROUS_MODULE_LABELS.get(moduleName) : undefined;
+  // One or more string literals joined by `+`. A template literal is accepted
+  // only when it contains NO `${…}` interpolation (`\$(?!\{)` allows a bare
+  // `$`, but `${` ends the literal match and forces a `null` "dynamic" result).
+  const LITERAL = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\$]|\\.|\$(?!\{))*`)/;
+  let rest = trimmed;
+  let value = "";
+  let matchedAny = false;
+  while (rest) {
+    const m = rest.match(LITERAL);
+    if (!m) return null;
+    const decoded = decodeQuotedLiteral(m[0]);
+    if (decoded === null) return null;
+    value += decoded;
+    matchedAny = true;
+    rest = rest.slice(m[0].length).replace(/^\s+/, "");
+    if (!rest) break;
+    // `import(spec, { with: … })` — the specifier is complete; the trailing
+    // comma introduces the (static) import-attributes object, not part of it.
+    if (rest[0] === ",") break;
+    if (rest[0] !== "+") return null; // any non-`+` operator/token ⇒ dynamic
+    rest = rest.slice(1).replace(/^\s+/, "");
+    if (!rest) return null; // dangling `+`
+  }
+  return matchedAny ? value : null;
+}
+
+function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
+  // Only the BARE dynamic-import operator `import(…)` and the global
+  // `require(…)` are real module-load surfaces. Member calls (`x.require(…)`,
+  // `ns.import(…)`) and shorthand method definitions (`require(name) { … }`)
+  // are unrelated: extensions routinely ship a scripting API whose methods are
+  // literally named `require`/`import` (e.g. RisuAI-compat layers). The
+  // negative lookbehind `(?<![.\w$])` drops member access and identifier-
+  // prefixed names; the trailing-`{` check below drops method definitions.
+  // No coverage is lost — a constant dangerous specifier on ANY receiver is
+  // still caught by DANGEROUS_BACKEND_CHECKS, and a dynamic `globalThis.require`
+  // is caught at runtime by guardRequire (a real override, unlike `import()`).
+  for (const match of matchOutsideIgnored(source, /(?<![.\w$])(?:require|import)\s*\(([^;\n]{1,300})\)/)) {
+    if (match.index !== undefined) {
+      const tail = source.text.slice(match.index + match[0].length);
+      if (/^\s*\{/.test(tail)) continue; // `require(name) { … }` — a definition
+    }
+    const resolved = resolveStaticModuleSpecifier(match[1]);
+    if (resolved === null) {
+      // Specifier is not a provable constant — fail closed. We cannot tell
+      // whether it resolves to `node:fs`, `child_process`, etc., so block it.
+      hits.add("dynamic module access");
+      continue;
+    }
+    const label = DANGEROUS_MODULE_LABELS.get(resolved);
     if (label) hits.add(label);
   }
 }
@@ -749,6 +820,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "image_gen",
   "images",
   "web_search",
+  "unsafe_eval",
 ]);
 
 function grantRequestedPermissionsByDefault(
@@ -1213,21 +1285,31 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
 
-  // Clean build artifacts and installed dependencies so git pull succeeds.
-  // We don't read stdout for these — ignore it to reduce pipe overhead.
-  await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
-  await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
+  // Read manifest up-front so we can honor `dev_mode` before touching the
+  // working tree. Extensions with `dev_mode: true` keep their local repo
+  // contents intact — we skip the git checkout/clean/pull and just rebuild
+  // + relaunch from whatever the developer has on disk.
+  const initialManifest = await readManifest(identifier);
+  const devMode = (initialManifest as { dev_mode?: boolean }).dev_mode === true;
 
-  const pullProc = await spawnAsync(["git", "pull"], {
-    cwd: repo,
-    timeoutMs: 60_000,
-  });
-  if (pullProc.exitCode !== 0) {
-    throw new Error(`git pull failed: ${pullProc.stderr}`);
+  if (!devMode) {
+    // Clean build artifacts and installed dependencies so git pull succeeds.
+    // We don't read stdout for these — ignore it to reduce pipe overhead.
+    await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
+    await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
+
+    const pullProc = await spawnAsync(["git", "pull"], {
+      cwd: repo,
+      timeoutMs: 60_000,
+    });
+    if (pullProc.exitCode !== 0) {
+      throw new Error(`git pull failed: ${pullProc.stderr}`);
+    }
   }
 
-  // Re-read manifest
-  const manifest = await readManifest(identifier);
+  // Re-read manifest — in non-dev mode the pull may have modified it; in
+  // dev mode we already have the current version.
+  const manifest = devMode ? initialManifest : await readManifest(identifier);
 
   const db = getDb();
   const existing = db
@@ -1475,6 +1557,14 @@ export async function getEnabledExtensions(): Promise<ExtensionInfo[]> {
     .query("SELECT * FROM extensions WHERE enabled = 1")
     .all() as any[];
   return Promise.all(rows.map(rowToExtensionInfo));
+}
+
+export function getEnabledExtensionIdentifiers(): string[] {
+  const db = getDb();
+  const rows = db
+    .query("SELECT identifier FROM extensions WHERE enabled = 1")
+    .all() as { identifier: string }[];
+  return rows.map((r) => r.identifier);
 }
 
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {

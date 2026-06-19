@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable'
-import { uiScaledTransform } from '@/lib/dndUiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import {
   GripVertical,
   ChevronDown,
@@ -42,6 +42,7 @@ import {
   FileText,
   Zap,
   Settings2,
+  Braces,
   RotateCcw,
   Wifi,
   Code2,
@@ -139,8 +140,8 @@ function SortableCategoryItem({
   block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { t } = useLb()
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
-  const style = { transform: uiScaledTransform(transform), transition }
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isDisabled = !block.enabled
   const displayName = block.name.replace(/^\u2501\s*/, '')
 
@@ -203,8 +204,8 @@ interface SortableBlockItemProps {
 function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
-  const style = { transform: uiScaledTransform(transform), transition }
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
   const preview = block.content ? block.content.substring(0, 50) + (block.content.length > 50 ? '...' : '') : ''
@@ -313,7 +314,11 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
     previewTimerRef.current = setTimeout(() => {
       setPreviewLoading(true)
-      resolveMacrosApi({ template: content, ...(activeChatId ? { chat_id: activeChatId } : {}) })
+      // Trim the preview to match the dry run: the assembly strips
+      // leading/trailing whitespace from each resolved block, except append
+      // roles, where it preserves whitespace for inter-append spacing.
+      const isAppend = role === 'user_append' || role === 'assistant_append'
+      resolveMacrosApi({ template: content, trim: !isAppend, ...(activeChatId ? { chat_id: activeChatId } : {}) })
         .then((res) => {
           setPreviewText(res.text)
           setPreviewDiagnostics(res.diagnostics)
@@ -325,7 +330,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
         .finally(() => setPreviewLoading(false))
     }, 500)
     return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview, activeChatId])
+  }, [content, showPreview, activeChatId, role])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']
@@ -667,6 +672,9 @@ function PresetCoverHeader({ preset }: { preset: LoomPreset }) {
       <div className={s.presetCoverContent}>
         <div className={s.presetCoverBadgeRow}>
           <span className={s.presetCoverBadge}>{t('preset.lumihubBadge')}</span>
+          {preset.presetVersion && (
+            <span className={s.presetCoverBadge}>{t('preset.version', { version: preset.presetVersion })}</span>
+          )}
           <span className={s.presetCoverBadge}>{t('preset.blocks', { count: preset.blocks.length })}</span>
         </div>
         <h2 className={s.presetCoverTitle}>{preset.name}</h2>
@@ -1381,16 +1389,18 @@ export default function LoomBuilder({
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [showLegacyExportConfirm, setShowLegacyExportConfirm] = useState(false)
   const [showPromptVariablesModal, setShowPromptVariablesModal] = useState(false)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  const hasConfigurableVariables = useMemo(() => {
-    return (activePreset?.blocks ?? []).some(
-      (b) => b.enabled && Array.isArray(b.variables) && b.variables.length > 0,
-    )
+  const configurableVariableCount = useMemo(() => {
+    return (activePreset?.blocks ?? []).reduce((count, b) => {
+      if (!b.enabled || !Array.isArray(b.variables)) return count
+      return count + b.variables.filter((v) => v && v.name).length
+    }, 0)
   }, [activePreset?.blocks])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const importTypeRef = useRef<string>('json')
@@ -1602,6 +1612,7 @@ export default function LoomBuilder({
 
   const handleDeletePreset = useCallback(async () => {
     if (!activePresetId) return
+    setConfirmDeletePreset(false)
     await deletePreset(activePresetId)
   }, [activePresetId, deletePreset])
 
@@ -1684,7 +1695,7 @@ export default function LoomBuilder({
             onCreate={createPreset}
             onRename={handleRenamePreset}
             onDuplicate={handleDuplicatePreset}
-            onDelete={handleDeletePreset}
+            onDelete={() => setConfirmDeletePreset(true)}
             onImport={handleImport}
             onExport={handleExport}
             onExportLegacy={() => setShowLegacyExportConfirm(true)}
@@ -1927,15 +1938,16 @@ export default function LoomBuilder({
         {activePreset && <AdvancedSettingsPanel advancedSettings={activePreset.advancedSettings} completionSettings={activePreset.completionSettings} onSave={saveAdvancedSettings} onSaveCompletion={saveCompletionSettings} />}
         {activePreset && <ContextMeter />}
 
-        {activePreset && hasConfigurableVariables && (
-          <div style={{ padding: '0 12px 8px' }}>
+        {activePreset && configurableVariableCount > 0 && (
+          <div className={s.variablesAction}>
             <button
               type="button"
-              className={clsx(s.btn)}
-              style={{ width: '100%', justifyContent: 'center' }}
+              className={clsx(s.btn, s.variablesBtn)}
               onClick={() => setShowPromptVariablesModal(true)}
             >
-              <Settings2 size={14} /> {lb('actions.configureVariables')}
+              <Braces size={14} />
+              <span>{lb('actions.configureVariables')}</span>
+              <span className={s.accordionBadge}>{configurableVariableCount}</span>
             </button>
           </div>
         )}
@@ -2091,6 +2103,17 @@ export default function LoomBuilder({
           confirmText={tc('actions.delete')}
           onConfirm={confirmDeleteBlock}
           onCancel={() => setConfirmDelete(null)}
+        />
+
+      {/* Confirm preset delete dialog */}
+        <ConfirmationModal
+          isOpen={confirmDeletePreset}
+          title={lb('confirm.deletePresetTitle')}
+          message={lb('confirm.deletePresetMessage', { name: activePreset?.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDeletePreset() }}
+          onCancel={() => setConfirmDeletePreset(false)}
         />
 
         {activePreset && (

@@ -3,19 +3,22 @@ import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getCharacter } from "./characters.service";
-import { getEffectiveCharacterName } from "../types/character";
+import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
+import { isTemporaryChatMetadata } from "../types/chat";
 import type { Message, CreateMessageInput, UpdateMessageInput } from "../types/message";
 import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
+import * as audioSvc from "./audio.service";
 import * as memoryCortex from "./memory-cortex";
 import { removePoolEntriesForChat } from "./generation-pool.service";
 import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { buildEnv, type MacroEnv } from "../macros";
 import { resolvePersonaOrDefault } from "./personas.service";
+import { resolvePersonaForChatMacros } from "./persona-addon-states";
 import { resolveAndSanitizeForVectorization, contentHasMacroHints } from "./vectorization-content.service";
 
 // --- Chat helpers ---
@@ -480,6 +483,65 @@ function rowToMessage(row: any): Message {
   };
 }
 
+const SWIPE_SCOPED_EXTRA_ARRAY_KEYS = [
+  "reasoningBySwipe",
+  "reasoningDurationBySwipe",
+  "tokenCountBySwipe",
+  "generationMetricsBySwipe",
+  "usageBySwipe",
+] as const;
+
+/**
+ * Light projection for chat-open / history-paging list responses. Non-active
+ * swipe texts and per-swipe extra arrays dominate the payload (measured ~75%
+ * of a 50-message tail) but the UI only renders the active swipe — its values
+ * are already projected to top-level extra keys by projectActiveSwipeExtra.
+ *
+ * Keeps `swipes.length` intact (the n/m indicator and at-first/at-last checks
+ * depend on it) by nulling the non-active slots. Any action that needs full
+ * swipe data (cycle/add/delete swipe, single-message GET, WS events) goes
+ * through rowToMessage and re-hydrates the client copy.
+ */
+/**
+ * Light list payloads omit the *BySwipe arrays (see rowToMessageLight), so a
+ * client echoing `message.extra` back on edit / hide-toggle would otherwise
+ * wipe the stored per-swipe history. An omitted array key means "untouched",
+ * not "delete" — seed it from the stored extra before normalization. Callers
+ * that really want to clear an array must send it explicitly (e.g.
+ * `reasoningBySwipe: []`); per-slot clearing still works via the top-level
+ * projected keys (`reasoning: null`).
+ */
+function preserveSwipeScopedExtraArrays(
+  incoming: Record<string, unknown>,
+  stored: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!stored) return incoming;
+  const merged = { ...incoming };
+  for (const key of SWIPE_SCOPED_EXTRA_ARRAY_KEYS) {
+    if (merged[key] === undefined && stored[key] !== undefined) {
+      merged[key] = stored[key];
+    }
+  }
+  return merged;
+}
+
+function rowToMessageLight(row: any): Message {
+  const msg = rowToMessage(row);
+  if (msg.swipes.length > 1) {
+    // The active slot must stay populated: `content` usually mirrors it, but
+    // extension rewrites can drift the two apart, and display prefers
+    // `swipes[swipe_id]` over `content`. Non-active slots are only read by
+    // swipe actions, which re-hydrate from full-message responses.
+    const activeIdx =
+      msg.swipe_id >= 0 && msg.swipe_id < msg.swipes.length ? msg.swipe_id : 0;
+    const lightSwipes: (string | null)[] = new Array(msg.swipes.length).fill(null);
+    lightSwipes[activeIdx] = msg.swipes[activeIdx] ?? null;
+    msg.swipes = lightSwipes as string[];
+  }
+  for (const key of SWIPE_SCOPED_EXTRA_ARRAY_KEYS) delete msg.extra[key];
+  return msg;
+}
+
 function rowToRecentChat(row: any): RecentChat {
   return {
     ...row,
@@ -517,9 +579,9 @@ export function listRecentChats(userId: string, pagination: PaginationParams): P
       `SELECT c.id, c.character_id, c.name, c.metadata, c.created_at, c.updated_at,
          ch.name AS character_name, ch.avatar_path AS character_avatar_path, ch.image_id AS character_image_id
        FROM chats c LEFT JOIN characters ch ON ch.id = c.character_id
-       WHERE c.user_id = ?
+       WHERE c.user_id = ? AND c.character_id IS NOT NULL
        ORDER BY c.updated_at DESC`,
-      "SELECT COUNT(*) as count FROM chats WHERE user_id = ?",
+      "SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND character_id IS NOT NULL",
       [userId],
       pagination,
       rowToRecentChat
@@ -558,7 +620,7 @@ export function listRecentChatsGrouped(
         ch.image_id AS character_image_id
       FROM chats c
       LEFT JOIN characters ch ON ch.id = c.character_id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ? AND c.character_id IS NOT NULL
       ORDER BY c.updated_at DESC
     `).all(userId) as any[]
   );
@@ -677,7 +739,10 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
       c.name,
       c.created_at,
       c.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count
+      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      (SELECT substr(content, 1, 280) FROM messages
+         WHERE chat_id = c.id
+         ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
     FROM chats c
     WHERE c.user_id = ? AND c.character_id = ?
       AND COALESCE(json_extract(c.metadata, '$.group'), 0) != 1
@@ -690,7 +755,32 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
     message_count: row.message_count || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    last_message_preview: row.last_message_preview || '',
   }));
+}
+
+/**
+ * Delete every non-group chat for a character in one call. Loops the
+ * individual `deleteChat()` per chat (rather than a single bulk SQL DELETE) so
+ * each chat still runs its full cleanup — audio attachments, LanceDB chunk
+ * embeddings, memory-cortex caches/ingestion, generation pools, debounced
+ * vectorizations, and the CHAT_DELETED event. Chat counts per character are
+ * small, so N small deletes is a fine trade-off. Group chats are excluded,
+ * matching `listChatSummaries`; they are managed separately. Returns the
+ * number of chats actually deleted.
+ */
+export function deleteAllChatsForCharacter(userId: string, characterId: string): number {
+  const rows = getDb().query(`
+    SELECT id FROM chats
+    WHERE user_id = ? AND character_id = ?
+      AND COALESCE(json_extract(metadata, '$.group'), 0) != 1
+  `).all(userId, characterId) as { id: string }[];
+
+  let deleted = 0;
+  for (const row of rows) {
+    if (deleteChat(userId, row.id)) deleted++;
+  }
+  return deleted;
 }
 
 export function listGroupChatSummaries(userId: string, characterIds?: string[]): ChatSummary[] {
@@ -705,7 +795,10 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
       c.name,
       c.created_at,
       c.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count
+      (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      (SELECT substr(content, 1, 280) FROM messages
+         WHERE chat_id = c.id
+         ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
     FROM chats c
   `;
 
@@ -735,6 +828,7 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
     message_count: row.message_count || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    last_message_preview: row.last_message_preview || '',
   }));
 }
 
@@ -761,17 +855,17 @@ export function createChat(userId: string, input: CreateChatInput): Chat {
 
   // Auto-name with character name
   let chatName = input.name || "";
-  if (!chatName) {
+  if (!chatName && input.character_id) {
     const character = getCharacter(userId, input.character_id);
     if (character) chatName = getEffectiveCharacterName(character);
   }
 
   getDb()
     .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(id, userId, input.character_id, chatName, JSON.stringify(input.metadata || {}), now, now);
+    .run(id, userId, input.character_id ?? null, chatName, JSON.stringify(input.metadata || {}), now, now);
 
   // Insert the character's greeting as the opening message
-  const character = getCharacter(userId, input.character_id);
+  const character = input.character_id ? getCharacter(userId, input.character_id) : null;
   if (character) {
     let greeting = character.first_mes;
     if (input.greeting_index && input.greeting_index >= 1 && character.alternate_greetings?.length) {
@@ -815,6 +909,7 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
   const source = getChat(userId, chatId);
   if (!source) return null;
   if (source.metadata?.group) throw new Error("Chat is already a group chat");
+  if (!source.character_id) throw new Error("Temporary chats cannot be converted to group chats");
 
   const converted = createChatRaw(userId, {
     character_id: source.character_id,
@@ -846,8 +941,23 @@ export function convertSoloChatToGroup(userId: string, chatId: string): Chat | n
 }
 
 export function deleteChat(userId: string, id: string): boolean {
+  // Snapshot any audio attachments before the cascade DELETE wipes the
+  // messages rows — we lose access to extras the moment the rows are gone.
+  let audioAttachments: any[] = [];
+  try {
+    const messageRows = getDb()
+      .query("SELECT extra FROM messages WHERE chat_id = ?")
+      .all(id) as any[];
+    for (const row of messageRows) {
+      audioAttachments.push(...collectMessageAttachments(row));
+    }
+  } catch (err) {
+    console.warn(`[chats] Failed to scan messages for audio cleanup in chat ${id}:`, err);
+  }
+
   const result = getDb().query("DELETE FROM chats WHERE id = ? AND user_id = ?").run(id, userId);
   if (result.changes > 0) {
+    cleanupAudioAttachments(userId, audioAttachments);
     invalidateChatMemoryCache(id);
     removePoolEntriesForChat(userId, id);
 
@@ -873,6 +983,25 @@ export function deleteChat(userId: string, id: string): boolean {
     eventBus.emit(EventType.CHAT_DELETED, { id }, userId);
   }
   return result.changes > 0;
+}
+
+/**
+ * Delete every temporary (character-less, metadata.temporary) chat the user
+ * owns. Called when the user returns to the landing page — temp chats are
+ * disposable by contract. Goes through deleteChat so audio/embedding/cortex
+ * cleanup runs for each.
+ */
+export function deleteTemporaryChats(userId: string): number {
+  const rows = getDb()
+    .query("SELECT id, metadata FROM chats WHERE user_id = ? AND character_id IS NULL")
+    .all(userId) as Array<{ id: string; metadata: string }>;
+
+  let deleted = 0;
+  for (const row of rows) {
+    if (!isTemporaryChatMetadata(parseMetadataObject(row.metadata))) continue;
+    if (deleteChat(userId, row.id)) deleted++;
+  }
+  return deleted;
 }
 
 function diffChatChangedFields(prev: Chat, next: Chat): string[] {
@@ -1308,17 +1437,17 @@ export function getMessages(userId: string, chatId: string): Message[] {
   return rows.map(rowToMessage);
 }
 
-export function listMessages(userId: string, chatId: string, pagination: PaginationParams): PaginatedResult<Message> {
+export function listMessages(userId: string, chatId: string, pagination: PaginationParams, opts?: { light?: boolean }): PaginatedResult<Message> {
   return paginatedQuery(
     "SELECT m.* FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ? ORDER BY m.index_in_chat ASC",
     "SELECT COUNT(*) as count FROM messages m JOIN chats c ON m.chat_id = c.id WHERE m.chat_id = ? AND c.user_id = ?",
     [chatId, userId],
     pagination,
-    rowToMessage
+    opts?.light ? rowToMessageLight : rowToMessage
   );
 }
 
-export function listMessagesTail(userId: string, chatId: string, limit: number): PaginatedResult<Message> {
+export function listMessagesTail(userId: string, chatId: string, limit: number, opts?: { light?: boolean }): PaginatedResult<Message> {
   const stmts = getMsgStmts();
   const countRow = stmts.count.get(chatId, userId) as { count: number } | null;
   const total = countRow?.count ?? 0;
@@ -1329,7 +1458,7 @@ export function listMessagesTail(userId: string, chatId: string, limit: number):
 
   const offset = Math.max(0, total - rows.length);
   return {
-    data: rows.map(rowToMessage),
+    data: rows.map(opts?.light ? rowToMessageLight : rowToMessage),
     total,
     limit,
     offset,
@@ -1420,10 +1549,43 @@ export function appendMessageAttachment(
 }
 
 /**
+ * Best-effort cleanup of audio_files rows referenced by message attachments.
+ * Tolerates missing audio table (test schemas) and missing rows. Caller passes
+ * the attachment list to clean up (either being-removed entries or the full
+ * extras of a message about to be deleted).
+ */
+function cleanupAudioAttachments(userId: string, attachments: any[]): void {
+  for (const att of attachments) {
+    if (!att || typeof att !== "object") continue;
+    if (att.type !== "audio") continue;
+    const id = typeof att.image_id === "string" ? att.image_id : null;
+    if (!id) continue;
+    try {
+      audioSvc.deleteAudio(userId, id);
+    } catch (err) {
+      console.warn(`[chats] Failed to delete audio file ${id} on cleanup:`, err);
+    }
+  }
+}
+
+function collectMessageAttachments(messageRow: any): any[] {
+  if (!messageRow) return [];
+  let extra: any = messageRow.extra;
+  if (typeof extra === "string") {
+    try { extra = JSON.parse(extra); } catch { return []; }
+  }
+  if (!extra || typeof extra !== "object") return [];
+  return Array.isArray(extra.attachments) ? extra.attachments : [];
+}
+
+/**
  * Removes a single attachment (by image_id) from a message's extra.attachments
  * array. Returns the updated Message if the attachment was found and removed,
  * null if the message doesn't exist, or the unchanged Message if the
  * attachment wasn't present. Emits MESSAGE_EDITED so chat clients re-render.
+ * When the removed attachment is an audio file, the underlying audio_files
+ * row + on-disk blob are also deleted (audio is single-ref per message; no
+ * orphan-tracking needed like images have).
  */
 export function removeMessageAttachment(
   userId: string,
@@ -1437,6 +1599,7 @@ export function removeMessageAttachment(
     ? existing.extra as Record<string, any>
     : {};
   const existingAttachments = Array.isArray(existingExtra.attachments) ? existingExtra.attachments : [];
+  const removed = existingAttachments.filter((a: any) => a && typeof a === "object" && a.image_id === imageId);
   const nextAttachments = existingAttachments.filter(
     (a: any) => a && typeof a === "object" && a.image_id !== imageId,
   );
@@ -1451,6 +1614,12 @@ export function removeMessageAttachment(
   getDb()
     .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
     .run(JSON.stringify(normalizedExtra), messageId, existing.chat_id);
+
+  // Free any audio_files blob backing a removed audio attachment so the
+  // on-disk file doesn't outlive the message reference. Safe to call after
+  // the UPDATE — if cleanup throws, the attachment is already gone from the
+  // message and the orphan can be GC'd manually.
+  cleanupAudioAttachments(userId, removed);
 
   const updated: Message = { ...existing, extra: normalizedExtra };
   eventBus.emit(EventType.MESSAGE_EDITED, { chatId: updated.chat_id, message: updated }, userId);
@@ -1469,6 +1638,60 @@ export function patchMessageExtra(userId: string, id: string, extra: Record<stri
     extra,
     existing.swipes.length,
     existing.swipe_id,
+  );
+  getDb()
+    .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+    .run(JSON.stringify(normalizedExtra), id, existing.chat_id);
+}
+
+/** Top-level extra keys that are persisted per-swipe (folded into `*BySwipe[]`). */
+const SWIPE_SCOPED_EXTRA_KEYS = [
+  "reasoning",
+  "reasoningDuration",
+  "tokenCount",
+  "generationMetrics",
+  "usage",
+] as const;
+
+/**
+ * Merge swipe-scoped extra fields (reasoning, usage, token metrics, …) into a
+ * SPECIFIC swipe, independent of which swipe is currently displayed. A generation
+ * can finish while the user is viewing a different swipe (swipe navigation during
+ * streaming), so keying these writes off the live `swipe_id` — as
+ * `patchMessageExtra` does — would land the result on the wrong swipe and clobber
+ * that swipe's own reasoning/metrics.
+ *
+ * Only the provided fields are written; other swipes and other extra fields are
+ * preserved. Falls back to the displayed swipe when `swipeId` is out of range.
+ */
+export function setSwipeScopedExtra(
+  userId: string,
+  id: string,
+  swipeId: number | undefined,
+  fields: Record<string, unknown>,
+): void {
+  const existing = getMessage(userId, id);
+  if (!existing) return;
+  const targetSwipeId =
+    typeof swipeId === "number" &&
+    Number.isInteger(swipeId) &&
+    swipeId >= 0 &&
+    swipeId < existing.swipes.length
+      ? swipeId
+      : existing.swipe_id;
+
+  // `existing.extra` is projected for the *displayed* swipe, so its top-level
+  // scoped fields belong to that swipe. Drop them before re-normalizing against
+  // the target swipe; the canonical `*BySwipe[]` arrays (also present) are kept,
+  // which preserves every other swipe's data.
+  const base: Record<string, unknown> = { ...(existing.extra || {}) };
+  for (const key of SWIPE_SCOPED_EXTRA_KEYS) delete base[key];
+  for (const [key, value] of Object.entries(fields)) base[key] = value;
+
+  const normalizedExtra = normalizeStoredMessageExtra(
+    base,
+    existing.swipes.length,
+    targetSwipeId,
   );
   getDb()
     .query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
@@ -1503,11 +1726,23 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     }
   }
 
+  // Which swipe slot receives `content`. Defaults to the active swipe; a caller
+  // can target a different slot (e.g. the generation pipeline finalizing a swipe
+  // the user navigated away from) without moving swipe_id.
+  const contentSwipeId =
+    patchedContent &&
+    input.contentSwipeId !== undefined &&
+    Number.isInteger(input.contentSwipeId) &&
+    input.contentSwipeId >= 0 &&
+    input.contentSwipeId < newSwipes.length
+      ? input.contentSwipeId
+      : newSwipeId;
+
   if (patchedContent) {
     if (!Number.isFinite(newSwipeId) || newSwipeId < 0 || newSwipeId >= newSwipes.length) {
       throw new Error("updateMessage: swipe_id out of range");
     }
-    newSwipes[newSwipeId] = input.content!;
+    newSwipes[contentSwipeId] = input.content!;
   }
 
   if (newSwipes.length === 0) throw new Error("updateMessage: swipes must be non-empty");
@@ -1518,15 +1753,20 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
     throw new Error("updateMessage: swipes and swipe_dates length mismatch");
   }
 
+  // The `content` column mirrors the ACTIVE swipe — which is `input.content` only
+  // when the write targeted the active slot; otherwise it's the active slot's
+  // (unchanged) text.
   const newContent = patchedContent
-    ? input.content!
+    ? newSwipes[newSwipeId]
     : swipeShapeTouched
       ? newSwipes[newSwipeId]
       : undefined;
   const normalizedExtra =
     input.extra !== undefined || swipeShapeTouched
       ? normalizeStoredMessageExtra(
-          input.extra ?? existing.extra,
+          input.extra !== undefined
+            ? preserveSwipeScopedExtraArrays(input.extra, existing.extra)
+            : existing.extra,
           newSwipes.length,
           input.extra !== undefined ? newSwipeId : existing.swipe_id,
         )
@@ -1576,7 +1816,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   // even without a `content` patch — check the resolved active content
   // against the prior active content to catch that case.
   const activeContentChanged =
-    patchedContent ||
+    (patchedContent && contentSwipeId === newSwipeId) ||
     (swipeShapeTouched && newSwipes[newSwipeId] !== existing.swipes[existing.swipe_id]);
   if (activeContentChanged && input.skipChunkRebuild !== true) {
     try {
@@ -1677,17 +1917,19 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   if (messageIds.length > 500) throw new Error("Maximum 500 messages per batch");
 
   const db = getDb();
-  const getStmt = db.query("SELECT id FROM messages WHERE id = ? AND chat_id = ?");
+  const getStmt = db.query("SELECT id, extra FROM messages WHERE id = ? AND chat_id = ?");
   const deleteStmt = db.query("DELETE FROM messages WHERE id = ? AND chat_id = ?");
 
   let deleted = 0;
   const deletedIds: string[] = [];
+  const attachmentsToCleanup: any[] = [];
 
   const transaction = db.transaction(() => {
     for (const msgId of messageIds) {
       const row = getStmt.get(msgId, chatId) as any;
       if (!row) continue;
 
+      attachmentsToCleanup.push(...collectMessageAttachments(row));
       deleteStmt.run(msgId, chatId);
       deleted++;
       deletedIds.push(msgId);
@@ -1695,6 +1937,8 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
   });
 
   transaction();
+
+  cleanupAudioAttachments(userId, attachmentsToCleanup);
 
   for (const msgId of deletedIds) {
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId, messageId: msgId }, userId);
@@ -1719,8 +1963,10 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
 export function deleteMessage(userId: string, id: string): boolean {
   const msg = getMessage(userId, id);
   if (!msg) return false;
+  const attachmentsToCleanup = collectMessageAttachments(msg);
   const result = getDb().query("DELETE FROM messages WHERE id = ? AND chat_id = ?").run(id, msg.chat_id);
   if (result.changes > 0) {
+    cleanupAudioAttachments(userId, attachmentsToCleanup);
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId: msg.chat_id, messageId: id }, userId);
     invalidateChatMemoryCache(msg.chat_id);
 
@@ -1917,7 +2163,7 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
   const now = Math.floor(Date.now() / 1000);
 
   // Branch names: "{baseName} — Branch at #{msgIndex}"
-  const character = getCharacter(userId, chat.character_id);
+  const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
   const baseName = (chat.name || character?.name || "Chat").replace(/\s+—\s+Branch.*$/i, "").replace(/\s+\(branch\s*\d*\)$/i, "");
   const branchLabel = `${baseName} — Branch at #${msg.index_in_chat}`;
 
@@ -1976,7 +2222,22 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
     return null;
   }
 
-  return getChat(userId, newChatId);
+  const forkedChat = getChat(userId, newChatId);
+  if (forkedChat) {
+    eventBus.emit(
+      EventType.CHAT_FORKED,
+      {
+        sourceChatId: chatId,
+        forkedChatId: newChatId,
+        chat: forkedChat,
+        branchId,
+        forkedAtMessageId: atMessageId,
+        forkedAtMessageIndex: msg.index_in_chat,
+      },
+      userId,
+    );
+  }
+  return forkedChat;
 }
 
 // Branch tree
@@ -2147,10 +2408,13 @@ export function bulkInsertMessages(chatId: string, messages: BulkMessageInput[],
 
   tx();
 
-  // Update chat's updated_at to last message timestamp
+  // Update chat's updated_at to last message timestamp, clamped so it never
+  // predates created_at. Migrated chats (e.g. SillyTavern group chats) can have
+  // message send_dates older than the import-time created_at; an updated_at that
+  // precedes created_at breaks updated_at DESC sorting in recent/search lists.
   if (messages.length > 0) {
     const lastDate = messages[messages.length - 1].send_date ?? now;
-    db.query("UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ?").run(lastDate, chatId, userId);
+    db.query("UPDATE chats SET updated_at = MAX(?, created_at) WHERE id = ? AND user_id = ?").run(lastDate, chatId, userId);
   }
 
   return messages.length;
@@ -2300,9 +2564,17 @@ export function buildMacroEnvForChat(userId: string, chatId: string): MacroEnv |
   try {
     const chat = getChat(userId, chatId);
     if (!chat) return null;
-    const character = getCharacter(userId, chat.character_id);
+    const character = chat.character_id
+      ? getCharacter(userId, chat.character_id)
+      : makeAssistantCharacter();
     if (!character) return null;
-    const persona = resolvePersonaOrDefault(userId);
+    const persona = isTemporaryChatMetadata(chat.metadata)
+      ? null
+      : resolvePersonaForChatMacros(
+          userId,
+          resolvePersonaOrDefault(userId),
+          chat.metadata,
+        );
     return buildEnv({
       character,
       persona,
@@ -2509,7 +2781,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       const characterNames: string[] = [];
       const aliasMaps: Map<string, string>[] = [];
       if (chat) {
-        const character = getCharacter(userId, chat.character_id);
+        const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
         if (character) {
           // Normalize sloppy bot-card names to extract the real character name
           const normalized = memoryCortex.normalizeCharacterName(character.name);

@@ -13,6 +13,16 @@
     "description": "始めるキャラクターと会話を開始"
   },
   "tagline": "ストーリーを続ける",
+  "tempChat": "一時チャット",
+  "tempChatWithProfile": "一時チャット · {{name}}",
+  "tempChatTitle": "使い捨てチャットを開始 — ホームに戻ると削除されます",
+  "tempChatTitleWithProfile": "{{name}} を使い捨てチャットで試す — ホームに戻ると削除されます",
+  "tempChatMenu": {
+    "withPreset": "現在のプリセットを使用",
+    "withPresetHint": "アクティブなプリセットを使用します",
+    "noPreset": "プリセットなし",
+    "noPresetHint": "素のモデルテスト — プリセットのブロックやパラメータなし"
+  },
   "logOutTitle": "このデバイスからログアウトします",
   "loadFailed": "チャットの読み込みに失敗しました",
   "tryAgain": "もう一度試してください",

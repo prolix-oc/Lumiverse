@@ -53,7 +53,9 @@ const variantIcons = {
 }
 
 function getVariantStyle(variant: Variant): CSSProperties {
-  const config = variantConfig[variant]
+  // Variant arrives through untyped modal props (openModal('confirm', …)),
+  // so an unknown string must degrade to 'safe' instead of crashing render.
+  const config = variantConfig[variant] ?? variantConfig.safe
   return {
     '--confirmation-accent': config.accent,
     '--confirmation-accent-border': config.border,
@@ -84,7 +86,7 @@ export default function ConfirmationModal({
   const resolvedConfirm = confirmText ?? t('confirm.confirm')
   const resolvedCancel = cancelText ?? tc('actions.cancel')
   const resolvedLoading = loadingText ?? t('confirm.working')
-  const displayIcon = customIcon || variantIcons[variant]
+  const displayIcon = customIcon || variantIcons[variant] || variantIcons.safe
   const modalStyle = getVariantStyle(variant)
 
   return (

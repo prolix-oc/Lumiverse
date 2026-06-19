@@ -313,6 +313,26 @@ const COMMON_ENGLISH = new Set([
   "view", "violence", "vision", "visit", "voice", "volume", "walk",
   "wall", "watch", "wave", "way", "wealth", "weight", "wish",
   "wonder", "wood", "word", "work", "world", "wound",
+  // ── Abstract nouns / concepts common in roleplay ──
+  "darkness", "shadow", "beauty", "chaos", "destiny", "fate", "honor",
+  "glory", "vengeance", "magic", "betrayal", "redemption", "salvation",
+  "destruction", "creation", "oblivion", "eternity", "infinity",
+  "mortality", "divinity", "prophecy", "legacy", "heritage", "bloodline",
+  "lineage", "corruption", "innocence", "madness", "sanity", "despair",
+  "sorrow", "rage", "fury", "wrath", "grief", "agony", "ecstasy",
+  "torment", "bliss", "serenity", "tranquility", "abyss", "void",
+  "realm", "domain", "hunger", "mercy", "justice", "cruelty", "pity",
+  "devotion", "damnation", "ruin", "decay", "rebirth", "awakening",
+  // ── Roleplay class/archetype nouns (not proper names) ──
+  "warrior", "sorcerer", "witch", "wizard", "healer", "assassin",
+  "thief", "rogue", "hunter", "soldier", "mercenary", "maiden",
+  "beast", "creature", "monster", "demon", "angel", "ghost",
+  "phantom", "wraith", "specter", "undead", "vampire", "werewolf",
+  // ── Conjunctions / transition words capitalized at sentence start ──
+  "however", "although", "therefore", "meanwhile", "furthermore",
+  "nevertheless", "nonetheless", "regardless", "afterwards", "beforehand",
+  "nothing", "everything", "something", "someone", "anyone", "nobody",
+  "everybody", "anywhere", "somewhere", "nowhere",
 ]);
 
 // ─── Title / Rank / Honorific Prefixes ────────────────────────

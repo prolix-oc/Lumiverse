@@ -64,6 +64,9 @@ interface WorldInfoInterceptorEntry {
   delay_until_recursion: boolean
   scan_depth: number | null
   order_value: number
+  // Which attachment scope contributed the entry's book to this chat.
+  // When a book is attached at multiple scopes the narrowest one wins.
+  book_source?: "character" | "persona" | "chat" | "global"
 }
 
 interface WorldInfoInterceptorMessage {

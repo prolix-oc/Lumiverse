@@ -1,17 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Mic, Trash2, Edit3, Zap, Star, Copy, MoreVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Star, Copy, MoreVertical } from 'lucide-react'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import type { SttConnectionProfile, SttProviderInfo, CreateSttConnectionInput } from '@/types/api'
 import STTConnectionForm from './STTConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: '#10a37f',
-}
 
 interface Props {
   profile: SttConnectionProfile
@@ -59,8 +56,6 @@ export default function STTConnectionItem({
     }
   }, [profile.id, onUpdate])
 
-  const providerColor = PROVIDER_COLORS[profile.provider] || 'var(--lumiverse-text-dim)'
-
   if (editing) {
     return (
       <div className={styles.item}>
@@ -78,15 +73,7 @@ export default function STTConnectionItem({
     <div className={styles.item}>
       <div className={styles.itemRow}>
         <div className={styles.itemBtn} style={{ cursor: 'default' }}>
-          <div
-            className={styles.itemIcon}
-            style={{
-              background: `color-mix(in srgb, ${providerColor} 10%, transparent)`,
-              color: providerColor,
-            }}
-          >
-            <Mic size={16} />
-          </div>
+          <ProviderIcon kind="stt" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
           <div className={styles.itemInfo}>
             <span className={styles.itemName}>
               {profile.name}

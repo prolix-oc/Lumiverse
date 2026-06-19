@@ -1,5 +1,7 @@
 import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetadata } from '@/types/regex'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
+import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
+import type { SpindleDisplayContext } from 'lumiverse-spindle-types'
 
 interface DisplayRegexMatch {
   fullMatch: string
@@ -307,12 +309,52 @@ export function applyDisplayRegex(
   return result
 }
 
+function toSpindleDisplayContext(context: ApplyDisplayRegexContext): SpindleDisplayContext {
+  return {
+    isUser: context.isUser,
+    depth: context.depth,
+    ...(context.chatId ? { chatId: context.chatId } : {}),
+    ...(context.characterId ? { characterId: context.characterId } : {}),
+    ...(context.personaId ? { personaId: context.personaId } : {}),
+    ...(context.messageId ? { messageId: context.messageId } : {}),
+    ...(typeof context.messageIndex === 'number' ? { messageIndex: context.messageIndex } : {}),
+    ...(context.role ? { role: context.role } : {}),
+    ...(context.dynamicMacros ? { dynamicMacros: context.dynamicMacros } : {}),
+  }
+}
+
 export async function applyDisplayRegexAsync(
   content: string,
   scripts: RegexScript[],
   context: ApplyDisplayRegexContext,
   resolveRawTemplates: (templates: Record<string, string>) => Promise<Record<string, string>>,
 ): Promise<DisplayRegexBackendResult> {
+  if (context.chatId && isDisplayChatOwned(context.chatId)) {
+    const resolver = getDisplayResolverForChat(context.chatId)
+    if (resolver) {
+      try {
+        const local = await resolver.applyScripts({
+          content,
+          scripts,
+          context: toSpindleDisplayContext(context),
+          ...(context.resolvedFindPatterns ? { resolvedFindPatterns: mapToRecord(context.resolvedFindPatterns) } : {}),
+          ...(context.resolvedReplacements ? { resolvedReplacements: mapToRecord(context.resolvedReplacements) } : {}),
+        })
+        if (local) {
+          return {
+            result: local.content,
+            ...(local.touchedVars ? { touchedVars: new Set(local.touchedVars) } : {}),
+            ...(typeof local.cacheable === 'boolean' ? { cacheable: local.cacheable } : {}),
+          }
+        }
+        console.error(`[display] resolver.applyScripts returned null for owned chat=${context.chatId}; showing raw (no backend fallback)`)
+      } catch (err) {
+        console.error(`[display] resolver.applyScripts threw for owned chat=${context.chatId}; showing raw (no backend fallback)`, err)
+      }
+    }
+    return { result: content, cacheable: false }
+  }
+
   const backendResult = await applyDisplayRegexOnBackend(content, scripts, context)
   if (backendResult !== null) return backendResult
 

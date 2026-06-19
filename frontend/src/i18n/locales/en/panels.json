@@ -1,4 +1,47 @@
 {
+  "comfyWorkflowEditor": {
+    "eyebrow": "COMFYUI",
+    "title": "Workflow setup",
+    "replace": "Replace",
+    "importLead": "Import a ComfyUI workflow once, then map which node field plays each role. The setup is saved to this connection and reused for every generation.",
+    "importStep1": "In ComfyUI, open Settings and turn on Enable Dev mode Options.",
+    "importStep2": "Build your workflow, then use Save (API Format).",
+    "importStep3": "Drop or paste that JSON here. The UI export is not supported.",
+    "chooseFile": "Choose API JSON",
+    "importing": "Importing...",
+    "or": "or",
+    "pastePlaceholder": "Paste the API-format workflow JSON",
+    "importPasted": "Import pasted JSON",
+    "invalidJson": "That is not valid JSON.",
+    "importFailed": "Import failed. Make sure it is the API-format export.",
+    "mapFailed": "Could not save the mapping. Try again.",
+    "ready": "Ready to generate",
+    "needsPositive": "Map a positive prompt to continue",
+    "nodeCount": "{{count}} nodes",
+    "needsReimport": "This workflow was imported in an older format. Replace it with a fresh API-format export.",
+    "unknownNodes": "{{count}} node type(s) aren't recognized by the connected server: {{nodes}}. You can still map and save, but generation will fail unless those custom node packs are installed on this server.",
+    "notMapped": "Not mapped",
+    "addCustom": "Add a custom field...",
+    "customHint": "Map any other node field, including custom or extension nodes, to expose it during generation.",
+    "group": {
+      "core": "Roles",
+      "sampling": "Sampling",
+      "model": "Model",
+      "custom": "Custom fields"
+    },
+    "role": {
+      "positive_prompt": "Positive prompt",
+      "negative_prompt": "Negative prompt",
+      "seed": "Seed",
+      "width": "Width",
+      "height": "Height",
+      "steps": "Steps",
+      "cfg": "CFG",
+      "sampler_name": "Sampler",
+      "scheduler": "Scheduler",
+      "checkpoint": "Checkpoint"
+    }
+  },
   "drawer": {
     "profile": {
       "shortName": "Profile",
@@ -282,7 +325,7 @@
     "thinkingDisplaySummarized": "Summarized",
     "thinkingDisplayOmitted": "Omitted",
     "thinkingDisplayDisabledHint": "Only sent when API reasoning is enabled.",
-    "thinkingDisplayHint": "Opus 4.7 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.",
+    "thinkingDisplayHint": "Opus 4.7/4.8 and Mythos Preview default to Omitted. Pick Summarized to receive summary text.",
     "keepInHistory": "Keep in history",
     "keepAllReasoning": "Keep all reasoning in prompt",
     "stripAllReasoning": "Strip all reasoning from prompt",
@@ -348,6 +391,8 @@
     "resetsIn": "Resets In",
     "unknown": "Unknown",
     "imagesLeft": "Images Left",
+    "daily": "Daily",
+    "monthly": "Monthly",
     "comfyWorkflow": "ComfyUI workflow",
     "loadComfyWorkflowFailed": "Failed to load ComfyUI workflow"
   },
@@ -387,7 +432,7 @@
     "useSubscriptionApi": "Use Subscription API",
     "useSubscriptionApiHint": "Use /api/subscription/v1 to only use models from your NanoGPT subscription",
     "enablePromptCaching": "Enable Prompt Caching",
-    "enableNanoGptCachingHint": "Route to cache-capable providers and pass NanoGPT's prompt_caching helper. Avoids stale responses when upstream caches collide.",
+    "enableNanoGptCachingHint": "Sends NanoGPT's prompt_caching helper for Claude routes. Non-Claude models (GLM, GPT, Gemini, etc.) keep using NanoGPT's automatic implicit caching — no flags needed and subscription routing stays intact.",
     "promptCacheTtl": "Prompt Cache TTL",
     "nanoGptPromptCacheTtlHint": "How long NanoGPT should retain the cached prefix. Use 1 hour for slower flows at higher write cost.",
     "stickyProvider": "Sticky Provider",
@@ -566,20 +611,36 @@
     "restoreServerDefault": "Restore server default",
     "reset": "Reset",
     "summarizationSystemPrompt": "Summarization System Prompt",
-    "summarizationUserPrompt": "Summarization User Prompt"
+    "summarizationUserPrompt": "Summarization User Prompt",
+    "rebuildFromScratch": "Rebuild from scratch",
+    "rebuilding": "Rebuilding...",
+    "rebuildInProgress": "Rebuilding in progress",
+    "rebuildBatchProgress": "Processing batch {{current}}/{{total}}…",
+    "clearModalTitle": "Clear Summary",
+    "rebuildModalTitle": "Rebuild Summary",
+    "rebuildModalMessage": "This will process all <strong>{{totalMessages}}</strong> messages in <strong>{{batchCount}}</strong> batch(es). The existing summary will be preserved if the rebuild fails midway.",
+    "rebuildModalLoading": "Rebuilding summary from scratch…",
+    "rebuildConfirm": "Rebuild"
   },
   "regexPanel": {
     "title": "Regex Scripts",
     "newScript": "New Script",
     "newFolder": "New Folder",
     "folderName": "Folder name...",
+    "dragToReorder": "Drag to reorder",
+    "dragToFolderAria": "Drag handle — reorder, or drop onto a folder to move",
     "scopeAll": "All",
     "scopeGlobal": "Global",
     "scopeThisChar": "This Char",
+    "scopeThisChat": "This Chat",
+    "scopePreset": "Preset",
     "noScripts": "No regex scripts yet.",
     "clickPlus": "Click + to create one.",
     "uncategorized": "uncategorized",
     "deleteFolderConfirm": "Delete all {{count}} regex scripts in \"{{folder}}\"? This cannot be undone.",
+    "deleteFolderTitle": "Delete Folder Scripts",
+    "deleteScriptTitle": "Delete Regex Script",
+    "deleteScriptConfirm": "Delete \"{{name}}\"? This cannot be undone.",
     "deleteSomeFailed": "{{count}} scripts could not be deleted",
     "deletedScripts": "Deleted {{count}} scripts",
     "selectPresetFirstScript": "Select a Loom preset before binding regex scripts",
@@ -724,13 +785,32 @@
       "generating": "Generating image…",
       "starting": "starting…",
       "step": "{{step}}/{{total}} ({{pct}}%)",
-      "previewAlt": "Generation preview"
+      "previewAlt": "Generation preview",
+      "finalizing": "Finalizing…"
     },
     "enable": "Enable Image Generation",
     "enableHint": "Generate scene-aware chat backgrounds through the council scene tool",
+    "importExport": "Import / Export",
+    "exportModalTitle": "Export Image Generation Config",
+    "exportIncludeSettings": "Include settings",
+    "exportIncludeParameters": "Include generation parameters",
+    "exportIncludeParametersHint": "Steps, CFG, size, seed and other parameters of the active connection. Applied on import to the active connection when the provider matches.",
+    "exportIncludeConnections": "Include provider connections",
+    "exportIncludeConnectionsHint": "Connection parameters, workflows and server URLs. API keys are never exported.",
+    "exportPresets": "Prompt presets",
+    "selectAll": "Select all",
+    "selectNone": "Select none",
+    "noPresetsToExport": "No saved presets to export",
+    "selectedCount": "{{selected}} of {{total}} presets selected",
+    "exportConfig": "Export",
+    "importConfig": "Import",
+    "importSuccess": "Image generation config imported ({{presets}} presets, {{connections}} connections)",
+    "importFailed": "Import failed",
+    "exportFailed": "Export failed",
     "connection": "Connection",
     "createConnectionFirst": "Create a connection in the Connections tab first",
     "selectConnection": "Select a connection...",
+    "noConnection": "No connection",
     "promptMode": "Prompt Mode",
     "mode": "Mode",
     "modeHint": "Scene analyzes chat into a scene prompt. Custom sends your prompt directly. Chat-aware custom uses your instructions to rewrite the current chat context into the final image prompt.",
@@ -748,22 +828,27 @@
     "mainPreset": "Main preset",
     "characterPreset": "Character preset",
     "personaPreset": "Persona preset",
+    "captioningPreset": "Captioning preset",
     "activeMainPreset": "Active Main Preset",
     "boundCharacterPreset": "Bound Character Preset",
     "boundPersonaPreset": "Bound Persona Preset",
+    "boundCaptioningPreset": "Captioning Preset",
     "pickMainPresetHint": "Pick a saved main preset to load it into the editor below. It also becomes the active prompt sent at generation time.",
     "pickCharacterPresetHint": "Pick a character preset to load it into the editor and bind it to the current chat's character.",
     "openChatBindPreset": "Open a chat to bind a preset to its character. Until then, picks won't persist.",
     "pickPersonaPresetHint": "Pick a persona preset to load it into the editor and bind it to the active persona.",
     "selectActivePersona": "Select an active persona to bind a preset to it.",
+    "pickCaptioningPresetHint": "Pick a saved captioning preset to load it. These presets define how the Image Captioner describes uploaded images.",
     "parserInstructions": "Parser Instructions",
     "prompt": "Prompt",
     "characterSnippet": "Character snippet",
     "personaSnippet": "Persona snippet",
+    "captioningInstructions": "Captioning Instructions",
     "parserInstructionsHint": "Instructions for how the parser LLM should turn chat context into the final image prompt. This is not sent directly to the image provider.",
     "sentDirectlyHint": "Sent directly to the image provider.",
     "characterSnippetHint": "Text spliced in wherever {{character_prompt}} appears in the main preset.",
     "personaSnippetHint": "Text spliced in wherever {{persona_prompt}} appears in the main preset.",
+    "captioningInstructionsHint": "Instructions sent alongside the uploaded image to the parser LLM in the Image Captioner modal.",
     "editingPresetTitle": "Editing: {{name}}",
     "editTargetPromptTitle": "{{target}} prompt",
     "parserPromptExample": "Example: Focus on the current pose, expressions, clothing, lighting, and room details. Use concise image-generation tags.",
@@ -773,6 +858,7 @@
     "negativePrompt": "Negative Prompt",
     "character": "Character",
     "persona": "Persona",
+    "captioning": "Captioning",
     "negativeSnippet": "negative snippet",
     "negativeSnippetHint": "Replaces the matching negative macro in the main preset's negative prompt.",
     "editingPresetNegativeTitle": "Editing: {{name}} - Negative",
@@ -783,6 +869,8 @@
     "saveChanges": "Save Changes",
     "saveAsNew": "Save as New",
     "delete": "Delete",
+    "deletePresetConfirmTitle": "Delete Prompt Preset",
+    "deletePresetConfirmMessage": "Delete \"{{name}}\"? This cannot be undone.",
     "boundToActiveCharacter": "bound to active character",
     "boundToActivePersona": "bound to active persona",
     "promptParser": "Prompt Parser",
@@ -838,6 +926,8 @@
     "workflowDefault": "(workflow default)",
     "workflowOrConnectionDefault": "(workflow / connection default)",
     "advanced": "Advanced",
+    "rawOverrideInvalidJson": "Invalid JSON — generation will fail until this is fixed or cleared",
+    "rawOverrideNotObject": "Must be a JSON object of request fields, e.g. {\"steps\": 30}",
     "directorReferences": "Director References",
     "includeCharacterAvatar": "Include Character Avatar",
     "includeCharacterAvatarHint": "Send current character avatar as director reference",
@@ -868,6 +958,8 @@
     "addGeneratedToGalleryHint": "When on, every generated image is also linked into the active chat's character gallery. Turn off to keep generations out of the gallery.",
     "generatedImagesResend": "Generated Images To Re-Send",
     "generatedImagesResendHint": "Only the most recent generated images are included in multimodal context.",
+    "contextMessageLimit": "Chat Messages In Context",
+    "contextMessageLimitHint": "Number of most recent chat messages sent to the prompt parser for scene analysis and parsed custom prompts.",
     "sceneChangeSensitivity": "Scene Change Sensitivity",
     "backgroundDisplay": "Background Display",
     "opacity": "Opacity",
@@ -970,6 +1062,7 @@
     "noWorldBooks": "No world books available",
     "unknown": "Unknown",
     "removeWorldBook": "Remove world book",
+    "openInLorebook": "Open in Lorebook tab",
     "noWorldBooksAttached": "No world books attached",
     "embeddedLorebook": "Embedded Lorebook",
     "embeddedLorebookEntries": "{{count}} entries found in character card",
@@ -1061,6 +1154,10 @@
       "expressionsCount": "{{count}} expressions",
       "switchToSingle": "Switch to Single-Character",
       "removeGroup": "Remove group",
+      "deleteLabelConfirmTitle": "Delete Expression",
+      "deleteLabelConfirmMessage": "Delete the expression \"{{label}}\"? This cannot be undone.",
+      "deleteGroupConfirmTitle": "Remove Group",
+      "deleteGroupConfirmMessage": "Remove the group \"{{name}}\" and all of its expressions? This cannot be undone.",
       "defaultExpressionLabel": "expression"
     },
     "imageLora": {
@@ -1099,7 +1196,9 @@
       "saved": "Saved.",
       "saveFailed": "Save failed.",
       "cleared": "Cleared.",
-      "clearFailed": "Clear failed."
+      "clearFailed": "Clear failed.",
+      "clearConfirmTitle": "Clear LoRA Binding",
+      "clearConfirmMessage": "Remove the saved LoRA binding from this character? This cannot be undone."
     }
   },
   "characterBrowser": {
@@ -1129,7 +1228,7 @@
     "importingTags": "Importing Tags...",
     "importUrl": "Import URL",
     "importFromUrlTitle": "Import from URL",
-    "importFromUrlHint": "Paste a character URL from Chub, JannyAI, or other supported sources.",
+    "importFromUrlHint": "Paste a character URL from Chub, JannyAI, BotBooru, or other supported sources.",
     "importUrlPlaceholder": "https://chub.ai/characters/...",
     "cancel": "Cancel",
     "dropToImport": "Drop character files to import",
@@ -1139,7 +1238,11 @@
       "labelWithCount": "Tags ({{count}})",
       "clearTags": "Clear tags",
       "searchPlaceholder": "Search tags...",
-      "noTagsFound": "No tags found"
+      "noTagsFound": "No tags found",
+      "cycleHint": "Click to include, again to exclude, again to clear.",
+      "stateNeutral": "Not filtered — click to include",
+      "stateIncluded": "Included — click to exclude",
+      "stateExcluded": "Excluded — click to clear"
     },
     "alternateAvatars": {
       "title": "Alternate Avatars",
@@ -1159,6 +1262,7 @@
     "searchWorldBooks": "Search world books…",
     "noWorldBooksAvailable": "No world books available",
     "removeFromAlwaysActive": "Remove from always active",
+    "editBook": "Edit this world book",
     "noGlobalActive": "No global world books active",
     "thisChatOnly": "This Chat Only",
     "openChatToAdd": "Open a chat to add chat-scoped world books",
@@ -1193,6 +1297,8 @@
       "afterAN": "After AN",
       "atDepth": "At Depth",
       "depthShort": "@ Depth",
+      "atMarker": "At Marker",
+      "markerShort": "@ Marker",
       "fallback": "Pos {{position}}"
     },
     "entryType": {
@@ -1272,7 +1378,10 @@
       "keywordPlaceholder": "Enter keyword",
       "keywordList": "Keyword List",
       "keywordPrimary": "Primary",
-      "keywordSecondary": "Secondary"
+      "keywordSecondary": "Secondary",
+      "setPositionTitle": "Set Position",
+      "position": "Position",
+      "depth": "Depth"
     },
     "entryEditor": {
       "sections": {
@@ -1644,7 +1753,9 @@
     "boundCharacter": "Loadout bound to this character",
     "unboundCharacter": "Character binding removed",
     "bindFailed": "Failed to bind loadout",
-    "unbindFailed": "Failed to remove binding"
+    "unbindFailed": "Failed to remove binding",
+    "deleteConfirmTitle": "Delete Loadout",
+    "deleteConfirmMessage": "Delete \"{{name}}\"? This cannot be undone."
   },
   "groupChatsPanel": {
     "loading": "Loading group chats...",
@@ -1741,13 +1852,16 @@
   "promptVariablesEditor": {
     "title": "Prompt Variables",
     "addVariable": "Add Variable",
-    "hint": "Declare typed inputs that end users can configure via the \"Configure Prompt Variables\" modal. Reference them inside this block's content with {{varName}}.",
+    "hint": "Declare typed inputs that end users can configure via the \"Configure Prompt Variables\" modal. Reference them inside this block's content with {{varName}}. Multi-select also exposes {{multiselectName}}.",
     "empty": "No variables declared yet. Add one to expose a user-configurable input on this block.",
     "types": {
       "text": "Text",
       "textarea": "Text Area",
       "number": "Number",
-      "slider": "Slider"
+      "slider": "Slider",
+      "select": "Dropdown",
+      "switch": "On / Off",
+      "multiselect": "Multi-select"
     },
     "dragComingSoon": "Drag (coming soon)",
     "type": "Type",
@@ -1761,6 +1875,9 @@
     "default": "Default",
     "defaultTextareaPlaceholder": "Default body text…",
     "defaultTextPlaceholder": "Neutral, warm, clinical…",
+    "switchOn": "On",
+    "switchOff": "Off",
+    "switchHint": "Resolves to 1 when on, 0 when off.",
     "defaultPreviewAria": "Default value preview",
     "min": "Min",
     "max": "Max",
@@ -2015,6 +2132,7 @@
       "salienceArc": "Arc {{percent}}%",
       "salienceGraph": "Graph {{percent}}%",
       "salienceTooltip": "Mention: {{mention}}% · Arc: {{arc}}% · Graph: {{graph}}%",
+      "salienceFloor": "Floor: {{floor}}%",
       "edit": "Edit",
       "remove": "Remove"
     },
@@ -2045,7 +2163,9 @@
       "reattributeTitle": "Reattribute to…",
       "detach": "(detach)",
       "pickEntity": "Pick entity…",
-      "unattributed": "Unattributed ({{count}})"
+      "unattributed": "Unattributed ({{count}})",
+      "deleteConfirmTitle": "Delete Color",
+      "deleteConfirmMessage": "Delete the color {{hex}}? This cannot be undone."
     },
     "stats": {
       "loading": "Loading stats...",
@@ -2115,7 +2235,8 @@
         "thought": "thought",
         "words": "{{count}} words",
         "heuristic": "heuristic"
-      }
+      },
+      "deleteRelationTitle": "Delete Relation"
     },
     "editors": {
       "cancel": "Cancel",
@@ -2234,6 +2355,13 @@
       "vaultDeleteFailed": "Failed to delete vault",
       "vaultRenameFailed": "Failed to rename vault",
       "defaultVaultName": "{{chat}} — {{date}}"
+    },
+    "confirm": {
+      "entityTitle": "Delete Entity",
+      "entityMessage": "Delete \"{{name}}\"? This cannot be undone.",
+      "bulkTitle": "Delete Selected Entities",
+      "bulkMessage_one": "Delete {{count}} selected entity? This cannot be undone.",
+      "bulkMessage_other": "Delete {{count}} selected entities? This cannot be undone."
     }
   },
   "councilFeedback": {
@@ -2296,6 +2424,7 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "useFullAvatar": "Use full-size avatars",
     "extensionThemesTitle": "Extension Themes",
     "overridesApplied_one": "{{count}} override applied",
     "overridesApplied_other": "{{count}} overrides applied",
@@ -2874,6 +3003,7 @@
       "create": "Create",
       "renameAction": "Rename",
       "lumihubBadge": "LumiHub preset",
+      "version": "v{{version}}",
       "blocks_one": "{{count}} block",
       "blocks_other": "{{count}} blocks",
       "coverAria": "Cover image for {{name}}",
@@ -3006,7 +3136,9 @@
       "legacyExportMessage": "Lumiverse-specific macros (e.g. {{lumiaDef}}, {{loomStyle}}, {{lumiaOOC}}) will not resolve in SillyTavern. Only standard macros like {{char}}, {{user}}, and {{persona}} are portable. Blocks using Lumiverse macros will be exported as-is with their raw macro text.",
       "exportAnyway": "Export Anyway",
       "deleteBlockTitle": "Delete Block",
-      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone."
+      "deleteBlockMessage": "Are you sure you want to delete this block? This action cannot be undone.",
+      "deletePresetTitle": "Delete Preset",
+      "deletePresetMessage": "Delete \"{{name}}\"? All of its blocks will be removed. This action cannot be undone."
     },
     "toast": {
       "exportFailed": "Failed to export preset",
@@ -3088,7 +3220,9 @@
         "loadFailed": "Failed to load theme assets",
         "uploaded": "Uploaded {{name}}",
         "uploadFailed": "Failed to upload theme asset"
-      }
+      },
+      "deleteConfirmTitle": "Delete Theme Asset",
+      "deleteConfirmMessage": "Delete \"{{name}}\"? Any CSS referencing this asset will stop loading it. This cannot be undone."
     }
   }
 }

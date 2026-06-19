@@ -37,6 +37,7 @@ export default function MigrationSettings() {
   const [remoteConnected, setRemoteConnected] = useState(true) // local starts "connected"
   const [validation, setValidation] = useState<ValidateResult | null>(null)
   const [validating, setValidating] = useState(false)
+  const [looksLikeST, setLooksLikeST] = useState(false)
   const [selectedStUser, setSelectedStUser] = useState('')
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
   const [scanning, setScanning] = useState(false)
@@ -186,6 +187,7 @@ export default function MigrationSettings() {
     setConnection(config)
     setValidation(null)
     setCurrentPath('')
+    setLooksLikeST(false)
   }, [])
 
   const handleRemoteConnected = useCallback((connected: boolean) => {
@@ -193,6 +195,7 @@ export default function MigrationSettings() {
     if (!connected) {
       setValidation(null)
       setCurrentPath('')
+      setLooksLikeST(false)
     }
   }, [])
 
@@ -385,6 +388,7 @@ export default function MigrationSettings() {
         <DirectoryBrowser
           key={connection.type === 'local' ? 'local' : `${connection.type}-connected`}
           onNavigate={handlePathNavigate}
+          onShapeChange={setLooksLikeST}
           connection={connection}
         />
       )}
@@ -395,6 +399,13 @@ export default function MigrationSettings() {
           {t('migration.validate')}
         </button>
       </div>
+
+      {looksLikeST && !validation && !validating && (
+        <div className={styles.validHint}>
+          <CheckCircle size={14} />
+          {t('migration.looksLikeFolder')}
+        </div>
+      )}
 
       {validating && (
         <div className={styles.validChecking}>

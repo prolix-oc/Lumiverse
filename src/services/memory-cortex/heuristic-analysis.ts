@@ -33,12 +33,14 @@ function inflateKnownEntities(input: HeuristicAnalysisInput): MemoryEntity[] {
       mentionComponent: 0,
       arcComponent: 0,
       graphComponent: 0,
+      frequencyFloor: 0,
       total: 0,
     },
     lastMentionTimestamp: null,
     recentMentionCount: 0,
     confidence: "confirmed",
     userEditedAt: null,
+    saliencePeak: 0,
   }));
 }
 

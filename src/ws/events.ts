@@ -6,6 +6,7 @@ export enum EventType {
   CHAT_CHANGED = "CHAT_CHANGED",
   CHAT_SWITCHED = "CHAT_SWITCHED",
   CHAT_DELETED = "CHAT_DELETED",
+  CHAT_FORKED = "CHAT_FORKED",
   MESSAGE_SENT = "MESSAGE_SENT",
   MESSAGE_EDITED = "MESSAGE_EDITED",
   MESSAGE_DELETED = "MESSAGE_DELETED",
@@ -21,6 +22,15 @@ export enum EventType {
   GENERATION_ACKNOWLEDGED = "GENERATION_ACKNOWLEDGED",
   GENERATION_IN_PROGRESS = "GENERATION_IN_PROGRESS",
   GENERATION_PHASE_CHANGED = "GENERATION_PHASE_CHANGED",
+  // Deferred post-generation bookkeeping (tokenCount / TTFT / TPS) finished and
+  // was persisted. Emitted after GENERATION_ENDED so the detail pill + hover
+  // tooltip can fill in without a reload — the terminal event stays cheap.
+  GENERATION_METRICS_READY = "GENERATION_METRICS_READY",
+  // Deferred prompt-breakdown tokenization finished. Emitted after
+  // GENERATION_ENDED (and separately from METRICS_READY so the pill isn't held
+  // behind the heavier breakdown count) so an opened Prompt Breakdown modal can
+  // render from cache instead of re-fetching.
+  GENERATION_BREAKDOWN_READY = "GENERATION_BREAKDOWN_READY",
   STREAM_TOKEN_RECEIVED = "STREAM_TOKEN_RECEIVED",
 
   // Entities
@@ -55,17 +65,10 @@ export enum EventType {
   COUNCIL_COMPLETED = "COUNCIL_COMPLETED",
   COUNCIL_TOOLS_FAILED = "COUNCIL_TOOLS_FAILED",
 
-  // Dream Weaver
-  DREAM_WEAVER_MESSAGE_CREATED = "DREAM_WEAVER_MESSAGE_CREATED",
-  DREAM_WEAVER_MESSAGE_UPDATED = "DREAM_WEAVER_MESSAGE_UPDATED",
-  DREAM_WEAVER_MESSAGE_DELETED = "DREAM_WEAVER_MESSAGE_DELETED",
-  DREAM_WEAVER_FINALIZED = "DREAM_WEAVER_FINALIZED",
-
-  // Dream Weaver Visual Jobs
-  DREAM_WEAVER_VISUAL_JOB_CREATED = "DREAM_WEAVER_VISUAL_JOB_CREATED",
-  DREAM_WEAVER_VISUAL_JOB_PROGRESS = "DREAM_WEAVER_VISUAL_JOB_PROGRESS",
-  DREAM_WEAVER_VISUAL_JOB_COMPLETED = "DREAM_WEAVER_VISUAL_JOB_COMPLETED",
-  DREAM_WEAVER_VISUAL_JOB_FAILED = "DREAM_WEAVER_VISUAL_JOB_FAILED",
+  WEAVER_VISUAL_JOB_CREATED = "WEAVER_VISUAL_JOB_CREATED",
+  WEAVER_VISUAL_JOB_PROGRESS = "WEAVER_VISUAL_JOB_PROGRESS",
+  WEAVER_VISUAL_JOB_COMPLETED = "WEAVER_VISUAL_JOB_COMPLETED",
+  WEAVER_VISUAL_JOB_FAILED = "WEAVER_VISUAL_JOB_FAILED",
 
   // Spindle extension events
   SPINDLE_EXTENSION_LOADED = "SPINDLE_EXTENSION_LOADED",
@@ -129,11 +132,17 @@ export enum EventType {
   // Theme overrides (Spindle extensions)
   SPINDLE_THEME_OVERRIDES = "SPINDLE_THEME_OVERRIDES",
 
+  // Per-chat CSS containment mode (Spindle extensions, app_manipulation)
+  SPINDLE_CHAT_STYLE_MODE = "SPINDLE_CHAT_STYLE_MODE",
+
   // Spindle permission changes (broadcast with extensionId so frontends can scope)
   SPINDLE_PERMISSION_CHANGED = "SPINDLE_PERMISSION_CHANGED",
 
   // Spindle command palette commands
   SPINDLE_COMMANDS_CHANGED = "SPINDLE_COMMANDS_CHANGED",
+
+  // Spindle UI automation (navigate drawer/settings/command palette)
+  SPINDLE_UI_NAVIGATE = "SPINDLE_UI_NAVIGATE",
 
   // Import progress
   IMPORT_GALLERY_PROGRESS = "IMPORT_GALLERY_PROGRESS",
@@ -185,8 +194,12 @@ export enum EventType {
 
   // Loom summary auto-summarization
   SUMMARIZATION_STARTED = "SUMMARIZATION_STARTED",
+  SUMMARIZATION_PROGRESS = "SUMMARIZATION_PROGRESS",
   SUMMARIZATION_COMPLETED = "SUMMARIZATION_COMPLETED",
   SUMMARIZATION_FAILED = "SUMMARIZATION_FAILED",
+
+  // System health
+  SYSTEM_DISK_LOW = "SYSTEM_DISK_LOW",
 }
 
 export interface EventMessage {

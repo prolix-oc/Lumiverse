@@ -1,5 +1,6 @@
 {
   "appName": "Lumivers",
+  "home": "Accueil",
   "actions": {
     "save": "Enregistrer",
     "cancel": "Annuler",

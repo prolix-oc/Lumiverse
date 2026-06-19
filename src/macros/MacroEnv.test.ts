@@ -47,6 +47,7 @@ const basePersona: Persona = {
   avatar_path: null,
   image_id: null,
   is_default: true,
+  is_narrator: false,
   attached_world_book_id: null,
   metadata: {},
   created_at: 0,
@@ -156,5 +157,62 @@ describe("buildEnv persona pronouns", () => {
     expect(env.character.personaSubjectivePronoun).toBe("she");
     expect(env.character.personaObjectivePronoun).toBe("her");
     expect(env.character.personaPossessivePronoun).toBe("her");
+  });
+});
+
+describe("buildEnv groupCardMode", () => {
+  test("returns 'solo' for non-group chats regardless of metadata", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: { ...baseChat, metadata: { group_card_mode: "merge" } },
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+    expect(env.names.groupCardMode).toBe("solo");
+    expect(env.names.isGroupChat).toBe("no");
+  });
+
+  test("returns the raw mode for group chats with merge / merge_ignore_muted", () => {
+    for (const mode of ["merge", "merge_ignore_muted"]) {
+      const env = buildEnv({
+        character: baseCharacter,
+        persona: null,
+        chat: {
+          ...baseChat,
+          metadata: {
+            group: true,
+            character_ids: ["char-1", "char-2"],
+            group_card_mode: mode,
+          },
+        },
+        messages: [],
+        generationType: "normal",
+        connection: null,
+      });
+      expect(env.names.groupCardMode).toBe(mode);
+    }
+  });
+
+  test("defaults to 'swap' for group chats with an unset or unrecognized mode", () => {
+    for (const raw of [undefined, null, "", "garbage", 42]) {
+      const env = buildEnv({
+        character: baseCharacter,
+        persona: null,
+        chat: {
+          ...baseChat,
+          metadata: {
+            group: true,
+            character_ids: ["char-1", "char-2"],
+            ...(raw !== undefined ? { group_card_mode: raw } : {}),
+          },
+        },
+        messages: [],
+        generationType: "normal",
+        connection: null,
+      });
+      expect(env.names.groupCardMode).toBe("swap");
+    }
   });
 });

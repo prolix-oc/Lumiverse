@@ -130,10 +130,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
       signal: request.signal,
     });
 
-    if (!res.ok) {
-      const err = await res.text().catch(() => "Unknown error");
-      throw new Error(`ElevenLabs API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "tts synthesize", res);
 
     const audioData = await res.arrayBuffer();
     const contentType = res.headers.get("content-type") || "audio/mpeg";
@@ -163,10 +160,7 @@ export class ElevenLabsTtsProvider implements TtsProvider {
       signal: request.signal,
     });
 
-    if (!res.ok) {
-      const err = await res.text().catch(() => "Unknown error");
-      throw new Error(`ElevenLabs API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "tts stream", res);
 
     if (!res.body) {
       throw new Error("ElevenLabs: no response body for streaming");

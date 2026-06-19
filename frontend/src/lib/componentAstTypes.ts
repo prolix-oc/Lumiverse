@@ -50,10 +50,13 @@ export type SafeRenderNode =
       children: SafeRenderNode[]
     }
   | { kind: 'fragment'; children: SafeRenderNode[] }
+  | { kind: 'slot'; name: string }
 
 export interface RuntimeOverrideContext {
   props: Record<string, unknown>
   actions: Record<string, unknown>
+  /** Host-trusted React elements keyed by slot tag name (e.g. 'Content'). */
+  slots: Record<string, React.ReactNode>
 }
 
 export type TrustedOverrideComponent = React.ComponentType<Record<string, unknown>>

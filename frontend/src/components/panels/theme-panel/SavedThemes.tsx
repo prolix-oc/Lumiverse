@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 
-import { Bookmark, Check, Pencil, Trash2, X } from 'lucide-react'
+import { Bookmark, Check, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useStore } from '@/store'
 import type { SavedTheme } from '@/types/store'
@@ -35,16 +35,25 @@ function attributionFor(entry: SavedTheme, t: TFunction<'panels'>): string {
 interface SavedThemeCardProps {
   entry: SavedTheme
   isActive: boolean
+  autoEdit?: boolean
   onApply: () => void
   onRename: (name: string) => void
+  onUpdate: () => void
   onDelete: () => void
 }
 
-function SavedThemeCard({ entry, isActive, onApply, onRename, onDelete }: SavedThemeCardProps) {
+function SavedThemeCard({ entry, isActive, autoEdit, onApply, onRename, onUpdate, onDelete }: SavedThemeCardProps) {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(entry.name)
+
+  useEffect(() => {
+    if (autoEdit) {
+      setEditing(true)
+      setDraft(entry.name)
+    }
+  }, [autoEdit, entry.name])
 
   const swatch = useMemo(() => swatchForEntry(entry), [entry])
   const attribution = useMemo(() => attributionFor(entry, t), [entry, t])
@@ -131,6 +140,14 @@ function SavedThemeCard({ entry, isActive, onApply, onRename, onDelete }: SavedT
             </button>
             <button
               type="button"
+              className={styles.iconBtn}
+              onClick={onUpdate}
+              title="Update with current theme"
+            >
+              <RefreshCw size={12} />
+            </button>
+            <button
+              type="button"
               className={clsx(styles.iconBtn, styles.deleteBtn)}
               onClick={onDelete}
               title={t('themePanel.savedThemes.deleteSavedTheme')}
@@ -151,11 +168,21 @@ export default function SavedThemes() {
   const applySavedTheme = useStore((s) => s.applySavedTheme)
   const renameSavedTheme = useStore((s) => s.renameSavedTheme)
   const deleteSavedTheme = useStore((s) => s.deleteSavedTheme)
+  const updateSavedTheme = useStore((s) => s.updateSavedTheme)
   const openModal = useStore((s) => s.openModal)
   const activeBundleId = useStore((s) => s.customCSS.bundleId)
   const activeThemeId = useStore((s) => s.theme?.id ?? '')
 
-  if (savedThemes.length === 0) return null
+  const prevLengthRef = useRef(savedThemes.length)
+  const [newlyAddedId, setNewlyAddedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const prevLen = prevLengthRef.current
+    prevLengthRef.current = savedThemes.length
+    if (savedThemes.length > prevLen && savedThemes.length > 0) {
+      setNewlyAddedId(savedThemes[savedThemes.length - 1].id)
+    }
+  }, [savedThemes])
 
   const handleDelete = (entry: SavedTheme) => {
     openModal('confirm', {
@@ -171,30 +198,50 @@ export default function SavedThemes() {
     })
   }
 
+  const handleUpdate = (entry: SavedTheme) => {
+    openModal('confirm', {
+      title: 'Update saved theme',
+      message: `Overwrite "${entry.name}" with your current theme settings? The previous snapshot will be lost.`,
+      variant: 'danger',
+      confirmText: 'Update',
+      onConfirm: () => {
+        updateSavedTheme(entry.id)
+      },
+    })
+  }
+
   return (
     <section className={styles.section}>
       <div className={styles.header}>
         <span className={styles.headerIcon}><Bookmark size={12} /></span>
         <h4 className={styles.headerLabel}>{t('themePanel.savedThemes.myThemes')}</h4>
       </div>
-      <div className={styles.list}>
-        {savedThemes.map((entry) => {
-          const isActive =
-            entry.kind === 'pack'
-              ? !!activeBundleId && activeBundleId === entry.pack.bundleId
-              : activeThemeId === entry.theme.id && activeThemeId !== 'custom'
-          return (
-            <SavedThemeCard
-              key={entry.id}
-              entry={entry}
-              isActive={isActive}
-              onApply={() => applySavedTheme(entry.id)}
-              onRename={(name) => renameSavedTheme(entry.id, name)}
-              onDelete={() => handleDelete(entry)}
-            />
-          )
-        })}
-      </div>
+      {savedThemes.length === 0 ? (
+        <p className={styles.emptyHint}>
+          Save your current theme to quickly switch between favorites.
+        </p>
+      ) : (
+        <div className={styles.list}>
+          {savedThemes.map((entry) => {
+            const isActive =
+              entry.kind === 'pack'
+                ? !!activeBundleId && activeBundleId === entry.pack.bundleId
+                : activeThemeId === entry.theme.id && activeThemeId !== 'custom'
+            return (
+              <SavedThemeCard
+                key={entry.id}
+                entry={entry}
+                isActive={isActive}
+                autoEdit={entry.id === newlyAddedId}
+                onApply={() => applySavedTheme(entry.id)}
+                onRename={(name) => renameSavedTheme(entry.id, name)}
+                onUpdate={() => handleUpdate(entry)}
+                onDelete={() => handleDelete(entry)}
+              />
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }

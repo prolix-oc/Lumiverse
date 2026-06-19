@@ -122,6 +122,50 @@
   opacity: 1;
 }
 
+/* Touch-only devices have no hover, so reveal the row actions (bind/delete)
+   permanently. `any-hover: none` matches only when NO input device supports
+   hover (true phones/tablets), avoiding false matches on Windows touchscreen
+   laptops where `hover: none` misfires in Firefox/Edge. */
+@media (any-hover: none) {
+  .deleteBtn {
+    opacity: 1;
+  }
+}
+
+/* ── Drag handle ─────────────────────────────────── */
+
+.dragHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin: -4px -2px -4px -4px;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  /* Always faintly visible so it's discoverable on touch devices (no hover). */
+  opacity: 0.4;
+  cursor: grab;
+  border-radius: 4px;
+  /* Prevent the browser from treating a drag on the grip as a scroll/pan. */
+  touch-action: none;
+  transition: opacity var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.scriptRow:hover .dragHandle {
+  opacity: 0.85;
+}
+
+.dragHandle:hover {
+  opacity: 1;
+  color: var(--lumiverse-text);
+}
+
 /* ── Inline Editor ─────────────────────────────────── */
 
 .inlineEditor {
@@ -329,6 +373,12 @@
   background: var(--lumiverse-surface-hover);
 }
 
+/* Highlight a folder header while a dragged regex hovers over it. */
+.folderHeaderDropTarget {
+  background: color-mix(in srgb, var(--lumiverse-primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px var(--lumiverse-primary);
+}
+
 .folderChevron {
   color: var(--lumiverse-text-dim);
   flex-shrink: 0;
@@ -372,6 +422,14 @@
 
 .folderHeader:hover .folderDeleteBtn {
   opacity: 1;
+}
+
+/* Touch-only devices have no hover, so reveal the folder actions permanently
+   (see note on .deleteBtn above for why `any-hover`). */
+@media (any-hover: none) {
+  .folderDeleteBtn {
+    opacity: 1;
+  }
 }
 
 .folderDeleteBtn:hover {

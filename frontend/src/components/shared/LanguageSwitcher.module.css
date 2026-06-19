@@ -1,37 +1,38 @@
 .root {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
+/* Match the other settings section headers (.sectionTitle / .helperText) so the
+   language block reads as a peer section rather than a divergent mini-label. */
 .label {
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-size: calc(15px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.55));
+  color: var(--lumiverse-text);
+  margin-bottom: 4px;
 }
 
 .helper {
   margin: 0;
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  color: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.45));
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
   line-height: 1.4;
 }
 
 .select {
   margin-top: 4px;
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12));
+  padding: 6px 10px;
+  border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
-  background: var(--lumiverse-surface, rgba(0, 0, 0, 0.25));
-  color: var(--lumiverse-text, inherit);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  outline: none;
   cursor: pointer;
 }
 
-.select:focus-visible {
-  outline: 2px solid var(--lumiverse-accent, #8b5fc7);
-  outline-offset: 2px;
+.select:focus {
+  border-color: var(--lumiverse-primary);
 }

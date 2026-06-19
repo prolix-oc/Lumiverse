@@ -1,3 +1,4 @@
+import { join } from "path";
 import { PROJECT_ROOT, ENTRY, STOP_SIGTERM_GRACE_MS } from "./lib/constants.js";
 
 export type ServerState = "starting" | "running" | "stopping" | "stopped" | "crashed";
@@ -50,12 +51,22 @@ async function readStream(
   }
 }
 
+// smol (low-memory GC mode) defaults on to preserve historical behavior and
+// keep low-RAM / Termux installs healthy. Operators opt out with
+// LUMIVERSE_SMOL=false (or 0/off/no) in .env — a choice that survives updates,
+// unlike an edit to the committed bunfig.toml.
+function smolEnabled(): boolean {
+  const v = (process.env.LUMIVERSE_SMOL ?? "").trim().toLowerCase();
+  return !(v === "false" || v === "0" || v === "off" || v === "no");
+}
+
 export function startServer(isDev: boolean): void {
   if (instance?.proc) return;
 
+  const smol = smolEnabled() ? ["--smol"] : [];
   const args = isDev
-    ? ["bun", "--watch", ENTRY]
-    : ["bun", ENTRY];
+    ? ["bun", ...smol, "--watch", ENTRY]
+    : ["bun", ...smol, ENTRY];
 
   const restartCount = instance ? instance.restartCount : 0;
 
@@ -67,6 +78,9 @@ export function startServer(isDev: boolean): void {
       ...process.env,
       FORCE_COLOR: "1",
       LUMIVERSE_RUNNER_IPC: "1",
+      ...("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env
+        ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
+        : { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(PROJECT_ROOT, "data", ".bun-transpiler-cache") }),
     },
     ipc(message) {
       // Handle IPC messages from the server child

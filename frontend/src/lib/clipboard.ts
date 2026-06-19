@@ -40,3 +40,53 @@ export async function copyTextToClipboard(text: string): Promise<void> {
     document.body.removeChild(textarea)
   }
 }
+
+/**
+ * Copies an image (referenced by a URL or data URL) to the system clipboard.
+ * The image is normalised to PNG because the async Clipboard API only reliably
+ * accepts `image/png` across engines. Throws if the clipboard API is missing
+ * or the image can't be fetched / converted.
+ */
+export async function copyImageToClipboard(src: string): Promise<void> {
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    throw new Error('The clipboard image API is not available in this browser.')
+  }
+
+  const toPngBlob = async (): Promise<Blob> => {
+    const res = await fetch(src)
+    if (!res.ok) throw new Error(`Failed to fetch image (${res.status})`)
+    const blob = await res.blob()
+    return blob.type === 'image/png' ? blob : blobToPng(blob)
+  }
+
+  try {
+    // Passing a promise to ClipboardItem keeps Safari's user-activation alive
+    // (it rejects an async write that awaits before calling write()).
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': toPngBlob() })])
+  } catch {
+    // Some engines reject a promise-valued ClipboardItem — retry with a
+    // fully-resolved blob.
+    const png = await toPngBlob()
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+  }
+}
+
+async function blobToPng(blob: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(blob)
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = bitmap.width
+    canvas.height = bitmap.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas 2D context unavailable')
+    ctx.drawImage(bitmap, 0, 0)
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (out) => (out ? resolve(out) : reject(new Error('Canvas toBlob returned null'))),
+        'image/png',
+      )
+    })
+  } finally {
+    bitmap.close()
+  }
+}

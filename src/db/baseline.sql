@@ -454,7 +454,7 @@ CREATE TABLE memory_entities (
     emotional_valence TEXT DEFAULT '{}',
     metadata TEXT DEFAULT '{}',
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL, fact_extraction_status TEXT DEFAULT 'never', fact_extraction_last_attempt INTEGER, salience_breakdown TEXT DEFAULT '{"mentionComponent":0,"arcComponent":0,"graphComponent":0,"total":0}', last_mention_timestamp INTEGER, recent_mention_count INTEGER DEFAULT 0, confidence TEXT DEFAULT 'confirmed',
+    updated_at INTEGER NOT NULL, fact_extraction_status TEXT DEFAULT 'never', fact_extraction_last_attempt INTEGER, salience_breakdown TEXT DEFAULT '{"mentionComponent":0,"arcComponent":0,"graphComponent":0,"frequencyFloor":0,"total":0}', last_mention_timestamp INTEGER, recent_mention_count INTEGER DEFAULT 0, confidence TEXT DEFAULT 'confirmed', salience_peak REAL DEFAULT 0.0,
     FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
 );
 
@@ -572,7 +572,7 @@ CREATE TABLE personas (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-, attached_world_book_id TEXT REFERENCES world_books(id) ON DELETE SET NULL, image_id TEXT REFERENCES images(id) ON DELETE SET NULL, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, title TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '', subjective_pronoun TEXT NOT NULL DEFAULT '', objective_pronoun TEXT NOT NULL DEFAULT '', possessive_pronoun TEXT NOT NULL DEFAULT '');
+, attached_world_book_id TEXT REFERENCES world_books(id) ON DELETE SET NULL, image_id TEXT REFERENCES images(id) ON DELETE SET NULL, user_id TEXT REFERENCES "user"(id) ON DELETE CASCADE, title TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '', subjective_pronoun TEXT NOT NULL DEFAULT '', objective_pronoun TEXT NOT NULL DEFAULT '', possessive_pronoun TEXT NOT NULL DEFAULT '', is_narrator INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE presets (
   id TEXT PRIMARY KEY,
@@ -619,7 +619,7 @@ CREATE TABLE regex_scripts (
   placement TEXT NOT NULL DEFAULT '["ai_output"]',
   scope TEXT NOT NULL DEFAULT 'global',
   scope_id TEXT,
-  target TEXT NOT NULL DEFAULT 'response',
+  target TEXT NOT NULL DEFAULT '["response"]',
   min_depth INTEGER,
   max_depth INTEGER,
   trim_strings TEXT NOT NULL DEFAULT '[]',

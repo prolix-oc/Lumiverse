@@ -1,5 +1,6 @@
 import type {
   AstNode,
+  TextNode,
   MacroNode,
   ScopedMacroNode,
   MacroEnv,
@@ -67,8 +68,7 @@ export async function evaluate(
     if (env.signal?.aborted) throw env.signal.reason ?? new DOMException("Aborted", "AbortError");
 
     if (runInterceptors) {
-      const beforeInterceptor = text;
-      text = await macroInterceptorChain.run({
+      const interceptorResult = await macroInterceptorChain.run({
         template: text,
         env: snapshotEnvForInterceptor(env),
         commit: env.commit !== false,
@@ -76,7 +76,11 @@ export async function evaluate(
         ...(sourceHint ? { sourceHint } : {}),
         ...(userId !== undefined ? { userId } : {}),
       });
-      if (text !== beforeInterceptor) fingerprint.cacheable = false;
+      text = interceptorResult.text;
+      for (const v of interceptorResult.touchedVars) fingerprint.touched.add(v);
+      if (interceptorResult.volatile || interceptorResult.opaque) {
+        fingerprint.cacheable = false;
+      }
       if (!text.includes("{{")) break;
     }
 
@@ -189,6 +193,81 @@ async function evaluateNodes(
   return result;
 }
 
+/**
+ * Strip "structural" leading/trailing whitespace from a macro argument — the
+ * newline + indentation a template author types when laying a nested macro out
+ * across multiple lines for readability, e.g.
+ *
+ *   {{setvar::cotexpand::
+ *     {{join::{{newline}}::...}}
+ *   }}
+ *
+ * Without this, the `\n  ` after `::` and the `\n` before the closing `}}` are
+ * captured as part of the argument and leak into the stored value (and then
+ * accumulate across rounds). We only strip whitespace runs that CONTAIN A
+ * NEWLINE, and only from the first/last nodes when they are literal text. That
+ * deliberately preserves:
+ *   - whitespace produced by a macro — {{join::{{newline}}::...}} keeps its
+ *     "\n" separator, because {{newline}} is a macro node, never a boundary
+ *     text node;
+ *   - inline padding the author typed on one line — {{join:: | ::a::b}} keeps
+ *     " | " and {{setvar::x:: - }} keeps " - ", since those runs have no newline.
+ *
+ * Returns the original array unchanged (no allocation) when nothing is trimmed,
+ * which is the common case. Never mutates the input (the AST is cached).
+ */
+function stripArgFraming(nodes: AstNode[]): AstNode[] {
+  if (nodes.length === 0) return nodes;
+
+  // Single text node: strip both ends.
+  if (nodes.length === 1) {
+    const only = nodes[0];
+    if (only.type !== "text") return nodes;
+    const stripped = stripTrailingLineWs(stripLeadingLineWs(only.value));
+    if (stripped === only.value) return nodes;
+    return stripped === "" ? [] : [{ type: "text", value: stripped }];
+  }
+
+  let out: AstNode[] | null = null;
+
+  const first = nodes[0];
+  if (first.type === "text") {
+    const stripped = stripLeadingLineWs(first.value);
+    if (stripped !== first.value) {
+      out = nodes.slice();
+      if (stripped === "") out.shift();
+      else out[0] = { type: "text", value: stripped } satisfies TextNode;
+    }
+  }
+
+  const arr = out ?? nodes;
+  const lastIdx = arr.length - 1;
+  const last = arr[lastIdx];
+  if (lastIdx >= 0 && last.type === "text") {
+    const stripped = stripTrailingLineWs(last.value);
+    if (stripped !== last.value) {
+      if (!out) out = nodes.slice();
+      const i = out.length - 1;
+      if (stripped === "") out.pop();
+      else out[i] = { type: "text", value: stripped } satisfies TextNode;
+    }
+  }
+
+  return out ?? nodes;
+}
+
+/** Remove a leading whitespace run only when it spans a line break. */
+function stripLeadingLineWs(value: string): string {
+  const m = /^\s+/.exec(value);
+  return m && m[0].includes("\n") ? value.slice(m[0].length) : value;
+}
+
+/** Remove a trailing whitespace run only when it spans a line break. */
+function stripTrailingLineWs(value: string): string {
+  const m = /\s+$/.exec(value);
+  return m && m[0].includes("\n") ? value.slice(0, value.length - m[0].length) : value;
+}
+
 async function evaluateMacroNode(
   node: MacroNode,
   env: MacroEnv,
@@ -243,7 +322,7 @@ async function evaluateMacroNode(
     resolvedArgs = [];
     for (const argNodes of node.args) {
       resolvedArgs.push(
-        await evaluateNodes(argNodes, env, registry, globalOffset, depth + 1, diagnostics)
+        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, diagnostics)
       );
     }
   }
@@ -319,7 +398,7 @@ async function evaluateScopedMacroNode(
     resolvedArgs = [];
     for (const argNodes of node.args) {
       resolvedArgs.push(
-        await evaluateNodes(argNodes, env, registry, globalOffset, depth + 1, diagnostics)
+        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, diagnostics)
       );
     }
   }

@@ -12,6 +12,10 @@ export type ComfyUIMappedFieldSemantic =
   | "lora_name"
   | "lora_strength_model"
   | "lora_strength_clip"
+  // img2img: the LoadImage filename (uploaded to ComfyUI at generation time) and
+  // the KSampler denoise strength (lower = closer to the source image).
+  | "init_image"
+  | "denoise"
   | "custom";
 
 export interface ComfyUIFieldMapping {
@@ -35,6 +39,10 @@ export interface ComfyUIPatchValues {
   lora_name?: string;
   lora_strength_model?: number;
   lora_strength_clip?: number;
+  /** Uploaded LoadImage filename (resolved server-side via /upload/image). */
+  init_image?: string;
+  /** KSampler denoise for img2img (0–1, lower = closer to the source image). */
+  denoise?: number;
   custom?: Record<string, unknown>;
 }
 
@@ -91,6 +99,10 @@ function resolveMappedValue(
       return values.lora_strength_model;
     case "lora_strength_clip":
       return values.lora_strength_clip;
+    case "init_image":
+      return values.init_image;
+    case "denoise":
+      return values.denoise;
     case "custom":
       return values.custom?.[`${mapping.nodeId}:${mapping.fieldName}`];
     default:

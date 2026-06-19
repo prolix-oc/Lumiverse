@@ -5,9 +5,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { validateHost } from "../utils/safe-fetch";
+import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as mcpServersSvc from "./mcp-servers.service";
+
+// Connect auto-connect servers through a small pool at startup: tool
+// availability otherwise scales with the SUM of every server's connect +
+// discovery time. Per-server try/catch + scheduleReconnect are preserved.
+const MCP_AUTOCONNECT_CONCURRENCY = 5;
 import { assertStdioLaunchAllowed } from "./mcp-stdio-policy";
 import type { McpServerProfile, McpDiscoveredTool, McpServerStatus } from "../types/mcp-server";
 
@@ -313,7 +319,7 @@ class McpClientManager {
 
     console.log(`[MCP] Auto-connecting ${servers.length} server(s)...`);
 
-    for (const server of servers) {
+    await mapWithConcurrency(servers, MCP_AUTOCONNECT_CONCURRENCY, async (server) => {
       try {
         const status = await this.connect(server.user_id as any, server);
         if (status.connected) {
@@ -324,7 +330,7 @@ class McpClientManager {
       } catch (err) {
         console.error(`[MCP] Auto-connect failed for "${server.name}":`, err);
       }
-    }
+    });
   }
 
   async disconnectAll(userId?: string): Promise<void> {

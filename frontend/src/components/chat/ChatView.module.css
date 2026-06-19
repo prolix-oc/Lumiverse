@@ -306,6 +306,7 @@
   top: 0;
   bottom: 0;
   z-index: 3;
+  pointer-events: none;
 }
 
 .portraitSideRight {
@@ -340,7 +341,8 @@
   }
 }
 
-/* Portrait side tab — flush, compact tab integrated into the flex layout */
+/* Portrait side tab — flush, compact tab integrated into the flex layout.
+   Styled to match ViewportDrawer's .drawerTab for visual consistency. */
 .portraitTab {
   flex: 0 0 auto;
   align-self: center;
@@ -349,10 +351,11 @@
   justify-content: center;
   width: var(--lumiverse-btn-icon);
   height: 48px;
-  background: var(--lcs-glass-bg);
-  border: 1px solid var(--lcs-glass-border);
-  color: var(--lumiverse-text-muted);
+  background: var(--lcs-glass-bg, var(--lumiverse-bg));
+  border: 1px solid var(--lumiverse-border-hover);
+  color: var(--lumiverse-primary);
   cursor: pointer;
+  pointer-events: auto;
   transition:
     background var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
     color var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
@@ -364,23 +367,24 @@
 }
 
 .portraitTab:hover {
-  background: var(--lumiverse-bg-hover);
+  background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+  border-color: var(--lumiverse-primary-050);
   color: var(--lumiverse-text);
-  border-color: var(--lumiverse-border-hover);
 }
 
 .portraitTabActive {
-  color: var(--lumiverse-primary-text);
-  border-color: var(--lumiverse-primary-020, rgba(140, 130, 255, 0.2));
+  background: var(--lumiverse-bg-hover, var(--lumiverse-bg));
+  border-color: var(--lumiverse-primary-050);
+  color: var(--lumiverse-text);
 }
 
 .portraitTabRight {
-  border-radius: 6px 0 0 6px;
+  border-radius: 12px 0 0 12px;
   border-right: none;
 }
 
 .portraitTabLeft {
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 12px 12px 0;
   border-left: none;
 }
 

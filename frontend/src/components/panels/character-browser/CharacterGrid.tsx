@@ -18,6 +18,7 @@ interface CharacterGridProps {
 }
 
 const MIN_COL_WIDTH = 200
+const MIN_CARD_WIDTH = 150 // narrowest card that still reads well on a phone
 const GAP = 16
 const INFO_HEIGHT = 64 // name + creator + tags padding
 
@@ -51,7 +52,10 @@ export default function CharacterGrid({
       if (singleColumn) {
         setColumns(1)
       } else {
-        setColumns(Math.max(1, Math.floor((width + GAP) / (MIN_COL_WIDTH + GAP))))
+        let cols = Math.max(1, Math.floor((width + GAP) / (MIN_COL_WIDTH + GAP)))
+        // Phones: prefer two columns once two ~150px cards fit (~316px+)
+        if (cols < 2 && width >= MIN_CARD_WIDTH * 2 + GAP) cols = 2
+        setColumns(cols)
       }
     })
     observer.observe(el)

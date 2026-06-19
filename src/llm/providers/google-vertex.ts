@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 import { fetchProviderJson, throwProviderResponseError } from "../../utils/provider-errors";
 import { sanitizeGeminiSchema } from "./google";
@@ -222,6 +222,10 @@ export class GoogleVertexProvider implements LlmProvider {
     supportsStreaming: true,
     apiKeyRequired: true, // We use the "API key" slot to store the service account JSON
     modelListStyle: "none", // Vertex model list requires project/location — handled in listModels()
+    // Same as Gemini API: reasoning is preserved across tool calls via the
+    // opaque `thoughtSignature` on each functionCall part, captured onto
+    // ToolCallResult.thought_signature and re-emitted by formatParts.
+    interleavedThinking: true,
   };
 
   /** Build the Vertex AI base URL for model operations (generate, stream, etc.). */
@@ -262,22 +266,18 @@ export class GoogleVertexProvider implements LlmProvider {
     const url = `${base}/${model}:generateContent`;
     const body = this.buildBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Vertex AI error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError("Vertex AI", "generate", res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const candidate = data.candidates?.[0];
     const parts = candidate?.content?.parts || [];
 
@@ -332,20 +332,18 @@ export class GoogleVertexProvider implements LlmProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Vertex AI error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError("Vertex AI", "stream", res);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const maybeYield = createCooperativeYielder(64, request.signal);
 
+    let streamDoneNaturally = false;
     try {
       while (true) {
         const { done, value } = await readWithAbort(reader, request.signal);
-        if (done) break;
+        if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -402,7 +400,7 @@ export class GoogleVertexProvider implements LlmProvider {
         }
       }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 

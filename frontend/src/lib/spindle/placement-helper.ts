@@ -11,11 +11,18 @@ import type {
   SpindleInputBarActionHandle,
 } from 'lumiverse-spindle-types'
 import { useStore } from '@/store'
+import type { TabLocation } from './tab-mobility-types'
+import { isTabDispatchable } from './tab-dispatch'
 
 let placementCounter = 0
 function nextId(extensionId: string, kind: string): string {
   return `spindle:${extensionId}:${kind}:${++placementCounter}`
 }
+
+// ── Tab Mobility Handle Cache ──
+// Each call to createTabMobilityHandle subscribes to useStore.
+// Cache one handle per extensionId to avoid subscription leaks.
+const _tabMobilityCache = new Map<string, ReturnType<typeof createTabMobilityHandle>>
 
 function getStore() {
   return useStore.getState()
@@ -361,6 +368,39 @@ export function createInputBarActionHandle(
     destroy() {
       getStore().unregisterInputBarAction(actionId)
       clickHandlers.clear()
+    },
+  }
+}
+
+// ── Tab Mobility ──
+
+/**
+ * Create a tab mobility handle for an extension. Filters to (a) own
+ * extension's tabs, (b) CORE_DRAWER_TAB_IDS.
+ */
+export function createTabMobilityHandle(extensionId: string): {
+  requestTabLocation(tabId: string, location: TabLocation): void
+} {
+  const cached = _tabMobilityCache.get(extensionId)
+  if (cached) return cached
+
+  const handle = createTabMobilityHandleUncached(extensionId)
+  _tabMobilityCache.set(extensionId, handle)
+  return handle
+}
+
+/** Clear the cached tab mobility handle for an extension (call on unload). */
+export function clearTabMobilityHandle(extensionId: string): void {
+  _tabMobilityCache.delete(extensionId)
+}
+
+function createTabMobilityHandleUncached(extensionId: string): {
+  requestTabLocation(tabId: string, location: TabLocation): void
+} {
+  return {
+    requestTabLocation(tabId: string, location: TabLocation): void {
+      if (!isTabDispatchable(tabId, extensionId, getStore().drawerTabs)) return
+      getStore().moveTabTo(tabId, location)
     },
   }
 }

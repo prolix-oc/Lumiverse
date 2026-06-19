@@ -88,7 +88,7 @@
 .tagItem {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   width: 100%;
   padding: 5px 8px;
   border-radius: 6px;
@@ -102,8 +102,28 @@
   background: var(--lumiverse-fill-subtle);
 }
 
-.tagItemSelected {
+.tagItemIncluded {
   background: var(--lumiverse-primary-010);
+}
+
+.tagItemExcluded {
+  background: var(--lumiverse-danger-015);
+}
+
+.tagState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.iconInclude {
+  color: var(--lumiverse-primary);
+}
+
+.iconExclude {
+  color: var(--lumiverse-danger);
 }
 
 .tagPill {
@@ -113,7 +133,13 @@
   border: 1px solid;
 }
 
+.tagPillExcluded {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
 .tagCount {
+  margin-left: auto;
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-hint);
 }
@@ -123,4 +149,12 @@
   text-align: center;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
+}
+
+.hint {
+  padding: 6px 10px;
+  border-top: 1px solid var(--lumiverse-border);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-hint);
+  line-height: 1.4;
 }

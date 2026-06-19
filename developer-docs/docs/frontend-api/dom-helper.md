@@ -9,7 +9,7 @@ Use the direct host DOM path for ordinary extension UI. Use sandbox frames when 
 
 ## `ctx.dom.inject(target, html, position?)`
 
-Inject sanitized HTML into the host document.
+Inject sanitized HTML into the host document. Returns the wrapper element containing the parsed content.
 
 ```ts
 const card = ctx.dom.inject(
@@ -24,6 +24,20 @@ const card = ctx.dom.inject(
 ```
 
 Injected HTML is sanitized with DOMPurify before insertion.
+
+**Element identity is preserved across chat-list virtualization.** When the injection lands inside a message bubble, the host keeps a reference to the wrapper and *moves* (not recreates) it back into place when the bubble next mounts. Form-control state, event listeners attached to the wrapper subtree, and any refs you cached all survive scroll-away/scroll-back round trips. The returned `Element` stays valid until you explicitly retire it. See [Persistence Across Virtualization](#persistence-across-virtualization) for the full contract.
+
+## `ctx.dom.uninject(element)`
+
+Retire an injection previously returned by `inject()`. Removes the wrapper from the DOM **and** drops its replay registration so the host won't restore it on future bubble remounts.
+
+```ts
+const tracker = ctx.dom.inject(bubble, html, 'beforeend')
+// …later, when you want to drop it:
+ctx.dom.uninject(tracker)
+```
+
+Use this — not `tracker.remove()` — to deliberately remove a message-targeted injection. Calling `.remove()` directly detaches the wrapper from the DOM but leaves the registry record in place, so the host will resurrect the wrapper the next time the bubble remounts. `uninject()` is a no-op for elements that aren't recognised Spindle wrappers, so it's safe to call defensively.
 
 ## `ctx.dom.addStyle(css)`
 
@@ -144,6 +158,112 @@ Remove DOM created by the helper.
 ```ts
 ctx.dom.cleanup()
 ```
+
+## Message-Targeted Injection
+
+For extensions that render content on specific chat message bubbles — trackers, summaries, per-message decorations — the host exposes helpers for looking up message ids and bubble elements, plus an invisible registry that re-attaches your injected DOM whenever the virtualized chat list mounts a bubble back into view.
+
+Together they let you write:
+
+```ts
+function attachTracker() {
+  const latestId = ctx.messages.getLatestMessageId()
+  if (!latestId) return
+
+  const bubble = ctx.dom.findMessageElement(latestId)
+  if (!bubble) return // currently scrolled out; nothing to inject this tick
+
+  ctx.dom.inject(bubble, '<div class="tracker">…</div>', 'beforeend')
+}
+```
+
+…and the tracker DOM survives the user scrolling away and back. The host re-injects it automatically on bubble remount, without your extension having to subscribe to anything.
+
+## `ctx.dom.getMessageId(target)`
+
+Resolve the chat message that contains a DOM element. Walks up from `target` looking for the host's message-bubble anchor and returns the stable message id, or `null` if the element isn't inside any chat message (sidebar, modal, floating widget, etc).
+
+```ts
+button.addEventListener('click', (e) => {
+  const messageId = ctx.dom.getMessageId(e.target as Element)
+  if (messageId) console.log('clicked inside message', messageId)
+})
+```
+
+Prefer this over reading host DOM attributes directly. The underlying attribute is a private implementation detail; `getMessageId` is the stable public contract.
+
+## `ctx.dom.findMessageElement(messageId)`
+
+Look up the bubble element currently mounted for a given message id. Returns `null` when the bubble isn't currently in the DOM — the chat list is virtualized, so only bubbles near the viewport (plus a small overscan window) are mounted at any time.
+
+```ts
+const bubble = ctx.dom.findMessageElement(latestId)
+if (bubble) {
+  ctx.dom.inject(bubble, html, 'beforeend')
+}
+```
+
+If `null` comes back, the bubble isn't currently visible. Any injection you previously registered against that bubble is auto-replayed when it next mounts (see [Persistence Across Virtualization](#persistence-across-virtualization)).
+
+## `ctx.dom.listMessageElements()`
+
+Enumerate every chat message bubble currently mounted in the DOM, paired with its stable message id. Reflects only what the virtualizer has rendered (typically the viewport + a small overscan window), so the list changes as the user scrolls.
+
+```ts
+for (const { messageId, element } of ctx.dom.listMessageElements()) {
+  ctx.dom.inject(element, decorateForMessage(messageId))
+}
+```
+
+## `ctx.messages.getLatestMessageId()`
+
+Get the most recent message id in the active chat, or `null` if the chat is empty or no chat is active. Reflects the full chat history — works even when the latest bubble is currently scrolled off-screen.
+
+```ts
+const latestId = ctx.messages.getLatestMessageId()
+```
+
+## `ctx.messages.getMessageIdAtIndex(index)`
+
+Get the message id at a given chronological index in the active chat. Negative indices count from the end Python-style: `-1` is the latest message, `-2` the second-latest. Returns `null` if the index is out of range or no chat is active.
+
+```ts
+const lastFive = [-5, -4, -3, -2, -1]
+  .map((i) => ctx.messages.getMessageIdAtIndex(i))
+  .filter((id): id is string => id !== null)
+```
+
+## `ctx.messages.listMessageIds()`
+
+Enumerate every message id in the active chat in chronological order (oldest first, newest last). Reflects the full chat history, not just what's currently mounted in the DOM — see `ctx.dom.listMessageElements()` for the mounted-only DOM view.
+
+```ts
+const ids = ctx.messages.listMessageIds()
+console.log('chat has', ids.length, 'messages')
+```
+
+## Persistence Across Virtualization
+
+The chat message list is virtualized: bubbles that scroll out of view (past the overscan window) have their DOM unmounted to save memory. Without intervention, anything an extension injected with `ctx.dom.inject()` into those bubbles would be destroyed.
+
+To avoid that, the host runs an injection registry behind the scenes:
+
+- Every `ctx.dom.inject(target, html, position?)` call whose `target` resolves inside a chat message bubble is recorded with the wrapper element itself, the sanitized HTML (as a rebuild fallback), the wrapper's relative path within the bubble, and the insert position.
+- When the virtualizer remounts a bubble, the host moves the original wrapper back into the same relative location — synchronously, before paint, via `useLayoutEffect`. Identity is preserved, so form-control state, event listeners bound to the subtree, refs you've stashed, and any in-flight `<audio>`/`<video>` elements all carry through untouched. Your extension sees nothing.
+- Records are dropped automatically when:
+    - the targeted message is deleted from the chat
+    - the user navigates to a different chat
+    - the extension calls `ctx.dom.cleanup()` or is uninstalled
+    - the extension calls `ctx.dom.uninject(wrapper)` for an individual injection
+
+You don't need to subscribe to anything, poll the DOM, or re-inject on scroll. Both static decorations and stateful widgets are durable.
+
+Injections whose `target` resolves **outside** a message bubble (chat header, sidebar, modals, floating widgets) are not registered. Those host regions aren't virtualized, so the original wrapper stays put on its own.
+
+### Caveats
+
+- **Deliberate removal must go through `uninject()`.** If you call `.remove()` on a registered wrapper, you detach it from the DOM but leave the registry record in place — the host will reattach the wrapper the next time the bubble mounts. Use `ctx.dom.uninject(wrapper)` (or `ctx.dom.cleanup()` for everything) to retire an injection permanently.
+- **Structurally-unstable selectors.** Injections targeted at deeply nested elements identified by `:nth-child` paths may fail to replay if the host bubble's internal structure changes between mount and remount. The host logs a console warning and skips the affected record rather than throwing. Prefer injecting at the bubble root (the element returned by `findMessageElement()`) and letting your own HTML own the layout below that.
 
 ## Message Widgets
 

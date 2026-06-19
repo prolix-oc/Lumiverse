@@ -6,6 +6,7 @@
 }
 
 .btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -17,6 +18,49 @@
   color: var(--lumiverse-text-dim);
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast);
+}
+
+/* The page-toward direction holds the swipe being generated (live) or a
+   freshly-generated swipe the user hasn't viewed yet (ready). */
+.btnAccent {
+  color: var(--lumiverse-accent, var(--lumiverse-text));
+  border-color: color-mix(in srgb, var(--lumiverse-accent, currentColor) 45%, var(--lumiverse-border));
+}
+
+.dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lumiverse-accent, currentColor);
+  box-shadow: 0 0 0 2px var(--lumiverse-bg, transparent);
+  pointer-events: none;
+}
+
+/* Live: pulsing while the target swipe is still streaming. */
+.dotLive {
+  animation: swipeLivePulse 1.15s ease-in-out infinite;
+}
+
+/* Ready: steady once generation finished, with a one-shot pop-in. */
+.dotReady {
+  animation: swipeReadyIn 0.24s ease-out;
+}
+
+@keyframes swipeLivePulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+@keyframes swipeReadyIn {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dotLive, .dotReady { animation: none; opacity: 0.95; }
 }
 
 .btn:hover:not(:disabled) {

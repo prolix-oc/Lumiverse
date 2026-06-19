@@ -2,174 +2,59 @@ import { describe, expect, test } from "bun:test";
 
 import { __test__ } from "./generate.service";
 
+// Provider-specific caching behavior lives in src/services/caching/ — see the
+// dedicated tests in that directory. This file covers the residual non-caching
+// flags that `injectConnectionMetadataFlags` still owns.
+
 describe("injectConnectionMetadataFlags", () => {
-  test("injects anthropic prompt caching config from connection metadata", () => {
+  test("sets use_responses_api when metadata flag is true", () => {
     const params: Record<string, unknown> = {};
+    __test__.injectConnectionMetadataFlags(
+      { provider: "openai", metadata: { use_responses_api: true } },
+      params,
+    );
+    expect(params.use_responses_api).toBe(true);
+  });
 
+  test("does not set use_responses_api when metadata flag is missing", () => {
+    const params: Record<string, unknown> = {};
+    __test__.injectConnectionMetadataFlags(
+      { provider: "openai", metadata: {} },
+      params,
+    );
+    expect(params.use_responses_api).toBeUndefined();
+  });
+
+  test("forwards openrouter metadata into _openrouter when set", () => {
+    const params: Record<string, unknown> = {};
     __test__.injectConnectionMetadataFlags(
       {
-        provider: "anthropic",
-        metadata: {
-          prompt_caching: { type: "ephemeral", ttl: "1h" },
-        },
+        provider: "openrouter",
+        metadata: { openrouter: { provider: { sort: "throughput" } } },
       },
       params,
     );
-
-    expect(params.prompt_caching).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(params._openrouter).toEqual({ provider: { sort: "throughput" } });
   });
 
-  test("does not inject disabled anthropic prompt caching", () => {
+  test("does not set _openrouter for non-openrouter providers", () => {
     const params: Record<string, unknown> = {};
-
     __test__.injectConnectionMetadataFlags(
       {
-        provider: "anthropic",
-        metadata: {
-          prompt_caching: false,
-        },
+        provider: "openai",
+        metadata: { openrouter: { provider: { sort: "throughput" } } },
       },
       params,
     );
-
-    expect(params.prompt_caching).toBeUndefined();
+    expect(params._openrouter).toBeUndefined();
   });
 
-  test("injects nanogpt caching params when enabled", () => {
+  test("no-op for empty metadata", () => {
     const params: Record<string, unknown> = {};
-
     __test__.injectConnectionMetadataFlags(
-      {
-        provider: "nanogpt",
-        metadata: {
-          nanogpt_caching: { enabled: true, ttl: "1h", stickyProvider: true },
-        },
-      },
+      { provider: "openai", metadata: undefined },
       params,
     );
-
-    expect(params.caching).toBe(true);
-    expect(params.stickyProvider).toBe(true);
-    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "1h", stickyProvider: true });
-  });
-
-  test("defaults nanogpt caching ttl to 5m and stickyProvider to true", () => {
-    const params: Record<string, unknown> = {};
-
-    __test__.injectConnectionMetadataFlags(
-      {
-        provider: "nanogpt",
-        metadata: {
-          nanogpt_caching: { enabled: true },
-        },
-      },
-      params,
-    );
-
-    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "5m", stickyProvider: true });
-    expect(params.stickyProvider).toBe(true);
-  });
-
-  test("honors stickyProvider=false on nanogpt caching", () => {
-    const params: Record<string, unknown> = {};
-
-    __test__.injectConnectionMetadataFlags(
-      {
-        provider: "nanogpt",
-        metadata: {
-          nanogpt_caching: { enabled: true, ttl: "5m", stickyProvider: false },
-        },
-      },
-      params,
-    );
-
-    expect(params.stickyProvider).toBe(false);
-    expect(params.prompt_caching).toEqual({ enabled: true, ttl: "5m", stickyProvider: false });
-  });
-
-  test("does not inject disabled nanogpt caching", () => {
-    const params: Record<string, unknown> = {};
-
-    __test__.injectConnectionMetadataFlags(
-      {
-        provider: "nanogpt",
-        metadata: {
-          nanogpt_caching: false,
-        },
-      },
-      params,
-    );
-
-    expect(params.caching).toBeUndefined();
-    expect(params.stickyProvider).toBeUndefined();
-    expect(params.prompt_caching).toBeUndefined();
-  });
-});
-
-describe("anthropic prompt caching helpers", () => {
-  test("parses explicit breakpoint settings from connection metadata", () => {
-    const config = __test__.resolveAnthropicPromptCachingConfig({
-      prompt_caching: {
-        type: "ephemeral",
-        ttl: "1h",
-        automatic: false,
-        breakpoints: {
-          tools: true,
-          system: true,
-          messages: true,
-        },
-      },
-    });
-
-    expect(config).toEqual({
-      enabled: true,
-      automatic: false,
-      cacheControl: { type: "ephemeral", ttl: "1h" },
-      breakpoints: {
-        tools: true,
-        system: true,
-        messages: true,
-      },
-    });
-  });
-
-  test("applies message and tool breakpoints to anthropic requests", () => {
-    const config = __test__.resolveAnthropicPromptCachingConfig({
-      prompt_caching: {
-        type: "ephemeral",
-        breakpoints: {
-          tools: true,
-          system: true,
-          messages: true,
-        },
-      },
-    });
-
-    const messages = __test__.applyAnthropicCacheBreakpointsToMessages(
-      [
-        { role: "system", content: "sys" },
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "reply" },
-      ],
-      config,
-    );
-    const tools = __test__.applyAnthropicCacheBreakpointsToTools(
-      [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
-      config,
-    );
-
-    expect(messages).toEqual([
-      { role: "system", content: "sys", cache_control: { type: "ephemeral" } },
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "reply", cache_control: { type: "ephemeral" } },
-    ]);
-    expect(tools).toEqual([
-      {
-        name: "lookup",
-        description: "Lookup",
-        parameters: { type: "object" },
-        cache_control: { type: "ephemeral" },
-      },
-    ]);
+    expect(params).toEqual({});
   });
 });

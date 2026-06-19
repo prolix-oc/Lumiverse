@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { Users, Trash2, MessageSquarePlus } from 'lucide-react'
 import { chatsApi } from '@/api/chats'
-import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
+import { getCharacterAvatarThumbUrl, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
 import LazyImage from '@/components/shared/LazyImage'
@@ -35,10 +35,10 @@ function MosaicThumb({ charIds, size = 'small' }: { charIds: string[]; size?: 's
       {displayIds.map((id) => (
         <div key={id} className={styles.mosaicCell}>
           <LazyImage
-            src={getCharacterAvatarThumbUrlById(
-              id,
-              characters.find((entry) => entry.id === id)?.image_id ?? null
-            ) || ''}
+            src={(() => {
+              const entry = characters.find((c) => c.id === id)
+              return (entry ? getCharacterAvatarThumbUrl(entry) : getCharacterAvatarThumbUrlById(id, null)) || ''
+            })()}
             alt=""
             spinnerSize={iconSize}
             fallback={

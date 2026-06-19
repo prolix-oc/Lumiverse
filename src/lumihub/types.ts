@@ -74,6 +74,12 @@ export interface InstallPresetPayload {
   source: "lumihub";
   presetId: string;
   presetName: string;
+  /** Latest published version label (also present at presetData.preset.presetVersion). */
+  presetVersion?: string | null;
+  /** Uploader username, for the manifest creator field. */
+  presetCreator?: string | null;
+  /** Canonical `creator/name` manifest slug computed by the hub, echoed back in the manifest. */
+  presetSlug?: string | null;
   /** Export shape returned by LumiHub's /presets/:id/export endpoint. */
   presetData: Record<string, any>;
 }
@@ -93,6 +99,8 @@ export interface ManifestSyncPayload {
     name: string;
     creator: string;
     source: "local" | "chub" | "lumihub";
+    /** Installed version label (presets), enabling the hub to detect outdated installs. */
+    version?: string;
     installed_at: number;
   }>;
 }

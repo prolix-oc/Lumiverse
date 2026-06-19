@@ -259,6 +259,37 @@ export function formatShadowPrompt(
   };
 }
 
+/**
+ * Format only the non-memory cortex context sections (entities, relationships,
+ * arc) using the shadow/attributed style. Used by the chat-memory-formatting
+ * path so entity/relationship/arc context is preserved alongside the user's
+ * custom memory templates.
+ */
+export function formatContextSections(
+  entities: EntitySnapshot[],
+  relationships: RelationEdge[],
+  arcContext: string | null,
+  options: FormatOptions,
+): string {
+  const budget = options.tokenBudget;
+  const entityBudget = Math.floor(budget * 0.55);
+  const relBudget = Math.floor(budget * 0.25);
+  const arcBudget = Math.floor(budget * 0.20);
+
+  const sections: string[] = [];
+
+  const entSection = formatEntitiesShadow(entities, entityBudget);
+  if (entSection) sections.push(entSection);
+
+  const relSection = formatRelationshipsShadow(relationships, relBudget);
+  if (relSection) sections.push(relSection);
+
+  const arcSection = formatArcShadow(arcContext, arcBudget);
+  if (arcSection) sections.push(arcSection);
+
+  return sections.join("\n\n");
+}
+
 // ─── Clinical Fallback ─────────────────────────────────────────
 
 function formatClinical(

@@ -79,7 +79,7 @@ async function resolveCortexParticipants(userId: string, chat: ReturnType<typeof
 
   if (!chat) return { characterNames, descriptionAliases: undefined as Map<string, string> | undefined };
 
-  const character = getCharacter(userId, chat.character_id);
+  const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
   if (character) {
     const normalized = memoryCortex.normalizeCharacterName(character.name);
     characterNames.push(normalized);
@@ -299,7 +299,7 @@ function logCortexRebuildTrigger(
   );
 }
 
-function startTrackedCortexRebuild(options: {
+type TrackedCortexRebuildOptions = {
   userId: string;
   chatId: string;
   characterNames: string[];
@@ -308,53 +308,109 @@ function startTrackedCortexRebuild(options: {
   sidecarConnectionId?: string;
   snapshot: CortexFreshnessSnapshot;
   source?: "warmup";
-}): void {
-  const { userId, chatId, characterNames, descriptionAliases, generateRawFn, sidecarConnectionId, snapshot, source } = options;
+};
 
-  memoryCortex.rebuildCortex(
-    userId,
-    chatId,
-    characterNames,
-    generateRawFn,
-    sidecarConnectionId,
-    (rebuildState) => {
+/** Per-chat registry of the rebuild currently running. Two warmups for the same
+ *  chat used to race (chat-open + WS reconnect both fire passive warmup), each
+ *  calling clearDerivedCortexData + reprocessing the same chunks — wasted work
+ *  that, before the memory_mentions upsert was made conflict-safe, surfaced as
+ *  "UNIQUE constraint failed: memory_mentions.entity_id, memory_mentions.chunk_id".
+ *  Coalescing rules:
+ *    - warmup vs anything in flight → coalesce (the in-flight run covers it)
+ *    - force  vs in-flight force    → coalesce
+ *    - force  vs in-flight warmup   → preempt: abort the warmup, then start the
+ *                                     force only after it has fully unwound.
+ *  The check-and-set below is race-free: it runs synchronously with no await in
+ *  between, and rebuildCortex registers its state synchronously before its first
+ *  await. */
+type InFlightCortexRebuild = { kind: "warmup" | "force"; abort: AbortController; done: Promise<void> };
+const cortexRebuildsInFlight = new Map<string, InFlightCortexRebuild>();
+
+function startTrackedCortexRebuild(options: TrackedCortexRebuildOptions): void {
+  const { chatId, source } = options;
+  const isForce = source !== "warmup";
+
+  const existing = cortexRebuildsInFlight.get(chatId);
+  if (existing) {
+    // Coalesce duplicates. Only an explicit force-rebuild may preempt — and only
+    // an in-flight warmup, never another force.
+    if (!isForce || existing.kind === "force") return;
+    existing.abort.abort(new DOMException("Superseded by an explicit rebuild", "AbortError"));
+    // Defer the force until the warmup has unwound so the two never run
+    // clearDerivedCortexData + reprocess concurrently on the same chat.
+    launchTrackedCortexRebuild(options, existing.done);
+    return;
+  }
+  launchTrackedCortexRebuild(options, null);
+}
+
+function launchTrackedCortexRebuild(
+  options: TrackedCortexRebuildOptions,
+  startAfter: Promise<void> | null,
+): void {
+  const { userId, chatId, characterNames, descriptionAliases, generateRawFn, sidecarConnectionId, snapshot, source } = options;
+  const abort = new AbortController();
+  const entry: InFlightCortexRebuild = {
+    kind: source === "warmup" ? "warmup" : "force",
+    abort,
+    done: Promise.resolve(),
+  };
+  // Register synchronously so a racing call coalesces against us immediately.
+  cortexRebuildsInFlight.set(chatId, entry);
+
+  entry.done = (startAfter ?? Promise.resolve()).then(() =>
+    memoryCortex.rebuildCortex(
+      userId,
+      chatId,
+      characterNames,
+      generateRawFn,
+      sidecarConnectionId,
+      (rebuildState) => {
+        eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+          chatId,
+          status: "processing",
+          current: rebuildState.current,
+          total: rebuildState.total,
+          percent: rebuildState.percent,
+          phase: rebuildState.phase,
+          inFlightBatches: rebuildState.inFlightBatches,
+          lastProviderRequestAt: rebuildState.lastProviderRequestAt,
+          lastProviderResponseMs: rebuildState.lastProviderResponseMs,
+          ...(source ? { source } : {}),
+        }, userId);
+      },
+      descriptionAliases,
+      { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature, signal: abort.signal },
+    ).then((result) => {
+      try {
+        stampCortexFreshnessSnapshot(userId, chatId, snapshot);
+      } catch (err) {
+        console.warn("[memory-cortex] Failed to stamp rebuild freshness state:", err);
+      }
+
       eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
         chatId,
-        status: "processing",
-        current: rebuildState.current,
-        total: rebuildState.total,
-        percent: rebuildState.percent,
-        phase: rebuildState.phase,
-        inFlightBatches: rebuildState.inFlightBatches,
-        lastProviderRequestAt: rebuildState.lastProviderRequestAt,
-        lastProviderResponseMs: rebuildState.lastProviderResponseMs,
+        status: "complete",
         ...(source ? { source } : {}),
+        ...result,
       }, userId);
-    },
-    descriptionAliases,
-    { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature },
-  ).then((result) => {
-    try {
-      stampCortexFreshnessSnapshot(userId, chatId, snapshot);
-    } catch (err) {
-      console.warn("[memory-cortex] Failed to stamp rebuild freshness state:", err);
-    }
-
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "complete",
-      ...(source ? { source } : {}),
-      ...result,
-    }, userId);
-  }).catch((err) => {
-    console.error(source === "warmup" ? "[memory-cortex] Warmup rebuild failed:" : "[memory-cortex] Rebuild failed:", err);
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "error",
-      ...(source ? { source } : {}),
-      error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
-    }, userId);
-  });
+    }).catch((err) => {
+      // Preempted by a superseding rebuild — that run owns the progress stream,
+      // so stay silent instead of flashing a spurious error in the UI.
+      if (abort.signal.aborted) return;
+      console.error(source === "warmup" ? "[memory-cortex] Warmup rebuild failed:" : "[memory-cortex] Rebuild failed:", err);
+      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+        chatId,
+        status: "error",
+        ...(source ? { source } : {}),
+        error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
+      }, userId);
+    }).finally(() => {
+      // Only clear if we're still the active entry; a preemptor may have already
+      // replaced us in the registry.
+      if (cortexRebuildsInFlight.get(chatId) === entry) cortexRebuildsInFlight.delete(chatId);
+    }),
+  );
 }
 
 async function warmLongTermChatMemory(options: {
@@ -404,6 +460,17 @@ async function warmLongTermChatMemory(options: {
   if (resumedChunks > 0) {
     return { status: "complete", reason: "chat_memory_warmup_resumed" };
   }
+
+  // Fully vectorized, nothing to (re)build or resume. Sweep any orphaned
+  // vectors a past rebuild/vectorization race may have left behind so
+  // existing duplicate memory-injection entries self-heal on chat open.
+  // Fire-and-forget to keep the warmup fast path snappy.
+  const liveChunkIds = (getDb()
+    .query("SELECT id FROM chat_chunks WHERE chat_id = ?")
+    .all(chatId) as Array<{ id: string }>).map((r) => r.id);
+  void embeddingsSvc
+    .reconcileChatChunkEmbeddings(userId, chatId, liveChunkIds)
+    .catch((err) => console.warn("[memory-cortex] Orphan reconcile failed:", err));
 
   return { status: "skipped", reason: "chat_memory_already_fresh" };
 }
@@ -1211,7 +1278,7 @@ app.put("/chats/:chatId/entities/:entityId", async (c) => {
   const params: any[] = [];
 
   if (body.name !== undefined) { updates.push("name = ?"); params.push(body.name); }
-  if (body.entity_type !== undefined) { updates.push("entity_type = ?"); params.push(body.entity_type); }
+  if (body.entityType !== undefined) { updates.push("entity_type = ?"); params.push(body.entityType); }
   if (body.aliases !== undefined) { updates.push("aliases = ?"); params.push(JSON.stringify(body.aliases)); }
   if (body.description !== undefined) { updates.push("description = ?"); params.push(body.description); }
   if (body.facts !== undefined) { updates.push("facts = ?"); params.push(JSON.stringify(body.facts)); }
@@ -1228,6 +1295,17 @@ app.put("/chats/:chatId/entities/:entityId", async (c) => {
   // Scope WHERE by chat_id as defense-in-depth: even if a global entity ID leaks,
   // the chat-ownership gate above plus this filter prevents cross-chat writes.
   db.query(`UPDATE memory_entities SET ${updates.join(", ")} WHERE id = ? AND chat_id = ?`).run(...params);
+
+  if (body.aliases && Array.isArray(body.aliases)) {
+    for (const alias of body.aliases) {
+      if (typeof alias !== "string" || !alias.trim()) continue;
+      const mergeResult = memoryCortex.checkAndAutoMerge(chatId, entityId, alias.trim());
+      if (mergeResult && mergeResult !== entityId) {
+        const survivor = memoryCortex.getEntities(chatId).find((e) => e.id === mergeResult);
+        return c.json({ ...survivor, merged: true, mergedInto: mergeResult });
+      }
+    }
+  }
 
   const updated = memoryCortex.getEntities(chatId).find((e) => e.id === entityId);
   return c.json(updated);
@@ -1268,54 +1346,10 @@ app.post("/chats/:chatId/entities/merge", async (c) => {
 
   if (!source || !target) return c.json({ error: "One or both entities not found" }, 404);
 
-  const { getDb } = require("../db/connection");
-  const db = getDb();
+  memoryCortex.mergeEntitiesInternal(sourceId, targetId);
+
   const now = Math.floor(Date.now() / 1000);
-
-  db.transaction(() => {
-    // Merge aliases (source name becomes an alias on target)
-    const targetAliases = [...target.aliases];
-    if (!targetAliases.includes(source.name)) targetAliases.push(source.name);
-    for (const alias of source.aliases) {
-      if (!targetAliases.includes(alias)) targetAliases.push(alias);
-    }
-
-    // Merge facts (deduplicated)
-    const targetFacts = [...target.facts];
-    const lowerFacts = new Set(targetFacts.map((f) => f.toLowerCase()));
-    for (const fact of source.facts) {
-      if (!lowerFacts.has(fact.toLowerCase())) {
-        targetFacts.push(fact);
-      }
-    }
-
-    // Update target entity
-    db.query(
-      `UPDATE memory_entities SET
-        aliases = ?, facts = ?,
-        mention_count = mention_count + ?,
-        salience_avg = MAX(salience_avg, ?),
-        updated_at = ?,
-        user_edited_at = ?
-       WHERE id = ?`,
-    ).run(
-      JSON.stringify(targetAliases), JSON.stringify(targetFacts.slice(-20)),
-      source.mentionCount, source.salienceAvg, now, now, targetId,
-    );
-
-    // Re-point all source mentions to target
-    db.query("UPDATE memory_mentions SET entity_id = ? WHERE entity_id = ?")
-      .run(targetId, sourceId);
-
-    // Re-point all source relations to target
-    db.query("UPDATE memory_relations SET source_entity_id = ? WHERE source_entity_id = ?")
-      .run(targetId, sourceId);
-    db.query("UPDATE memory_relations SET target_entity_id = ? WHERE target_entity_id = ?")
-      .run(targetId, sourceId);
-
-    // Delete source entity
-    db.query("DELETE FROM memory_entities WHERE id = ?").run(sourceId);
-  })();
+  getDb().query("UPDATE memory_entities SET user_edited_at = ? WHERE id = ?").run(now, targetId);
 
   const merged = memoryCortex.getEntities(chatId).find((e) => e.id === targetId);
   return c.json(merged);
@@ -1440,12 +1474,19 @@ app.put("/chats/:chatId/colors/:id", async (c) => {
 
 // ─── Relations ─────────────────────────────────────────────────
 
-/** GET /chats/:chatId/relations — List relations with resolved entity names */
+/** GET /chats/:chatId/relations — List relations with resolved entity names.
+ *  Query params:
+ *    ?includeInactive=true — include dormant, broken, and former relations (default: true)
+ */
 app.get("/chats/:chatId/relations", (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
-  const relations = memoryCortex.getRelations(chatId);
+
+  const includeInactive = c.req.query("includeInactive") !== "false";
+  const relations = includeInactive
+    ? memoryCortex.getRelationsIncludingInactive(chatId)
+    : memoryCortex.getRelations(chatId);
 
   // Resolve entity names for display
   const { getDb } = require("../db/connection");

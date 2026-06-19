@@ -229,7 +229,7 @@ export function resolveProfile(
   userId: string,
   fallbackPresetId: string | null,
   chatId: string,
-  characterId: string,
+  characterId: string | null,
   options: { isGroup?: boolean; connectionId?: string | null } = {}
 ): ResolvedPresetProfile {
   // 1. Chat-level binding (most specific)
@@ -240,7 +240,7 @@ export function resolveProfile(
 
   // 2. Character-level binding — skipped in group chats. Per-member bindings
   //    would be ambiguous (which member wins?), so group chats are chat-only.
-  if (!options.isGroup) {
+  if (!options.isGroup && characterId) {
     const charBinding = getCharacterBinding(userId, characterId);
     if (charBinding) {
       return resolveSpecificBinding(userId, "character", charBinding);

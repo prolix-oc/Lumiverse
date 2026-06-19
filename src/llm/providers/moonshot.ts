@@ -21,5 +21,14 @@ export class MoonshotProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "openai",
+    // Kimi K2 Thinking is end-to-end trained to interleave chain-of-thought
+    // with tool calls. Like DeepSeek it carries reasoning via `reasoning_content`
+    // (streamed before `content`), which the inherited
+    // OpenAICompatibleProvider.flattenForChat echoes back on assistant tool-call
+    // turns — so the generation loop's structured continuation keeps the model
+    // reasoning across tool calls. Enable thinking + history retention by passing
+    // `thinking: { type: "enabled", keep: "all" }` (sent via param passthrough);
+    // Moonshot recommends max_tokens >= 16000 and temperature = 1.0 for K2.
+    interleavedThinking: true,
   };
 }

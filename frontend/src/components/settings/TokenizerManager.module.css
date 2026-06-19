@@ -218,14 +218,251 @@
   margin: 4px 0;
 }
 
-.configJson {
+/* ── Tokenizer cards (Configs list) ───────────────────────────────────── */
+.cardList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.card {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  padding: 10px 12px;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cardName {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.cardBody {
+  margin-top: 6px;
+}
+
+.metaLine {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.metaLineMuted {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  word-break: break-all;
+}
+
+.metaLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-muted);
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+}
+
+.sourceBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.repoRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.repoLink {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-primary);
+  text-decoration: none;
+}
+
+.repoLink:hover {
+  text-decoration: underline;
+}
+
+.fileChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  background: var(--lumiverse-success-015, var(--lumiverse-fill-subtle));
+  color: var(--lumiverse-success, var(--lumiverse-text));
+  border: 1px solid var(--lumiverse-border);
+}
+
+.fileChipMissing {
+  composes: fileChip;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  opacity: 0.7;
+}
+
+/* ── HuggingFace access ───────────────────────────────────────────────── */
+.hfStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  margin-bottom: 8px;
+}
+
+.hfSaved {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-success, var(--lumiverse-primary));
+  margin: 6px 0 0;
+}
+
+/* ── Paste-a-URL add box ──────────────────────────────────────────────── */
+.addBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.inlineRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.inlineRow .input {
+  flex: 1;
+}
+
+.resolveFail {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-danger-015, var(--lumiverse-border));
+  background: var(--lumiverse-danger-015, var(--lumiverse-fill-subtle));
+}
+
+.failIcon {
+  color: var(--lumiverse-danger);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.resolveFailTitle {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.resolveFailMsg {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  margin-top: 2px;
+}
+
+.resolveOk {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.verifiedLine {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-success, var(--lumiverse-primary));
+}
+
+.warnLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  cursor: pointer;
+}
+
+/* ── Advanced (manual JSON) ───────────────────────────────────────────── */
+.advanced {
+  margin-top: 4px;
+}
+
+.advancedToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.advancedToggle:hover {
+  color: var(--lumiverse-text);
+}
+
+.chevron {
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.chevronOpen {
+  transition: transform var(--lumiverse-transition-fast);
+  transform: rotate(90deg);
+}
+
+.advancedDesc {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+  margin: 0 0 4px;
 }
 
 @media (max-width: 600px) {
@@ -244,7 +481,7 @@
     font-size: calc(11px * var(--lumiverse-font-scale, 1));
   }
 
-  .configJson {
-    max-width: 100px;
+  .inlineRow {
+    flex-direction: column;
   }
 }

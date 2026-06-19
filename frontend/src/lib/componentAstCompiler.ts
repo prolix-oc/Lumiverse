@@ -9,6 +9,7 @@ import {
   MAX_AST_NODES,
   MAX_OVERRIDE_SOURCE_LENGTH,
   isAllowedJsxProp,
+  isSlotTag,
 } from './componentOverrideCapabilities'
 
 type Node = any
@@ -168,6 +169,20 @@ function validateJsx(node: Node, scope: Set<string>) {
   if (node.type !== 'JSXElement') throw new ValidationError('Expected JSX.', node)
 
   const tag = getJsxTagName(node.openingElement.name)
+
+  if (tag && isSlotTag(tag)) {
+    // Slot tags render trusted built-in content. They take no props and no
+    // children — authors place them, they cannot configure them.
+    if ((node.openingElement.attributes || []).length > 0) {
+      throw new ValidationError(`<${tag} /> does not accept props.`, node.openingElement)
+    }
+    const hasChildren = (node.children || []).some(
+      (child: Node) => !(child.type === 'JSXText' && !child.value.trim()),
+    )
+    if (hasChildren) throw new ValidationError(`<${tag} /> cannot have children.`, node)
+    return
+  }
+
   if (!tag || !ALLOWED_JSX_TAGS.has(tag)) throw new ValidationError(`JSX tag <${tag || 'unknown'}> is not supported.`, node.openingElement.name)
 
   for (const attribute of node.openingElement.attributes || []) {

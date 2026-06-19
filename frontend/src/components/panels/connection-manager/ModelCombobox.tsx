@@ -40,7 +40,7 @@ export default function ModelCombobox({
   browseHint,
   appearance = 'compact',
 }: ModelComboboxProps) {
-  const { t } = useTranslation('dreamWeaver', { keyPrefix: 'modelCombobox' })
+  const { t } = useTranslation('shared', { keyPrefix: 'modelCombobox' })
   const emptyMessage = emptyMessageProp ?? t('emptyDefault')
   const loadingMessage = loadingMessageProp ?? t('loading')
   const [open, setOpen] = useState(false)

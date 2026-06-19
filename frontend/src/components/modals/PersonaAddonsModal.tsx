@@ -19,7 +19,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { uiScaledTransform } from '@/lib/dndUiScale'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
@@ -359,10 +359,10 @@ interface SortableAddonRowProps {
 function SortableAddonRow({ addon, onToggle, onDelete, onLabelChange, onContentChange }: SortableAddonRowProps) {
   const { t } = useTranslation('modals', { keyPrefix: 'personaAddons' })
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: addon.id })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: addon.id })
+  const { setNodeRef, style: scaledStyle } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const style = {
-    transform: uiScaledTransform(transform),
-    transition,
+    ...scaledStyle,
     opacity: isDragging ? 0.6 : undefined,
     zIndex: isDragging ? 1 : undefined,
   }

@@ -28,7 +28,7 @@ function pixelToPct(px: number, viewport: number): number {
 // ═════════════════════════════════════════════════════════════════════════════
 
 export default function ChatHeads() {
-  const { t } = useTranslation('settings', { keyPrefix: 'notifications.chatHeads' })
+  const { t } = useTranslation('settings', { keyPrefix: 'display.chatHeads' })
   const chatHeads = useStore((s) => s.chatHeads)
   const activeChatId = useStore((s) => s.activeChatId)
   const savedPos = useStore((s) => s.chatHeadsPosition)

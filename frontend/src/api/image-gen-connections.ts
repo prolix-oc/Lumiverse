@@ -1,6 +1,5 @@
 import { get, post, put, del } from './client'
 import type { ComfyUICapabilities } from './image-gen'
-import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from './dream-weaver'
 import type {
   ImageGenConnectionProfile,
   CreateImageGenConnectionInput,
@@ -14,6 +13,37 @@ import type {
   PollinationsAuthUrlRequest,
   PollinationsAuthUrlResponse,
 } from '@/types/api'
+
+export type ComfyUIMappedFieldSemantic =
+  | 'positive_prompt'
+  | 'negative_prompt'
+  | 'seed'
+  | 'steps'
+  | 'cfg'
+  | 'sampler_name'
+  | 'scheduler'
+  | 'width'
+  | 'height'
+  | 'checkpoint'
+  | 'custom'
+
+export interface ComfyUIFieldMapping {
+  nodeId: string
+  fieldName: string
+  mappedAs: ComfyUIMappedFieldSemantic
+  autoDetected?: boolean
+}
+
+export interface ComfyUIWorkflowConfig {
+  workflow_json: Record<string, any>
+  workflow_api_json: Record<string, any>
+  workflow_format: 'ui_workflow' | 'api_prompt'
+  field_mappings: ComfyUIFieldMapping[]
+  field_options?: Record<string, string[]>
+  imported_at: number
+  needs_reimport?: boolean
+  unknown_nodes?: string[]
+}
 
 export const imageGenConnectionsApi = {
   list(params?: { limit?: number; offset?: number }) {

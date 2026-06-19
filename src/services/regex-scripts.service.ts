@@ -288,10 +288,18 @@ function applyPresetBoundActivationWithDb(
 }
 
 export function rowToRegexScript(row: any): RegexScript {
+  let target: RegexTarget[];
+  try {
+    const parsed = JSON.parse(row.target);
+    target = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    target = [row.target || "response"];
+  }
   return {
     ...row,
     script_id: row.script_id || "",
     placement: JSON.parse(row.placement),
+    target,
     trim_strings: JSON.parse(row.trim_strings),
     folder: row.folder || "",
     pack_id: row.pack_id || null,
@@ -375,8 +383,16 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
       return "scope_id is required for non-global scope";
     }
   }
-  if (input.target !== undefined && !VALID_TARGETS.has(input.target)) {
-    return `Invalid target: ${input.target}`;
+  if (input.target !== undefined) {
+    if (typeof input.target === "string") {
+      (input as any).target = [input.target];
+    }
+    if (!Array.isArray(input.target) || input.target.length === 0) {
+      return "target must be a non-empty array";
+    }
+    for (const t of input.target) {
+      if (!VALID_TARGETS.has(t)) return `Invalid target: ${t}`;
+    }
   }
   if (input.substitute_macros !== undefined && !VALID_MACRO_MODES.has(input.substitute_macros)) {
     return `Invalid substitute_macros: ${input.substitute_macros}`;
@@ -421,7 +437,7 @@ export function listRegexScripts(
     params.push(filters.scope_id);
   }
   if (filters?.target) {
-    conditions.push("target = ?");
+    conditions.push(`instr(target, '"' || ? || '"') > 0`);
     params.push(filters.target);
   }
   if (filters?.character_id) {
@@ -445,9 +461,14 @@ export function listRegexScripts(
 
 // Prepared statement for hot-path regex fetch
 let _stmtRegexById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _stmtRegexByIdGen = -1;
 
 export function getRegexScript(userId: string, id: string): RegexScript | null {
-  if (!_stmtRegexById) _stmtRegexById = getDb().query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?");
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (!_stmtRegexById || _stmtRegexByIdGen !== gen) {
+    _stmtRegexById = getDb().query("SELECT * FROM regex_scripts WHERE id = ? AND user_id = ?");
+    _stmtRegexByIdGen = gen;
+  }
   const row = _stmtRegexById.get(id, userId) as any;
   return row ? rowToRegexScript(row) : null;
 }
@@ -484,7 +505,7 @@ export function createRegexScript(
       JSON.stringify(input.placement ?? ["ai_output"]),
       input.scope ?? "global",
       input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
-      input.target ?? "response",
+      JSON.stringify(input.target ?? ["response"]),
       input.min_depth ?? null,
       input.max_depth ?? null,
       JSON.stringify(input.trim_strings ?? []),
@@ -566,7 +587,7 @@ export function updateRegexScript(
   if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
   if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
   if (nextInput.scope_id !== undefined) { fields.push("scope_id = ?"); values.push(nextInput.scope_id); }
-  if (nextInput.target !== undefined) { fields.push("target = ?"); values.push(nextInput.target); }
+  if (nextInput.target !== undefined) { fields.push("target = ?"); values.push(JSON.stringify(nextInput.target)); }
   if (nextInput.min_depth !== undefined) { fields.push("min_depth = ?"); values.push(nextInput.min_depth); }
   if (nextInput.max_depth !== undefined) { fields.push("max_depth = ?"); values.push(nextInput.max_depth); }
   if (nextInput.trim_strings !== undefined) { fields.push("trim_strings = ?"); values.push(JSON.stringify(nextInput.trim_strings)); }
@@ -674,7 +695,7 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
       JSON.stringify(existing.placement),
       existing.scope,
       existing.scope_id,
-      existing.target,
+      JSON.stringify(existing.target),
       existing.min_depth,
       existing.max_depth,
       JSON.stringify(existing.trim_strings),
@@ -765,15 +786,59 @@ export function getActiveScripts(
 ): RegexScript[] {
   const db = getDb();
 
-  // Build a query that fetches all candidate scripts and orders by scope tier, then sort_order
+  // target is stored as a JSON array (e.g. '["prompt","display"]'). Match scripts
+  // whose array contains the requested target using instr on the serialized form.
   const conditions = [
     "user_id = ?",
     "disabled = 0",
-    "target = ?",
+    `instr(target, '"' || ? || '"') > 0`,
   ];
   const params: any[] = [userId, opts.target];
 
   // Scope filter: include global + character-scoped + chat-scoped matching the current context
+  const scopeConditions: string[] = ["scope = 'global'"];
+  if (opts.characterId) {
+    scopeConditions.push("(scope = 'character' AND scope_id = ?)");
+    params.push(opts.characterId);
+  }
+  if (opts.chatId) {
+    scopeConditions.push("(scope = 'chat' AND scope_id = ?)");
+    params.push(opts.chatId);
+  }
+  conditions.push(`(${scopeConditions.join(" OR ")})`);
+
+  const where = conditions.join(" AND ");
+
+  const rows = db
+    .query(
+      `SELECT * FROM regex_scripts WHERE ${where}
+       ORDER BY
+         CASE scope WHEN 'global' THEN 0 WHEN 'character' THEN 1 WHEN 'chat' THEN 2 END ASC,
+         sort_order ASC, created_at ASC`
+    )
+    .all(...params) as any[];
+
+  return rows.map(rowToRegexScript);
+}
+
+/**
+ * Get scripts that target "response" and have run_on_edit enabled —
+ * used when a message is edited to apply regex transformations.
+ */
+export function getRunOnEditScripts(
+  userId: string,
+  opts: { characterId?: string; chatId?: string }
+): RegexScript[] {
+  const db = getDb();
+
+  const conditions = [
+    "user_id = ?",
+    "disabled = 0",
+    "run_on_edit = 1",
+    `instr(target, '"response"') > 0`,
+  ];
+  const params: any[] = [userId];
+
   const scopeConditions: string[] = ["scope = 'global'"];
   if (opts.characterId) {
     scopeConditions.push("(scope = 'character' AND scope_id = ?)");
@@ -1062,6 +1127,7 @@ export async function applyRegexScripts(
         });
       }
     } catch (e) {
+      if (options?.outFingerprint) options.outFingerprint.cacheable = false;
       if (e instanceof RegexTimeoutError) {
         const elapsedMs = Date.now() - startedAt;
         const flagged = reportRegexScriptPerformance(script.user_id, script.id, {
@@ -1336,10 +1402,12 @@ function convertStPlacement(placement: any[]): RegexPlacement[] {
   return [...new Set(result)];
 }
 
-function convertStTarget(item: any): RegexTarget {
-  if (item.markdownOnly) return "display";
-  if (item.promptOnly) return "prompt";
-  return "response";
+function convertStTarget(item: any): RegexTarget[] {
+  const targets: RegexTarget[] = [];
+  if (item.markdownOnly) targets.push("display");
+  if (item.promptOnly) targets.push("prompt");
+  if (targets.length === 0) targets.push("response");
+  return targets;
 }
 
 export function importRegexScripts(
@@ -1457,4 +1525,120 @@ export function importRegexScripts(
   }
 
   return { imported, skipped, errors };
+}
+
+/**
+ * Import a character card's bound regex scripts into live, character-scoped rows
+ * so they apply for that character immediately. Covers both shapes carried by
+ * cards: Lumiverse-native bundles (`extensions.lumiverse_modules.regex_scripts`,
+ * already internal-shaped) and SillyTavern cards (`extensions.regex_scripts`,
+ * converted on the fly). Each script is rebound to the new character — `scope`
+ * + `scope_id` so it applies at runtime, `character_id` so it cascade-deletes
+ * when the character is removed.
+ *
+ * The CHARX import path imports its bundle separately (applyCharxModulesAndAssets);
+ * this helper covers the non-CHARX card paths (inline card data, PNG, JSON), which
+ * previously dropped bound regexes — leaving them as inert JSON in `extensions`.
+ * Returns the number of scripts imported.
+ */
+export function importCharacterBoundRegexScripts(
+  userId: string,
+  characterId: string,
+  extensions: unknown,
+): number {
+  if (!extensions || typeof extensions !== "object") return 0;
+  const ext = extensions as Record<string, any>;
+  let imported = 0;
+
+  // Lumiverse-native bundle: already internal-shaped, rebind directly (mirrors
+  // the CHARX bundle import in charx-import.service).
+  const bundle = ext.lumiverse_modules?.regex_scripts;
+  if (Array.isArray(bundle)) {
+    for (const script of bundle) {
+      if (!script || typeof script !== "object") continue;
+      const result = createRegexScript(userId, {
+        ...(script as CreateRegexScriptInput),
+        scope: "character",
+        scope_id: characterId,
+        character_id: characterId,
+        metadata: { ...(script.metadata ?? {}), source: "card_bundle" },
+      });
+      if (typeof result !== "string") imported++;
+    }
+    return imported;
+  }
+
+  // SillyTavern cards store regex at `extensions.regex_scripts`. Only consulted
+  // when there is no Lumiverse bundle, so a card carrying both isn't double-imported.
+  const stScripts = ext.regex_scripts;
+  if (Array.isArray(stScripts) && stScripts.length > 0) {
+    const result = importRegexScripts(userId, {
+      scripts: stScripts.map((s) =>
+        s && typeof s === "object" ? { ...s, scope: "character", scope_id: characterId } : s,
+      ),
+      character_id: characterId,
+    });
+    imported += result.imported;
+  }
+
+  return imported;
+}
+
+/**
+ * Import preset-bound regex scripts for a preset that is NOT the currently-active
+ * one (a LumiHub remote install, or any background preset import). The local
+ * Loom-builder import can rely on the freshly-imported preset already being
+ * active; this path cannot. importRegexScripts force-disables preset-bound scripts
+ * whose preset is inactive, so each script is created dormant and the preset's
+ * restore-list (`presetRegexEnabled:<id>`) is seeded from the author's intended
+ * on/off state — so the scripts light up correctly the moment the user switches
+ * to the preset.
+ *
+ * Caller is responsible for clearing a prior install's scripts
+ * (deleteRegexScriptsByPresetId) before re-importing on an update. Returns counts.
+ */
+export function importPresetBoundRegexScripts(
+  userId: string,
+  presetId: string,
+  presetName: string,
+  scripts: any[],
+): { imported: number; skipped: number } {
+  if (!Array.isArray(scripts) || scripts.length === 0) {
+    return { imported: 0, skipped: 0 };
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  const enabledIds: string[] = [];
+
+  // Import one at a time so each new row can be paired with the author's intended
+  // enabled state; importRegexScripts still handles SillyTavern/internal normalization.
+  for (const script of scripts) {
+    if (!script || typeof script !== "object") {
+      skipped++;
+      continue;
+    }
+    const before = new Set(getRegexScriptsByPresetId(userId, presetId).map((s) => s.id));
+    const result = importRegexScripts(userId, {
+      scripts: [script],
+      folder: presetName,
+      preset_id: presetId,
+    });
+    imported += result.imported;
+    skipped += result.skipped;
+    if (result.imported > 0 && !script.disabled) {
+      for (const created of getRegexScriptsByPresetId(userId, presetId)) {
+        if (!before.has(created.id)) enabledIds.push(created.id);
+      }
+    }
+  }
+
+  // Seed the restore-list so author-enabled scripts activate on the next switch
+  // to this preset. If every script shipped disabled we leave no record — the
+  // activation default (enable currently-undisabled rows) then correctly enables none.
+  if (enabledIds.length > 0) {
+    updateStoredPresetRegexIds(userId, presetId, () => enabledIds);
+  }
+
+  return { imported, skipped };
 }

@@ -219,12 +219,21 @@ export const TABLE_REGISTRY: readonly TableSpec[] = [
   // Order: entities → mentions → relations → consolidations → font_colors → salience
   // Vaults: vaults → vault_entities → vault_relations → vault_chunks → chat_links
 
-  // 15) Dream weaver
+  // 15) Dream Weaver — legacy, dormant tables (the feature was replaced by the
+  // Weaver). Kept so any existing user's old rows still export and purge cleanly.
   { table: "dream_weaver_sessions", ownership: "user" },
   { table: "dream_weaver_messages", ownership: "via_session" },
   { table: "dream_weaver_saved_prompts", ownership: "user" },
 
-  // 16) Extensions (only user-installed)
+  // 16) Weaver — sessions first, then their children (FK session_id), taste last.
+  { table: "weaver_sessions", ownership: "user" },
+  { table: "weaver_extraction", ownership: "user" },
+  { table: "weaver_interview_turns", ownership: "user" },
+  { table: "weaver_bible", ownership: "user" },
+  { table: "weaver_fields", ownership: "user" },
+  { table: "weaver_taste", ownership: "user" },
+
+  // 17) Extensions (only user-installed)
   {
     table: "extensions",
     ownership: "via_installer",
@@ -339,10 +348,18 @@ export const IMPORT_ORDER: readonly string[] = [
   "cortex_vault_chunks",
   "cortex_chat_links",
 
-  // Phase 13: dream weaver
+  // Phase 13: dream weaver (legacy, dormant)
   "dream_weaver_sessions",
   "dream_weaver_messages",
   "dream_weaver_saved_prompts",
+
+  // Phase 13b: weaver (sessions before their children)
+  "weaver_sessions",
+  "weaver_extraction",
+  "weaver_interview_turns",
+  "weaver_bible",
+  "weaver_fields",
+  "weaver_taste",
 
   // Phase 14: extensions (user-installed)
   "extensions",

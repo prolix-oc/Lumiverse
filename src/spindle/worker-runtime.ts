@@ -252,6 +252,7 @@ type RuntimeWorkerToHost =
       rpcPermissionScopeId?: string;
     }
   | { type: "toast_show"; toastType: "success" | "warning" | "error" | "info"; message: string; title?: string; duration?: number; userId?: string }
+  | { type: "prompt_regex_set_owned"; chatIds: string[] }
   | { type: "user_storage_read_binary"; requestId: string; path: string; userId?: string }
   | {
       type: "user_storage_write_binary";
@@ -424,7 +425,23 @@ type RuntimeWorkerToHost =
       processId: string;
       options?: { userId?: string; reason?: string };
     }
-  | { type: "backend_process_send"; processId: string; payload: unknown; userId?: string };
+  | { type: "backend_process_send"; processId: string; payload: unknown; userId?: string }
+  | { type: "ui_get_drawer_tabs"; requestId: string; userId?: string }
+  | { type: "ui_get_settings_tabs"; requestId: string; userId?: string }
+  | {
+      type: "ui_navigate";
+      requestId: string;
+      action:
+        | "open_drawer_tab"
+        | "close_drawer"
+        | "open_settings"
+        | "close_settings"
+        | "open_command_palette"
+        | "close_command_palette";
+      tabId?: string;
+      viewId?: string;
+      userId?: string;
+    };
 
 type RuntimeHostToWorker =
   | HostToWorker
@@ -456,7 +473,12 @@ type RuntimeHostToWorker =
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
 
-type RuntimeSpindleAPI = SpindleAPI & {
+// `presets` is replaced wholesale (not intersected) because the local
+// PromptBlock type adds variants (select, switch, multiselect) that the
+// published PromptBlockDTO doesn't carry. Intersection would require the
+// implementation to satisfy both shapes — which is impossible since the
+// local type is strictly broader.
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -646,6 +668,31 @@ type RuntimeSpindleAPI = SpindleAPI & {
   };
   users: SpindleAPI["users"] & {
     getRole(userId?: string): Promise<SpindleUserRole>;
+  };
+  ui: {
+    getDrawerTabs(options?: { userId?: string }): Promise<Array<{
+      id: string;
+      shortName: string;
+      tabName: string;
+      tabDescription: string;
+      keywords: string[];
+      source: "builtin" | "extension";
+      extensionId?: string;
+    }>>;
+    getSettingsTabs(options?: { userId?: string }): Promise<Array<{
+      id: string;
+      shortName: string;
+      tabName: string;
+      tabDescription: string;
+      keywords: string[];
+      role?: "admin" | "owner";
+    }>>;
+    openDrawerTab(tabId: string, options?: { userId?: string }): Promise<void>;
+    closeDrawer(options?: { userId?: string }): Promise<void>;
+    openSettings(viewId?: string, options?: { userId?: string }): Promise<void>;
+    closeSettings(options?: { userId?: string }): Promise<void>;
+    openCommandPalette(options?: { userId?: string }): Promise<void>;
+    closeCommandPalette(options?: { userId?: string }): Promise<void>;
   };
 };
 
@@ -1580,6 +1627,17 @@ const spindleApi: RuntimeSpindleAPI = {
       });
       return result as boolean;
     },
+    async setStyleMode(chatId: string, mode: "bounded" | "extension-relaxed", userId?: string): Promise<void> {
+      assertMutationAllowed("spindle.chat.setStyleMode()");
+      const requestId = crypto.randomUUID();
+      await request({
+        type: "chat_set_style_mode",
+        requestId,
+        chatId,
+        mode,
+        userId,
+      });
+    },
   },
 
   events: {
@@ -2193,6 +2251,29 @@ const spindleApi: RuntimeSpindleAPI = {
         userId,
       });
       return result as import("lumiverse-spindle-types").ActivatedWorldInfoEntryDTO[];
+    },
+    async getGlobal(userId?: string): Promise<string[]> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_get_global", requestId, userId });
+      return result as string[];
+    },
+    async setGlobal(worldBookIds: string[], userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.setGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_set_global", requestId, worldBookIds, userId });
+      return result as string[];
+    },
+    async activateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.activateGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_activate_global", requestId, worldBookId, userId });
+      return result as string[];
+    },
+    async deactivateGlobal(worldBookId: string, userId?: string): Promise<string[]> {
+      assertMutationAllowed("spindle.world_books.deactivateGlobal()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "world_books_deactivate_global", requestId, worldBookId, userId });
+      return result as string[];
     },
   },
 
@@ -3216,6 +3297,79 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  promptRegex: {
+    setOwnedChats(chatIds: string[]) {
+      post({ type: "prompt_regex_set_owned", chatIds: chatIds.map(String) });
+    },
+  },
+
+  ui: {
+    async getDrawerTabs(options?: { userId?: string }): Promise<Array<{
+      id: string;
+      shortName: string;
+      tabName: string;
+      tabDescription: string;
+      keywords: string[];
+      source: "builtin" | "extension";
+      extensionId?: string;
+    }>> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "ui_get_drawer_tabs", requestId, userId: options?.userId });
+      return result as Array<{
+        id: string;
+        shortName: string;
+        tabName: string;
+        tabDescription: string;
+        keywords: string[];
+        source: "builtin" | "extension";
+        extensionId?: string;
+      }>;
+    },
+    async getSettingsTabs(options?: { userId?: string }): Promise<Array<{
+      id: string;
+      shortName: string;
+      tabName: string;
+      tabDescription: string;
+      keywords: string[];
+      role?: "admin" | "owner";
+    }>> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "ui_get_settings_tabs", requestId, userId: options?.userId });
+      return result as Array<{
+        id: string;
+        shortName: string;
+        tabName: string;
+        tabDescription: string;
+        keywords: string[];
+        role?: "admin" | "owner";
+      }>;
+    },
+    async openDrawerTab(tabId: string, options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "open_drawer_tab", tabId, userId: options?.userId });
+    },
+    async closeDrawer(options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "close_drawer", userId: options?.userId });
+    },
+    async openSettings(viewId?: string, options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "open_settings", viewId, userId: options?.userId });
+    },
+    async closeSettings(options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "close_settings", userId: options?.userId });
+    },
+    async openCommandPalette(options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "open_command_palette", userId: options?.userId });
+    },
+    async closeCommandPalette(options?: { userId?: string }): Promise<void> {
+      const requestId = crypto.randomUUID();
+      await request({ type: "ui_navigate", requestId, action: "close_command_palette", userId: options?.userId });
+    },
+  },
+
   toast: {
     success(message: string, options?: { title?: string; duration?: number; userId?: string }) {
       post({ type: "toast_show", toastType: "success", message, title: options?.title, duration: options?.duration, userId: options?.userId });
@@ -3373,9 +3527,14 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       }
 
       // Initialize runtime sandbox before loading untrusted extension code.
-      // This patches import(), eval, Function, and sensitive Bun/process APIs
-      // so that static-analysis bypasses (dynamic imports, indirect access)
-      // are caught at runtime.
+      // This patches eval, the Function constructor, and sensitive Bun/process
+      // APIs (real property overrides that take effect). It CANNOT block the
+      // native `import()` operator or `node:` builtins — those resolve through
+      // Bun internals that neither a global override nor a loader plugin can
+      // intercept. Dangerous module access is therefore enforced upstream by
+      // the static scan (detectDangerousBackendCapabilities, run before this
+      // entry is loaded) and, when enabled, by the OS-level sandbox (sandbox
+      // mode). The sandbox here is a cooperative speed bump, not the boundary.
       initializeSandbox();
 
       // Dynamically import the extension's backend entry

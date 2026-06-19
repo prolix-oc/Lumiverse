@@ -452,7 +452,10 @@ async function searchChatChunksScoped(
   return filtered.map((h: any) => ({
     chunkId: h.chunk_id,
     content: h.content,
-    distance: h.score, // LanceDB returns distance as score
+    // LanceDB returns distance as score. Cortex uses pure-vector search (no
+    // FTS leg), so score is always a real distance here; coerce defensively
+    // since searchChatChunks returns null for keyword-only hits elsewhere.
+    distance: h.score ?? 1,
   }));
 }
 
@@ -805,7 +808,7 @@ export async function queryVaultCortex(
         description: e.description,
         lastSeenAt: null,
         mentionCount: 0,
-        topFacts: safeJsonArray(e.facts),
+        topFacts: safeJsonArray(e.facts).map((f: string) => entityGraph.stripFactTags(f)),
         emotionalProfile,
         relationships: [],
       });

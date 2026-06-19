@@ -391,8 +391,11 @@ export function sanitizeForVectorization(content: string, options?: SanitizeOpti
 
   result = stripDetailsBlocks(result);
   result = stripLoomTags(result);
+  result = stripScaffoldTagBlocks(result, DEFAULT_SCAFFOLD_TAGS);
   result = stripAllHtmlTagsPreserveContent(result);
 
+  result = result.replace(/[ \t\f\v]+/g, " ");
+  result = result.replace(/ ?\n ?/g, "\n");
   result = collapseExcessiveNewlines(result);
   return result.trim();
 }

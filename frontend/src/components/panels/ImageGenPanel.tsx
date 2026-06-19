@@ -1,26 +1,30 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Image as ImageIcon, Settings2, Trash2, Plus, X, Workflow, Shuffle } from 'lucide-react'
+import { Image as ImageIcon, Settings2, Trash2, Plus, X, Workflow, Shuffle, Download, Upload } from 'lucide-react'
 import { IconBrush } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { imageGenApi, imageGenPresetBindingsApi, type ComfyUICapabilities, type SceneData } from '@/api/image-gen'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import ImageGenProgressBar from './ImageGenProgressBar'
-import { connectionsApi } from '@/api/connections'
 import { Toggle } from '@/components/shared/Toggle'
 import { Button, FormField, Select, TextInput, EditorSection, TextArea } from '@/components/shared/FormComponents'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { LabeledRangeSlider } from '@/components/shared/RangeSlider'
+import { useTouchActivate } from '@/hooks/useTouchActivate'
 import ModelCombobox from './connection-manager/ModelCombobox'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
+import { uuidv7 } from '@/lib/uuid'
+import { toast } from '@/lib/toast'
+import ImageGenExportModal from './ImageGenExportModal'
 import ImageLightbox from '@/components/shared/ImageLightbox'
-import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
-import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/components/dream-weaver/visual-studio/comfyui/mapped-fields'
-import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
-import type { ConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import { ComfyWorkflowEditor } from './image-gen-connections/ComfyWorkflowEditor'
+import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/lib/comfyui-mapped-fields'
+import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 
@@ -141,6 +145,38 @@ function ModelComboField({
 }
 
 /** Render a single parameter from the provider capability schema */
+/** Raw Request Override editor — validates JSON inline so typos don't silently break generation. */
+function RawOverrideField({
+  label,
+  schema,
+  value,
+  onChange,
+}: {
+  label: string
+  schema: ImageGenParameterSchema
+  value: any
+  onChange: (value: string) => void
+}) {
+  const { t } = useTranslation('panels')
+  const text = typeof value === 'string' ? value : ''
+  let error: string | undefined
+  if (text.trim()) {
+    try {
+      const parsed = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        error = t('imageGenPanel.rawOverrideNotObject')
+      }
+    } catch {
+      error = t('imageGenPanel.rawOverrideInvalidJson')
+    }
+  }
+  return (
+    <FormField label={label} hint={schema.description} error={error}>
+      <TextArea rows={3} value={text} onChange={onChange} placeholder='{"steps": 30}' />
+    </FormField>
+  )
+}
+
 function ParamField({
   paramKey,
   schema,
@@ -256,6 +292,16 @@ function ParamField({
       )
 
     case 'string':
+      if (paramKey === 'rawRequestOverride') {
+        return (
+          <RawOverrideField
+            label={displayName}
+            schema={schema}
+            value={value}
+            onChange={(v) => onChange(paramKey, v)}
+          />
+        )
+      }
       if (schema.description?.toLowerCase().includes('prompt') || schema.description?.toLowerCase().includes('negative')) {
         return (
           <FormField label={displayName} hint={schema.description}>
@@ -306,16 +352,13 @@ export default function ImageGenPanel() {
   const [error, setError] = useState<string | null>(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [generatedPreview, setGeneratedPreview] = useState<string | null>(null)
-  const [llmConnections, setLlmConnections] = useState<ConnectionProfile[]>([])
-  const [parserModels, setParserModels] = useState<string[]>([])
-  const [parserModelLabels, setParserModelLabels] = useState<Record<string, string>>({})
-  const [parserModelsLoading, setParserModelsLoading] = useState(false)
   const [presetName, setPresetName] = useState('')
   const [availableMacros, setAvailableMacros] = useState<MacroGroup[]>(() => getAvailableMacros())
-  const [editTarget, setEditTarget] = useState<'main' | 'character' | 'persona'>('main')
+  const [editTarget, setEditTarget] = useState<'main' | 'character' | 'persona' | 'captioning'>('main')
   const [draftPrompt, setDraftPrompt] = useState('')
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
+  const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -325,43 +368,17 @@ export default function ImageGenPanel() {
   const [workflowLoading, setWorkflowLoading] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const refInputRef = useRef<HTMLInputElement | null>(null)
+  const importConfigInputRef = useRef<HTMLInputElement | null>(null)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [importConfigBusy, setImportConfigBusy] = useState(false)
 
-  // Load profiles and providers on mount
+  // Connection lists come from the store; only the image-gen provider registry
+  // needs a refresh here.
   useEffect(() => {
-    imageGenConnectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
-      setImageGenProfiles(res.data)
-    }).catch(() => {})
-
     imageGenConnectionsApi.providers().then((res) => {
       if (res.providers?.length) setImageGenProviders(res.providers)
     }).catch(() => {})
-
-    connectionsApi.list({ limit: 100, offset: 0 }).then((res) => {
-      setLlmConnections(res.data)
-    }).catch(() => {})
-  }, [setImageGenProfiles, setImageGenProviders])
-
-  const loadParserModels = useCallback(async () => {
-    const connectionId = imageGeneration.promptParserConnectionId
-    if (!connectionId) {
-      setParserModels([])
-      setParserModelLabels({})
-      return
-    }
-    setParserModelsLoading(true)
-    try {
-      const res = await connectionsApi.models(connectionId)
-      setParserModels(res.models || [])
-      setParserModelLabels(res.model_labels || {})
-    } catch {
-      setParserModels([])
-      setParserModelLabels({})
-    } finally {
-      setParserModelsLoading(false)
-    }
-  }, [imageGeneration.promptParserConnectionId])
-
-  useEffect(() => { void loadParserModels() }, [loadParserModels])
+  }, [setImageGenProviders])
 
   // Resolve active connection and its provider capabilities
   const activeConnection = useMemo(
@@ -517,6 +534,7 @@ export default function ImageGenPanel() {
   const mainPresets = useMemo(() => promptPresets.filter((p) => (p.kind ?? 'main') === 'main'), [promptPresets])
   const characterPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'character'), [promptPresets])
   const personaPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'persona'), [promptPresets])
+  const captioningPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'captioning'), [promptPresets])
 
   // Load this character's bound preset whenever the active character changes.
   useEffect(() => {
@@ -578,11 +596,15 @@ export default function ImageGenPanel() {
       setLoadedPresetId(preset?.id ?? null)
       setDraftPrompt(preset?.prompt || '')
       setDraftNegative(preset?.negativePrompt || '')
-    } else {
+    } else if (editTarget === 'persona') {
       const preset = personaPresetId ? personaPresets.find((p) => p.id === personaPresetId) : null
       setLoadedPresetId(preset?.id ?? null)
       setDraftPrompt(preset?.prompt || '')
       setDraftNegative(preset?.negativePrompt || '')
+    } else if (editTarget === 'captioning') {
+      setLoadedPresetId(null)
+      setDraftPrompt('')
+      setDraftNegative('')
     }
     setPresetName('')
     // We intentionally exclude `imageGeneration.customPrompt`/`customNegativePrompt`
@@ -693,6 +715,9 @@ export default function ImageGenPanel() {
         bindPersonaPreset(null)
         setDraftPrompt('')
         setDraftNegative('')
+      } else if (editTarget === 'captioning') {
+        setDraftPrompt('')
+        setDraftNegative('')
       }
       return
     }
@@ -723,18 +748,18 @@ export default function ImageGenPanel() {
   // target: 'main' bumps the activePromptPresetId and writes to settings;
   // 'character'/'persona' rebind the new id to the active actor.
   const savePromptPreset = useCallback(() => {
-    const targetLabel = editTarget === 'main' ? t('imageGenPanel.imagePrompt') : editTarget === 'character' ? t('imageGenPanel.characterPreset') : t('imageGenPanel.personaPreset')
+    const targetLabel = editTarget === 'main' ? t('imageGenPanel.imagePrompt') : editTarget === 'character' ? t('imageGenPanel.characterPreset') : editTarget === 'captioning' ? t('imageGenPanel.captioningPreset') : t('imageGenPanel.personaPreset')
     const name = presetName.trim() || loadedPreset?.name || targetLabel
     const existingId = loadedPresetId
     const nextPreset: ImageGenPromptPreset = {
-      id: existingId || crypto.randomUUID(),
+      id: existingId || uuidv7(),
       name,
       mode: imageGeneration.promptMode === 'parsed_custom' ? 'parsed_custom' : 'custom',
       prompt: draftPrompt,
       negativePrompt: draftNegative,
-      parserConnectionId: editTarget === 'main' ? (imageGeneration.promptParserConnectionId || null) : null,
-      parserModel: editTarget === 'main' ? (imageGeneration.promptParserModel || '') : '',
-      parserParameters: editTarget === 'main' ? (imageGeneration.promptParserParameters || {}) : {},
+      parserConnectionId: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserConnectionId || null) : null,
+      parserModel: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserModel || '') : '',
+      parserParameters: (editTarget === 'main' || editTarget === 'captioning') ? (imageGeneration.promptParserParameters || {}) : {},
       kind: editTarget,
     }
     const next = existingId
@@ -774,6 +799,7 @@ export default function ImageGenPanel() {
 
   const deletePromptPreset = useCallback(() => {
     if (!loadedPresetId) return
+    setConfirmDeletePreset(false)
     const id = loadedPresetId
     const next = promptPresets.filter((p) => p.id !== id)
     const updates: Partial<typeof imageGeneration> = { promptPresets: next }
@@ -801,13 +827,42 @@ export default function ImageGenPanel() {
     setImageGenSettings,
   ])
 
+  const handleImportConfigFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImportConfigBusy(true)
+    try {
+      const payload = JSON.parse(await file.text())
+      const res = await imageGenApi.importConfig(payload)
+      // The backend already persisted the merged settings; this re-syncs the store.
+      setImageGenSettings(res.settings)
+      if (res.imported.connections > 0) {
+        const list = await imageGenConnectionsApi.list({ limit: 100, offset: 0 })
+        setImageGenProfiles(list.data)
+      }
+      toast.success(t('imageGenPanel.importSuccess', {
+        presets: res.imported.presets,
+        connections: res.imported.connections,
+      }))
+      for (const issue of res.errors || []) toast.error(issue)
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+    } finally {
+      setImportConfigBusy(false)
+    }
+  }
+
   // Reference images are provider parameters and stay scoped to this connection.
   const currentRefs: RefImage[] = genParams.referenceImages || []
   const setCurrentRefs = (next: RefImage[]) => {
     updateParam('referenceImages', next)
   }
 
-  const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt'
+  // Providers that accept image input: NovelAI/NanoGPT (style references) plus
+  // the img2img providers, which reuse the same reference-image config surface.
+  const supportsImg2ImgSource = providerName === 'swarmui' || providerName === 'comfyui' || providerName === 'google_gemini' || providerName === 'openrouter' || providerName === 'openai' || providerName === 'sdapi'
+  const supportsRefs = providerName === 'novelai' || providerName === 'nanogpt' || supportsImg2ImgSource
 
   const runGenerationCall = useCallback(async (input: {
     chatId: string
@@ -820,7 +875,7 @@ export default function ImageGenPanel() {
     attachToMessageId?: string
     skipParse?: boolean
   }) => {
-    const jobId = crypto.randomUUID()
+    const jobId = uuidv7()
     setCurrentJobId(jobId)
     setSceneGenerating(true)
     try {
@@ -949,6 +1004,14 @@ export default function ImageGenPanel() {
     await runGenerationCall(baseInput)
   }
 
+  // The Generate buttons sit directly below the prompt textareas. On Android,
+  // tapping them blurs the input and dismisses the keyboard, which reflows the
+  // layout and moves the button before the synthetic click lands (the click is
+  // then dropped — the button only flashes). Activate on pointerup instead.
+  const genDisabled = sceneGenerating || !activeChatId || !activeImageGenConnectionId
+  const generateNowTap = useTouchActivate(() => handleGenerate(false), genDisabled)
+  const forceGenerateTap = useTouchActivate(() => handleGenerate(true), genDisabled)
+
   const onPickRefs = () => refInputRef.current?.click()
   const onRefFiles: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const files = Array.from(e.target.files || [])
@@ -962,17 +1025,6 @@ export default function ImageGenPanel() {
       e.target.value = ''
     }
   }
-
-  // Connection selector options — just the name
-  const connectionOptions = useMemo(() => [
-    { value: '', label: t('imageGenPanel.selectConnection') },
-    ...imageGenProfiles.map((p) => ({ value: p.id, label: p.name })),
-  ], [imageGenProfiles, t])
-
-  const llmConnectionOptions = useMemo(
-    () => llmConnections.map((p) => ({ value: p.id, label: p.name })),
-    [llmConnections],
-  )
 
   const mainPresetOptions = useMemo(() => [
     { value: '', label: t('imageGenPanel.noSavedPrompt') },
@@ -988,6 +1040,11 @@ export default function ImageGenPanel() {
     { value: '', label: t('imageGenPanel.noPersonaPreset') },
     ...personaPresets.map((p) => ({ value: p.id, label: p.name })),
   ], [personaPresets, t])
+
+  const captioningPresetOptions = useMemo(() => [
+    { value: '', label: 'No captioning preset' },
+    ...captioningPresets.map((p) => ({ value: p.id, label: p.name })),
+  ], [captioningPresets])
 
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
@@ -1007,14 +1064,54 @@ export default function ImageGenPanel() {
         hint={t('imageGenPanel.enableHint')}
       />
 
+      <FormField label="Image Captioner" hint="Upload an image and generate descriptive tags using your parser model. Useful for creating character or scene prompts from reference images.">
+        <Button variant="secondary" size="sm" onClick={() => useStore.getState().openModal('imageCaptioner', {})}>
+          Open Captioner
+        </Button>
+      </FormField>
+
+      <EditorSection title={t('imageGenPanel.importExport')} Icon={Settings2} defaultExpanded={false}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" size="sm" onClick={() => setExportModalOpen(true)}>
+            <Download size={14} /> {t('imageGenPanel.exportConfig')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => importConfigInputRef.current?.click()}
+            disabled={importConfigBusy}
+          >
+            <Upload size={14} /> {t('imageGenPanel.importConfig')}
+          </Button>
+        </div>
+        <input
+          ref={importConfigInputRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: 'none' }}
+          onChange={handleImportConfigFile}
+        />
+      </EditorSection>
+
+      <ImageGenExportModal
+        isOpen={exportModalOpen}
+        onClose={() => setExportModalOpen(false)}
+        presets={promptPresets}
+      />
+
       {imageGeneration.enabled && (
         <>
           {/* Connection Profile Selector */}
           <FormField label={t('imageGenPanel.connection')} hint={imageGenProfiles.length === 0 ? t('imageGenPanel.createConnectionFirst') : undefined}>
-            <Select
+            <ConnectionSelect
+              kind="imageGen"
               value={activeImageGenConnectionId || ''}
               onChange={(value) => setActiveImageGenConnection(value || null)}
-              options={connectionOptions}
+              placeholder={t('imageGenPanel.selectConnection')}
+              searchPlaceholder={t('imageGenPanel.searchConnections')}
+              ariaLabel={t('imageGenPanel.connection')}
+              clearable
+              clearLabel={t('imageGenPanel.noConnection')}
             />
             {activeConnection && (
               <div style={{ fontSize: 11, color: 'var(--lumiverse-text-muted)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1058,17 +1155,18 @@ export default function ImageGenPanel() {
                 >
                   <Select
                     value={editTarget}
-                    onChange={(value) => setEditTarget(value as 'main' | 'character' | 'persona')}
+                    onChange={(value) => setEditTarget(value as 'main' | 'character' | 'persona' | 'captioning')}
                     options={[
                       { value: 'main', label: t('imageGenPanel.mainPreset') },
                       { value: 'character', label: t('imageGenPanel.characterPreset') },
                       { value: 'persona', label: t('imageGenPanel.personaPreset') },
+                      { value: 'captioning', label: t('imageGenPanel.captioningPreset') },
                     ]}
                   />
                 </FormField>
 
                 <FormField
-                  label={editTarget === 'main' ? t('imageGenPanel.activeMainPreset') : editTarget === 'character' ? t('imageGenPanel.boundCharacterPreset') : t('imageGenPanel.boundPersonaPreset')}
+                  label={editTarget === 'main' ? t('imageGenPanel.activeMainPreset') : editTarget === 'character' ? t('imageGenPanel.boundCharacterPreset') : editTarget === 'captioning' ? t('imageGenPanel.boundCaptioningPreset') : t('imageGenPanel.boundPersonaPreset')}
                   hint={
                     editTarget === 'main'
                       ? t('imageGenPanel.pickMainPresetHint')
@@ -1076,16 +1174,18 @@ export default function ImageGenPanel() {
                         ? activeCharacterId
                           ? t('imageGenPanel.pickCharacterPresetHint')
                           : t('imageGenPanel.openChatBindPreset')
-                        : activePersonaId
-                          ? t('imageGenPanel.pickPersonaPresetHint')
-                          : t('imageGenPanel.selectActivePersona')
+                        : editTarget === 'captioning'
+                          ? t('imageGenPanel.pickCaptioningPresetHint')
+                          : activePersonaId
+                            ? t('imageGenPanel.pickPersonaPresetHint')
+                            : t('imageGenPanel.selectActivePersona')
                   }
                 >
                   <Select
                     value={loadedPresetId || ''}
                     onChange={(value) => pickPreset(value || null)}
                     options={
-                      editTarget === 'main' ? mainPresetOptions : editTarget === 'character' ? characterPresetOptions : personaPresetOptions
+                      editTarget === 'main' ? mainPresetOptions : editTarget === 'character' ? characterPresetOptions : editTarget === 'captioning' ? captioningPresetOptions : personaPresetOptions
                     }
                   />
                 </FormField>
@@ -1094,7 +1194,9 @@ export default function ImageGenPanel() {
                   label={
                     editTarget === 'main'
                       ? (imageGeneration.promptMode === 'parsed_custom' ? t('imageGenPanel.parserInstructions') : t('imageGenPanel.prompt'))
-                      : editTarget === 'character' ? t('imageGenPanel.characterSnippet') : t('imageGenPanel.personaSnippet')
+                      : editTarget === 'character' ? t('imageGenPanel.characterSnippet')
+                      : editTarget === 'captioning' ? t('imageGenPanel.captioningInstructions')
+                      : t('imageGenPanel.personaSnippet')
                   }
                   hint={
                     editTarget === 'main'
@@ -1103,7 +1205,9 @@ export default function ImageGenPanel() {
                           : t('imageGenPanel.sentDirectlyHint'))
                       : editTarget === 'character'
                         ? t('imageGenPanel.characterSnippetHint')
-                        : t('imageGenPanel.personaSnippetHint')
+                        : editTarget === 'captioning'
+                          ? t('imageGenPanel.captioningInstructionsHint')
+                          : t('imageGenPanel.personaSnippetHint')
                   }
                 >
                   <ExpandableTextarea
@@ -1118,7 +1222,9 @@ export default function ImageGenPanel() {
                             : t('imageGenPanel.describeImage'))
                         : editTarget === 'character'
                           ? '1girl, long red hair, leather jacket'
-                          : 'middle-aged man, glasses, beige coat'
+                          : editTarget === 'captioning'
+                            ? 'Describe this image in detail using concise image-generation tags. Include subject, composition, style, lighting, mood, and colors.'
+                            : 'middle-aged man, glasses, beige coat'
                     }
                     rows={5}
                     macros={availableMacros}
@@ -1137,7 +1243,7 @@ export default function ImageGenPanel() {
                 </FormField>
 
                 <FormField
-                  label={editTarget === 'main' ? t('imageGenPanel.negativePrompt') : `${editTarget === 'character' ? t('imageGenPanel.character') : t('imageGenPanel.persona')} ${t('imageGenPanel.negativeSnippet')}`}
+                  label={editTarget === 'main' ? t('imageGenPanel.negativePrompt') : `${editTarget === 'character' ? t('imageGenPanel.character') : editTarget === 'captioning' ? t('imageGenPanel.captioning') : t('imageGenPanel.persona')} ${t('imageGenPanel.negativeSnippet')}`}
                   hint={
                     editTarget === 'main'
                       ? undefined
@@ -1165,8 +1271,20 @@ export default function ImageGenPanel() {
                   <Button variant="secondary" size="sm" onClick={savePromptPreset}>
                     {loadedPresetId ? t('imageGenPanel.saveChanges') : t('imageGenPanel.saveAsNew')}
                   </Button>
-                  {loadedPresetId && <Button variant="danger" size="sm" onClick={deletePromptPreset}>{t('imageGenPanel.delete')}</Button>}
+                  {loadedPresetId && <Button variant="danger" size="sm" onClick={() => setConfirmDeletePreset(true)}>{t('imageGenPanel.delete')}</Button>}
                 </div>
+
+                {confirmDeletePreset && (
+                  <ConfirmationModal
+                    isOpen={true}
+                    title={t('imageGenPanel.deletePresetConfirmTitle')}
+                    message={t('imageGenPanel.deletePresetConfirmMessage', { name: loadedPreset?.name })}
+                    variant="danger"
+                    confirmText={t('imageGenPanel.delete')}
+                    onConfirm={deletePromptPreset}
+                    onCancel={() => setConfirmDeletePreset(false)}
+                  />
+                )}
                 {loadedPreset && (
                   <div className={styles.editorTargetBanner}>
                     {t('imageGenPanel.editing')} <strong>{loadedPreset.name}</strong> ({editTarget})
@@ -1176,42 +1294,29 @@ export default function ImageGenPanel() {
                 )}
               </>
             )}
+
           </EditorSection>
 
           {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (
             <EditorSection title={t('imageGenPanel.promptParser')} Icon={Settings2} defaultExpanded={imageGeneration.promptMode === 'parsed_custom'}>
               <FormField label={t('imageGenPanel.parserConnection')} hint={t('imageGenPanel.parserConnectionHint')}>
-                <SearchableSelect
+                <ConnectionSelect
+                  kind="llm"
                   value={imageGeneration.promptParserConnectionId || ''}
-                  onChange={(value) => updateTop({ promptParserConnectionId: value || null, promptParserModel: '' })}
-                  options={llmConnectionOptions}
+                  onChange={(value) => updateTop({ promptParserConnectionId: value || null })}
+                  withModel
+                  seedDefaultModel={false}
+                  modelValue={imageGeneration.promptParserModel || ''}
+                  onModelChange={(value) => updateTop({ promptParserModel: value })}
                   placeholder={t('imageGenPanel.useSidecarOrSelect')}
                   searchPlaceholder={t('imageGenPanel.searchConnections')}
-                  emptyMessage={llmConnections.length === 0 ? t('imageGenPanel.noLlmConnections') : t('imageGenPanel.noMatchingConnections')}
-                  disabled={llmConnections.length === 0}
+                  emptyMessage={t('imageGenPanel.noLlmConnections')}
                   ariaLabel={t('imageGenPanel.parserConnection')}
+                  modelPlaceholder={t('imageGenPanel.useConnectionDefault')}
+                  modelEmptyMessage={t('imageGenPanel.noModelsReturned')}
+                  modelNoConnectionMessage={t('imageGenPanel.pickParserConnectionFirst')}
+                  modelAppearance="standard"
                   portal
-                />
-              </FormField>
-
-              <FormField label={t('imageGenPanel.parserModel')}>
-                <ModelCombobox
-                  value={imageGeneration.promptParserModel || ''}
-                  onChange={(value) => updateTop({ promptParserModel: value })}
-                  models={parserModels}
-                  modelLabels={parserModelLabels}
-                  loading={parserModelsLoading}
-                  onRefresh={loadParserModels}
-                  autoRefreshOnFocus
-                  refreshKey={imageGeneration.promptParserConnectionId || ''}
-                  placeholder={t('imageGenPanel.useConnectionDefault')}
-                  emptyMessage={
-                    imageGeneration.promptParserConnectionId
-                      ? t('imageGenPanel.noModelsReturned')
-                      : t('imageGenPanel.pickParserConnectionFirst')
-                  }
-                  disabled={!imageGeneration.promptParserConnectionId}
-                  appearance="standard"
                 />
               </FormField>
 
@@ -1358,9 +1463,26 @@ export default function ImageGenPanel() {
                 </EditorSection>
               ))}
 
-              {/* Director References — provider-specific, only for NovelAI and NanoGPT */}
+              {/* Reference / source images — NovelAI & NanoGPT style references,
+                  plus img2img init images for SwarmUI / ComfyUI / Gemini. */}
               {supportsRefs && (
-                <EditorSection title={t('imageGenPanel.directorReferences')} Icon={IconBrush} defaultExpanded={false}>
+                <EditorSection title={t(providerName === 'novelai' ? 'imageGenPanel.directorReferences' : 'imageGenPanel.references')} Icon={IconBrush} defaultExpanded={false}>
+                  {supportsImg2ImgSource && (
+                    <>
+                      <ToggleRow
+                        checked={!!genParams.includeCharacterAvatar}
+                        onChange={(checked) => updateParam('includeCharacterAvatar', checked)}
+                        label={t('imageGenPanel.includeCharacterAvatar')}
+                        hint={t('imageGenPanel.includeCharacterAvatarHint')}
+                      />
+                      <ToggleRow
+                        checked={!!genParams.includePersonaAvatar}
+                        onChange={(checked) => updateParam('includePersonaAvatar', checked)}
+                        label={t('imageGenPanel.includePersonaAvatar')}
+                        hint={t('imageGenPanel.includePersonaAvatarHint')}
+                      />
+                    </>
+                  )}
                   {providerName === 'novelai' && (
                     <>
                       <ToggleRow
@@ -1498,6 +1620,18 @@ export default function ImageGenPanel() {
                 />
               </FormField>
             )}
+            <FormField label={t('imageGenPanel.contextMessageLimit')} hint={t('imageGenPanel.contextMessageLimitHint')}>
+              <TextInput
+                type="number"
+                min={1}
+                max={200}
+                value={String(imageGeneration.promptContextMessageLimit ?? 3)}
+                onChange={(value) => {
+                  const parsed = Number(value)
+                  updateTop({ promptContextMessageLimit: Math.max(1, Math.min(200, Number.isFinite(parsed) ? Math.floor(parsed) : 3)) })
+                }}
+              />
+            </FormField>
             <LabeledRangeSlider
               label={t('imageGenPanel.sceneChangeSensitivity')}
               min={1}
@@ -1538,8 +1672,8 @@ export default function ImageGenPanel() {
           {lastScene && <div className={styles.sceneInfo}><div><strong>{t('imageGenPanel.scene')}:</strong> {lastScene.environment}</div><div><strong>{t('imageGenPanel.time')}:</strong> {lastScene.time_of_day}</div><div><strong>{t('imageGenPanel.mood')}:</strong> {lastScene.mood}</div></div>}
 
           <div className={styles.actions}>
-            <Button variant="primary" size="sm" icon={<ImageIcon size={14} />} onClick={() => handleGenerate(false)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>{sceneGenerating ? t('imageGenPanel.generating') : t('imageGenPanel.generateNow')}</Button>
-            <Button variant="secondary" size="sm" icon={<IconBrush size={14} />} onClick={() => handleGenerate(true)} disabled={sceneGenerating || !activeChatId || !activeImageGenConnectionId}>{t('imageGenPanel.forceGenerate')}</Button>
+            <Button variant="primary" size="sm" icon={<ImageIcon size={14} />} {...generateNowTap} disabled={genDisabled}>{sceneGenerating ? t('imageGenPanel.generating') : t('imageGenPanel.generateNow')}</Button>
+            <Button variant="secondary" size="sm" icon={<IconBrush size={14} />} {...forceGenerateTap} disabled={genDisabled}>{t('imageGenPanel.forceGenerate')}</Button>
             {generatedPreview && <Button variant="secondary" size="sm" onClick={() => { setSceneBackground(generatedPreview); setGeneratedPreview(null) }}>{t('imageGenPanel.useAsBackground')}</Button>}
             {previewSrc && <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => { setSceneBackground(null); setGeneratedPreview(null) }}>{t('imageGenPanel.clear')}</Button>}
           </div>
@@ -1551,11 +1685,16 @@ export default function ImageGenPanel() {
         </>
       )}
 
-      {lightboxOpen && previewSrc && <ImageLightbox src={previewSrc} onClose={() => setLightboxOpen(false)} />}
+      {lightboxOpen && previewSrc && (
+        <ImageLightbox
+          src={previewSrc}
+          onClose={() => setLightboxOpen(false)}
+          onDelete={() => { setSceneBackground(null); setGeneratedPreview(null) }}
+        />
+      )}
       {workflowEditorOpen && (
-        <WorkflowEditorModal
+        <ComfyWorkflowEditor
           config={workflowConfig}
-          capabilities={workflowCapabilities}
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}

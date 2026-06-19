@@ -33,6 +33,12 @@ class EventBus {
   }
 
   addClient(ws: ServerWebSocket<unknown>, userId: string, sessionId?: string): void {
+    // If the socket already closed during onOpen's async auth/DB work, don't
+    // register it. onClose would have run removeClient as a no-op (not yet in
+    // the maps), so inserting a dead socket here would leave tracking that only
+    // the 120s sweep reclaims. readyState 1 === OPEN on Bun's ServerWebSocket.
+    if ((ws as { readyState?: number }).readyState !== 1) return;
+
     // Track session → socket mapping for dedup, but do NOT forcefully evict
     // the old socket. Stale sockets are cleaned up naturally via onClose →
     // removeClient. Forceful eviction causes reconnect loops because the

@@ -6,7 +6,7 @@ import type {
   CreateLumiaItemInput, UpdateLumiaItemInput,
   CreateLoomItemInput, UpdateLoomItemInput,
   CreateLoomToolInput, UpdateLoomToolInput,
-  PackImportPayload,
+  PackImportPayload, PackExportPayload,
 } from "../types/pack";
 import type { RegexPlacement, RegexTarget, RegexMacroMode } from "../types/regex-script";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
@@ -134,9 +134,20 @@ let _stmtPackById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtLumiaByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtLoomByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtToolsByPack: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
+let _packStmtsGen = -1;
 
 function getPackStmts() {
   const db = getDb();
+  // Invalidate cached statements when the underlying Database is replaced
+  // (reset/reopen); statements bound to a closed DB throw on reuse.
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (_packStmtsGen !== gen) {
+    _stmtPackById = null;
+    _stmtLumiaByPack = null;
+    _stmtLoomByPack = null;
+    _stmtToolsByPack = null;
+    _packStmtsGen = gen;
+  }
   if (!_stmtPackById) _stmtPackById = db.query("SELECT * FROM packs WHERE id = ? AND user_id = ?");
   if (!_stmtLumiaByPack) _stmtLumiaByPack = db.query("SELECT * FROM lumia_items WHERE pack_id = ? ORDER BY sort_order ASC");
   if (!_stmtLoomByPack) _stmtLoomByPack = db.query("SELECT * FROM loom_items WHERE pack_id = ? ORDER BY sort_order ASC");
@@ -514,7 +525,7 @@ function normalizePackPayload(raw: any): PackImportPayload {
       replaceString: s.replaceString || s.replace_string || "",
       flags: s.flags || "gi",
       placement: s.placement || ["ai_output"],
-      target: s.target || "response",
+      target: Array.isArray(s.target) ? s.target : [s.target || "response"],
       minDepth: s.minDepth ?? s.min_depth ?? null,
       maxDepth: s.maxDepth ?? s.max_depth ?? null,
       trimStrings: s.trimStrings || s.trim_strings || [],
@@ -621,7 +632,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         placement: (s.placement as RegexPlacement[]) || ["ai_output"],
         scope: "global",
         scope_id: null,
-        target: (s.target as RegexTarget) || "response",
+        target: (Array.isArray(s.target) ? s.target : [s.target || "response"]) as RegexTarget[],
         min_depth: s.minDepth ?? null,
         max_depth: s.maxDepth ?? null,
         trim_strings: s.trimStrings || [],
@@ -640,36 +651,63 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
   return getPackWithItems(userId, id)!;
 }
 
-export function exportPack(userId: string, id: string): PackImportPayload | null {
+// LumiHub stores loom categories as display strings; map Lumiverse enums to them.
+// The importer's normCategory() maps these back (case-insensitive substring match).
+const LOOM_CATEGORY_EXPORT: Record<string, string> = {
+  narrative_style: "Narrative Style",
+  loom_utility: "Loom Utilities",
+  retrofit: "Loom Retrofit",
+};
+
+// LumiHub requires a positive integer version; Lumiverse stores semantic strings.
+function toExportVersion(value: string | number | null | undefined): number {
+  const n = Math.floor(Number.parseFloat(String(value ?? "")));
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+// LumiHub gender identity is 0=she/her, 1=he/him, 2=they/them. Lumiverse adds
+// 3=any, which has no LumiHub equivalent and collapses to they/them.
+function toExportGenderIdentity(value: 0 | 1 | 2 | 3): 0 | 1 | 2 {
+  return value === 3 ? 2 : value;
+}
+
+export function exportPack(userId: string, id: string): PackExportPayload | null {
   const pack = getPackWithItems(userId, id);
   if (!pack) return null;
 
+  const extrasItems = Array.isArray((pack.extras as any)?.items) ? (pack.extras as any).items : [];
+
   return {
-    name: pack.name,
-    author: pack.author,
-    coverUrl: pack.cover_url || undefined,
-    version: pack.version,
-    sourceUrl: pack.source_url || undefined,
-    extras: pack.extras,
+    // LumiHub-compatible fields (validated by its lumiaPackSchema on upload)
+    packName: pack.name,
+    packAuthor: pack.author || "Unknown",
+    coverUrl: pack.cover_url || null,
+    version: toExportVersion(pack.version),
+    packExtras: extrasItems.map((e: any) => ({
+      type: String(e?.type ?? ""),
+      name: String(e?.name ?? ""),
+      description: String(e?.description ?? ""),
+    })),
     lumiaItems: pack.lumia_items.map((item) => ({
-      name: item.name,
-      avatarUrl: item.avatar_url || undefined,
-      authorName: item.author_name,
-      definition: item.definition,
-      personality: item.personality,
-      behavior: item.behavior,
-      genderIdentity: item.gender_identity,
-      version: item.version,
-      sortOrder: item.sort_order,
+      lumiaName: item.name,
+      lumiaDefinition: item.definition,
+      lumiaPersonality: item.personality,
+      lumiaBehavior: item.behavior,
+      avatarUrl: item.avatar_url || null,
+      genderIdentity: toExportGenderIdentity(item.gender_identity),
+      authorName: item.author_name || "Unknown",
+      version: toExportVersion(item.version),
     })),
     loomItems: pack.loom_items.map((item) => ({
-      name: item.name,
-      content: item.content,
-      category: item.category,
-      authorName: item.author_name,
-      version: item.version,
-      sortOrder: item.sort_order,
+      loomName: item.name,
+      loomContent: item.content,
+      loomCategory: LOOM_CATEGORY_EXPORT[item.category] ?? "Narrative Style",
+      authorName: item.author_name || null,
+      version: toExportVersion(item.version),
     })),
+    // Lumiverse-only — preserved via LumiHub's passthrough() for lossless round-trips
+    sourceUrl: pack.source_url || undefined,
+    extras: pack.extras,
     loomTools: pack.loom_tools.map((tool) => ({
       toolName: tool.tool_name,
       displayName: tool.display_name,

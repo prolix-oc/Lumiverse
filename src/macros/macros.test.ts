@@ -30,7 +30,9 @@ function makeEnv(opts: {
       groupOthers: "Charlie, Dave",
       groupMemberCount: "3",
       isGroupChat: "yes",
+      isNarrator: "no",
       groupLastSpeaker: "Charlie",
+      groupCardMode: "swap",
     },
     character: {
       name: "Bob",
@@ -168,6 +170,36 @@ describe("Core primitives", () => {
     expect(await ev("{{#trim}}  hello  {{/trim}}")).toBe("  hello  ");
   });
 
+  test("block-style trim matches assembly per-block trim", async () => {
+    // A var built inside a {{trim}} block but emitted afterwards. The structural
+    // whitespace the author typed around the nested macros no longer leaks into
+    // the value (stripArgFraming), so only the lone newline between {{/trim}}
+    // and the emit remains. The block-editor preview (resolve with trim) and the
+    // dry run (assembly .trim() per block) must agree — both strip that.
+    const template = `{{trim}}
+{{setvar::cotexpansion::}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    first string
+  }}
+}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    second string
+  }}
+}}
+{{/trim}}
+{{.cotexpansion}}`;
+    const raw = await ev(template);
+    // Raw resolution (free-form callers, e.g. chat input) keeps the newline the
+    // author put between the {{/trim}} and the {{.cotexpansion}} emit.
+    expect(raw).toBe("\nfirst string\nsecond string");
+    // Block-style normalization (preview `trim: true` / dry run) cleans it.
+    expect(raw.trim()).toBe("first string\nsecond string");
+  });
+
   test("reverse", async () => {
     expect(await ev("{{reverse::hello}}")).toBe("olleh");
   });
@@ -226,6 +258,20 @@ describe("if / else", () => {
     expect(await ev("{{if::false}}yes{{else}}no{{/if}}")).toBe("no");
     expect(await ev("{{if::null}}yes{{else}}no{{/if}}")).toBe("no");
     expect(await ev("{{if::undefined}}yes{{else}}no{{/if}}")).toBe("no");
+  });
+
+  test("literal 'no' / 'off' are falsy (case-insensitive)", async () => {
+    expect(await ev("{{if::no}}T{{else}}F{{/if}}")).toBe("F");
+    expect(await ev("{{if::No}}T{{else}}F{{/if}}")).toBe("F");
+    expect(await ev("{{if::NO}}T{{else}}F{{/if}}")).toBe("F");
+    expect(await ev("{{if::off}}T{{else}}F{{/if}}")).toBe("F");
+    expect(await ev("{{if::Off}}T{{else}}F{{/if}}")).toBe("F");
+  });
+
+  test("literal 'yes' / 'on' are truthy (mirror of yes/no convention)", async () => {
+    expect(await ev("{{if::yes}}T{{else}}F{{/if}}")).toBe("T");
+    expect(await ev("{{if::Yes}}T{{else}}F{{/if}}")).toBe("T");
+    expect(await ev("{{if::on}}T{{else}}F{{/if}}")).toBe("T");
   });
 
   test("non-scoped if returns 'true' or ''", async () => {
@@ -498,6 +544,37 @@ describe("Identity macros", () => {
   test("isGroupChat", async () => {
     expect(await ev("{{isGroupChat}}")).toBe("yes");
   });
+
+  test("groupCardMode reads the env.names value", async () => {
+    for (const mode of ["solo", "swap", "merge", "merge_ignore_muted"]) {
+      const env = makeEnv();
+      env.names.groupCardMode = mode;
+      expect(await ev("{{groupCardMode}}", env)).toBe(mode);
+    }
+  });
+
+  test("group_card_mode alias resolves the same value", async () => {
+    const env = makeEnv();
+    env.names.groupCardMode = "merge";
+    expect(await ev("{{group_card_mode}}", env)).toBe("merge");
+  });
+
+  test("groupCardMode drives a four-way conditional template", async () => {
+    const template = "{{if::{{groupCardMode}} == solo}}SOLO{{else}}{{if::{{groupCardMode}} == swap}}SWAP{{else}}{{if::{{groupCardMode}} == merge_ignore_muted}}MERGE_MUTED{{else}}MERGE{{/if}}{{/if}}{{/if}}";
+
+    const cases: Array<{ mode: string; expected: string }> = [
+      { mode: "solo", expected: "SOLO" },
+      { mode: "swap", expected: "SWAP" },
+      { mode: "merge", expected: "MERGE" },
+      { mode: "merge_ignore_muted", expected: "MERGE_MUTED" },
+    ];
+
+    for (const c of cases) {
+      const env = makeEnv();
+      env.names.groupCardMode = c.mode;
+      expect(await ev(template, env)).toBe(c.expected);
+    }
+  });
 });
 
 describe("Chat macros", () => {
@@ -623,6 +700,55 @@ describe("String macros", () => {
 
   test("join filters empty", async () => {
     expect(await ev("{{join:: | ::a::::b}}")).toBe("a | b");
+  });
+
+  test("join trims items and drops whitespace-only items", async () => {
+    // Separator whitespace is preserved; per-item structural whitespace is not.
+    expect(await ev("{{join::, ::  a  ::\n  b\n::   }}")).toBe("a, b");
+  });
+
+  test("join across indented lines does not leak newlines (regression)", async () => {
+    const template = `{{trim}}
+{{setvar::cotexpansion::}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    first string
+  }}
+}}
+{{setvar::cotexpansion::
+  {{join::{{newline}}::
+    {{getvar::cotexpansion}}::
+    second string
+  }}
+}}
+{{.cotexpansion}}
+{{/trim}}`;
+    expect(await ev(template)).toBe("first string\nsecond string");
+  });
+
+  test("nested macro on its own line stores same value as inline (regression)", async () => {
+    // The structural whitespace between `setvar::key::` and a nested macro laid
+    // out on the next line must NOT leak into the stored value — building the
+    // var with the {{join}} on its own indented line ("A") must match building
+    // it inline after the `::` ("B"). The {{newline}} separator is preserved.
+    const buildAndGet = async (open: string) => {
+      const env = makeEnv();
+      await ev(
+        `${open}::{{newline}}::
+    {{getvar::acc}}::
+Test String
+  }}
+}}`,
+        env,
+      );
+      return env.variables.local.get('acc')
+    };
+    const a = await buildAndGet('{{setvar::acc::\n  {{join'); // join on next line
+    const b = await buildAndGet('{{setvar::acc::{{join');      // join inline
+    expect(a).toBe('Test String');
+    expect(b).toBe('Test String');
+    expect(a).toBe(b);
   });
 
   test("repeat", async () => {
@@ -1017,6 +1143,62 @@ describe("Chat Utils macros", () => {
     expect(await ev("{{toggle::flag}}", env)).toBe("true");
     expect(await ev("{{toggle::flag}}", env)).toBe("false");
     expect(await ev("{{toggle::flag}}", env)).toBe("true");
+  });
+
+  test("rcounter increments and starts at 1 on first call", async () => {
+    const env = makeEnv();
+    expect(await ev("{{rcounter::step}}", env)).toBe("1");
+    expect(await ev("{{rcounter::step}}", env)).toBe("2");
+    expect(await ev("{{rcounter::step}}", env)).toBe("3");
+  });
+
+  test("rcounter is independent of pre-seeded local vars (render scope)", async () => {
+    // Critical scope check: even if a chat had a persisted local var named
+    // "step" carrying over from previous renders, rcounter ignores it and
+    // starts from its own zero baseline.
+    const env = makeEnv({ localVars: { step: "99" } });
+    expect(await ev("{{rcounter::step}}", env)).toBe("1");
+  });
+
+  test("rcounter reset arg zeros the counter", async () => {
+    const env = makeEnv();
+    expect(await ev("{{rcounter::step}}", env)).toBe("1");
+    expect(await ev("{{rcounter::step}}", env)).toBe("2");
+    expect(await ev("{{rcounter::step::reset}}", env)).toBe("0");
+    expect(await ev("{{rcounter::step}}", env)).toBe("1");
+  });
+
+  test("rcounter never writes to env.variables.local (no persistence path)", async () => {
+    const env = makeEnv();
+    await ev("{{rcounter::step}}{{rcounter::step}}{{rcounter::step}}", env);
+    // chat-macro-render.service.persistMacroVariableState only reads
+    // env.variables.local / global / chat — rcounter's render bag isn't
+    // part of any persisted scope, so this assertion locks down that the
+    // counter cannot leak into chat.metadata.macro_variables.local.
+    expect(env.variables.local.has("step")).toBe(false);
+  });
+
+  test("rcounter resets across separate env instances (simulates a new render)", async () => {
+    const envA = makeEnv();
+    await ev("{{rcounter::step}}{{rcounter::step}}{{rcounter::step}}", envA);
+    // A fresh env (new prompt build) starts the counter back at 1.
+    const envB = makeEnv();
+    expect(await ev("{{rcounter::step}}", envB)).toBe("1");
+  });
+
+  test("rcounter handles distinct names independently", async () => {
+    const env = makeEnv();
+    expect(await ev("{{rcounter::main}}", env)).toBe("1");
+    expect(await ev("{{rcounter::sub}}", env)).toBe("1");
+    expect(await ev("{{rcounter::main}}", env)).toBe("2");
+    expect(await ev("{{rcounter::sub}}", env)).toBe("2");
+  });
+
+  test("rcounter in a conditional template renumbers cleanly when branches skip", async () => {
+    const env = makeEnv();
+    const template =
+      "{{if::yes}}{{rcounter::step}}. A\n{{/if}}{{if::no}}{{rcounter::step}}. B\n{{/if}}{{rcounter::step}}. C";
+    expect(await ev(template, env)).toBe("1. A\n2. C");
   });
 
   test("charTags", async () => {
@@ -1419,6 +1601,37 @@ describe("Lumia and council macros", () => {
     ];
 
     expect(await ev("{{lumiaCouncilToolsActive}}", env)).toBe("yes");
+  });
+
+  test("{{if::{{lumiaCouncilToolsActive}}}} respects the yes/no convention", async () => {
+    const env = makeEnv();
+    env.extra.council = {
+      councilMode: false,
+      members: [],
+      toolsSettings: {},
+      memberItems: {},
+      toolResults: [],
+      namedResults: {},
+    };
+
+    const template = "{{if::{{lumiaCouncilToolsActive}}}}FIRED{{else}}SKIPPED{{/if}}";
+
+    // Council off — macro returns "no" → block must NOT fire.
+    expect(await ev(template, env)).toBe("SKIPPED");
+
+    // Council on with a successful tool result — macro returns "yes" → block fires.
+    env.extra.council.councilMode = true;
+    env.extra.council.toolResults = [
+      {
+        memberId: "member-1",
+        memberName: "Mira",
+        toolName: "detect_scene",
+        toolDisplayName: "Scene Analysis",
+        success: true,
+        content: "A storm is closing in.",
+      },
+    ];
+    expect(await ev(template, env)).toBe("FIRED");
   });
 
   test("lumiaCouncilToolsList resolves from configured member tools", async () => {

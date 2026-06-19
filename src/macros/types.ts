@@ -143,8 +143,17 @@ export interface MacroEnv {
     groupMemberCount: string;
     /** "yes" or "no" */
     isGroupChat: string;
+    /** "yes" or "no" — whether the active persona is a narrator (not a self-insert) */
+    isNarrator: string;
     /** Name of the last non-user character who spoke. Empty if none or non-group chat. */
     groupLastSpeaker: string;
+    /**
+     * Card composition mode for the current chat:
+     * - "solo" for non-group chats
+     * - "swap" when only the focused character's card is loaded
+     * - "merge" / "merge_ignore_muted" when group cards are combined into one
+     */
+    groupCardMode: string;
   };
   character: {
     name: string;

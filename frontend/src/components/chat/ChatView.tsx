@@ -8,18 +8,17 @@ import { chatsApi, messagesApi } from '@/api/chats'
 import { memoryCortexApi, type CortexIngestionStatus } from '@/api/memory-cortex'
 import { generateApi } from '@/api/generate'
 import { loadoutsApi } from '@/api/loadouts'
-import { councilApi } from '@/api/council'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
 import { imagesApi } from '@/api/images'
 import { expressionsApi } from '@/api/expressions'
-import { resolveAutoPersonaBinding } from '@/store/slices/personas'
+import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
 import type { WallpaperRef } from '@/types/store'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
-import { councilSourceToTarget } from '@/hooks/useCouncilProfiles'
+import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
@@ -195,6 +194,7 @@ export default function ChatView() {
   const sceneBackground = useStore((s) => s.sceneBackground)
   const imageGeneration = useStore((s) => s.imageGeneration)
   const wallpaper = useStore((s) => s.wallpaper)
+  const useCharacterBackground = useStore((s) => s.useCharacterBackground)
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -391,7 +391,91 @@ export default function ChatView() {
         if (cancelled) return
 
         setActiveChat(chatId, chat.character_id)
+        useStore.getState().setActiveChatDisplayOwner(chat.character_display_owner ?? null)
+        useStore.getState().setActiveChatName(chat.name ?? null)
         setMessages(msgPage.data, msgPage.total)
+
+        // Chat-derived store state, applied synchronously with setMessages so
+        // it lands in the same render batch. Each of these used to trickle in
+        // after the network-dependent steps below, re-rendering every mounted
+        // message card once per write.
+
+        // Snapshot chat metadata into the store so features like TTS voice
+        // resolution can read it without an extra fetch.
+        useStore.getState().setActiveChatMetadata(chat.metadata ?? null)
+
+        // Load per-chat wallpaper from metadata
+        const wp = chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
+        if (wp?.image_id) {
+          useStore.getState().setActiveChatWallpaper(wp)
+        }
+
+        // Restore active avatar override from metadata
+        const avatarOverride = chat.metadata?.active_avatar_id as string | undefined
+        useStore.getState().setActiveChatAvatarId(avatarOverride || null)
+
+        // Detect group chat and initialize group state
+        const isGroup = chat.metadata?.group === true
+        const groupCharIds: string[] = isGroup ? (chat.metadata.character_ids || []) : []
+        const mutedIds: string[] = isGroup ? (chat.metadata.muted_character_ids || []) : []
+
+        if (isGroup && groupCharIds.length > 0) {
+          useStore.getState().setGroupChat(true, groupCharIds, mutedIds)
+
+          // Restore per-character group expressions
+          const savedGroupExprs = chat.metadata?.group_expressions as Record<string, { label: string; imageId: string }> | undefined
+          if (savedGroupExprs && Object.keys(savedGroupExprs).length > 0) {
+            useStore.getState().setGroupExpressions(savedGroupExprs)
+          } else {
+            useStore.getState().clearGroupExpressions()
+          }
+
+          // Refresh group members on every chat open so avatars/profile data
+          // don't get stuck on an older in-memory character snapshot.
+          Promise.all(groupCharIds.map((id) => charactersApi.get(id).catch(() => null)))
+            .then((chars) => {
+              if (cancelled) return
+              const valid = chars.filter(Boolean) as import('@/types/api').Character[]
+              if (valid.length === 0) return
+
+              const store = useStore.getState()
+              for (const char of valid) {
+                store.updateCharacter(char.id, char)
+              }
+            })
+        } else {
+          useStore.getState().clearGroupChat()
+          useStore.getState().clearGroupExpressions()
+        }
+
+        // Restore active expression from chat metadata (async, fire-and-forget)
+        const savedExpr = chat.metadata?.active_expression as string | undefined
+        if (savedExpr && chat.character_id) {
+          expressionsApi.get(chat.character_id).then((config) => {
+            if (cancelled) return
+            if (config?.enabled && config.mappings?.[savedExpr]) {
+              useStore.getState().setActiveExpression(savedExpr, config.mappings[savedExpr], chat.character_id!)
+            }
+          }).catch(() => {})
+        }
+
+        // Start the character fetch now, in parallel with the generation
+        // recovery below. Character-aware theming can't sample the avatar
+        // until the character record is in the store, so every await ahead
+        // of this fetch used to delay the chat's theme tint by one round trip.
+        const cachedCharacter = chat.character_id
+          ? useStore.getState().characters.find((c) => c.id === chat.character_id) ?? null
+          : null
+        const characterPromise: Promise<import('@/types/api').Character | null> = cachedCharacter
+          ? Promise.resolve(cachedCharacter)
+          : chat.character_id
+            ? charactersApi.get(chat.character_id)
+                .then((char) => {
+                  if (!cancelled) useStore.getState().updateCharacter(char.id, char)
+                  return char
+                })
+                .catch(() => null)
+            : Promise.resolve(null)
 
         // If there's a pending council tools failure for this chat, show the retry modal now
         const pendingFailure = useStore.getState().councilToolsFailure
@@ -415,21 +499,13 @@ export default function ChatView() {
         }
         generateApi.acknowledge(chatId).catch(() => {})
 
-        let openedCharacter: import('@/types/api').Character | null = null
-        if (chat.character_id) {
-          openedCharacter = useStore.getState().characters.find((c) => c.id === chat.character_id) ?? null
-          if (!openedCharacter) {
-            openedCharacter = await charactersApi.get(chat.character_id).catch(() => null)
-            if (openedCharacter && !cancelled) {
-              useStore.getState().updateCharacter(openedCharacter.id, openedCharacter)
-            }
-          }
-        }
+        const openedCharacter = await characterPromise
 
         // Character bindings are temporary chat-context overrides. When a chat
         // has no binding, fall back to the user's default persona instead of
         // leaking the previous chat's bound persona into the new chat.
-        {
+        // Temporary chats are persona-less — leave the global persona alone.
+        if (chat.metadata?.temporary !== true) {
           const {
             characterPersonaBindings,
             personaTagBindings,
@@ -452,9 +528,30 @@ export default function ChatView() {
           if (resolvedBinding.personaId && boundPersona) {
             if (activePersonaId !== resolvedBinding.personaId) {
               setActivePersona(resolvedBinding.personaId)
-              toast.info(t('chatView.switchedPersona', { name: boundPersona.name }))
+              toast.info(t('chatView.switchedPersona', { name: personaToastName(boundPersona) }))
             }
             autoSwitchedPersonaIdRef.current = resolvedBinding.personaId
+
+            // Apply the binding's add-on snapshot so the bound selections take
+            // effect and are visible in this chat. Seed only when the chat has
+            // no per-chat states for the persona yet, so a fresh chat picks up
+            // the binding while later in-chat tweaks are never clobbered.
+            if (
+              resolvedBinding.addonStates &&
+              Object.keys(resolvedBinding.addonStates).length > 0 &&
+              !cancelled
+            ) {
+              const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
+              if (!existing[resolvedBinding.personaId]) {
+                const nextStates = { ...existing, [resolvedBinding.personaId]: { ...resolvedBinding.addonStates } }
+                // Fold into chat.metadata and re-publish the snapshot (the
+                // canonical publish already happened alongside setMessages);
+                // persist for future opens.
+                chat.metadata = { ...(chat.metadata ?? {}), persona_addon_states: nextStates }
+                useStore.getState().setActiveChatMetadata(chat.metadata)
+                chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
+              }
+            }
 
           } else {
             const shouldRestoreDefault =
@@ -481,18 +578,21 @@ export default function ChatView() {
           }
         } catch { /* no loadout binding — that's fine */ }
 
+        // Resolve council (members, tool toggles, sidecar) from the
+        // council-profile system — its sole owner. Loadouts no longer carry
+        // council, so the two can't override each other.
         try {
-          const resolvedCouncil = await councilApi.resolve(chatId)
+          const council = await resolveCouncilForChat(chatId, {
+            characterId: chat.character_id,
+            characterBindingEnabled: chat.metadata?.group !== true,
+          })
           if (!cancelled) {
             const store = useStore.getState()
-            store.setCouncilSettings(resolvedCouncil.council_settings)
-            store.setCouncilPersistenceTarget(councilSourceToTarget(resolvedCouncil.source, {
-              chatId,
-              characterId: chat.character_id,
-            }))
+            store.setCouncilSettings(council.council_settings)
+            store.setCouncilPersistenceTarget(council.target)
 
             const memberPackIds = new Set(
-              resolvedCouncil.council_settings.members.map((member) => member.packId).filter(Boolean),
+              council.council_settings.members.map((member) => member.packId).filter(Boolean),
             )
             for (const packId of memberPackIds) {
               if (!store.packsWithItems[packId]) {
@@ -506,85 +606,18 @@ export default function ChatView() {
           // no council profile binding or resolution issue - keep current settings
         }
 
-        // Snapshot chat metadata into the store so features like TTS voice
-        // resolution can read it without an extra fetch.
-        useStore.getState().setActiveChatMetadata(chat.metadata ?? null)
-
-        // Load per-chat wallpaper from metadata
-        const wp = chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
-        if (wp?.image_id) {
-          useStore.getState().setActiveChatWallpaper(wp)
-        }
-
-        // Restore active avatar override from metadata
-        const avatarOverride = chat.metadata?.active_avatar_id as string | undefined
-        useStore.getState().setActiveChatAvatarId(avatarOverride || null)
-
-        // Detect group chat and initialize group state
-        const isGroup = chat.metadata?.group === true
-        const groupCharIds: string[] = isGroup ? (chat.metadata.character_ids || []) : []
-        const mutedIds: string[] = isGroup ? (chat.metadata.muted_character_ids || []) : []
-
-        // Restore active expression from chat metadata
-        if (isGroup && groupCharIds.length > 0) {
-          // Restore per-character group expressions
-          const savedGroupExprs = chat.metadata?.group_expressions as Record<string, { label: string; imageId: string }> | undefined
-          if (savedGroupExprs && Object.keys(savedGroupExprs).length > 0) {
-            useStore.getState().setGroupExpressions(savedGroupExprs)
+        // Refresh the active character on every chat open so profile/chat
+        // surfaces don't rely on a stale cached avatar/image_id. The store
+        // skips no-op updates, so the cached-snapshot case doesn't re-render
+        // the message list. (Group member refresh happens above, alongside
+        // the group state setup.)
+        if (!isGroup && chat.character_id) {
+          if (openedCharacter) {
+            if (!cancelled) useStore.getState().updateCharacter(openedCharacter.id, openedCharacter)
           } else {
-            useStore.getState().clearGroupExpressions()
-          }
-          // Also restore the last single active_expression for the primary character
-          const savedExpr = chat.metadata?.active_expression as string | undefined
-          if (savedExpr && chat.character_id) {
-            expressionsApi.get(chat.character_id).then((config) => {
-              if (cancelled) return
-              if (config?.enabled && config.mappings?.[savedExpr]) {
-                useStore.getState().setActiveExpression(savedExpr, config.mappings[savedExpr], chat.character_id!)
-              }
+            charactersApi.get(chat.character_id).then((char) => {
+              if (!cancelled) useStore.getState().updateCharacter(char.id, char)
             }).catch(() => {})
-          }
-        } else {
-          useStore.getState().clearGroupExpressions()
-          const savedExpr = chat.metadata?.active_expression as string | undefined
-          if (savedExpr && chat.character_id) {
-            expressionsApi.get(chat.character_id).then((config) => {
-              if (cancelled) return
-              if (config?.enabled && config.mappings?.[savedExpr]) {
-                useStore.getState().setActiveExpression(savedExpr, config.mappings[savedExpr], chat.character_id!)
-              }
-            }).catch(() => {})
-          }
-        }
-
-        if (isGroup && groupCharIds.length > 0) {
-          useStore.getState().setGroupChat(true, groupCharIds, mutedIds)
-          // Refresh group members on every chat open so avatars/profile data
-          // don't get stuck on an older in-memory character snapshot.
-          Promise.all(groupCharIds.map((id) => charactersApi.get(id).catch(() => null)))
-            .then((chars) => {
-              if (cancelled) return
-              const valid = chars.filter(Boolean) as import('@/types/api').Character[]
-              if (valid.length === 0) return
-
-              const store = useStore.getState()
-              for (const char of valid) {
-                store.updateCharacter(char.id, char)
-              }
-            })
-        } else {
-          useStore.getState().clearGroupChat()
-          useStore.getState().clearGroupExpressions()
-          // Refresh the active character on every chat open so profile/chat
-          // surfaces don't rely on a stale cached avatar/image_id.
-          if (chat.character_id) {
-            if (openedCharacter) {
-              if (!cancelled) useStore.getState().updateCharacter(openedCharacter.id, openedCharacter)
-            } else {
-              charactersApi.get(chat.character_id).then((char) => {
-                if (!cancelled) useStore.getState().updateCharacter(char.id, char)
-              }).catch(() => {})
-            }
           }
         }
       } catch (err) {
@@ -608,9 +641,26 @@ export default function ChatView() {
   }, [setActiveChat])
 
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const characters = useStore((s) => s.characters)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
 
-  // Resolve effective wallpaper: per-chat overrides global
-  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global
+  const characterBackground = useMemo((): WallpaperRef | null => {
+    if (!useCharacterBackground || !activeCharacterId) return null
+    const character = characters.find((c) => c.id === activeCharacterId)
+    if (!character) return null
+
+    const greetingIndex = (activeChatMetadata?.activeGreetingIndex as number) ?? 0
+    const greetingBgs = character.extensions?.greeting_backgrounds as Record<number, string> | undefined
+    const mappedImageId = greetingBgs?.[greetingIndex]
+
+    const imageId = mappedImageId || character.image_id
+    if (!imageId) return null
+    return { image_id: imageId, type: 'image' }
+  }, [useCharacterBackground, activeCharacterId, characters, activeChatMetadata])
+
+  // Resolve effective wallpaper: per-chat > global > character avatar
+  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global ?? characterBackground
   const wallpaperUrl = effectiveWallpaper?.image_id ? imagesApi.url(effectiveWallpaper.image_id) : null
   const wallpaperIsVideo = effectiveWallpaper?.type === 'video'
   const wallpaperOpacity = wallpaper.opacity ?? 0.3
@@ -632,17 +682,21 @@ export default function ChatView() {
   // Sync bubble opt-out attributes so CSS can suppress effects.
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
+  const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   useEffect(() => {
     const root = document.documentElement
     if (bubbleDisableHover) root.setAttribute('data-no-bubble-hover', '')
     else root.removeAttribute('data-no-bubble-hover')
     if (bubbleHideAvatarBg) root.setAttribute('data-no-bubble-avatar-bg', '')
     else root.removeAttribute('data-no-bubble-avatar-bg')
+    // Drives the bubble card background fill alpha (see BubbleMessage.module.css).
+    root.style.setProperty('--lcs-bubble-opacity', String(bubbleOpacity))
     return () => {
       root.removeAttribute('data-no-bubble-hover')
       root.removeAttribute('data-no-bubble-avatar-bg')
+      root.style.removeProperty('--lcs-bubble-opacity')
     }
-  }, [bubbleDisableHover, bubbleHideAvatarBg])
+  }, [bubbleDisableHover, bubbleHideAvatarBg, bubbleOpacity])
 
   if (!chatId) return null
 
@@ -664,6 +718,7 @@ export default function ChatView() {
             opacity: sceneBackground ? 0 : wallpaperOpacity,
             objectFit: wallpaperFit,
             backgroundSize: wallpaperFit === 'fill' ? '100% 100%' : wallpaperFit,
+            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
           }}
         />
       )}
@@ -679,6 +734,7 @@ export default function ChatView() {
           style={{
             opacity: sceneBackground ? 0 : wallpaperOpacity,
             objectFit: wallpaperFit === 'fill' ? 'fill' : wallpaperFit,
+            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
           }}
         />
       )}

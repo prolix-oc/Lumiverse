@@ -1,8 +1,67 @@
 import type { LlmProvider } from "../provider";
 import type { ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort, yieldToEventLoop } from "../stream-utils";
 import type { GenerationRequest, GenerationResponse, StreamChunk, ToolCallResult, LlmMessage, LlmMessagePart } from "../types";
 import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
+
+const GENERATE_OPERATION = "generate";
+const STREAM_OPERATION = "stream";
+
+/** Streamable text-ish fields within a reasoning_details block that are
+ *  concatenated across chunks; everything else (type/id/format/index) is set. */
+const REASONING_DETAIL_APPEND_FIELDS = new Set([
+  "text",
+  "summary",
+  "data",
+  "signature",
+]);
+
+/**
+ * Accumulates OpenRouter `reasoning_details` deltas streamed across chunks into
+ * a single ordered array. OpenRouter sends each reasoning block as it becomes
+ * available; the complete sequence is rebuilt by concatenating the streamable
+ * text fields per block `index` while preserving block metadata. The result is
+ * replayed verbatim on the assistant message to keep chain-of-thought intact
+ * across tool calls (interleaved thinking). Opaque otherwise.
+ */
+export class ReasoningDetailsAccumulator {
+  private byIndex = new Map<number, Record<string, unknown>>();
+  private order = 0;
+  private seen = false;
+
+  push(incoming: unknown): void {
+    if (!Array.isArray(incoming)) return;
+    for (const d of incoming) {
+      if (!d || typeof d !== "object") continue;
+      this.seen = true;
+      const rec = d as Record<string, unknown>;
+      const idx = typeof rec.index === "number" ? rec.index : this.order++;
+      let existing = this.byIndex.get(idx);
+      if (!existing) {
+        existing = {};
+        this.byIndex.set(idx, existing);
+      }
+      for (const [k, v] of Object.entries(rec)) {
+        if (
+          REASONING_DETAIL_APPEND_FIELDS.has(k) &&
+          typeof v === "string" &&
+          typeof existing[k] === "string"
+        ) {
+          existing[k] = (existing[k] as string) + v;
+        } else {
+          existing[k] = v;
+        }
+      }
+    }
+  }
+
+  finalize(): Record<string, unknown>[] | undefined {
+    if (!this.seen) return undefined;
+    return [...this.byIndex.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, v]) => v);
+  }
+}
 
 /**
  * Abstract base class for providers that use the OpenAI-compatible
@@ -80,19 +139,15 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
     const url = `${this.baseUrl(apiUrl)}/chat/completions`;
     const body = this.buildBody(request, false);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, GENERATE_OPERATION, res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const choice = data.choices?.[0];
 
     const rawToolCalls = choice?.message?.tool_calls;
@@ -109,16 +164,32 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       choice?.message?.reasoning || choice?.message?.reasoning_content,
     );
 
+    // OpenRouter (and some routed providers) return normalized `reasoning_details`
+    // blocks that must be replayed verbatim across tool calls for interleaved
+    // thinking. Opaque to us — capture as-is when present.
+    const rawReasoningDetails = choice?.message?.reasoning_details;
+    const reasoningDetails =
+      Array.isArray(rawReasoningDetails) && rawReasoningDetails.length > 0
+        ? (rawReasoningDetails as Record<string, unknown>[])
+        : undefined;
+
     return {
       content: normalized.content,
       reasoning: normalized.reasoning,
       finish_reason: toolCalls ? "tool_calls" : (choice?.finish_reason || "stop"),
       tool_calls: toolCalls,
+      reasoning_details: reasoningDetails,
       usage: data.usage
         ? {
             prompt_tokens: data.usage.prompt_tokens,
             completion_tokens: data.usage.completion_tokens,
             total_tokens: data.usage.total_tokens,
+            // Preserve provider-side telemetry so consumers (e.g. NanoGPT
+            // cache hit summary in the prompt breakdown UI) can read fields
+            // beyond the canonical three — cache_read_input_tokens,
+            // cache_creation_input_tokens, prompt_tokens_details.cached_tokens,
+            // and any other passthrough metadata.
+            provider_raw: { ...data.usage },
           }
         : undefined,
     };
@@ -138,15 +209,16 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, STREAM_OPERATION, res);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    const maybeYield = createCooperativeYielder(64, request.signal);
+    // Inline counter instead of createCooperativeYielder: the yielder is an
+    // async fn, so calling it allocates a promise (and an await hop) on every
+    // SSE line even when it doesn't yield. The sync modulo check keeps the
+    // 63/64 non-yielding lines allocation-free.
+    let lineCount = 0;
     // Auto-detect reasoning field: modern APIs use `reasoning`, legacy uses
     // `reasoning_content`. Lock to whichever key appears first so we don't
     // check both on every chunk.
@@ -154,18 +226,21 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
 
     // Tool call accumulation — OpenAI streams tool_calls as delta chunks
     const toolCallBuffer: { id: string; name: string; argsJson: string }[] = [];
+    // OpenRouter reasoning_details accumulation (streamed as deltas).
+    const reasoningDetails = new ReasoningDetailsAccumulator();
 
+    let streamDoneNaturally = false;
     try {
     while (true) {
       const { done, value } = await readWithAbort(reader, request.signal);
-      if (done) break;
+      if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        await maybeYield();
+        if (++lineCount % 64 === 0) await yieldToEventLoop(request.signal);
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
@@ -184,6 +259,9 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
             if (tc.function?.name) toolCallBuffer[idx].name += tc.function.name;
             if (tc.function?.arguments) toolCallBuffer[idx].argsJson += tc.function.arguments;
           }
+
+          // Accumulate OpenRouter reasoning_details deltas
+          reasoningDetails.push(delta?.reasoning_details);
 
           // Resolve reasoning from the detected key, or auto-detect on first occurrence
           let reasoning: string | undefined;
@@ -206,6 +284,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
                 prompt_tokens: parsed.usage.prompt_tokens || 0,
                 completion_tokens: parsed.usage.completion_tokens || 0,
                 total_tokens: parsed.usage.total_tokens || 0,
+                provider_raw: { ...parsed.usage },
               }
             : undefined;
 
@@ -219,6 +298,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
               reasoning,
               finish_reason: toolCalls ? "tool_calls" : finishReason,
               tool_calls: toolCalls,
+              reasoning_details: reasoningDetails.finalize(),
               usage,
             };
           } else if (reasoning || content) {
@@ -236,7 +316,7 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
       }
     }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 
@@ -329,7 +409,14 @@ export abstract class OpenAICompatibleProvider implements LlmProvider {
           type: "function",
           function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
         })),
-        ...(m.reasoning_content ? { reasoning_content: m.reasoning_content } : {}),
+        // OpenRouter's `reasoning_details` is the authoritative, normalized
+        // carrier — replay the whole sequence verbatim and prefer it over the
+        // plaintext `reasoning_content` alias when both are present.
+        ...(m.reasoning_details?.length
+          ? { reasoning_details: m.reasoning_details }
+          : m.reasoning_content
+            ? { reasoning_content: m.reasoning_content }
+            : {}),
       });
     } else if (nonTool.length > 0) {
       out.push({ role: m.role, content: this.formatContent({ ...m, content: nonTool }) });

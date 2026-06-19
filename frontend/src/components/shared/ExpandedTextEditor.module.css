@@ -129,6 +129,11 @@
 .editorArea {
   flex: 1;
   min-width: 0;
+  /* min-height:0 lets this flex child shrink below its (very tall) content so
+     the inner scroll box engages. Without it, on mobile the body switches to a
+     column flex and this item's default min-height:auto balloons to the full
+     <pre> height, overflowing the clipped body and killing scroll. */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -153,6 +158,8 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   box-sizing: border-box;
 }
 
@@ -160,45 +167,72 @@
   color: var(--lumiverse-text-dim);
 }
 
-/* ── Syntax-highlighted textarea overlay ── */
+/* ── Syntax-highlighted overlay (grid-stacked) ──
+   The colored <pre> (in-flow) and the transparent <textarea> (which owns the
+   caret + real text) are stacked into the SAME single grid cell, so the grid
+   sizes BOTH to one identical box.
+
+   This matters under CSS `zoom` UI scaling: --lumiverse-ui-scale is applied as
+   `zoom` on `body > *` (see reset.css) and this modal portals into that zoom
+   layer. A `position: absolute; inset: 0` textarea rounds its box differently
+   from the in-flow <pre> at fractional zoom values, which shifted the caret off
+   the highlighted glyphs (a documented form-control-under-zoom caret bug, worst
+   when the field is absolutely positioned). Sharing one grid cell removes that
+   absolute box entirely — both layers resolve to the exact same track geometry,
+   so caret and glyphs stay locked together at any zoom factor.
+
+   `.highlightContainer` stays the sole scroll box (single-scroller), so there's
+   no per-element scrollbar gutter and no JS scroll-syncing is required. */
 
 .highlightContainer {
-  position: relative;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
-.highlightBackdrop {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 1;
+.highlightInner {
+  display: grid;
+  /* Single cell that both layers share. minmax(0, 1fr) fills the width while
+     letting the textarea's intrinsic `cols` width shrink instead of widening
+     the track. The implicit auto row grows to the <pre>'s content height and,
+     via the grid's default stretch, fills the container when content is short
+     (so the caret-bearing textarea always covers the full clickable area). */
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 100%;
 }
 
 .highlightPre {
+  grid-area: 1 / 1;
+  min-width: 0;
   margin: 0;
   padding: 16px;
   font-family: var(--lumiverse-font-mono, monospace);
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 2;
   color: var(--lumiverse-text);
+  pointer-events: none;
   box-sizing: border-box;
 }
 
 .textareaHighlighted {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  /* Stacked in the SAME grid cell as .highlightPre — no absolute positioning,
+     so there's no separate box to round differently from the <pre> under CSS
+     zoom. Grid stretch sizes it to the shared cell (== the <pre>'s box). */
+  grid-area: 1 / 1;
+  min-width: 0;
   padding: 16px;
   margin: 0;
   border: none;
   outline: none;
   resize: none;
+  overflow: hidden;
   background: transparent;
   color: transparent;
   caret-color: var(--lumiverse-text);
@@ -206,9 +240,9 @@
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
   white-space: pre-wrap;
-  word-break: break-word;
-  overflow-y: auto;
-  z-index: 2;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 2;
   -webkit-text-fill-color: transparent;
   box-sizing: border-box;
 }
@@ -216,6 +250,29 @@
 .textareaHighlighted::placeholder {
   color: var(--lumiverse-text-dim);
   -webkit-text-fill-color: var(--lumiverse-text-dim);
+}
+
+/* Lock per-character glyph advance across BOTH layers so the caret (which lives
+   in the <textarea>) and the visible glyphs (in the <pre>) never drift apart.
+   A <textarea> shapes text with kerning/ligatures effectively OFF (it treats
+   glyphs as fixed cells for caret math), while a <pre> applies the font's
+   kerning + contextual ligatures by default. That asymmetry shifts the
+   highlighted text away from the caret — worsening along each line and around
+   ligature-prone tokens this editor is full of ({{ }} :: -> ==), especially on
+   ligature mono fonts (Fira Code, JetBrains Mono). Forcing the same minimal
+   shaping on both keeps them in step. text-size-adjust pins mobile text
+   inflation, which hits the <pre> (content) but not the form control.
+   These two selectors MUST stay grouped — divergence here = caret drift. */
+.highlightPre,
+.textareaHighlighted {
+  letter-spacing: 0;
+  word-spacing: 0;
+  font-kerning: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  text-rendering: optimizeSpeed;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 /* ── Syntax highlight tokens ── */
@@ -418,7 +475,15 @@
 
   .textareaHighlighted,
   .highlightPre {
-    font-size: calc(16px * var(--lumiverse-font-scale, 1)); /* Must match .textarea — prevents auto-zoom cursor misalignment */
+    /* Mirror the global reset's mobile form-control rule
+       (`input,textarea,select { font-size: max(16px, 1em) !important }`, which
+       blocks iOS focus auto-zoom). The reset can't target the <pre>, so the two
+       overlay layers would otherwise diverge whenever --lumiverse-font-scale ≠ 1
+       (the textarea gets forced to max(16px,1em) while the <pre> keeps the module
+       value). Using the identical formula keeps both at ONE font-size for every
+       scale — 1em resolves to the same inherited size for each, so the caret and
+       the highlighted glyphs stay aligned. */
+    font-size: max(16px, 1em);
   }
 
   .macroSidebar {
@@ -430,32 +495,13 @@
   }
 }
 
-/* Touch-only devices: disable highlight overlay (fixes cursor tracking),
-   always show expand button since there's no hover.
+/* Touch-only devices have no hover, so reveal the expand button permanently.
    Uses `any-hover: none` so it only matches when NO input device supports hover
    (true phones/tablets). `hover: none` incorrectly matches on Windows touchscreen
-   laptops in Firefox/Edge, disabling syntax highlighting even though a mouse is present. */
+   laptops in Firefox/Edge. The single-scroller overlay above tracks the caret
+   correctly on touch, so syntax highlighting stays enabled here. */
 @media (any-hover: none) {
   .expandBtn {
     opacity: 0.7;
-  }
-
-  .highlightBackdrop {
-    display: none;
-  }
-
-  /* With the backdrop hidden, the absolute overlay positioning is unnecessary and
-     causes cursor coordinate mismatches on Android. Switch to normal flow layout
-     so the textarea fills its container without position:absolute. */
-  .textareaHighlighted {
-    position: static;
-    -webkit-text-fill-color: unset;
-    color: var(--lumiverse-text);
-  }
-
-  .highlightContainer {
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
   }
 }

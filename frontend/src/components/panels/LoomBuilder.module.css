@@ -596,6 +596,28 @@
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
+/* ── Configure prompt variables action ── */
+.variablesAction {
+  padding: 12px 12px 10px;
+}
+
+.variablesBtn {
+  width: 100%;
+  justify-content: center;
+  border-color: var(--lumiverse-primary-020, var(--lumiverse-primary-light));
+  color: var(--lumiverse-text);
+}
+
+.variablesBtn:hover {
+  background: var(--lumiverse-primary-light);
+  border-color: var(--lumiverse-primary);
+}
+
+.variablesBtn svg {
+  color: var(--lumiverse-primary);
+  flex-shrink: 0;
+}
+
 /* ============================================================================
    EMPTY STATE
    ============================================================================ */

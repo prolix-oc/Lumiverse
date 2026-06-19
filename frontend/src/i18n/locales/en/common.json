@@ -1,5 +1,6 @@
 {
   "appName": "Lumiverse",
+  "home": "Home",
   "actions": {
     "save": "Save",
     "cancel": "Cancel",
@@ -34,6 +35,7 @@
     "zh-TW": "繁體中文",
     "ja": "日本語",
     "fr": "Français",
+    "it": "Italiano",
     "helper": "Choose the language for menus, buttons, and labels in the app."
   },
   "time": {

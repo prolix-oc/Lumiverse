@@ -20,6 +20,12 @@
 
 const chatBackgroundControllers = new Map<string, AbortController>();
 
+// Track pending background task promises so abort callers can await their
+// HTTP teardown (reader.cancel, connection close) before starting new
+// fetches. Without this, Bun's HTTPThread can see overlapping cancel+start
+// operations that trigger a null-callback segfault.
+const chatBackgroundTasks = new Map<string, Set<Promise<void>>>();
+
 function chatBgKey(userId: string, chatId: string): string {
   return `${userId}:${chatId}`;
 }
@@ -39,15 +45,48 @@ export function getChatBackgroundSignal(userId: string, chatId: string): AbortSi
   return ctrl.signal;
 }
 
-/** Abort the chat's background controller and drop it. The next call to
+/**
+ * Register a background task promise so its HTTP teardown can be awaited
+ * when the chat's background work is aborted. The task is automatically
+ * removed from tracking once it settles.
+ */
+export function trackChatBackgroundTask(
+  userId: string,
+  chatId: string,
+  task: Promise<void>,
+): void {
+  const key = chatBgKey(userId, chatId);
+  let tasks = chatBackgroundTasks.get(key);
+  if (!tasks) {
+    tasks = new Set();
+    chatBackgroundTasks.set(key, tasks);
+  }
+  tasks.add(task);
+  task.finally(() => {
+    tasks!.delete(task);
+    if (tasks!.size === 0) chatBackgroundTasks.delete(key);
+  });
+}
+
+/** Abort the chat's background controller and wait for pending tasks'
+ *  HTTP teardown to complete (bounded at 2s). The next call to
  *  `getChatBackgroundSignal` creates a fresh controller. */
-export function abortChatBackground(userId: string, chatId: string): void {
+export async function abortChatBackground(userId: string, chatId: string): Promise<void> {
   const key = chatBgKey(userId, chatId);
   const ctrl = chatBackgroundControllers.get(key);
   if (ctrl && !ctrl.signal.aborted) {
     ctrl.abort();
   }
   chatBackgroundControllers.delete(key);
+
+  const tasks = chatBackgroundTasks.get(key);
+  if (tasks && tasks.size > 0) {
+    await Promise.race([
+      Promise.allSettled([...tasks]),
+      new Promise<void>((r) => setTimeout(r, 2000)),
+    ]);
+    chatBackgroundTasks.delete(key);
+  }
 }
 
 /** Abort every background controller for a user (called from
@@ -60,6 +99,9 @@ export function abortUserBackgrounds(userId: string): void {
       chatBackgroundControllers.delete(key);
     }
   }
+  for (const [key] of chatBackgroundTasks) {
+    if (key.startsWith(prefix)) chatBackgroundTasks.delete(key);
+  }
 }
 
 /** Abort every background controller (called from graceful shutdown). */
@@ -68,4 +110,5 @@ export function abortAllBackgrounds(): void {
     if (!ctrl.signal.aborted) ctrl.abort();
   }
   chatBackgroundControllers.clear();
+  chatBackgroundTasks.clear();
 }

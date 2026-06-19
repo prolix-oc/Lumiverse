@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useStore } from "@/store";
 import { memoryCortexApi, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
+import ConfirmationModal from "@/components/shared/ConfirmationModal";
 import CortexLinksTab from "./CortexLinksTab";
 import { EntityEditorModal, RelationEditorModal, RelationCreatorModal, ColorEditorModal } from "./MemoryCortexEditors";
 import styles from "./MemoryCortexPanel.module.css";
@@ -46,7 +47,10 @@ export default function MemoryCortexPanel() {
   const [tab, setTab] = useState<ViewTab>("entities");
   const [entities, setEntities] = useState<CortexEntity[]>([]);
   const [stats, setStats] = useState<CortexUsageStats | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in the loading state: the fetch is kicked off by an effect that runs
+  // after first paint, so initializing to false would paint the empty state
+  // ("No entities yet") for one frame before loading begins — a visible flash.
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -54,6 +58,26 @@ export default function MemoryCortexPanel() {
   const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(() => new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [editingEntity, setEditingEntity] = useState<CortexEntity | null>(null);
+  const [deleteEntityTarget, setDeleteEntityTarget] = useState<CortexEntity | null>(null);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
+  // Reset read-state when the active chat changes — DURING render, not in an
+  // effect. An effect runs after paint, so it can't stop the previous chat's
+  // entities/stats (and the count badge) from flashing for a frame before the
+  // refetch lands. React's "adjust state on prior-render change" pattern
+  // re-renders synchronously with the cleared state before committing.
+  const [loadedChatId, setLoadedChatId] = useState<string | null>(activeChatId);
+  if (activeChatId !== loadedChatId) {
+    setLoadedChatId(activeChatId);
+    setEntities([]);
+    setStats(null);
+    setLoading(true);
+    setExpandedId(null);
+    setSelectionMode(false);
+    setSelectedEntityIds(new Set());
+    setDeleteEntityTarget(null);
+    setConfirmBulkDelete(false);
+  }
 
   const loadEntities = useCallback(async () => {
     if (!activeChatId) return;
@@ -82,12 +106,6 @@ export default function MemoryCortexPanel() {
     loadEntities();
     loadStats();
   }, [loadEntities, loadStats]);
-
-  useEffect(() => {
-    setSelectionMode(false);
-    setSelectedEntityIds(new Set());
-    setExpandedId(null);
-  }, [activeChatId]);
 
   const handleDeleteEntity = async (entityId: string) => {
     if (!activeChatId) return;
@@ -154,6 +172,7 @@ export default function MemoryCortexPanel() {
   const handleBulkDeleteEntities = async () => {
     if (!activeChatId || selectedEntityIds.size === 0 || bulkDeleting) return;
     const ids = [...selectedEntityIds];
+    setConfirmBulkDelete(false);
     setBulkDeleting(true);
     try {
       const res = await memoryCortexApi.bulkDeleteEntities(activeChatId, ids);
@@ -266,7 +285,7 @@ export default function MemoryCortexPanel() {
               </button>
               <button
                 className={styles.selectionToolbarDanger}
-                onClick={handleBulkDeleteEntities}
+                onClick={() => setConfirmBulkDelete(true)}
                 disabled={selectedCount === 0 || bulkDeleting}
                 type="button"
               >
@@ -292,7 +311,7 @@ export default function MemoryCortexPanel() {
                   entity={entity}
                   expanded={expandedId === entity.id}
                   onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
-                  onDelete={() => handleDeleteEntity(entity.id)}
+                  onDelete={() => setDeleteEntityTarget(entity)}
                   onEdit={() => setEditingEntity(entity)}
                   selectionMode={selectionMode}
                   selected={selectedEntityIds.has(entity.id)}
@@ -308,7 +327,7 @@ export default function MemoryCortexPanel() {
                       entity={entity}
                       expanded={expandedId === entity.id}
                       onToggle={() => setExpandedId(expandedId === entity.id ? null : entity.id)}
-                      onDelete={() => handleDeleteEntity(entity.id)}
+                      onDelete={() => setDeleteEntityTarget(entity)}
                       onEdit={() => setEditingEntity(entity)}
                       selectionMode={selectionMode}
                       selected={selectedEntityIds.has(entity.id)}
@@ -340,6 +359,34 @@ export default function MemoryCortexPanel() {
           entity={editingEntity}
           onClose={() => setEditingEntity(null)}
           onSaved={() => { setEditingEntity(null); loadEntities(); }}
+        />
+      )}
+
+      {deleteEntityTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.confirm.entityTitle')}
+          message={t('memoryCortexPanel.confirm.entityMessage', { name: deleteEntityTarget.name })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => {
+            const id = deleteEntityTarget.id;
+            setDeleteEntityTarget(null);
+            void handleDeleteEntity(id);
+          }}
+          onCancel={() => setDeleteEntityTarget(null)}
+        />
+      )}
+
+      {confirmBulkDelete && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.confirm.bulkTitle')}
+          message={t('memoryCortexPanel.confirm.bulkMessage', { count: selectedCount })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleBulkDeleteEntities() }}
+          onCancel={() => setConfirmBulkDelete(false)}
         />
       )}
     </div>
@@ -380,13 +427,27 @@ function EntityCard({
 
   // Salience breakdown for mini bar
   const bd = entity.salienceBreakdown;
-  const bdTotal = bd ? (bd.mentionComponent + bd.arcComponent + bd.graphComponent) || 1 : 0;
+  const bdTotal = bd ? (bd.mentionComponent + bd.arcComponent + bd.graphComponent + (bd.frequencyFloor ?? 0)) || 1 : 0;
 
   // Fact extraction status indicator
   const needsFacts = entity.factExtractionStatus !== "ok" && entity.salienceAvg > 0.45;
 
   const lastSeenTs = entity.lastMentionTimestamp ?? entity.lastSeenAt
   const lastSeen = lastSeenTs ? formatRelativeTime(lastSeenTs) : null
+
+  // Blurb shown in the expanded card body. A user-edited entity surfaces its
+  // curated description — the manual edit must win. Otherwise we keep the
+  // original behaviour: prefer the freshest mention excerpt over the
+  // auto-backfilled (first-mention) description. Each side falls back to the
+  // other so the line is never blank.
+  const rawBlurb = entity.userEditedAt
+    ? (entity.description || entity.latestExcerpt)
+    : (entity.latestExcerpt || entity.description);
+  const blurb = (rawBlurb || "")
+    .replace(/^\.*\s*\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/i, "")
+    .replace(/^\.{3}\s*/, "")
+    .replace(/\s*\.{3}$/, "")
+    .trim();
   const handleHeaderClick = () => {
     if (selectionMode) onSelect();
     else onToggle();
@@ -442,19 +503,30 @@ function EntityCard({
             {entity.salienceAvg > 0 && (
               <span className={styles.salienceBadge} style={{
                 opacity: 0.4 + entity.salienceAvg * 0.6,
-              }}>
+              }} title={[
+                `Salience: ${(entity.salienceAvg * 100).toFixed(0)}%`,
+                bd ? `Mention: ${(bd.mentionComponent * 100).toFixed(0)}%` : null,
+                bd ? `Arc: ${(bd.arcComponent * 100).toFixed(0)}%` : null,
+                bd ? `Graph: ${(bd.graphComponent * 100).toFixed(0)}%` : null,
+                bd?.frequencyFloor ? `Floor: ${(bd.frequencyFloor * 100).toFixed(0)}%` : null,
+                entity.saliencePeak > 0 ? `Peak: ${(entity.saliencePeak * 100).toFixed(0)}%` : null,
+              ].filter(Boolean).join("\n")}>
                 {(entity.salienceAvg * 100).toFixed(0)}%
               </span>
             )}
             {bd && bdTotal > 0 && (
-              <span className={styles.salienceBar} title={t('memoryCortexPanel.entity.salienceTooltip', {
+              <span className={styles.salienceBar} title={`${t('memoryCortexPanel.entity.salienceTooltip', {
                 mention: (bd.mentionComponent * 100).toFixed(0),
                 arc: (bd.arcComponent * 100).toFixed(0),
                 graph: (bd.graphComponent * 100).toFixed(0),
-              })}>
+              })}${bd.frequencyFloor ? ` · ${t('memoryCortexPanel.entity.salienceFloor', { floor: (bd.frequencyFloor * 100).toFixed(0) })}` : ""}`}>
+
                 <span className={clsx(styles.salienceBarSegment, styles.salienceBarMention)} style={{ width: `${(bd.mentionComponent / bdTotal) * 100}%` }} />
                 <span className={clsx(styles.salienceBarSegment, styles.salienceBarArc)} style={{ width: `${(bd.arcComponent / bdTotal) * 100}%` }} />
                 <span className={clsx(styles.salienceBarSegment, styles.salienceBarGraph)} style={{ width: `${(bd.graphComponent / bdTotal) * 100}%` }} />
+                {(bd.frequencyFloor ?? 0) > 0 && (
+                  <span className={clsx(styles.salienceBarSegment, styles.salienceBarFloor)} style={{ width: `${((bd.frequencyFloor ?? 0) / bdTotal) * 100}%` }} />
+                )}
               </span>
             )}
           </div>
@@ -466,15 +538,9 @@ function EntityCard({
 
       {expanded && (
         <div className={styles.entityBody}>
-          {/* Show the latest mention excerpt — the actual chunk text, not a stale description */}
-          {((entity as any).latestExcerpt || entity.description) && (
-            <p className={styles.entityDescription}>
-              {((entity as any).latestExcerpt || entity.description)
-                .replace(/^\.*\s*\[(?:CHARACTER|USER)\s*\|\s*[^\]]*\]\s*:\s*/i, "")
-                .replace(/^\.{3}\s*/, "")
-                .replace(/\s*\.{3}$/, "")
-                .trim() || null}
-            </p>
+          {/* User edits win; otherwise show the latest mention excerpt (see `blurb` above). */}
+          {blurb && (
+            <p className={styles.entityDescription}>{blurb}</p>
           )}
 
           {entity.aliases.length > 0 && (
@@ -524,6 +590,16 @@ function EntityCard({
                 <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, #06b6d4 30%, transparent)" }}>
                   {t('memoryCortexPanel.entity.salienceGraph', { percent: (bd.graphComponent * 100).toFixed(0) })}
                 </span>
+                {(bd.frequencyFloor ?? 0) > 0 && (
+                  <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, #f59e0b 30%, transparent)" }}>
+                    Floor {((bd.frequencyFloor ?? 0) * 100).toFixed(0)}%
+                  </span>
+                )}
+                {(entity.saliencePeak ?? 0) > 0 && (
+                  <span className={styles.miniTag} style={{ borderColor: "color-mix(in srgb, #ef4444 30%, transparent)" }}>
+                    Peak {((entity.saliencePeak ?? 0) * 100).toFixed(0)}%
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -558,6 +634,7 @@ function ColorsView({
   const [colors, setColors] = useState<CortexFontColor[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingColor, setEditingColor] = useState<CortexFontColor | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CortexFontColor | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -574,6 +651,7 @@ function ColorsView({
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async (id: string) => {
+    setDeleteTarget(null);
     try {
       await memoryCortexApi.deleteColor(chatId, id);
       setColors((prev) => prev.filter((c) => c.id !== id));
@@ -628,7 +706,7 @@ function ColorsView({
         <button className={styles.colorEditBtn} onClick={() => setEditingColor(c)} title={tc('actions.edit')}>
           <Edit2 size={11} />
         </button>
-        <button className={styles.colorDeleteBtn} onClick={() => handleDelete(c.id)} title={tc('actions.delete')}>
+        <button className={styles.colorDeleteBtn} onClick={() => setDeleteTarget(c)} title={tc('actions.delete')}>
           <Trash2 size={11} />
         </button>
       </div>
@@ -673,6 +751,18 @@ function ColorsView({
         </div>
       ))}
 
+      {deleteTarget && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('memoryCortexPanel.colors.deleteConfirmTitle')}
+          message={t('memoryCortexPanel.colors.deleteConfirmMessage', { hex: deleteTarget.hexColor })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          onConfirm={() => { void handleDelete(deleteTarget.id) }}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
       {editingColor && (
         <ColorEditorModal
           chatId={chatId}
@@ -702,12 +792,14 @@ function StatsView({
   addToast: (t: any) => void;
 }) {
   const { t } = useTranslation('panels')
+  const { t: tc } = useTranslation('common')
   const dl = (key: string) => t(`memoryCortexPanel.stats.drillLabels.${key}`)
   const [drill, setDrill] = useState<DrillTarget>(null);
   const [drillData, setDrillData] = useState<any[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [editingRelation, setEditingRelation] = useState<CortexRelation | null>(null);
   const [creatingRelation, setCreatingRelation] = useState(false);
+  const [deleteRelationId, setDeleteRelationId] = useState<string | null>(null);
 
   const reloadDrill = useCallback(async () => {
     if (!drill) return;
@@ -754,7 +846,7 @@ function StatsView({
   };
 
   const handleDeleteRelation = async (relationId: string) => {
-    if (!confirm(t('memoryCortexPanel.stats.deleteRelationConfirm'))) return;
+    setDeleteRelationId(null);
     try {
       await memoryCortexApi.deleteRelation(chatId, relationId);
       addToast({ type: "success", message: t('memoryCortexPanel.stats.relationDeleted') });
@@ -803,7 +895,7 @@ function StatsView({
                 key={r.id}
                 relation={r}
                 onEdit={() => setEditingRelation(r)}
-                onDelete={() => handleDeleteRelation(r.id)}
+                onDelete={() => setDeleteRelationId(r.id)}
               />
             ))}
             {drill === "consolidations" && (() => {
@@ -886,6 +978,17 @@ function StatsView({
             entities={entities}
             onClose={() => setCreatingRelation(false)}
             onSaved={() => { setCreatingRelation(false); reloadDrill(); }}
+          />
+        )}
+        {deleteRelationId && (
+          <ConfirmationModal
+            isOpen={true}
+            title={t('memoryCortexPanel.stats.deleteRelationTitle')}
+            message={t('memoryCortexPanel.stats.deleteRelationConfirm')}
+            variant="danger"
+            confirmText={tc('actions.delete')}
+            onConfirm={() => { void handleDeleteRelation(deleteRelationId) }}
+            onCancel={() => setDeleteRelationId(null)}
           />
         )}
       </div>

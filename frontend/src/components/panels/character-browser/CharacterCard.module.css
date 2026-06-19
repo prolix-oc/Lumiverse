@@ -80,9 +80,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--lumiverse-fill-heavy);
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text);
+  /* On-image overlay control: fixed dark scrim + light icon in BOTH themes.
+     The theme fill/text tokens collapse to near-invisible in light mode
+     (faint scrim + dark icon over imagery), so they must not be used here. */
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
   cursor: pointer;
   opacity: 0;
   z-index: 2;
@@ -98,7 +101,7 @@
 }
 
 .editBtn:hover {
-  background: var(--lumiverse-fill-deepest);
+  background: rgba(0, 0, 0, 0.7);
   border-color: var(--lumiverse-primary-050);
   color: white;
   transform: scale(1.1);
@@ -114,9 +117,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--lumiverse-fill-heavy);
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text);
+  /* On-image overlay control: fixed dark scrim + light icon in BOTH themes.
+     The theme fill/text tokens collapse to near-invisible in light mode
+     (faint scrim + dark icon over imagery), so they must not be used here. */
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
   cursor: pointer;
   opacity: 0;
   z-index: 2;
@@ -133,7 +139,7 @@
 }
 
 .favBtn:hover {
-  background: var(--lumiverse-fill-deepest);
+  background: rgba(0, 0, 0, 0.7);
   border-color: rgba(255, 193, 7, 0.4);
   transform: scale(1.1);
 }
@@ -284,6 +290,9 @@
   height: 24px;
   background: transparent;
   border-color: transparent;
+  /* Compact sits on the card surface (not over imagery), so restore the
+     theme-aware icon color instead of the fixed white used for overlays. */
+  color: var(--lumiverse-text);
   transform: translateY(-50%);
 }
 

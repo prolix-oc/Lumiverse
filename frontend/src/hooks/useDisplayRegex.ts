@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useStore } from '@/store'
 import { applyDisplayRegex, applyDisplayRegexAsync } from '@/lib/regex/compiler'
 import { resolveMacrosBatch } from '@/api/macros'
+import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 import type { RegexScript } from '@/types/regex'
+import type { Message } from '@/types/api'
 
 interface ResolvedDisplayRegexTemplates {
   resolvedFindPatterns: Map<string, string>
@@ -16,6 +18,7 @@ interface ResolvedDisplayRegexTemplates {
 interface DisplayRegexCacheEntry {
   value?: ResolvedDisplayRegexTemplates
   promise?: Promise<ResolvedDisplayRegexTemplates>
+  touchedVars?: ReadonlySet<string>
 }
 
 interface DisplayRegexContentCacheEntry {
@@ -115,6 +118,46 @@ function fnv1a(s: string): string {
   return h.toString(16)
 }
 
+async function resolveTemplatesWithResolver(
+  templates: Record<string, string>,
+  ctx: { chatId?: string; characterId?: string; personaId?: string },
+): Promise<{ resolved: Record<string, string>; touched_vars?: Record<string, string[]>; cacheable?: Record<string, boolean> }> {
+  if (ctx.chatId && isDisplayChatOwned(ctx.chatId)) {
+    const resolver = getDisplayResolverForChat(ctx.chatId)
+    if (resolver) {
+      try {
+        const local = await resolver.resolveTemplates({
+          templates,
+          context: {
+            chatId: ctx.chatId,
+            characterId: ctx.characterId,
+            personaId: ctx.personaId,
+            isUser: false,
+            depth: 0,
+          },
+        })
+        if (local) {
+          return {
+            resolved: local.resolved,
+            ...(local.touchedVars ? { touched_vars: local.touchedVars } : {}),
+            ...(local.cacheable ? { cacheable: local.cacheable } : {}),
+          }
+        }
+        console.error(`[display] resolver.resolveTemplates returned null for owned chat=${ctx.chatId}; showing raw (no backend fallback)`)
+      } catch (err) {
+        console.error(`[display] resolver.resolveTemplates threw for owned chat=${ctx.chatId}; showing raw (no backend fallback)`, err)
+      }
+    }
+    return { resolved: { ...templates } }
+  }
+  return resolveMacrosBatch({
+    templates,
+    chat_id: ctx.chatId,
+    character_id: ctx.characterId,
+    persona_id: ctx.personaId,
+  })
+}
+
 async function fetchDisplayPreprocessBatch(
   chatId: string,
   bodies: DisplayPreprocessBody[],
@@ -153,7 +196,7 @@ function flushDisplayPreprocessQueue(): void {
   }
 }
 
-function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
+function enqueueDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
   return new Promise((resolve) => {
     const queue = displayPreprocessQueues.get(chatId)
     if (queue) queue.push({ body, resolve })
@@ -163,6 +206,36 @@ function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Pr
       displayPreprocessFlushTimer = window.setTimeout(flushDisplayPreprocessQueue, DISPLAY_PREPROCESS_BATCH_DELAY_MS)
     }
   })
+}
+
+function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
+  if (isDisplayChatOwned(chatId)) {
+    const resolver = getDisplayResolverForChat(chatId)
+    if (resolver) {
+      return resolver
+        .resolveBody({
+          content: body.rawContent,
+          context: {
+            chatId,
+            isUser: body.role === 'user',
+            depth: 0,
+            messageId: body.messageId,
+            role: body.role,
+          },
+        })
+        .then((local) => {
+          if (local) return local.content
+          console.error(`[display] resolver.resolveBody returned null for owned chat=${chatId}; showing raw (no backend fallback)`)
+          return body.rawContent
+        })
+        .catch((err: unknown) => {
+          console.error(`[display] resolver.resolveBody threw for owned chat=${chatId}; showing raw (no backend fallback)`, err)
+          return body.rawContent
+        })
+    }
+    return Promise.resolve(body.rawContent)
+  }
+  return enqueueDisplayPreprocess(chatId, body)
 }
 
 export function useDisplayPreprocessed(
@@ -253,6 +326,21 @@ export function useDisplayPreprocessed(
 
 const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}\})/i
 
+// id→index lookup shared across every mounted message card, built once per
+// messages-array identity. The previous per-card findIndex selector was
+// O(messages) per card per store update — O(n²) on chat open.
+const messageIndexMaps = new WeakMap<readonly Message[], Map<string, number>>()
+
+function getMessageIndex(messages: readonly Message[], messageId: string): number {
+  let map = messageIndexMaps.get(messages)
+  if (!map) {
+    map = new Map()
+    for (let i = 0; i < messages.length; i++) map.set(messages[i]!.id, i)
+    messageIndexMaps.set(messages, map)
+  }
+  return map.get(messageId) ?? -1
+}
+
 /** Quick check for macro syntax in a string. */
 function hasMacroSyntax(s: string): boolean {
   return s.includes('{{') || s.includes('<USER>') || s.includes('<BOT>') || s.includes('<CHAR>')
@@ -328,7 +416,14 @@ export function invalidateDisplayRegexCacheForVars(changedVars: ReadonlySet<stri
       }
     }
   }
-  displayRegexResolutionCache.clear()
+  // Selective clear by touchedVars
+  for (const [key, entry] of displayRegexResolutionCache) {
+    const fp = entry.touchedVars
+    if (!fp) { displayRegexResolutionCache.delete(key); continue }
+    for (const v of fp) {
+      if (changedVars.has(v)) { displayRegexResolutionCache.delete(key); break }
+    }
+  }
   for (const messageId of affectedMessages) bumpPerMessageCv(messageId)
   bumpGlobalCv()
 }
@@ -371,7 +466,7 @@ export function useDisplayRegex(
   const activePersonaId = useStore((s) => s.activePersonaId)
   const messageIndex = useStore((s) => {
     if (!preprocessOpts?.messageId) return -1
-    return s.messages.findIndex((m) => m.id === preprocessOpts.messageId)
+    return getMessageIndex(s.messages, preprocessOpts.messageId)
   })
   const messageIdForSnapshot = preprocessOpts?.messageId ?? null
   const getSnapshotForThisMessage = useCallback(
@@ -396,7 +491,7 @@ export function useDisplayRegex(
     () =>
       regexScripts.filter(
         (s) =>
-          s.target === 'display' &&
+          s.target.includes('display') &&
           !s.disabled &&
           (s.scope === 'global' ||
             (s.scope === 'character' && s.scope_id === activeCharacterId) ||
@@ -491,11 +586,10 @@ export function useDisplayRegex(
 
     if (!cached?.promise) {
       let assignedPromise: Promise<ResolvedDisplayRegexTemplates>
-      const promise = resolveMacrosBatch({
-        templates,
-        chat_id: activeChatId ?? undefined,
-        character_id: activeCharacterId ?? undefined,
-        persona_id: activePersonaId ?? undefined,
+      const promise = resolveTemplatesWithResolver(templates, {
+        chatId: activeChatId ?? undefined,
+        characterId: activeCharacterId ?? undefined,
+        personaId: activePersonaId ?? undefined,
       })
         .then((res) => {
           const next = createEmptyResolvedTemplates()
@@ -506,8 +600,13 @@ export function useDisplayRegex(
               next.resolvedReplacements.set(key.slice(8), value)
             }
           }
+          let agg: Set<string> | null = res.touched_vars ? new Set<string>() : null
+          if (agg && res.touched_vars) {
+            for (const arr of Object.values(res.touched_vars)) for (const v of arr) agg.add(v)
+          }
+          if (res.cacheable && Object.values(res.cacheable).some((c) => c === false)) agg = null
           if (displayRegexResolutionCache.get(templateCacheKey)?.promise === assignedPromise) {
-            displayRegexResolutionCache.set(templateCacheKey, { value: next })
+            displayRegexResolutionCache.set(templateCacheKey, agg ? { value: next, touchedVars: agg } : { value: next })
           }
           return next
         })

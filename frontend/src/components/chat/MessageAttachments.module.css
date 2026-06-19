@@ -91,25 +91,3 @@
   }
 }
 
-/* ── Audio ── */
-.audioWrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 200px;
-  max-width: 320px;
-}
-
-.audioPlayer {
-  width: 100%;
-  height: 32px;
-  border-radius: var(--lcs-radius-xs, 6px);
-}
-
-.audioName {
-  font-size: calc(10px * var(--lumiverse-font-scale, 1));
-  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.45));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}

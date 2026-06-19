@@ -19,7 +19,9 @@ function makeEnv(): MacroEnv {
       groupOthers: "",
       groupMemberCount: "0",
       isGroupChat: "no",
+      isNarrator: "no",
       groupLastSpeaker: "",
+      groupCardMode: "solo",
     },
     character: {
       name: "Assistant",

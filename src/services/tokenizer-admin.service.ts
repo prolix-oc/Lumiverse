@@ -1,5 +1,5 @@
 import { getDb } from "../db/connection";
-import type { TokenizerConfig, TokenizerModelPattern, CreateTokenizerConfigInput, CreateTokenizerModelPatternInput } from "../types/tokenizer";
+import type { TokenizerConfig, TokenizerModelPattern, CreateTokenizerConfigInput, CreateTokenizerModelPatternInput, InstallTokenizerInput } from "../types/tokenizer";
 import * as tokenizerService from "./tokenizer.service";
 
 // ---- Config CRUD ----
@@ -17,6 +17,28 @@ export function createConfig(input: CreateTokenizerConfigInput): TokenizerConfig
     [id, input.name, input.type, config]
   );
   return tokenizerService.getConfig(id)!;
+}
+
+/**
+ * Create a tokenizer config and (optionally) its model-match pattern in a single
+ * transaction, so a bad regex can't leave a dangling config behind. Used by the
+ * resolve-from-repo flow where a paste-a-URL action installs both at once.
+ */
+export function installResolved(input: InstallTokenizerInput): { config: TokenizerConfig; pattern: TokenizerModelPattern | null } {
+  const db = getDb();
+  let config!: TokenizerConfig;
+  let pattern: TokenizerModelPattern | null = null;
+  db.transaction(() => {
+    config = createConfig({ name: input.name, type: input.type, config: input.config });
+    if (input.pattern?.pattern) {
+      pattern = createPattern({
+        tokenizer_id: config.id,
+        pattern: input.pattern.pattern,
+        priority: input.pattern.priority,
+      });
+    }
+  })();
+  return { config, pattern };
 }
 
 export function updateConfig(id: string, updates: Partial<CreateTokenizerConfigInput>): TokenizerConfig | null {

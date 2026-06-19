@@ -305,14 +305,14 @@ const TOOL_FONT_COLORS: ToolDefinition = {
 
 const TOOL_GRADE_HEURISTIC_CANDIDATES: ToolDefinition = {
   name: "grade_heuristic_candidates",
-  description: "Judge the candidate records supplied in the user message against the passage. Reject candidates that are not real proper-name entities or are not actually supported by the passage. Transform candidates that refer to a real entity but use the wrong form. Confirmation is by omission — silence means the candidate is acceptable. Use empty arrays when nothing needs flagging.",
+  description: "Judge the candidate records supplied in the user message against the passage. Reject candidates that are not real proper-name entities or are not actually supported by the passage. Be especially aggressive about rejecting common English words that are only capitalized due to sentence position, dialogue formatting, or emphasis — these are the most frequent false positives. Transform candidates that refer to a real entity but use the wrong form. Confirmation is by omission — silence means the candidate is acceptable. Use empty arrays when nothing needs flagging.",
   parameters: {
     type: "object",
     properties: {
       rejected_heuristic_entities: {
         type: "array",
         items: { type: "string" },
-        description: "Exact names from the heuristic_entities candidate list that should NOT be persisted (verbs, adjectives, meta-references, sentence-start capitalization, names not actually in the passage). Match the candidate name verbatim.",
+        description: "Exact names from the heuristic_entities candidate list that should NOT be persisted. Reject: verbs, adjectives, adverbs, abstract nouns (Beauty, Darkness, Silence, Power, Magic, Chaos, Destiny, Fate, Honor, Vengeance, Shadow, Truth, Nothing), common English words only capitalized because of sentence position or shouted dialogue or emphasis formatting, meta-references, and names not actually present in the passage. Examples: 'Beautiful' (adjective), 'Darkness' (abstract noun), 'Important' (adjective), 'Ancient' (adjective), 'Suddenly' (adverb), 'Nothing' (pronoun), 'Perhaps' (adverb). Match the candidate name verbatim.",
       },
       transformed_heuristic_entities: {
         type: "array",
@@ -342,7 +342,7 @@ const TOOL_GRADE_HEURISTIC_CANDIDATES: ToolDefinition = {
       rejected_existing_entities: {
         type: "array",
         items: { type: "string" },
-        description: "Names from the existing_graph_entities list that are not real proper-name entities (verbs, adjectives, sentence fragments, meta-references that were incorrectly persisted in a prior chunk). Be conservative — only reject obvious mistakes, not entities you simply find unimportant.",
+        description: "Names from the existing_graph_entities list that are not real proper-name entities (verbs, adjectives, abstract nouns like Darkness/Beauty/Power/Shadow/Silence/Chaos, adverbs, pronouns, sentence fragments, meta-references that were incorrectly persisted in a prior chunk). Be conservative — only reject obvious mistakes, not entities you simply find unimportant.",
       },
     },
     required: [
@@ -1173,6 +1173,20 @@ function validateNarrativeFlags(raw: any): NarrativeFlag[] {
   return raw.filter((f) => VALID_NARRATIVE_FLAGS.has(f));
 }
 
+const FACT_COMMON_VERBS = new Set([
+  "is", "are", "was", "were", "be", "been", "being",
+  "has", "have", "had", "having",
+  "do", "does", "did",
+  "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+  "seems", "appears", "becomes", "remains", "feels", "looks", "sounds",
+  "knows", "believes", "thinks", "wants", "needs", "likes", "loves", "hates",
+  "says", "tells", "asks", "speaks", "lives", "works", "serves",
+  "owns", "rules", "leads", "guards", "protects", "controls",
+  "promised", "revealed", "discovered", "arrived", "departed", "died",
+  "killed", "betrayed", "confessed", "transformed", "inherited", "lost",
+  "gained", "broke", "destroyed", "created", "joined", "left",
+]);
+
 function validateKeyFacts(raw: any): string[] {
   if (!Array.isArray(raw)) return [];
 
@@ -1187,6 +1201,18 @@ function validateKeyFacts(raw: any): string[] {
     if (!cleaned.includes(" ")) continue;
     if (/^[A-Z\s]+$/.test(cleaned)) continue;
     if (/[:;,\-]$/.test(cleaned)) continue;
+
+    const words = cleaned.split(/\s+/);
+    if (words.length < 3) continue;
+    if (/^[a-z]/.test(cleaned)) continue;
+
+    const hasVerb = words.some((w) => {
+      const lower = w.toLowerCase().replace(/[.,;:!?]$/, "");
+      if (FACT_COMMON_VERBS.has(lower)) return true;
+      if (/(?:ed|es|ing)$/.test(lower) && lower.length >= 4) return true;
+      return false;
+    });
+    if (!hasVerb) continue;
 
     const key = cleaned.toLowerCase();
     if (seen.has(key)) continue;

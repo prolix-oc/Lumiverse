@@ -17,7 +17,8 @@ import type { MacroExecContext } from "../types";
 
 interface MemoryChunk {
   content: string;
-  score: number;
+  // null when the hit has no vector distance (keyword-only or recency fallback).
+  score: number | null;
   metadata: any;
 }
 
@@ -57,7 +58,7 @@ function formatChunks(
   const renderedChunks = chunks.map(c => {
     let rendered = settings.chunkTemplate;
     rendered = rendered.replace(/\{\{content\}\}/g, c.content);
-    rendered = rendered.replace(/\{\{score\}\}/g, c.score.toFixed(4));
+    rendered = rendered.replace(/\{\{score\}\}/g, c.score != null ? c.score.toFixed(4) : "n/a");
     const meta = c.metadata ?? {};
     rendered = rendered.replace(/\{\{startIndex\}\}/g, String(meta.startIndex ?? "?"));
     rendered = rendered.replace(/\{\{endIndex\}\}/g, String(meta.endIndex ?? "?"));

@@ -1,6 +1,7 @@
 import React, { useMemo, useRef } from 'react'
 import { useStore } from '@/store'
 import { transpileComponent } from '@/lib/componentTranspiler'
+import { HOST_SLOTS_PROP } from '@/lib/componentOverrideCapabilities'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 
@@ -76,6 +77,12 @@ export function useComponentOverride<P extends Record<string, any>>(
   DefaultComponent: React.ComponentType<P>,
   overrideProps: any,
   defaultProps: P,
+  /**
+   * Host-trusted React elements keyed by slot tag name (e.g. `{ Content: <…/> }`).
+   * The override author renders these by placing the matching slot tag
+   * (`<Content />`) — they cannot read or forge this object from their source.
+   */
+  hostSlots?: Record<string, React.ReactNode>,
 ): React.ReactElement {
   const override = useStore((s) => s.componentOverrides?.[componentName])
   const prevErrorRef = useRef<string | null>(null)
@@ -95,8 +102,10 @@ export function useComponentOverride<P extends Record<string, any>>(
 
   if (compiled?.component) {
     const UserComponent = compiled.component
-    // Freeze top-level props so user code can't reassign action callbacks
-    const frozenProps = Object.freeze({ ...overrideProps })
+    // Freeze top-level props so user code can't reassign action callbacks.
+    // Host slots ride along under a reserved key the interpreter reads directly
+    // and never exposes to user scope (see FORBIDDEN_PROPERTY_NAMES).
+    const frozenProps = Object.freeze({ ...overrideProps, [HOST_SLOTS_PROP]: hostSlots })
     return (
       <OverrideErrorBoundary
         componentName={componentName}

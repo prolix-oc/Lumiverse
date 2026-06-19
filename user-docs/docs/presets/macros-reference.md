@@ -162,9 +162,11 @@ Macros for character and user identity.
 | `{{notChar}}` | `{{not_char}}` | The non-character party (usually the user) |
 | `{{charGroupFocused}}` | `{{charFocused}}`, `{{char_group_focused}}` | The targeted character in a group chat |
 | `{{isGroupChat}}` | `{{is_group_chat}}` | `"yes"` or `"no"` — usable as a condition |
+| `{{isNarrator}}` | `{{is_narrator}}` | `"yes"` or `"no"` — whether the active persona is a narrator (not a self-insert) |
 | `{{groupOthers}}` | `{{group_others}}` | Group members excluding the focused character |
 | `{{groupMemberCount}}` | `{{group_member_count}}` | Number of characters in the group |
 | `{{groupLastSpeaker}}` | `{{group_last_speaker}}` | Last character who spoke |
+| `{{groupCardMode}}` | `{{group_card_mode}}` | Card composition mode: `"solo"`, `"swap"`, `"merge"`, or `"merge_ignore_muted"` |
 
 ---
 
@@ -410,6 +412,7 @@ Access individual messages, track state, and query character metadata.
 | `{{toggle::name}}` | — | Flipped boolean (`"true"` ↔ `"false"`) | Toggle name (stored as local variable) |
 | `{{charTags}}` | `{{char_tags}}`, `{{characterTags}}` | Comma-separated list of the character's tags | — |
 | `{{charTag::tag}}` | `{{char_tag}}`, `{{hasTag}}`, `{{has_tag}}` | `"true"` / `"false"` — whether character has this tag | Tag name (case-insensitive) |
+| `{{rcounter::name}}` | — | Render-scoped counter (resets each prompt build, never persisted) | Counter name; optional second arg `reset` to zero it |
 
 **Examples:**
 
@@ -579,9 +582,16 @@ Here `.roll` is a temporary local variable (used for the current evaluation only
 
 Prompt variables are preset-defined inputs that are seeded into local scope before block evaluation. That means `{{var::tone}}`, `{{getvar::tone}}`, and `{{.tone}}` can all resolve to the same runtime value.
 
+Variables come in seven types — **Text**, **Text Area**, **Number**, **Slider**, **Dropdown**, **On/Off**, and **Multi-select** — and each resolves to its **rendered value** when read:
+
+- **Dropdown** → the selected option's value string (the long, expanded text the creator wrote).
+- **On/Off** → `1` when on, `0` when off. Use directly in `{{if::...}}` gates.
+- **Multi-select** → the selected options' values, joined by the variable's separator (default `\n\n`).
+
 | Macro | Aliases | Description | Args |
 |-------|---------|-------------|------|
 | `{{var::name}}` | `{{promptVar}}`, `{{presetVar}}` | Read the runtime prompt-variable value, then the user override, then the creator default | Variable name |
+| `{{var::name::ison::keyA,keyB,...}}` | — | **Multi-select only.** Returns `"true"` if every listed option key is currently selected (AND match), `"false"` otherwise. Empty key list is vacuously `"true"`. | Variable name, the literal `ison`, comma-separated option keys |
 | `{{hasVar::name}}` | `{{hasPromptVar}}`, `{{hasPresetVar}}` | Check whether a prompt variable is resolvable | Variable name |
 | `{{varDefault::name}}` | `{{promptVarDefault}}`, `{{presetVarDefault}}` | Read the creator-declared default only | Variable name |
 
@@ -592,6 +602,20 @@ Tone: {{default::{{var::tone}}::neutral}}
 
 {{if::{{hasPromptVar::violence}}}}
 Violence level: {{var::violence}}
+{{/if}}
+
+// On/Off switches resolve to 1 or 0 — drop them straight into {{if::...}}.
+{{if::{{var::strict_canon}}}}
+Strictly adhere to established canon.
+{{/if}}
+
+// Multi-select: the rendered value is the joined block of selected option values.
+Style guidelines:
+{{var::style_guides}}
+
+// Multi-select: branch on WHICH options are selected with the ison sub-syntax.
+{{if::{{var::style_guides::ison::concise,polite}}}}
+Stay tight and respectful — no throat-clearing.
 {{/if}}
 ```
 
@@ -755,6 +779,7 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | Macro | True When |
 |-------|-----------|
 | `{{isGroupChat}}` | Chat has multiple characters |
+| `{{isNarrator}}` | Active persona is marked as a narrator |
 | `{{lumiaCouncilModeActive}}` | Council mode is enabled |
 | `{{lumiaCouncilToolsActive}}` | Council tools ran this generation |
 | `{{loomSovHandActive}}` | Sovereign Hand mode is on |
@@ -765,6 +790,7 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | `{{haschatvar::key}}` | Chat-persisted variable exists |
 | `{{hasgvar::key}}` | Global variable exists |
 | `{{hasPromptVar::name}}` | A prompt variable is available |
+| `{{var::name::ison::keyA,keyB}}` | All listed option keys are selected on a multi-select prompt variable |
 | `{{charTag::tag}}` | Character has the specified tag |
 | `{{regexInstalled::id}}` | Regex script with that ID is installed and enabled |
 | `{{and::a::b}}` | All arguments are truthy |

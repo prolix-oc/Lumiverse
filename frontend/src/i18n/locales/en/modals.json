@@ -46,6 +46,9 @@
     "updated": "Updated {{time}}",
     "deleteTitle": "Delete Chat",
     "deleteMessage": "Are you sure you want to delete \"{{name}}\"? This action cannot be undone.",
+    "deleteAllChats": "Delete all chats",
+    "deleteAllTitle": "Delete All Chats",
+    "deleteAllMessage": "This will permanently delete all {{count}} chats with {{name}}. This action cannot be undone.",
     "unnamedChat": "Chat {{date}}",
     "menuRename": "Rename",
     "menuExport": "Export",
@@ -74,6 +77,7 @@
     "filesSelected": "{{count}} files selected",
     "duplicate": "duplicate",
     "wiEntries": "{{count}} WI entries",
+    "loraReference": "LoRA: {{name}} @ {{weight}}",
     "failed": "failed",
     "imported": "{{count}} imported",
     "skipped": "{{count}} skipped",
@@ -243,7 +247,7 @@
     "showFull": "Show full ({{count}} chars)",
     "chars": "{{count}} chars",
     "lines": "{{count}} lines",
-    "tokens": "{{count}} tokens"
+    "tokens": "{{count, number}} tokens"
   },
   "dryRun": {
     "title": "Prompt Dry Run",
@@ -255,7 +259,7 @@
     "showFull": "Show full ({{count}} chars)",
     "assistantPrefill": "Assistant Prefill",
     "assemblyBreakdown": "Assembly Breakdown ({{count}})",
-    "totalTokens": "{{count}} total tokens",
+    "totalTokens": "{{count, number}} total tokens",
     "viaTokenizer": "via {{name}}",
     "cacheReadWrite": "read {{read}} • write {{write}}",
     "cache5m": " • 5m {{count}}",
@@ -271,8 +275,8 @@
     "contextBudget": "Context Budget",
     "clippingDisabled": "(no max_context_length set — clipping disabled)",
     "budgetInvalid": "(budget invalid — context size ≤ reserved response tokens)",
-    "messagesClipped": "({{messages}} message clipped, {{tokens}} tokens)",
-    "messagesClipped_plural": "({{messages}} messages clipped, {{tokens}} tokens)",
+    "messagesClipped_one": "({{messages}} message clipped, {{tokens}} tokens)",
+    "messagesClipped_other": "({{messages}} messages clipped, {{tokens}} tokens)",
     "fitsBudget": "(fits within budget)",
     "budgetNoHistory": "Budget cannot fit any chat history",
     "budgetNoHistoryDetail": "input budget = max_context ({{max}}) − max_tokens ({{reserved}}) − safety ({{safety}}) = {{input}}. Raise Context Size or lower Max Tokens.",
@@ -310,7 +314,7 @@
       "settingsSource": "Settings source",
       "queryPreview": "Query preview",
       "retrievedChunks": "Retrieved Chunks",
-      "chunkLine": "#{{index}} — score: {{score}}, ~{{tokens}} tokens"
+      "chunkLine": "#{{index}} — score: {{score}}, ~{{tokens, number}} tokens"
     },
     "databank": {
       "embeddingsEnabled": "Embeddings enabled",
@@ -320,7 +324,7 @@
       "activeBankIds": "Active databank IDs",
       "queryPreview": "Query preview",
       "retrievedChunks": "Retrieved Chunks",
-      "chunkLine": "#{{index}} — {{document}}, score: {{score}}, ~{{tokens}} tokens"
+      "chunkLine": "#{{index}} — {{document}}, score: {{score}}, ~{{tokens, number}} tokens"
     },
     "budget": {
       "maxContext": "Max context length",
@@ -336,7 +340,7 @@
       "tokensDropped": "Tokens dropped",
       "tokenizerUsed": "Tokenizer used",
       "unset": "— (unset)",
-      "tokens": "{{count}} tokens"
+      "tokens": "{{count, number}} tokens"
     },
     "yes": "Yes",
     "no": "No"
@@ -352,6 +356,8 @@
     "cacheWrite": "write {{count}}",
     "cache5m": "5m {{count}}",
     "cache1h": "1h {{count}}",
+    "nanoGptCache": "NanoGPT cache",
+    "cacheCached": "cached {{count}}",
     "sidecarDivider": "Sidecar (separate LLM calls)",
     "loadingMessages": "Loading assembled messages...",
     "reassembling": "Reassembling prompt…",
@@ -541,7 +547,10 @@
     "saveFailed": "Failed to save add-on",
     "createFailed": "Failed to create add-on",
     "deleteFailed": "Failed to delete add-on",
-    "duplicateFailed": "Failed to duplicate add-on"
+    "duplicateFailed": "Failed to duplicate add-on",
+    "deleteConfirmTitle": "Delete Add-On",
+    "deleteConfirmMessage": "Delete \"{{name}}\"? This cannot be undone.",
+    "deleteConfirmMessageUnnamed": "Delete this add-on? This cannot be undone."
   },
   "personaAddons": {
     "title": "Persona Add-Ons",

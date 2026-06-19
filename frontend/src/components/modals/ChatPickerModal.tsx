@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence } from 'motion/react'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
+import { previewText } from '@/lib/previewText'
 import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -19,6 +20,7 @@ interface ChatSummary {
   message_count: number
   created_at: number
   updated_at: number
+  last_message_preview: string
 }
 
 interface ChatPickerModalProps {
@@ -51,6 +53,7 @@ export default function ChatPickerModal({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
 
   const renameInputRef = useRef<HTMLInputElement>(null)
 
@@ -109,6 +112,10 @@ export default function ChatPickerModal({
           setDeleteTarget(null)
           return
         }
+        if (confirmDeleteAll) {
+          setConfirmDeleteAll(false)
+          return
+        }
         onDismiss()
       }
     }
@@ -116,7 +123,7 @@ export default function ChatPickerModal({
     return () => {
       document.removeEventListener('keydown', handleEscape)
     }
-  }, [onDismiss, renamingId, activeMenuId, deleteTarget, closeActiveMenu])
+  }, [onDismiss, renamingId, activeMenuId, deleteTarget, confirmDeleteAll, closeActiveMenu])
 
   const handleConfirmRename = async (chatId: string) => {
     const trimmed = renameValue.trim()
@@ -164,6 +171,17 @@ export default function ChatPickerModal({
       console.error('[Lumiverse] Failed to delete chat:', err)
     }
     setDeleteTarget(null)
+  }
+
+  const handleDeleteAll = async () => {
+    try {
+      await chatsApi.deleteCharacterChats(characterId)
+      setItems([])
+      onDismiss()
+    } catch (err) {
+      console.error('[Lumiverse] Failed to delete all chats:', err)
+    }
+    setConfirmDeleteAll(false)
   }
 
   const handleNewChat = async (options?: { memoryIsolation?: boolean }) => {
@@ -223,15 +241,28 @@ export default function ChatPickerModal({
 
         <div className={styles.header}>
           <h3 className={styles.title}>{t('chatPicker.title', { name: characterName })}</h3>
-          <span className={styles.count}>
-            {loading ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <Spinner size={10} /> {t('chatPicker.loading')}
-              </span>
-            ) : (
-              t('chatPicker.chatCount', { count: items.length })
+          <div className={styles.headerActions}>
+            <span className={styles.count}>
+              {loading ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <Spinner size={10} /> {t('chatPicker.loading')}
+                </span>
+              ) : (
+                t('chatPicker.chatCount', { count: items.length })
+              )}
+            </span>
+            {!loading && items.length > 1 && (
+              <button
+                type="button"
+                className={styles.deleteAllBtn}
+                onClick={() => setConfirmDeleteAll(true)}
+                title={t('chatPicker.deleteAllChats')}
+              >
+                <Trash2 size={13} />
+                {t('chatPicker.deleteAllChats')}
+              </button>
             )}
-          </span>
+          </div>
         </div>
 
         <div className={styles.list}>
@@ -256,14 +287,14 @@ export default function ChatPickerModal({
             className={clsx(styles.card, styles.freshChatCard)}
             onClick={() => handleNewChat({ memoryIsolation: true })}
             disabled={loading}
-            title={t('freshChatTitle')}
+            title={t('chatPicker.freshChatTitle')}
           >
             <div className={styles.freshChatIcon}>
               <Sparkles size={14} strokeWidth={2.5} />
             </div>
             <div className={clsx(styles.cardHeader, styles.freshChatHeader)}>
-              <span className={styles.cardLabel}>{t('startFreshChat')}</span>
-              <span className={styles.freshChatSubtitle}>{t('freshChatSubtitle')}</span>
+              <span className={styles.cardLabel}>{t('chatPicker.startFreshChat')}</span>
+              <span className={styles.freshChatSubtitle}>{t('chatPicker.freshChatSubtitle')}</span>
             </div>
           </button>
 
@@ -322,7 +353,7 @@ export default function ChatPickerModal({
                     {isActive && !isRenaming && (
                       <span className={styles.activeBadge}>
                         <Check size={10} />
-                        {t('mostRecent')}
+                        {t('chatPicker.mostRecent')}
                       </span>
                     )}
                   </div>
@@ -339,20 +370,25 @@ export default function ChatPickerModal({
                       }
                       openActiveMenu(item.id, e.currentTarget)
                     }}
-                    title={t('moreOptions')}
+                    title={t('chatPicker.moreOptions')}
                   >
                     <MoreHorizontal size={14} />
                   </button>
                 </div>
 
                 <div className={styles.cardPreview}>
+                  {item.last_message_preview && (
+                    <p className={styles.previewText}>
+                      {previewText(item.last_message_preview)}
+                    </p>
+                  )}
                   <div className={styles.metaRow}>
                     <span className={styles.metaItem}>
                       <MessageSquare size={12} />
-                      {t('messageCount', { count: item.message_count })}
+                      {t('chatPicker.messageCount', { count: item.message_count })}
                     </span>
                     <span className={styles.metaItem}>
-                      {t('updated', { time: formatRelativeTime(item.updated_at) })}
+                      {t('chatPicker.updated', { time: formatRelativeTime(item.updated_at) })}
                     </span>
                   </div>
                 </div>
@@ -369,8 +405,19 @@ export default function ChatPickerModal({
         isOpen={deleteTarget !== null}
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
-        title={t('deleteTitle')}
-        message={t('deleteMessage', { name: deleteTarget ? formatChatName(deleteTarget) : '' })}
+        title={t('chatPicker.deleteTitle')}
+        message={t('chatPicker.deleteMessage', { name: deleteTarget ? formatChatName(deleteTarget) : '' })}
+        variant="danger"
+        confirmText={tc('actions.delete')}
+        cancelText={tc('actions.cancel')}
+      />
+
+      <ConfirmationModal
+        isOpen={confirmDeleteAll}
+        onConfirm={handleDeleteAll}
+        onCancel={() => setConfirmDeleteAll(false)}
+        title={t('chatPicker.deleteAllTitle')}
+        message={t('chatPicker.deleteAllMessage', { count: items.length, name: characterName })}
         variant="danger"
         confirmText={tc('actions.delete')}
         cancelText={tc('actions.cancel')}

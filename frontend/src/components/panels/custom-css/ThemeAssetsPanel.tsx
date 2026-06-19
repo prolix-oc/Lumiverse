@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Copy, FileImage, Link2, Loader2, Save, Trash2, Upload } from 'lucide-react'
 import LazyImage from '@/components/shared/LazyImage'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { toThemeAssetRelativePath } from '@/lib/themeAssetCss'
@@ -65,6 +66,7 @@ function ThemeAssetRow({
   const [tags, setTags] = useState(asset.tags.join(', '))
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [optimizing, setOptimizing] = useState(false)
 
   useEffect(() => {
@@ -95,6 +97,7 @@ function ThemeAssetRow({
   }, [asset.id, onChanged, slug, tags, t])
 
   const handleDelete = useCallback(async () => {
+    setConfirmDelete(false)
     setDeleting(true)
     try {
       await themeAssetsApi.delete(asset.id)
@@ -183,12 +186,24 @@ function ThemeAssetRow({
               <button type="button" className={clsx(styles.assetBtn, styles.assetBtnPrimary)} onClick={handleSave} disabled={!hasChanges || saving || deleting || optimizing}>
                 {saving ? <Loader2 size={12} className={styles.spin} /> : <Save size={12} />} {t('save')}
               </button>
-              <button type="button" className={clsx(styles.assetBtn, styles.assetBtnDanger)} onClick={handleDelete} disabled={saving || deleting || optimizing}>
+              <button type="button" className={clsx(styles.assetBtn, styles.assetBtnDanger)} onClick={() => setConfirmDelete(true)} disabled={saving || deleting || optimizing}>
                 {deleting ? <Loader2 size={12} className={styles.spin} /> : <Trash2 size={12} />} {t('delete')}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {confirmDelete && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('deleteConfirmTitle')}
+          message={t('deleteConfirmMessage', { name: asset.original_filename })}
+          variant="danger"
+          confirmText={t('delete')}
+          onConfirm={() => { void handleDelete() }}
+          onCancel={() => setConfirmDelete(false)}
+        />
       )}
     </div>
   )

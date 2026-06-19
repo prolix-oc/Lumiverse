@@ -1,9 +1,9 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
-import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getCharacterAvatarUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById, getPersonaAvatarUrlById } from '@/lib/avatarUrls'
+import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getCharacterAvatarUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById, getPersonaAvatarUrlById, getCharacterAvatarTiers, getPersonaAvatarTiers, getImageTiers, type AvatarTierUrls } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
@@ -68,18 +68,27 @@ export function useMessageCard(message: Message, chatId: string) {
   const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
   const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
+  const streamingSwipeId = useStore((s) => s.streamingSwipeId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
 
   const isUser = message.is_user
   const isLastMessage = messages.length > 0 && messages[messages.length - 1].id === message.id
-  const isRegenerating = isStreaming && regeneratingMessageId === message.id
-  const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser
-  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId)
+  // The streaming buffer only belongs on the swipe that is actually being
+  // generated. If the user navigates to a different swipe of this message while
+  // it streams, paint that swipe's saved content instead and let the stream
+  // keep filling the target swipe in the background. (null = swipe index not
+  // yet known, e.g. before GENERATION_STARTED — fall back to painting in-place.)
+  const onStreamingSwipe = streamingSwipeId == null || message.swipe_id === streamingSwipeId
+  const isRegenerating = isStreaming && regeneratingMessageId === message.id && onStreamingSwipe
+  const isContinuing = isStreaming && streamingGenerationType === 'continue' && isLastMessage && !isUser && onStreamingSwipe
+  const isActivelyStreaming = isRegenerating || isContinuing || (isStreaming && isLastMessage && !isUser && !regeneratingMessageId && onStreamingSwipe)
   // When this message is being regenerated, show streaming content in-place
   // instead of the saved (blank) swipe content.
   // When continuing, append streaming content to the existing message content.
   // For non-regeneration streaming (normal generation), the streaming bubble
   // in MessageList handles display to avoid race conditions with MESSAGE_SENT.
+  // When navigated to a non-streaming swipe, falls through to message.content
+  // (kept in sync with the active swipe by cycleSwipe / MESSAGE_SWIPED).
   const rawContent = isRegenerating
     ? (streamingContent || message.content)
     : isContinuing
@@ -115,9 +124,13 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const isGroupChat = useStore((s) => s.isGroupChat)
 
+  // Temporary chats are persona-less: never attribute the user's messages to
+  // the globally active persona (name or avatar).
+  const isTemporaryChat = useStore((s) => s.activeChatMetadata?.temporary === true)
+
   const userPersonaId = typeof message.extra?.persona_id === 'string' ? message.extra.persona_id : null
   const messagePersona = userPersonaId ? personas.find((p) => p.id === userPersonaId) : null
-  const activePersona = activePersonaId ? personas.find((p) => p.id === activePersonaId) ?? null : null
+  const activePersona = activePersonaId && !isTemporaryChat ? personas.find((p) => p.id === activePersonaId) ?? null : null
   const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) : null
 
   // In group chats, assistant messages carry character_id in message.extra
@@ -133,7 +146,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const isGenericUserName = normalizedMessageName.length === 0 || /^user$/i.test(normalizedMessageName)
 
   const displayName = isUser
-    ? (messagePersona?.name || (isGenericUserName ? (personas.find((p) => p.id === activePersonaId)?.name || 'User') : normalizedMessageName))
+    ? (messagePersona?.name || (isGenericUserName ? (activePersona?.name || 'User') : normalizedMessageName))
     : ((isGenericAssistantName ? effectiveCharacter?.name : normalizedMessageName) || effectiveCharacter?.name || 'Assistant')
 
   const effectiveCharId = messageCharacterId || activeCharacterId
@@ -171,6 +184,36 @@ export function useMessageCard(message: Message, chatId: string) {
             ? effectiveCharacter.extensions.original_image_id
             : effectiveCharacter?.image_id ?? null
         )
+
+  // ── Full sm/lg/full tier matrix for theme overrides. `cropped` is the 1:1
+  //    square variant; `original` is the uploaded aspect ratio. Mirrors the
+  //    avatarUrl/fullAvatarUrl resolution above so they stay consistent. ──
+  const personaAvatarId = userPersonaId ?? activePersona?.id ?? null
+  const personaImageId = messagePersona?.image_id ?? activePersona?.image_id ?? null
+  const characterOriginalImageId = typeof effectiveCharacter?.extensions?.original_image_id === 'string'
+    ? effectiveCharacter.extensions.original_image_id
+    : effectiveCharacter?.image_id ?? null
+  const usesChatAvatar = !!activeChatAvatarId && effectiveCharId === activeCharacterId
+
+  const croppedAvatarTiers: AvatarTierUrls = isUser
+    ? getPersonaAvatarTiers(personaAvatarId, personaImageId)
+    : usesChatAvatar
+      ? getImageTiers(activeChatAvatarId)
+      : getCharacterAvatarTiers(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
+
+  const originalAvatarTiers: AvatarTierUrls = isUser
+    ? getPersonaAvatarTiers(personaAvatarId, personaImageId)
+    : usesChatAvatar
+      ? getImageTiers(activeAltAvatar?.original_image_id || activeChatAvatarId)
+      : getCharacterAvatarTiers(effectiveCharId, characterOriginalImageId)
+
+  const avatar = useMemo(
+    () => ({ cropped: croppedAvatarTiers, original: originalAvatarTiers }),
+    [
+      croppedAvatarTiers.sm, croppedAvatarTiers.lg, croppedAvatarTiers.full,
+      originalAvatarTiers.sm, originalAvatarTiers.lg, originalAvatarTiers.full,
+    ],
+  )
 
   const macroUserName = useMemo(() => {
     const fallback = activePersona?.name ?? 'User'
@@ -212,7 +255,10 @@ export function useMessageCard(message: Message, chatId: string) {
 
   // Populate edit fields on the false→true transition of isEditing,
   // so externally-triggered edits (keyboard shortcut) seed the fields too.
-  useEffect(() => {
+  // useLayoutEffect so the content is populated before paint — useEffect
+  // leaves a frame where the textarea is empty (min-height 220px) which
+  // the virtualizer measures as a height spike ("void").
+  useLayoutEffect(() => {
     if (isEditing && !wasEditingRef.current) {
       initializeEdit()
     }
@@ -319,8 +365,8 @@ export function useMessageCard(message: Message, chatId: string) {
         onSecondary: doDeleteSwipe,
         secondaryVariant: 'warning',
       })
-    } else if (!message.is_user) {
-      // Assistant message without swipes: simple confirm
+    } else {
+      // Single-message delete (assistant without swipes, or any user message)
       openModal('confirm', {
         title: tc('deleteMessage.title'),
         message: tc('deleteMessage.message'),
@@ -328,9 +374,6 @@ export function useMessageCard(message: Message, chatId: string) {
         confirmText: tc('deleteMessage.confirm'),
         onConfirm: doDeleteMessage,
       })
-    } else {
-      // User messages: delete directly (existing behavior)
-      doDeleteMessage()
     }
   }, [message.is_user, message.swipes, openModal, doDeleteMessage, doDeleteSwipe, tc])
 
@@ -352,6 +395,7 @@ export function useMessageCard(message: Message, chatId: string) {
     generationMetrics,
     avatarUrl,
     fullAvatarUrl,
+    avatar,
     displayName,
     macroUserName,
     isHidden,

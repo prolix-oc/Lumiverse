@@ -106,10 +106,153 @@
   opacity: 0.55;
 }
 
-.typeText     { --accent: #38bdf8; }   /* sky */
-.typeTextarea { --accent: #a78bfa; }   /* violet */
-.typeNumber   { --accent: #fbbf24; }   /* amber */
-.typeSlider   { --accent: #34d399; }   /* emerald */
+.typeText        { --accent: #38bdf8; }   /* sky */
+.typeTextarea    { --accent: #a78bfa; }   /* violet */
+.typeNumber      { --accent: #fbbf24; }   /* amber */
+.typeSlider      { --accent: #34d399; }   /* emerald */
+.typeSelect      { --accent: #22d3ee; }   /* cyan */
+.typeSwitch      { --accent: #f472b6; }   /* pink */
+.typeMultiselect { --accent: #818cf8; }   /* indigo */
+
+/* ---- Option list (select + multiselect) ---- */
+
+.optionsList {
+  grid-column: span 12;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+}
+
+.optionsListHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.optionRow {
+  display: grid;
+  grid-template-columns: 24px 1fr 1.4fr 28px;
+  gap: 6px;
+  align-items: start;
+}
+
+.optionDefaultCell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 7px;
+}
+
+.optionDefaultInput {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--lumiverse-primary, #c4b5fd);
+  cursor: pointer;
+}
+
+.optionLabelInput,
+.optionValueInput {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.22));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-family: inherit;
+  outline: none;
+  resize: vertical;
+}
+
+.optionValueInput {
+  min-height: 32px;
+  max-height: 160px;
+  line-height: 1.4;
+}
+
+.optionLabelInput:focus,
+.optionValueInput:focus {
+  border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010, rgba(147, 112, 219, 0.1));
+}
+
+.optionDelete {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.optionDelete:hover {
+  color: var(--lumiverse-danger, #ef4444);
+  border-color: color-mix(in oklab, var(--lumiverse-danger, #ef4444) 50%, var(--lumiverse-border));
+}
+
+.optionAddBtn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.optionAddBtn:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+}
+
+.optionsEmpty {
+  padding: 8px;
+  text-align: center;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+/* ---- Switch default control ---- */
+
+.switchToggleRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+.switchToggleLabel {
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+}
+
+.switchToggleHint {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  margin-left: 4px;
+}
 
 /* ---- Field primitives ---- */
 

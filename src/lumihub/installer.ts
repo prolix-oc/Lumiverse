@@ -6,16 +6,19 @@ import * as svc from "../services/characters.service";
 import * as cardSvc from "../services/character-card.service";
 import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
-import * as exprSvc from "../services/expressions.service";
 import { safeFetch } from "../utils/safe-fetch";
+import { mapWithConcurrency } from "../utils/concurrency";
+import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getFirstUserId } from "../auth/seed";
 import * as wbSvc from "../services/world-books.service";
 import * as presetsSvc from "../services/presets.service";
+import * as regexSvc from "../services/regex-scripts.service";
 import * as settingsSvc from "../services/settings.service";
 import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
+import { applyCharxModulesAndAssets } from "../services/charx-import.service";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -127,20 +130,23 @@ function stampInstallSource(userId: string, characterId: string, payload: Instal
  * Each image gets full-size + thumbnail storage via the gallery service.
  */
 async function importGalleryFromUrls(userId: string, characterId: string, urls: string[]): Promise<void> {
-  const files: File[] = [];
-  for (const url of urls) {
+  // Download through a small pool instead of serially — these are independent
+  // network fetches. The subsequent gallery write stays serial below.
+  const downloaded = await mapWithConcurrency(urls, 6, async (url): Promise<File | null> => {
     try {
       const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
-      if (!res.ok) continue;
+      if (!res.ok) return null;
       const buf = await res.arrayBuffer();
       const contentType = res.headers.get("content-type") || "image/webp";
       const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
       const filename = `gallery_${crypto.randomUUID()}.${ext}`;
-      files.push(new File([buf], filename, { type: contentType }));
+      return new File([buf], filename, { type: contentType });
     } catch {
       // Skip individual failures
+      return null;
     }
-  }
+  });
+  const files: File[] = downloaded.filter((f): f is File => f !== null);
 
   if (files.length === 0) return;
 
@@ -203,6 +209,10 @@ async function installFromCardData(
   const cardInput = cardSvc.parseCardJson(payload.cardData!);
   const character = svc.createCharacter(userId, cardInput);
 
+  // Bind any card-embedded regex scripts (Lumiverse bundle or SillyTavern) to
+  // the new character. The CHARX/url path handles its own bundle separately.
+  importCharacterRegexBestEffort(userId, character.id, cardInput.extensions);
+
   // Handle avatar if provided
   if (payload.avatarBase64) {
     try {
@@ -248,7 +258,9 @@ async function installFromUrl(
   userId: string,
   payload: InstallCharacterPayload
 ): Promise<InstallResultPayload> {
-  const url = payload.importUrl!;
+  // BotBooru browseable URLs rewrite to the PNG download (card + avatar);
+  // everything else is fetched as provided.
+  const url = rewriteBotBooruUrl(payload.importUrl!, "png") ?? payload.importUrl!;
 
   const res = await safeFetch(url, {
     timeoutMs: 30_000,
@@ -265,118 +277,17 @@ async function installFromUrl(
   if (contentType.includes("application/zip") || url.toLowerCase().endsWith(".charx")) {
     const file = new File([buf], "import.charx", { type: "application/zip" });
     const charxResult = await cardSvc.extractCardFromCharx(file);
-    const { card: cardInput, avatarFile, risuModule, expressionAssets, lumiverseModules, assetFiles } = charxResult;
-    const character = svc.createCharacter(userId, cardInput);
+    const character = svc.createCharacter(userId, charxResult.card);
 
-    if (avatarFile) {
-      const image = await images.uploadImage(userId, avatarFile);
-      svc.setCharacterImage(userId, character.id, image.id);
-      svc.setCharacterAvatar(userId, character.id, image.filename);
-    }
-
-    // Track consumed asset paths so remaining go to gallery
-    const consumedPaths = new Set<string>();
-
-    if (lumiverseModules) {
-      const extensions: Record<string, any> = { ...(character.extensions || {}) };
-
-      // Import expressions from Lumiverse modules
-      if (lumiverseModules.expressions?.mappings) {
-        const exprMappings: Record<string, string> = {};
-        for (const [label, archivePath] of Object.entries(lumiverseModules.expressions.mappings)) {
-          const assetFile = assetFiles.get(archivePath);
-          if (assetFile) {
-            const img = await images.uploadImage(userId, assetFile);
-            exprMappings[label] = img.id;
-            consumedPaths.add(archivePath);
-          }
-        }
-        if (Object.keys(exprMappings).length > 0) {
-          extensions.expressions = {
-            enabled: lumiverseModules.expressions.enabled,
-            defaultExpression: lumiverseModules.expressions.defaultExpression,
-            mappings: exprMappings,
-          };
-        }
-      }
-
-      // Import alternate fields
-      if (lumiverseModules.alternate_fields) {
-        extensions.alternate_fields = lumiverseModules.alternate_fields;
-      }
-
-      // Import alternate avatars
-      const altAvatars: Array<{ id: string; image_id: string; label: string }> = [];
-      if (Array.isArray(lumiverseModules.alternate_avatars)) {
-        for (const av of lumiverseModules.alternate_avatars) {
-          const assetFile = assetFiles.get(av.path);
-          if (assetFile) {
-            const img = await images.uploadImage(userId, assetFile);
-            altAvatars.push({ id: av.id || crypto.randomUUID(), image_id: img.id, label: av.label });
-            consumedPaths.add(av.path);
-          }
-        }
-        if (altAvatars.length > 0) {
-          extensions.alternate_avatars = altAvatars;
-        }
-      }
-
-      svc.updateCharacter(userId, character.id, { extensions });
-    }
-
-    // Upload remaining unconsumed images to gallery
-    const remainingGalleryFiles: File[] = [];
-    for (const [path, assetFile] of assetFiles) {
-      if (consumedPaths.has(path)) continue;
-      if (avatarFile && assetFile.name === avatarFile.name) continue;
-      if (/^assets\/(icon|other)\//i.test(path)) {
-        remainingGalleryFiles.push(assetFile);
-      }
-    }
-    if (remainingGalleryFiles.length > 3) {
-      await gallerySvc.uploadBulkToGallery(userId, character.id, remainingGalleryFiles);
-    } else {
-      for (const gf of remainingGalleryFiles) {
-        try { await gallerySvc.uploadToGallery(userId, character.id, gf); } catch { /* skip */ }
-      }
-    }
-
-    // Import RisuAI expression assets (heuristic-based, from x-risu-asset entries)
-    if (expressionAssets.length > 0) {
-      await exprSvc.importFromAssets(userId, character.id, expressionAssets);
-    }
-
-    // Import regex scripts from Lumiverse modules (bundled .charx)
-    if (lumiverseModules?.regex_scripts?.length) {
-      try {
-        const regexSvc = await import("../services/regex-scripts.service");
-        for (const bundled of lumiverseModules.regex_scripts) {
-          try {
-            regexSvc.createRegexScript(userId, {
-              ...(bundled as import("../types/regex-script").CreateRegexScriptInput),
-              scope: "character",
-              scope_id: character.id,
-              character_id: character.id,
-              metadata: { ...bundled.metadata, source: "charx_bundle" },
-            });
-          } catch { /* skip individual failures */ }
-        }
-      } catch { /* skip if regex service unavailable */ }
-    }
-
-    // Import RisuAI regex scripts
-    if (risuModule?.regex?.length) {
-      const scripts = cardSvc.convertRisuRegexScripts(risuModule.regex, character.id);
-      for (const script of scripts) {
-        // Best-effort — skip failures
-        try {
-          const regexSvc = await import("../services/regex-scripts.service");
-          regexSvc.createRegexScript(userId, script);
-        } catch { /* skip */ }
-      }
-    }
-
-    maybeExtractWorldbook(userId, character.id, payload.characterName, payload);
+    // Full CHARX processing shared with the app's import endpoints: expressions,
+    // expression groups, alternate fields/avatars, bundled regex scripts, gallery
+    // + inline asset resolution, and RisuAI module/expressions. World-book import
+    // — both lumiverse_modules.world_books and the embedded character_book, which
+    // a Lumiverse export carries identically — is gated on the hub user's opt-in
+    // so "don't import the worldbook" is honored.
+    await applyCharxModulesAndAssets(userId, character, charxResult, {
+      importWorldBooks: !!payload.importEmbeddedWorldbook,
+    });
 
     const final = svc.getCharacter(userId, character.id);
 
@@ -400,6 +311,8 @@ async function installFromUrl(
     const file = new File([buf], "import.png", { type: "image/png" });
     const cardInput = await cardSvc.extractCardFromPng(file);
     const character = svc.createCharacter(userId, cardInput);
+
+    importCharacterRegexBestEffort(userId, character.id, cardInput.extensions);
 
     const image = await images.uploadImage(userId, file);
     svc.setCharacterImage(userId, character.id, image.id);
@@ -436,6 +349,8 @@ async function installFromUrl(
   const cardInput = cardSvc.parseCardJson(json);
   const character = svc.createCharacter(userId, cardInput);
 
+  importCharacterRegexBestEffort(userId, character.id, cardInput.extensions);
+
   maybeExtractWorldbook(userId, character.id, payload.characterName, payload);
 
   const final = svc.getCharacter(userId, character.id);
@@ -453,6 +368,16 @@ async function installFromUrl(
     characterId: character.id,
     characterName: final?.name || payload.characterName,
   };
+}
+
+/** Import card-embedded regex scripts onto a freshly-installed character without
+ * letting a regex failure abort the install (the character is already created). */
+function importCharacterRegexBestEffort(userId: string, characterId: string, extensions: unknown): void {
+  try {
+    regexSvc.importCharacterBoundRegexScripts(userId, characterId, extensions);
+  } catch (err) {
+    console.warn("[LumiHub Installer] Character regex import failed:", err);
+  }
 }
 
 /** Install from a Chub URL (reuses existing Chub fetch logic). */
@@ -524,6 +449,8 @@ async function installFromChub(
 
   const cardInput = cardSvc.parseCardJson(card);
   const character = svc.createCharacter(userId, cardInput);
+
+  importCharacterRegexBestEffort(userId, character.id, cardInput.extensions);
 
   // Fetch avatar
   const avatarUrl = node.max_res_url || node.avatar_url;
@@ -719,7 +646,15 @@ export async function installPreset(
     const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
     const blocks = Array.isArray(p.blocks) ? p.blocks : [];
 
-    const created = presetsSvc.createPreset(userId, {
+    // Version sits directly below `name` in the export; fall back to the top-level field.
+    const presetVersion =
+      typeof p.presetVersion === "string" ? p.presetVersion
+      : typeof payload.presetVersion === "string" ? payload.presetVersion
+      : null;
+    const presetSlug = typeof payload.presetSlug === "string" ? payload.presetSlug : null;
+    const presetCreator = typeof payload.presetCreator === "string" ? payload.presetCreator : null;
+
+    const presetInput = {
       name,
       provider: "loom",
       parameters: {
@@ -744,13 +679,42 @@ export async function installPreset(
         coverUrl: typeof exported.cover_url === "string" ? exported.cover_url : null,
         _lumiverse_install_source: "lumihub",
         _lumiverse_lumihub_id: payload.presetId,
+        _lumiverse_preset_version: presetVersion,
+        _lumiverse_preset_slug: presetSlug,
+        _lumiverse_preset_creator: presetCreator,
       },
-    });
+    };
 
-    eventBus.emit(EventType.PRESET_CHANGED, { id: created.id, preset: created }, userId);
+    // Update the existing installation in place when this preset was installed
+    // from LumiHub before, so "Update" advances the version instead of duplicating.
+    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
+    let saved;
+    if (existing) {
+      saved = presetsSvc.updatePreset(userId, existing.id, presetInput)!;
+    } else {
+      saved = presetsSvc.createPreset(userId, presetInput);
+      eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);
+    }
+
+    // Preset-bound regex scripts ride at the top level of the export (sibling to
+    // `preset`); import them so remote installs keep parity with local preset
+    // imports. On update, clear the previous install's scripts first so successive
+    // versions don't accumulate duplicates. Best-effort — the preset is already saved.
+    try {
+      if (existing) {
+        regexSvc.deleteRegexScriptsByPresetId(userId, saved.id);
+      }
+      const regexScripts = extractPresetRegexScripts(exported);
+      if (regexScripts.length > 0) {
+        regexSvc.importPresetBoundRegexScripts(userId, saved.id, saved.name, regexScripts);
+      }
+    } catch (err) {
+      console.warn("[LumiHub Installer] Preset regex import failed:", err);
+    }
+
     eventBus.emit(EventType.LUMIHUB_INSTALL_COMPLETED, {
-      characterId: created.id,
-      characterName: created.name,
+      characterId: saved.id,
+      characterName: saved.name,
       source: "lumihub",
       type: "preset",
     }, userId);
@@ -758,8 +722,8 @@ export async function installPreset(
     return {
       requestId,
       success: true,
-      presetId: created.id,
-      presetName: created.name,
+      presetId: saved.id,
+      presetName: saved.name,
     };
   } catch (err: any) {
     console.error("[LumiHub Installer] Preset install error:", err);
@@ -769,6 +733,24 @@ export async function installPreset(
 
 function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Pull bound regex scripts out of a preset export, tolerating every location
+ * LumiHub/Lumiverse have stored them in: top-level (the canonical export shape,
+ * a sibling of `preset`), nested under `preset`, or under `extensions`.
+ */
+function extractPresetRegexScripts(exported: Record<string, any>): any[] {
+  const candidates = [
+    exported?.regex_scripts,
+    exported?.preset?.regex_scripts,
+    exported?.extensions?.regex_scripts,
+    exported?.extensions?.lumiverse_modules?.regex_scripts,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) return candidate;
+  }
+  return [];
 }
 
 function normalizeThemeConfig(value: unknown): Record<string, any> {

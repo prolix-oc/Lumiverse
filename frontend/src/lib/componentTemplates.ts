@@ -24,61 +24,48 @@ export interface ComponentTemplate {
 const BUBBLE_MESSAGE: ComponentTemplate = {
   template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles }) {
   return (
-    <div className={styles.message || ''} style={{ padding: 12 }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        {message.avatarUrl && (
-          <img src={message.avatarUrl} alt="" width={32} height={32} style={{ borderRadius: '50%' }} />
+    <div className={styles.card || ''} data-part={message.isUser ? 'user' : 'character'}>
+      {/* Avatar — message.avatarUrl is the cropped square. For a specific size or
+          the original aspect ratio use message.avatar, e.g. message.avatar.cropped.lg
+          or message.avatar.original.full */}
+      <div className={styles.avatar || ''}>
+        {message.avatarUrl ? (
+          <img src={message.avatarUrl} alt={message.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+        ) : (
+          <div className={styles.avatarFallback || ''}>
+            {message.initial}
+          </div>
         )}
-        <strong style={{ color: message.isUser ? '#a78bfa' : '#60a5fa' }}>
-          {message.displayName}
-        </strong>
-        <span style={{ fontSize: 11, opacity: 0.5 }}>#{message.index}</span>
       </div>
 
-      {/* Reasoning */}
-      {reasoning && (
-        <details style={{ marginBottom: 8, fontSize: 12, opacity: 0.7 }}>
-          <summary>Thinking{reasoning.duration ? \` (\${reasoning.duration}ms)\` : ''}</summary>
-          <pre style={{ whiteSpace: 'pre-wrap' }}>{reasoning.raw}</pre>
-        </details>
-      )}
-
-      {/* Content */}
-      <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{content.raw}</div>
-
-      {/* Attachments */}
-      {attachments.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-          {attachments.map(attachment => (
-            <img
-              key={attachment.imageId}
-              src={\`/api/v1/images/\${attachment.imageId}?size=sm\`}
-              alt={attachment.filename}
-              width={96}
-              height={96}
-              style={{ objectFit: 'cover', borderRadius: 8 }}
-            />
-          ))}
+      {/* Bubble */}
+      <div className={styles.bubble || ''}>
+        {/* Header */}
+        <div className={styles.header || ''}>
+          <span className={styles.name || ''} style={{ color: message.isUser ? 'rgba(255,165,0,0.85)' : 'var(--lumiverse-primary-text)' }}>
+            {message.displayName}
+          </span>
         </div>
-      )}
 
-      {/* Swipes */}
-      {swipes.total > 1 && (
-        <div style={{ display: 'flex', gap: 6, marginTop: 8, fontSize: 12 }}>
-          <button onClick={actions.swipeLeft}>←</button>
-          <span>{swipes.current} / {swipes.total}</span>
-          <button onClick={actions.swipeRight}>→</button>
-        </div>
-      )}
+        {/* Reasoning — <Reasoning /> renders the built-in collapsible block.
+            (Or build your own from reasoning.raw / reasoning.duration.) */}
+        {reasoning && <Reasoning />}
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: 4, marginTop: 8, opacity: 0.6, fontSize: 11 }}>
-        <button onClick={actions.copy}>Copy</button>
-        <button onClick={actions.edit}>Edit</button>
-        <button onClick={actions.fork}>Fork</button>
-        <button onClick={actions.toggleHidden}>{message.isHidden ? 'Show' : 'Hide'}</button>
-        <button onClick={actions.delete}>Delete</button>
+        {/* Content — <Content /> renders fully-formatted markdown, code blocks,
+            macros and interactivity. Use content.raw for the plain source. */}
+        <Content />
+
+        {/* Attachments — <Attachments /> renders inline images/audio. */}
+        {attachments.length > 0 && <Attachments />}
+
+        {/* Swipes */}
+        {swipes.total > 1 && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, fontSize: 12 }}>
+            <button onClick={actions.swipeLeft}>←</button>
+            <span>{swipes.current} / {swipes.total}</span>
+            <button onClick={actions.swipeRight}>→</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -90,15 +77,20 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'sendDate', type: 'number', description: 'Unix timestamp' },
       { name: 'isUser', type: 'boolean', description: 'True if sent by user' },
       { name: 'displayName', type: 'string', description: 'Resolved display name' },
-      { name: 'avatarUrl', type: 'string | null', description: 'Avatar image URL' },
+      { name: 'initial', type: 'string', description: 'First letter of displayName, uppercased (\'?\' when empty) — handy for avatar fallbacks' },
+      { name: 'avatarUrl', type: 'string | null', description: 'Convenience: cropped square at the active layout’s tier (see avatar for full control)' },
+      { name: 'fullAvatarUrl', type: 'string | null', description: 'Convenience: original aspect ratio at full resolution (see avatar for full control)' },
+      { name: 'avatar', type: 'object', description: 'Avatar URLs by variant and size tier', children: [
+        { name: 'cropped', type: '{ sm, lg, full }', description: '1:1 square crop (falls back to original) — sm ~300px, lg ~700px, full = original res' },
+        { name: 'original', type: '{ sm, lg, full }', description: 'Uploaded native aspect ratio — sm ~300px, lg ~700px, full = original res' },
+      ]},
       { name: 'isHidden', type: 'boolean', description: 'Hidden from AI context' },
       { name: 'isStreaming', type: 'boolean', description: 'Currently streaming tokens' },
       { name: 'isLastMessage', type: 'boolean', description: 'Last message in chat' },
       { name: 'tokenCount', type: 'number | null', description: 'Token count for this message' },
     ]},
     { name: 'content', type: 'object', description: 'Message text', children: [
-      { name: 'raw', type: 'string', description: 'Raw markdown source' },
-      { name: 'html', type: 'string', description: 'Pre-rendered HTML (markdown, code highlighting, macros applied)' },
+      { name: 'raw', type: 'string', description: 'Raw markdown source (use the <Content /> slot tag for formatted output)' },
     ]},
     { name: 'reasoning', type: 'object | null', description: 'CoT reasoning block (null if none)', children: [
       { name: 'raw', type: 'string', description: 'Raw reasoning text' },
@@ -133,6 +125,9 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'swipeRight', type: '() => void', description: 'Navigate to next swipe' },
     ]},
     { name: 'styles', type: 'Record<string, string>', description: 'Original CSS module class names' },
+    { name: '<Content />', type: 'slot tag', description: 'Renders the fully-formatted message body (markdown, code highlighting, macros, interactivity) exactly like the built-in renderer. Place this tag where the message text should appear.' },
+    { name: '<Reasoning />', type: 'slot tag', description: 'Renders the built-in reasoning/CoT collapsible block. Renders nothing when there is no reasoning.' },
+    { name: '<Attachments />', type: 'slot tag', description: 'Renders inline image/audio attachments. Renders nothing when there are none.' },
   ],
 }
 

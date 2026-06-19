@@ -1,6 +1,6 @@
 import { OpenAICompatibleProvider } from "./openai-compatible";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import type {
   GenerationRequest,
   GenerationResponse,
@@ -10,6 +10,7 @@ import type {
   LlmMessagePart,
 } from "../types";
 import { getTextContent } from "../types";
+import { throwProviderResponseError } from "../../utils/provider-errors";
 
 export class OpenAIProvider extends OpenAICompatibleProvider {
   readonly name = "openai";
@@ -193,19 +194,15 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
     const url = `${this.baseUrl(apiUrl)}/responses`;
     const body = this.buildResponsesBody(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
       headers: this.headers(apiKey),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} Responses API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "responses generate", res);
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
 
     // Extract text content from response output
     let content = "";
@@ -284,10 +281,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
       body: JSON.stringify(body),
     }, request.signal);
 
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${this.name} Responses API error ${res.status}: ${err}`);
-    }
+    if (!res.ok) await throwProviderResponseError(this.displayName, "responses stream", res);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -297,10 +291,11 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
     // Tool call accumulation for Responses API function_call streaming
     const fnCallBuffer: Map<string, { name: string; argsJson: string; callId: string }> = new Map();
 
+    let streamDoneNaturally = false;
     try {
     while (true) {
       const { done, value } = await readWithAbort(reader, request.signal);
-      if (done) break;
+      if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -405,7 +400,7 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
       }
     }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 }

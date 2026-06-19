@@ -81,6 +81,7 @@ export interface SalienceBreakdown {
   mentionComponent: number;
   arcComponent: number;
   graphComponent: number;
+  frequencyFloor: number;
   total: number;
 }
 
@@ -106,6 +107,9 @@ export interface CortexEntity {
   recentMentionCount: number;
   confidence: "confirmed" | "provisional";
   userEditedAt: number | null;
+  saliencePeak: number;
+  // Enriched by route: excerpt from the most recent mention (display only)
+  latestExcerpt?: string | null;
 }
 
 export interface CortexRelation {

@@ -106,9 +106,17 @@ seedTokenizers();
 const { initSharpSettings } = await import("./services/sharp-settings.service");
 initSharpSettings();
 
+// Load DNS settings so safe-fetch can pick up the DoH fallback toggle
+// before the first outbound request that needs validation.
+const { initDnsSettings } = await import("./services/dns-settings.service");
+initDnsSettings();
+
 // Start background vectorization maintenance only after the database is ready.
 const { startVectorizationQueueMaintenance } = await import("./services/vectorization-queue.service");
 startVectorizationQueueMaintenance();
+
+const { startDiskMonitor } = await import("./services/disk-monitor.service");
+startDiskMonitor();
 
 // Pre-warm tokenizers for configured connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
@@ -275,6 +283,8 @@ async function gracefulShutdown(signal: string) {
   // 7.5 Stop DB stats monitor
   stopDatabaseMonitor();
   stopAutomaticDatabaseMaintenance();
+  const { stopDiskMonitor } = await import("./services/disk-monitor.service");
+  stopDiskMonitor();
 
   // 8. Close database (triggers WAL checkpoint)
   const { closeDatabase } = await import("./db/connection");

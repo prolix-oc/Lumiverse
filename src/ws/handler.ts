@@ -280,6 +280,14 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (data.type === "SPINDLE_UI_REGISTRY_SYNC") {
+          if (userId) {
+            const { setUserExtensionDrawerTabs } = await import("../spindle/ui-frontend-state.service");
+            setUserExtensionDrawerTabs(userId, data.drawerTabs);
+          }
+          return;
+        }
+
         if (data.type === "SPINDLE_COMMAND_INVOKE") {
           const extensionId = typeof data.extensionId === "string" ? data.extensionId : null;
           const commandId = typeof data.commandId === "string" ? data.commandId : null;

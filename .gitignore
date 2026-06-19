@@ -3,8 +3,12 @@ frontend/local/
 frontend/scripts/.translate-cache-*.json
 
 # Dependencies
+# NOTE: bun.lock (root + frontend) is intentionally COMMITTED, not ignored.
+# Without it the Docker build re-resolves caret ranges fresh on every build,
+# which drifted better-auth/kysely into an incompatible combo (kysely 0.29
+# moved DEFAULT_MIGRATION_LOCK_TABLE out of its root export) and crashed
+# startup. Keep the lockfile tracked so every environment installs the same tree.
 node_modules/
-bun.lock
 .claude/
 vendor/lancedb-android/upstream/
 vendor/lancedb-android/build/

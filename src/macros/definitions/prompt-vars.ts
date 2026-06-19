@@ -17,10 +17,16 @@
  *   3. env.extra.promptVariableDefaults — creator-declared defaults.
  *   4. "" — undeclared.
  *
+ * Sub-syntax for multiselect variables:
+ *   {{var::name::ison::key1,key2,…}} — returns 'true' iff every listed option key
+ *   is currently selected (AND). Useful as a guard inside {{#if}} / switch
+ *   blocks. Unknown keys cause the check to fail. Empty key list returns 'true'.
+ *
  * env.extra shape:
- *   promptVariables         — Record<varName, string | number>   flat; last enabled block wins
- *   promptVariablesByBlock  — Record<blockId, Record<varName, string | number>>
- *   promptVariableDefaults  — Record<varName, string | number>   creator-declared defaults
+ *   promptVariables          — Record<varName, string | number>   flat; last enabled block wins
+ *   promptVariablesByBlock   — Record<blockId, Record<varName, string | number>>
+ *   promptVariableDefaults   — Record<varName, string | number>   creator-declared defaults
+ *   promptVariableSelections — Record<varName, string[]>          multiselect option ids
  */
 
 import { registry } from "../MacroRegistry";
@@ -39,21 +45,56 @@ function getDefaults(ctx: MacroExecContext): Record<string, string | number> {
   return (ctx.env.extra.promptVariableDefaults ?? {}) as Record<string, string | number>;
 }
 
+function getSelections(ctx: MacroExecContext): Record<string, string[]> {
+  return (ctx.env.extra.promptVariableSelections ?? {}) as Record<string, string[]>;
+}
+
+// {{var::name::ison::key1,key2,…}} returns 'true' iff every listed key is in
+// the variable's current selection (AND semantics). Unknown variables and
+// non-multiselect variables both report 'false' so creators get loud failure
+// rather than silent matches.
+function resolveIsOnQuery(ctx: MacroExecContext, key: string): string {
+  const rawList = (ctx.args[2] ?? "").trim();
+  if (!rawList) return "true";
+  const wanted = rawList
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (wanted.length === 0) return "true";
+  const selections = getSelections(ctx);
+  const current = selections[key];
+  if (!Array.isArray(current)) return "false";
+  const set = new Set(current);
+  for (const id of wanted) {
+    if (!set.has(id)) return "false";
+  }
+  return "true";
+}
+
 export function registerPromptVarMacros(): void {
   // {{var::name}} — configured value, falling back to creator default, then empty string.
   // Reads env.variables.local first so {{var::}} stays in lockstep with {{getvar::}}
   // and the {{.name}} shorthand — all three resolve against the same backing store.
+  //
+  // {{var::name::ison::key1,key2,…}} — multiselect-only AND-query. Returns
+  // 'true' iff every listed option key is currently selected.
   registry.registerMacro({
     name: "var",
     category: "state",
     description:
-      "Read a preset-scoped prompt variable value. Returns the runtime value (including any {{setvar::}} overrides), then the end-user configured value, then the creator default, then an empty string.",
-    args: [{ name: "name", type: "string", description: "Variable name defined on a prompt block" }],
+      "Read a preset-scoped prompt variable value. Returns the runtime value (including any {{setvar::}} overrides), then the end-user configured value, then the creator default, then an empty string. With sub-syntax {{var::name::ison::key1,key2,…}}, returns 'true' iff every listed multiselect option key is currently selected.",
+    args: [
+      { name: "name", type: "string", description: "Variable name defined on a prompt block" },
+      { name: "op", type: "string", optional: true, description: "Optional sub-operation. Currently only 'ison' is supported (multiselect)." },
+      { name: "keys", type: "string", optional: true, description: "Comma-separated option keys for 'ison' (AND-matched)." },
+    ],
     aliases: ["promptVar", "presetVar"],
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const key = resolveKey(ctx);
       if (!key) return "";
+      const op = (ctx.args[1] ?? "").trim().toLowerCase();
+      if (op === "ison") return resolveIsOnQuery(ctx, key);
       const local = ctx.env.variables.local;
       if (local.has(key)) return local.get(key)!;
       const values = getValues(ctx);

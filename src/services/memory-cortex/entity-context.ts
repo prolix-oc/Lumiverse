@@ -84,7 +84,7 @@ export function assembleEntitySnapshots(
       description: entity.description,
       lastSeenAt: entity.lastSeenAt,
       mentionCount: entity.mentionCount,
-      topFacts: entity.facts.slice(-6), // Most recent 6 facts
+      topFacts: entity.facts.slice(-6).map((f) => entityGraph.stripFactTags(f)),
       emotionalProfile: entity.emotionalValence,
       relationships,
     };

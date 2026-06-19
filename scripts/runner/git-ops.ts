@@ -51,6 +51,29 @@ function getChangedFilesBetween(fromRef: string, toRef: string): string[] {
     .filter(Boolean);
 }
 
+// Lockfiles graduated from gitignored to committed so the dependency tree is
+// pinned for everyone (a drifting bun.lock is what pulled an incompatible
+// kysely/better-auth combo and crashed startup). Existing installs still carry
+// an *untracked* bun.lock on disk from the gitignored era. A fast-forward pull
+// usually overwrites it silently — git treats a still-ignored file as
+// expendable — but if the user's ignore state has drifted, git aborts with
+// "untracked working tree files would be overwritten by merge." The runner's
+// stash uses no -u, so it never covers untracked files. Removing any untracked
+// lockfile before pull/checkout makes the transition deterministic: the
+// committed lockfile lands cleanly and the bun install below restores it.
+// Self-cleaning — once bun.lock is tracked, ls-files matches and this is a no-op.
+const COMMITTED_LOCKFILES = ["bun.lock", "frontend/bun.lock"];
+
+function clearUntrackedLockfiles(): void {
+  for (const rel of COMMITTED_LOCKFILES) {
+    const abs = join(PROJECT_ROOT, rel);
+    if (!existsSync(abs)) continue;
+    if (runGit("ls-files", "--error-unmatch", rel).ok) continue; // tracked — leave it
+    log(`Removing untracked ${rel} so the committed lockfile can land...`);
+    try { rmSync(abs, { force: true }); } catch {}
+  }
+}
+
 function isFrontendBuildInput(filePath: string): boolean {
   if (!filePath.startsWith("frontend/")) return false;
   if (FRONTEND_BUILD_IGNORED_FILES.has(filePath)) return false;
@@ -191,6 +214,9 @@ export async function applyUpdate(
     rmSync(frontendDistDir, { recursive: true, force: true });
   }
 
+  // Drop any untracked lockfile so the committed one can fast-forward in cleanly.
+  clearUntrackedLockfiles();
+
   // Pull latest
   log("Pulling latest changes...");
   const pull = await spawnAsync(["git", "pull", "--ff-only"], {
@@ -271,6 +297,9 @@ export async function switchBranch(
     log("Removing frontend/dist...");
     rmSync(frontendDistDir, { recursive: true, force: true });
   }
+
+  // Drop any untracked lockfile so a committed one can't block the checkout.
+  clearUntrackedLockfiles();
 
   // Checkout (bounded — a dirty working tree shouldn't have survived the
   // stash above, but a stuck index lock or slow disk could still hang).

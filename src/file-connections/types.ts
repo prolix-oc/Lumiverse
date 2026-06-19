@@ -20,6 +20,7 @@ export interface FileStat {
   isFile: boolean;
   size: number;
   modifiedAt?: number; // unix epoch seconds
+  createdAt?: number;  // unix epoch seconds (birthtime where available)
 }
 
 export interface FileSystem {

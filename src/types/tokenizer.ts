@@ -58,3 +58,50 @@ export interface TokenCountResult {
   tokenizer_id: string | null;
   tokenizer_name: string | null;
 }
+
+// ---- Resolve-from-repo flow ----
+
+/** A tokenizer file we looked for in a repo and whether it was present. */
+export interface ResolvedFile {
+  name: string;
+  url: string;
+  required: boolean;
+  present: boolean;
+}
+
+/** Tokenizer config + an auto-suggested name and model-match rule. */
+export interface ResolvedTokenizerSuggestion {
+  name: string;
+  type: TokenizerType;
+  config: Record<string, any>;
+  pattern: string;
+  priority: number;
+}
+
+/** Result of resolving a pasted model URL / `owner/repo` slug. */
+export type ResolveTokenizerResult =
+  | {
+      ok: true;
+      repo: string;
+      revision: string;
+      sourceUrl: string;
+      type: TokenizerType;
+      files: ResolvedFile[];
+      suggested: ResolvedTokenizerSuggestion;
+      warnings: string[];
+    }
+  | {
+      ok: false;
+      reason: "unavailable" | "unsupported" | "invalid";
+      message: string;
+      /** Files we did detect, when the failure is "unsupported" (loaded but broke). */
+      files?: ResolvedFile[];
+    };
+
+/** Body for POST /tokenizers/install — create a config and (optionally) a match rule atomically. */
+export interface InstallTokenizerInput {
+  name: string;
+  type: TokenizerType;
+  config?: Record<string, any>;
+  pattern?: { pattern: string; priority?: number };
+}

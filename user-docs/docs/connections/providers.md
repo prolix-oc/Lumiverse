@@ -129,7 +129,7 @@ Z.AI ships two API URLs that share the same authentication but route to differen
 
 On a Z.AI connection, toggle **Use Coding Plan Endpoint** to route through `/api/coding/paas/v4`. Leave it off for normal API keys. Lumiverse rewrites the base URL accordingly — you don't have to edit the API URL field by hand.
 
-Z.AI does not expose an OpenAI-compatible `/models` endpoint, so Lumiverse ships a built-in model list (`glm-5.1`, `glm-5-turbo`, `glm-5`, `glm-4.7` family, `glm-4.6`, `glm-4.5` family, `glm-4-32b-0414-128k`) and validates your key by sending a minimal `chat/completions` request rather than a model list call. This is what keeps Coding Plan keys working — they 404 the model list endpoint but accept chat requests fine.
+Z.AI does not expose an OpenAI-compatible `/models` endpoint, so Lumiverse ships a built-in model list (`glm-5.2`, `glm-5.1`, `glm-5-turbo`, `glm-5`, `glm-4.7` family, `glm-4.6`, `glm-4.5` family, `glm-4-32b-0414-128k`) and validates your key by sending a minimal `chat/completions` request rather than a model list call. This is what keeps Coding Plan keys working — they 404 the model list endpoint but accept chat requests fine.
 
 !!! tip "Coding Plan keys reject /models"
     If you see "model list failed" errors on a freshly-saved Z.AI connection, you probably forgot to enable **Use Coding Plan Endpoint** — Lumiverse's chat-completion validation already handles this, but third-party tools that hit `/models` directly will fail.

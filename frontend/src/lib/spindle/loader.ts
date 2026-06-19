@@ -1,6 +1,9 @@
 import type { SpindleManifest, SpindleFrontendContext, SpindleFrontendModule, PermissionRequestOptions } from 'lumiverse-spindle-types'
+import type { SpindleTabMobilityUI, TabLocation } from './tab-mobility-types'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
+import { registerDisplayResolver, unregisterDisplayResolver } from './display-resolver-registry'
+import { invalidateDisplayRegexCacheForVars, invalidateDisplayRegexCache } from '@/hooks/useDisplayRegex'
 import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
 import {
   createDrawerTabHandle,
@@ -8,11 +11,14 @@ import {
   createDockPanelHandle,
   createAppMountHandle,
   createInputBarActionHandle,
+  createTabMobilityHandle,
+  clearTabMobilityHandle,
   destroyAllPlacementsForExtension,
 } from './placement-helper'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
+import { DRAWER_TABS, ensureRegistryRoot } from '@/lib/drawer-tab-registry'
 import { createUIEventsHelper, type FrontendUIEventsHelper } from './ui-events-helper'
 import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
@@ -68,7 +74,7 @@ interface ActiveFrontendProcess {
 }
 
 type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
-  ui: SpindleFrontendContext['ui'] & {
+  ui: SpindleTabMobilityUI & {
     events: FrontendUIEventsHelper
   }
   processes: {
@@ -226,11 +232,23 @@ async function doLoadFrontendExtension(
       })
     }
 
-    const dom = createDOMHelper(extensionId, corsProxy)
+    const dom = createDOMHelper(
+      extensionId,
+      corsProxy,
+      () => cachedGrantedPermissions.includes('unsafe_eval'),
+    )
     const uiEvents = createUIEventsHelper(extensionId)
 
-    // Cache granted permissions for synchronous permission checks in ui methods
+    // Cache granted permissions for synchronous permission checks in ui methods.
+    // Kept in sync via the SPINDLE_PERMISSION_CHANGED WS event so admin
+    // grant/revoke takes effect without a full extension reload.
     let cachedGrantedPermissions: string[] = await permissionsPromise
+    const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
+      if (payload?.extensionId === extensionId && Array.isArray(payload.allGranted)) {
+        cachedGrantedPermissions = payload.allGranted
+      }
+    })
+    eventUnsubs.push(unsubPermissionSync)
     const mountedPoints = new Set<string>()
     let openModalCount = 0
 
@@ -314,6 +332,27 @@ async function doLoadFrontendExtension(
             throw new Error('PERMISSION_DENIED:ui_panels — requestDockPanel requires the ui_panels permission')
           }
           return createDockPanelHandle(extensionId, options)
+        },
+        requestTabLocation(tabId: string, location: TabLocation) {
+          const granted = cachedGrantedPermissions
+          if (!granted.includes('app_manipulation')) {
+            throw new Error('PERMISSION_DENIED:app_manipulation — requestTabLocation requires the app_manipulation permission')
+          }
+          createTabMobilityHandle(extensionId).requestTabLocation(tabId, location)
+        },
+        getBuiltInTabTitle(tabId: string): string | undefined {
+          const tab = DRAWER_TABS.find((t) => t.id === tabId)
+          return tab ? (tab.tabHeaderTitle ?? tab.tabName) : undefined
+        },
+        getTabLocation(tabId: string): TabLocation {
+          return (useStore.getState().tabLocations[tabId] ?? { kind: 'main-drawer' }) as TabLocation
+        },
+        getBuiltInTabRoot(tabId: string): HTMLElement | undefined {
+          const granted = cachedGrantedPermissions
+          if (!granted.includes('ui_panels')) {
+            throw new Error('PERMISSION_DENIED:ui_panels — getBuiltInTabRoot requires the ui_panels permission')
+          }
+          return ensureRegistryRoot(tabId)
         },
         mountApp(options) {
           const granted = cachedGrantedPermissions
@@ -603,6 +642,32 @@ async function doLoadFrontendExtension(
         removeWidget(messageId: string, widgetId: string) {
           removeMessageWidget(extensionId, messageId, widgetId)
         },
+        getLatestMessageId(): string | null {
+          // Source from the chat store, NOT the DOM. The chat list is
+          // virtualized, so the bubble for the latest message may not
+          // be mounted right now (user scrolled up). Extensions want a
+          // real id regardless of mount state — they can pair this with
+          // dom.findMessageElement / dom.inject and the injection
+          // registry handles auto-replay on remount.
+          const msgs = useStore.getState().messages
+          return msgs.length > 0 ? msgs[msgs.length - 1].id : null
+        },
+        getMessageIdAtIndex(index: number): string | null {
+          const msgs = useStore.getState().messages
+          if (msgs.length === 0) return null
+          // Python-style negative indexing: -1 → last, -2 → second-to-last,
+          // etc. Clamping out-of-range to null keeps the caller from
+          // accidentally walking off either end of the array.
+          const i = index < 0 ? msgs.length + index : index
+          if (i < 0 || i >= msgs.length) return null
+          return msgs[i].id
+        },
+        listMessageIds(): string[] {
+          // Chronological order matches the store's array order — the
+          // chat slice sorts by index_in_chat so callers can rely on
+          // oldest-first / newest-last without re-sorting.
+          return useStore.getState().messages.map((m) => m.id)
+        },
       },
       characters: {
         get(characterId: string) {
@@ -615,6 +680,21 @@ async function doLoadFrontendExtension(
           useStore.getState().updateMessage(updated.id, updated)
           return updated
         },
+      },
+      display: {
+        registerResolver(resolver) {
+          return registerDisplayResolver(manifest.identifier, resolver)
+        },
+        invalidate(touchedVars: string[]) {
+          if (touchedVars.includes('*')) invalidateDisplayRegexCache()
+          else invalidateDisplayRegexCacheForVars(new Set(touchedVars))
+        },
+      },
+      containers: {
+        registerContainer: (opts: { id: string; side: 'left' | 'right' | 'top' | 'bottom'; element: HTMLElement }) =>
+          useStore.getState().registerContainer(opts),
+        unregisterContainer: (id: string) =>
+          useStore.getState().unregisterContainer(id),
       },
       manifest,
     }
@@ -655,7 +735,7 @@ async function doLoadFrontendExtension(
       stopMountSync: cleanupMountInfra,
     })
 
-    console.log(`[Spindle] Loaded frontend: ${manifest.identifier}`)
+    console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
   } catch (err) {
     console.error(`[Spindle] Failed to load frontend for ${manifest.identifier}:`, err)
   }
@@ -747,12 +827,14 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
   loaded.backendHandlers.clear()
   loaded.processHandlers.clear()
   unregisterTagInterceptorsByExtension(extensionId)
+  unregisterDisplayResolver(loaded.identifier)
   removeMessageWidgetsByExtension(extensionId)
   destroyAllComponentsForExtension(extensionId)
   destroyAllPlacementsForExtension(extensionId)
+  clearTabMobilityHandle(extensionId)
   loadedExtensions.delete(extensionId)
 
-  console.log(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
+  console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
 }
 
 export function routeBackendMessage(extensionId: string, payload: unknown): void {
@@ -937,4 +1019,70 @@ export async function unloadAllFrontendExtensions(): Promise<void> {
   for (const [id] of loadedExtensions) {
     await unloadFrontendExtension(id)
   }
+}
+
+// ── window.spindle global bridge ──
+// Provides a runtime API surface for extensions (e.g. Canvas) that cannot
+// import from lumiverse-spindle-types directly. Defined lazily via getter
+// so the store is fully initialised by the time any extension reads the bridge.
+//
+// This bridge is a system-level API — it does NOT enforce extension
+// permissions. Use `ctx.ui.*` from the extension context for permission-
+// gated access.
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'spindle', {
+    configurable: true,
+    get() {
+      const api = {
+        ui: {
+          getBuiltInTabTitle(tabId: string): string | undefined {
+            const tab = DRAWER_TABS.find((t) => t.id === tabId)
+            return tab ? (tab.tabHeaderTitle ?? tab.tabName) : undefined
+          },
+          getBuiltInTabRoot(tabId: string): HTMLElement | undefined {
+            return ensureRegistryRoot(tabId)
+          },
+          requestTabLocation(tabId: string, location: TabLocation) {
+            useStore.getState().moveTabTo(tabId, location)
+          },
+          getTabLocation(tabId: string): TabLocation {
+            return (useStore.getState().tabLocations[tabId] ?? { kind: 'main-drawer' }) as TabLocation
+          },
+          /**
+           * Get the backend message bus for a loaded extension. Used by
+           * Canvas's secondary-drawer re-executor: when an extension bundle
+           * is re-executed in the secondary drawer, its `setup(ctx)` calls
+           * `ctx.sendToBackend(...)` and `ctx.onBackendMessage(...)`. If
+           * those were bound to canvas_ext's own context, the messages
+           * would be routed to canvas_ext's worker (wrong worker) and
+           * responses from the target extension's worker would never be
+           * received. This helper returns the target extension's actual
+           * bus so the re-executed setup() can talk to the right worker.
+           *
+           * Returns null if the extension is not loaded.
+           */
+          getExtensionBackend(extensionId: string): {
+            sendToBackend: (payload: unknown) => void
+            onBackendMessage: (handler: (payload: unknown) => void) => () => void
+          } | null {
+            const loaded = loadedExtensions.get(extensionId)
+            if (!loaded) return null
+            return {
+              sendToBackend: loaded.context.sendToBackend.bind(loaded.context),
+              onBackendMessage: loaded.context.onBackendMessage.bind(loaded.context),
+            }
+          },
+        },
+        containers: {
+          registerContainer: (opts: { id: string; side: string; element: HTMLElement }) =>
+            useStore.getState().registerContainer(opts as any),
+          unregisterContainer: (id: string) =>
+            useStore.getState().unregisterContainer(id),
+        },
+      }
+      // Cache so subsequent reads don't re-invoke the getter
+      Object.defineProperty(window, 'spindle', { value: api, configurable: true })
+      return api
+    },
+  })
 }

@@ -14,12 +14,34 @@ interface MessageActionsProps {
   onPromptBreakdown?: () => void
   onPlay?: () => void
   isPlaying?: boolean
+  /**
+   * True while a save-first TTS regen is in flight. Swaps the play
+   * button to a stop affordance with a "Cancel TTS generation" label so
+   * the user can abort a long synth they no longer want.
+   */
+  isGenerating?: boolean
+  /** True when this message already has a persisted audio attachment —
+   *  changes the play tooltip from "Play with TTS" to "Regenerate". */
+  hasSavedAudio?: boolean
   isUser: boolean
   isHidden: boolean
   content: string
 }
 
-export default function MessageActions({ onEdit, onDelete, onToggleHidden, onFork, onPromptBreakdown, onPlay, isPlaying, isHidden, content }: MessageActionsProps) {
+export default function MessageActions({
+  onEdit,
+  onDelete,
+  onToggleHidden,
+  onFork,
+  onPromptBreakdown,
+  onPlay,
+  isPlaying,
+  isGenerating,
+  hasSavedAudio,
+  isUser,
+  isHidden,
+  content,
+}: MessageActionsProps) {
   const { t } = useTranslation('chat')
   const [copied, setCopied] = useState(false)
 
@@ -29,7 +51,14 @@ export default function MessageActions({ onEdit, onDelete, onToggleHidden, onFor
     setTimeout(() => setCopied(false), 1500)
   }, [content])
 
-  const playLabel = isPlaying ? t('messageActions.stopPlayback') : t('messageActions.playTts')
+  const playLabel = isGenerating
+    ? t('messageActions.cancelTtsGeneration')
+    : isPlaying
+      ? t('messageActions.stopPlayback')
+      : hasSavedAudio
+        ? t('messageActions.regenerateTtsAudio')
+        : t('messageActions.playTts')
+  const showStopIcon = !!(isGenerating || isPlaying)
   const hideLabel = isHidden ? t('messageActions.unhideFromAi') : t('messageActions.hideFromAi')
   const hideAria = isHidden ? t('messageActions.unhide') : t('messageActions.hide')
 
@@ -50,7 +79,7 @@ export default function MessageActions({ onEdit, onDelete, onToggleHidden, onFor
           aria-label={playLabel}
           aria-pressed={isPlaying}
         >
-          {isPlaying ? <Square size={13} /> : <Volume2 size={13} />}
+          {showStopIcon ? <Square size={13} /> : <Volume2 size={13} />}
         </Button>
       )}
       <Button

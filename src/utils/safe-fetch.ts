@@ -8,9 +8,16 @@
 
 import { lookup, resolve4, resolve6 } from "dns/promises";
 import { dns as bunDns } from "bun";
+import { getEffectiveDnsSettings } from "../services/dns-settings.service";
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+const DEFAULT_DNS_TIMEOUT_MS = 5_000;
+const DOH_TIMEOUT_MS = 5_000;
+
+// DNS record type codes used by RFC 8484 JSON DoH responses.
+const DNS_TYPE_A = 1;
+const DNS_TYPE_AAAA = 28;
 
 export class SSRFError extends Error {
   constructor(message: string) {
@@ -111,9 +118,67 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata.goog",
 ]);
 
+/**
+ * Fallback resolver for environments where the system DNS resolver can't
+ * see a hostname but a public DoH endpoint can (Termux + custom TLDs,
+ * Tailscale split-horizon, etc.). Off by default; toggled in the Operator
+ * panel via `dnsSettings.dohFallbackEnabled`.
+ *
+ * Uses Cloudflare's RFC 8484 JSON wire format and contacts the endpoint by
+ * its configured URL — defaults to `https://1.1.1.1/dns-query` so DoH itself
+ * needs no DNS to bootstrap. We call plain `fetch` (not `safeFetch`) on
+ * purpose: the destination is the operator-configured DoH endpoint, and
+ * safeFetch would recurse back through validateHost.
+ */
+async function resolveViaDoh(
+  hostname: string,
+  endpoint: string,
+  timeoutMs: number
+): Promise<{ v4: string[]; v6: string[] }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const query = async (type: typeof DNS_TYPE_A | typeof DNS_TYPE_AAAA): Promise<string[]> => {
+    const url = new URL(endpoint);
+    url.searchParams.set("name", hostname);
+    url.searchParams.set("type", type === DNS_TYPE_A ? "A" : "AAAA");
+    const res = await fetch(url.toString(), {
+      headers: { accept: "application/dns-json" },
+      signal: controller.signal,
+    });
+    if (!res.ok) return [];
+    const body = (await res.json().catch(() => null)) as
+      | { Status?: number; Answer?: Array<{ type?: number; data?: string }> }
+      | null;
+    if (!body || body.Status !== 0 || !Array.isArray(body.Answer)) return [];
+    const ips: string[] = [];
+    for (const ans of body.Answer) {
+      if (ans.type === type && typeof ans.data === "string") ips.push(ans.data);
+    }
+    return ips;
+  };
+
+  try {
+    const [v4, v6] = await Promise.all([
+      query(DNS_TYPE_A).catch(() => [] as string[]),
+      query(DNS_TYPE_AAAA).catch(() => [] as string[]),
+    ]);
+    return { v4, v6 };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface ValidateHostOptions {
   allowLoopback?: boolean;
   allowPrivate?: boolean;
+  /**
+   * Hard ceiling on total DNS resolution time. Without this, environments
+   * whose system resolver doesn't know a TLD (e.g. Termux on Android with
+   * custom TLDs like `.spot`) can stall for several minutes while resolve4,
+   * resolve6, and lookup each time out independently. Defaults to 5s.
+   */
+  dnsTimeoutMs?: number;
 }
 
 export async function validateHost(hostname: string, options?: ValidateHostOptions): Promise<void> {
@@ -140,36 +205,83 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
     return;
   }
 
-  // Resolve and check all IPs
-  let v4Addrs: string[] = [];
-  let v6Addrs: string[] = [];
+  // Run resolve4, resolve6, and lookup in parallel and race the whole stage
+  // against a hard timeout. Sequencing these would let a single hung resolver
+  // block the others — on Termux that adds up to ~5 minutes per request.
+  const dnsTimeoutMs = options?.dnsTimeoutMs ?? DEFAULT_DNS_TIMEOUT_MS;
+  const v4Addrs = new Set<string>();
+  const v6Addrs = new Set<string>();
+
+  const resolvers = [
+    resolve4(hostname).then(
+      (addrs) => addrs.forEach((a) => v4Addrs.add(a)),
+      () => { /* no A records, or resolver doesn't know this name */ }
+    ),
+    resolve6(hostname).then(
+      (addrs) => addrs.forEach((a) => v6Addrs.add(a)),
+      () => { /* no AAAA records */ }
+    ),
+    lookup(hostname, { all: true }).then(
+      (addrs) => {
+        for (const a of addrs) {
+          if (a.family === 4) v4Addrs.add(a.address);
+          else if (a.family === 6) v6Addrs.add(a.address);
+        }
+      },
+      () => { /* system resolver doesn't know this name */ }
+    ),
+  ];
+
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, dnsTimeoutMs);
+  });
 
   try {
-    v4Addrs = await resolve4(hostname);
-  } catch {
-    // No A records — that's fine, try AAAA
+    await Promise.race([Promise.allSettled(resolvers), timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
-  try {
-    v6Addrs = await resolve6(hostname);
-  } catch {
-    // No AAAA records
-  }
-
-  if (v4Addrs.length === 0 && v6Addrs.length === 0) {
-    try {
-      const lookupAddrs = await lookup(hostname, { all: true });
-      for (const addr of lookupAddrs) {
-        if (addr.family === 4) v4Addrs.push(addr.address);
-        if (addr.family === 6) v6Addrs.push(addr.address);
+  // Local resolvers came back empty — NXDOMAIN-equivalent or they timed
+  // out. If the operator turned on DoH fallback, ask Cloudflare (or whatever
+  // they configured). Termux/.spot escape hatch.
+  //
+  // Heads-up if you're debugging this later: DoH only fixes validation.
+  // The fetch() that safeFetch fires below still does its own DNS lookup.
+  // We get away with it because Bun's fetch goes through libcurl (probably
+  // ending up at Bionic getaddrinfo, which honors Android's Private DNS),
+  // while dns/promises hits c-ares against Termux's hardcoded resolv.conf.
+  // Two different worlds. PR author confirmed plain fetch() works on their
+  // device, so we're banking on that. If someone shows up saying "DoH on
+  // but it still hangs" — yeah, the assumption broke. Least-bad fix is
+  // probably to skip safeFetch at the callsite when DoH succeeded, since
+  // we just validated the IP. Custom lookup-into-fetch is dead (bun#27890
+  // breaks TLS), URL→IP rewriting is dead (breaks SNI). Sorry.
+  if (v4Addrs.size === 0 && v6Addrs.size === 0) {
+    const dns = getEffectiveDnsSettings();
+    if (dns.dohFallbackEnabled) {
+      try {
+        const doh = await resolveViaDoh(hostname, dns.dohEndpoint, DOH_TIMEOUT_MS);
+        doh.v4.forEach((a) => v4Addrs.add(a));
+        doh.v6.forEach((a) => v6Addrs.add(a));
+      } catch {
+        // DoH itself failed (network down, endpoint unreachable). Fall
+        // through to the standard resolution error below.
       }
-    } catch {
-      // Fall through to the standard resolution error below.
     }
   }
 
-  if (v4Addrs.length === 0 && v6Addrs.length === 0) {
-    throw new SSRFError(`Could not resolve hostname: ${hostname}`);
+  if (v4Addrs.size === 0 && v6Addrs.size === 0) {
+    throw new SSRFError(
+      timedOut
+        ? `DNS resolution timed out after ${dnsTimeoutMs}ms for hostname: ${hostname}`
+        : `Could not resolve hostname: ${hostname}`
+    );
   }
 
   for (const ip of v4Addrs) {
@@ -196,6 +308,7 @@ export interface SafeFetchOptions {
   body?: BodyInit | null;
   maxBytes?: number;
   timeoutMs?: number;
+  dnsTimeoutMs?: number;
   headers?: HeadersInit;
   allowLoopback?: boolean;
   allowPrivate?: boolean;
@@ -224,9 +337,10 @@ export async function safeFetch(
       throw new SSRFError(`Only http and https URLs are allowed, got: ${parsed.protocol}`);
     }
 
-    await validateHost(parsed.hostname, { 
+    await validateHost(parsed.hostname, {
       allowLoopback: options?.allowLoopback,
-      allowPrivate: options?.allowPrivate
+      allowPrivate: options?.allowPrivate,
+      dnsTimeoutMs: options?.dnsTimeoutMs,
     });
     // Warm Bun's DNS cache with the validated answer so the connect() that
     // fetch performs immediately below does not re-resolve and potentially

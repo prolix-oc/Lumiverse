@@ -10,7 +10,7 @@
 
 import { posix } from "path";
 import type { FileSystem, FileEntry, FileStat, GoogleDriveConnectionConfig } from "../types";
-import { readResponseBuffer, MAX_REMOTE_FILE_BYTES } from "../remote-fetch-cap";
+import { readResponseBuffer, MAX_REMOTE_FILE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "../remote-fetch-cap";
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
 const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -212,6 +212,7 @@ export class GoogleDriveFileSystem implements FileSystem {
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
       },
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
     });
   }
 }

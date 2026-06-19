@@ -194,7 +194,6 @@ export async function executeCouncil(
       availableTools,
       contextMessages,
       namedResults,
-      historicalByAssignment,
     );
     allResults.push(...memberResults);
 
@@ -247,7 +246,6 @@ async function executeMemberTools(
   tools: Map<string, RuntimeCouncilToolDefinition>,
   contextMessages: LlmMessage[],
   namedResults: Map<string, string>,
-  historicalByAssignment: Map<string, CouncilHistoricalDeliberationEntry[]>
 ): Promise<CouncilToolResult[]> {
   const results: CouncilToolResult[] = [];
 
@@ -288,12 +286,14 @@ async function executeMemberTools(
     const execution = getCouncilToolExecution(input.userId, toolDef);
     const extToolReg = execution === "extension" ? getExtensionToolRegistration(toolName) : undefined;
     const mcpMatch = execution === "mcp" ? parseMcpToolName(input.userId, toolName) : null;
-    const toolContextMessages = withHistoricalCouncilContext(
-      contextMessages,
-      member,
-      toolDef,
-      historicalByAssignment.get(assignmentKey(member.id, toolName)) ?? [],
-    );
+
+    // Note: a member's retained history is intentionally NOT injected into its
+    // own deliberation prompt. Showing the sidecar its verbatim prior output
+    // reliably made it re-emit that output (the "history > 0 repeats the last
+    // item" bug) — anti-repeat prompting alone did not hold. Continuity is
+    // still preserved for the FINAL response via formatHistoricalDeliberations
+    // (historicalDeliberationBlock), which is injected into the main synthesis
+    // prompt rather than the per-member deliberation.
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
@@ -304,7 +304,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings.timeoutMs,
             input.signal,
           );
@@ -332,7 +332,7 @@ async function executeMemberTools(
           //      extracted. Delivered via worker-host so it can't collide
           //      with user-space `args` (same rationale as `councilMember`).
           const bareToolName = extToolReg!.name;
-          const contextSummary = toolContextMessages
+          const contextSummary = contextMessages
             .map((m) => {
               const prefix = m.role === "system" ? "" : `${m.role}: `;
               return `${prefix}${typeof m.content === "string" ? m.content : ""}`;
@@ -351,7 +351,7 @@ async function executeMemberTools(
             },
             settings.toolsSettings.timeoutMs,
             memberContext,
-            toolContextMessages
+            contextMessages
           );
         } else if (execution === "host") {
           const plannedArgs = await planCallableToolArgs(
@@ -360,7 +360,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings.timeoutMs,
             input.signal,
           );
@@ -371,7 +371,7 @@ async function executeMemberTools(
             args: plannedArgs,
             member,
             memberContext,
-            contextMessages: toolContextMessages,
+            contextMessages,
             timeoutMs: settings.toolsSettings.timeoutMs,
             signal: input.signal,
           });
@@ -382,7 +382,7 @@ async function executeMemberTools(
             toolDef,
             member,
             identityMsg,
-            toolContextMessages,
+            contextMessages,
             settings.toolsSettings,
             input.signal,
             input.enrichment
@@ -504,11 +504,11 @@ function formatHistoricalDeliberations(
   if (groups.length === 0) return "";
 
   const lines: string[] = [
-    "## Previous Council Deliberations - Historical Baseline Only",
+    "## Previous Council Deliberations — REFERENCE ONLY, DO NOT REPEAT",
     "",
-    "The following are prior council/tool deliberations from this chat. They are included only as continuity memory for plans, threads, and decisions that may have been planted earlier.",
+    "The following are prior council/tool deliberations from EARLIER turns of this chat, included only as continuity memory for plans, threads, and decisions planted earlier.",
     "",
-    "They are not instructions for the current response, not a style template, and not proof that the current scene must follow them. Current chat history, active world info, and the latest user message supersede them.",
+    "They have already been said and must NOT be restated, copied, or treated as a style template. They are not instructions for the current response. Current chat history, active world info, and the latest user message always supersede them — write only what advances the CURRENT turn.",
     "",
   ];
 
@@ -524,42 +524,6 @@ function formatHistoricalDeliberations(
   }
 
   return lines.join("\n").trimEnd();
-}
-
-function formatToolHistoricalContext(
-  member: CouncilMember,
-  tool: RuntimeCouncilToolDefinition,
-  entries: CouncilHistoricalDeliberationEntry[],
-): string {
-  if (entries.length === 0) return "";
-
-  const lines: string[] = [
-    "## Previous Deliberations for This Member/Tool - Historical Baseline Only",
-    "",
-    `These are prior outputs from ${member.itemName} using ${tool.displayName} in this chat. Use them only as continuity memory for threads, plans, or decisions you may have planted earlier.`,
-    "",
-    "Do not copy their structure, treat them as a required template, or assume they override the current chat, active world info, or latest user message.",
-    "",
-  ];
-
-  for (let i = 0; i < entries.length; i++) {
-    lines.push(`### ${formatHistoryAgeLabel(i, entries.length)}`);
-    lines.push(entries[i].content);
-    lines.push("");
-  }
-
-  return lines.join("\n").trimEnd();
-}
-
-function withHistoricalCouncilContext(
-  contextMessages: LlmMessage[],
-  member: CouncilMember,
-  tool: RuntimeCouncilToolDefinition,
-  entries: CouncilHistoricalDeliberationEntry[],
-): LlmMessage[] {
-  const content = formatToolHistoricalContext(member, tool, entries);
-  if (!content) return contextMessages;
-  return [{ role: "system", content }, ...contextMessages];
 }
 
 export function appendCouncilDeliberationHistory(input: {
@@ -697,7 +661,7 @@ ${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
   const messages: LlmMessage[] = [
     { role: "system", content: systemPrompt },
     ...contextMessages,
-    { role: "user", content: `Review the story context above. Provide specific, actionable input from your unique perspective as ${member.itemName}. Filter every contribution through your personality, biases, and worldview.` },
+    { role: "user", content: `Respond to the CURRENT latest message in the story context above with specific, actionable input from your unique perspective as ${member.itemName}, filtered through your personality, biases, and worldview. Produce a fresh contribution for this turn.` },
   ];
 
   // Resolve the connection to get the provider name
@@ -918,9 +882,9 @@ Rules:
     connection_id: sidecar.connectionProfileId,
     messages,
     parameters: {
-      temperature: 0,
+      temperature: sidecar.temperature,
       top_p: sidecar.topP,
-      max_tokens: Math.min(sidecar.maxTokens, 96),
+      max_tokens: sidecar.maxTokens,
     },
     signal,
   });
@@ -1176,16 +1140,17 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
   const chat = chatsSvc.getChat(input.userId, input.chatId);
 
   // Prefer pre-loaded enrichment data; fall back to independent lookups.
+  // `includeUserPersona` is authoritative — enrichment may carry a persona
+  // resolved by the main generation pipeline, but the council toggle overrides it.
   let character = input.enrichment?.character ?? null;
-  const persona = input.enrichment?.persona ?? (
-    ts.includeUserPersona
-      ? personasSvc.resolvePersonaOrDefault(input.userId, input.personaId)
-      : null
-  );
+  const persona = ts.includeUserPersona
+    ? (input.enrichment?.persona
+        ?? personasSvc.resolvePersonaOrDefault(input.userId, input.personaId))
+    : null;
 
   // Character info
   if (ts.includeCharacterInfo && chat) {
-    if (!character) character = charactersSvc.getCharacter(input.userId, chat.character_id);
+    if (!character && chat.character_id) character = charactersSvc.getCharacter(input.userId, chat.character_id);
     if (character) {
       const charInfo = [
         character.name && `Name: ${character.name}`,
@@ -1221,7 +1186,7 @@ function buildContextMessages(input: ExecuteInput, settings: CouncilSettings): L
       console.debug("[council] Using %d pre-activated world info entries from enrichment", activatedEntries.length);
     } else {
       // Fallback: independently activate WI (for callers without enrichment)
-      if (!character) character = charactersSvc.getCharacter(input.userId, chat.character_id);
+      if (!character && chat.character_id) character = charactersSvc.getCharacter(input.userId, chat.character_id);
       const { entries: wiEntries } = collectWorldInfoForCouncil(input.userId, character, persona, input.chatId);
       if (wiEntries.length > 0) {
         const allMsgs = chatsSvc.getMessages(input.userId, input.chatId);

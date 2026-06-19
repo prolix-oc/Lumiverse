@@ -1506,6 +1506,9 @@ function scrubOrphanForeignKeys(userId: string): void {
     ["dream_weaver_sessions", "persona_id", "personas"],
     ["dream_weaver_sessions", "connection_id", "connection_profiles"],
     ["dream_weaver_sessions", "character_id", "characters"],
+    ["weaver_sessions", "persona_id", "personas"],
+    ["weaver_sessions", "connection_id", "connection_profiles"],
+    ["weaver_sessions", "character_id", "characters"],
     ["messages", "parent_message_id", "messages"],
   ];
   for (const [child, col, parent] of nullableFks) {

@@ -82,6 +82,7 @@ These macros are especially useful in group chat presets:
 | `{{groupLastSpeaker}}` | Name of the character who spoke last |
 | `{{isGroupChat}}` | "yes" or "no" |
 | `{{charGroupFocused}}` | The currently targeted character's name |
+| `{{groupCardMode}}` | Card composition mode: "solo", "swap", "merge", or "merge_ignore_muted" |
 
 ---
 

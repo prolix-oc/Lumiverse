@@ -4,6 +4,7 @@ import { hashPassword } from "../crypto/password";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
+import { seedDefaultPreset } from "./default-preset";
 import {
   ownerCredentialsExist,
   readOwnerCredentials,
@@ -209,6 +210,7 @@ export async function seedOwner(): Promise<void> {
     try {
       const userId = seedOwnerDirectly(db, creds.username, creds.passwordHash);
       provisionUserDirectories(userId);
+      seedDefaultPreset(userId);
     } catch (err) {
       console.error("[Auth] Failed to seed owner:", err);
       throw err;
@@ -261,6 +263,7 @@ export async function seedOwner(): Promise<void> {
       console.log(`[Auth] Promoted "${owner.username}" to owner role (was "${owner.role}")`);
     }
     provisionUserDirectories(owner.id);
+    seedDefaultPreset(owner.id);
   } else {
     console.error("[Auth] No users exist after seeding — this should never happen");
   }

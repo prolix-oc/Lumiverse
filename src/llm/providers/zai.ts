@@ -56,6 +56,7 @@ export class ZAIProvider extends OpenAICompatibleProvider {
   // Serve a static model list because the API has no /models endpoint.
   async listModels(_apiKey: string, _apiUrl: string): Promise<string[]> {
     return [
+      "glm-5.2",
       "glm-5.1",
       "glm-5-turbo",
       "glm-5",

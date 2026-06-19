@@ -74,6 +74,7 @@
     "filesSelected": "{{count}} ファイルが選択されました",
     "duplicate": "重複",
     "wiEntries": "{{count}} WI エントリ",
+    "loraReference": "LoRA: {{name}} @ {{weight}}",
     "failed": "失敗",
     "imported": "{{count}} インポート",
     "skipped": "{{count}} スキップ",
@@ -243,7 +244,7 @@
     "showFull": "完全に表示 ({{count}} 文字)",
     "chars": "{{count}} 文字",
     "lines": "{{count}} 行",
-    "tokens": "{{count}} トークン"
+    "tokens": "{{count, number}} トークン"
   },
   "dryRun": {
     "title": "プロンプト ドライ ラン",
@@ -255,7 +256,7 @@
     "showFull": "完全に表示 ({{count}} 文字)",
     "assistantPrefill": "Assistantプレフィル",
     "assemblyBreakdown": "アセンブリ内訳 ({{count}})",
-    "totalTokens": "{{count}} 合計トークン数",
+    "totalTokens": "{{count, number}} 合計トークン数",
     "viaTokenizer": "{{name}}経由",
     "cacheReadWrite": "{{read}} を読み取る • {{write}} を書き込む",
     "cache5m": " • 5m {{count}}",
@@ -271,8 +272,8 @@
     "contextBudget": "コンテキスト予算",
     "clippingDisabled": "(max_context_length セットなし - クリッピング)無効)",
     "budgetInvalid": "(予算が無効 — コンテキスト サイズ ≤ 予約された応答トークン)",
-    "messagesClipped": "({{messages}} メッセージがクリップされました、{{tokens}} トークン)",
-    "messagesClipped_plural": "({{messages}} メッセージがクリップされました、{{tokens}} トークン)",
+    "messagesClipped_one": "({{messages}} メッセージがクリップされました、{{tokens}} トークン)",
+    "messagesClipped_other": "({{messages}} メッセージがクリップされました、{{tokens}} トークン)",
     "fitsBudget": "(予算内に収まります)",
     "budgetNoHistory": "予算はどのチャット履歴にも適合しません",
     "budgetNoHistoryDetail": "入力予算 = max_context ({{max}}) − max_tokens ({{reserved}}) − 安全性({{safety}}) = {{input}}。コンテキスト サイズを増やすか、最大トークンを減らします。",
@@ -310,7 +311,7 @@
       "settingsSource": "Settings ソース",
       "queryPreview": "クエリ プレビュー",
       "retrievedChunks": "取得されたチャンク",
-      "chunkLine": "#{{index}} — スコア: {{score}}、~{{tokens}} トークン"
+      "chunkLine": "#{{index}} — スコア: {{score}}、~{{tokens, number}} トークン"
     },
     "databank": {
       "embeddingsEnabled": "埋め込み有効",
@@ -320,7 +321,7 @@
       "activeBankIds": "アクティブなデータバンク ID",
       "queryPreview": "クエリ プレビュー",
       "retrievedChunks": "取得されたチャンク",
-      "chunkLine": "#{{index}} — {{document}}、スコア: {{score}}、~{{tokens}} トークン"
+      "chunkLine": "#{{index}} — {{document}}、スコア: {{score}}、~{{tokens, number}} トークン"
     },
     "budget": {
       "maxContext": "最大コンテキスト長",
@@ -336,7 +337,7 @@
       "tokensDropped": "トークンがドロップされました",
       "tokenizerUsed": "使用されたトークナイザー",
       "unset": "— (未設定)",
-      "tokens": "{{count}} トークン"
+      "tokens": "{{count, number}} トークン"
     },
     "yes": "はい",
     "no": "いいえ"
@@ -541,7 +542,10 @@
     "saveFailed": "アドオンの保存に失敗しました",
     "createFailed": "アドオンの作成に失敗しました",
     "deleteFailed": "アドオンの削除に失敗しました",
-    "duplicateFailed": "アドオンの複製に失敗しました"
+    "duplicateFailed": "アドオンの複製に失敗しました",
+    "deleteConfirmTitle": "アドオンを削除",
+    "deleteConfirmMessage": "「{{name}}」を削除しますか?これを元に戻すことはできません。",
+    "deleteConfirmMessageUnnamed": "このアドオンを削除しますか?これを元に戻すことはできません。"
   },
   "personaAddons": {
     "title": "ペルソナアドオン",

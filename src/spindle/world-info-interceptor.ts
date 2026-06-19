@@ -1,4 +1,5 @@
 import type { WorldBookEntry } from "../types/world-book";
+import type { BookSource } from "../services/prompt-assembly.service";
 
 export interface WorldInfoInterceptorEntryDTO {
   readonly id: string;
@@ -26,6 +27,7 @@ export interface WorldInfoInterceptorEntryDTO {
   readonly delay_until_recursion: boolean;
   readonly scan_depth: number | null;
   readonly order_value: number;
+  readonly book_source?: BookSource;
 }
 
 export interface WorldInfoInterceptorMessageDTO {
@@ -92,7 +94,8 @@ class WorldInfoInterceptorChain {
   async run(
     entries: readonly WorldBookEntry[],
     ctx: Omit<WorldInfoInterceptorCtxDTO, "entries">,
-    userId?: string | null
+    userId?: string | null,
+    bookSourceMap?: ReadonlyMap<string, BookSource>
   ): Promise<WorldBookEntry[]> {
     if (this.handlers.length === 0) return [...entries];
 
@@ -125,6 +128,7 @@ class WorldInfoInterceptorChain {
         delay_until_recursion: e.delay_until_recursion,
         scan_depth: e.scan_depth,
         order_value: e.order_value,
+        book_source: bookSourceMap?.get(e.world_book_id),
       }));
 
     const disabledByChain = new Set<string>();

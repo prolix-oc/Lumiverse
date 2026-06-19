@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync, statSync, statfsSync } from "node:fs";
 import { totalmem } from "node:os";
 import { dirname } from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { env } from "../env";
 
 const MiB = 1024 * 1024;
@@ -14,6 +15,10 @@ const DB_MAINTENANCE_STATE_KEY = "databaseMaintenanceState";
 const MIN_CACHE_BYTES = 32 * MiB;
 const DEFAULT_CACHE_BYTES = 64 * MiB;
 const MIN_MMAP_BYTES = 256 * MiB;
+// Adaptive mmap is capped here when mmap is explicitly opted in. The old 2 GiB
+// ceiling exposed an enormous mapping for negligible read gain; 512 MiB fully
+// maps a typical Lumiverse DB while bounding memory and crash surface.
+const MMAP_AUTO_CEILING_BYTES = 512 * MiB;
 
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -285,6 +290,18 @@ export function getDatabasePathFallback(path?: string): string {
   return path || DEFAULT_DB_PATH;
 }
 
+/**
+ * Whether this connection may enable memory-mapped I/O. OFF by default
+ * (uncatchable SIGBUS/SIGSEGV on mmap faults). Even when opted in via env, a
+ * worker thread must NEVER mmap: a short-lived worker holding its own map over
+ * a DB file the main thread concurrently grows/checkpoints/truncates is the
+ * exact SIGBUS race behind the message-send segfaults. Windows can't truncate
+ * mmap'd files, so it stays off there regardless.
+ */
+function mmapEnabled(): boolean {
+  return env.sqliteMmapEnabled && isMainThread && process.platform !== "win32";
+}
+
 export function applyBaseDatabasePragmas(db: Database): void {
   db.run("PRAGMA journal_mode = WAL");
   db.run("PRAGMA foreign_keys = ON");
@@ -292,8 +309,7 @@ export function applyBaseDatabasePragmas(db: Database): void {
   db.run("PRAGMA synchronous = NORMAL");
   db.run(`PRAGMA cache_size = ${-Math.floor(DEFAULT_CACHE_BYTES / 1024)}`);
   db.run("PRAGMA temp_store = MEMORY");
-  const isWindows = process.platform === "win32";
-  db.run(`PRAGMA mmap_size = ${isWindows ? 0 : MIN_MMAP_BYTES}`);
+  db.run(`PRAGMA mmap_size = ${mmapEnabled() ? MIN_MMAP_BYTES : 0}`);
   db.run("PRAGMA wal_autocheckpoint = 500");
   db.run(`PRAGMA journal_size_limit = ${DEFAULT_JOURNAL_SIZE_LIMIT_BYTES}`);
 }
@@ -421,7 +437,7 @@ function computeMmapBytes(stats: DatabaseStats, settings: DatabaseTuningSettings
   bytes: number;
   source: "auto" | "settings" | "disabled";
 } {
-  if (process.platform === "win32") {
+  if (!mmapEnabled()) {
     return { bytes: 0, source: "disabled" };
   }
 
@@ -429,7 +445,7 @@ function computeMmapBytes(stats: DatabaseStats, settings: DatabaseTuningSettings
     return { bytes: Math.max(0, Math.floor(settings.mmapSizeBytes)), source: "settings" };
   }
 
-  const hostBudgetMax = Math.max(MIN_MMAP_BYTES, Math.min(Math.floor(stats.hostMemoryBytes / 4), 2 * 1024 * MiB));
+  const hostBudgetMax = Math.max(MIN_MMAP_BYTES, Math.min(Math.floor(stats.hostMemoryBytes / 4), MMAP_AUTO_CEILING_BYTES));
   const autoTarget = Math.max(MIN_MMAP_BYTES, Math.ceil(Math.max(stats.logicalBytes, stats.fileBytes) * 2));
   return {
     bytes: clamp(autoTarget, MIN_MMAP_BYTES, hostBudgetMax),

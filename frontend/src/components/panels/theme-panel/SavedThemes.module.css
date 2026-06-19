@@ -147,3 +147,11 @@
   border-color: var(--lumiverse-danger-020);
   color: var(--lumiverse-danger);
 }
+
+.emptyHint {
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-hint);
+  line-height: 1.4;
+  margin: 0;
+  padding: 6px 0;
+}

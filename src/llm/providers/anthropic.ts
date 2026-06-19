@@ -1,6 +1,6 @@
 import type { LlmProvider } from "../provider";
 import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
-import { createCooperativeYielder, fetchWithPreflightAbort, readWithAbort } from "../stream-utils";
+import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPreflightAbort, readJsonWithAbort, readWithAbort } from "../stream-utils";
 import {
   getTextContent,
   type GenerationUsage,
@@ -10,10 +10,13 @@ import {
   type ToolCallResult,
   type LlmMessage,
   type LlmMessagePart,
+  type LlmThinkingBlock,
 } from "../types";
 import {
   fetchProviderJson,
+  parseProviderErrorBody,
   ProviderRequestError,
+  readBoundedText,
   throwProviderResponseError,
 } from "../../utils/provider-errors";
 
@@ -41,7 +44,14 @@ export class AnthropicProvider implements LlmProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "anthropic",
+    // Anthropic preserves reasoning across tool calls via native `thinking`
+    // blocks (with opaque signatures) replayed before each turn's `tool_use`.
+    // formatContent re-injects them and buildBody sends the interleaved-thinking
+    // beta header, so the generation loop can use the structured continuation.
+    interleavedThinking: true,
   };
+
+  private static readonly INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 
   private baseUrl(apiUrl: string): string {
     let url = (apiUrl || this.defaultUrl).replace(/\/+$/, "");
@@ -60,8 +70,9 @@ export class AnthropicProvider implements LlmProvider {
     };
   }
 
-  private isOpus47Model(model: string): boolean {
-    return /^claude-opus-4-7(?:$|[-:@])/.test((model || "").trim());
+  /** Opus 4.7/4.8 use adaptive thinking and reject manual sampling params. */
+  private omitsSamplingParams(model: string): boolean {
+    return /^claude-opus-4-(?:7|8)(?:$|[-:@])/.test((model || "").trim());
   }
 
   private shouldSuppressThinking(request: GenerationRequest): boolean {
@@ -71,6 +82,62 @@ export class AnthropicProvider implements LlmProvider {
       typeof thinking === "object" &&
       (thinking as any).type === "disabled"
     );
+  }
+
+  /** True when extended/adaptive thinking is active (set and not disabled). */
+  private thinkingEnabled(request: GenerationRequest): boolean {
+    const thinking = request.parameters?.thinking;
+    return (
+      !!thinking &&
+      typeof thinking === "object" &&
+      !Array.isArray(thinking) &&
+      (thinking as any).type !== "disabled"
+    );
+  }
+
+  /**
+   * Whether to request interleaved thinking for this call. Only meaningful when
+   * tools are present (nothing to interleave otherwise) and thinking is enabled.
+   * The `interleaved-thinking-2025-05-14` beta header is accepted on any model
+   * and is safely ignored / deprecated where interleaved thinking is automatic
+   * (adaptive thinking on Opus 4.6+/4.7/4.8 and Sonnet 4.6), so it's safe to
+   * send whenever these conditions hold.
+   */
+  protected wantsInterleavedThinking(request: GenerationRequest): boolean {
+    return !!request.tools?.length && this.thinkingEnabled(request);
+  }
+
+  /** Merge the interleaved-thinking beta header onto the base headers when applicable. */
+  protected requestHeaders(
+    apiKey: string,
+    request: GenerationRequest,
+  ): Record<string, string> {
+    const headers = this.headers(apiKey);
+    if (this.wantsInterleavedThinking(request)) {
+      headers["anthropic-beta"] = AnthropicProvider.INTERLEAVED_THINKING_BETA;
+    }
+    return headers;
+  }
+
+  /**
+   * Extract native thinking / redacted_thinking blocks (with signatures) from a
+   * non-streaming response `content` array, preserving order. These are opaque
+   * and must be replayed verbatim on tool-use continuations.
+   */
+  protected collectThinkingBlocks(blocks: any[]): LlmThinkingBlock[] {
+    const out: LlmThinkingBlock[] = [];
+    for (const block of blocks) {
+      if (block?.type === "thinking") {
+        out.push({
+          type: "thinking",
+          thinking: block.thinking || "",
+          ...(block.signature ? { signature: block.signature } : {}),
+        });
+      } else if (block?.type === "redacted_thinking") {
+        out.push({ type: "redacted_thinking", data: block.data });
+      }
+    }
+    return out;
   }
 
   private normalizeThinkingConfig(thinking: unknown):
@@ -174,20 +241,27 @@ export class AnthropicProvider implements LlmProvider {
     const body = this.buildBody(request, false);
     const suppressThinking = this.shouldSuppressThinking(request);
 
-    const res = await fetch(url, {
+    const res = await fetchWithPreflightAbort(url, {
       method: "POST",
-      headers: this.headers(apiKey),
+      headers: this.requestHeaders(apiKey, request),
       body: JSON.stringify(body),
-      signal: request.signal,
-    });
+    }, request.signal);
 
     if (!res.ok) {
-      const err = await res.text();
-      this.logSystemValidationError(body, err);
-      throw new Error(`Anthropic API error ${res.status}: ${err}`);
+      const rawBody = await readBoundedText(res);
+      this.logSystemValidationError(body, rawBody);
+      const parsed = parseProviderErrorBody(rawBody);
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "generate",
+        status: res.status,
+        code: parsed.code || res.statusText || undefined,
+        detail: parsed.detail || res.statusText || undefined,
+        rawBody,
+      });
     }
 
-    const data = (await res.json()) as any;
+    const data = (await readJsonWithAbort<any>(res, request.signal)) as any;
     const blocks = data.content || [];
     let textContent = "";
     let thinkingContent = "";
@@ -213,11 +287,19 @@ export class AnthropicProvider implements LlmProvider {
           }))
         : undefined;
 
+    // Capture native thinking blocks (with signatures) so the caller can replay
+    // them on tool-use continuations — required for interleaved thinking. Not
+    // collected when thinking is suppressed (it was merged into text above).
+    const thinkingBlocks = suppressThinking
+      ? []
+      : this.collectThinkingBlocks(blocks);
+
     return {
       content: textContent,
       reasoning: thinkingContent || undefined,
       finish_reason: toolCalls ? "tool_calls" : data.stop_reason || "end_turn",
       tool_calls: toolCalls,
+      thinking_blocks: thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
       usage: this.buildUsage(data),
     };
   }
@@ -233,14 +315,22 @@ export class AnthropicProvider implements LlmProvider {
 
     const res = await fetchWithPreflightAbort(url, {
       method: "POST",
-      headers: this.headers(apiKey),
+      headers: this.requestHeaders(apiKey, request),
       body: JSON.stringify(body),
     }, request.signal);
 
     if (!res.ok) {
-      const err = await res.text();
-      this.logSystemValidationError(body, err);
-      throw new Error(`Anthropic API error ${res.status}: ${err}`);
+      const rawBody = await readBoundedText(res);
+      this.logSystemValidationError(body, rawBody);
+      const parsed = parseProviderErrorBody(rawBody);
+      throw new ProviderRequestError({
+        provider: this.displayName,
+        operation: "stream",
+        status: res.status,
+        code: parsed.code || res.statusText || undefined,
+        detail: parsed.detail || res.statusText || undefined,
+        rawBody,
+      });
     }
 
     const reader = res.body!.getReader();
@@ -255,10 +345,19 @@ export class AnthropicProvider implements LlmProvider {
       [];
     let currentToolIdx = -1;
 
+    // Native thinking-block accumulation. Thinking blocks carry the model's
+    // reasoning text plus an opaque `signature` (streamed as a signature_delta
+    // just before content_block_stop). They must be replayed verbatim on
+    // tool-use continuations to keep interleaved thinking intact. Skipped when
+    // thinking is suppressed (deltas are merged into text instead).
+    const thinkingBlocks: LlmThinkingBlock[] = [];
+    let currentThinkingIdx = -1;
+
+    let streamDoneNaturally = false;
     try {
       while (true) {
         const { done, value } = await readWithAbort(reader, request.signal);
-        if (done) break;
+        if (done) { streamDoneNaturally = !request.signal?.aborted; break; }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -287,14 +386,54 @@ export class AnthropicProvider implements LlmProvider {
                   inputJson: "",
                 });
                 currentToolIdx = pendingToolCalls.length - 1;
+              } else if (
+                !suppressThinking &&
+                data.content_block?.type === "thinking"
+              ) {
+                thinkingBlocks.push({
+                  type: "thinking",
+                  thinking: data.content_block.thinking || "",
+                  ...(data.content_block.signature
+                    ? { signature: data.content_block.signature }
+                    : {}),
+                });
+                currentThinkingIdx = thinkingBlocks.length - 1;
+              } else if (
+                !suppressThinking &&
+                data.content_block?.type === "redacted_thinking"
+              ) {
+                // redacted_thinking is delivered whole (no deltas).
+                thinkingBlocks.push({
+                  type: "redacted_thinking",
+                  data: data.content_block.data,
+                });
               }
             } else if (data.type === "content_block_delta") {
               if (data.delta?.type === "thinking_delta") {
                 if (suppressThinking) {
                   yield { token: data.delta.thinking };
                 } else {
+                  if (currentThinkingIdx >= 0) {
+                    thinkingBlocks[currentThinkingIdx].thinking =
+                      (thinkingBlocks[currentThinkingIdx].thinking || "") +
+                      (data.delta.thinking || "");
+                  }
                   yield { token: "", reasoning: data.delta.thinking };
                 }
+              } else if (
+                data.delta?.type === "signature_delta" &&
+                !suppressThinking
+              ) {
+                // The opaque signature for the current thinking block. Create a
+                // block defensively if none was started (e.g. display:"omitted"
+                // where text deltas may be skipped).
+                if (currentThinkingIdx < 0) {
+                  thinkingBlocks.push({ type: "thinking", thinking: "" });
+                  currentThinkingIdx = thinkingBlocks.length - 1;
+                }
+                thinkingBlocks[currentThinkingIdx].signature =
+                  (thinkingBlocks[currentThinkingIdx].signature || "") +
+                  (data.delta.signature || "");
               } else if (data.delta?.type === "text_delta") {
                 yield { token: data.delta.text };
               } else if (
@@ -357,6 +496,8 @@ export class AnthropicProvider implements LlmProvider {
                   token: "",
                   finish_reason: finishReason,
                   tool_calls: toolCalls,
+                  thinking_blocks:
+                    thinkingBlocks.length > 0 ? thinkingBlocks : undefined,
                   usage,
                 };
               } else if (usage) {
@@ -371,7 +512,7 @@ export class AnthropicProvider implements LlmProvider {
         }
       }
     } finally {
-      reader.cancel().catch(() => {});
+      if (!streamDoneNaturally) await cancelStreamAndCloseConnection(reader, res);
     }
   }
 
@@ -427,15 +568,44 @@ export class AnthropicProvider implements LlmProvider {
     return normalized ? { ...target, cache_control: normalized } : target;
   }
 
-  /** Format message content for the Anthropic API, handling multipart (vision) content. */
-  private formatContent(m: LlmMessage): string | any[] {
+  /** Serialize native thinking blocks to Anthropic content-block form. */
+  private formatThinkingBlocks(
+    blocks: LlmThinkingBlock[] | undefined,
+  ): Array<Record<string, unknown>> {
+    if (!blocks?.length) return [];
+    return blocks.map((b) =>
+      b.type === "redacted_thinking"
+        ? { type: "redacted_thinking", data: b.data }
+        : {
+            type: "thinking",
+            thinking: b.thinking ?? "",
+            // The signature is opaque and must be sent back unmodified. Omit it
+            // only if absent (shouldn't happen for a captured thinking block).
+            ...(b.signature ? { signature: b.signature } : {}),
+          },
+    );
+  }
+
+  /** Format message content for the Anthropic API, handling multipart (vision)
+   *  content and replaying native thinking blocks for interleaved thinking. */
+  protected formatContent(m: LlmMessage): string | any[] {
+    // Native thinking blocks must be replayed verbatim at the START of the
+    // assistant turn, before any text or tool_use blocks. When thinking is
+    // active, Anthropic requires the assistant turn to begin with them and
+    // rejects tool_use turns that drop them.
+    const thinkingParts =
+      m.role === "assistant" ? this.formatThinkingBlocks(m.thinking_blocks) : [];
+
     if (typeof m.content === "string") {
-      if (!this.normalizeCacheControl(m.cache_control)) return m.content;
-      return [
-        this.applyCacheControl({ type: "text", text: m.content }, m.cache_control),
-      ];
+      const hasCacheControl = !!this.normalizeCacheControl(m.cache_control);
+      if (thinkingParts.length === 0 && !hasCacheControl) return m.content;
+      const textParts = m.content
+        ? [this.applyCacheControl({ type: "text", text: m.content }, m.cache_control)]
+        : [];
+      return [...thinkingParts, ...textParts];
     }
-    return m.content.map((part: LlmMessagePart) => {
+
+    const parts = m.content.map((part: LlmMessagePart) => {
       switch (part.type) {
         case "text":
           return this.applyCacheControl({ type: "text", text: part.text }, part.cache_control);
@@ -467,6 +637,7 @@ export class AnthropicProvider implements LlmProvider {
           return { type: "text", text: "" };
       }
     });
+    return thinkingParts.length > 0 ? [...thinkingParts, ...parts] : parts;
   }
 
   private formatSystemMessage(m: LlmMessage): Array<Record<string, unknown>> {
@@ -596,7 +767,7 @@ export class AnthropicProvider implements LlmProvider {
 
   private buildBody(request: GenerationRequest, stream: boolean): any {
     const params = request.parameters || {};
-    const omitSampling = this.isOpus47Model(request.model);
+    const omitSampling = this.omitsSamplingParams(request.model);
     const systemBlocks: Array<Record<string, unknown>> = [];
     const normalizedMessages: Array<{
       role: "user" | "assistant";

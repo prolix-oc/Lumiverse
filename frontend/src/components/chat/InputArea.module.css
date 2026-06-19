@@ -41,6 +41,18 @@
   padding-bottom: calc(10px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
 }
 
+:global(html[data-pwa]:not([data-ios-pwa])) .container {
+  /* Chromium/Android PWA: .app is now edge-to-edge (no bottom padding), so
+     pin the bar's glass to the screen edge and lift only its content above
+     the gesture nav bar. Unlike iOS, Android sets
+     interactive-widget=resizes-content (see main.tsx), so the dvh-sized
+     shell shrinks above the keyboard and the bar rides up on its own — no
+     --app-keyboard-inset-bottom lift needed. env(safe-area-inset-bottom)
+     collapses to 0 when the keyboard hides the nav bar. */
+  bottom: 0;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+
 :global([data-glass]) .container {
   backdrop-filter: blur(var(--lcs-glass-blur));
   will-change: backdrop-filter;
@@ -75,6 +87,26 @@
 .container > * {
   position: relative;
   z-index: 1;
+}
+
+/* ── Drag-and-drop overlay ── */
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1.5px dashed var(--lumiverse-primary, rgba(140, 120, 240, 0.9));
+  background: color-mix(in srgb, var(--lumiverse-primary-020, rgba(140, 120, 240, 0.2)) 60%, var(--lumiverse-bg, rgba(28, 24, 38, 0.95)) 40%);
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.92));
+  font-size: 13px;
+  font-weight: 600;
+  backdrop-filter: blur(2px);
 }
 
 /* ── Action bar — regenerate / continue / stop ── */
@@ -921,6 +953,11 @@
   :global(html[data-ios-pwa]) .container {
     bottom: var(--app-keyboard-inset-bottom, 0px);
     padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom, 0px) - var(--app-keyboard-inset-bottom, 0px)));
+  }
+
+  :global(html[data-pwa]:not([data-ios-pwa])) .container {
+    bottom: 0;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   }
 
   /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px).

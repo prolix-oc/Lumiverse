@@ -1,5 +1,10 @@
 /* ── Bubble mode card ── */
 .card {
+  /* User-tunable bubble fill alpha. --lcs-bubble-opacity (set on :root by
+     ChatView) scales the theme's glass fill toward transparent; at the default
+     1 these resolve to the unmodified glass colors, so the look is unchanged. */
+  --lcs-bubble-bg: color-mix(in srgb, var(--lcs-glass-bg) calc(var(--lcs-bubble-opacity, 1) * 100%), transparent);
+  --lcs-bubble-bg-hover: color-mix(in srgb, var(--lcs-glass-bg-hover, rgba(24, 22, 36, 0.65)) calc(var(--lcs-bubble-opacity, 1) * 100%), transparent);
   display: flex;
   flex-shrink: 0;
   gap: 10px;
@@ -11,7 +16,7 @@
   contain: layout style paint;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
-    var(--lcs-glass-bg);
+    var(--lcs-bubble-bg);
   box-shadow: 0 0 0 0.5px var(--lcs-glass-border);
   backdrop-filter: none;
   transition:
@@ -44,7 +49,7 @@
   background:
     linear-gradient(145deg, var(--lcs-glass-char-tint, rgba(100, 120, 255, 0.03)) 0%, transparent 40%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
-    var(--lcs-glass-bg);
+    var(--lcs-bubble-bg);
 }
 
 /* User tint */
@@ -53,7 +58,7 @@
   background:
     linear-gradient(225deg, var(--lcs-glass-user-tint, rgba(255, 180, 100, 0.03)) 0%, transparent 40%),
     linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
-    var(--lcs-glass-bg);
+    var(--lcs-bubble-bg);
 }
 
 /* Left-aligned user override — mirrors character layout */
@@ -86,7 +91,13 @@
     inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(255, 255, 255, 0.018) 100%),
-    var(--lcs-glass-bg-hover, rgba(24, 22, 36, 0.65));
+    var(--lcs-bubble-bg-hover);
+}
+
+/* Light themes use a light hover fill fallback, so derive the bubble hover var
+   from it instead of the dark default. */
+:global([data-theme-mode='light']) .card {
+  --lcs-bubble-bg-hover: color-mix(in srgb, var(--lcs-glass-bg-hover, rgba(255, 255, 255, 0.75)) calc(var(--lcs-bubble-opacity, 1) * 100%), transparent);
 }
 
 :global([data-theme-mode='light']) .card:hover {
@@ -97,7 +108,7 @@
     inset 0 0.5px 0 rgba(255, 255, 255, 0.5);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(255, 255, 255, 0.04) 100%),
-    var(--lcs-glass-bg-hover, rgba(255, 255, 255, 0.75));
+    var(--lcs-bubble-bg-hover);
 }
 
 /* Hide dissolving avatar background when user opts out */
@@ -114,7 +125,7 @@
     0 12px 48px rgba(0, 0, 0, 0.08);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
-    var(--lcs-glass-bg, rgba(18, 16, 28, 0.55));
+    var(--lcs-bubble-bg);
 }
 
 :global([data-no-bubble-hover]) .card:hover .avatarBgImg {
@@ -187,6 +198,21 @@
 .streaming {
   will-change: opacity, transform;
   backdrop-filter: none;
+}
+
+:global([data-style-mode='extension-relaxed']) .streaming {
+  will-change: opacity;
+}
+
+:global([data-style-mode='extension-relaxed']) .card {
+  contain: style;
+}
+
+/* Allow card authored extension-relaxed content to render at arbitrary z levels,
+  as long as they stay below the sidebars. */
+:global([data-style-mode='extension-relaxed']) .bubble,
+:global([data-style-mode='extension-relaxed']) .content {
+  z-index: auto;
 }
 
 /* ── Bubble inner content ── */

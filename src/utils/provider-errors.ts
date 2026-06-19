@@ -11,6 +11,20 @@ export interface ProviderRequestErrorOptions {
   detail?: string;
   rawBody?: string;
   retryable?: boolean;
+  /** Parsed Retry-After hint (ms) the caller may honor before retrying. */
+  retryAfterMs?: number;
+}
+
+/**
+ * Parse an HTTP Retry-After header into milliseconds. Supports the
+ * delta-seconds form (the common case for 429/503 from LLM providers); the
+ * HTTP-date form is ignored (returns undefined) as it is rare for these APIs.
+ */
+export function parseRetryAfterMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const secs = Number(value.trim());
+  if (Number.isFinite(secs) && secs >= 0) return Math.floor(secs * 1000);
+  return undefined;
 }
 
 export class ProviderRequestError extends Error {
@@ -21,6 +35,7 @@ export class ProviderRequestError extends Error {
   readonly detail?: string;
   readonly rawBody?: string;
   readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(options: ProviderRequestErrorOptions) {
     const status = options.status ? ` (${options.status})` : "";
@@ -34,6 +49,7 @@ export class ProviderRequestError extends Error {
     this.detail = options.detail;
     this.rawBody = options.rawBody;
     this.retryable = options.retryable ?? isRetryableProviderStatus(options.status);
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -77,6 +93,24 @@ function stripHtml(raw: string): string {
     .trim();
 }
 
+/**
+ * Defense-in-depth sanitizer for any error string about to be surfaced to a
+ * user (toast, WS event, HTTP response body). Even if a provider somehow
+ * propagates a raw HTML/oversize body (legacy code path, third-party
+ * extension, etc.), this keeps the message small enough that it can't wedge
+ * a toast layout or blow up a WS frame.
+ */
+const MAX_USER_FACING_ERROR_LENGTH = 1000;
+export function clampErrorMessage(message: string | undefined | null): string {
+  if (!message) return "";
+  const sanitized = /<\w[^>]*>/.test(message)
+    ? stripHtml(message)
+    : message;
+  return sanitized.length > MAX_USER_FACING_ERROR_LENGTH
+    ? `${sanitized.slice(0, MAX_USER_FACING_ERROR_LENGTH - 1)}…`
+    : sanitized;
+}
+
 function truncateDetail(value: string): string {
   return value.length > 500 ? `${value.slice(0, 497)}...` : value;
 }
@@ -89,15 +123,15 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
     try {
       const data = JSON.parse(trimmed) as any;
       const error = data?.error;
-      if (error && typeof error === "object") {
-        return {
-          code: normalizeText(error.code) || normalizeText(error.status) || normalizeText(error.type),
-          detail: normalizeText(error.message) || normalizeText(data?.error_description) || normalizeText(data?.message),
-        };
-      }
+      const code = error && typeof error === "object"
+        ? normalizeText(error.code) || normalizeText(error.status) || normalizeText(error.type)
+        : normalizeText(data?.code) || normalizeText(data?.status) || normalizeText(data?.type) || normalizeText(error);
+      const detail = error && typeof error === "object"
+        ? normalizeText(error.message) || normalizeText(data?.error_description) || normalizeText(data?.message)
+        : normalizeText(data?.error_description) || normalizeText(data?.message) || normalizeText(data?.detail) || normalizeText(error);
       return {
-        code: normalizeText(data?.code) || normalizeText(data?.status) || normalizeText(data?.type) || normalizeText(error),
-        detail: normalizeText(data?.error_description) || normalizeText(data?.message) || normalizeText(data?.detail) || normalizeText(error),
+        code: code ? truncateDetail(code) : undefined,
+        detail: detail ? truncateDetail(detail) : undefined,
       };
     } catch {
       // Fall through to text normalization.
@@ -107,12 +141,59 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
   return { detail: truncateDetail(stripHtml(trimmed) || trimmed) };
 }
 
+/**
+ * Read at most `maxBytes` of a Response body as text. Discards anything past
+ * the cap and cancels the underlying stream so we don't keep slurping huge
+ * upstream error pages (Cloudflare 503s, nginx 502s, etc.) into memory.
+ *
+ * Important: cancels the reader explicitly to release the HTTP connection —
+ * relying on GC alone leaves the socket pinned, which has previously surfaced
+ * as Bun HTTPThread misbehaviour on large/slow error responses.
+ */
+export async function readBoundedText(res: Response, maxBytes = 16 * 1024): Promise<string> {
+  if (!res.body) {
+    try {
+      const text = await res.text();
+      return text.length > maxBytes ? `${text.slice(0, maxBytes)}…[truncated]` : text;
+    } catch {
+      return "";
+    }
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let total = 0;
+  let truncated = false;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        const overshoot = total - maxBytes;
+        const keep = value.byteLength - overshoot;
+        buffer += decoder.decode(value.subarray(0, Math.max(0, keep)), { stream: false });
+        truncated = true;
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+    }
+    if (!truncated) buffer += decoder.decode();
+  } catch {
+    // Swallow — we only need a best-effort error body. The caller still has
+    // res.status / res.statusText for context.
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return truncated ? `${buffer}…[truncated]` : buffer;
+}
+
 export function isRetryableProviderStatus(status: number | undefined): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || (status !== undefined && status >= 500);
 }
 
 export async function throwProviderResponseError(provider: string, operation: string, res: Response): Promise<never> {
-  const rawBody = await res.text().catch(() => "");
+  const rawBody = await readBoundedText(res);
   const parsed = parseProviderErrorBody(rawBody);
   throw new ProviderRequestError({
     provider,
@@ -121,6 +202,7 @@ export async function throwProviderResponseError(provider: string, operation: st
     code: parsed.code || res.statusText || undefined,
     detail: parsed.detail || res.statusText || undefined,
     rawBody,
+    retryAfterMs: parseRetryAfterMs(res.headers.get("retry-after")),
   });
 }
 

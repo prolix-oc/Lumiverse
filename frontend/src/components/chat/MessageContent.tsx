@@ -1557,7 +1557,15 @@ export default function MessageContent({
     if (!container) return
 
     const updateMinHeight = () => {
-      const nextHeight = Math.ceil(container.getBoundingClientRect().height)
+      // Measure in layout (unscaled) pixels via offsetHeight, NOT
+      // getBoundingClientRect. Under the standardized CSS `zoom` model used by
+      // --lumiverse-ui-scale (`body > * { zoom }` in reset.css), getBoundingClientRect
+      // returns zoom-*scaled* px, but this container lives inside that zoomed
+      // subtree — so a min-height written from a scaled measurement gets multiplied
+      // by zoom a second time and balloons the bubble. offsetHeight is zoom-invariant
+      // (and font-scale aware, since font scale is plain CSS font-size with no
+      // transform), keeping the ratchet in the virtualizer's own coordinate space.
+      const nextHeight = container.offsetHeight
       if (nextHeight <= maxStreamingHeightRef.current) return
       maxStreamingHeightRef.current = nextHeight
       setStreamingMinHeight(nextHeight)

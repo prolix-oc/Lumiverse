@@ -82,6 +82,14 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
     supportsStreaming: true,
     apiKeyRequired: true,
     modelListStyle: "openai",
+    // OpenRouter preserves reasoning across tool calls via its normalized,
+    // opaque `reasoning_details` blocks. OpenAICompatibleProvider captures them
+    // (streaming + non-streaming) and flattenForChat replays the sequence
+    // verbatim on the assistant message, so the structured continuation keeps
+    // chain-of-thought intact across tool calls for any upstream model that
+    // supports it (Claude, Gemini, Kimi, GLM, MiniMax, …). Enable upstream
+    // reasoning by passing the `reasoning` param (sent via passthrough).
+    interleavedThinking: true,
   };
 
   protected extraHeaders(): Record<string, string> {

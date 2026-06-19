@@ -1,22 +1,25 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { ImageIcon, Trash2, Edit3, Zap, Check, Star, Copy, MoreVertical, RefreshCw, Workflow } from 'lucide-react'
+import { Trash2, Edit3, Zap, Check, Star, Copy, MoreVertical, RefreshCw, Workflow } from 'lucide-react'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
-import type { ComfyUICapabilities } from '@/api/image-gen'
-import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/dream-weaver'
+import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import type { ImageGenConnectionProfile, ImageGenProviderInfo, CreateImageGenConnectionInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ImageGenConnectionForm from './ImageGenConnectionForm'
-import { WorkflowEditorModal } from '@/components/dream-weaver/visual-studio/comfyui/WorkflowEditorModal'
+import { ComfyWorkflowEditor } from './ComfyWorkflowEditor'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { Spinner } from '@/components/shared/Spinner'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
 
-const PROVIDER_COLORS: Record<string, string> = {
-  google_gemini: '#4285f4',
-  nanogpt: '#10b981',
-  novelai: '#8b5cf6',
+const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+function formatCompactCount(value: number) {
+  return COMPACT_NUMBER_FORMATTER.format(value)
 }
 
 function formatTimeUntil(resetAt: number | null, unknownLabel: string) {
@@ -55,7 +58,6 @@ export default function ImageGenConnectionItem({
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
   const [workflowEditorOpen, setWorkflowEditorOpen] = useState(false)
   const [workflowConfig, setWorkflowConfig] = useState<ComfyUIWorkflowConfig | null>(null)
-  const [workflowCapabilities, setWorkflowCapabilities] = useState<ComfyUICapabilities | null>(null)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
 
   const isNanoGpt = profile.provider === 'nanogpt'
@@ -113,12 +115,8 @@ export default function ImageGenConnectionItem({
     setWorkflowEditorOpen(true)
     setWorkflowError(null)
     try {
-      const [configResponse, capabilities] = await Promise.all([
-        imageGenConnectionsApi.getComfyUIWorkflowConfig(profile.id),
-        imageGenConnectionsApi.getComfyUICapabilities(profile.id),
-      ])
+      const configResponse = await imageGenConnectionsApi.getComfyUIWorkflowConfig(profile.id)
       setWorkflowConfig(configResponse.config)
-      setWorkflowCapabilities(capabilities)
     } catch (err: any) {
       setWorkflowError(err?.message || t('connectionItem.loadComfyWorkflowFailed'))
     }
@@ -148,8 +146,6 @@ export default function ImageGenConnectionItem({
     }
   }, [profile.id, onUpdate])
 
-  const providerColor = PROVIDER_COLORS[profile.provider] || 'var(--lumiverse-text-dim)'
-
   if (editing) {
     return (
       <div className={styles.item}>
@@ -167,15 +163,7 @@ export default function ImageGenConnectionItem({
     <div className={clsx(styles.item, isActive && styles.itemActive)}>
       <div className={styles.itemRow}>
         <button type="button" className={styles.itemBtn} onClick={onSelect}>
-          <div
-            className={styles.itemIcon}
-            style={{
-              background: `color-mix(in srgb, ${providerColor} 10%, transparent)`,
-              color: providerColor,
-            }}
-          >
-            <ImageIcon size={16} />
-          </div>
+          <ProviderIcon kind="imageGen" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
           <div className={styles.itemInfo}>
             <span className={styles.itemName}>
               {profile.name}
@@ -220,31 +208,41 @@ export default function ImageGenConnectionItem({
           {testResult.message}
         </div>
       )}
-      {showNanoGptUsage && nanoGptUsage?.dailyImages && (
-        <div className={styles.creditsBar}>
-          <div className={styles.creditCell}>
-            <span className={styles.creditLabel}>{t('connectionItem.imagesLeft')}</span>
-            <span className={styles.creditValue}>
-              {nanoGptUsage.limits.dailyImages !== null
-                ? `${nanoGptUsage.dailyImages.remaining} / ${nanoGptUsage.limits.dailyImages}`
-                : String(nanoGptUsage.dailyImages.remaining)}
-            </span>
-          </div>
-          <div className={styles.creditCell}>
-            <span className={styles.creditLabel}>{t('connectionItem.resetsIn')}</span>
-            <span className={styles.creditValue}>
-              {formatTimeUntil(nanoGptUsage.dailyImages.resetAt, t('connectionItem.unknown'))}
-            </span>
-          </div>
-          <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
-            {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
-          </button>
-        </div>
+      {showNanoGptUsage && nanoGptUsage && (nanoGptUsage.daily || nanoGptUsage.monthly) && (
+        [
+          { key: 'daily', label: t('connectionItem.daily'), window: nanoGptUsage.daily, limit: nanoGptUsage.limits.daily },
+          { key: 'monthly', label: t('connectionItem.monthly'), window: nanoGptUsage.monthly, limit: nanoGptUsage.limits.monthly },
+        ]
+          .filter((entry): entry is typeof entry & { window: NonNullable<typeof entry.window> } => entry.window != null)
+          .map(({ key, label, window: win, limit }, idx) => (
+            <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar)}>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{label}</span>
+                <span className={styles.creditValue}>
+                  {limit !== null
+                    ? `${formatCompactCount(win.remaining)} / ${formatCompactCount(limit)}`
+                    : formatCompactCount(win.remaining)}
+                </span>
+              </div>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{t('connectionItem.used')}</span>
+                <span className={styles.creditValue}>{formatCompactCount(win.used)}</span>
+              </div>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{t('connectionItem.resetsIn')}</span>
+                <span className={styles.creditValue}>{formatTimeUntil(win.resetAt, t('connectionItem.unknown'))}</span>
+              </div>
+              {idx === 0 && (
+                <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                  {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
+                </button>
+              )}
+            </div>
+          ))
       )}
       {workflowEditorOpen && (
-        <WorkflowEditorModal
+        <ComfyWorkflowEditor
           config={workflowConfig}
-          capabilities={workflowCapabilities}
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}

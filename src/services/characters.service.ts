@@ -27,6 +27,24 @@ function rowToSummary(row: any): CharacterSummary {
   };
 }
 
+export function getCharacterDisplayOwner(
+  userId: string,
+  characterId: string,
+  providerIds: string[],
+): string | null {
+  if (providerIds.length === 0) return null;
+  const db = getDb();
+  const whens = providerIds
+    .map(() => `WHEN json_extract(extensions, '$.' || ? || '.display_owner') = 1 THEN ?`)
+    .join(" ");
+  const params: string[] = [];
+  for (const id of providerIds) params.push(id, id);
+  const row = db
+    .query(`SELECT (CASE ${whens} ELSE NULL END) AS owner FROM characters WHERE id = ? AND user_id = ?`)
+    .get(...params, characterId, userId) as { owner: string | null } | null;
+  return row?.owner ?? null;
+}
+
 /**
  * Build an FTS5 MATCH query for the trigram tokenizer. Each whitespace-delimited
  * token is wrapped in a quoted phrase (substring needle); tokens are AND-ed
@@ -53,6 +71,7 @@ function escapeLike(input: string): string {
 export interface SummaryQueryOptions {
   search?: string;
   tags?: string[];
+  excludeTags?: string[];
   sort?: string;
   direction?: "asc" | "desc";
   favoriteIds?: string[];
@@ -135,7 +154,7 @@ export function listCharacterSummaries(
   options: SummaryQueryOptions = {}
 ): PaginatedResult<CharacterSummary> {
   const db = getDb();
-  const { search, tags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
+  const { search, tags, excludeTags, sort, direction = "desc", favoriteIds, filterMode = "all", seed } = options;
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -177,10 +196,18 @@ export function listCharacterSummaries(
     }
   }
 
-  // Tag AND filter
+  // Tag AND filter (character must have ALL of these tags)
   if (tags && tags.length > 0) {
     for (const tag of tags) {
       whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  // Tag exclusion filter (character must have NONE of these tags)
+  if (excludeTags && excludeTags.length > 0) {
+    for (const tag of excludeTags) {
+      whereClauses.push("NOT EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
       whereParams.push(tag);
     }
   }
@@ -203,16 +230,17 @@ export function listCharacterSummaries(
   } else if (search && !sort) {
     orderBy = "ORDER BY c.updated_at DESC"; // LIKE fallback has no rank column
   } else {
+    const dir = direction === "desc" ? "DESC" : "ASC";
     switch (sort) {
       case "name":
-        orderBy = `ORDER BY c.name ${direction === "desc" ? "DESC" : "ASC"}`;
+        orderBy = `ORDER BY c.name ${dir}, c.id ASC`;
         break;
       case "created":
-        orderBy = `ORDER BY c.created_at ${direction === "desc" ? "DESC" : "ASC"}`;
+        orderBy = `ORDER BY c.created_at ${dir}, c.id ASC`;
         break;
       case "recent":
       default:
-        orderBy = `ORDER BY c.updated_at ${direction === "desc" ? "DESC" : "ASC"}`;
+        orderBy = `ORDER BY c.updated_at ${dir}, c.id ASC`;
         break;
       }
   }
@@ -234,7 +262,7 @@ function listCharacterSummariesDiscover(
   const db = getDb();
   const nowSeconds = Math.floor(Date.now() / 1000);
   const shuffleSeed = normalizeShuffleSeed(options.seed);
-  const { search, tags, favoriteIds, filterMode = "all" } = options;
+  const { search, tags, excludeTags, favoriteIds, filterMode = "all" } = options;
 
   if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
     return {
@@ -270,6 +298,13 @@ function listCharacterSummariesDiscover(
   if (tags && tags.length > 0) {
     for (const tag of tags) {
       whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  if (excludeTags && excludeTags.length > 0) {
+    for (const tag of excludeTags) {
+      whereClauses.push("NOT EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
       whereParams.push(tag);
     }
   }
@@ -522,6 +557,7 @@ export function getCharactersByIds(userId: string, ids: string[]): Map<string, C
 export function createCharacter(userId: string, input: CreateCharacterInput): Character {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const createdAt = input.created_at ?? now;
   const extensions = { ...(input.extensions || {}) };
   delete extensions.avatar_crop_image_id;
   delete extensions.original_image_id;
@@ -547,7 +583,7 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
       JSON.stringify(input.tags || []),
       JSON.stringify(input.alternate_greetings || []),
       JSON.stringify(extensions),
-      now,
+      createdAt,
       now
     );
 
@@ -615,6 +651,25 @@ export function setCharacterImage(userId: string, id: string, imageId: string): 
     .query("UPDATE characters SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(imageId, Math.floor(Date.now() / 1000), id, userId);
   return result.changes > 0;
+}
+
+export function setCharacterAvatarFromImage(userId: string, id: string, imageId: string): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+  const image = imagesSvc.getImage(userId, imageId);
+  if (!image) return null;
+
+  setCharacterImage(userId, id, image.id);
+  setCharacterAvatar(userId, id, image.filename);
+
+  const extensions = { ...(existing.extensions ?? {}) };
+  delete extensions.avatar_crop_image_id;
+  delete extensions.original_image_id;
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  return getCharacter(userId, id);
 }
 
 export async function replaceCharacterAvatar(userId: string, id: string, file: File, originalFile?: File): Promise<Character | null> {

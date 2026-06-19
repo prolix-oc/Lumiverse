@@ -26,7 +26,9 @@ import {
   type DatabaseMaintenanceSettings,
   operatorApi,
   type DatabaseTuningSettings,
+  type DnsSettings,
   type OperatorDatabaseStatus,
+  type OperatorDnsStatus,
   type OperatorSharpStatus,
   type OperatorStatus,
   type SharpSettings,
@@ -279,6 +281,8 @@ export default function OperatorPanel() {
   const [dbMaintenanceSettings, setDbMaintenanceSettings] = useState<DatabaseMaintenanceSettings>({})
   const [sharpStatus, setSharpStatus] = useState<OperatorSharpStatus | null>(null)
   const [sharpSettings, setSharpSettings] = useState<SharpSettings>({})
+  const [dnsStatus, setDnsStatus] = useState<OperatorDnsStatus | null>(null)
+  const [dnsSettings, setDnsSettings] = useState<DnsSettings>({})
   const [uptime, setUptime] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -405,6 +409,20 @@ export default function OperatorPanel() {
     }
   }, [])
 
+  const refreshDnsSettings = useCallback(async () => {
+    try {
+      const next = await operatorApi.getDns()
+      setDnsStatus(next)
+      setDnsSettings({
+        dohFallbackEnabled: next.configuredSettings.dohFallbackEnabled ?? false,
+        dohEndpoint: next.configuredSettings.dohEndpoint,
+      })
+      return next
+    } catch {
+      return null
+    }
+  }, [])
+
   const saveTrustedHosts = useCallback(async (nextConfigured: string[]) => {
     try {
       trustedHostsRequestId.current += 1
@@ -476,14 +494,14 @@ export default function OperatorPanel() {
   useEffect(() => {
     let mounted = true
     const fetchStatus = async () => {
-      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth(), refreshSharpSettings()])
+      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth(), refreshSharpSettings(), refreshDnsSettings()])
       if (mounted && s) setLoading(false)
       else if (mounted) setLoading(false)
     }
     fetchStatus()
     const interval = setInterval(fetchStatus, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [refreshDatabase, refreshSharpSettings, refreshStatus, refreshVectorHealth])
+  }, [refreshDatabase, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshVectorHealth])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -537,6 +555,7 @@ export default function OperatorPanel() {
       refreshStatus()
       refreshDatabase()
       refreshSharpSettings()
+      refreshDnsSettings()
       refreshTrustedHosts()
 
       // Re-subscribe to log streaming
@@ -547,7 +566,7 @@ export default function OperatorPanel() {
       clearInterval(disconnectPoll)
       unsub()
     }
-  }, [reconnecting, refreshDatabase, refreshSharpSettings, refreshStatus, refreshTrustedHosts])
+  }, [reconnecting, refreshDatabase, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshTrustedHosts])
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -786,6 +805,26 @@ export default function OperatorPanel() {
     }
     setBusy(null)
   }, [addToast, t])
+
+  const handleSaveDnsSettings = useCallback(async (override?: DnsSettings) => {
+    setBusy('saving dns settings')
+    try {
+      const payload = override ?? dnsSettings
+      const next = await operatorApi.putDns({
+        dohFallbackEnabled: payload.dohFallbackEnabled ?? false,
+        dohEndpoint: payload.dohEndpoint,
+      })
+      setDnsStatus(next)
+      setDnsSettings({
+        dohFallbackEnabled: next.configuredSettings.dohFallbackEnabled ?? false,
+        dohEndpoint: next.configuredSettings.dohEndpoint,
+      })
+      addToast({ type: 'success', message: 'DNS settings applied.' })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to apply DNS settings.' })
+    }
+    setBusy(null)
+  }, [addToast, dnsSettings])
 
   const handleRunVacuumNow = useCallback(() => {
     const normalizedTuning = normalizeDatabaseTuning(dbTuning)
@@ -1695,6 +1734,73 @@ export default function OperatorPanel() {
             >
               <RefreshCw size={14} />
               {t('operator.refresh')}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* DNS Resolution */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>DNS Resolution</span>
+        </div>
+        <div className={styles.sectionBody}>
+          <div className={styles.toggleRow}>
+            <div className={styles.remoteInfo}>
+              <span className={styles.remoteLabel}>DoH fallback for SSRF validation</span>
+              <span className={styles.remoteHint}>
+                When the system resolver can't resolve a hostname (e.g. Termux on Android with custom TLDs like
+                {' '}<code>.spot</code>, or Tailscale split-horizon), fall back to DNS-over-HTTPS to validate the IP
+                before fetching. Off by default — only enable if outbound DNS is the bottleneck.
+              </span>
+            </div>
+            <Toggle.Switch
+              checked={dnsSettings.dohFallbackEnabled ?? false}
+              onChange={(checked) => {
+                const next: DnsSettings = { ...dnsSettings, dohFallbackEnabled: checked }
+                setDnsSettings(next)
+                handleSaveDnsSettings(next)
+              }}
+              disabled={!!effectiveBusy}
+            />
+          </div>
+
+          <div className={styles.tuningGrid}>
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>DoH endpoint</span>
+              <input
+                type="text"
+                className={styles.hostInput}
+                placeholder={dnsStatus?.defaults.dohEndpoint ?? 'https://1.1.1.1/dns-query'}
+                value={dnsSettings.dohEndpoint ?? ''}
+                onChange={(e) => setDnsSettings((prev) => ({ ...prev, dohEndpoint: e.target.value || undefined }))}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={!!effectiveBusy}
+              />
+              <span className={styles.fieldHint}>
+                Must be HTTPS and serve the RFC 8484 JSON wire format. Use an IP literal in the URL so the endpoint
+                itself doesn't need DNS to reach.
+              </span>
+            </label>
+          </div>
+
+          <div className={styles.controls}>
+            <button
+              className={styles.controlBtnPrimary}
+              disabled={!!effectiveBusy}
+              onClick={() => handleSaveDnsSettings()}
+            >
+              <Globe size={14} />
+              Apply DNS Settings
+            </button>
+            <button
+              className={styles.controlBtn}
+              disabled={!!effectiveBusy}
+              onClick={refreshDnsSettings}
+            >
+              <RefreshCw size={14} />
+              Refresh
             </button>
           </div>
         </div>

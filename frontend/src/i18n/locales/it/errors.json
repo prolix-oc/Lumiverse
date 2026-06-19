@@ -1,0 +1,9 @@
+{
+  "failedToRegenerate": "Rigenerazione fallita",
+  "failedToContinue": "Continuazione della generazione fallita",
+  "failedToStartGeneration": "Avvio della generazione fallito",
+  "failedToImpersonate": "Impersonificazione fallita",
+  "failedToResolveMacros": "Risoluzione delle macro fallita",
+  "failedToGenerate": "Generazione fallita",
+  "failedMentionChain": "Impossibile continuare la catena @mention"
+}

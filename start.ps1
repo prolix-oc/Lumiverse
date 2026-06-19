@@ -14,6 +14,7 @@
     dev          - Start backend in watch mode
     setup           - Run setup wizard only
     reset-password  - Reset owner account password
+    edit-env        - Edit the .env file ($env:VISUAL/$env:EDITOR, else Notepad)
     migrate-st      - Run SillyTavern migration helper
     kill-pkgs       - Nuke lockfiles + node_modules, reinstall backend deps
 
@@ -22,6 +23,9 @@
 
 .PARAMETER KillPkgs
     Nuke lockfiles and node_modules, then reinstall backend dependencies
+
+.PARAMETER EditEnv
+    Open the .env file in an editor ($env:VISUAL/$env:EDITOR if set, else Notepad)
 
 .PARAMETER FrontendPath
     Path to frontend directory (default: ./frontend)
@@ -37,7 +41,7 @@
 #>
 
 param(
-    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "migrate-st", "kill-pkgs")]
+    [ValidateSet("all", "build-only", "backend-only", "dev", "setup", "reset-password", "edit-env", "migrate-st", "kill-pkgs")]
     [string]$Mode = "all",
 
     [Alias("b")]
@@ -52,6 +56,8 @@ param(
 
     [Alias("k")]
     [switch]$KillPkgs,
+
+    [switch]$EditEnv,
 
     [switch]$UpgradeBun,
 
@@ -214,6 +220,13 @@ function Invoke-MigrateST {
     try { & bun run migrate:st } finally { Pop-Location }
 }
 
+function Invoke-EditEnv {
+    # No dep install - edit-env.ts only uses Bun built-ins + local ui/input
+    # helpers, so it's a quick hop to the editor (handy before first setup).
+    Push-Location $BackendDir
+    try { & bun run scripts/edit-env.ts } finally { Pop-Location }
+}
+
 # ─── Kill packages (nuke + reinstall) ──────────────────────────────────────
 
 function Invoke-KillPkgs {
@@ -309,6 +322,14 @@ function Start-Backend {
     $env:FRONTEND_DIR = $frontendDist
     Load-EnvFile
 
+    # smol (low-memory GC mode) defaults on; operators disable it persistently
+    # via LUMIVERSE_SMOL=false in .env (survives auto-updates, unlike bunfig.toml).
+    # The visual runner applies this itself in scripts/runner/server-manager.ts;
+    # this only covers the plain (no-runner) launch below.
+    $smolArgs = @("--smol")
+    $smolVal = if ($env:LUMIVERSE_SMOL) { $env:LUMIVERSE_SMOL.Trim().ToLower() } else { "" }
+    if ($smolVal -in @("false", "0", "off", "no")) { $smolArgs = @() }
+
     # Decide: visual runner or plain process
     $isTTY = [Environment]::UserInteractive -and -not $NoRunner
     if ($isTTY) {
@@ -325,9 +346,9 @@ function Start-Backend {
         Push-Location $BackendDir
         try {
             if ($Mode -eq "dev") {
-                & bun run dev
+                & bun @smolArgs --watch src/index.ts
             } else {
-                & bun run start
+                & bun @smolArgs src/index.ts
             }
         } finally { Pop-Location }
     }
@@ -345,6 +366,7 @@ Update-BunChannel
 # Allow switches as shorthand for -Mode
 if ($MigrateST) { $Mode = "migrate-st" }
 if ($KillPkgs)  { $Mode = "kill-pkgs" }
+if ($EditEnv)   { $Mode = "edit-env" }
 
 switch ($Mode) {
     "all" {
@@ -373,6 +395,9 @@ switch ($Mode) {
     }
     "migrate-st" {
         Invoke-MigrateST
+    }
+    "edit-env" {
+        Invoke-EditEnv
     }
     "kill-pkgs" {
         Invoke-KillPkgs

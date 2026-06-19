@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect, type ReactNode } from 'react'
-import { useTranslation } from 'react-i18next'
+import { Trans, useTranslation } from 'react-i18next'
 
 import {
   FileText, Check, AlertCircle, Trash2, Save, RefreshCw,
   Settings, Clock, Cloud, ChevronDown, Play, Scissors, Link2,
-  Sparkles, RotateCcw,
+  Sparkles, RotateCcw, Hammer,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import clsx from 'clsx'
@@ -13,9 +13,10 @@ import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import { Button } from '@/components/shared/FormComponents'
-import SearchableSelect from '@/components/shared/SearchableSelect'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import {
   loadSummarizationDefaults,
 } from '@/lib/summary/service'
@@ -26,6 +27,9 @@ import {
   USER_PROMPT_PLACEHOLDERS,
 } from '@/lib/summary/prompts'
 import { DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS, type SummaryMode, type SummaryApiSource } from '@/lib/summary/types'
+import { messagesApi } from '@/api/chats'
+import { useStore } from '@/store'
+import type { SummaryOperation } from '@/types/store'
 import styles from './SummaryEditor.module.css'
 
 // ─── Shared sub-components ────────────────────────────────────────
@@ -98,9 +102,21 @@ function SummaryTextEditor() {
     summaryText, originalText, hasChat, hasChanges,
     isLoading, error,
     setSummaryText, generate, save, clear, loadSummary,
+    rebuildProgress,
+    rebuild,
   } = useSummary()
 
+  const activeChatId = useStore((s) => s.activeChatId)
+  const summarization = useStore((s) => s.summarization)
+  const activeOperation = useStore((s) => s.activeSummaryOperation)
+
   const [isSaving, setIsSaving] = useState(false)
+  const [showClearModal, setShowClearModal] = useState(false)
+  const [showRebuildModal, setShowRebuildModal] = useState(false)
+  const [rebuildInfo, setRebuildInfo] = useState<{ totalMessages: number; batchCount: number } | null>(null)
+
+  const isGenerating = activeOperation === 'generating'
+  const isRebuilding = activeOperation === 'rebuilding'
 
   const handleGenerate = useCallback(async () => {
     if (!hasChat || isLoading) return
@@ -121,10 +137,32 @@ function SummaryTextEditor() {
     }
   }, [save])
 
-  const handleClear = useCallback(async () => {
-    if (!confirm(t('summaryEditor.clearConfirm'))) return
+  const handleClearConfirm = useCallback(async () => {
+    setShowClearModal(false)
     await clear()
   }, [clear])
+
+  const handleRebuildConfirm = useCallback(async () => {
+    setShowRebuildModal(false)
+    if (!rebuildInfo) return
+    await rebuild()
+  }, [rebuild, rebuildInfo])
+
+  const openRebuildModal = useCallback(async () => {
+    if (!hasChat || isLoading) return
+    // Get total message count for the confirmation dialog
+    let totalMessages = 0
+    try {
+      const msgPage = await messagesApi.list(activeChatId, { limit: 1 })
+      totalMessages = msgPage.total
+    } catch {
+      totalMessages = 0
+    }
+    const manualContext = summarization.manualMessageContext || 10
+    const batchCount = Math.ceil(totalMessages / manualContext)
+    setRebuildInfo({ totalMessages, batchCount })
+    setShowRebuildModal(true)
+  }, [hasChat, isLoading, activeChatId, summarization.manualMessageContext])
 
   return (
     <Section icon={<FileText size={16} />} title={t('summaryEditor.summaryText')} defaultOpen>
@@ -160,9 +198,9 @@ function SummaryTextEditor() {
         <Button
           size="icon" variant="primary"
           onClick={handleGenerate}
-          disabled={!hasChat || isLoading}
-          title={isLoading ? t('summaryEditor.generating') : t('summaryEditor.generate')}
-          icon={isLoading ? <Spinner size={14} fast /> : <Play size={14} />}
+          disabled={!hasChat || isRebuilding}
+          title={isGenerating ? t('summaryEditor.generating') : isRebuilding ? t('summaryEditor.rebuildInProgress') : t('summaryEditor.generate')}
+          icon={isGenerating ? <Spinner size={14} fast /> : <Play size={14} />}
         />
         <Button
           size="icon" variant="ghost"
@@ -173,19 +211,76 @@ function SummaryTextEditor() {
         />
         <Button
           size="icon" variant="danger-ghost"
-          onClick={handleClear}
-          disabled={!hasChat || !originalText}
+          onClick={() => setShowClearModal(true)}
+          disabled={!hasChat || !originalText || isGenerating || isRebuilding}
           title={t('actions.clear', { ns: 'common' })}
           icon={<Trash2 size={14} />}
         />
         <Button
           size="icon" variant="primary"
           onClick={handleSave}
-          disabled={!hasChat || !hasChanges}
+          disabled={!hasChat || !hasChanges || isGenerating || isRebuilding}
           title={isSaving ? t('summaryEditor.saved') : t('summaryEditor.save')}
           icon={isSaving ? <Check size={14} /> : <Save size={14} />}
         />
+        {/* Rebuild button */}
+        <Button
+          size="icon" variant="secondary"
+          onClick={openRebuildModal}
+          disabled={!hasChat || isGenerating}
+          title={isRebuilding ? t('summaryEditor.rebuilding') : t('summaryEditor.rebuildFromScratch')}
+          icon={isRebuilding ? <Spinner size={14} fast /> : <Hammer size={14} />}
+        />
       </div>
+
+      {/* Rebuild progress — shows immediately with batch count from store */}
+      {rebuildProgress && rebuildProgress.totalBatches > 0 && (
+        <motion.div
+          className={styles.rebuildProgress}
+          initial={{ opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 5 }}
+        >
+          <Spinner size={12} fast />
+          <span>
+            {t('summaryEditor.rebuildBatchProgress', {
+              current: rebuildProgress.batchNumber + 1,
+              total: rebuildProgress.totalBatches,
+            })}
+          </span>
+        </motion.div>
+      )}
+
+      {/* Clear confirmation modal */}
+      <ConfirmationModal
+        isOpen={showClearModal}
+        onConfirm={handleClearConfirm}
+        onCancel={() => setShowClearModal(false)}
+        title={t('summaryEditor.clearModalTitle')}
+        message={t('summaryEditor.clearConfirm')}
+        variant="danger"
+        confirmText={t('actions.clear', { ns: 'common' })}
+      />
+
+      {/* Rebuild confirmation modal */}
+      <ConfirmationModal
+        isOpen={showRebuildModal}
+        onConfirm={handleRebuildConfirm}
+        onCancel={() => setShowRebuildModal(false)}
+        title={t('summaryEditor.rebuildModalTitle')}
+        message={rebuildInfo
+          ? (
+            <Trans
+              ns="panels"
+              i18nKey="summaryEditor.rebuildModalMessage"
+              values={{ totalMessages: rebuildInfo.totalMessages, batchCount: rebuildInfo.batchCount }}
+              components={{ strong: <strong /> }}
+            />
+          )
+          : t('summaryEditor.rebuildModalLoading')}
+        variant="warning"
+        confirmText={t('summaryEditor.rebuildConfirm')}
+      />
 
       {/* Unsaved changes */}
       <AnimatePresence>
@@ -219,11 +314,6 @@ function SummarizationConfig() {
     const next = Number.isFinite(value) ? value : DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS
     setSummarization({ requestTimeoutMs: Math.max(5_000, Math.round(next)) })
   }, [setSummarization])
-
-  const connectionOptions = profiles.map((p) => ({
-    value: p.id,
-    label: `${p.name} (${p.provider})`,
-  }))
 
   return (
     <div className={styles.editor}>
@@ -309,19 +399,20 @@ function SummarizationConfig() {
       {/* Dedicated Connection Picker */}
       {mode !== 'disabled' && apiSource === 'dedicated' && (
         <Section icon={<Link2 size={16} />} title={t('summaryEditor.dedicatedConnection')} defaultOpen>
-          {connectionOptions.length === 0 ? (
+          {profiles.length === 0 ? (
             <p className={styles.desc}>{t('summaryEditor.noConnectionProfiles')}</p>
           ) : (
             <div className={styles.field}>
               <label className={styles.fieldLabel} htmlFor="sum-conn">{t('summaryEditor.connectionProfile')}</label>
-              <SearchableSelect
+              <ConnectionSelect
+                kind="llm"
                 value={summarization.dedicatedConnectionId || ''}
                 onChange={(val) => setSummarization({ dedicatedConnectionId: val || null })}
-                options={connectionOptions}
                 placeholder={t('summaryEditor.selectConnection')}
                 searchPlaceholder={t('summaryEditor.searchConnections')}
                 ariaLabel={t('summaryEditor.connectionProfile')}
                 emptyMessage={t('summaryEditor.noConnectionProfiles')}
+                portal
                 clearable
                 clearLabel={t('summaryEditor.noDedicatedConnection')}
               />

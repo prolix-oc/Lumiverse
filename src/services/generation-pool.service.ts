@@ -26,6 +26,9 @@ export interface PooledTokensEntry {
   tokenSeq: number;
   generationType: GenerationType;
   targetMessageId?: string;
+  /** Index of the swipe being streamed into, so recovering clients can gate the
+   *  streaming buffer to the right swipe even after navigating away. */
+  targetSwipeId?: number;
   characterName: string;
   characterId?: string;
   model: string;
@@ -33,6 +36,9 @@ export interface PooledTokensEntry {
   reasoningStartedAt?: number;
   reasoningDurationMs?: number;
   status: PoolStatus;
+  /** Timestamp (ms) of the last append/status transition. Drives the stale
+   *  non-terminal failsafe so hung generations don't leak pool entries. */
+  lastActivityAt: number;
   completedMessageId?: string;
   completedAt?: number;
   error?: string;
@@ -78,6 +84,15 @@ const TERMINAL_STATUSES: Set<PoolStatus> = new Set(["completed", "stopped", "err
 /** Safety cap: terminal entries are swept after this to prevent memory leaks */
 const UNACKNOWLEDGED_MAX_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
+/**
+ * Failsafe: a non-terminal entry with no pool activity (no tokens, no status
+ * transitions) for this long is force-errored. Without it, a generation that
+ * hangs without ever reaching a terminal state leaks its entry and leaves the
+ * chat showing "streaming" forever. Generous because slow local models can
+ * legitimately sit in prompt processing for many minutes without emitting.
+ */
+const STALE_ACTIVE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+
 /** Additional cap so terminal chat-head state cannot grow without bound. */
 const MAX_TERMINAL_ENTRIES = 200;
 
@@ -95,6 +110,7 @@ export function createPoolEntry(opts: {
   characterId?: string;
   model: string;
   targetMessageId?: string;
+  targetSwipeId?: number;
 }): void {
   const entry: PooledTokensEntry = {
     generationId: opts.generationId,
@@ -105,11 +121,13 @@ export function createPoolEntry(opts: {
     tokenSeq: 0,
     generationType: opts.generationType,
     targetMessageId: opts.targetMessageId,
+    targetSwipeId: opts.targetSwipeId,
     characterName: opts.characterName,
     characterId: opts.characterId,
     model: opts.model,
     startedAt: Date.now(),
     status: "assembling",
+    lastActivityAt: Date.now(),
   };
   pool.set(opts.generationId, entry);
   chatIndex.set(`${opts.userId}:${opts.chatId}`, opts.generationId);
@@ -119,6 +137,7 @@ export function setPoolStatus(generationId: string, status: PoolStatus): void {
   const entry = pool.get(generationId);
   if (!entry) return;
   entry.status = status;
+  entry.lastActivityAt = Date.now();
 }
 
 export function markStreamingStarted(generationId: string): void {
@@ -128,13 +147,22 @@ export function markStreamingStarted(generationId: string): void {
   }
 }
 
+/** Result of a pool append: seq for legacy consumers (Spindle extensions),
+ *  offset = char position of the appended text within the cumulative buffer.
+ *  Offsets give clients exact dedupe/gap detection across recovery snapshots. */
+export interface PoolAppendResult {
+  seq: number;
+  offset: number;
+}
+
 /**
  * Append content text and increment tokenSeq.
- * Returns the new tokenSeq value (used for the `seq` field on WS events).
+ * Returns the new tokenSeq value (used for the `seq` field on WS events) and
+ * the char offset where this text begins in the cumulative content buffer.
  */
-export function appendPoolContent(generationId: string, text: string): number {
+export function appendPoolContent(generationId: string, text: string): PoolAppendResult {
   const entry = pool.get(generationId);
-  if (!entry) return 0;
+  if (!entry) return { seq: 0, offset: 0 };
   const now = Date.now();
   // Finalize reasoning duration on the first content token
   if (entry.reasoningStartedAt && !entry.reasoningDurationMs) {
@@ -146,17 +174,20 @@ export function appendPoolContent(generationId: string, text: string): number {
     setPoolStatus(generationId, "streaming");
     eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "streaming" }, entry.userId);
   }
+  const offset = entry.content.length;
   entry.content += text;
-  return ++entry.tokenSeq;
+  entry.lastActivityAt = now;
+  return { seq: ++entry.tokenSeq, offset };
 }
 
 /**
  * Append reasoning text and increment tokenSeq.
- * Returns the new tokenSeq value.
+ * Returns the new tokenSeq value and the char offset where this text begins
+ * in the cumulative reasoning buffer.
  */
-export function appendPoolReasoning(generationId: string, text: string): number {
+export function appendPoolReasoning(generationId: string, text: string): PoolAppendResult {
   const entry = pool.get(generationId);
-  if (!entry) return 0;
+  if (!entry) return { seq: 0, offset: 0 };
   const now = Date.now();
   if (!entry.reasoningStartedAt) entry.reasoningStartedAt = now;
   if (!entry.firstTokenAt) entry.firstTokenAt = now;
@@ -164,8 +195,10 @@ export function appendPoolReasoning(generationId: string, text: string): number 
     setPoolStatus(generationId, "reasoning");
     eventBus.emit(EventType.GENERATION_PHASE_CHANGED, { generationId, chatId: entry.chatId, phase: "reasoning" }, entry.userId);
   }
+  const offset = entry.reasoning.length;
   entry.reasoning += text;
-  return ++entry.tokenSeq;
+  entry.lastActivityAt = now;
+  return { seq: ++entry.tokenSeq, offset };
 }
 
 export function completePool(generationId: string, messageId: string | undefined): void {
@@ -302,6 +335,29 @@ export function removePoolEntriesForChat(userId: string, chatId: string): void {
 
 function sweep(): void {
   const now = Date.now();
+
+  // Failsafe: force-error non-terminal entries with no activity for far longer
+  // than any legitimate generation gap. The entry transitions to a terminal
+  // state (reclaimed by the TTL pass below) and connected clients receive the
+  // error so their streaming UI unsticks. If the underlying generation task is
+  // somehow still alive and later completes, completePool() simply overwrites
+  // this status — the failsafe is self-healing.
+  for (const entry of pool.values()) {
+    if (TERMINAL_STATUSES.has(entry.status)) continue;
+    if (now - entry.lastActivityAt <= STALE_ACTIVE_TIMEOUT_MS) continue;
+    const message = "Generation timed out: no activity for 60 minutes";
+    const priorStatus = entry.status;
+    errorPool(entry.generationId, message);
+    eventBus.emit(
+      EventType.GENERATION_ENDED,
+      { generationId: entry.generationId, chatId: entry.chatId, error: message },
+      entry.userId,
+    );
+    console.warn(
+      `[GenerationPool] Force-errored stale generation ${entry.generationId} (chat ${entry.chatId}, status was ${priorStatus})`,
+    );
+  }
+
   for (const [id, entry] of pool) {
     if (!TERMINAL_STATUSES.has(entry.status) || !entry.completedAt) continue;
     const age = now - entry.completedAt;
@@ -323,6 +379,11 @@ function trimTerminalEntries(): void {
     const [generationId] = terminalEntries.shift()!;
     removePoolEntry(generationId);
   }
+}
+
+/** Run one sweep pass immediately (stale failsafe + terminal TTL/trim). */
+export function sweepPoolNow(): void {
+  sweep();
 }
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null;

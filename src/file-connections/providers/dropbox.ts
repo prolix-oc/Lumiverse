@@ -8,7 +8,7 @@
 
 import { posix } from "path";
 import type { FileSystem, FileEntry, FileStat, DropboxConnectionConfig } from "../types";
-import { readResponseBuffer, MAX_REMOTE_FILE_BYTES } from "../remote-fetch-cap";
+import { readResponseBuffer, MAX_REMOTE_FILE_BYTES, REMOTE_FETCH_TIMEOUT_MS } from "../remote-fetch-cap";
 
 const API_BASE = "https://api.dropboxapi.com/2";
 const CONTENT_BASE = "https://content.dropboxapi.com/2";
@@ -99,6 +99,7 @@ export class DropboxFileSystem implements FileSystem {
         Authorization: `Bearer ${this.accessToken}`,
         "Dropbox-API-Arg": JSON.stringify({ path: dbxPath }),
       },
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`Failed to download: ${path}`);
     return readResponseBuffer(res, MAX_REMOTE_FILE_BYTES, path);
@@ -171,6 +172,7 @@ export class DropboxFileSystem implements FileSystem {
       method: "POST",
       headers,
       body: body !== null ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
     });
   }
 }

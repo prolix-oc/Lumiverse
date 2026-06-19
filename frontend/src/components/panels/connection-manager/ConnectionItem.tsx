@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Link2, Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
 import {
@@ -16,21 +16,9 @@ import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
 import { Button } from '@/components/shared/FormComponents'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from './ConnectionItem.module.css'
 import clsx from 'clsx'
-
-const PROVIDER_COLORS: Record<string, string> = {
-  openai: '#10a37f',
-  anthropic: '#d97757',
-  google: '#4285f4',
-  google_vertex: '#34a853',
-  openrouter: '#6366f1',
-  infermatic: '#8b5cf6',
-  nanogpt: '#10b981',
-  pollinations_text: '#f89c73',
-  pollinations: '#ff6b35',
-  custom: 'var(--lumiverse-text-dim)',
-}
 
 const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
   notation: 'compact',
@@ -201,7 +189,6 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
     }
   }, [profile.id, onUpdate])
 
-  const providerColor = PROVIDER_COLORS[profile.provider] || PROVIDER_COLORS.custom
   const boundReasoning = profile.metadata?.reasoningBindings?.settings
   const boundPromptBias = profile.metadata?.reasoningBindings?.promptBias
   const normalizedBoundReasoning = boundReasoning
@@ -234,15 +221,7 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
     <div className={clsx(styles.item, isActive && styles.itemActive)}>
       <div className={styles.itemRow}>
         <button type="button" className={styles.itemBtn} onClick={onSelect}>
-          <div
-            className={styles.itemIcon}
-            style={{
-              background: `color-mix(in srgb, ${providerColor} 10%, transparent)`,
-              color: providerColor,
-            }}
-          >
-            <Link2 size={16} />
-          </div>
+          <ProviderIcon kind="llm" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
             <div className={styles.itemInfo}>
               <span className={styles.itemName}>
                 {profile.name}
@@ -333,28 +312,37 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
           </button>
         </div>
       )}
-      {showNanoGptUsage && nanoGptUsage?.weeklyInputTokens && (
-        <div className={clsx(styles.creditsBar, styles.nanoGptUsageBar)}>
-          <div className={styles.creditCell}>
-            <span className={styles.creditLabel}>{t('connectionItem.remaining')}</span>
-            <span className={styles.creditValue}>
-              {nanoGptUsage.limits.weeklyInputTokens !== null
-                ? `${formatCompactCount(nanoGptUsage.weeklyInputTokens.remaining)} / ${formatCompactCount(nanoGptUsage.limits.weeklyInputTokens)}`
-                : formatCompactCount(nanoGptUsage.weeklyInputTokens.remaining)}
-            </span>
-          </div>
-          <div className={styles.creditCell}>
-            <span className={styles.creditLabel}>{t('connectionItem.used')}</span>
-            <span className={styles.creditValue}>{formatCompactCount(nanoGptUsage.weeklyInputTokens.used)}</span>
-          </div>
-          <div className={styles.creditCell}>
-            <span className={styles.creditLabel}>{t('connectionItem.resetsIn')}</span>
-            <span className={styles.creditValue}>{formatTimeUntil(nanoGptUsage.weeklyInputTokens.resetAt) || unknownReset}</span>
-          </div>
-          <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
-            {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
-          </button>
-        </div>
+      {showNanoGptUsage && nanoGptUsage && (nanoGptUsage.daily || nanoGptUsage.monthly) && (
+        [
+          { key: 'daily', label: t('connectionItem.daily'), window: nanoGptUsage.daily, limit: nanoGptUsage.limits.daily },
+          { key: 'monthly', label: t('connectionItem.monthly'), window: nanoGptUsage.monthly, limit: nanoGptUsage.limits.monthly },
+        ]
+          .filter((entry): entry is typeof entry & { window: NonNullable<typeof entry.window> } => entry.window != null)
+          .map(({ key, label, window: win, limit }, idx) => (
+            <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar)}>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{label}</span>
+                <span className={styles.creditValue}>
+                  {limit !== null
+                    ? `${formatCompactCount(win.remaining)} / ${formatCompactCount(limit)}`
+                    : formatCompactCount(win.remaining)}
+                </span>
+              </div>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{t('connectionItem.used')}</span>
+                <span className={styles.creditValue}>{formatCompactCount(win.used)}</span>
+              </div>
+              <div className={styles.creditCell}>
+                <span className={styles.creditLabel}>{t('connectionItem.resetsIn')}</span>
+                <span className={styles.creditValue}>{formatTimeUntil(win.resetAt) || unknownReset}</span>
+              </div>
+              {idx === 0 && (
+                <button type="button" className={styles.creditsRefresh} onClick={refreshNanoGptUsage} disabled={nanoGptUsageLoading}>
+                  {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
+                </button>
+              )}
+            </div>
+          ))
       )}
     </div>
   )

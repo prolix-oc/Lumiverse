@@ -1,11 +1,13 @@
 import { Hono } from "hono";
 import { evaluate, buildEnv, resolveGroupCharacterNames, resolvePersonaPronouns, registry, initMacros } from "../macros";
-import { getEffectiveCharacterName } from "../types/character";
+import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
+import { isTemporaryChatMetadata } from "../types/chat";
 import type { Chat } from "../types/chat";
 import type { MacroEnv } from "../macros";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
+import { resolvePersonaForChatMacros } from "../services/persona-addon-states";
 import * as connectionsSvc from "../services/connections.service";
 import { populateLumiaLoomContext } from "../services/prompt-assembly.service";
 
@@ -27,6 +29,13 @@ app.post("/resolve", async (c) => {
     persona_id?: string;
     connection_id?: string;
     dynamic_macros?: Record<string, string>;
+    // When true, leading/trailing whitespace is stripped from the resolved
+    // text. This mirrors the per-block trim the assembly applies to a prompt
+    // block (see prompt-assembly.service.ts), so a block-editor preview
+    // matches what a dry run produces. Off by default — callers that resolve
+    // free-form text (e.g. the chat input "resolve macros" action) must keep
+    // the user's exact whitespace.
+    trim?: boolean;
   }>();
 
   if (!body.template) {
@@ -38,7 +47,7 @@ app.post("/resolve", async (c) => {
 
   const result = await evaluate(body.template, env, registry);
   return c.json({
-    text: result.text,
+    text: body.trim ? result.text.trim() : result.text,
     diagnostics: result.diagnostics,
     touched_vars: Array.from(result.touchedVars),
     cacheable: result.cacheable,
@@ -141,9 +150,17 @@ function buildEnvFromIds(userId: string, body: {
     const chat = chatsSvc.getChat(userId, body.chat_id);
     if (chat) {
       const messages = chatsSvc.getMessages(userId, body.chat_id);
-      const character = charactersSvc.getCharacter(userId, chat.character_id);
+      const character = chat.character_id
+        ? charactersSvc.getCharacter(userId, chat.character_id)
+        : makeAssistantCharacter();
       if (character) {
-        const persona = personasSvc.resolvePersonaOrDefault(userId, body.persona_id);
+        const persona = isTemporaryChatMetadata(chat.metadata)
+          ? null
+          : resolvePersonaForChatMacros(
+              userId,
+              personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+              chat.metadata,
+            );
 
         const connection = body.connection_id
           ? connectionsSvc.getConnection(userId, body.connection_id)
@@ -175,7 +192,12 @@ function buildEnvFromIds(userId: string, body: {
   if (body.character_id) {
     const character = charactersSvc.getCharacter(userId, body.character_id);
     if (character) {
-      const persona = personasSvc.resolvePersonaOrDefault(userId, body.persona_id);
+      // No chat context here, so there are no per-chat add-on bindings to apply.
+      const persona = resolvePersonaForChatMacros(
+        userId,
+        personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+        null,
+      );
 
       const connection = body.connection_id
         ? connectionsSvc.getConnection(userId, body.connection_id)
@@ -203,7 +225,11 @@ function buildEnvFromIds(userId: string, body: {
     }
   }
 
-  const persona = personasSvc.resolvePersonaOrDefault(userId, body.persona_id);
+  const persona = resolvePersonaForChatMacros(
+    userId,
+    personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
+    null,
+  );
   const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.getDefaultConnection(userId);
 
@@ -211,7 +237,7 @@ function buildEnvFromIds(userId: string, body: {
     commit: true,
     names: {
       user: persona?.name || "User", char: "", group: "", groupNotMuted: "", notChar: persona?.name || "User",
-      charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", groupLastSpeaker: "",
+      charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", isNarrator: persona?.is_narrator ? "yes" : "no", groupLastSpeaker: "", groupCardMode: "solo",
     },
     character: {
       name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",

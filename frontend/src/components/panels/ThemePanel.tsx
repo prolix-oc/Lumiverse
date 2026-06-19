@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Upload, Code2 } from 'lucide-react'
+import { Bookmark, Download, Upload, Code2 } from 'lucide-react'
 import { useStore } from '@/store'
-import { DEFAULT_THEME } from '@/theme/presets'
+import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import { resolveMode } from '@/hooks/useThemeApplicator'
 import type { ThemeConfig, ThemeMode, BaseColors } from '@/types/theme'
 import ModeSelector from './theme-panel/ModeSelector'
@@ -23,7 +23,11 @@ export default function ThemePanel() {
   )
 
   const openModal = useStore((s) => s.openModal)
-  const current = theme ?? DEFAULT_THEME
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
+  const setSetting = useStore((s) => s.setSetting)
+  // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
+  // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
+  const current = normalizeTheme(theme) ?? DEFAULT_THEME
 
   // Always read the latest theme from the store to avoid stale closures
   // (e.g. useCharacterTheme may async-update accent/baseColors after render)
@@ -111,6 +115,15 @@ export default function ThemePanel() {
 
   const addSavedTheme = useStore((s) => s.addSavedTheme)
 
+  const handleSaveTheme = useCallback(() => {
+    const latest = getLatest()
+    addSavedTheme({
+      kind: 'config',
+      name: latest.name || 'My Theme',
+      theme: latest,
+    })
+  }, [getLatest, addSavedTheme])
+
   const handleImportTheme = useCallback(() => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -176,10 +189,12 @@ export default function ThemePanel() {
         <DepthControls
           radiusScale={current.radiusScale}
           enableGlass={current.enableGlass}
+          useFullAvatar={bubbleUseFullAvatar}
           fontScale={current.fontScale}
           uiScale={current.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
+          onFullAvatarToggle={(v) => setSetting('bubbleUseFullAvatar', v)}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
         />
@@ -202,6 +217,9 @@ export default function ThemePanel() {
         </button>
         <button type="button" className={styles.actionBtn} onClick={handleImportTheme}>
           <Upload size={12} /> {t('themePanel.importTheme')}
+        </button>
+        <button type="button" className={styles.actionBtn} onClick={handleSaveTheme}>
+          <Bookmark size={12} /> Save to My Themes
         </button>
         <button
           type="button"

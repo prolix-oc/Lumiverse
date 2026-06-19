@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { GitBranch, MessageCircle, Info, Scissors } from 'lucide-react'
 import clsx from 'clsx'
@@ -14,12 +14,20 @@ function treeSize(node: ChatTreeNode): number {
   return 1 + node.children.reduce((acc, c) => acc + treeSize(c), 0)
 }
 
+// Pixels added per real branch level — mirrors .children's margin-left + padding-left.
+const INDENT_STEP = 29
+// Keep the deepest node card at least this wide. maxIndent is derived from the
+// panel's measured width (users can resize the drawer) so cards stay readable.
+const MIN_CARD_WIDTH = 190
+
 interface NodeProps {
   node: ChatTreeNode
   currentChatId: string
+  indent: number
+  maxIndent: number
 }
 
-function Node({ node, currentChatId }: NodeProps) {
+function Node({ node, currentChatId, indent, maxIndent }: NodeProps) {
   const navigate = useNavigate()
   const closeDrawer = useStore((s) => s.closeDrawer)
   const { t } = useTranslation('panels')
@@ -31,6 +39,12 @@ function Node({ node, currentChatId }: NodeProps) {
       closeDrawer()
     }
   }
+
+  // Indentation steps in only at a real branch point (2+ children) and only while
+  // the measured width budget allows it. Linear fork chains (a single child) and
+  // any depth past the budget render flush, so they never staircase off-screen.
+  const stepsIn = node.children.length > 1 && indent < maxIndent
+  const childIndent = stepsIn ? indent + 1 : indent
 
   return (
     <div className={styles.treeItem}>
@@ -72,12 +86,14 @@ function Node({ node, currentChatId }: NodeProps) {
       </button>
 
       {node.children.length > 0 && (
-        <div className={styles.children}>
+        <div className={clsx(styles.children, !stepsIn && styles.childrenFlush)}>
           {node.children.map((child) => (
             <Node
               key={child.id}
               node={child}
               currentChatId={currentChatId}
+              indent={childIndent}
+              maxIndent={maxIndent}
             />
           ))}
         </div>
@@ -92,6 +108,8 @@ export default function BranchTreePanel() {
   const [tree, setTree] = useState<ChatTreeNode | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [maxIndent, setMaxIndent] = useState(6)
 
   useEffect(() => {
     if (!activeChatId) return
@@ -102,6 +120,24 @@ export default function BranchTreePanel() {
       .catch(() => setError(true))
       .finally(() => setLoading(false))
   }, [activeChatId])
+
+  // Derive how many indent levels fit from the panel's real width (resizable),
+  // keeping the deepest card at least MIN_CARD_WIDTH. Re-runs when the tree mounts
+  // (so rootRef is attached) and whenever the drawer is resized.
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const update = () => {
+      const width = el.clientWidth
+      if (width <= 0) return
+      const fits = Math.floor((width - MIN_CARD_WIDTH) / INDENT_STEP)
+      setMaxIndent(Math.max(1, Math.min(12, fits)))
+    }
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    update()
+    return () => ro.disconnect()
+  }, [tree])
 
   if (!activeChatId) {
     return (
@@ -152,8 +188,8 @@ export default function BranchTreePanel() {
   return (
     <PanelFadeIn>
       <div className={styles.panel}>
-        <div className={styles.root}>
-          <Node node={tree} currentChatId={activeChatId} />
+        <div className={styles.root} ref={rootRef}>
+          <Node node={tree} currentChatId={activeChatId} indent={0} maxIndent={maxIndent} />
         </div>
 
         <div className={styles.hint}>
