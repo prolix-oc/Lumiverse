@@ -1,7 +1,7 @@
 import type { ComponentType, ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  User, Wand2, GitFork, Link2, Package, Zap,
+  User, Wand2, GitFork, Link2, Package, Zap, Gamepad2,
   Users, Drama, PenTool, MessageCircle, FileText, Brain, ScrollText,
   MessageSquareReply, Image, Palette, Puzzle, Terminal,
   GitBranch, Globe, Wallpaper, Replace, Library, Feather, Database,
@@ -42,6 +42,7 @@ import BranchTreePanel from '@/components/panels/BranchTreePanel'
 import RegexPanel from '@/components/panels/RegexPanel'
 import MemoryCortexPanel from '@/components/panels/memory-cortex/MemoryCortexPanel'
 import DatabankPanel from '@/components/panels/databank/DatabankPanel'
+import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
 export interface DrawerTabEntry {
   id: string
@@ -206,6 +207,16 @@ export const DRAWER_TABS: DrawerTabEntry[] = [
     tabIcon: Drama,
     keywords: ['persona', 'identity', 'user', 'avatar', 'name', 'sender', 'you', 'addons'],
     mount: (root) => mountReactComponent(root, <PersonaManager />),
+  },
+  {
+    id: 'multiplayer',
+    shortName: 'Party',
+    tabName: 'Multiplayer',
+    tabDescription: 'Host or join a room and chat with bots alongside friends',
+    tabIcon: Gamepad2,
+    tabHeaderTitle: 'Multiplayer',
+    keywords: ['multiplayer', 'room', 'party', 'friends', 'group', 'coop', 'co-op', 'join', 'host', 'invite', 'turn'],
+    mount: (root) => mountReactComponent(root, <MultiplayerPanel />),
   },
   {
     id: 'lorebook',

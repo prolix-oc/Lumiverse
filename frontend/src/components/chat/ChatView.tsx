@@ -380,6 +380,12 @@ export default function ChatView() {
     let cancelled = false
 
     const loadChat = async () => {
+      // Multiplayer peers don't own this chat — the host's instance can't be
+      // fetched via the owner API. The join hydration + room WS events populate
+      // the view instead, so skip the normal owner-scoped load.
+      const mp = useStore.getState()
+      if (mp.mpRoomId && !mp.mpIsHost && mp.mpChatId === chatId) return
+
       try {
         const pageSize = useStore.getState().messagesPerPage || 50
 

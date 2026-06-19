@@ -40,6 +40,17 @@ export enum EventType {
   GROUP_TURN_STARTED = 'GROUP_TURN_STARTED',
   GROUP_ROUND_COMPLETE = 'GROUP_ROUND_COMPLETE',
 
+  // Multiplayer rooms
+  ROOM_STATUS = 'ROOM_STATUS',
+  ROOM_PARTICIPANT_JOINED = 'ROOM_PARTICIPANT_JOINED',
+  ROOM_PARTICIPANT_LEFT = 'ROOM_PARTICIPANT_LEFT',
+  ROOM_PARTICIPANT_KICKED = 'ROOM_PARTICIPANT_KICKED',
+  ROOM_PERSONA_CHANGED = 'ROOM_PERSONA_CHANGED',
+  ROOM_TURN_CHANGED = 'ROOM_TURN_CHANGED',
+  ROOM_TURN_SKIPPED = 'ROOM_TURN_SKIPPED',
+  ROOM_PRESENCE = 'ROOM_PRESENCE',
+  ROOM_ROUND_COMPLETE = 'ROOM_ROUND_COMPLETE',
+
   // World Info
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
 
@@ -412,6 +423,53 @@ export interface GroupRoundCompletePayload {
   chatId: string
   round: number
   charactersSpoken: string[]
+}
+
+// ── Multiplayer room payloads ──
+import type { RoomParticipant, RoomStateView, PersonaSnapshot } from '@/types/multiplayer'
+
+export interface RoomBasePayload {
+  chatId: string
+  roomId: string
+}
+export interface RoomStatusPayload extends RoomBasePayload {
+  status?: string
+  room?: RoomStateView
+  /** Present on the private hydration payload sent to a joining socket. */
+  messages?: unknown[]
+}
+export interface RoomParticipantJoinedPayload extends RoomBasePayload {
+  participant: RoomParticipant
+}
+export interface RoomParticipantLeftPayload extends RoomBasePayload {
+  participantId: string
+}
+export interface RoomParticipantKickedPayload extends RoomBasePayload {
+  participantId: string
+  banned: boolean
+}
+export interface RoomPersonaChangedPayload extends RoomBasePayload {
+  participantId: string
+  persona: PersonaSnapshot | null
+  displayName: string
+}
+export interface RoomTurnChangedPayload extends RoomBasePayload {
+  turnStrategy: 'round_robin' | 'freeform'
+  currentTurnParticipantId: string | null
+  turnOrder: string[]
+  round: number
+  freeformDeadline: number | null
+}
+export interface RoomTurnSkippedPayload extends RoomBasePayload {
+  skippedParticipantId: string
+  currentTurnParticipantId: string | null
+}
+export interface RoomPresencePayload extends RoomBasePayload {
+  participantId: string
+  typing: boolean
+}
+export interface RoomRoundCompletePayload extends RoomBasePayload {
+  round: number
 }
 
 export interface LumiPipelineStartedPayload {

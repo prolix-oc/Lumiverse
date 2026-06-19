@@ -16,6 +16,7 @@ import { createSpindleSlice } from './slices/spindle'
 import { createAuthSlice } from './slices/auth'
 import { createWorldInfoSlice } from './slices/world-info'
 import { createGroupChatSlice } from './slices/group-chat'
+import { createMultiplayerSlice } from './slices/multiplayer'
 import { createSpindlePlacementSlice } from './slices/spindle-placement'
 import { createPromptBreakdownSlice } from './slices/prompt-breakdown'
 import { createRegexSlice } from './slices/regex'
@@ -52,6 +53,7 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createAuthSlice(...a),
   ...createWorldInfoSlice(...a),
   ...createGroupChatSlice(...a),
+  ...createMultiplayerSlice(...a),
   ...createSpindlePlacementSlice(...a),
   ...createPromptBreakdownSlice(...a),
   ...createRegexSlice(...a),

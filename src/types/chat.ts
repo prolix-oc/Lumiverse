@@ -70,6 +70,8 @@ export interface GroupedRecentChat {
   is_group: boolean;
   group_character_ids?: string[];
   group_name?: string;
+  /** True if the representative (latest) chat is a multiplayer room chat. */
+  multiplayer?: boolean;
 }
 
 export interface ChatSummary {
@@ -80,4 +82,6 @@ export interface ChatSummary {
   updated_at: number;
   /** Truncated (<=280 chars) content of the most recent message, for list previews. */
   last_message_preview: string;
+  /** True if this chat is a multiplayer room chat. */
+  multiplayer?: boolean;
 }

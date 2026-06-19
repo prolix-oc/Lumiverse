@@ -377,6 +377,37 @@ export function useMessageCard(message: Message, chatId: string) {
     }
   }, [message.is_user, message.swipes, openModal, doDeleteMessage, doDeleteSwipe, tc])
 
+  // Multiplayer: peer-authored messages carry author attribution in extra.mp.
+  // Render the peer's persona name + broadcast WebP avatar instead of the
+  // host's persona. Guarded by extra.mp, so normal messages are unaffected.
+  // Multiplayer author resolution. The WebP data-URL avatar lives once in the
+  // participants slice (not on every message). Resolve the author participant
+  // by stamped id (peer messages) or, for the host's own messages — which have
+  // no extra.mp — by matching the persona name. Non-reactive read on purpose:
+  // avoids re-rendering every card on typing/presence churn.
+  const mpStore = useStore.getState()
+  const mpStamp = isUser && message.extra?.mp && typeof message.extra.mp === 'object'
+    ? (message.extra.mp as { participantId?: string; displayName?: string; personaName?: string })
+    : null
+  const mpParticipant = mpStore.mpRoomId && isUser
+    ? mpStamp?.participantId
+      ? mpStore.mpParticipants.find((p) => p.id === mpStamp.participantId)
+      : mpStore.mpParticipants.find((p) => !!p.persona?.name && p.persona.name === (message.name || '').trim())
+    : undefined
+  const isMpAuthor = !!mpStamp || !!mpParticipant
+  const mpAvatarData = mpParticipant?.persona?.avatarUrl || ''
+  const mpDisplayName = isMpAuthor
+    ? (mpParticipant?.persona?.name || mpStamp?.personaName || mpStamp?.displayName || displayName)
+    : displayName
+  const mpAvatarUrl = isMpAuthor ? (mpAvatarData || null) : avatarUrl
+  const mpFullAvatarUrl = isMpAuthor ? (mpAvatarData || null) : fullAvatarUrl
+  const mpAvatar: typeof avatar = isMpAuthor
+    ? {
+        cropped: { sm: mpAvatarData, lg: mpAvatarData, full: mpAvatarData },
+        original: { sm: mpAvatarData, lg: mpAvatarData, full: mpAvatarData },
+      }
+    : avatar
+
   return {
     isEditing,
     editContent,
@@ -393,10 +424,10 @@ export function useMessageCard(message: Message, chatId: string) {
     reasoningStartedAt,
     tokenCount,
     generationMetrics,
-    avatarUrl,
-    fullAvatarUrl,
-    avatar,
-    displayName,
+    avatarUrl: mpAvatarUrl,
+    fullAvatarUrl: mpFullAvatarUrl,
+    avatar: mpAvatar,
+    displayName: mpDisplayName,
     macroUserName,
     isHidden,
     handleEdit,

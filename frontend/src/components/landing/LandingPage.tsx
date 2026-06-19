@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as R
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2 } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
 import { wsClient } from '@/ws/client'
@@ -304,6 +304,11 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
                   {item.chat_count}
                 </span>
               ) : null}
+              {item.multiplayer && (
+                <span className={styles.groupBadge} style={{ color: 'var(--lumiverse-accent, #6366f1)' }} title="Multiplayer">
+                  <Gamepad2 size={10} strokeWidth={2} />
+                </span>
+              )}
               <span className={styles.cardTime}>{formatRelativeTime(item.updated_at)}</span>
             </div>
           </div>
@@ -346,6 +351,11 @@ function ChatListItem({ item, onClick, onDelete }: ChatCardProps) {
           <div className={styles.listBottomRow}>
             <p className={styles.listSubtitle}>{subtitle}</p>
             <div className={styles.listMeta}>
+              {item.multiplayer && (
+                <span className={styles.groupBadge} style={{ color: 'var(--lumiverse-accent, #6366f1)' }} title="Multiplayer">
+                  <Gamepad2 size={10} strokeWidth={2} />
+                </span>
+              )}
               {isGroup ? (
                 <span className={styles.groupBadge}>
                   <Users size={10} strokeWidth={2} />

@@ -1042,6 +1042,50 @@ export interface GroupChatSlice {
   shiftMentionQueue: () => string | null
 }
 
+// ---- Multiplayer Slice ----
+import type {
+  RoomParticipant,
+  RoomStateView,
+  TurnStrategy,
+  RoomConnStatus,
+  PersonaSnapshot,
+} from '@/types/multiplayer'
+
+export interface MultiplayerSlice {
+  /** Backend room UUID (used for REST), null when not in a room. */
+  mpRoomId: string | null
+  /** The host's chat id — equals activeChatId while in the room. */
+  mpChatId: string | null
+  mpIsHost: boolean
+  mpMyParticipantId: string | null
+  mpConnStatus: RoomConnStatus
+  mpParticipants: RoomParticipant[]
+  mpTurnStrategy: TurnStrategy
+  mpCurrentTurnParticipantId: string | null
+  mpTurnOrder: string[]
+  mpRound: number
+  /** Unix seconds; null unless a freeform window is open. */
+  mpFreeformDeadline: number | null
+  mpSettings: { maxPeers: number; freeformWindowSec: number } | null
+
+  /** Full reconcile from a ROOM_STATUS / hydration payload. */
+  setRoomState: (view: RoomStateView, opts?: { isHost?: boolean }) => void
+  clearRoom: () => void
+  setRoomConnStatus: (status: RoomConnStatus) => void
+  upsertParticipant: (participant: RoomParticipant) => void
+  removeParticipant: (participantId: string) => void
+  setParticipantPersona: (participantId: string, persona: PersonaSnapshot | null) => void
+  setParticipantTyping: (participantId: string, typing: boolean) => void
+  setRoomTurn: (turn: {
+    currentTurnParticipantId: string | null
+    turnOrder?: string[]
+    round?: number
+    freeformDeadline?: number | null
+  }) => void
+  /** Derived: may the local user send right now? */
+  isMyTurn: () => boolean
+}
+
 // ---- Spindle Placement Slice ----
 import type {
   DrawerTabState,
@@ -1513,6 +1557,7 @@ export type AppStore = ChatSlice &
   AuthSlice &
   WorldInfoSlice &
   GroupChatSlice &
+  MultiplayerSlice &
   SpindlePlacementSlice &
   PromptBreakdownSlice &
   RegexSlice &

@@ -719,6 +719,7 @@ export function listRecentChatsGrouped(
         updated_at: row.updated_at,
         chat_count: isGroup ? (row.groupKey ? groupCounts.get(row.groupKey) ?? 1 : 1) : (soloCounts.get(row.character_id) ?? 1),
         is_group: isGroup,
+        multiplayer: !!metadata?.multiplayer,
         ...(isGroup && getGroupMemberIds(metadata).length > 0 ? {
           group_character_ids: getGroupMemberIds(metadata),
           group_name: row.name || undefined,
@@ -740,6 +741,7 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
       c.created_at,
       c.updated_at,
       (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      json_extract(c.metadata, '$.multiplayer') as multiplayer,
       (SELECT substr(content, 1, 280) FROM messages
          WHERE chat_id = c.id
          ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
@@ -756,6 +758,7 @@ export function listChatSummaries(userId: string, characterId: string): ChatSumm
     created_at: row.created_at,
     updated_at: row.updated_at,
     last_message_preview: row.last_message_preview || '',
+    multiplayer: !!row.multiplayer,
   }));
 }
 
@@ -796,6 +799,7 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
       c.created_at,
       c.updated_at,
       (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count,
+      json_extract(c.metadata, '$.multiplayer') as multiplayer,
       (SELECT substr(content, 1, 280) FROM messages
          WHERE chat_id = c.id
          ORDER BY index_in_chat DESC LIMIT 1) as last_message_preview
@@ -829,6 +833,7 @@ export function listGroupChatSummaries(userId: string, characterIds?: string[]):
     created_at: row.created_at,
     updated_at: row.updated_at,
     last_message_preview: row.last_message_preview || '',
+    multiplayer: !!row.multiplayer,
   }));
 }
 

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
+import { sendRoomAction } from './relayClient'
+import { buildActivePersonaSnapshot } from '@/lib/personaSnapshot'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
@@ -39,7 +41,16 @@ import type {
   LumiPipelineCompletedPayload,
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
+  RoomStatusPayload,
+  RoomParticipantJoinedPayload,
+  RoomParticipantLeftPayload,
+  RoomParticipantKickedPayload,
+  RoomPersonaChangedPayload,
+  RoomTurnChangedPayload,
+  RoomTurnSkippedPayload,
+  RoomPresencePayload,
 } from '@/types/ws-events'
+import type { Message } from '@/types/api'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
@@ -1422,6 +1433,83 @@ export function useWebSocket() {
         }
         console.warn(`[Summary] Generation failed for chat ${payload.chatId}:`, payload.error)
       }),
+
+      // ── Multiplayer rooms ──
+      // Peer chat messages and bot stream tokens arrive via the existing
+      // MESSAGE_SENT / STREAM_TOKEN_RECEIVED handlers (re-broadcast to the room
+      // topic, still carrying the real chatId). These only cover room lifecycle.
+      wsClient.on(EventType.ROOM_STATUS, (payload: RoomStatusPayload) => {
+        const state = store.getState()
+        if (payload.room) {
+          state.setRoomState(payload.room)
+          // A messages snapshot for a DIFFERENT chat means we just joined
+          // someone else's room — adopt it as the active chat view (peer
+          // hydration). For the host (same chat) we keep our own messages.
+          if (Array.isArray(payload.messages) && payload.chatId !== state.activeChatId) {
+            state.setActiveChat(payload.chatId)
+            store.getState().setMessages(payload.messages as Message[])
+          }
+        } else if (payload.status === 'closed' && payload.roomId === state.mpRoomId) {
+          state.clearRoom()
+          toast.info(i18n.t('multiplayer.roomClosed', { defaultValue: 'The room was closed by the host' }))
+        }
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_JOINED, (payload: RoomParticipantJoinedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.upsertParticipant(payload.participant)
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_LEFT, (payload: RoomParticipantLeftPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.removeParticipant(payload.participantId)
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_KICKED, (payload: RoomParticipantKickedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        if (payload.participantId === state.mpMyParticipantId) {
+          state.clearRoom()
+          toast.warning(
+            payload.banned
+              ? i18n.t('multiplayer.youWereBanned', { defaultValue: 'You were banned from the room' })
+              : i18n.t('multiplayer.youWereRemoved', { defaultValue: 'You were removed from the room' }),
+          )
+        } else {
+          state.removeParticipant(payload.participantId)
+        }
+      }),
+
+      wsClient.on(EventType.ROOM_PERSONA_CHANGED, (payload: RoomPersonaChangedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setParticipantPersona(payload.participantId, payload.persona)
+      }),
+
+      wsClient.on(EventType.ROOM_TURN_CHANGED, (payload: RoomTurnChangedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setRoomTurn({
+          currentTurnParticipantId: payload.currentTurnParticipantId,
+          turnOrder: payload.turnOrder,
+          round: payload.round,
+          freeformDeadline: payload.freeformDeadline,
+        })
+      }),
+
+      wsClient.on(EventType.ROOM_TURN_SKIPPED, (payload: RoomTurnSkippedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setRoomTurn({ currentTurnParticipantId: payload.currentTurnParticipantId })
+      }),
+
+      wsClient.on(EventType.ROOM_PRESENCE, (payload: RoomPresencePayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setParticipantTyping(payload.participantId, payload.typing)
+      }),
     ]
 
     // Re-sync pooled tokens whenever the tab becomes visible. Mobile PWAs and
@@ -1470,11 +1558,30 @@ export function useWebSocket() {
       sendDrawerTabRegistrySnapshot(state.drawerTabs)
     })
 
+    // Multiplayer: relay the local persona to the room whenever it changes (or
+    // on join). Phase 1 broadcasts the persona's existing same-origin avatar
+    // URL; re-hosting for off-instance peers is a later phase.
+    let lastRelayKey = ''
+    const relayPersona = (state: ReturnType<typeof store.getState>) => {
+      if (!state.mpRoomId || !state.activePersonaId) { lastRelayKey = ''; return }
+      const key = `${state.mpRoomId}:${state.activePersonaId}`
+      if (key === lastRelayKey) return
+      lastRelayKey = key
+      // Compress + relay the active persona (name + portable WebP data-URL
+      // avatar) so every client's member list + message attribution show it.
+      void buildActivePersonaSnapshot().then((snap) => {
+        if (snap) sendRoomAction({ type: 'room_persona_change', persona: snap })
+      })
+    }
+    const unsubPersonaRelay = store.subscribe(relayPersona)
+    relayPersona(store.getState())
+
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange)
       clearInterval(recoveryWatchdog)
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
+      unsubPersonaRelay()
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }

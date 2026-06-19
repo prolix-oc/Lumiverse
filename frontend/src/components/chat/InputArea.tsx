@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
+import { sendRoomAction } from '@/ws/relayClient'
 import { messagesApi, chatsApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
@@ -1183,6 +1184,31 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
+
+    // Multiplayer: in a room, gate by turn. Non-host participants send through
+    // the room (the host's instance writes the message + runs generation);
+    // the host falls through to the normal owner send path for their own chat.
+    {
+      const mp = useStore.getState()
+      if (mp.mpRoomId) {
+        if (!mp.isMyTurn()) {
+          toast.info(mp.mpTurnStrategy === 'freeform' ? 'The freeform window is closed' : 'Wait for your turn')
+          return
+        }
+        if (!mp.mpIsHost) {
+          const roomContent = text.trim()
+          if (!roomContent) return
+          sendRoomAction({ type: 'room_message', content: roomContent })
+          setText('')
+          if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+          requestAnimationFrame(() => {
+            if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
+          })
+          return
+        }
+      }
+    }
+
     const content = text.trim()
     const attachments = pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)

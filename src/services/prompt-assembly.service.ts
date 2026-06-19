@@ -1003,6 +1003,17 @@ interface PendingAppend {
  *
  * Falls back to legacy simple message mapping if no preset/blocks are found.
  */
+// ── Multiplayer participant personas ──
+// Registered by the multiplayer service (initMultiplayer). Returns the active
+// PEER personas for a room's chat so assembly can tell the model who else is in
+// the conversation. Inverted dependency: assembly never imports the multiplayer
+// service, so there is no import cycle.
+type MultiplayerPersonaProvider = (chatId: string) => Array<{ name: string; description?: string }>;
+let multiplayerPersonaProvider: MultiplayerPersonaProvider | null = null;
+export function setMultiplayerPersonaProvider(fn: MultiplayerPersonaProvider | null): void {
+  multiplayerPersonaProvider = fn;
+}
+
 export async function assemblePrompt(
   ctx: AssemblyContext,
 ): Promise<AssemblyResult> {
@@ -2104,6 +2115,25 @@ export async function assemblePrompt(
         }
       }
 
+      // Multiplayer: inject the cast of remote participants (name + persona)
+      // just before chat history, so the model can tell the co-located humans
+      // apart. No-op for normal single-user chats (provider returns []).
+      const mpCast = multiplayerPersonaProvider?.(ctx.chatId);
+      if (mpCast && mpCast.length > 0) {
+        const castContent =
+          "[Other people in this chat]\n" +
+          mpCast
+            .map((p) => (p.description ? `- ${p.name}: ${p.description}` : `- ${p.name}`))
+            .join("\n");
+        result.push({ role: "system", content: castContent });
+        breakdown.push({
+          type: "separator",
+          name: "Multiplayer Participants",
+          role: "system",
+          content: castContent,
+        });
+      }
+
       firstChatIdx = result.length;
 
       // Apply message limit — keep only the N most recent messages when enabled.
@@ -2189,14 +2219,23 @@ export async function assemblePrompt(
           continue;
         }
 
-        historyParts.push(resolvedContent);
+        // Multiplayer: prefix peer-authored turns with the speaker name so the
+        // model can attribute messages to the right person. Guarded by
+        // extra.mp (set only on peer messages), so normal chats are untouched.
+        const mpSpeaker =
+          msg.is_user && msg.extra?.mp && typeof msg.name === "string" && msg.name.length > 0
+            ? msg.name
+            : null;
+        const contentForPrompt = mpSpeaker ? `${mpSpeaker}: ${resolvedContent}` : resolvedContent;
+
+        historyParts.push(contentForPrompt);
         if (attachments.length > 0) {
           // Build multipart content: text + attachment parts. Skip the text part
           // when it's blank so strict providers (Anthropic et al) don't reject
           // the request for empty content blocks.
           const parts: import("../llm/types").LlmMessagePart[] = [];
-          if (resolvedContent.trim().length > 0) {
-            parts.push({ type: "text", text: resolvedContent });
+          if (contentForPrompt.trim().length > 0) {
+            parts.push({ type: "text", text: contentForPrompt });
           }
           for (const att of attachments) {
             const b64 = attachmentCache.get(att.image_id) ?? null;
@@ -2219,12 +2258,12 @@ export async function assemblePrompt(
           if (parts.length > 0) {
             result.push(markAsChatHistory({ role, content: parts }, source));
           } else {
-            result.push(markAsChatHistory({ role, content: resolvedContent }, source));
+            result.push(markAsChatHistory({ role, content: contentForPrompt }, source));
           }
         } else {
           result.push(
             markAsChatHistory(
-              { role, content: resolvedContent },
+              { role, content: contentForPrompt },
               { id: msg.id, index_in_chat: msg.index_in_chat },
             ),
           );

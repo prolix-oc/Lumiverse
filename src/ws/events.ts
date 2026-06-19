@@ -200,6 +200,20 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = "SYSTEM_DISK_LOW",
+
+  // Multiplayer rooms (broadcast to the room:{roomId} topic). Peer chat
+  // messages and bot stream tokens reuse MESSAGE_SENT / STREAM_TOKEN_RECEIVED /
+  // GENERATION_* (re-broadcast to the room topic by the fan-out listener) — these
+  // only cover room lifecycle, turn, persona-relay and moderation.
+  ROOM_STATUS = "ROOM_STATUS",
+  ROOM_PARTICIPANT_JOINED = "ROOM_PARTICIPANT_JOINED",
+  ROOM_PARTICIPANT_LEFT = "ROOM_PARTICIPANT_LEFT",
+  ROOM_PARTICIPANT_KICKED = "ROOM_PARTICIPANT_KICKED",
+  ROOM_PERSONA_CHANGED = "ROOM_PERSONA_CHANGED",
+  ROOM_TURN_CHANGED = "ROOM_TURN_CHANGED",
+  ROOM_TURN_SKIPPED = "ROOM_TURN_SKIPPED",
+  ROOM_PRESENCE = "ROOM_PRESENCE",
+  ROOM_ROUND_COMPLETE = "ROOM_ROUND_COMPLETE",
 }
 
 export interface EventMessage {

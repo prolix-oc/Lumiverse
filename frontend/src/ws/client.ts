@@ -129,6 +129,15 @@ export class WebSocketClient {
     }
   }
 
+  /**
+   * Dispatch an event through the same handler registry as the live socket.
+   * Used by the relay client so events arriving over the Identity Server relay
+   * (for a remote peer) flow through the exact same store handlers.
+   */
+  dispatchExternal(event: string, payload: any) {
+    this.emit(event, payload)
+  }
+
   private emit(event: string, payload: any) {
     this.handlers.get(event)?.forEach(handler => {
       try {

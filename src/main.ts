@@ -164,6 +164,17 @@ const server = Bun.serve({
 // Give the EventBus access to the server for native topic-based publish().
 eventBus.setServer(server);
 
+// Initialize multiplayer rooms: registers the chat/generation fan-out listener
+// (re-broadcasts to room topics), the prompt-assembly persona provider, and
+// re-arms any freeform deadline timers dropped by the restart.
+const { initMultiplayer } = await import("./services/multiplayer.service");
+initMultiplayer();
+
+// Register the Identity Server attestation validator so remote peers can join
+// directly with a server-minted token (no-op until MPIDENTITY_URL is set).
+const { registerIdentityServerAttestation } = await import("./multiplayer/attestation");
+registerIdentityServerAttestation();
+
 console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
 
 // Notify runner (if present) that the server is ready

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence } from 'motion/react'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { previewText } from '@/lib/previewText'
-import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles } from 'lucide-react'
+import { Check, MessageSquare, Plus, MoreHorizontal, Pencil, Download, Trash2, Sparkles, Gamepad2 } from 'lucide-react'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { CloseButton } from '@/components/shared/CloseButton'
 import ContextMenu, { type ContextMenuEntry } from '@/components/shared/ContextMenu'
@@ -21,6 +21,7 @@ interface ChatSummary {
   created_at: number
   updated_at: number
   last_message_preview: string
+  multiplayer?: boolean
 }
 
 interface ChatPickerModalProps {
@@ -354,6 +355,12 @@ export default function ChatPickerModal({
                       <span className={styles.activeBadge}>
                         <Check size={10} />
                         {t('chatPicker.mostRecent')}
+                      </span>
+                    )}
+                    {item.multiplayer && (
+                      <span className={styles.activeBadge} style={{ color: 'var(--lumiverse-accent, #6366f1)' }}>
+                        <Gamepad2 size={10} />
+                        Multiplayer
                       </span>
                     )}
                   </div>

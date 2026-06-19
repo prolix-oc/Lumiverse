@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Search, MessageSquare, Pencil, Download, Upload, Trash2,
-  ArrowRight, Check, SortAsc, FileText, Clock, Plus,
+  ArrowRight, Check, SortAsc, FileText, Clock, Plus, Gamepad2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -26,6 +26,7 @@ interface ChatSummary {
   created_at: number
   updated_at: number
   last_message_preview: string
+  multiplayer?: boolean
 }
 
 type SortMode = 'date' | 'name' | 'messages'
@@ -447,6 +448,12 @@ export default function ManageChatsModal() {
                           <Clock size={11} />
                           {formatRelativeTime(chat.updated_at)}
                         </span>
+                        {chat.multiplayer && (
+                          <span className={styles.cardMetaItem} style={{ color: 'var(--lumiverse-accent, #6366f1)', fontWeight: 600 }}>
+                            <Gamepad2 size={11} />
+                            Multiplayer
+                          </span>
+                        )}
                         {isActive && <span className={styles.activeBadge}>{t('active')}</span>}
                       </div>
                     </div>
