@@ -1485,8 +1485,10 @@ async function ensureWorldBookVectorVersion(userId: string): Promise<void> {
     await withWriteLock(async () => {
       const table = await getTableIfExists(WORLD_BOOK_EMBEDDINGS_TABLE, true);
       if (table) {
-        await table.delete(
-          `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry'`
+        await safeTableDelete(
+          table,
+          `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry'`,
+          "world_book",
         );
       }
     });
@@ -1968,6 +1970,40 @@ function scheduleOptimize(reason: "general" | "chat_chunk" | "world_book" = "gen
       console.warn("[embeddings] Deferred optimize failed:", err);
     }
   }, delay);
+}
+
+/**
+ * lance-6.0.0's empty-fragment delete bug. A predicated `table.delete()` makes
+ * Lance scan fragments to evaluate the filter; on an empty table or a stray
+ * 0-byte fragment it throws "Invalid range 0..0 for object of size 0 bytes"
+ * (dataset.rs) instead of matching nothing.
+ */
+function isEmptyFragmentDeleteError(err: unknown): boolean {
+  const text = collectErrorMessages(err).join(" | ").toLowerCase();
+  if (!text) return false;
+  return text.includes("invalid range 0..0") || text.includes("for object of size 0 bytes");
+}
+
+/**
+ * Predicated delete that tolerates the empty-fragment bug above. A delete that
+ * matches nothing is semantically a success, so we (1) short-circuit when the
+ * table is empty — there is nothing to delete and `countRows()` reads fragment
+ * metadata, not the 0-byte data file — and (2) swallow the empty-fragment error
+ * as a no-op, scheduling an optimize to compact the stray fragment away. Every
+ * other error propagates unchanged.
+ */
+async function safeTableDelete(
+  table: Table,
+  filter: string,
+  reason: "general" | "chat_chunk" | "world_book" = "general",
+): Promise<void> {
+  if ((await table.countRows()) === 0) return;
+  try {
+    await table.delete(filter);
+  } catch (err) {
+    if (!isEmptyFragmentDeleteError(err)) throw err;
+    scheduleOptimize(reason);
+  }
 }
 
 async function migrateWorldBookRowsToDedicatedTable(): Promise<{ migratedRows: number; legacyRowsFound: boolean }> {
@@ -3076,8 +3112,10 @@ export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: st
 async function deleteWorldBookEntryRowsFromTable(table: Table, userId: string, entryIds: string[]): Promise<void> {
   if (entryIds.length === 0) return;
   const sourceFilter = `source_id IN (${entryIds.map((id) => sqlValue(id)).join(", ")})`;
-  await table.delete(
-    `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND (${sourceFilter})`
+  await safeTableDelete(
+    table,
+    `user_id = ${sqlValue(userId)} AND source_type = 'world_book_entry' AND (${sourceFilter})`,
+    "world_book",
   );
 }
 
@@ -3572,7 +3610,7 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
       for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
         const table = await getTableIfExists(tableName, true);
         if (table) {
-          await table.delete(`user_id = ${sqlValue(userId)}`);
+          await safeTableDelete(table, `user_id = ${sqlValue(userId)}`);
         }
       }
     });
@@ -3623,7 +3661,7 @@ export async function deleteUserVectors(userId: string): Promise<void> {
       for (const tableName of [EMBEDDINGS_TABLE, WORLD_BOOK_EMBEDDINGS_TABLE]) {
         const table = await getTableIfExists(tableName, true);
         if (table) {
-          await table.delete(`user_id = ${sqlValue(userId)}`);
+          await safeTableDelete(table, `user_id = ${sqlValue(userId)}`);
         }
       }
     });
@@ -3679,7 +3717,7 @@ export async function deleteChatChunkEmbeddings(
   await withWriteLock(async () => {
     const table = await getTableIfExists(EMBEDDINGS_TABLE, true);
     if (!table) return;
-    await table.delete(filter);
+    await safeTableDelete(table, filter, "chat_chunk");
   });
   scheduleOptimize("chat_chunk");
 }
@@ -4316,7 +4354,7 @@ export async function deleteChunkVector(userId: string, chunkId: string): Promis
     const table = await getTableIfExists(EMBEDDINGS_TABLE, true);
     if (!table) return;
     const id = rowId(userId, "chat_chunk", chunkId, 0);
-    await table.delete(`id = ${sqlValue(id)}`);
+    await safeTableDelete(table, `id = ${sqlValue(id)}`, "chat_chunk");
   });
 }
 
@@ -4515,7 +4553,7 @@ export async function deleteVaultChunks(userId: string, vaultId: string): Promis
   await withWriteLock(async () => {
     const table = await getTableIfExists(EMBEDDINGS_TABLE, true);
     if (!table) return;
-    await table.delete(filter);
+    await safeTableDelete(table, filter);
   });
   scheduleOptimize();
 }
@@ -4565,7 +4603,7 @@ export async function deleteDatabankEmbeddings(
     const table = await getTableIfExists(EMBEDDINGS_TABLE, true);
     if (!table) return;
     const filter = `user_id = ${sqlValue(userId)} AND source_type = 'databank' AND owner_id = ${sqlValue(databankId)}`;
-    await table.delete(filter);
+    await safeTableDelete(table, filter);
   });
   scheduleOptimize();
 }
@@ -4585,7 +4623,7 @@ export async function deleteDatabankChunksByIds(userId: string, chunkIds: string
       const batch = chunkIds.slice(i, i + BATCH);
       const ids = batch.map((id) => rowId(userId, "databank", id, 0));
       const filter = `id IN (${ids.map((id) => sqlValue(id)).join(", ")})`;
-      await table.delete(filter);
+      await safeTableDelete(table, filter);
     }
   });
   scheduleOptimize();
