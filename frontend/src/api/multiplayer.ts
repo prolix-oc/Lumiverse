@@ -47,6 +47,21 @@ export const multiplayerApi = {
   joinByCode(code: string, displayName?: string) {
     return post<JoinGrant>('/multiplayer/join', { code, displayName })
   },
+  /** Peer side: rejoin a previously-joined remote room from history (no new code). */
+  reconnect(chatId: string) {
+    return post<JoinGrant>('/multiplayer/reconnect', { chatId })
+  },
+  /** Peer side: record a joined room as a local chat in the user's history. */
+  saveShadow(input: {
+    chatId: string
+    roomId: string
+    name?: string
+    characterName?: string
+    messages?: unknown[]
+    reconnectToken?: string
+  }) {
+    return post<{ ok: boolean }>('/multiplayer/shadow', input)
+  },
 
   // Host turn controls (REST-primary; the server broadcasts the resulting events).
   promote(roomId: string, participantId: string) {

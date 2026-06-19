@@ -48,6 +48,8 @@ export interface JoinGrant {
   roomId: string
   memberId: string
   peerToken: string
+  /** Durable, revocable credential to rejoin later without a fresh invite code. */
+  reconnectToken?: string
   transport: {
     relay: { url: string; expiresAt: number }
     direct?: { url: string; directToken: string; expiresAt: number }

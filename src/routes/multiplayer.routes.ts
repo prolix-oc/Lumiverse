@@ -208,4 +208,61 @@ app.post("/rooms/:roomId/freeform/end", (c) => {
   return c.json({ ok }, ok ? 200 : 400);
 });
 
+/**
+ * Peer side: record a room the user joined as a local chat in their own history
+ * (so it shows in recent/manage chats), seeded with the snapshot.
+ */
+app.post("/shadow", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}) as any);
+  if (typeof body.chatId !== "string" || typeof body.roomId !== "string") {
+    return c.json({ error: "chatId and roomId are required" }, 400);
+  }
+  const reconnectToken = typeof body.reconnectToken === "string" ? body.reconnectToken : undefined;
+  const res = svc.ensureJoinedRoomChat(userId, {
+    chatId: body.chatId,
+    roomId: body.roomId,
+    name: typeof body.name === "string" ? body.name : undefined,
+    characterName: typeof body.characterName === "string" ? body.characterName : undefined,
+    messages: Array.isArray(body.messages) ? body.messages : undefined,
+    reconnectToken,
+    // Record which server holds the room (only meaningful with a reconnect token).
+    server: reconnectToken ? mpidConfig.url : undefined,
+  });
+  return c.json(res);
+});
+
+/**
+ * Peer side: rejoin a previously-joined remote room from history using the
+ * durable reconnect token stored on the shadow chat — no new invite code
+ * needed. The token never leaves the server here; the browser only sends the
+ * chat id. Returns a fresh JoinGrant (relay URL + peer token) for the frontend
+ * to connect to the relay, exactly like `/join`.
+ */
+app.post("/reconnect", roomMutationLimiter, async (c) => {
+  if (!mpidConfig.enabled) {
+    return c.json({ error: "Remote multiplayer is not configured (set MPIDENTITY_URL)" }, 400);
+  }
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}) as any);
+  const chatId = typeof body.chatId === "string" ? body.chatId : "";
+  if (!chatId) return c.json({ error: "chatId is required" }, 400);
+
+  const stored = svc.getJoinedRoomReconnect(userId, chatId);
+  if (!stored?.reconnectToken) {
+    return c.json({ error: "This room can't be rejoined automatically — ask the host for a new invite" }, 409);
+  }
+
+  const grant = await identityClient.reconnect(stored.reconnectToken);
+  if (!grant) {
+    return c.json({ error: "Could not rejoin — the room may be closed, or you were removed" }, 403);
+  }
+
+  // Persist the refreshed (sliding-expiry) reconnect token for next time.
+  if (grant.reconnectToken) {
+    svc.ensureJoinedRoomChat(userId, { chatId, roomId: grant.roomId, reconnectToken: grant.reconnectToken });
+  }
+  return c.json(grant);
+});
+
 export { app as multiplayerRoutes };

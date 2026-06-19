@@ -1186,8 +1186,10 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (sendingRef.current || isStreaming) return
 
     // Multiplayer: in a room, gate by turn. Non-host participants send through
-    // the room (the host's instance writes the message + runs generation);
-    // the host falls through to the normal owner send path for their own chat.
+    // the room (the host's instance writes the message + runs generation). The
+    // host ALSO submits through the room during a freeform window — so the bot
+    // reply waits until every participant has contributed — but in round-robin
+    // the host falls through to the normal owner send+generate path on its turn.
     {
       const mp = useStore.getState()
       if (mp.mpRoomId) {
@@ -1195,7 +1197,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
           toast.info(mp.mpTurnStrategy === 'freeform' ? 'The freeform window is closed' : 'Wait for your turn')
           return
         }
-        if (!mp.mpIsHost) {
+        const hostFreeformContribution = mp.mpIsHost && mp.mpTurnStrategy === 'freeform'
+        if (!mp.mpIsHost || hostFreeformContribution) {
           const roomContent = text.trim()
           if (!roomContent) return
           sendRoomAction({ type: 'room_message', content: roomContent })

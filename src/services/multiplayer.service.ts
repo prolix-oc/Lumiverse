@@ -20,6 +20,7 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as chatsSvc from "./chats.service";
+import * as charactersSvc from "./characters.service";
 import * as generateSvc from "./generate.service";
 import { setMultiplayerPersonaProvider } from "./prompt-assembly.service";
 import { mpidConfig } from "../multiplayer/config";
@@ -450,6 +451,7 @@ export function closeRoom(hostUserId: string, roomId: string): boolean {
   if (!room || room.host_user_id !== hostUserId) return false;
 
   clearFreeformTimer(roomId);
+  freeformSubmitters.delete(roomId);
   getDb()
     .query("UPDATE multiplayer_rooms SET status = 'closed', freeform_deadline = NULL, updated_at = ? WHERE id = ?")
     .run(Math.floor(Date.now() / 1000), roomId);
@@ -561,15 +563,133 @@ function broadcastJoin(room: Room, participant: Participant): void {
 export function buildHydrationPayload(room: Room, selfParticipantId: string): {
   chatId: string;
   roomId: string;
+  chatName: string;
+  characterName: string;
   room: RoomStateView;
   messages: Message[];
 } {
   const messages = chatsSvc.getMessages(room.host_user_id, room.chat_id).slice(-HYDRATION_MESSAGE_TAIL);
+  const chat = chatsSvc.getChat(room.host_user_id, room.chat_id);
+  const character = chat?.character_id ? charactersSvc.getCharacter(room.host_user_id, chat.character_id) : null;
   return {
     chatId: room.chat_id,
     roomId: room.id,
+    chatName: chat?.name || "",
+    characterName: character?.name || "",
     room: buildRoomStateView(room, { selfParticipantId }),
     messages,
+  };
+}
+
+// ─── Peer-side "joined room" shadow chat (adds the room to the peer's history) ──
+
+const MP_PLACEHOLDER_CHARACTER_NAME = "Multiplayer Rooms";
+
+/** A per-user placeholder character that joined-room shadow chats group under. */
+function getOrCreatePlaceholderCharacter(userId: string): string {
+  const row = getDb()
+    .query("SELECT id FROM characters WHERE user_id = ? AND name = ? LIMIT 1")
+    .get(userId, MP_PLACEHOLDER_CHARACTER_NAME) as { id: string } | null;
+  if (row) return row.id;
+  return charactersSvc.createCharacter(userId, { name: MP_PLACEHOLDER_CHARACTER_NAME }).id;
+}
+
+/**
+ * Record a room a peer joined as a local chat in their OWN history (grouped
+ * under the placeholder character + flagged multiplayer), seeded with the
+ * snapshot. Uses the host's chat id so live events line up; bails if that id
+ * already exists locally (a same-instance host's real chat, or a prior shadow).
+ */
+export function ensureJoinedRoomChat(
+  userId: string,
+  input: {
+    chatId: string;
+    name?: string;
+    characterName?: string;
+    roomId: string;
+    messages?: unknown[];
+    /** Durable credential to rejoin this remote room later (refresh token). */
+    reconnectToken?: string;
+    /** Identity Server URL the room lives on (informational/diagnostic). */
+    server?: string;
+  },
+): { ok: boolean } {
+  if (!input.chatId) return { ok: false };
+  const db = getDb();
+  const existing = db.query("SELECT user_id FROM chats WHERE id = ?").get(input.chatId) as { user_id: string } | null;
+  if (existing) {
+    if (existing.user_id !== userId) return { ok: false };
+    // Already recorded — just refresh the durable reconnect material when given
+    // (sliding-expiry tokens on rejoin; or a local shadow that later goes remote).
+    if (input.reconnectToken || input.server) {
+      const prev = (chatsSvc.getChat(userId, input.chatId)?.metadata?.joined_room ?? {}) as Record<string, any>;
+      chatsSvc.mergeChatMetadata(userId, input.chatId, {
+        joined_room: {
+          ...prev,
+          roomId: input.roomId || prev.roomId,
+          characterName: input.characterName ?? prev.characterName ?? "",
+          remote: true,
+          ...(input.server ? { server: input.server } : {}),
+          ...(input.reconnectToken ? { reconnect: input.reconnectToken } : {}),
+        },
+      });
+    }
+    return { ok: true };
+  }
+
+  const characterId = getOrCreatePlaceholderCharacter(userId);
+  const now = Math.floor(Date.now() / 1000);
+  const name = (input.name || input.characterName || "Multiplayer room").slice(0, 120);
+  const joinedRoom: Record<string, any> = {
+    roomId: input.roomId,
+    characterName: input.characterName || "",
+    remote: !!input.reconnectToken,
+  };
+  if (input.server) joinedRoom.server = input.server;
+  if (input.reconnectToken) joinedRoom.reconnect = input.reconnectToken;
+  db.query(
+    "INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    input.chatId,
+    userId,
+    characterId,
+    name,
+    JSON.stringify({ multiplayer: true, joined_room: joinedRoom }),
+    now,
+    now,
+  );
+
+  if (Array.isArray(input.messages) && input.messages.length > 0) {
+    const mapped = (input.messages as any[]).slice(0, 200).map((m) => ({
+      is_user: !!m.is_user,
+      name: typeof m.name === "string" ? m.name : "",
+      content: typeof m.content === "string" ? m.content : "",
+      send_date: typeof m.send_date === "number" ? m.send_date : undefined,
+      swipes: Array.isArray(m.swipes) ? m.swipes : undefined,
+      swipe_dates: Array.isArray(m.swipe_dates) ? m.swipe_dates : undefined,
+      swipe_id: typeof m.swipe_id === "number" ? m.swipe_id : undefined,
+      extra: m.extra && typeof m.extra === "object" ? m.extra : undefined,
+    }));
+    chatsSvc.bulkInsertMessages(input.chatId, mapped, userId);
+  }
+  return { ok: true };
+}
+
+/**
+ * Read the durable reconnect credential a peer stored when they joined a remote
+ * room (used by `POST /multiplayer/reconnect` to rejoin without a new invite).
+ * Scoped to the caller via `chatsSvc.getChat`, so one user can't read another's.
+ */
+export function getJoinedRoomReconnect(
+  userId: string,
+  chatId: string,
+): { roomId: string; reconnectToken: string; server?: string } | null {
+  const jr = chatsSvc.getChat(userId, chatId)?.metadata?.joined_room as Record<string, any> | undefined;
+  if (!jr || typeof jr.reconnect !== "string" || !jr.reconnect) return null;
+  return {
+    roomId: typeof jr.roomId === "string" ? jr.roomId : "",
+    reconnectToken: jr.reconnect,
+    server: typeof jr.server === "string" ? jr.server : undefined,
   };
 }
 
@@ -592,6 +712,10 @@ export function leaveParticipant(roomId: string, participantId: string, opts?: {
       participantId,
     });
   }
+
+  // The departure may have removed the last participant the open freeform
+  // window was still waiting on — re-evaluate so the round isn't stuck.
+  checkFreeformComplete(roomId);
 }
 
 /** WS socket closed without an explicit leave — treat as a leave for MVP. */
@@ -728,6 +852,13 @@ function advanceTurn(room: Room): void {
 
 const freeformTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Per-open-window set of participant ids that have contributed a message. Once
+// it covers every active participant, generation fires immediately instead of
+// waiting for the deadline. In-process only: on restart it resets empty, so the
+// worst case is falling back to the window deadline — it never fires early in
+// error.
+const freeformSubmitters = new Map<string, Set<string>>();
+
 function clearFreeformTimer(roomId: string): void {
   const t = freeformTimers.get(roomId);
   if (t) {
@@ -759,6 +890,7 @@ export function openFreeformWindow(hostUserId: string, roomId: string): Room | n
   room.freeform_deadline = deadline;
   room.current_turn_participant_id = null;
   persistTurn(room);
+  freeformSubmitters.set(roomId, new Set());
   armFreeformTimer(roomId, deadline);
   emitTurnChanged(room, { windowOpen: true });
   return room;
@@ -780,8 +912,10 @@ const freeformGenerating = new Set<string>();
 async function runFreeformGeneration(roomId: string): Promise<void> {
   const room = getRoom(roomId);
   if (!room || room.status === "closed") return;
+  if (freeformGenerating.has(roomId)) return; // a concurrent trigger already won
   // Close the window.
   room.freeform_deadline = null;
+  freeformSubmitters.delete(roomId);
   persistTurn(room);
   emitTurnChanged(room, { windowOpen: false });
 
@@ -797,6 +931,37 @@ async function runFreeformGeneration(roomId: string): Promise<void> {
   }
   freeformGenerating.add(roomId);
   await triggerHostGeneration(room);
+}
+
+/**
+ * Record a freeform contribution; once EVERY active participant (host + peers)
+ * has submitted at least once in the open window, generate immediately rather
+ * than waiting for the window deadline (which stays as the fallback).
+ */
+function recordFreeformSubmission(room: Room, participantId: string): void {
+  let set = freeformSubmitters.get(room.id);
+  if (!set) {
+    set = new Set();
+    freeformSubmitters.set(room.id, set);
+  }
+  set.add(participantId);
+  checkFreeformComplete(room.id);
+}
+
+/** Fire freeform generation early if every active participant has submitted. */
+function checkFreeformComplete(roomId: string): void {
+  const room = getRoom(roomId);
+  if (!room || room.turn_strategy !== "freeform" || room.freeform_deadline === null) return;
+  if (freeformGenerating.has(roomId)) return;
+  const set = freeformSubmitters.get(roomId);
+  if (!set || set.size === 0) return;
+  const active = listParticipants(roomId, { activeOnly: true });
+  if (active.length === 0 || !active.every((p) => set.has(p.id))) return;
+  // Everyone present has had their say — don't wait out the deadline.
+  clearFreeformTimer(roomId);
+  void runFreeformGeneration(roomId).catch((err) =>
+    console.error("[multiplayer] early freeform generation failed:", err),
+  );
 }
 
 // ─── peer message submit ──────────────────────────────────────────────────────────
@@ -830,11 +995,14 @@ export function submitPeerMessage(roomId: string, participantId: string, rawCont
   touchParticipant(participantId);
   writePeerMessage(room, participant, content);
 
-  // Round-robin generates immediately; freeform waits for the deadline.
+  // Round-robin generates immediately. Freeform collects every participant's
+  // message, firing once everyone has submitted (or when the deadline hits).
   if (room.turn_strategy === "round_robin") {
     triggerHostGeneration(room).catch((err) =>
       console.error("[multiplayer] generation failed:", err),
     );
+  } else {
+    recordFreeformSubmission(room, participantId);
   }
   return { ok: true };
 }

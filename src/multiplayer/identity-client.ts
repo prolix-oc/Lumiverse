@@ -16,6 +16,8 @@ export interface JoinGrant {
   roomId: string;
   memberId: string;
   peerToken: string;
+  /** Durable, revocable credential to rejoin later without a new invite code. */
+  reconnectToken?: string;
   transport: {
     relay: { url: string; expiresAt: number };
     direct?: { url: string; directToken: string; expiresAt: number };
@@ -101,6 +103,30 @@ export async function redeemInvite(code: string, opts: { displayName?: string } 
     return (await res.json()) as JoinGrant;
   } catch (err) {
     console.warn("[mp-remote] redeemInvite failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Peer side: exchange a stored reconnect token for a fresh JoinGrant (no new
+ * invite code consumed). The Identity Server re-checks live membership + ban
+ * state, so a kicked/banned member — or a closed room — fails closed here.
+ */
+export async function reconnect(reconnectToken: string): Promise<JoinGrant | null> {
+  if (!mpidConfig.enabled) return null;
+  try {
+    const res = await safeFetch(
+      `${mpidConfig.url}/reconnect`,
+      baseOpts({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reconnectToken }),
+      }),
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as JoinGrant;
+  } catch (err) {
+    console.warn("[mp-remote] reconnect failed:", err instanceof Error ? err.message : err);
     return null;
   }
 }

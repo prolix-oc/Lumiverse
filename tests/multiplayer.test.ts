@@ -73,6 +73,64 @@ describe("multiplayer turn engine", () => {
     expect(mp.getRoomByChatId(result.chatId)).not.toBeNull();
   });
 
+  test("ensureJoinedRoomChat records a joined room in the peer's own history", () => {
+    const PEER = "peer-user";
+    const hostChatId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+
+    const res = mp.ensureJoinedRoomChat(PEER, {
+      chatId: hostChatId,
+      roomId,
+      name: "Alice's Room",
+      characterName: "Bot",
+      messages: [
+        { is_user: true, name: "Bob", content: "hi" },
+        { is_user: false, name: "Bot", content: "hello" },
+      ],
+    });
+    expect(res.ok).toBe(true);
+
+    const chat = chatsSvc.getChat(PEER, hostChatId)!;
+    expect(chat.metadata.multiplayer).toBe(true);
+    expect(chat.metadata.joined_room.roomId).toBe(roomId);
+    expect(chat.character_id).not.toBeNull(); // under the placeholder char → shows in lists
+    expect(chatsSvc.getMessages(PEER, hostChatId)).toHaveLength(2); // snapshot persisted
+
+    // Idempotent: re-recording doesn't duplicate.
+    expect(mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId, messages: [] }).ok).toBe(true);
+    expect(chatsSvc.getMessages(PEER, hostChatId)).toHaveLength(2);
+  });
+
+  test("ensureJoinedRoomChat stores a reconnect token getJoinedRoomReconnect reads back", () => {
+    const PEER = "peer-user-rc";
+    const hostChatId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+
+    mp.ensureJoinedRoomChat(PEER, {
+      chatId: hostChatId,
+      roomId,
+      name: "Remote Room",
+      reconnectToken: "tok-abc",
+      server: "https://mp.example",
+    });
+
+    const chat = chatsSvc.getChat(PEER, hostChatId)!;
+    expect(chat.metadata.joined_room.remote).toBe(true);
+    expect(chat.metadata.joined_room.reconnect).toBe("tok-abc");
+
+    const back = mp.getJoinedRoomReconnect(PEER, hostChatId)!;
+    expect(back.roomId).toBe(roomId);
+    expect(back.reconnectToken).toBe("tok-abc");
+    expect(back.server).toBe("https://mp.example");
+
+    // A refreshed token updates in place (sliding expiry) without duplicating.
+    mp.ensureJoinedRoomChat(PEER, { chatId: hostChatId, roomId, reconnectToken: "tok-xyz" });
+    expect(mp.getJoinedRoomReconnect(PEER, hostChatId)!.reconnectToken).toBe("tok-xyz");
+
+    // Scoped to the owner — another user can't read the credential.
+    expect(mp.getJoinedRoomReconnect("intruder", hostChatId)).toBeNull();
+  });
+
   test("a chat can only host one room", () => {
     const character = charactersSvc.createCharacter(HOST, { name: "Bot" });
     const chat = chatsSvc.createChat(HOST, { character_id: character.id });
@@ -154,6 +212,42 @@ describe("multiplayer turn engine", () => {
     expect(mp.submitPeerMessage(room.id, peerA, "too early").ok).toBe(false);
     mp.openFreeformWindow(HOST, room.id);
     expect(mp.submitPeerMessage(room.id, peerA, "in window").ok).toBe(true);
+  });
+
+  test("freeform: generation fires early once every active participant has submitted", () => {
+    const { room } = makeRoom("freeform");
+    const hostP = mp.getRoomStateForHost(HOST, room.id)!.participants[0].id;
+    const peerA = joinPeer(room.id, "peerA", "Ada");
+
+    mp.openFreeformWindow(HOST, room.id);
+    expect(mp.getRoom(room.id)!.freeform_deadline).not.toBeNull();
+
+    // One peer has submitted but the host hasn't — the window stays open.
+    expect(mp.submitPeerMessage(room.id, peerA, "i act").ok).toBe(true);
+    expect(mp.getRoom(room.id)!.freeform_deadline).not.toBeNull();
+
+    // The host submits too → everyone has contributed → the window closes
+    // immediately (generation fired) rather than waiting for the deadline.
+    expect(mp.submitPeerMessage(room.id, hostP, "the GM narrates").ok).toBe(true);
+    expect(mp.getRoom(room.id)!.freeform_deadline).toBeNull();
+  });
+
+  test("freeform: a holdout leaving lets the remaining submitters trigger the round", () => {
+    const { room } = makeRoom("freeform");
+    const hostP = mp.getRoomStateForHost(HOST, room.id)!.participants[0].id;
+    const peerA = joinPeer(room.id, "peerA", "Ada");
+    const peerB = joinPeer(room.id, "peerB", "Bo");
+
+    mp.openFreeformWindow(HOST, room.id);
+    expect(mp.submitPeerMessage(room.id, hostP, "go").ok).toBe(true);
+    expect(mp.submitPeerMessage(room.id, peerA, "i act").ok).toBe(true);
+    // peerB never submits → still open.
+    expect(mp.getRoom(room.id)!.freeform_deadline).not.toBeNull();
+
+    // peerB leaves → the only remaining un-submitted participant is gone, so the
+    // round completes without waiting out the deadline.
+    mp.leaveParticipant(room.id, peerB);
+    expect(mp.getRoom(room.id)!.freeform_deadline).toBeNull();
   });
 
   test("ban kicks the participant and blocks rejoin; capacity is enforced", () => {

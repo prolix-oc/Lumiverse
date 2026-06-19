@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
-import { sendRoomAction } from './relayClient'
+import { sendRoomAction, relayClient } from './relayClient'
 import { buildActivePersonaSnapshot } from '@/lib/personaSnapshot'
 import { EventType } from './events'
 import { useStore } from '@/store'
@@ -8,6 +8,7 @@ import { hasUnsavedSettings } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
 import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
+import { multiplayerApi } from '@/api/multiplayer'
 import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
@@ -1442,12 +1443,26 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.room) {
           state.setRoomState(payload.room)
-          // A messages snapshot for a DIFFERENT chat means we just joined
-          // someone else's room — adopt it as the active chat view (peer
-          // hydration). For the host (same chat) we keep our own messages.
-          if (Array.isArray(payload.messages) && payload.chatId !== state.activeChatId) {
+          // A hydration snapshot for a PEER (we're not the host) means we just
+          // joined — or rejoined — someone else's room: adopt it as the active
+          // chat view and refresh the messages. The host owns the real chat, so
+          // we never clobber the host's own messages with the tail snapshot.
+          if (Array.isArray(payload.messages) && !state.mpIsHost) {
             state.setActiveChat(payload.chatId)
             store.getState().setMessages(payload.messages as Message[])
+            // Record this joined room in the user's own chat history (best-effort,
+            // so it shows up in recent/manage chats with the multiplayer badge),
+            // stashing the durable reconnect token so it can be rejoined later.
+            multiplayerApi
+              .saveShadow({
+                chatId: payload.chatId,
+                roomId: payload.roomId,
+                name: payload.chatName,
+                characterName: payload.characterName,
+                messages: payload.messages,
+                reconnectToken: relayClient.reconnectToken() ?? undefined,
+              })
+              .catch(() => {})
           }
         } else if (payload.status === 'closed' && payload.roomId === state.mpRoomId) {
           state.clearRoom()

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { Crown, UserCheck, SkipForward, UserX, Ban, LogOut, Copy, Loader2, Globe } from 'lucide-react'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
@@ -79,6 +80,7 @@ function Avatar({ p }: { p: RoomParticipant }) {
 export default function MultiplayerPanel() {
   const activeChatId = useStore((s) => s.activeChatId)
   const roomId = useStore((s) => s.mpRoomId)
+  const mpChatId = useStore((s) => s.mpChatId)
   const isHost = useStore((s) => s.mpIsHost)
   const participants = useStore((s) => s.mpParticipants)
   const turnStrategy = useStore((s) => s.mpTurnStrategy)
@@ -90,6 +92,26 @@ export default function MultiplayerPanel() {
   const clearRoom = useStore((s) => s.clearRoom)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  // A "joined room" shadow chat (recorded when this user joined someone else's
+  // remote room) carries a durable reconnect credential → offer a Rejoin button.
+  const joinedRoom = activeChatMetadata?.joined_room as
+    | { roomId?: string; characterName?: string; remote?: boolean }
+    | undefined
+  const navigate = useNavigate()
+  const lastNavRef = useRef<string | null>(null)
+
+  // Pull the user into the room's chat view when they join (host → the fork,
+  // peer → the host's chat). ChatView renders from the route param, so a store
+  // change alone isn't enough — we navigate once per room session.
+  useEffect(() => {
+    if (mpChatId && lastNavRef.current !== mpChatId) {
+      lastNavRef.current = mpChatId
+      navigate('/chat/' + mpChatId)
+    } else if (!mpChatId) {
+      lastNavRef.current = null
+    }
+  }, [mpChatId, navigate])
 
   const [strategy, setStrategy] = useState<TurnStrategy>('round_robin')
   const [windowSec, setWindowSec] = useState(120)
@@ -182,6 +204,22 @@ export default function MultiplayerPanel() {
     }
   }, [joinId, clearRoom])
 
+  // Rejoin a remote room previously joined from history, using the durable
+  // reconnect token the backend stored on this shadow chat — no new invite code.
+  const rejoin = useCallback(async () => {
+    if (!activeChatId) return
+    setBusy(true)
+    try {
+      const snap = await buildActivePersonaSnapshot()
+      const grant = await multiplayerApi.reconnect(activeChatId)
+      relayClient.connect(grant, { displayName: snap?.name, persona: snap })
+    } catch {
+      toast.error('Could not rejoin — the room may be closed, or you may need a fresh invite')
+    } finally {
+      setBusy(false)
+    }
+  }, [activeChatId])
+
   const enableRemote = useCallback(async () => {
     if (!roomId) return
     setBusy(true)
@@ -226,6 +264,17 @@ export default function MultiplayerPanel() {
   if (!roomId) {
     return (
       <div style={{ padding: 12 }}>
+        {joinedRoom?.remote && (
+          <div style={card}>
+            <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Rejoin room</h3>
+            <p style={{ color: 'var(--lumiverse-text-secondary)', fontSize: 13, margin: '0 0 10px' }}>
+              You joined this room before. Reconnect to pick up where you left off — no new code needed.
+            </p>
+            <button style={primaryBtn} onClick={rejoin} disabled={busy}>
+              {busy ? <Loader2 size={14} className="spin" /> : 'Rejoin'}
+            </button>
+          </div>
+        )}
         <div style={card}>
           <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>Host a room</h3>
           {!activeChatId ? (

@@ -15,6 +15,9 @@ import type { JoinGrant, PersonaSnapshot } from '@/types/multiplayer'
 
 let ws: WebSocket | null = null
 let joinProfile: { displayName?: string; persona?: PersonaSnapshot | null } = {}
+// The durable reconnect token from the active grant, surfaced so the room
+// hydration handler can persist it on the shadow chat for later rejoin.
+let reconnectToken: string | null = null
 
 function isActive(): boolean {
   return !!ws && ws.readyState === WebSocket.OPEN
@@ -23,9 +26,15 @@ function isActive(): boolean {
 export const relayClient = {
   isActive,
 
+  /** The current grant's durable reconnect token, if any. */
+  reconnectToken(): string | null {
+    return reconnectToken
+  },
+
   connect(grant: JoinGrant, profile: { displayName?: string; persona?: PersonaSnapshot | null } = {}) {
     this.disconnect()
     joinProfile = profile
+    reconnectToken = grant.reconnectToken ?? null
     const url = `${grant.transport.relay.url}?token=${encodeURIComponent(grant.peerToken)}&role=peer`
     const sock = new WebSocket(url)
     ws = sock

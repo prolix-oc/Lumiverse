@@ -437,6 +437,8 @@ export interface RoomStatusPayload extends RoomBasePayload {
   room?: RoomStateView
   /** Present on the private hydration payload sent to a joining socket. */
   messages?: unknown[]
+  chatName?: string
+  characterName?: string
 }
 export interface RoomParticipantJoinedPayload extends RoomBasePayload {
   participant: RoomParticipant
