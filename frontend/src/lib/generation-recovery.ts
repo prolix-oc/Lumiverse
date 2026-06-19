@@ -25,6 +25,14 @@ export async function recoverPooledGeneration(chatId: string): Promise<void> {
   const state = useStore.getState()
   if (state.activeChatId !== chatId) return
 
+  // Multiplayer peers don't own the host's generation pool — they reconcile
+  // purely from the re-broadcast WS event stream. Polling the pool would either
+  // no-op (remote peer: a different backend instance) or, worse, re-fetch the
+  // peer's own backend and wipe the live view (it holds no copy of the host's
+  // chat). All recovery triggers — load, visibility, reconnect, gap — funnel
+  // through here, so this single guard keeps peers safe everywhere.
+  if (state.mpRoomId && !state.mpIsHost && state.mpChatId === chatId) return
+
   // Request a delta when we already hold a prefix of this generation's
   // buffers. The server only honors the lengths if the generationId matches,
   // so a stale id degrades safely to a full snapshot.

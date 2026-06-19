@@ -10,6 +10,8 @@ import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../src/db/connection";
 import * as charactersSvc from "../src/services/characters.service";
 import * as chatsSvc from "../src/services/chats.service";
+import * as settingsSvc from "../src/services/settings.service";
+import * as poolSvc from "../src/services/generation-pool.service";
 import * as mp from "../src/services/multiplayer.service";
 import type { Room } from "../src/types/multiplayer";
 
@@ -282,6 +284,97 @@ describe("multiplayer turn engine", () => {
     // Oversized data URLs rejected.
     mp.updateParticipantPersona(room.id, peer, { name: "Ada", avatarUrl: "data:image/webp;base64," + "A".repeat(40_000) });
     expect(mp.getParticipant(peer)?.persona_snapshot?.avatarUrl ?? null).toBeNull();
+  });
+
+  test("host generation connection resolves active → default → any (never hard-fails with profiles)", () => {
+    const db = getDb();
+    const now = Math.floor(Date.now() / 1000);
+    const addConn = (id: string, isDefault: number, updated: number) =>
+      db
+        .query(
+          "INSERT INTO connection_profiles (id, user_id, name, provider, is_default, metadata, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .run(id, HOST, "Profile", "openai", isDefault, "{}", now, updated);
+
+    // No profiles at all → undefined (a genuine misconfiguration, not our bug).
+    expect(mp.resolveHostConnectionId(HOST)).toBeUndefined();
+
+    const c1 = crypto.randomUUID();
+    const c2 = crypto.randomUUID();
+    addConn(c1, 0, now - 100);
+    addConn(c2, 0, now); // most-recently-updated
+
+    // No default + no active selection → falls back to any owned profile (the
+    // most recent), instead of throwing "No connection profile found".
+    expect(mp.resolveHostConnectionId(HOST)).toBe(c2);
+
+    // An explicit DB default beats "any".
+    db.query("UPDATE connection_profiles SET is_default = 1 WHERE id = ?").run(c1);
+    expect(mp.resolveHostConnectionId(HOST)).toBe(c1);
+
+    // The host's active UI selection (activeProfileId) beats the default — so a
+    // room generates on the same connection the host's normal sends use.
+    settingsSvc.putSetting(HOST, "activeProfileId", c2);
+    expect(mp.resolveHostConnectionId(HOST)).toBe(c2);
+
+    // A stale active id (profile since deleted) is ignored → back to the default.
+    settingsSvc.putSetting(HOST, "activeProfileId", "missing-id");
+    expect(mp.resolveHostConnectionId(HOST)).toBe(c1);
+  });
+
+  test("hydration embeds an in-flight generation so mid-join peers resume streaming", () => {
+    const { room, chatId } = makeRoom("round_robin");
+
+    // Nothing generating → no snapshot.
+    expect(mp.buildHydrationPayload(room, "self").generation).toBeNull();
+
+    // Host starts streaming a reply.
+    const genId = crypto.randomUUID();
+    poolSvc.createPoolEntry({
+      generationId: genId,
+      userId: HOST,
+      chatId,
+      generationType: "normal",
+      characterName: "Bot",
+      model: "m",
+      targetMessageId: "msg-1",
+    });
+    poolSvc.setPoolStatus(genId, "streaming");
+    poolSvc.appendPoolContent(genId, "Hello, trav");
+
+    const hy = mp.buildHydrationPayload(room, "self");
+    expect(hy.generation?.active).toBe(true);
+    expect(hy.generation?.generationId).toBe(genId);
+    expect(hy.generation?.content).toBe("Hello, trav");
+    expect(hy.generation?.targetMessageId).toBe("msg-1");
+
+    // Host-local impersonate drafts are never resumed on a peer.
+    const imp = crypto.randomUUID();
+    poolSvc.createPoolEntry({
+      generationId: imp,
+      userId: HOST,
+      chatId,
+      generationType: "impersonate",
+      characterName: "Bot",
+      model: "m",
+    });
+    poolSvc.setPoolStatus(imp, "streaming");
+    expect(mp.buildHydrationPayload(room, "self").generation).toBeNull();
+  });
+
+  test("character (bot) avatar is relayed via hydration, sanitized", () => {
+    const { room } = makeRoom("round_robin");
+    // None set → null.
+    expect(mp.buildHydrationPayload(room, "self").characterAvatar).toBeNull();
+
+    // A compressed WebP data URL is accepted + relayed to peers.
+    const webp = "data:image/webp;base64," + "A".repeat(200);
+    mp.setRoomCharacterAvatar(room.id, webp);
+    expect(mp.buildHydrationPayload(room, "self").characterAvatar).toBe(webp);
+
+    // SVG (script-exec risk) is rejected — the prior value is kept.
+    mp.setRoomCharacterAvatar(room.id, "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=");
+    expect(mp.buildHydrationPayload(room, "self").characterAvatar).toBe(webp);
   });
 
   test("peer cannot invoke host controls", () => {

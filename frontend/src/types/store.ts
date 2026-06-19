@@ -1067,11 +1067,14 @@ export interface MultiplayerSlice {
   /** Unix seconds; null unless a freeform window is open. */
   mpFreeformDeadline: number | null
   mpSettings: { maxPeers: number; freeformWindowSec: number } | null
+  /** Compressed bot-avatar data URL relayed by the host (peers render this). */
+  mpCharacterAvatar: string | null
 
   /** Full reconcile from a ROOM_STATUS / hydration payload. */
   setRoomState: (view: RoomStateView, opts?: { isHost?: boolean }) => void
   clearRoom: () => void
   setRoomConnStatus: (status: RoomConnStatus) => void
+  setCharacterAvatar: (url: string | null) => void
   upsertParticipant: (participant: RoomParticipant) => void
   removeParticipant: (participantId: string) => void
   setParticipantPersona: (participantId: string, persona: PersonaSnapshot | null) => void

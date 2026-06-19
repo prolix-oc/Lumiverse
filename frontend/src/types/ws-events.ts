@@ -432,6 +432,24 @@ export interface RoomBasePayload {
   chatId: string
   roomId: string
 }
+/** In-flight host generation embedded in hydration so a peer joining mid-stream
+ *  resumes the reply already in progress (instead of only seeing it complete). */
+export interface RoomHydrationGeneration {
+  active: boolean
+  generationId: string
+  status: string
+  content: string
+  reasoning: string
+  contentOffset: number
+  reasoningOffset: number
+  generationType?: string
+  targetMessageId?: string
+  targetSwipeId?: number
+  characterName?: string
+  characterId?: string
+  reasoningStartedAt?: number
+  reasoningDurationMs?: number
+}
 export interface RoomStatusPayload extends RoomBasePayload {
   status?: string
   room?: RoomStateView
@@ -439,6 +457,10 @@ export interface RoomStatusPayload extends RoomBasePayload {
   messages?: unknown[]
   chatName?: string
   characterName?: string
+  /** Compressed WebP data URL of the bot avatar, so peers can render it. */
+  characterAvatar?: string | null
+  /** Present when a generation was streaming as the joining socket hydrated. */
+  generation?: RoomHydrationGeneration | null
 }
 export interface RoomParticipantJoinedPayload extends RoomBasePayload {
   participant: RoomParticipant

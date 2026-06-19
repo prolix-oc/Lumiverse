@@ -15,6 +15,7 @@ const EMPTY = {
   mpRound: 0,
   mpFreeformDeadline: null,
   mpSettings: null,
+  mpCharacterAvatar: null as string | null,
 }
 
 /** Recompute each participant's isCurrentTurn flag from the single source of truth. */
@@ -44,6 +45,8 @@ export const createMultiplayerSlice: StateCreator<MultiplayerSlice> = (set, get)
   clearRoom: () => set({ ...EMPTY }),
 
   setRoomConnStatus: (status) => set({ mpConnStatus: status }),
+
+  setCharacterAvatar: (url) => set({ mpCharacterAvatar: url }),
 
   upsertParticipant: (participant) =>
     set((state) => {

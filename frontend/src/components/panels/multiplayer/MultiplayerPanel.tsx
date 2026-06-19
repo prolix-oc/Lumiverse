@@ -6,6 +6,7 @@ import { wsClient } from '@/ws/client'
 import { relayClient } from '@/ws/relayClient'
 import { multiplayerApi } from '@/api/multiplayer'
 import { buildActivePersonaSnapshot } from '@/lib/personaSnapshot'
+import { buildCharacterAvatarSnapshot } from '@/lib/characterAvatarSnapshot'
 import { toast } from '@/lib/toast'
 import type { RoomParticipant, TurnStrategy } from '@/types/multiplayer'
 
@@ -138,6 +139,9 @@ export default function MultiplayerPanel() {
     setBusy(true)
     try {
       const snap = await buildActivePersonaSnapshot()
+      // Compress the bot avatar so peers (who can't fetch the owner-scoped
+      // character-avatar endpoint) can render it.
+      const characterAvatar = await buildCharacterAvatarSnapshot(activeCharacterId)
       // Backend forks the current chat and returns the room on the new fork.
       const view = await multiplayerApi.create({
         chat_id: activeChatId,
@@ -148,8 +152,9 @@ export default function MultiplayerPanel() {
       // Switch to the forked multiplayer chat (the original is preserved).
       setActiveChat(view.chatId, activeCharacterId)
       // Subscribe the host's socket to the room topic + register the host
-      // participant under their current persona name + avatar.
-      wsClient.send({ type: 'room_join', roomId: view.roomId, displayName: snap?.name, persona: snap })
+      // participant under their current persona name + avatar, and relay the
+      // bot avatar for peers.
+      wsClient.send({ type: 'room_join', roomId: view.roomId, displayName: snap?.name, persona: snap, characterAvatar })
       toast.success('Multiplayer room created')
       void startListening(view.roomId)
     } catch {
@@ -170,15 +175,16 @@ export default function MultiplayerPanel() {
       .then(async (res) => {
         if (cancelled || !res.room) return
         const snap = await buildActivePersonaSnapshot()
+        const characterAvatar = await buildCharacterAvatarSnapshot(activeCharacterId)
         if (cancelled) return
         setRoomState(res.room, { isHost: true })
-        wsClient.send({ type: 'room_join', roomId: res.room.roomId, displayName: snap?.name, persona: snap })
+        wsClient.send({ type: 'room_join', roomId: res.room.roomId, displayName: snap?.name, persona: snap, characterAvatar })
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [activeChatId, roomId, setRoomState])
+  }, [activeChatId, roomId, setRoomState, activeCharacterId])
 
   const join = useCallback(async () => {
     const input = joinId.trim()

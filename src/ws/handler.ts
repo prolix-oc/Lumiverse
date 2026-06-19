@@ -231,6 +231,11 @@ export const wsHandler = upgradeWebSocket((c) => {
             ws.send(JSON.stringify({ event: "ROOM_JOIN_REJECTED", payload: { roomId, reason: join.reason }, timestamp: Date.now() }));
             return;
           }
+          // Only the host may set the room's character (bot) avatar — it's
+          // relayed to peers (who can't fetch the owner-scoped endpoint).
+          if (data.characterAvatar && join.participant.role === "host") {
+            multiplayerSvc.setRoomCharacterAvatar(join.room.id, data.characterAvatar);
+          }
           // The host gets chat/gen events on its user topic already; only peers
           // subscribe to the feed topic (avoids double-delivery to the host).
           if (raw) {

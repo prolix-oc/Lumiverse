@@ -22,6 +22,9 @@ import { EventType } from "../ws/events";
 import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as generateSvc from "./generate.service";
+import * as poolSvc from "./generation-pool.service";
+import * as connectionsSvc from "./connections.service";
+import * as settingsSvc from "./settings.service";
 import { setMultiplayerPersonaProvider } from "./prompt-assembly.service";
 import { mpidConfig } from "../multiplayer/config";
 import type { Message } from "../types/message";
@@ -452,6 +455,7 @@ export function closeRoom(hostUserId: string, roomId: string): boolean {
 
   clearFreeformTimer(roomId);
   freeformSubmitters.delete(roomId);
+  roomCharacterAvatars.delete(roomId);
   getDb()
     .query("UPDATE multiplayer_rooms SET status = 'closed', freeform_deadline = NULL, updated_at = ? WHERE id = ?")
     .run(Math.floor(Date.now() / 1000), roomId);
@@ -559,14 +563,88 @@ function broadcastJoin(room: Room, participant: Participant): void {
   });
 }
 
+// Host-supplied compressed WebP data URL of the room's CHARACTER (bot) avatar.
+// The character-avatar endpoint is owner-scoped (unreachable by peers, and
+// cross-instance for relayed peers), so the host relays a compressed copy at
+// join time and we hand it to every peer via hydration. In-process only: the
+// host re-sends it on reconnect (its restore effect re-issues room_join).
+const roomCharacterAvatars = new Map<string, string>();
+
+/** Record the room's character avatar (host-only; sanitized like persona avatars). */
+export function setRoomCharacterAvatar(roomId: string, rawUrl: unknown): void {
+  const clean = sanitizeAvatarUrl(rawUrl);
+  if (clean) roomCharacterAvatars.set(roomId, clean);
+}
+
+interface HydrationGeneration {
+  active: boolean;
+  generationId: string;
+  status: string;
+  content: string;
+  reasoning: string;
+  contentOffset: number;
+  reasoningOffset: number;
+  generationType: string;
+  targetMessageId?: string;
+  targetSwipeId?: number;
+  characterName?: string;
+  characterId?: string;
+  reasoningStartedAt?: number;
+  reasoningDurationMs?: number;
+}
+
+// Keep the in-flight content embedded in hydration well under the relay frame
+// cap (256 KB), alongside the message tail + participant avatars. A peer joining
+// a very long generation simply falls back to seeing it at completion.
+const MAX_HYDRATION_GEN_BYTES = 48 * 1024;
+
+/**
+ * Snapshot of any in-flight host generation, embedded in hydration so a peer
+ * joining mid-stream resumes the reply already in progress (instead of only
+ * seeing it pop in at completion). Peers can't reach the host's pool status
+ * endpoint cross-instance, so the host hands them the snapshot directly.
+ */
+function buildInFlightGeneration(room: Room): HydrationGeneration | null {
+  const entry = poolSvc.getPoolForChat(room.host_user_id, room.chat_id);
+  if (!entry) return null;
+  // Host-local user drafts aren't shared replies — never resume them on a peer.
+  if (entry.generationType === "impersonate") return null;
+  const active =
+    entry.status === "assembling" ||
+    entry.status === "council" ||
+    entry.status === "waiting" ||
+    entry.status === "reasoning" ||
+    entry.status === "streaming";
+  if (!active) return null;
+  if (entry.content.length + entry.reasoning.length > MAX_HYDRATION_GEN_BYTES) return null;
+  return {
+    active: true,
+    generationId: entry.generationId,
+    status: entry.status,
+    content: entry.content,
+    reasoning: entry.reasoning,
+    contentOffset: 0,
+    reasoningOffset: 0,
+    generationType: entry.generationType,
+    targetMessageId: entry.targetMessageId,
+    targetSwipeId: entry.targetSwipeId,
+    characterName: entry.characterName,
+    characterId: entry.characterId,
+    reasoningStartedAt: entry.reasoningStartedAt,
+    reasoningDurationMs: entry.reasoningDurationMs,
+  };
+}
+
 /** Build the private hydration payload sent directly to a joining socket. */
 export function buildHydrationPayload(room: Room, selfParticipantId: string): {
   chatId: string;
   roomId: string;
   chatName: string;
   characterName: string;
+  characterAvatar: string | null;
   room: RoomStateView;
   messages: Message[];
+  generation: HydrationGeneration | null;
 } {
   const messages = chatsSvc.getMessages(room.host_user_id, room.chat_id).slice(-HYDRATION_MESSAGE_TAIL);
   const chat = chatsSvc.getChat(room.host_user_id, room.chat_id);
@@ -576,8 +654,10 @@ export function buildHydrationPayload(room: Room, selfParticipantId: string): {
     roomId: room.id,
     chatName: chat?.name || "",
     characterName: character?.name || "",
+    characterAvatar: roomCharacterAvatars.get(room.id) ?? null,
     room: buildRoomStateView(room, { selfParticipantId }),
     messages,
+    generation: buildInFlightGeneration(room),
   };
 }
 
@@ -1039,11 +1119,37 @@ export function passTurn(roomId: string, participantId: string): void {
   advanceTurn(room);
 }
 
+/**
+ * Pick the connection profile a room's headless generation should run on.
+ *
+ * The host's normal sends pass `connection_id: activeProfileId` from the UI, but
+ * room generations are triggered server-side (peer message / freeform deadline /
+ * "End now") with no such context. `resolveConnection` then falls back to
+ * `getDefaultConnection`, which ONLY matches `is_default=1` — so a host with
+ * several profiles but no explicit default hard-fails with "No connection
+ * profile found". Mirror the host's actual selection instead, with safe
+ * fallbacks: their active profile → the DB default → any profile they own.
+ */
+export function resolveHostConnectionId(userId: string): string | undefined {
+  const active = settingsSvc.getSetting(userId, "activeProfileId");
+  if (
+    typeof active?.value === "string" &&
+    active.value &&
+    connectionsSvc.getConnection(userId, active.value)
+  ) {
+    return active.value;
+  }
+  const def = connectionsSvc.getDefaultConnection(userId);
+  if (def) return def.id;
+  return connectionsSvc.listConnections(userId, { limit: 1, offset: 0 }).data[0]?.id;
+}
+
 async function triggerHostGeneration(room: Room): Promise<void> {
   try {
     await generateSvc.startGeneration({
       userId: room.host_user_id,
       chat_id: room.chat_id,
+      connection_id: resolveHostConnectionId(room.host_user_id),
       generation_type: "normal",
     });
   } catch (err) {

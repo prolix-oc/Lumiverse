@@ -565,8 +565,13 @@ export function useWebSocket() {
               { title: i18n.t('common.toast.generationFailedTitle') },
             )
             // Reconcile message list on error so any backend-staged empty messages
-            // are reflected (or removed if the backend cleaned them up).
-            if (payload.chatId) {
+            // are reflected (or removed if the backend cleaned them up). Peers skip
+            // this — their backend has no authoritative copy of the host's chat, so
+            // a re-fetch would wipe the live view (the host reconciles + the error
+            // toast already surfaced the failure).
+            const sErr = store.getState()
+            const mpPeerErr = !!sErr.mpRoomId && !sErr.mpIsHost && sErr.mpChatId === payload.chatId
+            if (payload.chatId && !mpPeerErr) {
               fetchLatestMessages(payload.chatId).then((res) => {
                 const s = store.getState()
                 if (s.activeChatId === payload.chatId) {
@@ -628,6 +633,31 @@ export function useWebSocket() {
             // fresh one as unseen so a "new swipe ready" badge points them to it.
             const completedSwipeId = state.streamingSwipeId
             const completedMessageId = payload.messageId
+
+            // ── Multiplayer peers: finalize from the event, never re-fetch ──
+            // A peer holds no authoritative local copy of the host's chat (local
+            // peer: the chat is owned by the host, so a re-fetch returns nothing;
+            // remote peer: the shadow chat is frozen at join). Re-fetching here
+            // would wipe the live, WS-delivered conversation — so finalize the
+            // streamed assistant message from the event payload, keep everything
+            // else, and skip the host-only image-gen / @mention follow-ups.
+            {
+              const sPeer = store.getState()
+              if (sPeer.mpRoomId && !sPeer.mpIsHost && sPeer.mpChatId === payload.chatId) {
+                if (completedMessageId && typeof payload.content === 'string') {
+                  sPeer.updateMessage(completedMessageId, { content: payload.content })
+                }
+                if (completedMessageId) {
+                  const buffered = pendingGenerationMetrics.get(completedMessageId)
+                  if (buffered) {
+                    applyGenerationMetrics(buffered)
+                    pendingGenerationMetrics.delete(completedMessageId)
+                  }
+                }
+                sPeer.endStreaming()
+                return
+              }
+            }
 
             // Reconcile before clearing streaming. Clearing first collapses long
             // streamed rows back to their blank/original content for a frame; on
@@ -832,7 +862,16 @@ export function useWebSocket() {
         // then both updates (stop streaming + set messages) happen in a single
         // React render — no flash of empty content.
         const chatId = payload?.chatId || state.activeChatId
-        if (chatId) {
+        const mpPeerStop = !!state.mpRoomId && !state.mpIsHost && !!chatId && state.mpChatId === chatId
+        if (mpPeerStop) {
+          // Peers can't re-fetch the host's chat — finalize the streamed partial
+          // from the live buffer and stop (the backend's MESSAGE_EDITED re-broadcast
+          // reconciles the authoritative saved partial). Avoids wiping the view.
+          if (state.regeneratingMessageId && state.streamingContent) {
+            state.updateMessage(state.regeneratingMessageId, { content: state.streamingContent })
+          }
+          state.stopStreaming()
+        } else if (chatId) {
           fetchLatestMessages(chatId).then((res) => {
             const s = store.getState()
             if (s.activeChatId === chatId) {
@@ -1443,6 +1482,11 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.room) {
           state.setRoomState(payload.room)
+          // The host relays the bot avatar (peers can't fetch the owner-scoped
+          // character-avatar endpoint) — stash it for useMessageCard.
+          if (payload.characterAvatar !== undefined) {
+            state.setCharacterAvatar(payload.characterAvatar)
+          }
           // A hydration snapshot for a PEER (we're not the host) means we just
           // joined — or rejoined — someone else's room: adopt it as the active
           // chat view and refresh the messages. The host owns the real chat, so
@@ -1450,6 +1494,21 @@ export function useWebSocket() {
           if (Array.isArray(payload.messages) && !state.mpIsHost) {
             state.setActiveChat(payload.chatId)
             store.getState().setMessages(payload.messages as Message[])
+            // Mid-join: if the host had a reply streaming when we joined, resume
+            // it from the embedded snapshot so it appears live (not just at
+            // completion). Peers can't reach the host's pool endpoint
+            // cross-instance, so the host hands us the in-flight snapshot here.
+            // Mirrors recoverPooledGeneration's resume branch.
+            const gen = payload.generation
+            if (gen?.active && gen.generationId) {
+              const st = store.getState()
+              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType)
+              st.setStreamingSwipeId(gen.targetSwipeId ?? null)
+              if (gen.content) st.reconcileStreamContent(gen.content, gen.contentOffset ?? 0)
+              if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)
+              if (gen.reasoningDurationMs) store.setState({ streamingReasoningDuration: gen.reasoningDurationMs })
+              else if (gen.reasoningStartedAt) st.setStreamingReasoningStartedAt(gen.reasoningStartedAt)
+            }
             // Record this joined room in the user's own chat history (best-effort,
             // so it shows up in recent/manage chats with the multiplayer badge),
             // stashing the durable reconnect token so it can be rejoined later.

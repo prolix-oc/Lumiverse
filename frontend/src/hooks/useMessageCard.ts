@@ -59,6 +59,9 @@ export function useMessageCard(message: Message, chatId: string) {
   const messages = useStore((s) => s.messages)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const personas = useStore((s) => s.personas)
+  const mpRoomId = useStore((s) => s.mpRoomId)
+  const mpIsHost = useStore((s) => s.mpIsHost)
+  const mpCharacterAvatar = useStore((s) => s.mpCharacterAvatar)
   const autoParse = useStore((s) => s.reasoningSettings.autoParse)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const isBubbleMode = useStore((s) => s.chatSheldDisplayMode) === 'bubble'
@@ -161,14 +164,20 @@ export function useMessageCard(message: Message, chatId: string) {
         ?.find((avatar) => avatar.image_id === activeChatAvatarId)
     : null
 
+  // Multiplayer peers can't fetch the owner-scoped character-avatar endpoint —
+  // the host relays a compressed copy of the bot avatar. Use it for non-user
+  // messages when we're a peer (the host renders the real character avatar).
+  const peerBotAvatar = !isUser && mpRoomId && !mpIsHost ? mpCharacterAvatar : null
+
   const avatarUrl = isUser
     ? getPersonaAvatarUrl(
         userPersonaId ?? activePersona?.id ?? null,
         messagePersona?.image_id ?? activePersona?.image_id ?? null
       )
-    : (activeChatAvatarId && effectiveCharId === activeCharacterId)
-      ? getImageUrl(activeChatAvatarId)
-      : getCharAvatarUrl(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
+    : peerBotAvatar
+      ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
+        ? getImageUrl(activeChatAvatarId)
+        : getCharAvatarUrl(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null))
 
   // Full-size avatar URL for lightbox/floating viewer (no resize)
   const fullAvatarUrl = isUser
@@ -176,14 +185,15 @@ export function useMessageCard(message: Message, chatId: string) {
         userPersonaId ?? activePersona?.id ?? null,
         messagePersona?.image_id ?? activePersona?.image_id ?? null
       )
-    : (activeChatAvatarId && effectiveCharId === activeCharacterId)
-      ? imagesApi.url(activeAltAvatar?.original_image_id || activeChatAvatarId)
-      : getCharacterAvatarUrlById(
-          effectiveCharId,
-          typeof effectiveCharacter?.extensions?.original_image_id === 'string'
-            ? effectiveCharacter.extensions.original_image_id
-            : effectiveCharacter?.image_id ?? null
-        )
+    : peerBotAvatar
+      ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
+        ? imagesApi.url(activeAltAvatar?.original_image_id || activeChatAvatarId)
+        : getCharacterAvatarUrlById(
+            effectiveCharId,
+            typeof effectiveCharacter?.extensions?.original_image_id === 'string'
+              ? effectiveCharacter.extensions.original_image_id
+              : effectiveCharacter?.image_id ?? null
+          ))
 
   // ── Full sm/lg/full tier matrix for theme overrides. `cropped` is the 1:1
   //    square variant; `original` is the uploaded aspect ratio. Mirrors the
