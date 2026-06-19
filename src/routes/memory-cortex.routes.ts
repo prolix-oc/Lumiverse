@@ -299,7 +299,7 @@ function logCortexRebuildTrigger(
   );
 }
 
-function startTrackedCortexRebuild(options: {
+type TrackedCortexRebuildOptions = {
   userId: string;
   chatId: string;
   characterNames: string[];
@@ -308,53 +308,109 @@ function startTrackedCortexRebuild(options: {
   sidecarConnectionId?: string;
   snapshot: CortexFreshnessSnapshot;
   source?: "warmup";
-}): void {
-  const { userId, chatId, characterNames, descriptionAliases, generateRawFn, sidecarConnectionId, snapshot, source } = options;
+};
 
-  memoryCortex.rebuildCortex(
-    userId,
-    chatId,
-    characterNames,
-    generateRawFn,
-    sidecarConnectionId,
-    (rebuildState) => {
+/** Per-chat registry of the rebuild currently running. Two warmups for the same
+ *  chat used to race (chat-open + WS reconnect both fire passive warmup), each
+ *  calling clearDerivedCortexData + reprocessing the same chunks — wasted work
+ *  that, before the memory_mentions upsert was made conflict-safe, surfaced as
+ *  "UNIQUE constraint failed: memory_mentions.entity_id, memory_mentions.chunk_id".
+ *  Coalescing rules:
+ *    - warmup vs anything in flight → coalesce (the in-flight run covers it)
+ *    - force  vs in-flight force    → coalesce
+ *    - force  vs in-flight warmup   → preempt: abort the warmup, then start the
+ *                                     force only after it has fully unwound.
+ *  The check-and-set below is race-free: it runs synchronously with no await in
+ *  between, and rebuildCortex registers its state synchronously before its first
+ *  await. */
+type InFlightCortexRebuild = { kind: "warmup" | "force"; abort: AbortController; done: Promise<void> };
+const cortexRebuildsInFlight = new Map<string, InFlightCortexRebuild>();
+
+function startTrackedCortexRebuild(options: TrackedCortexRebuildOptions): void {
+  const { chatId, source } = options;
+  const isForce = source !== "warmup";
+
+  const existing = cortexRebuildsInFlight.get(chatId);
+  if (existing) {
+    // Coalesce duplicates. Only an explicit force-rebuild may preempt — and only
+    // an in-flight warmup, never another force.
+    if (!isForce || existing.kind === "force") return;
+    existing.abort.abort(new DOMException("Superseded by an explicit rebuild", "AbortError"));
+    // Defer the force until the warmup has unwound so the two never run
+    // clearDerivedCortexData + reprocess concurrently on the same chat.
+    launchTrackedCortexRebuild(options, existing.done);
+    return;
+  }
+  launchTrackedCortexRebuild(options, null);
+}
+
+function launchTrackedCortexRebuild(
+  options: TrackedCortexRebuildOptions,
+  startAfter: Promise<void> | null,
+): void {
+  const { userId, chatId, characterNames, descriptionAliases, generateRawFn, sidecarConnectionId, snapshot, source } = options;
+  const abort = new AbortController();
+  const entry: InFlightCortexRebuild = {
+    kind: source === "warmup" ? "warmup" : "force",
+    abort,
+    done: Promise.resolve(),
+  };
+  // Register synchronously so a racing call coalesces against us immediately.
+  cortexRebuildsInFlight.set(chatId, entry);
+
+  entry.done = (startAfter ?? Promise.resolve()).then(() =>
+    memoryCortex.rebuildCortex(
+      userId,
+      chatId,
+      characterNames,
+      generateRawFn,
+      sidecarConnectionId,
+      (rebuildState) => {
+        eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+          chatId,
+          status: "processing",
+          current: rebuildState.current,
+          total: rebuildState.total,
+          percent: rebuildState.percent,
+          phase: rebuildState.phase,
+          inFlightBatches: rebuildState.inFlightBatches,
+          lastProviderRequestAt: rebuildState.lastProviderRequestAt,
+          lastProviderResponseMs: rebuildState.lastProviderResponseMs,
+          ...(source ? { source } : {}),
+        }, userId);
+      },
+      descriptionAliases,
+      { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature, signal: abort.signal },
+    ).then((result) => {
+      try {
+        stampCortexFreshnessSnapshot(userId, chatId, snapshot);
+      } catch (err) {
+        console.warn("[memory-cortex] Failed to stamp rebuild freshness state:", err);
+      }
+
       eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
         chatId,
-        status: "processing",
-        current: rebuildState.current,
-        total: rebuildState.total,
-        percent: rebuildState.percent,
-        phase: rebuildState.phase,
-        inFlightBatches: rebuildState.inFlightBatches,
-        lastProviderRequestAt: rebuildState.lastProviderRequestAt,
-        lastProviderResponseMs: rebuildState.lastProviderResponseMs,
+        status: "complete",
         ...(source ? { source } : {}),
+        ...result,
       }, userId);
-    },
-    descriptionAliases,
-    { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature },
-  ).then((result) => {
-    try {
-      stampCortexFreshnessSnapshot(userId, chatId, snapshot);
-    } catch (err) {
-      console.warn("[memory-cortex] Failed to stamp rebuild freshness state:", err);
-    }
-
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "complete",
-      ...(source ? { source } : {}),
-      ...result,
-    }, userId);
-  }).catch((err) => {
-    console.error(source === "warmup" ? "[memory-cortex] Warmup rebuild failed:" : "[memory-cortex] Rebuild failed:", err);
-    eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-      chatId,
-      status: "error",
-      ...(source ? { source } : {}),
-      error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
-    }, userId);
-  });
+    }).catch((err) => {
+      // Preempted by a superseding rebuild — that run owns the progress stream,
+      // so stay silent instead of flashing a spurious error in the UI.
+      if (abort.signal.aborted) return;
+      console.error(source === "warmup" ? "[memory-cortex] Warmup rebuild failed:" : "[memory-cortex] Rebuild failed:", err);
+      eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+        chatId,
+        status: "error",
+        ...(source ? { source } : {}),
+        error: err?.message || (source === "warmup" ? "Warmup failed" : "Rebuild failed"),
+      }, userId);
+    }).finally(() => {
+      // Only clear if we're still the active entry; a preemptor may have already
+      // replaced us in the registry.
+      if (cortexRebuildsInFlight.get(chatId) === entry) cortexRebuildsInFlight.delete(chatId);
+    }),
+  );
 }
 
 async function warmLongTermChatMemory(options: {

@@ -124,6 +124,11 @@ export interface CortexWarmupCoverage {
 export interface CortexRebuildOptions {
   resumable?: boolean;
   warmupSignature?: string;
+  /** Cooperative cancellation. When aborted (e.g. an explicit POST /rebuild
+   *  preempts an in-flight passive warmup), the worker loop stops pulling new
+   *  chunks and rebuildCortex rejects with the signal's abort reason instead of
+   *  racing the superseding run on the same chat's derived data. */
+  signal?: AbortSignal;
 }
 
 export interface CortexIngestionTimings {
@@ -1716,7 +1721,7 @@ export type RebuildPhase =
 
 interface RebuildState {
   chatId: string;
-  status: "processing" | "complete" | "error";
+  status: "processing" | "complete" | "error" | "superseded";
   current: number;
   total: number;
   percent: number;
@@ -1779,6 +1784,7 @@ export async function rebuildCortex(
   const warmupSignature = options.warmupSignature || getCortexStructuralSignature(config);
   const sidecarAvailable = shouldUseCortexSidecar(config) && !!generateRawFn && !!sidecarConnectionId;
   const sidecarAnalysisActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
+  const signal = options.signal;
   const db = getDb();
 
   console.info(
@@ -1842,6 +1848,7 @@ export async function rebuildCortex(
       state.phase = "heuristic_only";
       emit();
       for (let i = 0; i < chunks.length; i++) {
+        if (signal?.aborted) break;
         await processChunkFromRaw(
           chunks[i],
           chatId,
@@ -1890,6 +1897,7 @@ export async function rebuildCortex(
 
       async function processNextBatch(): Promise<void> {
         while (nextChunkIdx < chunks.length) {
+          if (signal?.aborted) return;
           const start = nextChunkIdx;
           const end = Math.min(start + chunkBatchSize, chunks.length);
           nextChunkIdx = end;
@@ -2028,6 +2036,10 @@ export async function rebuildCortex(
           }
 
           for (let i = 0; i < batch.length; i++) {
+            // Bail before persisting this batch if a superseding rebuild has
+            // preempted us — its clearDerivedCortexData + reprocess owns the
+            // chat now, so writing here would just be overwritten work.
+            if (signal?.aborted) return;
             const chunk = batch[i];
             try {
               const sidecarResult = sidecarResults[i];
@@ -2053,6 +2065,10 @@ export async function rebuildCortex(
       await Promise.all(workers);
     }
 
+    if (signal?.aborted) {
+      throw signal.reason ?? new DOMException("Cortex rebuild aborted", "AbortError");
+    }
+
     const entities = entityGraph.getEntities(chatId);
     const relations = entityGraph.getRelations(chatId);
 
@@ -2064,8 +2080,10 @@ export async function rebuildCortex(
 
     state.status = "complete";
     state.result = result;
-    // Keep state around for 5 minutes so reconnecting clients can see the result
-    setTimeout(() => activeRebuilds.delete(chatId), 5 * 60 * 1000);
+    // Keep state around for 5 minutes so reconnecting clients can see the
+    // result. Guard the delete: a stale timer must never evict a newer rebuild's
+    // state that has since replaced this one for the same chat.
+    setTimeout(() => { if (activeRebuilds.get(chatId) === state) activeRebuilds.delete(chatId); }, 5 * 60 * 1000);
 
     console.info(
       `[memory-cortex] ${resumable ? "Warmup" : "Rebuild"} complete: ${totalChunks} chunks, ${entities.length} entities, ${relations.length} relations`,
@@ -2073,9 +2091,12 @@ export async function rebuildCortex(
 
     return result;
   } catch (err: any) {
-    state.status = "error";
-    state.error = err?.message || "Rebuild failed";
-    setTimeout(() => activeRebuilds.delete(chatId), 60 * 1000);
+    // A deliberately superseded run (an explicit rebuild preempted this warmup)
+    // is not a failure — don't mark it "error" or the superseding run, which
+    // owns the chat's progress stream, gets shadowed by a spurious error state.
+    state.status = signal?.aborted ? "superseded" : "error";
+    if (!signal?.aborted) state.error = err?.message || "Rebuild failed";
+    setTimeout(() => { if (activeRebuilds.get(chatId) === state) activeRebuilds.delete(chatId); }, 60 * 1000);
     throw err;
   }
 }

@@ -1377,7 +1377,14 @@ export function upsertMention(
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
 
-  // Use INSERT OR REPLACE with the unique constraint on (entity_id, chunk_id)
+  // Idempotent upsert keyed on the (entity_id, chunk_id) UNIQUE index
+  // (idx_mm_entity_chunk). This MUST stay conflict-safe: cortex warmup/rebuild
+  // can persist the same chunk more than once — the batch fallback in
+  // rebuildCortex re-runs a chunk through processChunkFromRaw after a
+  // post-commit failure, and overlapping warmups for the same chat can race the
+  // in-flight guard. A plain INSERT here would throw "UNIQUE constraint failed:
+  // memory_mentions.entity_id, memory_mentions.chunk_id" on the second pass.
+  // Do NOT simplify this to a bare INSERT.
   db.query(
     `INSERT INTO memory_mentions (id, entity_id, chunk_id, chat_id, role, excerpt, sentiment, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
