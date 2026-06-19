@@ -214,6 +214,8 @@ export enum EventType {
   ROOM_TURN_SKIPPED = "ROOM_TURN_SKIPPED",
   ROOM_PRESENCE = "ROOM_PRESENCE",
   ROOM_ROUND_COMPLETE = "ROOM_ROUND_COMPLETE",
+  /** Host-only: a fresh remote invite code (auto-rolled after one is redeemed). */
+  ROOM_INVITE_CODE = "ROOM_INVITE_CODE",
 }
 
 export interface EventMessage {

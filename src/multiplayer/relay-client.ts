@@ -12,7 +12,9 @@
 import { mpidConfig } from "./config";
 import { deriveRoomSecret } from "./room-secret";
 import { mintHostToken } from "./mpid-token";
+import * as identityClient from "./identity-client";
 import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 import * as mp from "../services/multiplayer.service";
 
 const INITIAL_RECONNECT_MS = 1_000;
@@ -139,7 +141,17 @@ function handleRelayFrame(bridge: Bridge, raw: string): void {
   } catch {
     return;
   }
-  if (!frame || frame.v !== 1 || typeof frame.from !== "string") return;
+  if (!frame || frame.v !== 1) return;
+
+  // Server→host control frames carry no `from`. Currently: an invite was
+  // redeemed → roll a fresh code so the host always has an unused one to share.
+  if (frame.t === "ctrl") {
+    const d = frame.d as Record<string, any> | undefined;
+    if (d?.type === "invite_consumed") void cycleInviteCode(bridge.roomId);
+    return;
+  }
+
+  if (typeof frame.from !== "string") return;
   const memberId = frame.from;
   const d = frame.d as Record<string, any> | undefined;
   if (!d || typeof d.type !== "string") return;
@@ -191,4 +203,22 @@ function handleRelayFrame(bridge: Bridge, raw: string): void {
     default:
       break; // unknown action — ignore
   }
+}
+
+/**
+ * A peer redeemed the host's one-time code → mint a fresh one and push it to the
+ * host's OWN frontend (host user topic only — never the room, so peers never see
+ * invite codes). Best-effort: if the Identity Server is unreachable, the host's
+ * displayed code simply stays until it's regenerated manually.
+ */
+async function cycleInviteCode(roomId: string): Promise<void> {
+  const room = mp.getRoom(roomId);
+  if (!room) return;
+  const invite = await identityClient.createInvite(roomId);
+  if (!invite) return;
+  eventBus.emit(
+    EventType.ROOM_INVITE_CODE,
+    { roomId, code: invite.code, expiresAt: invite.expiresAt, server: mpidConfig.url },
+    room.host_user_id,
+  );
 }

@@ -50,6 +50,7 @@ export enum EventType {
   ROOM_TURN_SKIPPED = 'ROOM_TURN_SKIPPED',
   ROOM_PRESENCE = 'ROOM_PRESENCE',
   ROOM_ROUND_COMPLETE = 'ROOM_ROUND_COMPLETE',
+  ROOM_INVITE_CODE = 'ROOM_INVITE_CODE',
 
   // World Info
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
@@ -461,6 +462,11 @@ export interface RoomStatusPayload extends RoomBasePayload {
   characterAvatar?: string | null
   /** Present when a generation was streaming as the joining socket hydrated. */
   generation?: RoomHydrationGeneration | null
+}
+export interface RoomInviteCodePayload extends RoomBasePayload {
+  code: string
+  expiresAt?: number
+  server?: string
 }
 export interface RoomParticipantJoinedPayload extends RoomBasePayload {
   participant: RoomParticipant

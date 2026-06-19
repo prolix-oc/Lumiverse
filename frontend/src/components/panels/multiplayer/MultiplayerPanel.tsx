@@ -119,7 +119,10 @@ export default function MultiplayerPanel() {
   const [joinId, setJoinId] = useState('')
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState<{ token: string } | null>(null)
-  const [remoteCode, setRemoteCode] = useState<string | null>(null)
+  // Lives in the store (not local state) so the ROOM_INVITE_CODE handler can
+  // auto-roll it when a guest redeems the current code.
+  const remoteCode = useStore((s) => s.mpRemoteCode)
+  const setRemoteCode = useStore((s) => s.setRemoteCode)
 
   // Register with the Identity Server + open the relay bridge + mint a shareable
   // code, so the room is immediately "listening" for remote invites. Best-effort:

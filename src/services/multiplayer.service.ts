@@ -966,6 +966,10 @@ export function openFreeformWindow(hostUserId: string, roomId: string): Room | n
   const room = getRoom(roomId);
   if (!room || room.host_user_id !== hostUserId || room.status === "closed") return null;
   if (room.turn_strategy !== "freeform") return null;
+  // Self-heal: clear any stale in-progress flag left by a previously stopped or
+  // crashed generation, so a fresh window can always generate (belt-and-braces
+  // alongside the GENERATION_STOPPED cleanup listener).
+  freeformGenerating.delete(roomId);
   const deadline = Math.floor(Date.now() / 1000) + room.settings.freeformWindowSec;
   room.freeform_deadline = deadline;
   room.current_turn_participant_id = null;
@@ -1321,6 +1325,14 @@ export function initMultiplayer(): void {
     if (chatId && message?.is_user) onUserMessageSent(chatId);
   });
   eventBus.on(EventType.GENERATION_ENDED, (msg) => {
+    const chatId = msg.payload?.chatId;
+    if (chatId) onGenerationEnded(chatId);
+  });
+  // A STOPPED generation emits GENERATION_STOPPED, NOT GENERATION_ENDED, so the
+  // turn engine must clean up here too — otherwise `freeformGenerating` /
+  // `armedRooms` leak and the room's turn flow is permanently stuck (no future
+  // freeform window can generate). Same cleanup as a normal end.
+  eventBus.on(EventType.GENERATION_STOPPED, (msg) => {
     const chatId = msg.payload?.chatId;
     if (chatId) onGenerationEnded(chatId);
   });

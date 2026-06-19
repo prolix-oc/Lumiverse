@@ -43,6 +43,7 @@ import type {
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
   RoomStatusPayload,
+  RoomInviteCodePayload,
   RoomParticipantJoinedPayload,
   RoomParticipantLeftPayload,
   RoomParticipantKickedPayload,
@@ -1527,6 +1528,14 @@ export function useWebSocket() {
           state.clearRoom()
           toast.info(i18n.t('multiplayer.roomClosed', { defaultValue: 'The room was closed by the host' }))
         }
+      }),
+
+      wsClient.on(EventType.ROOM_INVITE_CODE, (payload: RoomInviteCodePayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        // A guest redeemed the shared code → the host auto-rolled a fresh one.
+        state.setRemoteCode(payload.code)
+        toast.info(i18n.t('multiplayer.inviteRolled', { defaultValue: 'Invite used — a new code is ready to share' }))
       }),
 
       wsClient.on(EventType.ROOM_PARTICIPANT_JOINED, (payload: RoomParticipantJoinedPayload) => {

@@ -255,6 +255,11 @@ export default function InputArea({ chatId }: InputAreaProps) {
   const startStreaming = useStore((s) => s.startStreaming)
   const stopStreaming = useStore((s) => s.stopStreaming)
   const setStreamingError = useStore((s) => s.setStreamingError)
+  const mpRoomId = useStore((s) => s.mpRoomId)
+  const mpIsHost = useStore((s) => s.mpIsHost)
+  // A non-host room peer can't stop the host's generation (it isn't theirs) —
+  // used to suppress the stop control so they can't trigger a no-op/stuck state.
+  const isRoomPeer = !!mpRoomId && !mpIsHost
   const openModal = useStore((s) => s.openModal)
   const setSetting = useStore((s) => s.setSetting)
 
@@ -973,7 +978,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
   // Document-level Escape to stop generation
   useEffect(() => {
     const handleEscape = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && isStreaming) {
+      // Peers can't stop the host's generation — ignore Escape for them.
+      if (e.key === 'Escape' && isStreaming && !isRoomPeer) {
         e.preventDefault()
         e.stopPropagation()
         generateApi.stop(activeGenerationId || undefined, chatId).catch(console.error)
@@ -985,7 +991,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     }
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
   useEffect(() => {
     if (openPopover !== 'persona') return
@@ -1136,8 +1142,38 @@ export default function InputArea({ chatId }: InputAreaProps) {
     return false
   }, [messages])
 
+  // Multiplayer room send. Returns 'sent' (routed to the room — caller stops),
+  // 'blocked' (off-turn / closed freeform window — caller stops), or 'local'
+  // (not in a room, or host in round-robin → caller does its normal local
+  // send/queue). Shared by send AND queue so both are turn/window-gated
+  // identically — queueing must not be a bypass.
+  const attemptRoomSend = useCallback((): 'sent' | 'blocked' | 'local' => {
+    const mp = useStore.getState()
+    if (!mp.mpRoomId) return 'local'
+    if (!mp.isMyTurn()) {
+      toast.info(mp.mpTurnStrategy === 'freeform' ? 'The freeform window is closed' : 'Wait for your turn')
+      return 'blocked'
+    }
+    // The host in round-robin sends locally (owns the chat); everyone else —
+    // peers always, and the host during a freeform window — submits via the room.
+    const hostFreeformContribution = mp.mpIsHost && mp.mpTurnStrategy === 'freeform'
+    if (mp.mpIsHost && !hostFreeformContribution) return 'local'
+    const roomContent = text.trim()
+    if (!roomContent) return 'blocked'
+    sendRoomAction({ type: 'room_message', content: roomContent })
+    setText('')
+    if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+    requestAnimationFrame(() => {
+      if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
+    })
+    return 'sent'
+  }, [text, chatId, saveDraftInput, resizeTextarea])
+
   const handleQueueMessage = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
+    // In a room, queueing IS sending — gate by turn/window + route through the
+    // host (peers can't write to the chat directly).
+    if (attemptRoomSend() !== 'local') return
     const content = text.trim()
     const attachments = pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
@@ -1180,37 +1216,14 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, isTemporaryChat, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend])
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isStreaming) return
 
-    // Multiplayer: in a room, gate by turn. Non-host participants send through
-    // the room (the host's instance writes the message + runs generation). The
-    // host ALSO submits through the room during a freeform window — so the bot
-    // reply waits until every participant has contributed — but in round-robin
-    // the host falls through to the normal owner send+generate path on its turn.
-    {
-      const mp = useStore.getState()
-      if (mp.mpRoomId) {
-        if (!mp.isMyTurn()) {
-          toast.info(mp.mpTurnStrategy === 'freeform' ? 'The freeform window is closed' : 'Wait for your turn')
-          return
-        }
-        const hostFreeformContribution = mp.mpIsHost && mp.mpTurnStrategy === 'freeform'
-        if (!mp.mpIsHost || hostFreeformContribution) {
-          const roomContent = text.trim()
-          if (!roomContent) return
-          sendRoomAction({ type: 'room_message', content: roomContent })
-          setText('')
-          if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
-          requestAnimationFrame(() => {
-            if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
-          })
-          return
-        }
-      }
-    }
+    // Multiplayer: route through the room (turn/window-gated) unless we're the
+    // host in round-robin, who sends locally on their own chat.
+    if (attemptRoomSend() !== 'local') return
 
     const content = text.trim()
     const attachments = pendingAttachments.length > 0
@@ -1343,7 +1356,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isStreaming, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea])
+  }, [text, chatId, isStreaming, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, characters, setMentionQueue, resizeTextarea, attemptRoomSend])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1546,6 +1559,8 @@ export default function InputArea({ chatId }: InputAreaProps) {
 
   const handleStop = useCallback(async () => {
     if (!isStreaming) return
+    // Peers don't own the host's generation — stopping is the host's to do.
+    if (isRoomPeer) return
     try {
       // Stop the specific generation when we know its ID; the chat id lets the
       // backend fall back to the chat's active generation if the ID is stale
@@ -1558,7 +1573,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
     if (!activeGenerationId) {
       stopStreaming()
     }
-  }, [isStreaming, activeGenerationId, chatId, stopStreaming])
+  }, [isStreaming, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
   const handleNewChat = useCallback(async () => {
     // For group chats, open group creator pre-populated with current members
@@ -3089,7 +3104,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
             />
           </div>
 
-          {isStreaming ? (
+          {isStreaming && !isRoomPeer ? (
             <button
               type="button"
               className={clsx(styles.sendBtn, styles.sendBtnStop)}

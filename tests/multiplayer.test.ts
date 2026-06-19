@@ -234,6 +234,28 @@ describe("multiplayer turn engine", () => {
     expect(mp.getRoom(room.id)!.freeform_deadline).toBeNull();
   });
 
+  test("freeform recovers after a stopped/crashed generation — a new window generates again", () => {
+    const { room } = makeRoom("freeform");
+    const hostP = mp.getRoomStateForHost(HOST, room.id)!.participants[0].id;
+    const peerA = joinPeer(room.id, "peerA", "Ada");
+
+    // Round 1: open + everyone submits → generation fires, window closes.
+    mp.openFreeformWindow(HOST, room.id);
+    mp.submitPeerMessage(room.id, peerA, "a1");
+    mp.submitPeerMessage(room.id, hostP, "h1");
+    expect(mp.getRoom(room.id)!.freeform_deadline).toBeNull();
+
+    // That generation never completes here (no LLM in tests) and — simulating a
+    // STOP/crash — never fires GENERATION_ENDED, so the in-progress flag is left
+    // set. A new window must still be able to generate (otherwise the room's
+    // freeform is permanently stuck — the reported "cannot recover" state).
+    mp.openFreeformWindow(HOST, room.id);
+    expect(mp.getRoom(room.id)!.freeform_deadline).not.toBeNull();
+    mp.submitPeerMessage(room.id, peerA, "a2");
+    mp.submitPeerMessage(room.id, hostP, "h2");
+    expect(mp.getRoom(room.id)!.freeform_deadline).toBeNull();
+  });
+
   test("freeform: a holdout leaving lets the remaining submitters trigger the round", () => {
     const { room } = makeRoom("freeform");
     const hostP = mp.getRoomStateForHost(HOST, room.id)!.participants[0].id;
