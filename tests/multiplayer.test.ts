@@ -430,6 +430,25 @@ describe("multiplayer turn engine", () => {
     expect(mp.buildHydrationPayload(room, "self").characterAvatar).toBe(webp);
   });
 
+  test("hydration is trimmed to fit under the relay frame cap", () => {
+    const character = charactersSvc.createCharacter(HOST, { name: "Bot" });
+    const chat = chatsSvc.createChat(HOST, { character_id: character.id });
+    const result = mp.createRoom(HOST, chat.id, {});
+    if ("error" in result) throw new Error("createRoom failed");
+
+    // Insert way more message data than a single 256 KB frame can hold.
+    const big = "x".repeat(4000);
+    for (let i = 0; i < 100; i++) {
+      chatsSvc.createMessage(chat.id, { is_user: true, name: "U", content: big }, HOST);
+    }
+
+    const hy = mp.buildHydrationPayload(result, "self");
+    const bytes = new TextEncoder().encode(JSON.stringify(hy)).length;
+    expect(bytes).toBeLessThan(256 * 1024); // fits the relay cap (no silent drop)
+    expect(hy.messages.length).toBeLessThan(100); // oldest were trimmed
+    expect(hy.messages.length).toBeGreaterThan(0); // but the recent tail is kept
+  });
+
   test("peer cannot invoke host controls", () => {
     const { room } = makeRoom("round_robin");
     const peerA = joinPeer(room.id, "peerA", "Ada");

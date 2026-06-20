@@ -63,6 +63,10 @@ export type SubmitResult =
   | { ok: false; reason: "not_found" | "not_your_turn" | "closed" | "kicked" | "invalid" | "too_large" };
 
 const HYDRATION_MESSAGE_TAIL = 100;
+// Headroom under the relay's (learned) frame cap for the frame wrapper + JSON
+// overhead — hydration is trimmed to (cap - this) so the wrapped relay frame
+// never exceeds the cap (which the relay silently drops).
+const HYDRATION_FRAME_HEADROOM = 26 * 1024;
 
 // ─── row mapping ────────────────────────────────────────────────────────────────
 
@@ -663,19 +667,31 @@ export function buildHydrationPayload(room: Room, selfParticipantId: string): {
   messages: Message[];
   generation: HydrationGeneration | null;
 } {
-  const messages = chatsSvc.getMessages(room.host_user_id, room.chat_id).slice(-HYDRATION_MESSAGE_TAIL);
   const chat = chatsSvc.getChat(room.host_user_id, room.chat_id);
   const character = chat?.character_id ? charactersSvc.getCharacter(room.host_user_id, chat.character_id) : null;
-  return {
+  const base = {
     chatId: room.chat_id,
     roomId: room.id,
     chatName: chat?.name || "",
     characterName: character?.name || "",
     characterAvatar: roomCharacterAvatars.get(room.id) ?? null,
     room: buildRoomStateView(room, { selfParticipantId }),
-    messages,
-    generation: buildInFlightGeneration(room),
   };
+
+  // The relay silently DROPS any frame over MAX_FRAME_BYTES (256 KB), leaving the
+  // peer unhydrated ("couldn't reach the host"). Participant + character avatars
+  // are a fixed cost in the room state, so fit the rest under a safe budget:
+  // trim the oldest messages first, then drop the in-flight generation snapshot.
+  const budget = mpidConfig.maxFrameBytes - HYDRATION_FRAME_HEADROOM;
+  let messages = chatsSvc.getMessages(room.host_user_id, room.chat_id).slice(-HYDRATION_MESSAGE_TAIL);
+  let generation = buildInFlightGeneration(room);
+  const payloadBytes = () => Buffer.byteLength(JSON.stringify({ ...base, generation, messages }), "utf8");
+  while (messages.length > 0 && payloadBytes() > budget) {
+    messages = messages.slice(Math.max(1, Math.ceil(messages.length / 4))); // drop ~25% oldest
+  }
+  if (generation && payloadBytes() > budget) generation = null;
+
+  return { ...base, messages, generation };
 }
 
 // ─── Peer-side "joined room" shadow chat (adds the room to the peer's history) ──

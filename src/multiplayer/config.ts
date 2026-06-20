@@ -35,4 +35,20 @@ export const mpidConfig = {
   get relayWsUrl(): string {
     return this.url.replace(/^http/, "ws") + "/relay";
   },
+
+  /**
+   * The relay's max frame size, LEARNED from the Identity Server's register
+   * response. Starts conservative (256 KB — the pre-advertise default) so an
+   * older server never makes us overflow; a newer server advertises a higher
+   * cap. The hydration builder sizes its payload to fit under this.
+   */
+  _maxFrameBytes: 256 * 1024,
+  get maxFrameBytes(): number {
+    return this._maxFrameBytes;
+  },
+  setMaxFrameBytes(n: unknown): void {
+    if (typeof n === "number" && Number.isFinite(n) && n >= 64 * 1024) {
+      this._maxFrameBytes = Math.min(n, 4 * 1024 * 1024);
+    }
+  },
 };

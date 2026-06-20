@@ -66,6 +66,15 @@ export async function registerRoom(
         }),
       }),
     );
+    if (res.ok) {
+      // Learn the relay's frame cap so hydration is sized to fit it.
+      try {
+        const body = (await res.json()) as { maxFrameBytes?: number };
+        mpidConfig.setMaxFrameBytes(body?.maxFrameBytes);
+      } catch {
+        /* keep the conservative default */
+      }
+    }
     return res.ok;
   } catch (err) {
     console.warn("[mp-remote] registerRoom failed:", err instanceof Error ? err.message : err);

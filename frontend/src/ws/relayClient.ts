@@ -31,6 +31,10 @@ const MAX_RECONNECT_ATTEMPTS = 8
 // to the relay but never landed in the room" cases (host offline / bridge down,
 // silent host-side rejection, dropped/oversized hydration frame).
 const JOIN_TIMEOUT_MS = 10_000
+// Re-announce room_join this many times on timeout before giving up — covers a
+// host whose relay bridge was momentarily down/reconnecting when we first joined
+// (our room_join is dropped while no host is attached to the relay).
+const MAX_JOIN_ATTEMPTS = 2
 
 let ws: WebSocket | null = null
 let joinProfile: { displayName?: string; persona?: PersonaSnapshot | null } = {}
@@ -41,6 +45,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let joinTimer: ReturnType<typeof setTimeout> | null = null
 let hydrated = false
+let joinAttempts = 0
 let reconnectMs = INITIAL_RECONNECT_MS
 let reconnectAttempts = 0
 let lastFrameAt = 0
@@ -70,6 +75,15 @@ function clearJoinTimer(): void {
 function onJoinTimeout(): void {
   joinTimer = null
   if (hydrated) return
+  // Still connected to the relay but no room state — the host's bridge may have
+  // been mid-reconnect when our join landed (room_join is dropped if no host is
+  // attached). Re-announce a few times before giving up.
+  if (isActive() && joinAttempts < MAX_JOIN_ATTEMPTS) {
+    joinAttempts += 1
+    sendAction({ type: 'room_join', displayName: joinProfile.displayName, persona: joinProfile.persona })
+    joinTimer = setTimeout(onJoinTimeout, JOIN_TIMEOUT_MS)
+    return
+  }
   if (useStore.getState().mpChatId) {
     // We had been in the room (a reconnect that didn't re-hydrate) — keep retrying.
     dropAndReconnect()
@@ -132,6 +146,7 @@ function openSocket(grant: JoinGrant): void {
     sendAction({ type: 'room_join', displayName: joinProfile.displayName, persona: joinProfile.persona })
     // Expect hydration (ROOM_STATUS) shortly — otherwise the join silently failed.
     hydrated = false
+    joinAttempts = 0
     clearJoinTimer()
     joinTimer = setTimeout(onJoinTimeout, JOIN_TIMEOUT_MS)
   }
