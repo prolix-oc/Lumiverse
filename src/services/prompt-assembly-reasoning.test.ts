@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { applyProviderReasoningOffSwitch } from "./prompt-assembly.service";
+import { applyProviderReasoningOffSwitch, injectReasoningParams } from "./prompt-assembly.service";
 
 describe("applyProviderReasoningOffSwitch", () => {
   test("removes generic reasoning fields for OpenAI-compatible providers", () => {
@@ -61,5 +61,44 @@ describe("applyProviderReasoningOffSwitch", () => {
     expect(params.reasoning).toEqual({ exclude: true });
     expect(params.reasoning_effort).toBeUndefined();
     expect(params.max_tokens).toBe(256);
+  });
+
+  test("disables Bedrock reasoning via reasoning_effort none", () => {
+    const params: Record<string, any> = {
+      reasoning: { effort: "high" },
+      reasoning_effort: "high",
+      temperature: 0.6,
+    };
+
+    applyProviderReasoningOffSwitch(params, "bedrock");
+
+    expect(params.reasoning).toBeUndefined();
+    expect(params.reasoning_effort).toBe("none");
+    expect(params.temperature).toBe(0.6);
+  });
+});
+
+describe("injectReasoningParams (bedrock)", () => {
+  test("sets top-level reasoning_effort and omits the generic reasoning object", () => {
+    const params: Record<string, any> = {};
+    injectReasoningParams(params, "bedrock", "medium", "us.anthropic.claude-sonnet-4-6");
+    expect(params.reasoning_effort).toBe("medium");
+    expect(params.reasoning).toBeUndefined();
+  });
+
+  test("clamps higher tiers (xhigh/max) down to high", () => {
+    const xhigh: Record<string, any> = {};
+    injectReasoningParams(xhigh, "bedrock", "xhigh", "openai.gpt-oss-120b");
+    expect(xhigh.reasoning_effort).toBe("high");
+
+    const max: Record<string, any> = {};
+    injectReasoningParams(max, "bedrock", "max", "openai.gpt-oss-120b");
+    expect(max.reasoning_effort).toBe("high");
+  });
+
+  test("does not override an explicit reasoning_effort", () => {
+    const params: Record<string, any> = { reasoning_effort: "low" };
+    injectReasoningParams(params, "bedrock", "high", "openai.gpt-oss-120b");
+    expect(params.reasoning_effort).toBe("low");
   });
 });

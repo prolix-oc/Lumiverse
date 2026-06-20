@@ -21,6 +21,7 @@ import { SiliconFlowProvider } from "./providers/siliconflow";
 import { InfermaticProvider } from "./providers/infermatic";
 import { CustomProvider } from "./providers/custom";
 import { GoogleVertexProvider } from "./providers/google-vertex";
+import { BedrockProvider } from "./providers/bedrock";
 
 const providers = new Map<string, LlmProvider>();
 
@@ -45,6 +46,7 @@ registerProvider(new OpenAIProvider());
 registerProvider(new AnthropicProvider());
 registerProvider(new GoogleProvider());
 registerProvider(new GoogleVertexProvider());
+registerProvider(new BedrockProvider());
 registerProvider(new OpenRouterProvider());
 registerProvider(new DeepSeekProvider());
 registerProvider(new ChutesProvider());

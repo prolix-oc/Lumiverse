@@ -74,7 +74,7 @@ export default function ViewportDrawer() {
     }
   }, [updateTabListScroll])
 
-  const showTabLabels = drawerSettings.showTabLabels ?? false
+  const showTabLabels = drawerSettings.showTabLabels ?? true
   const hiddenTabIds = sanitizeHiddenDrawerTabIds(drawerSettings.hiddenTabIds)
   const hiddenTabIdsSet = new Set(hiddenTabIds)
   const tabOrder = sanitizeDrawerTabOrder(drawerSettings.tabOrder)

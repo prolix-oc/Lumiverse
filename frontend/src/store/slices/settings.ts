@@ -280,7 +280,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     tabSize: 'large',
     panelWidthMode: 'default',
     customPanelWidth: 35,
-    showTabLabels: false,
+    showTabLabels: true,
     hiddenTabIds: [],
     tabOrder: [],
   },

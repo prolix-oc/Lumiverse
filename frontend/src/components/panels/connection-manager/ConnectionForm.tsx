@@ -53,6 +53,19 @@ const VERTEX_REGIONS = [
   'northamerica-northeast1', 'australia-southeast1', 'global',
 ]
 
+const BEDROCK_REGIONS = [
+  'us-east-1', 'us-east-2', 'us-west-2',
+  'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1', 'eu-north-1',
+  'ap-south-1', 'ap-southeast-1', 'ap-southeast-2',
+  'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
+  'ca-central-1', 'sa-east-1',
+]
+
+const BEDROCK_ENDPOINTS = [
+  { value: 'mantle', label: 'Mantle (recommended)' },
+  { value: 'runtime', label: 'Runtime (cross-region profiles)' },
+]
+
 export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const { t } = useTranslation('panels')
   const anthropicCacheTtlOptions = [
@@ -101,6 +114,12 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [saFileName, setSaFileName] = useState<string | null>(profile?.metadata?.sa_file_name || null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Amazon Bedrock specific state
+  const [bedrockRegion, setBedrockRegion] = useState(profile?.metadata?.region || 'us-east-1')
+  const [bedrockEndpoint, setBedrockEndpoint] = useState<'mantle' | 'runtime'>(
+    profile?.metadata?.bedrock_endpoint === 'runtime' ? 'runtime' : 'mantle'
+  )
+
   // OpenRouter specific state
   const [openrouterSettings, setOpenrouterSettings] = useState<OpenRouterConnectionSettings>(
     profile?.metadata?.openrouter || {}
@@ -114,6 +133,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const urlPlaceholder = selectedProvider?.default_url || 'https://api.openai.com/v1'
   const isVertexAI = provider === 'google_vertex'
   const isPollinations = provider === 'pollinations'
+  const isBedrock = provider === 'bedrock'
 
   const fetchModels = useCallback(async () => {
     setModelsLoading(true)
@@ -132,11 +152,15 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       if (isVertexAI) {
         metadata.vertex_region = vertexRegion
       }
+      if (isBedrock) {
+        metadata.region = bedrockRegion
+        metadata.bedrock_endpoint = bedrockEndpoint
+      }
 
       const result = await connectionsApi.previewModels({
         connection_id: profile?.id,
         provider,
-        api_url: isVertexAI ? undefined : (apiUrl.trim() || undefined),
+        api_url: (isVertexAI || isBedrock) ? undefined : (apiUrl.trim() || undefined),
         metadata,
         api_key: apiKey.trim() || undefined,
       })
@@ -148,7 +172,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, isVertexAI, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion])
+  }, [apiKey, apiUrl, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
 
   useEffect(() => {
     if (profile?.id) fetchModels()
@@ -246,7 +270,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const isOpenRouter = provider === 'openrouter'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
-  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI
+  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI || isBedrock
   const normalizedBoundReasoningSettings = normalizeReasoningSettingsForProvider(boundReasoningSettings, provider, model)
   const normalizedCurrentReasoningSettings = normalizeReasoningSettingsForProvider(reasoningSettings, provider, model)
   const bindingMatchesCurrent = areReasoningSettingsEqual(normalizedBoundReasoningSettings, normalizedCurrentReasoningSettings)
@@ -350,6 +374,13 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       metadata.vertex_region = vertexRegion
       if (saFileName) metadata.sa_file_name = saFileName
     }
+    if (isBedrock) {
+      metadata.region = bedrockRegion
+      metadata.bedrock_endpoint = bedrockEndpoint
+    } else {
+      delete metadata.region
+      delete metadata.bedrock_endpoint
+    }
     if (isOpenRouter) {
       // Only persist non-empty settings
       const hasRouting = openrouterSettings.provider_routing && Object.values(openrouterSettings.provider_routing).some((v) =>
@@ -365,9 +396,9 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       delete metadata.openrouter
     }
 
-    // For Vertex AI the backend ignores `api_url` entirely and builds the
-    // host from `metadata.vertex_region`, so we don't persist a value here.
-    const resolvedApiUrl = isVertexAI ? undefined : (apiUrl.trim() || undefined)
+    // For Vertex AI and Bedrock the backend ignores `api_url` entirely and
+    // builds the host from metadata (region / endpoint), so we don't persist one.
+    const resolvedApiUrl = (isVertexAI || isBedrock) ? undefined : (apiUrl.trim() || undefined)
 
     onSave({
       name: name.trim(),
@@ -378,7 +409,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
 
   return (
     <div className={styles.form}>
@@ -446,7 +477,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
               </div>
             </FormField>
           )}
-          <FormField label={t('connectionForm.apiKey')} hint={profile?.has_api_key ? t('connectionForm.keyAlreadySet') : undefined}>
+          <FormField label={t('connectionForm.apiKey')} hint={profile?.has_api_key ? t('connectionForm.keyAlreadySet') : isBedrock ? t('connectionForm.bedrockApiKeyHint') : undefined}>
             <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : t('connectionForm.enterApiKey')} type="password" />
           </FormField>
         </>
@@ -457,6 +488,24 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
         </FormField>
       )}
+      {isBedrock && (
+        <>
+          <FormField label={t('connectionForm.region')} hint={t('connectionForm.bedrockRegionHint')}>
+            <Select
+              value={bedrockRegion}
+              onChange={setBedrockRegion}
+              options={BEDROCK_REGIONS.map((r) => ({ value: r, label: r }))}
+            />
+          </FormField>
+          <FormField label={t('connectionForm.bedrockEndpoint')} hint={t('connectionForm.bedrockEndpointHint')}>
+            <Select
+              value={bedrockEndpoint}
+              onChange={(v) => setBedrockEndpoint(v as 'mantle' | 'runtime')}
+              options={BEDROCK_ENDPOINTS}
+            />
+          </FormField>
+        </>
+      )}
       <FormField label={t('connectionForm.model')} hint={t('connectionForm.modelHint')}>
         <ModelCombobox
           value={model}
@@ -466,7 +515,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           loading={modelsLoading}
           onRefresh={fetchModels}
           appearance="standard"
-          placeholder={isVertexAI ? 'gemini-2.5-flash' : 'gpt-4o'}
+          placeholder={isVertexAI ? 'gemini-2.5-flash' : isBedrock ? 'us.anthropic.claude-sonnet-4-6' : 'gpt-4o'}
         />
       </FormField>
       <FormField label="">

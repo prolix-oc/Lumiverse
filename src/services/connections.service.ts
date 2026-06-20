@@ -146,6 +146,16 @@ export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: st
     if (!region || region === "global") return "https://aiplatform.googleapis.com";
     return `https://${region}-aiplatform.googleapis.com`;
   }
+  if (profile.provider === "bedrock") {
+    // An explicit api_url wins so power users can pin a GovCloud or VPC
+    // PrivateLink host; otherwise derive from region + endpoint toggle.
+    if (url) return url;
+    const region = (profile.metadata?.region || "us-east-1").trim() || "us-east-1";
+    // mantle (default, recommended) vs runtime (cross-region inference profiles).
+    return profile.metadata?.bedrock_endpoint === "runtime"
+      ? `https://bedrock-runtime.${region}.amazonaws.com/v1`
+      : `https://bedrock-mantle.${region}.api.aws/v1`;
+  }
   return url;
 }
 

@@ -5621,6 +5621,9 @@ function buildParameters(
  *                thinking on `:thinking`-suffixed models when the user disables
  *                API reasoning (the `:thinking` suffix activates reasoning
  *                server-side regardless of `reasoning_effort`).
+ * - Bedrock:     reasoning_effort (top-level OpenAI Chat Completions string).
+ *                Bedrock maps it to each model's native mechanism (gpt-oss
+ *                reasoning, Claude thinking, etc.). Valid: none/minimal/low/medium/high.
  * - Moonshot:    thinking: { type: "enabled" } — toggle-only, effort ignored
  * - Z.AI:        thinking: { type: "enabled" } — toggle-only, effort ignored
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
@@ -5754,6 +5757,19 @@ export function injectReasoningParams(
     if (!params.thinking) {
       params.thinking = { type: "enabled" };
     }
+  } else if (providerName === "bedrock") {
+    // Bedrock's OpenAI-compatible Chat Completions endpoint exposes a single
+    // top-level `reasoning_effort` string that it maps to each model family's
+    // native mechanism (gpt-oss reasoning; Claude thinking.budget_tokens or
+    // adaptive thinking; etc.). Valid values: none/minimal/low/medium/high — our
+    // higher tiers (xhigh/max) clamp down to high.
+    if (params.reasoning_effort === undefined) {
+      const validEfforts = new Set(["none", "minimal", "low", "medium", "high"]);
+      params.reasoning_effort = validEfforts.has(effort) ? effort : "high";
+    }
+    // The generic `reasoning: { effort }` object isn't part of the Chat
+    // Completions schema Bedrock accepts — make sure it isn't sent.
+    delete params.reasoning;
   } else {
     // Generic OpenAI-compatible providers (OpenAI, xAI, etc.)
     // reasoning: { effort } is the standard format for reasoning-capable models.
@@ -5799,6 +5815,13 @@ export function applyProviderReasoningOffSwitch(
   }
 
   delete params.output_config;
+
+  if (providerName === "bedrock") {
+    // Bedrock reasoning models (gpt-oss, Claude, …) default to low reasoning
+    // when `reasoning_effort` is omitted, so explicitly send "none" to disable.
+    params.reasoning_effort = "none";
+    return;
+  }
 
   if (providerName === "deepseek") {
     params.thinking = { type: "disabled" };

@@ -5,6 +5,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   anthropic: '#d97757',
   google: '#4285f4',
   google_vertex: '#34a853',
+  bedrock: '#ff9900',
   openrouter: '#6366f1',
   infermatic: '#8b5cf6',
   nanogpt: '#10b981',

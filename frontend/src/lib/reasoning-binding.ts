@@ -57,6 +57,19 @@ const NANOGPT_EFFORTS: EffortOption[] = [
   { value: 'high', label: 'High' },
 ]
 
+// Amazon Bedrock's OpenAI-compatible endpoint exposes a single `reasoning_effort`
+// string (none/minimal/low/medium/high) that it maps to each model family's
+// native mechanism — gpt-oss reasoning, Claude thinking.budget_tokens / adaptive
+// thinking, etc. — so one flat list covers every Bedrock model.
+const BEDROCK_EFFORTS: EffortOption[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'none', label: 'None (disabled)' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+]
+
 const GENERIC_EFFORTS: EffortOption[] = [
   { value: 'auto', label: 'Auto' },
   { value: 'low', label: 'Low' },
@@ -88,6 +101,8 @@ export function getEffortOptions(provider: string | null | undefined, model: str
       return model && /claude-opus-4[-.](7|8)/i.test(model) ? ANTHROPIC_OPUS_XHIGH_EFFORTS : ANTHROPIC_EFFORTS
     case 'nanogpt':
       return NANOGPT_EFFORTS
+    case 'bedrock':
+      return BEDROCK_EFFORTS
     case 'moonshot':
     case 'zai':
       return TOGGLE_ONLY_EFFORTS
