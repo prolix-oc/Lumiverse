@@ -41,7 +41,12 @@ async function hostAuth(roomId: string): Promise<string> {
 
 export async function registerRoom(
   roomId: string,
-  opts: { displayName?: string; reachability?: "relay-only" | "direct"; advertisedUrl?: string | null } = {},
+  opts: {
+    displayName?: string;
+    reachability?: "relay-only" | "direct";
+    advertisedUrl?: string | null;
+    maxPeers?: number;
+  } = {},
 ): Promise<boolean> {
   if (!mpidConfig.enabled) return false;
   try {
@@ -57,6 +62,7 @@ export async function registerRoom(
           displayName: opts.displayName,
           reachability: opts.reachability ?? "relay-only",
           advertisedUrl: opts.advertisedUrl ?? null,
+          maxPeers: opts.maxPeers,
         }),
       }),
     );
@@ -131,12 +137,17 @@ export async function reconnect(reconnectToken: string): Promise<JoinGrant | nul
   }
 }
 
-export async function heartbeat(roomId: string, reachability?: string, advertisedUrl?: string | null): Promise<boolean> {
+export async function heartbeat(
+  roomId: string,
+  reachability?: string,
+  advertisedUrl?: string | null,
+  maxPeers?: number,
+): Promise<boolean> {
   if (!mpidConfig.enabled) return false;
   try {
     const res = await safeFetch(
       `${mpidConfig.url}/rooms/${roomId}/heartbeat`,
-      baseOpts({ method: "POST", headers: { authorization: await hostAuth(roomId), "content-type": "application/json" }, body: JSON.stringify({ reachability, advertisedUrl }) }),
+      baseOpts({ method: "POST", headers: { authorization: await hostAuth(roomId), "content-type": "application/json" }, body: JSON.stringify({ reachability, advertisedUrl, maxPeers }) }),
     );
     return res.ok;
   } catch {

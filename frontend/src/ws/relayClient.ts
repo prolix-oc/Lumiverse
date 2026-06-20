@@ -26,6 +26,11 @@ const LIVENESS_TIMEOUT_MS = 60_000
 const INITIAL_RECONNECT_MS = 1_000
 const MAX_RECONNECT_MS = 30_000
 const MAX_RECONNECT_ATTEMPTS = 8
+// How long to wait, after announcing `room_join`, for the host's hydration
+// (ROOM_STATUS) before declaring the join failed. Catches the silent "connected
+// to the relay but never landed in the room" cases (host offline / bridge down,
+// silent host-side rejection, dropped/oversized hydration frame).
+const JOIN_TIMEOUT_MS = 10_000
 
 let ws: WebSocket | null = null
 let joinProfile: { displayName?: string; persona?: PersonaSnapshot | null } = {}
@@ -34,6 +39,8 @@ let joinProfile: { displayName?: string; persona?: PersonaSnapshot | null } = {}
 let reconnectToken: string | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let joinTimer: ReturnType<typeof setTimeout> | null = null
+let hydrated = false
 let reconnectMs = INITIAL_RECONNECT_MS
 let reconnectAttempts = 0
 let lastFrameAt = 0
@@ -49,6 +56,25 @@ function stopHeartbeat(): void {
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
+  }
+}
+
+function clearJoinTimer(): void {
+  if (joinTimer) {
+    clearTimeout(joinTimer)
+    joinTimer = null
+  }
+}
+
+/** No hydration arrived after announcing room_join — the join silently failed. */
+function onJoinTimeout(): void {
+  joinTimer = null
+  if (hydrated) return
+  if (useStore.getState().mpChatId) {
+    // We had been in the room (a reconnect that didn't re-hydrate) — keep retrying.
+    dropAndReconnect()
+  } else {
+    giveUp('Couldn’t reach the host — they may be offline. Try joining again in a moment.')
   }
 }
 
@@ -96,13 +122,18 @@ function openSocket(grant: JoinGrant): void {
 
   sock.onopen = () => {
     if (ws !== sock) return // superseded
-    reconnectMs = INITIAL_RECONNECT_MS
-    reconnectAttempts = 0
+    // NB: do NOT reset the reconnect counters here — a socket that opens but
+    // never hydrates (host offline / bridge down) must still count as a failed
+    // attempt, else it loops forever. They reset on hydration (real success).
     startHeartbeat()
     useStore.getState().setRoomConnStatus('connected')
     // Announce ourselves so the host (re-)materializes our participant + hydrates
     // us. On a reconnect this re-attaches the SAME member → same turn slot.
     sendAction({ type: 'room_join', displayName: joinProfile.displayName, persona: joinProfile.persona })
+    // Expect hydration (ROOM_STATUS) shortly — otherwise the join silently failed.
+    hydrated = false
+    clearJoinTimer()
+    joinTimer = setTimeout(onJoinTimeout, JOIN_TIMEOUT_MS)
   }
 
   sock.onmessage = (e) => {
@@ -117,6 +148,14 @@ function openSocket(grant: JoinGrant): void {
     if (!frame || frame.v !== 1) return
     const d = frame.d
     if (d && typeof d.event === 'string') {
+      // Room hydration arrived → the join landed. Cancel the failure timer and
+      // reset the reconnect counters (this is the real success signal).
+      if (d.event === 'ROOM_STATUS' && d.payload?.room) {
+        hydrated = true
+        clearJoinTimer()
+        reconnectAttempts = 0
+        reconnectMs = INITIAL_RECONNECT_MS
+      }
       wsClient.dispatchExternal(d.event, d.payload)
     }
   }
@@ -125,6 +164,7 @@ function openSocket(grant: JoinGrant): void {
     if (ws !== sock) return // stale socket's late close — ignore
     ws = null
     stopHeartbeat()
+    clearJoinTimer()
     if (!intentionalClose) scheduleReconnect()
   }
   sock.onerror = () => {
@@ -141,6 +181,7 @@ function dropAndReconnect(): void {
   const sock = ws
   ws = null
   stopHeartbeat()
+  clearJoinTimer()
   try {
     sock?.close()
   } catch {
@@ -193,6 +234,7 @@ async function attemptReconnect(): Promise<void> {
 function giveUp(message: string): void {
   intentionalClose = true
   stopHeartbeat()
+  clearJoinTimer()
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -227,6 +269,7 @@ export const relayClient = {
   disconnect() {
     intentionalClose = true
     stopHeartbeat()
+    clearJoinTimer()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null

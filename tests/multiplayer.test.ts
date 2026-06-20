@@ -226,6 +226,18 @@ describe("multiplayer turn engine", () => {
     expect(opened.freeform_deadline! - Math.floor(Date.now() / 1000)).toBeGreaterThan(550);
   });
 
+  test("freeform window duration is editable only while no window is open", () => {
+    const { room } = makeRoom("freeform"); // default 120
+    // Ended → change applies.
+    expect(mp.updateRoom(HOST, room.id, { settings: { freeformWindowSec: 300 } })!.settings.freeformWindowSec).toBe(300);
+
+    // Open a window → the duration is now locked (can't move the goalposts mid-round).
+    mp.openFreeformWindow(HOST, room.id);
+    const blocked = mp.updateRoom(HOST, room.id, { settings: { freeformWindowSec: 600 } })!;
+    expect(blocked.settings.freeformWindowSec).toBe(300);
+    expect(blocked.freeform_deadline).not.toBeNull();
+  });
+
   test("freeform: submit only inside an open window", () => {
     const { room } = makeRoom("freeform");
     const peerA = joinPeer(room.id, "peerA", "Ada");

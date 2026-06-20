@@ -88,6 +88,7 @@ export default function MultiplayerPanel() {
   const currentTurnId = useStore((s) => s.mpCurrentTurnParticipantId)
   const round = useStore((s) => s.mpRound)
   const freeformDeadline = useStore((s) => s.mpFreeformDeadline)
+  const mpSettings = useStore((s) => s.mpSettings)
   const myParticipantId = useStore((s) => s.mpMyParticipantId)
   const setRoomState = useStore((s) => s.setRoomState)
   const clearRoom = useStore((s) => s.clearRoom)
@@ -119,12 +120,39 @@ export default function MultiplayerPanel() {
   // [10, 3600] only at send time (a raw number input snapped empty values back
   // to 120, which made larger values awkward/impossible to enter).
   const [windowSec, setWindowSec] = useState('120')
+  // In-room editable freeform window duration (synced from the room's setting),
+  // changeable only while no window is open.
+  const [windowEdit, setWindowEdit] = useState('120')
+  // Max participants (peers), 1–8. Configurable at create time.
+  const [maxPeers, setMaxPeers] = useState('8')
   const [joinId, setJoinId] = useState('')
   const [busy, setBusy] = useState(false)
   // Lives in the store (not local state) so the ROOM_INVITE_CODE handler can
   // auto-roll it when a guest redeems the current code.
   const remoteCode = useStore((s) => s.mpRemoteCode)
   const setRemoteCode = useStore((s) => s.setRemoteCode)
+
+  // Keep the in-room window-duration field in sync with the room's setting.
+  useEffect(() => {
+    if (mpSettings?.freeformWindowSec) setWindowEdit(String(mpSettings.freeformWindowSec))
+  }, [mpSettings?.freeformWindowSec])
+
+  // Host opens a freeform window, applying any (only-while-ended) duration change.
+  const openWindow = useCallback(async () => {
+    if (!roomId) return
+    setBusy(true)
+    try {
+      const sec = Math.min(3600, Math.max(10, parseInt(windowEdit, 10) || 120))
+      if (sec !== mpSettings?.freeformWindowSec) {
+        await multiplayerApi.update(roomId, { settings: { freeformWindowSec: sec } })
+      }
+      await multiplayerApi.startFreeform(roomId)
+    } catch {
+      toast.error('Could not open the freeform window')
+    } finally {
+      setBusy(false)
+    }
+  }, [roomId, windowEdit, mpSettings])
 
   // Register with the Identity Server + open the relay bridge + mint a shareable
   // code, so the room is immediately "listening" for remote invites. Best-effort:
@@ -147,13 +175,14 @@ export default function MultiplayerPanel() {
       // Compress the bot avatar so peers (who can't fetch the owner-scoped
       // character-avatar endpoint) can render it.
       const characterAvatar = await buildCharacterAvatarSnapshot(activeCharacterId)
-      // Clamp to the backend's accepted range [10, 3600] (empty → default 120).
+      // Clamp to the backend's accepted ranges (empty → defaults).
       const freeformWindowSec = Math.min(3600, Math.max(10, parseInt(windowSec, 10) || 120))
+      const max = Math.min(8, Math.max(1, parseInt(maxPeers, 10) || 8))
       // Backend forks the current chat and returns the room on the new fork.
       const view = await multiplayerApi.create({
         chat_id: activeChatId,
         turn_strategy: strategy,
-        settings: strategy === 'freeform' ? { freeformWindowSec } : undefined,
+        settings: { maxPeers: max, ...(strategy === 'freeform' ? { freeformWindowSec } : {}) },
       })
       setRoomState(view, { isHost: true })
       // Switch to the forked multiplayer chat (the original is preserved).
@@ -169,7 +198,7 @@ export default function MultiplayerPanel() {
     } finally {
       setBusy(false)
     }
-  }, [activeChatId, strategy, windowSec, setRoomState, setActiveChat, activeCharacterId, startListening])
+  }, [activeChatId, strategy, windowSec, maxPeers, setRoomState, setActiveChat, activeCharacterId, startListening])
 
   // After a refresh the store forgets the room but the backend still has it.
   // Re-adopt it (and re-subscribe the socket) so the host isn't offered a
@@ -204,14 +233,28 @@ export default function MultiplayerPanel() {
       if (isRoomId) {
         // Same-server / LAN: join by room id over our own socket.
         wsClient.send({ type: 'room_join', roomId: input, displayName: snap?.name, persona: snap })
-      } else {
-        // Remote: redeem an invite code → connect to the Identity Server relay.
-        const grant = await multiplayerApi.joinByCode(input, snap?.name)
-        relayClient.connect(grant, { displayName: snap?.name, persona: snap })
+        setJoinId('')
+        return
       }
-      setJoinId('')
-    } catch {
-      toast.error('Could not join — invalid or expired code')
+      // Remote: redeem the one-time code (consumes it), THEN connect to the relay.
+      // Split so a redeem failure (bad/expired code) reads differently from a
+      // post-redeem connection failure — the code is already spent in the latter.
+      let grant
+      try {
+        grant = await multiplayerApi.joinByCode(input, snap?.name)
+      } catch {
+        toast.error('Invalid or expired invite code')
+        return
+      }
+      try {
+        // Connection problems (host offline, relay unreachable) surface via the
+        // relay client's join timeout, not here — this only catches a sync throw
+        // (e.g. a malformed relay URL).
+        relayClient.connect(grant, { displayName: snap?.name, persona: snap })
+        setJoinId('')
+      } catch {
+        toast.error('Code accepted, but the relay server was unreachable.')
+      }
     } finally {
       setBusy(false)
     }
@@ -304,6 +347,17 @@ export default function MultiplayerPanel() {
                   </button>
                 ))}
               </div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={label}>Max participants (1–8)</div>
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={maxPeers}
+                  onChange={(e) => setMaxPeers(e.target.value)}
+                  style={{ ...btn, width: 100, cursor: 'text' }}
+                />
+              </div>
               {strategy === 'freeform' && (
                 <div style={{ marginBottom: 10 }}>
                   <div style={label}>Window (seconds, 10–3600)</div>
@@ -368,14 +422,31 @@ export default function MultiplayerPanel() {
           )}
         </div>
         {isHost && turnStrategy === 'freeform' && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button style={btn} onClick={() => multiplayerApi.startFreeform(roomId).catch(() => {})}>
-              Open window
-            </button>
-            <button style={btn} onClick={() => multiplayerApi.endFreeform(roomId).catch(() => {})}>
-              End now
-            </button>
-          </div>
+          freeformDeadline == null ? (
+            // Window ended → the duration can be changed before (re)opening.
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+              <input
+                type="number"
+                min={10}
+                max={3600}
+                value={windowEdit}
+                onChange={(e) => setWindowEdit(e.target.value)}
+                aria-label="Freeform window seconds"
+                style={{ ...btn, width: 72, cursor: 'text' }}
+              />
+              <span style={{ ...label, marginBottom: 0 }}>sec</span>
+              <button style={primaryBtn} onClick={openWindow} disabled={busy}>
+                Open window
+              </button>
+            </div>
+          ) : (
+            // Window open → duration is locked; only ending is offered.
+            <div style={{ marginTop: 8 }}>
+              <button style={btn} onClick={() => multiplayerApi.endFreeform(roomId).catch(() => {})}>
+                End now
+              </button>
+            </div>
+          )
         )}
       </div>
 

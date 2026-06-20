@@ -97,7 +97,10 @@ app.post("/rooms/:roomId/remote/enable", roomMutationLimiter, async (c) => {
   if (!mpidConfig.enabled) {
     return c.json({ error: "Remote multiplayer is not configured (set MPIDENTITY_URL)" }, 400);
   }
-  const registered = await identityClient.registerRoom(roomId, { reachability: "relay-only" });
+  const registered = await identityClient.registerRoom(roomId, {
+    reachability: "relay-only",
+    maxPeers: svc.getRoom(roomId)?.settings.maxPeers,
+  });
   if (!registered) return c.json({ error: "Identity Server unreachable" }, 502);
   await relayClient.startRelayBridge(roomId);
   return c.json({ ok: true, server: mpidConfig.url });

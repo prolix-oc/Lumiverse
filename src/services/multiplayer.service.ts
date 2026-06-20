@@ -439,9 +439,16 @@ export function updateRoom(
   const now = Math.floor(Date.now() / 1000);
   const status = patch.status ?? room.status;
   const turnStrategy = patch.turnStrategy ?? room.turn_strategy;
-  const settings = patch.settings
-    ? normalizeSettings({ ...room.settings, ...patch.settings })
-    : room.settings;
+  let settings = room.settings;
+  if (patch.settings) {
+    settings = normalizeSettings({ ...room.settings, ...patch.settings });
+    // The freeform window duration may only change while NO window is open —
+    // otherwise it would move the goalposts on an in-progress round. Keep the
+    // current value if a window is live (the host's UI gates this too).
+    if (room.freeform_deadline !== null) {
+      settings.freeformWindowSec = room.settings.freeformWindowSec;
+    }
+  }
 
   getDb()
     .query(

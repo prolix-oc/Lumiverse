@@ -82,9 +82,10 @@ export async function startRelayBridge(roomId: string): Promise<boolean> {
     }),
   );
 
-  // Keep the room's control-plane liveness fresh on the Identity Server.
+  // Keep the room's control-plane liveness + capacity fresh on the Identity
+  // Server (so a later maxPeers change propagates).
   const roomHb = setInterval(() => {
-    void identityClient.heartbeat(bridge.roomId);
+    void identityClient.heartbeat(bridge.roomId, undefined, undefined, mp.getRoom(bridge.roomId)?.settings.maxPeers);
   }, ROOM_HEARTBEAT_MS);
   if (typeof (roomHb as { unref?: () => void }).unref === "function") {
     (roomHb as { unref: () => void }).unref();
@@ -265,7 +266,17 @@ function handleRelayFrame(bridge: Bridge, raw: string): void {
       displayName: typeof d.displayName === "string" ? d.displayName : undefined,
       persona: d.persona,
     });
-    if (!join.ok) return;
+    if (!join.ok) {
+      // Tell the peer WHY (full / closed / banned) instead of dropping silently,
+      // so they don't sit "connected but never in the room".
+      sendFrame(bridge, {
+        v: 1,
+        t: "msg",
+        to: memberId,
+        d: { event: "ROOM_JOIN_REJECTED", payload: { roomId: bridge.roomId, reason: join.reason } },
+      });
+      return;
+    }
     participantId = join.participant.id;
     bridge.memberToParticipant.set(memberId, participantId);
   }

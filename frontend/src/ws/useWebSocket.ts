@@ -44,6 +44,7 @@ import type {
   GroupRoundCompletePayload,
   RoomStatusPayload,
   RoomInviteCodePayload,
+  RoomJoinRejectedPayload,
   RoomParticipantJoinedPayload,
   RoomParticipantLeftPayload,
   RoomParticipantKickedPayload,
@@ -1533,6 +1534,25 @@ export function useWebSocket() {
         }
       }),
 
+      wsClient.on(EventType.ROOM_JOIN_REJECTED, (payload: RoomJoinRejectedPayload) => {
+        // The host refused our join (full / closed / banned / kicked). Tear down
+        // the relay + clear so we don't sit "connected but never in the room".
+        relayClient.disconnect()
+        store.getState().clearRoom()
+        const reason = payload.reason
+        toast.error(
+          reason === 'full'
+            ? i18n.t('multiplayer.joinFull', { defaultValue: 'That room is full' })
+            : reason === 'banned'
+              ? i18n.t('multiplayer.joinBanned', { defaultValue: 'You are banned from that room' })
+              : reason === 'kicked'
+                ? i18n.t('multiplayer.joinKicked', { defaultValue: 'You were removed from that room' })
+                : reason === 'closed'
+                  ? i18n.t('multiplayer.joinClosed', { defaultValue: 'That room has closed' })
+                  : i18n.t('multiplayer.joinRejected', { defaultValue: 'Could not join the room' }),
+        )
+      }),
+
       wsClient.on(EventType.ROOM_INVITE_CODE, (payload: RoomInviteCodePayload) => {
         const state = store.getState()
         if (payload.roomId !== state.mpRoomId) return
@@ -1557,6 +1577,9 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.roomId !== state.mpRoomId) return
         if (payload.participantId === state.mpMyParticipantId) {
+          // Tear down the relay (and suppress auto-reconnect) before clearing —
+          // we've been removed, so we must not try to rejoin.
+          relayClient.disconnect()
           state.clearRoom()
           toast.warning(
             payload.banned
@@ -1583,6 +1606,14 @@ export function useWebSocket() {
           round: payload.round,
           freeformDeadline: payload.freeformDeadline,
         })
+        // The host opened a freeform window — let everyone know they can add to it.
+        if (payload.windowOpen) {
+          toast.info(
+            i18n.t('multiplayer.freeformWindowOpen', {
+              defaultValue: 'Freeform window open — add your message',
+            }),
+          )
+        }
       }),
 
       wsClient.on(EventType.ROOM_TURN_SKIPPED, (payload: RoomTurnSkippedPayload) => {

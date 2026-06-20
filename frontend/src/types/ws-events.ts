@@ -51,6 +51,7 @@ export enum EventType {
   ROOM_PRESENCE = 'ROOM_PRESENCE',
   ROOM_ROUND_COMPLETE = 'ROOM_ROUND_COMPLETE',
   ROOM_INVITE_CODE = 'ROOM_INVITE_CODE',
+  ROOM_JOIN_REJECTED = 'ROOM_JOIN_REJECTED',
 
   // World Info
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
@@ -468,6 +469,9 @@ export interface RoomInviteCodePayload extends RoomBasePayload {
   expiresAt?: number
   server?: string
 }
+export interface RoomJoinRejectedPayload extends RoomBasePayload {
+  reason?: 'not_found' | 'closed' | 'banned' | 'full' | 'kicked' | string
+}
 export interface RoomParticipantJoinedPayload extends RoomBasePayload {
   participant: RoomParticipant
 }
@@ -489,6 +493,8 @@ export interface RoomTurnChangedPayload extends RoomBasePayload {
   turnOrder: string[]
   round: number
   freeformDeadline: number | null
+  /** True on the event that opens a freeform window. */
+  windowOpen?: boolean
 }
 export interface RoomTurnSkippedPayload extends RoomBasePayload {
   skippedParticipantId: string
