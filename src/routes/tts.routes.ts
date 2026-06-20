@@ -5,6 +5,7 @@ import * as audioSvc from "../services/audio.service";
 import * as muxSvc from "../services/audio-mux.service";
 import * as chatsSvc from "../services/chats.service";
 import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
+import { contentTypeForFormat } from "../utils/audio-content-type";
 
 const app = new Hono();
 
@@ -84,9 +85,10 @@ app.post("/synthesize/stream", async (c) => {
       },
     });
 
+    // Derive from request so non-MP3 streams (Cartesia wav/raw, OpenRouter pcm) play in browsers.
     return new Response(stream, {
       headers: {
-        "Content-Type": "audio/mpeg",
+        "Content-Type": contentTypeForFormat(body.outputFormat),
         "Transfer-Encoding": "chunked",
         "Content-Disposition": "inline",
       },
