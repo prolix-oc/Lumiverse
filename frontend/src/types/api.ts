@@ -1116,7 +1116,7 @@ export interface ActivatedWorldInfoEntry {
   keys: string[];
   source: 'keyword' | 'vector';
   score?: number;
-  bookSource?: 'character' | 'persona' | 'chat' | 'global';
+  bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
 }
 

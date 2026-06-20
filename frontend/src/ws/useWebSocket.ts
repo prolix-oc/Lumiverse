@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
 import { sendRoomAction, relayClient } from './relayClient'
-import { buildActivePersonaSnapshot } from '@/lib/personaSnapshot'
+import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/personaSnapshot'
+import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
@@ -1679,16 +1680,33 @@ export function useWebSocket() {
     // on join). Phase 1 broadcasts the persona's existing same-origin avatar
     // URL; re-hosting for off-instance peers is a later phase.
     let lastRelayKey = ''
+    let lastLorebookKey = ''
     const relayPersona = (state: ReturnType<typeof store.getState>) => {
-      if (!state.mpRoomId || !state.activePersonaId) { lastRelayKey = ''; return }
-      const key = `${state.mpRoomId}:${state.activePersonaId}`
-      if (key === lastRelayKey) return
-      lastRelayKey = key
-      // Compress + relay the active persona (name + portable WebP data-URL
-      // avatar) so every client's member list + message attribution show it.
-      void buildActivePersonaSnapshot().then((snap) => {
-        if (snap) sendRoomAction({ type: 'room_persona_change', persona: snap })
-      })
+      if (!state.mpRoomId || !state.activePersonaId) { lastRelayKey = ''; lastLorebookKey = ''; return }
+      // Persona snapshot: re-send on a persona switch OR a real-time add-on
+      // toggle (the add-on signature changes even when the persona id doesn't),
+      // so the host's generation reflects the peer's currently-enabled add-ons.
+      const personaKey = `${state.mpRoomId}:${state.activePersonaId}:${activePersonaAddonSignature()}`
+      if (personaKey !== lastRelayKey) {
+        lastRelayKey = personaKey
+        // Compress + relay the active persona (name + effective description +
+        // portable WebP data-URL avatar) so every client's member list + message
+        // attribution show it and the host's prompt reflects enabled add-ons.
+        void buildActivePersonaSnapshot().then((snap) => {
+          if (snap) sendRoomAction({ type: 'room_persona_change', persona: snap })
+        })
+      }
+      // Attached persona lorebook: tied to the persona itself (add-on toggles
+      // don't change it), relayed host-only for generation. Re-send only when the
+      // active persona changes; send null on a persona with no book so the host
+      // clears the previous one.
+      const lorebookKey = `${state.mpRoomId}:${state.activePersonaId}`
+      if (lorebookKey !== lastLorebookKey) {
+        lastLorebookKey = lorebookKey
+        void buildActivePersonaLorebook().then((lorebook) => {
+          sendRoomAction({ type: 'room_persona_lorebook', lorebook })
+        })
+      }
     }
     const unsubPersonaRelay = store.subscribe(relayPersona)
     relayPersona(store.getState())

@@ -91,6 +91,37 @@ export function getTextContent(msg: LlmMessage): string {
     .join("");
 }
 
+/**
+ * Flatten message content to a human-readable string for display-only surfaces
+ * (e.g. the dry-run prompt viewer) that can't render multimodal parts. Text is
+ * inlined in order; non-text parts become bracketed placeholders so an
+ * image/audio/tool part is still visible. Unlike {@link getTextContent}, this
+ * never silently drops media — important for a debugging view.
+ */
+export function flattenContentForDisplay(
+  content: string | LlmMessagePart[],
+): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((p) => {
+      switch (p.type) {
+        case "text":
+          return p.text;
+        case "image":
+          return `[image: ${p.mime_type}]`;
+        case "audio":
+          return `[audio: ${p.mime_type}]`;
+        case "tool_use":
+          return `[tool_call: ${p.name}(${JSON.stringify(p.input)})]`;
+        case "tool_result":
+          return `[tool_result${p.is_error ? " (error)" : ""}: ${p.content}]`;
+        default:
+          return "";
+      }
+    })
+    .join("\n");
+}
+
 export interface GenerationRequest {
   messages: LlmMessage[];
   model: string;
@@ -262,7 +293,7 @@ export interface ActivatedWorldInfoEntry {
   keys: string[];
   source: 'keyword' | 'vector';
   score?: number;
-  bookSource?: 'character' | 'persona' | 'chat' | 'global';
+  bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
 }
 

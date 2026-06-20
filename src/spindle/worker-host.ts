@@ -7750,7 +7750,11 @@ export class WorkerHost {
         source: e.source,
         score: e.score,
         bookId: e.bookId,
-        bookSource: e.bookSource,
+        // The published Spindle SDK's WorldBookSourceDTO has no "peer" variant
+        // (a relayed multiplayer participant's persona lorebook). Surface it to
+        // extensions as its closest valid kind — "persona" — rather than bumping
+        // the SDK contract; the host's own Prompt Breakdown keeps the distinction.
+        bookSource: e.bookSource === "peer" ? "persona" : e.bookSource,
       }));
 
       this.postToWorker({ type: "response", requestId, result });

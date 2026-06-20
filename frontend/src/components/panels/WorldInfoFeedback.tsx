@@ -1,15 +1,17 @@
 import { useMemo, useState, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Globe, MessageSquare } from 'lucide-react'
+import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Users, Globe, MessageSquare } from 'lucide-react'
 import { IconUserStar } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import type { ActivatedWorldInfoEntry } from '@/types/api'
 import styles from './WorldInfoFeedback.module.css'
 
-const SCOPE_ORDER: Array<ActivatedWorldInfoEntry['bookSource']> = ['character', 'persona', 'chat', 'global']
+// 'peer' = a relayed multiplayer participant's attached persona lorebook.
+const SCOPE_ORDER: Array<ActivatedWorldInfoEntry['bookSource']> = ['character', 'persona', 'peer', 'chat', 'global']
 const SCOPE_ICONS: Record<string, ComponentType<{ size?: number | string; className?: string }>> = {
   character: IconUserStar,
   persona: User,
+  peer: Users,
   chat: MessageSquare,
   global: Globe,
 }

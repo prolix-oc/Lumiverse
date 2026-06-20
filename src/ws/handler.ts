@@ -275,6 +275,12 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (data.type === "room_persona_lorebook") {
+          if (!roomAuth) return;
+          multiplayerSvc.updateParticipantLorebook(roomAuth.roomId, roomAuth.participantId, data.lorebook);
+          return;
+        }
+
         if (data.type === "room_typing") {
           if (!roomAuth) return;
           multiplayerSvc.markTyping(roomAuth.roomId, roomAuth.participantId, !!data.typing);

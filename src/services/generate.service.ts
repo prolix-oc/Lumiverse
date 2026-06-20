@@ -22,6 +22,7 @@ import { getEffectiveCharacterName } from "../types/character";
 import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import {
   getTextContent,
+  flattenContentForDisplay,
   type LlmMessage,
   type GenerationParameters,
   type GenerationRequest,
@@ -2757,7 +2758,15 @@ export async function dryRunGeneration(
   }
 
   return {
-    messages: pipeline.messages,
+    // The dry-run viewer is display-only and assumes string content. Flatten
+    // multimodal parts (image/audio/tool) to placeholder-annotated strings so
+    // multipart turns don't crash the frontend (TypeError: e.replace is not a
+    // function) when a chat message carries an attachment. Token counts come
+    // from the breakdown above, which is already computed from the real parts.
+    messages: pipeline.messages.map((m) => ({
+      ...m,
+      content: flattenContentForDisplay(m.content),
+    })),
     breakdown: pipeline.breakdown || [],
     parameters: outboundParams,
     assistantPrefill: pipeline.assistantPrefill,

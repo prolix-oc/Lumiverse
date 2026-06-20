@@ -25,9 +25,14 @@ import * as generateSvc from "./generate.service";
 import * as poolSvc from "./generation-pool.service";
 import * as connectionsSvc from "./connections.service";
 import * as settingsSvc from "./settings.service";
-import { setMultiplayerPersonaProvider } from "./prompt-assembly.service";
+import * as worldBooksSvc from "./world-books.service";
+import {
+  setMultiplayerPersonaProvider,
+  setMultiplayerWorldInfoProvider,
+} from "./prompt-assembly.service";
 import { mpidConfig } from "../multiplayer/config";
 import type { Message } from "../types/message";
+import type { WorldBookEntry } from "../types/world-book";
 import {
   type Room,
   type RoomSettings,
@@ -186,6 +191,99 @@ function sanitizeAvatarUrl(raw: unknown): string | null {
     return raw;
   }
   return null;
+}
+
+// ── Peer persona lorebook (relayed character_book) caps ──
+// A peer's attached persona lorebook is hostile input that gets injected into
+// the host's prompt. We bound it hard: entry count, per-entry content + key
+// sizes, and total serialized bytes (kept well under the relay frame cap).
+const MAX_PEER_LOREBOOK_ENTRIES = 64;
+const MAX_PEER_LOREBOOK_ENTRY_CONTENT = 4000;
+const MAX_PEER_LOREBOOK_KEYS = 32;
+const MAX_PEER_LOREBOOK_KEY_LEN = 256;
+const MAX_PEER_LOREBOOK_COMMENT = 256;
+const MAX_PEER_LOREBOOK_BYTES = 200 * 1024;
+
+/** A sanitized, portable character_book — the shape materialize* consumes. */
+interface PeerLorebook {
+  entries: Array<Record<string, unknown>>;
+}
+
+function sanitizeKeyArray(raw: unknown): string[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(",")
+      : [];
+  const out: string[] = [];
+  for (const k of list) {
+    if (out.length >= MAX_PEER_LOREBOOK_KEYS) break;
+    const clean = sanitizePersonaText(k, MAX_PEER_LOREBOOK_KEY_LEN).trim();
+    if (clean) out.push(clean);
+  }
+  return out;
+}
+
+function clampNumber(raw: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof raw === "number" && Number.isFinite(raw) ? raw : Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+
+/**
+ * Validate + bound a peer-relayed lorebook (the `character_book` export shape:
+ * `{ entries: [...] }`). We keep only the fields the host's runtime materializer
+ * understands, strip incoming ids (the host assigns stable namespaced ids so a
+ * peer can't collide with host entries), drop `extensions` wholesale (it can
+ * smuggle arbitrary bulk), and enforce a total byte budget. Returns null when
+ * nothing usable survives.
+ */
+function sanitizePeerLorebook(raw: unknown): PeerLorebook | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rawEntries = (raw as { entries?: unknown }).entries;
+  const list = Array.isArray(rawEntries)
+    ? rawEntries
+    : rawEntries && typeof rawEntries === "object"
+      ? Object.values(rawEntries as Record<string, unknown>)
+      : [];
+  if (list.length === 0) return null;
+
+  const entries: Array<Record<string, unknown>> = [];
+  let budget = MAX_PEER_LOREBOOK_BYTES;
+  for (const e of list) {
+    if (entries.length >= MAX_PEER_LOREBOOK_ENTRIES) break;
+    if (!e || typeof e !== "object") continue;
+    const src = e as Record<string, unknown>;
+    const content = sanitizePersonaText(src.content, MAX_PEER_LOREBOOK_ENTRY_CONTENT);
+    if (!content) continue;
+    const keys = sanitizeKeyArray(src.keys ?? src.key);
+    const secondary = sanitizeKeyArray(src.secondary_keys ?? src.keysecondary);
+    const constant = !!src.constant;
+    // A non-constant entry with no keys can never activate — drop it.
+    if (!constant && keys.length === 0) continue;
+
+    const entry: Record<string, unknown> = {
+      keys,
+      secondary_keys: secondary,
+      content,
+      comment: sanitizeDisplayName(src.comment ?? src.name, MAX_PEER_LOREBOOK_COMMENT),
+      enabled: src.enabled !== false && src.disabled !== true,
+      constant,
+      selective: !!src.selective,
+      insertion_order: clampNumber(src.insertion_order ?? src.order_value, 100, 0, 1_000_000),
+      position: clampNumber(src.position, 0, 0, 7),
+      depth: clampNumber(src.depth, 4, 0, 1000),
+      case_sensitive: !!src.case_sensitive,
+      match_whole_words: !!src.match_whole_words,
+    };
+
+    const size = JSON.stringify(entry).length;
+    if (size > budget) break;
+    budget -= size;
+    entries.push(entry);
+  }
+
+  return entries.length > 0 ? { entries } : null;
 }
 
 function sanitizePersonaSnapshot(raw: unknown): PersonaSnapshot | null {
@@ -490,7 +588,10 @@ export function closeRoom(hostUserId: string, roomId: string): boolean {
 
   // Disconnect every peer socket (host stays connected as a normal user client).
   for (const p of listParticipants(roomId, { activeOnly: true })) {
-    if (p.role === "peer") eventBus.disconnectParticipant(p.id, 1000, "room closed");
+    if (p.role === "peer") {
+      roomParticipantLorebooks.delete(p.id);
+      eventBus.disconnectParticipant(p.id, 1000, "room closed");
+    }
   }
   return true;
 }
@@ -596,6 +697,13 @@ export function setRoomCharacterAvatar(roomId: string, rawUrl: unknown): void {
   const clean = sanitizeAvatarUrl(rawUrl);
   if (clean) roomCharacterAvatars.set(roomId, clean);
 }
+
+// Per-participant relayed persona lorebook (sanitized character_book). The
+// world book lives on the PEER's instance, so they relay a bounded copy that the
+// host materializes into runtime world-info entries at generation time. Keyed by
+// participantId; in-process only — peers re-relay on (re)connect / persona
+// change, and entries are cleared on leave/kick/close.
+const roomParticipantLorebooks = new Map<string, PeerLorebook>();
 
 interface HydrationGeneration {
   active: boolean;
@@ -817,6 +925,7 @@ export function leaveParticipant(roomId: string, participantId: string, opts?: {
     .query("UPDATE multiplayer_participants SET status = ?, last_seen = ? WHERE id = ?")
     .run(status, Math.floor(Date.now() / 1000), participantId);
 
+  roomParticipantLorebooks.delete(participantId);
   removeFromTurnOrder(getRoom(roomId)!, participantId);
 
   if (!opts?.kicked) {
@@ -864,6 +973,67 @@ export function updateParticipantPersona(
     displayName: participant.display_name,
   });
   return getParticipant(participantId);
+}
+
+/**
+ * Receive a peer's relayed persona lorebook. Host-only (generation): NOT
+ * re-broadcast to other peers (it's not display data, and one peer's lorebook is
+ * none of the others' business). A null/empty payload clears it (e.g. the peer
+ * switched to a persona with no attached book).
+ */
+export function updateParticipantLorebook(
+  roomId: string,
+  participantId: string,
+  rawLorebook: unknown,
+): void {
+  const room = getRoom(roomId);
+  if (!room) return;
+  const participant = getParticipant(participantId);
+  if (!participant || participant.room_id !== roomId || participant.status !== "active") return;
+  if (participant.role !== "peer") return; // the host's lorebook flows through normal assembly
+
+  const lorebook = sanitizePeerLorebook(rawLorebook);
+  if (lorebook) {
+    roomParticipantLorebooks.set(participantId, lorebook);
+  } else {
+    roomParticipantLorebooks.delete(participantId);
+  }
+  touchParticipant(participantId);
+}
+
+/**
+ * Active peers' attached-lorebook entries for a room's chat, materialized into
+ * runtime world-info entries. Each entry gets a STABLE, namespaced id/uid
+ * (`mp-peer:<participantId>:<index>`) so it (a) can't collide with host entries
+ * and (b) keeps a consistent identity across turns for sticky/cooldown state.
+ * Registered as the prompt-assembly world-info provider.
+ */
+export function getActivePeerLorebookEntriesForChat(
+  chatId: string,
+): { entries: WorldBookEntry[]; bookIds: string[] } | null {
+  const roomId = getRoomIdForChat(chatId);
+  if (!roomId) return null;
+  const entries: WorldBookEntry[] = [];
+  const bookIds: string[] = [];
+  for (const p of listParticipants(roomId, { activeOnly: true })) {
+    if (p.role !== "peer") continue;
+    const lorebook = roomParticipantLorebooks.get(p.id);
+    if (!lorebook) continue;
+    const bookId = `mp-peer:${p.id}`;
+    let materialized: WorldBookEntry[];
+    try {
+      materialized = worldBooksSvc.materializeCharacterBookEntriesForRuntime(bookId, lorebook);
+    } catch {
+      continue;
+    }
+    if (materialized.length === 0) continue;
+    materialized.forEach((entry, index) => {
+      const stableId = `${bookId}:${index}`;
+      entries.push({ ...entry, id: stableId, uid: stableId, world_book_id: bookId });
+    });
+    bookIds.push(bookId);
+  }
+  return entries.length > 0 ? { entries, bookIds } : null;
 }
 
 // ─── presence / typing ──────────────────────────────────────────────────────────
@@ -1372,6 +1542,8 @@ export function initMultiplayer(): void {
 
   // Inject active peer personas into prompt assembly for room chats.
   setMultiplayerPersonaProvider(getActivePeerPersonasForChat);
+  // Inject active peers' attached persona lorebooks into world-info assembly.
+  setMultiplayerWorldInfoProvider(getActivePeerLorebookEntriesForChat);
 
   // Re-arm freeform deadline timers dropped by a restart.
   try {

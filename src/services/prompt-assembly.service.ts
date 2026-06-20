@@ -1014,6 +1014,21 @@ export function setMultiplayerPersonaProvider(fn: MultiplayerPersonaProvider | n
   multiplayerPersonaProvider = fn;
 }
 
+// ── Multiplayer participant lorebooks ──
+// Each peer can have an attached persona lorebook (world book) that lives on
+// THEIR instance — the host has no row for it. The multiplayer service relays a
+// sanitized copy and materializes it into runtime world-info entries, exposed
+// here so assembly can splice them into the normal world-info pipeline (keyword
+// scan / positions / budgeting all apply unchanged). Returns null for non-room
+// chats. `bookIds` are synthetic per-participant ids for source attribution.
+type MultiplayerWorldInfoProvider = (
+  chatId: string,
+) => { entries: import("../types/world-book").WorldBookEntry[]; bookIds: string[] } | null;
+let multiplayerWorldInfoProvider: MultiplayerWorldInfoProvider | null = null;
+export function setMultiplayerWorldInfoProvider(fn: MultiplayerWorldInfoProvider | null): void {
+  multiplayerWorldInfoProvider = fn;
+}
+
 export async function assemblePrompt(
   ctx: AssemblyContext,
 ): Promise<AssemblyResult> {
@@ -1428,7 +1443,17 @@ export async function assemblePrompt(
       globalWorldBooks,
       chatWorldBookIds,
     );
-  const wiEntries = wiSources.entries;
+  let wiEntries = wiSources.entries;
+  // Multiplayer: splice in active peers' attached persona lorebooks (relayed
+  // from each peer's own instance, materialized into runtime entries). No-op for
+  // single-user chats (provider returns null). These flow through the normal
+  // interceptor + activation path below, so keyword matching / positions / token
+  // budgeting all apply identically to host-owned world info.
+  const mpWorldInfo = multiplayerWorldInfoProvider?.(ctx.chatId);
+  if (mpWorldInfo && mpWorldInfo.entries.length > 0) {
+    wiEntries = wiEntries.concat(mpWorldInfo.entries);
+    for (const bookId of mpWorldInfo.bookIds) wiSources.bookSourceMap.set(bookId, "peer");
+  }
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const worldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
@@ -3359,7 +3384,7 @@ export function populateLumiaLoomContext(
 // Helpers
 // ---------------------------------------------------------------------------
 
-export type BookSource = "character" | "persona" | "chat" | "global";
+export type BookSource = "character" | "persona" | "chat" | "global" | "peer";
 
 /**
  * Collect all WorldBookEntry[] from character extensions + persona attached book.

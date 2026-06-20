@@ -457,3 +457,117 @@ describe("multiplayer turn engine", () => {
     expect(mp.hostPromote("peerA", room.id, peerA)).toBe(false);
   });
 });
+
+describe("multiplayer peer persona lorebook relay", () => {
+  beforeEach(async () => {
+    closeDatabase();
+    initDatabase(":memory:");
+    await applyBaseline();
+  });
+
+  // A relayed lorebook is a `character_book` (the world-book export shape).
+  const CB = (entries: Array<Record<string, unknown>>) => ({ entries });
+
+  test("relayed lorebook materializes into namespaced runtime entries", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    const peer = joinPeer(room.id, "peerA", "Ada");
+
+    mp.updateParticipantLorebook(
+      room.id,
+      peer,
+      CB([
+        { keys: ["dragon"], content: "Dragons breathe fire." },
+        { keys: ["castle", "keep"], content: "The castle is on a hill.", position: 4, depth: 2 },
+      ]),
+    );
+
+    const wi = mp.getActivePeerLorebookEntriesForChat(chatId);
+    expect(wi).not.toBeNull();
+    expect(wi!.bookIds).toEqual([`mp-peer:${peer}`]);
+    expect(wi!.entries).toHaveLength(2);
+
+    // Stable, namespaced identity: no collision with the host's UUID entries,
+    // and a consistent id across turns for sticky/cooldown state.
+    const first = wi!.entries[0];
+    expect(first.id).toBe(`mp-peer:${peer}:0`);
+    expect(first.uid).toBe(`mp-peer:${peer}:0`);
+    expect(first.world_book_id).toBe(`mp-peer:${peer}`);
+    expect(first.key).toEqual(["dragon"]);
+    expect(first.content).toBe("Dragons breathe fire.");
+
+    const second = wi!.entries[1];
+    expect(second.id).toBe(`mp-peer:${peer}:1`);
+    expect(second.key).toEqual(["castle", "keep"]);
+    expect(second.position).toBe(4);
+  });
+
+  test("a null payload clears a previously-relayed lorebook", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    const peer = joinPeer(room.id, "peerA", "Ada");
+    mp.updateParticipantLorebook(room.id, peer, CB([{ keys: ["x"], content: "X." }]));
+    expect(mp.getActivePeerLorebookEntriesForChat(chatId)).not.toBeNull();
+
+    mp.updateParticipantLorebook(room.id, peer, null);
+    expect(mp.getActivePeerLorebookEntriesForChat(chatId)).toBeNull();
+  });
+
+  test("drops un-activatable entries (no keys, not constant) but keeps constants", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    const peer = joinPeer(room.id, "peerA", "Ada");
+    mp.updateParticipantLorebook(
+      room.id,
+      peer,
+      CB([
+        { keys: [], content: "Never matches." }, // dropped — can never activate
+        { keys: [], content: "Always on.", constant: true }, // kept — constant
+        { keys: ["y"], content: "" }, // dropped — empty content
+      ]),
+    );
+    const wi = mp.getActivePeerLorebookEntriesForChat(chatId);
+    expect(wi).not.toBeNull();
+    expect(wi!.entries).toHaveLength(1);
+    expect(wi!.entries[0].content).toBe("Always on.");
+    expect(wi!.entries[0].constant).toBe(true);
+  });
+
+  test("caps relayed entry count", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    const peer = joinPeer(room.id, "peerA", "Ada");
+    const many = Array.from({ length: 200 }, (_, i) => ({ keys: [`k${i}`], content: `C${i}` }));
+    mp.updateParticipantLorebook(room.id, peer, CB(many));
+    const wi = mp.getActivePeerLorebookEntriesForChat(chatId)!;
+    expect(wi.entries.length).toBeLessThanOrEqual(64);
+    expect(wi.entries.length).toBeGreaterThan(0);
+  });
+
+  test("clears a peer's lorebook when they leave", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    const peer = joinPeer(room.id, "peerA", "Ada");
+    mp.updateParticipantLorebook(room.id, peer, CB([{ keys: ["x"], content: "X." }]));
+    mp.leaveParticipant(room.id, peer);
+    expect(mp.getActivePeerLorebookEntriesForChat(chatId)).toBeNull();
+  });
+
+  test("ignores a host-role lorebook (host's book flows through normal assembly)", () => {
+    const { chatId, room } = makeRoom("round_robin");
+    joinPeer(room.id, "peerA", "Ada"); // a peer exists but relays no lorebook
+    const hostId = mp.getRoomStateForHost(HOST, room.id)!.participants[0].id;
+    mp.updateParticipantLorebook(room.id, hostId, CB([{ keys: ["x"], content: "X." }]));
+    // The host's attached book is injected by normal assembly, never as a peer
+    // entry — so the peer-lorebook provider yields nothing here.
+    expect(mp.getActivePeerLorebookEntriesForChat(chatId)).toBeNull();
+  });
+
+  test("two peers' lorebooks are namespaced separately", () => {
+    const { chatId, room } = makeRoom("freeform");
+    const peerA = joinPeer(room.id, "peerA", "Ada");
+    const peerB = joinPeer(room.id, "peerB", "Bo");
+    mp.updateParticipantLorebook(room.id, peerA, CB([{ keys: ["a"], content: "A." }]));
+    mp.updateParticipantLorebook(room.id, peerB, CB([{ keys: ["b"], content: "B." }]));
+    const wi = mp.getActivePeerLorebookEntriesForChat(chatId)!;
+    expect(wi.bookIds.sort()).toEqual([`mp-peer:${peerA}`, `mp-peer:${peerB}`].sort());
+    expect(wi.entries.map((e) => e.world_book_id).sort()).toEqual(
+      [`mp-peer:${peerA}`, `mp-peer:${peerB}`].sort(),
+    );
+  });
+});

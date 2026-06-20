@@ -2393,6 +2393,7 @@
     "scope": {
       "character": "Character",
       "persona": "Persona",
+      "peer": "Participants",
       "chat": "This Chat",
       "global": "Global",
       "other": "Other"

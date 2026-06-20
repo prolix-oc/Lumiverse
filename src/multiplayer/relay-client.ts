@@ -306,6 +306,9 @@ function handleRelayFrame(bridge: Bridge, raw: string): void {
     case "room_persona_change":
       mp.updateParticipantPersona(bridge.roomId, participantId, d.persona);
       break;
+    case "room_persona_lorebook":
+      mp.updateParticipantLorebook(bridge.roomId, participantId, d.lorebook);
+      break;
     case "room_pass_turn":
       mp.passTurn(bridge.roomId, participantId);
       break;
