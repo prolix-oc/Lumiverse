@@ -118,7 +118,8 @@ export function useMessagePlayback(
   // lives in the resolver; the button just stays enabled when TTS is on.
   const canPlay = Boolean(ttsEnabled && connectionId)
 
-  const [regenModalOpen, setRegenModalOpen] = useState(false)
+  const [regenModalMessageId, setRegenModalMessageId] = useState<string | null>(null)
+  const regenModalOpen = regenModalMessageId === messageId
   const [isGenerating, setIsGenerating] = useState(false)
 
   // AbortController for the active save-first regen. Held in a ref so the
@@ -154,7 +155,7 @@ export function useMessagePlayback(
       return
     }
     if (hasSavedAudio) {
-      setRegenModalOpen(true)
+      setRegenModalMessageId(messageId)
       return
     }
     startMessageTtsPlayback({
@@ -166,7 +167,9 @@ export function useMessagePlayback(
   }, [isGenerating, cancelActiveRegen, isPlaying, hasSavedAudio, content, messageId, name, isUser])
 
   const confirmRegen = useCallback(() => {
-    setRegenModalOpen(false)
+    const targetMessageId = regenModalMessageId
+    setRegenModalMessageId(null)
+    if (targetMessageId !== messageId) return
 
     // Stop any in-flight in-memory playback so the regen doesn't overlap
     // with whatever was playing.
@@ -210,10 +213,10 @@ export function useMessagePlayback(
       }
       clearRegenerating(messageId)
     })
-  }, [content, messageId, name, isUser])
+  }, [content, messageId, name, isUser, regenModalMessageId])
 
   const cancelRegen = useCallback(() => {
-    setRegenModalOpen(false)
+    setRegenModalMessageId(null)
   }, [])
 
   // ── Delete flow ─────────────────────────────────────────────────────────
@@ -224,20 +227,23 @@ export function useMessagePlayback(
   // underlying audio_files row + on-disk blob, and emits MESSAGE_EDITED so
   // other clients re-render. Same-tab UI updates instantly from the
   // response.
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+  const [deleteModalMessageId, setDeleteModalMessageId] = useState<string | null>(null)
+  const deleteModalOpen = deleteModalMessageId === messageId
   const addToast = useStore((s) => s.addToast)
 
   const requestDelete = useCallback(() => {
     if (!hasSavedAudio) return
-    setDeleteModalOpen(true)
-  }, [hasSavedAudio])
+    setDeleteModalMessageId(messageId)
+  }, [hasSavedAudio, messageId])
 
   const cancelDelete = useCallback(() => {
-    setDeleteModalOpen(false)
+    setDeleteModalMessageId(null)
   }, [])
 
   const confirmDelete = useCallback(() => {
-    setDeleteModalOpen(false)
+    const targetMessageId = deleteModalMessageId
+    setDeleteModalMessageId(null)
+    if (targetMessageId !== messageId) return
 
     // Resolve the audio attachment for the current swipe FRESHLY (don't
     // capture in a closure dep) so a regen race or store update between
@@ -276,7 +282,7 @@ export function useMessagePlayback(
         })
       }
     })()
-  }, [messageId, addToast])
+  }, [messageId, addToast, deleteModalMessageId])
 
   return {
     canPlay,
