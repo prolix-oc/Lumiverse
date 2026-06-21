@@ -61,5 +61,6 @@ export interface MessageAuthor {
   participantId: string
   displayName: string
   personaName?: string
+  /** Small relayed data URL, persisted so message avatars survive room teardown. */
   avatarUrl?: string | null
 }

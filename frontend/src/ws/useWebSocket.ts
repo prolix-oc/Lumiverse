@@ -55,6 +55,8 @@ import type {
   RoomPresencePayload,
 } from '@/types/ws-events'
 import type { Message } from '@/types/api'
+import type { ChatHeadStatus } from '@/types/store'
+import type { RoomStateView } from '@/types/multiplayer'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
@@ -70,6 +72,103 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
 }
 
 const MAX_TOAST_ERROR_LENGTH = 800
+const MULTIPLAYER_CHAT_HEAD_PREFIX = 'mp-room:'
+
+const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([
+  'assembling',
+  'council',
+  'waiting',
+  'reasoning',
+  'streaming',
+])
+
+function isLiveGenerationHead(status: ChatHeadStatus, generationId: string): boolean {
+  return !generationId.startsWith(MULTIPLAYER_CHAT_HEAD_PREFIX) && LIVE_GENERATION_HEAD_STATUSES.has(status)
+}
+
+function participantName(room: RoomStateView, participantId: string | null): string | null {
+  if (!participantId) return null
+  const participant = room.participants.find((p) => p.id === participantId)
+  return participant?.persona?.name || participant?.displayName || null
+}
+
+function normalizeGenerationHeadStatus(raw: string | undefined): ChatHeadStatus {
+  switch (raw) {
+    case 'assembling':
+    case 'council':
+    case 'waiting':
+    case 'reasoning':
+    case 'streaming':
+    case 'completed':
+    case 'stopped':
+    case 'error':
+      return raw
+    default:
+      return 'waiting'
+  }
+}
+
+function syncMultiplayerChatHead(
+  room: RoomStateView,
+  opts: { characterName?: string; characterAvatar?: string | null } = {},
+): void {
+  const state = useStore.getState()
+  const existing = state.chatHeads.find((h) => h.chatId === room.chatId)
+  if (existing && isLiveGenerationHead(existing.status, existing.generationId)) return
+
+  const myParticipantId = room.selfParticipantId ?? state.mpMyParticipantId
+  const freeformOpen =
+    room.turnStrategy === 'freeform' &&
+    room.freeformDeadline != null &&
+    Date.now() / 1000 < room.freeformDeadline
+  const myTurn = room.turnStrategy === 'round_robin' && room.currentTurnParticipantId === myParticipantId
+  const currentName = participantName(room, room.currentTurnParticipantId)
+
+  const status: ChatHeadStatus = freeformOpen
+    ? 'mp_freeform'
+    : myTurn
+      ? 'mp_your_turn'
+      : 'mp_waiting_turn'
+  const subtitle = freeformOpen
+    ? 'Freeform window open'
+    : myTurn
+      ? 'Your turn'
+      : currentName
+        ? `Waiting for ${currentName}`
+        : 'Waiting for the room'
+
+  state.addChatHead({
+    generationId: `${MULTIPLAYER_CHAT_HEAD_PREFIX}${room.roomId}`,
+    chatId: room.chatId,
+    characterName: opts.characterName || existing?.characterName || state.activeChatName || 'Multiplayer chat',
+    characterId: existing?.characterId || (state.mpIsHost && state.activeChatId === room.chatId ? state.activeCharacterId ?? undefined : undefined),
+    avatarUrl: opts.characterAvatar ?? state.mpCharacterAvatar ?? existing?.avatarUrl ?? null,
+    status,
+    model: '',
+    startedAt: existing?.startedAt ?? Date.now(),
+    subtitle,
+    multiplayerRoomId: room.roomId,
+  })
+}
+
+function syncMultiplayerChatHeadFromStore(): void {
+  const state = useStore.getState()
+  if (!state.mpRoomId || !state.mpChatId) return
+  syncMultiplayerChatHead({
+    roomId: state.mpRoomId,
+    chatId: state.mpChatId,
+    status: 'open',
+    turnStrategy: state.mpTurnStrategy,
+    freeformDeadline: state.mpFreeformDeadline,
+    currentTurnParticipantId: state.mpCurrentTurnParticipantId,
+    turnOrder: state.mpTurnOrder,
+    round: state.mpRound,
+    participants: state.mpParticipants,
+    settings: state.mpSettings ?? undefined,
+    selfParticipantId: state.mpMyParticipantId ?? undefined,
+  })
+}
+
 // Last-line-of-defense sanitizer for error strings rendered in toasts. The
 // backend already strips HTML/oversize bodies from provider errors, but this
 // keeps a misbehaving provider (or a stale backend) from wedging the toast
@@ -479,11 +578,12 @@ export function useWebSocket() {
           generationId: payload.generationId,
           chatId: payload.chatId,
           characterName: payload.characterName || 'Assistant',
-          characterId: payload.characterId,
-          avatarUrl: null, // resolved by the component via characterId
+          characterId: state.mpChatId === payload.chatId && !state.mpIsHost ? undefined : payload.characterId,
+          avatarUrl: state.mpChatId === payload.chatId ? state.mpCharacterAvatar : null,
           status: 'assembling',
           model: '',
           startedAt: Date.now(),
+          subtitle: state.mpChatId === payload.chatId ? 'Generating reply' : undefined,
         })
       }),
 
@@ -849,6 +949,7 @@ export function useWebSocket() {
               playNotificationPing(state.chatHeadsCustomCompletionSound?.uploadedAt ?? null)
             }
           }
+          if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
         }
       }),
 
@@ -936,6 +1037,7 @@ export function useWebSocket() {
           } else {
             state.updateChatHead(payload.generationId, { status: 'stopped' })
           }
+          if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
         }
       }),
 
@@ -1527,6 +1629,10 @@ export function useWebSocket() {
           if (payload.characterAvatar !== undefined) {
             state.setCharacterAvatar(payload.characterAvatar)
           }
+          syncMultiplayerChatHead(payload.room, {
+            characterName: payload.chatName || payload.characterName,
+            characterAvatar: payload.characterAvatar,
+          })
           // A hydration snapshot for a PEER (we're not the host) means we just
           // joined — or rejoined — someone else's room: adopt it as the active
           // chat view and refresh the messages. The host owns the real chat, so
@@ -1548,6 +1654,17 @@ export function useWebSocket() {
               if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)
               if (gen.reasoningDurationMs) store.setState({ streamingReasoningDuration: gen.reasoningDurationMs })
               else if (gen.reasoningStartedAt) st.setStreamingReasoningStartedAt(gen.reasoningStartedAt)
+              st.addChatHead({
+                generationId: gen.generationId,
+                chatId: payload.chatId,
+                characterName: gen.characterName || payload.characterName || payload.chatName || 'Assistant',
+                characterId: gen.characterId,
+                avatarUrl: payload.characterAvatar ?? st.mpCharacterAvatar,
+                status: normalizeGenerationHeadStatus(gen.status),
+                model: '',
+                startedAt: Date.now(),
+                subtitle: 'Generating reply',
+              })
             }
             // Record this joined room in the user's own chat history (best-effort,
             // so it shows up in recent/manage chats with the multiplayer badge),
@@ -1567,6 +1684,7 @@ export function useWebSocket() {
           // Stop any relay auto-reconnect before clearing — the room is gone, so
           // we must not try to rejoin it.
           relayClient.disconnect()
+          state.deleteChatHead(payload.chatId)
           state.clearRoom()
           toast.info(i18n.t('multiplayer.roomClosed', { defaultValue: 'The room was closed by the host' }))
         }
@@ -1618,6 +1736,7 @@ export function useWebSocket() {
           // Tear down the relay (and suppress auto-reconnect) before clearing —
           // we've been removed, so we must not try to rejoin.
           relayClient.disconnect()
+          state.deleteChatHead(payload.chatId)
           state.clearRoom()
           toast.warning(
             payload.banned
@@ -1644,6 +1763,7 @@ export function useWebSocket() {
           round: payload.round,
           freeformDeadline: payload.freeformDeadline,
         })
+        syncMultiplayerChatHeadFromStore()
         // The host opened a freeform window — let everyone know they can add to it.
         if (payload.windowOpen) {
           toast.info(
@@ -1658,6 +1778,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.roomId !== state.mpRoomId) return
         state.setRoomTurn({ currentTurnParticipantId: payload.currentTurnParticipantId })
+        syncMultiplayerChatHeadFromStore()
       }),
 
       wsClient.on(EventType.ROOM_PRESENCE, (payload: RoomPresencePayload) => {

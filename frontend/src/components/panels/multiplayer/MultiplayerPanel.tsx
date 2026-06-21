@@ -92,6 +92,7 @@ export default function MultiplayerPanel() {
   const myParticipantId = useStore((s) => s.mpMyParticipantId)
   const setRoomState = useStore((s) => s.setRoomState)
   const clearRoom = useStore((s) => s.clearRoom)
+  const setCharacterAvatar = useStore((s) => s.setCharacterAvatar)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
@@ -175,6 +176,7 @@ export default function MultiplayerPanel() {
       // Compress the bot avatar so peers (who can't fetch the owner-scoped
       // character-avatar endpoint) can render it.
       const characterAvatar = await buildCharacterAvatarSnapshot(activeCharacterId)
+      setCharacterAvatar(characterAvatar)
       // Clamp to the backend's accepted ranges (empty → defaults).
       const freeformWindowSec = Math.min(3600, Math.max(10, parseInt(windowSec, 10) || 120))
       const max = Math.min(8, Math.max(1, parseInt(maxPeers, 10) || 8))
@@ -198,7 +200,7 @@ export default function MultiplayerPanel() {
     } finally {
       setBusy(false)
     }
-  }, [activeChatId, strategy, windowSec, maxPeers, setRoomState, setActiveChat, activeCharacterId, startListening])
+  }, [activeChatId, strategy, windowSec, maxPeers, setRoomState, setActiveChat, activeCharacterId, startListening, setCharacterAvatar])
 
   // After a refresh the store forgets the room but the backend still has it.
   // Re-adopt it (and re-subscribe the socket) so the host isn't offered a
@@ -213,6 +215,7 @@ export default function MultiplayerPanel() {
         const snap = await buildActivePersonaSnapshot()
         const characterAvatar = await buildCharacterAvatarSnapshot(activeCharacterId)
         if (cancelled) return
+        setCharacterAvatar(characterAvatar)
         setRoomState(res.room, { isHost: true })
         wsClient.send({ type: 'room_join', roomId: res.room.roomId, displayName: snap?.name, persona: snap, characterAvatar })
       })
@@ -220,7 +223,7 @@ export default function MultiplayerPanel() {
     return () => {
       cancelled = true
     }
-  }, [activeChatId, roomId, setRoomState, activeCharacterId])
+  }, [activeChatId, roomId, setRoomState, activeCharacterId, setCharacterAvatar])
 
   const join = useCallback(async () => {
     const input = joinId.trim()

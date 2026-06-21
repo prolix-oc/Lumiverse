@@ -1378,7 +1378,19 @@ export interface FloatingAvatarSlice {
 
 // ---- Chat Heads (floating generation status) ----
 
-export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'waiting' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
+export type ChatHeadStatus =
+  | 'assembling'
+  | 'council'
+  | 'council_failed'
+  | 'waiting'
+  | 'reasoning'
+  | 'streaming'
+  | 'completed'
+  | 'stopped'
+  | 'error'
+  | 'mp_your_turn'
+  | 'mp_waiting_turn'
+  | 'mp_freeform'
 
 export interface ChatHeadEntry {
   generationId: string
@@ -1390,6 +1402,8 @@ export interface ChatHeadEntry {
   model: string
   startedAt: number
   attentionCleared?: boolean
+  subtitle?: string
+  multiplayerRoomId?: string
 }
 
 export interface ChatHeadsSlice {

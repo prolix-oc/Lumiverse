@@ -1306,13 +1306,13 @@ function writePeerMessage(room: Room, participant: Participant, content: string)
       content,
       extra: {
         // Lightweight author attribution (rides in extra JSON; no messages-table
-        // column). The avatar is deliberately NOT stamped per message — it's
-        // resolved from the live participant on the frontend, so a data-URL
-        // avatar isn't duplicated onto every row.
+        // column). Include the peer's small relayed avatar so historical messages
+        // still render correctly after the room/participant state is cleared.
         mp: {
           participantId: participant.id,
           displayName: participant.display_name,
           personaName: participant.persona_snapshot?.name,
+          avatarUrl: participant.persona_snapshot?.avatarUrl ?? null,
         },
       },
     },

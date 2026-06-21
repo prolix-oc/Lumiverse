@@ -141,6 +141,10 @@
   background: var(--lumiverse-danger);
 }
 
+.badgeWaiting {
+  background: var(--lumiverse-text-muted);
+}
+
 .badgeIcon {
   width: 7px;
   height: 7px;
@@ -217,6 +221,14 @@
 
 .notifPipUnread {
   background: var(--lumiverse-danger);
+}
+
+.notifPipTurn {
+  background: var(--lumiverse-primary);
+}
+
+.notifPipWaiting {
+  background: rgba(116, 104, 138, 0.95);
 }
 
 .notifPipIcon {
@@ -357,6 +369,13 @@
 .head:hover .tooltip {
   opacity: 1;
   transform: translateY(-50%) translateX(0);
+}
+
+.tooltipSub {
+  margin-top: 2px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 400;
 }
 
 /* Don't show tooltips while dragging */

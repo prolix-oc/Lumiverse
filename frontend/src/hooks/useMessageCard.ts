@@ -397,7 +397,7 @@ export function useMessageCard(message: Message, chatId: string) {
   // avoids re-rendering every card on typing/presence churn.
   const mpStore = useStore.getState()
   const mpStamp = isUser && message.extra?.mp && typeof message.extra.mp === 'object'
-    ? (message.extra.mp as { participantId?: string; displayName?: string; personaName?: string })
+    ? (message.extra.mp as { participantId?: string; displayName?: string; personaName?: string; avatarUrl?: string | null })
     : null
   const mpParticipant = mpStore.mpRoomId && isUser
     ? mpStamp?.participantId
@@ -405,7 +405,7 @@ export function useMessageCard(message: Message, chatId: string) {
       : mpStore.mpParticipants.find((p) => !!p.persona?.name && p.persona.name === (message.name || '').trim())
     : undefined
   const isMpAuthor = !!mpStamp || !!mpParticipant
-  const mpAvatarData = mpParticipant?.persona?.avatarUrl || ''
+  const mpAvatarData = mpParticipant?.persona?.avatarUrl || mpStamp?.avatarUrl || ''
   const mpDisplayName = isMpAuthor
     ? (mpParticipant?.persona?.name || mpStamp?.personaName || mpStamp?.displayName || displayName)
     : displayName

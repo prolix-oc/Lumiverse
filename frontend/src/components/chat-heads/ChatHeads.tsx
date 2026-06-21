@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } fr
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
-import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle, Volume2, VolumeX } from 'lucide-react'
+import { X, EyeOff, Columns2, Rows2, Wrench, AlertTriangle, Volume2, VolumeX, PencilLine, UsersRound } from 'lucide-react'
 import { useStore } from '@/store'
 import { generateApi } from '@/api/generate'
 import { getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
@@ -471,7 +471,9 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
     head.status === 'council' ||
     head.status === 'waiting' ||
     head.status === 'reasoning' ||
-    head.status === 'streaming'
+    head.status === 'streaming' ||
+    head.status === 'mp_your_turn' ||
+    head.status === 'mp_freeform'
   const isCompleted = head.status === 'completed' || head.status === 'stopped'
   const isError = head.status === 'error'
   const avatarUrl = head.avatarUrl || getCharacterAvatarThumbUrlById(head.characterId)
@@ -543,12 +545,33 @@ function ChatHeadBubble({ head, size, index, isExiting }: { head: ChatHeadEntry;
         <div className={`${styles.notifPip} ${styles.notifPipUnread}`} />
       )}
 
+      {/* Multiplayer: current user's turn */}
+      {head.status === 'mp_your_turn' && (
+        <div className={`${styles.notifPip} ${styles.notifPipTurn}`}><PencilLine className={styles.notifPipIcon} /></div>
+      )}
+
+      {/* Multiplayer: freeform writing window */}
+      {head.status === 'mp_freeform' && (
+        <div className={styles.speechBubble}>
+          <SpeechBubbleSvg />
+          <PencilLine className={styles.wrenchIcon} />
+        </div>
+      )}
+
+      {/* Multiplayer: waiting for another participant */}
+      {head.status === 'mp_waiting_turn' && (
+        <div className={`${styles.notifPip} ${styles.notifPipWaiting}`}><UsersRound className={styles.notifPipIcon} /></div>
+      )}
+
       {/* Error: pip with X icon */}
       {isError && (
         <div className={styles.notifPip}><X className={styles.notifPipIcon} /></div>
       )}
 
-      <div className={styles.tooltip}>{head.characterName}</div>
+      <div className={styles.tooltip}>
+        <div>{head.characterName}</div>
+        {head.subtitle && <div className={styles.tooltipSub}>{head.subtitle}</div>}
+      </div>
     </div>
   )
 }
@@ -577,12 +600,16 @@ function StatusBadge({ status }: { status: ChatHeadEntry['status'] }) {
       return <div className={`${styles.badge} ${styles.badgeError}`} />
     case 'reasoning':
     case 'streaming':
+    case 'mp_your_turn':
+    case 'mp_freeform':
       return <div className={`${styles.badge} ${styles.badgeActive}`} />
     case 'completed':
     case 'stopped':
       return <div className={`${styles.badge} ${styles.badgeCompleted}`} />
     case 'error':
       return <div className={`${styles.badge} ${styles.badgeError}`} />
+    case 'mp_waiting_turn':
+      return <div className={`${styles.badge} ${styles.badgeWaiting}`} />
     default:
       return null
   }

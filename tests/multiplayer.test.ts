@@ -182,6 +182,8 @@ describe("multiplayer turn engine", () => {
   test("round-robin submit is turn-gated and stamps author attribution", () => {
     const { room, chatId } = makeRoom("round_robin");
     const peerA = joinPeer(room.id, "peerA", "Ada");
+    const avatarUrl = "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vuUAAA=";
+    mp.updateParticipantPersona(room.id, peerA, { name: "Ada", avatarUrl });
 
     // host's turn → peer rejected
     const early = mp.submitPeerMessage(room.id, peerA, "hi");
@@ -197,6 +199,7 @@ describe("multiplayer turn engine", () => {
     expect(last.is_user).toBe(true);
     expect(last.name).toBe("Ada");
     expect(last.extra.mp.participantId).toBe(peerA);
+    expect(last.extra.mp.avatarUrl).toBe(avatarUrl);
   });
 
   test("empty and oversized messages are rejected", () => {
