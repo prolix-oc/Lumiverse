@@ -31,6 +31,16 @@ function getImageFrameStyle(att: MessageAttachment): CSSProperties | undefined {
   }
 }
 
+function getLocalImageUrl(att: MessageAttachment): string {
+  return imagesApi.url(att.image_id)
+}
+
+function getRelayPreviewUrl(att: MessageAttachment): string | null {
+  return typeof att.relay_preview_url === 'string' && att.relay_preview_url.startsWith('data:image/')
+    ? att.relay_preview_url
+    : null
+}
+
 export default function MessageAttachments({ attachments, isUser, chatId, messageId }: MessageAttachmentsProps) {
   const { t } = useTranslation('chat')
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
@@ -45,9 +55,9 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
     setLightboxSrc(null)
     setLightboxImageId(null)
   }, [])
-  const openLightbox = useCallback((imageId: string) => {
-    setLightboxImageId(imageId)
-    setLightboxSrc(imagesApi.url(imageId))
+  const openLightbox = useCallback((att: MessageAttachment) => {
+    setLightboxImageId(att.image_id)
+    setLightboxSrc(getRelayPreviewUrl(att) || getLocalImageUrl(att))
   }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)
@@ -139,7 +149,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.imageThumbUser}
               style={getImageFrameStyle(att)}
-              onClick={() => openLightbox(att.image_id)}
+              onClick={() => openLightbox(att)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
@@ -147,10 +157,18 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               title={att.original_filename}
             >
               <LazyImage
-                src={imagesApi.url(att.image_id)}
+                src={getLocalImageUrl(att)}
                 alt={att.original_filename}
                 style={{ objectFit: 'contain' }}
                 spinnerSize={18}
+                fallback={getRelayPreviewUrl(att) ? (
+                  <LazyImage
+                    src={getRelayPreviewUrl(att)}
+                    alt={att.original_filename}
+                    style={{ objectFit: 'contain' }}
+                    spinnerSize={18}
+                  />
+                ) : null}
               />
             </button>
           ) : (
@@ -159,14 +177,14 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.inlineImageBtn}
               style={getImageFrameStyle(att)}
-              onClick={() => openLightbox(att.image_id)}
+              onClick={() => openLightbox(att)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
               onTouchEnd={canActOnImage ? longPress.onTouchEnd : undefined}
             >
               <LazyImage
-                src={imagesApi.url(att.image_id)}
+                src={getLocalImageUrl(att)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
                 style={att.width && att.height
@@ -175,6 +193,19 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
                 }
                 containerClassName={styles.inlineImageWrap}
                 spinnerSize={20}
+                fallback={getRelayPreviewUrl(att) ? (
+                  <LazyImage
+                    src={getRelayPreviewUrl(att)}
+                    alt={att.original_filename}
+                    className={styles.inlineImage}
+                    style={att.width && att.height
+                      ? { objectFit: 'contain' }
+                      : { objectFit: 'contain', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '240px' }
+                    }
+                    containerClassName={styles.inlineImageWrap}
+                    spinnerSize={20}
+                  />
+                ) : null}
               />
             </button>
           )

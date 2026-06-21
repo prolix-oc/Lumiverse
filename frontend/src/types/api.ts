@@ -168,6 +168,8 @@ export interface MessageAttachment {
   original_filename: string;
   width?: number;
   height?: number;
+  /** Image-only: bounded WebP data URL for multiplayer peers that cannot fetch the host's image row. */
+  relay_preview_url?: string;
   /**
    * Audio-only: the message swipe this audio was generated for. The
    * player is only visible when `message.swipe_id` matches. Undefined

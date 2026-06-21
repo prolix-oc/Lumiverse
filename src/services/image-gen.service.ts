@@ -13,6 +13,7 @@ import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
 import * as characterLoraSvc from "./character-lora.service";
 import { buildMacroEnvForChat } from "./chats.service";
 import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros";
+import sharp from "../utils/sharp-config";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
@@ -31,6 +32,29 @@ import type { ImageGenConnectionProfile } from "../types/image-gen-connection";
 import "../image-gen/index";
 
 const IMAGE_SETTINGS_KEY = "imageGeneration";
+const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
+
+async function buildRelayImagePreview(dataUrl: string): Promise<string | undefined> {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return undefined;
+  const input = Buffer.from(match[2], "base64");
+
+  for (const size of [640, 480, 320]) {
+    for (const quality of [75, 60, 45, 30]) {
+      try {
+        const output = await sharp(input)
+          .resize(size, size, { fit: "inside", withoutEnlargement: true })
+          .webp({ quality })
+          .toBuffer();
+        const preview = `data:image/webp;base64,${output.toString("base64")}`;
+        if (preview.length <= RELAY_IMAGE_PREVIEW_MAX_CHARS) return preview;
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
 
 interface ImageGenSettings {
   enabled: boolean;
@@ -430,6 +454,7 @@ export async function generateSceneBackground(
       );
       imageId = image.id;
       imageUrl = `/api/v1/image-gen/results/${image.id}`;
+      const relayPreviewUrl = await buildRelayImagePreview(response.imageDataUrl);
 
       const newAttachment = {
         type: "image" as const,
@@ -438,6 +463,7 @@ export async function generateSceneBackground(
         original_filename: image.original_filename,
         width: image.width ?? undefined,
         height: image.height ?? undefined,
+        relay_preview_url: relayPreviewUrl,
       };
       const imageGenMeta = {
         provider: connection.provider,

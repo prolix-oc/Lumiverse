@@ -5,6 +5,8 @@ export interface MessageAttachment {
   original_filename: string;
   width?: number;             // images only
   height?: number;            // images only
+  /** Image-only: bounded WebP data URL for multiplayer peers that cannot fetch the host's image row. */
+  relay_preview_url?: string;
   /**
    * Audio-only: the message swipe this audio was generated for. Audio is
    * a per-swipe artifact (regenerating a swipe should not invalidate the
