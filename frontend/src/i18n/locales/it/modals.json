@@ -511,6 +511,7 @@
     "entry": "voce",
     "entries": "voci",
     "constantSkipped": "{{count}} {{entryWord}} costante saltata (sempre attiva)",
+    "keysRetained": "{{count}} {{entryWord}} will keep trigger keywords for hybrid activation",
     "alreadySkipped": "{{count}} {{entryWord}} già vettorizzata saltata",
     "emptySkipped": "{{count}} {{entryWord}} vuota saltata",
     "disabledSkipped": "{{count}} {{entryWord}} disabilitata saltata",

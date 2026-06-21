@@ -360,6 +360,60 @@
   background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.25));
 }
 
+.rootDropSlotWrap {
+  position: relative;
+  height: 0;
+  margin: 0;
+  overflow: visible;
+}
+
+.rootDropSlot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  z-index: 2;
+  height: 18px;
+  opacity: 0;
+  border-radius: 8px;
+  border: 1px dashed transparent;
+  background: transparent;
+  transition: opacity var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.rootDropSlotActive {
+  opacity: 1;
+  border: 1px dashed var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.16));
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+}
+
+.rootDropSlotOver {
+  border-color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+  box-shadow: inset 0 0 0 1px var(--lumiverse-primary-020);
+}
+
+.rootDropSlotAppendArmed {
+  opacity: 1;
+  border-color: var(--lumiverse-primary);
+  background: color-mix(in srgb, var(--lumiverse-primary) 24%, transparent);
+  animation: rootDropAppendFlash 0.6s steps(2, jump-none) infinite;
+}
+
+@keyframes rootDropAppendFlash {
+  0%, 100% {
+    border-color: var(--lumiverse-primary);
+    background: color-mix(in srgb, var(--lumiverse-primary) 34%, transparent);
+    box-shadow: inset 0 0 0 1px var(--lumiverse-primary), 0 0 0 3px color-mix(in srgb, var(--lumiverse-primary) 26%, transparent);
+  }
+
+  50% {
+    border-color: color-mix(in srgb, var(--lumiverse-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent);
+    box-shadow: inset 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
 .itemIndented {
   margin-left: 14px;
   border-left: 2px solid var(--lumiverse-primary-020);

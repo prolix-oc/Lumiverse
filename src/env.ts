@@ -51,6 +51,21 @@ export interface EnvConfig {
    * on a known-good filesystem with disk headroom. See CLAUDE.md.
    */
   sqliteMmapEnabled: boolean;
+  /**
+   * Optional environment override for the vector database backend. When
+   * `provider` is set, it takes precedence over the owner's stored
+   * `vectorStoreConfig` (for headless/Docker self-hosting) and the operator UI
+   * renders the connection as read-only. Empty `provider` = use stored config.
+   */
+  vectorStore: {
+    provider: string; // "" | "lancedb" | "qdrant" | "milvus"
+    qdrantUrl: string;
+    qdrantApiKey: string;
+    milvusAddress: string;
+    milvusUsername: string;
+    milvusPassword: string;
+    milvusSsl: boolean;
+  };
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -146,6 +161,18 @@ export function loadEnv(): EnvConfig {
     process.env.LUMIVERSE_SQLITE_MMAP_ENABLED === "true" &&
     process.env.LUMIVERSE_SQLITE_MMAP_DISABLED !== "true";
 
+  // Optional vector-store backend override (headless/Docker). When provider is
+  // set it wins over the owner's stored vectorStoreConfig. Parsed once here.
+  const vectorStore = {
+    provider: (process.env.LUMIVERSE_VECTOR_STORE_PROVIDER || "").trim().toLowerCase(),
+    qdrantUrl: (process.env.LUMIVERSE_QDRANT_URL || "").trim(),
+    qdrantApiKey: process.env.LUMIVERSE_QDRANT_API_KEY || "",
+    milvusAddress: (process.env.LUMIVERSE_MILVUS_ADDRESS || "").trim(),
+    milvusUsername: process.env.LUMIVERSE_MILVUS_USERNAME || "",
+    milvusPassword: process.env.LUMIVERSE_MILVUS_PASSWORD || "",
+    milvusSsl: process.env.LUMIVERSE_MILVUS_SSL === "true",
+  };
+
   return {
     port,
     encryptionKey,
@@ -168,6 +195,7 @@ export function loadEnv(): EnvConfig {
     stForceNewMigration,
     pollinationsAppKey,
     sqliteMmapEnabled,
+    vectorStore,
   };
 }
 

@@ -15,6 +15,7 @@ interface VectorizationJob {
 
 const WORLD_BOOK_SWEEP_INTERVAL_MS = 60_000;
 const WORLD_BOOK_SWEEP_LIMIT_PER_USER = 100;
+const CHAT_CHUNK_REQUEUE_LIMIT = 500;
 
 function normalizeWorldBookVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
   if (
@@ -272,18 +273,28 @@ class VectorizationQueue {
     const placeholders = entryIds.map(() => "?").join(", ");
     const rows = getDb()
       .query(`
-        SELECT e.*
+        SELECT e.*, wb.name AS world_book_name
         FROM world_book_entries e
         JOIN world_books wb ON wb.id = e.world_book_id
         WHERE wb.user_id = ?
           AND e.id IN (${placeholders})
           AND (e.vector_index_status != 'indexed' OR e.vector_index_status IS NULL)
+        ORDER BY wb.name COLLATE NOCASE, e.updated_at ASC
       `)
       .all(jobs[0].userId, ...entryIds) as any[];
 
     if (rows.length === 0) return;
 
     const entries = rows.map(rowToWorldBookEntry);
+    const bookCounts = new Map<string, number>();
+    for (const row of rows) {
+      const name = String(row.world_book_name || "Untitled world book");
+      bookCounts.set(name, (bookCounts.get(name) ?? 0) + 1);
+    }
+    const bookParts = Array.from(bookCounts.entries()).map(([name, count]) => `${name} (${count})`);
+    const bookLabel = bookParts.length === 1
+      ? bookParts[0]
+      : `${bookParts.slice(0, 5).join(", ")}${bookParts.length > 5 ? `, +${bookParts.length - 5} more books` : ""}`;
     try {
       const cfg = await embeddingsSvc.getEmbeddingConfig(jobs[0].userId);
       await embeddingsSvc.reindexWorldBookEntries(jobs[0].userId, entries, {
@@ -291,7 +302,7 @@ class VectorizationQueue {
         optimizeAfter: false,
         rebuildVectorIndex: false,
       });
-      console.info(`[vectorization] Processed ${entries.length} world book entr${entries.length === 1 ? "y" : "ies"}`);
+      console.info(`[vectorization] Processed ${entries.length} world book entr${entries.length === 1 ? "y" : "ies"} for ${bookParts.length === 1 ? bookLabel : `multiple books: ${bookLabel}`}`);
     } catch (err) {
       const errorMsg = String(err instanceof Error ? err.message : err);
       console.warn("[vectorization] World book batch failed, marked as error:", errorMsg);
@@ -339,6 +350,33 @@ export function queuePendingChatChunkVectorization(userId: string, chatId: strin
   }
 
   return rows.length;
+}
+
+export async function queueStaleChatChunkVectorization(limit = CHAT_CHUNK_REQUEUE_LIMIT, priority = 2): Promise<number> {
+  const rows = getDb().query(
+    `SELECT cc.id, cc.chat_id, c.user_id
+     FROM chat_chunks cc
+     JOIN chats c ON c.id = cc.chat_id
+     WHERE cc.vectorized_at IS NULL
+     ORDER BY c.updated_at DESC, cc.updated_at ASC, cc.created_at ASC
+     LIMIT ?`,
+  ).all(Math.max(1, limit)) as Array<{ id: string; chat_id: string; user_id: string }>;
+
+  const eligibleUsers = new Map<string, boolean>();
+  let queued = 0;
+  for (const row of rows) {
+    let eligible = eligibleUsers.get(row.user_id);
+    if (eligible === undefined) {
+      const cfg = await embeddingsSvc.getEmbeddingConfig(row.user_id);
+      eligible = !!(cfg.enabled && cfg.vectorize_chat_messages && cfg.has_api_key);
+      eligibleUsers.set(row.user_id, eligible);
+    }
+    if (!eligible) continue;
+    queueChunkVectorization(row.user_id, row.chat_id, row.id, priority);
+    queued++;
+  }
+
+  return queued;
 }
 
 export function queueWorldBookEntryVectorization(userId: string, entryId: string, priority = 4) {

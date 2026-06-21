@@ -151,6 +151,45 @@ describe("finalizeActivatedWorldInfoEntries", () => {
 });
 
 describe("activateWorldInfo recursion settings", () => {
+  test("activation cache invalidates on same-length keyword and message content changes", () => {
+    const entryId = crypto.randomUUID();
+    const uid = crypto.randomUUID();
+    const messageId = crypto.randomUUID();
+
+    const first = makeEntry({
+      id: entryId,
+      uid,
+      key: ["alpha"],
+      content: "first",
+      vectorized: false,
+    });
+    const second = makeEntry({
+      id: entryId,
+      uid,
+      key: ["bravo"],
+      content: "reply",
+      vectorized: false,
+    });
+
+    const firstResult = activateWorldInfo({
+      entries: [first],
+      messages: [{ ...makeMessage("alpha"), id: messageId }],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+    expect(firstResult.activatedEntries.map((entry) => entry.content)).toEqual(["first"]);
+
+    const secondResult = activateWorldInfo({
+      entries: [second],
+      messages: [{ ...makeMessage("bravo"), id: messageId }],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+    expect(secondResult.activatedEntries.map((entry) => entry.content)).toEqual(["reply"]);
+  });
+
   test("maxRecursionPasses=0 only performs the base keyword scan", () => {
     const first = makeEntry({
       key: ["alpha"],

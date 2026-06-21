@@ -1987,6 +1987,25 @@ export function deleteMessage(userId: string, id: string): boolean {
   return result.changes > 0;
 }
 
+function scheduleMemoryRebuildForActiveMessageChange(userId: string, chatId: string, messageId: string, reason: string): void {
+  try {
+    invalidateChatMemoryCache(chatId);
+  } catch { /* test/minimal schemas may omit runtime cache tables */ }
+  try {
+    memoryCortex.invalidateCortexCache(chatId);
+    memoryCortex.invalidateLinkedCortexCache(chatId);
+  } catch { /* ignore if not loaded */ }
+
+  const hasChatChunksTable = !!getDb()
+    .query("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name = 'chat_chunks'")
+    .get();
+  if (!hasChatChunksTable) return;
+
+  rebuildChatChunksFromMessages(userId, chatId, [messageId]).catch(err => {
+    console.warn(`[chats] Failed to rebuild chunks after ${reason}:`, err);
+  });
+}
+
 // --- Swipes ---
 
 export function addSwipe(userId: string, messageId: string, content: string): Message | null {
@@ -2026,6 +2045,9 @@ export function addSwipe(userId: string, messageId: string, content: string): Me
     },
     userId,
   );
+  if (content !== msg.content) {
+    scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe add");
+  }
   return updated;
 }
 
@@ -2060,6 +2082,10 @@ export function updateSwipe(userId: string, messageId: string, swipeIdx: number,
     },
     userId,
   );
+
+  if (swipeIdx === msg.swipe_id && content !== msg.content) {
+    scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe update");
+  }
 
   return updated;
 }
@@ -2117,6 +2143,9 @@ export function deleteSwipe(userId: string, messageId: string, swipeIdx: number)
     },
     userId,
   );
+  if (newContent !== msg.content) {
+    scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe delete");
+  }
   return updated;
 }
 
@@ -2151,6 +2180,9 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
     },
     userId,
   );
+  if (nextContent !== msg.content) {
+    scheduleMemoryRebuildForActiveMessageChange(userId, updated.chat_id, messageId, "swipe navigation");
+  }
   return updated;
 }
 

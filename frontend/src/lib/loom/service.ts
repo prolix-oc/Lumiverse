@@ -44,6 +44,7 @@ export function createBlock(overrides: Partial<PromptBlock> = {}): PromptBlock {
     isLocked: false,
     color: null,
     injectionTrigger: [],
+    group: null,
     categoryMode: null,
     ...overrides,
   }
@@ -195,16 +196,32 @@ function coerceCategoryMode(mode: unknown): PromptBlock['categoryMode'] {
   return mode === 'radio' || mode === 'checkbox' ? mode : null
 }
 
+function normalizeCategoryGroups(blocks: PromptBlock[]): PromptBlock[] {
+  let currentCategoryId: string | null = null
+  return blocks.map((block) => {
+    if (block.marker === 'category') {
+      currentCategoryId = block.id
+      return { ...block, group: null }
+    }
+
+    if (block.group !== undefined) {
+      return { ...block, group: block.group || null }
+    }
+
+    return { ...block, group: currentCategoryId }
+  })
+}
+
 export function normalizeCategoryBlockState(
   blocks: PromptBlock[],
   preferredBlockIdByCategory?: Map<string, string>,
 ): PromptBlock[] {
-  const normalizedBlocks = blocks.map((block) => ({
+  const normalizedBlocks = normalizeCategoryGroups(blocks.map((block) => ({
     ...block,
     categoryMode: block.marker === 'category'
       ? coerceCategoryMode(block.categoryMode)
       : null,
-  }))
+  })))
 
   for (const group of computeGroups(normalizedBlocks)) {
     if (!group.categoryBlock || group.categoryBlock.categoryMode !== 'radio') continue
@@ -412,6 +429,12 @@ export function computeGroups(blocks: PromptBlock[] | undefined): CategoryGroup[
       }
       currentGroup = { categoryBlock: block, children: [] }
     } else {
+      if (block.group !== undefined && block.group !== (currentGroup.categoryBlock?.id ?? null)) {
+        if (currentGroup.categoryBlock || currentGroup.children.length > 0) {
+          result.push(currentGroup)
+        }
+        currentGroup = { categoryBlock: null, children: [] }
+      }
       currentGroup.children.push(block)
     }
   }

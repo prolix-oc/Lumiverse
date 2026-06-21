@@ -442,17 +442,15 @@ function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): st
  * Returns null if no cached result exists or if it has expired.
  * This is a synchronous, non-blocking call — safe to use in the generation hot path.
  *
- * When `requireExcludedMessageId` is provided (regenerate/swipe), the cached
- * entry is only returned if that message was excluded when the entry was
- * warmed. Otherwise the entry could contain a chunk for the message being
- * regenerated and re-inject the prior swipe's text as a "memory". On a reject
- * the caller falls through to exclusion-aware vector retrieval, so correctness
- * is preserved at the cost of one cold retrieval in the (rare) cross-message
- * regen case. Normal sends pass nothing here and keep the fast warm-cache read.
+ * When `requiredExcludedMessageIds` is provided, the cached entry is only
+ * returned if every required message was excluded when the entry was warmed.
+ * Otherwise it could contain the regen target or current live-context tail and
+ * re-inject it as "memory". On a reject the caller falls through to
+ * exclusion-aware vector retrieval.
  */
 export function getCachedCortexResult(
   chatId: string,
-  requireExcludedMessageId?: string,
+  requiredExcludedMessageIds?: string | string[],
 ): CortexResult | null {
   const entry = cortexResultCache.get(chatId);
   if (!entry) return null;
@@ -460,14 +458,18 @@ export function getCachedCortexResult(
     cortexResultCache.delete(chatId);
     return null;
   }
-  if (
-    requireExcludedMessageId &&
-    !entry.excludeMessageIds.includes(requireExcludedMessageId)
-  ) {
-    // Stale-context entry: it was warmed without excluding the message we are
-    // now regenerating, so it may contain that message's own chunk. Treat as a
-    // miss and let the caller fall back to an exclusion-aware retrieval.
-    return null;
+  const required = typeof requiredExcludedMessageIds === "string"
+    ? [requiredExcludedMessageIds]
+    : (requiredExcludedMessageIds ?? []);
+  if (required.length > 0) {
+    const excluded = new Set(entry.excludeMessageIds);
+    for (const id of required) {
+      if (!excluded.has(id)) {
+        // Stale-context entry: it was warmed without excluding a message that is
+        // now live or being regenerated, so it may contain that chunk.
+        return null;
+      }
+    }
   }
   return entry.result;
 }

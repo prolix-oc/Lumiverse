@@ -1,6 +1,6 @@
 {
   "name": "lumiverse-backend",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "dependencies": {
     "@lancedb/lancedb": "^0.29.0",
     "@lenml/tokenizer-claude": "^3.7.2",
@@ -10,6 +10,7 @@
     "@msgpack/msgpack": "^3.1.2",
     "@opentelemetry/api": "^1.9.1",
     "@pushforge/builder": "^2.0.1",
+    "@zilliz/milvus2-sdk-node": "^3.0.3",
     "apache-arrow": "18.1.0",
     "better-auth": "^1.5.3",
     "fflate": "^0.8.2",

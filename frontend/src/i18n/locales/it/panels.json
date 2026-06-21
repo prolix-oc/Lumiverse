@@ -1455,6 +1455,8 @@
     "convertIntro_other": "Questo abiliterà l'attivazione vettoriale per {{count}} voci, cancellerà le loro parole chiave trigger primarie e secondarie e avvierà immediatamente la reindicizzazione.",
     "convertKeysCleared_one": "{{count}} voce ha parole chiave trigger che verranno cancellate",
     "convertKeysCleared_other": "{{count}} voci hanno parole chiave trigger che verranno cancellate",
+    "convertKeysRetained_one": "{{count}} entry has trigger keywords that will be retained for hybrid activation",
+    "convertKeysRetained_other": "{{count}} entries have trigger keywords that will be retained for hybrid activation",
     "convertConstantSkipped_one": "{{count}} voce costante saltata (sempre attiva)",
     "convertConstantSkipped_other": "{{count}} voci costanti saltate (sempre attive)",
     "convertAlreadyVectorized": "{{count}} già vettorizzate",

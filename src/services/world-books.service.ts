@@ -163,6 +163,22 @@ function normalizeKeywordList(values: string[]): string[] {
   return normalized;
 }
 
+function importExtensionRecord(raw: any): Record<string, any> {
+  return raw?.extensions && typeof raw.extensions === "object" && !Array.isArray(raw.extensions)
+    ? raw.extensions
+    : {};
+}
+
+function importValue(raw: any, extensions: Record<string, any>, ...keys: string[]): any {
+  for (const key of keys) {
+    if (raw[key] !== undefined) return raw[key];
+  }
+  for (const key of keys) {
+    if (extensions[key] !== undefined) return extensions[key];
+  }
+  return undefined;
+}
+
 export function normalizeImportedEntries(raw: unknown): any[] {
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === "object") return Object.values(raw as Record<string, any>);
@@ -222,6 +238,7 @@ function normalizeImportedPosition(position: unknown): number {
 }
 
 export function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
+  const ext = importExtensionRecord(raw);
   const keys: string[] = Array.isArray(raw.keys) ? raw.keys
     : Array.isArray(raw.key) ? raw.key
     : typeof raw.key === "string" ? raw.key.split(",").map((k: string) => k.trim()).filter(Boolean)
@@ -258,7 +275,7 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
   }
 
   return {
-    outlet_name: raw.outlet_name ?? raw.outletName,
+    outlet_name: importValue(raw, ext, "outlet_name", "outletName"),
     key: keys,
     keysecondary: secondaryKeys,
     content: raw.content || "",
@@ -266,29 +283,29 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     disabled: !enabled,
     order_value: resolveImportOrder(raw, index),
     position: normalizeImportedPosition(raw.position),
-    depth: raw.depth ?? 4,
+    depth: importValue(raw, ext, "depth") ?? 4,
     role: normalizeImportRole(raw.role) || undefined,
-    selective: raw.selective ?? false,
-    constant: raw.constant ?? false,
-    case_sensitive: raw.case_sensitive ?? raw.caseSensitive ?? false,
-    match_whole_words: raw.match_whole_words ?? raw.matchWholeWords ?? false,
-    group_name: raw.group || raw.group_name || "",
-    group_override: raw.group_override ?? raw.groupOverride ?? false,
-    group_weight: raw.group_weight ?? raw.groupWeight ?? 100,
-    probability: raw.probability ?? 100,
-    scan_depth: raw.scan_depth ?? raw.scanDepth ?? undefined,
-    automation_id: raw.automation_id || raw.automationId || undefined,
-    selective_logic: raw.selectiveLogic ?? raw.selective_logic ?? 0,
-    use_probability: raw.useProbability !== undefined ? raw.useProbability : (raw.use_probability !== undefined ? raw.use_probability : true),
-    use_regex: raw.use_regex ?? raw.useRegex ?? false,
-    prevent_recursion: raw.prevent_recursion ?? raw.preventRecursion ?? false,
-    exclude_recursion: raw.exclude_recursion ?? raw.excludeRecursion ?? false,
-    delay_until_recursion: raw.delay_until_recursion ?? raw.delayUntilRecursion ?? false,
-    priority: raw.priority ?? 10,
-    sticky: raw.sticky ?? 0,
-    cooldown: raw.cooldown ?? 0,
-    delay: raw.delay ?? 0,
-    vectorized: raw.vectorized ?? false,
+    selective: importValue(raw, ext, "selective") ?? false,
+    constant: importValue(raw, ext, "constant") ?? false,
+    case_sensitive: importValue(raw, ext, "case_sensitive", "caseSensitive") ?? false,
+    match_whole_words: importValue(raw, ext, "match_whole_words", "matchWholeWords") ?? false,
+    group_name: importValue(raw, ext, "group", "group_name") || "",
+    group_override: importValue(raw, ext, "group_override", "groupOverride") ?? false,
+    group_weight: importValue(raw, ext, "group_weight", "groupWeight") ?? 100,
+    probability: importValue(raw, ext, "probability") ?? 100,
+    scan_depth: importValue(raw, ext, "scan_depth", "scanDepth") ?? undefined,
+    automation_id: importValue(raw, ext, "automation_id", "automationId") || undefined,
+    selective_logic: importValue(raw, ext, "selectiveLogic", "selective_logic") ?? 0,
+    use_probability: importValue(raw, ext, "useProbability", "use_probability") ?? true,
+    use_regex: importValue(raw, ext, "use_regex", "useRegex") ?? false,
+    prevent_recursion: importValue(raw, ext, "prevent_recursion", "preventRecursion") ?? false,
+    exclude_recursion: importValue(raw, ext, "exclude_recursion", "excludeRecursion") ?? false,
+    delay_until_recursion: importValue(raw, ext, "delay_until_recursion", "delayUntilRecursion") ?? false,
+    priority: importValue(raw, ext, "priority") ?? 10,
+    sticky: importValue(raw, ext, "sticky") ?? 0,
+    cooldown: importValue(raw, ext, "cooldown") ?? 0,
+    delay: importValue(raw, ext, "delay") ?? 0,
+    vectorized: importValue(raw, ext, "vectorized") ?? false,
     extensions: { ...raw.extensions, ...extras },
   };
 }
@@ -596,13 +613,13 @@ export function setWorldBookSemanticActivation(
 export function getConvertToVectorizedPreview(
   userId: string,
   worldBookId: string,
-): { total: number; eligible: number; keys_to_clear: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
+): { total: number; eligible: number; keys_to_clear: number; keys_retained: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
   const entries = listEntries(userId, worldBookId);
 
   let eligible = 0;
-  let keysToClear = 0;
+  let keysRetained = 0;
   let constantSkipped = 0;
   let alreadyVectorized = 0;
   let emptySkipped = 0;
@@ -614,14 +631,14 @@ export function getConvertToVectorizedPreview(
     if (!hasContent) { emptySkipped++; continue; }
     if (entry.disabled) { disabledSkipped++; continue; }
     const hasKeys = (entry.key?.length ?? 0) > 0 || (entry.keysecondary?.length ?? 0) > 0;
-    if (entry.vectorized && !hasKeys) { alreadyVectorized++; continue; }
+    if (entry.vectorized) { alreadyVectorized++; continue; }
     eligible++;
     if (hasKeys) {
-      keysToClear++;
+      keysRetained++;
     }
   }
 
-  return { total: entries.length, eligible, keys_to_clear: keysToClear, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
+  return { total: entries.length, eligible, keys_to_clear: 0, keys_retained: keysRetained, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
 }
 
 export function convertToVectorized(
@@ -637,8 +654,6 @@ export function convertToVectorized(
   const converted = db.query(
     `UPDATE world_book_entries
       SET vectorized = 1,
-          key = '[]',
-          keysecondary = '[]',
           vector_index_status = 'pending',
           vector_indexed_at = NULL,
           vector_index_error = NULL,
@@ -647,7 +662,7 @@ export function convertToVectorized(
         AND constant = 0
         AND disabled = 0
         AND length(trim(content)) > 0
-        AND (vectorized = 0 OR key != '[]' OR keysecondary != '[]')`
+        AND vectorized = 0`
   ).run(now, worldBookId).changes;
 
   if (converted > 0) {

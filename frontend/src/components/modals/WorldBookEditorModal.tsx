@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
-import { Toggle } from '@/components/shared/Toggle'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { worldBooksApi } from '@/api/world-books'
@@ -11,19 +10,14 @@ import ImportWorldBookModal, { type WorldBookImportResult } from './ImportWorldB
 import PostImportWorldBookModal from '@/components/shared/PostImportWorldBookModal'
 import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookDiagnosticsModal'
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
-import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import WorldBookEntriesSection from '@/components/shared/WorldBookEntriesSection'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { useFolders } from '@/hooks/useFolders'
 import { useWorldBookListLiveSync } from '@/hooks/useWorldBookListLiveSync'
-import Pagination from '@/components/shared/Pagination'
-import type { WorldBook, WorldBookEntry, WorldBookVectorSummary } from '@/types/api'
+import type { WorldBook, WorldBookVectorSummary } from '@/types/api'
 
 import styles from './WorldBookEditorModal.module.css'
 import clsx from 'clsx'
-
-type EntrySortBy = 'order' | 'priority' | 'created' | 'updated' | 'name'
-type EntrySortDir = 'asc' | 'desc'
 
 export default function WorldBookEditorModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'worldBookEditor' })
@@ -40,15 +34,6 @@ export default function WorldBookEditorModal() {
     (modalProps.bookId as string) || null
   )
 
-  // Entry state
-  const [entries, setEntries] = useState<WorldBookEntry[]>([])
-  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
-  const [entryTotal, setEntryTotal] = useState(0)
-  const [entryPage, setEntryPage] = useState(1)
-  const [entrySearchFilter, setEntrySearchFilter] = useState('')
-  const [entrySortBy, setEntrySortBy] = useState<EntrySortBy>('order')
-  const [entrySortDir, setEntrySortDir] = useState<EntrySortDir>('asc')
-
   // Book editing state
   const [bookName, setBookName] = useState('')
   const [bookDescription, setBookDescription] = useState('')
@@ -60,10 +45,9 @@ export default function WorldBookEditorModal() {
 
   // Confirmation modals
   const [deleteBookConfirm, setDeleteBookConfirm] = useState<string | null>(null)
-  const [deleteEntryConfirm, setDeleteEntryConfirm] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [convertPreview, setConvertPreview] = useState<{
-    total: number; eligible: number; constant_skipped: number
+    total: number; eligible: number; keys_retained?: number; constant_skipped: number
     already_vectorized: number; empty_skipped: number; disabled_skipped: number
   } | null>(null)
   const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false)
@@ -71,14 +55,6 @@ export default function WorldBookEditorModal() {
   // Debounce refs
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const bookDescTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-
-  const [debouncedEntrySearch, setDebouncedEntrySearch] = useState('')
-  useEffect(() => {
-    const trimmed = entrySearchFilter.trim()
-    const handle = setTimeout(() => setDebouncedEntrySearch(trimmed), 200)
-    return () => clearTimeout(handle)
-  }, [entrySearchFilter])
 
   // Load books
   const loadBooks = useCallback(async () => {
@@ -99,33 +75,6 @@ export default function WorldBookEditorModal() {
     onSelectedBookDeleted: () => setSelectedBookId(null),
   })
 
-  const ENTRIES_PAGE_SIZE = 50
-  const entryTotalPages = Math.max(1, Math.ceil(entryTotal / ENTRIES_PAGE_SIZE))
-
-  const loadEntries = useCallback(async (
-    bookId: string,
-    page: number,
-    sortBy: EntrySortBy,
-    sortDir: EntrySortDir,
-    search: string,
-  ) => {
-    try {
-      const res = await worldBooksApi.listEntries(bookId, {
-        limit: ENTRIES_PAGE_SIZE,
-        offset: (page - 1) * ENTRIES_PAGE_SIZE,
-        sort_by: sortBy,
-        sort_dir: sortDir,
-        search: search || undefined,
-      })
-      setEntries(res.data)
-      setEntryTotal(res.total)
-      const lastPage = Math.max(1, Math.ceil(res.total / ENTRIES_PAGE_SIZE))
-      if (page > lastPage) {
-        setEntryPage(lastPage)
-      }
-    } catch {}
-  }, [])
-
   const loadVectorSummary = useCallback(async (bookId: string) => {
     try {
       const summary = await worldBooksApi.getVectorSummary(bookId)
@@ -136,16 +85,6 @@ export default function WorldBookEditorModal() {
   }, [])
 
   useEffect(() => {
-    setEntryPage(1)
-    setSelectedEntryId(null)
-  }, [debouncedEntrySearch])
-
-  useEffect(() => {
-    if (!selectedBookId) return
-    loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
-  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries])
-
-  useEffect(() => {
     if (selectedBookId) {
       loadVectorSummary(selectedBookId)
       const book = books.find((b) => b.id === selectedBookId)
@@ -154,35 +93,12 @@ export default function WorldBookEditorModal() {
         setBookDescription(book.description)
         setBookFolder(book.folder || '')
       }
-      setEntrySearchFilter('')
-      setSelectedEntryId(null)
       setShowDiagnosticsModal(false)
-      setEntryPage(1)
     } else {
-      setEntries([])
-      setEntryTotal(0)
-      setEntryPage(1)
-      setEntrySearchFilter('')
-      setSelectedEntryId(null)
       setVectorSummary(null)
       setShowDiagnosticsModal(false)
     }
   }, [selectedBookId, books, loadVectorSummary])
-
-  const handleSortByChange = useCallback((value: EntrySortBy) => {
-    setEntrySortBy(value)
-    setEntryPage(1)
-  }, [])
-
-  const toggleSortDir = useCallback(() => {
-    setEntrySortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))
-    setEntryPage(1)
-  }, [])
-
-  const refetchCurrentPage = useCallback(() => {
-    if (!selectedBookId) return
-    loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
-  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries])
 
   // Filtered books
   const filteredBooks = searchFilter
@@ -257,58 +173,6 @@ export default function WorldBookEditorModal() {
     [selectedBookId, markLocalBookEdit]
   )
 
-  // Entry CRUD
-  const handleCreateEntry = useCallback(async () => {
-    if (!selectedBookId) return
-    try {
-      const entry = await worldBooksApi.createEntry(selectedBookId, {
-        comment: t('newEntryName'),
-        key: [],
-        content: '',
-      })
-      setSelectedEntryId(entry.id)
-      await loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
-    } catch {}
-  }, [selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries, t])
-
-  const handleDeleteEntry = useCallback(
-    async (entryId: string) => {
-      if (!selectedBookId) return
-      try {
-        await worldBooksApi.deleteEntry(selectedBookId, entryId)
-        if (selectedEntryId === entryId) setSelectedEntryId(null)
-        await loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch)
-      } catch {}
-    },
-    [selectedBookId, selectedEntryId, entryPage, entrySortBy, entrySortDir, debouncedEntrySearch, loadEntries]
-  )
-
-  const updateEntry = useCallback(
-    (entryId: string, updates: Record<string, any>) => {
-      if (!selectedBookId) return
-      setEntries((prev) => prev.map((e) => (e.id === entryId ? { ...e, ...updates } : e)))
-      void worldBooksApi.updateEntry(selectedBookId, entryId, updates)
-        .then(() => loadVectorSummary(selectedBookId))
-        .catch(() => {})
-    },
-    [selectedBookId, loadVectorSummary]
-  )
-
-  const debouncedUpdateEntry = useCallback(
-    (entryId: string, updates: Record<string, any>) => {
-      if (!selectedBookId) return
-      setEntries((prev) => prev.map((e) => (e.id === entryId ? { ...e, ...updates } : e)))
-      const key = `${entryId}-${Object.keys(updates).join(',')}`
-      clearTimeout(entryTimers.current[key])
-      entryTimers.current[key] = setTimeout(() => {
-        void worldBooksApi.updateEntry(selectedBookId, entryId, updates)
-          .then(() => loadVectorSummary(selectedBookId))
-          .catch(() => {})
-      }, 400)
-    },
-    [selectedBookId, loadVectorSummary]
-  )
-
   const [vectorStatus, setVectorStatus] = useState<string | null>(null)
   const [reindexing, setReindexing] = useState(false)
 
@@ -324,14 +188,13 @@ export default function WorldBookEditorModal() {
       })
       const finalStatus = formatWorldBookReindexStatus(result)
       setVectorStatus(t('doneStatus', { status: finalStatus }))
-      refetchCurrentPage()
       await loadVectorSummary(selectedBookId)
     } catch {
       setVectorStatus(t('reindexFailed'))
     } finally {
       setReindexing(false)
     }
-  }, [selectedBookId, reindexing, refetchCurrentPage, loadVectorSummary, t])
+  }, [selectedBookId, reindexing, loadVectorSummary, t])
 
   const handleConvertToVectorizedPreview = useCallback(async () => {
     if (!selectedBookId) return
@@ -351,7 +214,6 @@ export default function WorldBookEditorModal() {
       const result = await worldBooksApi.convertToVectorized(selectedBookId)
       setVectorSummary(result.summary)
       setVectorStatus(t('convertedCount', { count: result.converted }))
-      refetchCurrentPage()
       const reindexResult = await worldBooksApi.reindexVectors(selectedBookId, {
         onProgress: (p) => {
           setVectorStatus(t('reindexProgress', { status: formatWorldBookReindexStatus(p) }))
@@ -359,14 +221,13 @@ export default function WorldBookEditorModal() {
       })
       const finalStatus = formatWorldBookReindexStatus(reindexResult)
       setVectorStatus(t('doneStatus', { status: finalStatus }))
-      refetchCurrentPage()
       await loadVectorSummary(selectedBookId)
     } catch {
       setVectorStatus(t('convertFailed'))
     } finally {
       setReindexing(false)
     }
-  }, [selectedBookId, refetchCurrentPage, loadVectorSummary, t])
+  }, [selectedBookId, loadVectorSummary, t])
 
   const handleDiagnostics = useCallback(() => {
     if (!selectedBookId || !activeChatId) return
@@ -569,22 +430,6 @@ export default function WorldBookEditorModal() {
         />
       )}
 
-      {/* Delete entry confirmation */}
-      {deleteEntryConfirm && (
-        <ConfirmationModal
-          isOpen={true}
-          title={t('deleteEntryTitle')}
-          message={t('deleteEntryMessage')}
-          variant="danger"
-          confirmText={tc('actions.delete')}
-          onConfirm={async () => {
-            await handleDeleteEntry(deleteEntryConfirm)
-            setDeleteEntryConfirm(null)
-          }}
-          onCancel={() => setDeleteEntryConfirm(null)}
-        />
-      )}
-
       {/* Import modal */}
       {showImport && (
         <ImportWorldBookModal
@@ -625,6 +470,12 @@ export default function WorldBookEditorModal() {
                       <li>{t('constantSkipped', {
                         count: convertPreview.constant_skipped,
                         entryWord: convertPreview.constant_skipped === 1 ? t('entry') : t('entries'),
+                      })}</li>
+                    )}
+                    {(convertPreview.keys_retained ?? 0) > 0 && (
+                      <li>{t('keysRetained', {
+                        count: convertPreview.keys_retained ?? 0,
+                        entryWord: convertPreview.keys_retained === 1 ? t('entry') : t('entries'),
                       })}</li>
                     )}
                     {convertPreview.already_vectorized > 0 && (

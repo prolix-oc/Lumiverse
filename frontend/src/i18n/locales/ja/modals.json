@@ -511,6 +511,7 @@
     "entry": "エントリ",
     "entries": "エントリ",
     "constantSkipped": "{{count}} 定数 {{entryWord}} スキップされました (常にアクティブ)",
+    "keysRetained": "{{count}} {{entryWord}} will keep trigger keywords for hybrid activation",
     "alreadySkipped": "{{count}} すでにベクトル化されています {{entryWord}} スキップされました",
     "emptySkipped": "{{count}} 空の {{entryWord}} スキップされました",
     "disabledSkipped": "{{count}} 無効になりました {{entryWord}}スキップしました",

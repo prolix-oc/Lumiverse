@@ -154,7 +154,7 @@ const entryDeleted = await spindle.world_books.entries.delete(newEntry.id)
   sticky: number               // stay active for N turns after match
   cooldown: number             // cooldown turns after deactivation
   delay: number                // delay N turns before first activation
-  selective_logic: number      // 0=AND, 1=NOT, 2=OR for secondary keys
+  selective_logic: number      // 0=AND all, 1=NOT none, 2=OR any, 3=NOT all for secondary keys
   use_probability: boolean     // whether probability field is active
   vectorized: boolean          // entry has vector embeddings
   extensions: Record<string, unknown>

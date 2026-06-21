@@ -1454,6 +1454,8 @@
     "convertIntro_other": "これにより、{{count}} エントリのベクトル アクティブ化が有効になり、プライマリ トリガー キーワードとセカンダリ トリガー キーワードがクリアされ、すぐに再インデックス作成が開始されます。",
     "convertKeysCleared_one": "{{count}} エントリにはクリアされるトリガー キーワードがあります",
     "convertKeysCleared_other": "{{count}} エントリには、クリアされるトリガー キーワードがありますクリア済み",
+    "convertKeysRetained_one": "{{count}} entry has trigger keywords that will be retained for hybrid activation",
+    "convertKeysRetained_other": "{{count}} entries have trigger keywords that will be retained for hybrid activation",
     "convertConstantSkipped_one": "{{count}} 定数エントリのスキップ (常にアクティブ)",
     "convertConstantSkipped_other": "{{count}} 定数エントリのスキップ (常にアクティブ)",
     "convertAlreadyVectorized": "{{count}} ベクトル化済み",

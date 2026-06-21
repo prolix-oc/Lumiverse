@@ -511,6 +511,7 @@
     "entry": "条目",
     "entries": "条目",
     "constantSkipped": "跳过 {{count}} 个常量{{entryWord}}（始终激活）",
+    "keysRetained": "{{count}} {{entryWord}} will keep trigger keywords for hybrid activation",
     "alreadySkipped": "跳过 {{count}} 个已向量化{{entryWord}}",
     "emptySkipped": "跳过 {{count}} 个空{{entryWord}}",
     "disabledSkipped": "跳过 {{count}} 个已禁用{{entryWord}}",

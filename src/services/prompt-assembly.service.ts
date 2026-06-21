@@ -1286,9 +1286,12 @@ export async function assemblePrompt(
         .join(" ");
       const emotionalContext = buildEmotionalContext(recentContent);
 
-      const excludeMessageIds = ctx.excludeMessageId
-        ? [ctx.excludeMessageId]
-        : undefined;
+      const excludeMessageIds = buildMemoryExcludeMessageIds(
+        messages,
+        effective,
+        cortexPerChatOverrides,
+        ctx.excludeMessageId,
+      );
       const mainQueryParams = {
         chatId: ctx.chatId,
         userId: ctx.userId,
@@ -1324,7 +1327,7 @@ export async function assemblePrompt(
             memoryCortex.primeCortexCache(
               ctx.chatId,
               mainResult,
-              excludeMessageIds ?? [],
+              excludeMessageIds,
             );
           }
           if (linkedResult) {
@@ -1804,19 +1807,17 @@ export async function assemblePrompt(
 
   if (cortexConfig.enabled) {
     // Fast path: warm cache from a previous generation (synchronous, no I/O).
-    // On regenerate/swipe the excluded message has real content we must not
-    // re-inject, so require the cached entry to have been warmed with that
-    // message excluded; otherwise fall through to exclusion-aware retrieval.
-    // Normal/continue sends exclude only an empty staged message, so they read
-    // the warm cache ungated to avoid a needless cold retrieval.
-    const requireExcludedMessageId =
-      (ctx.generationType === "regenerate" || ctx.generationType === "swipe") &&
-      ctx.excludeMessageId
-        ? ctx.excludeMessageId
-        : undefined;
+    // Require the cached entry to have excluded the current live-context tail
+    // (and regen target, if any), otherwise it may re-inject recent messages as
+    // long-term memory.
     cortexResult = memoryCortex.getCachedCortexResult(
       ctx.chatId,
-      requireExcludedMessageId,
+      buildMemoryExcludeMessageIds(
+        messages,
+        chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
+        perChatOverrides,
+        ctx.excludeMessageId,
+      ),
     );
 
     if (cortexResult && cortexResult.memories.length > 0) {
@@ -4446,6 +4447,24 @@ async function buildQueryText(
       );
     }
   }
+}
+
+function buildMemoryExcludeMessageIds(
+  messages: Message[],
+  settings: import("./embeddings.service").ChatMemorySettings,
+  perChatOverrides?: import("./embeddings.service").PerChatMemoryOverrides | null,
+  explicitMessageId?: string,
+): string[] {
+  const rawWindow = perChatOverrides?.exclusionWindow ?? settings.exclusionWindow;
+  const exclusionWindow = Math.max(5, Math.min(50, rawWindow));
+  const ids = new Set<string>();
+  for (const message of messages
+    .filter((m) => !m.extra?.hidden && m.content.trim().length > 0)
+    .slice(-exclusionWindow)) {
+    ids.add(message.id);
+  }
+  if (explicitMessageId) ids.add(explicitMessageId);
+  return [...ids];
 }
 
 function formatMemoryOutput(

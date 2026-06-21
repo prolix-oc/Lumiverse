@@ -511,6 +511,7 @@
     "entry": "entrée",
     "entries": "entrées",
     "constantSkipped": "{{count}} constante {{entryWord}} ignorée (toujours active)",
+    "keysRetained": "{{count}} {{entryWord}} will keep trigger keywords for hybrid activation",
     "alreadySkipped": "{{count}} déjà vectorisée {{entryWord}} ignorée",
     "emptySkipped": "{{count}} vide {{entryWord}} ignorée",
     "disabledSkipped": "{{count}} désactivé {{entryWord}} ignoré",

@@ -1454,6 +1454,8 @@
     "convertIntro_other": "Cela permettra l'activation vectorielle pour les entrées {{count}}, effacera leurs mots-clés déclencheurs principaux et secondaires et commencera immédiatement la réindexation.",
     "convertKeysCleared_one": "{{count}} l'entrée a des mots-clés déclencheurs qui seront effacés",
     "convertKeysCleared_other": "{{count}} les entrées ont des mots-clés déclencheurs qui seront effacés",
+    "convertKeysRetained_one": "{{count}} entry has trigger keywords that will be retained for hybrid activation",
+    "convertKeysRetained_other": "{{count}} entries have trigger keywords that will be retained for hybrid activation",
     "convertConstantSkipped_one": "{{count}} entrée constante ignorée (toujours active)",
     "convertConstantSkipped_other": "{{count}} entrées constantes ignorées (toujours actives)",
     "convertAlreadyVectorized": "{{count}} déjà vectorisées",

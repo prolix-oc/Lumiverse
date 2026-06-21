@@ -155,14 +155,43 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
   const messages = input.messages;
   const wiState = input.wiState;
-  const settings = input.settings ?? {};
+  const settings = normalizeWorldInfoSettings(input.settings);
   const entrySig = entries
-    .map(
-      (e) =>
-        `${e.uid}:${e.disabled ? 1 : 0}:${e.constant ? 1 : 0}:${e.priority}:${e.key?.length ?? 0}:${e.keysecondary?.length ?? 0}:${e.content?.length ?? 0}`
-    )
+    .map((e) => JSON.stringify({
+      id: e.id,
+      uid: e.uid,
+      world_book_id: e.world_book_id,
+      key: e.key,
+      keysecondary: e.keysecondary,
+      content: e.content,
+      position: e.position,
+      depth: e.depth,
+      role: e.role,
+      order_value: e.order_value,
+      selective: e.selective,
+      constant: e.constant,
+      disabled: e.disabled,
+      group_name: e.group_name,
+      group_override: e.group_override,
+      group_weight: e.group_weight,
+      probability: e.probability,
+      scan_depth: e.scan_depth,
+      case_sensitive: e.case_sensitive,
+      match_whole_words: e.match_whole_words,
+      use_regex: e.use_regex,
+      prevent_recursion: e.prevent_recursion,
+      exclude_recursion: e.exclude_recursion,
+      delay_until_recursion: e.delay_until_recursion,
+      priority: e.priority,
+      sticky: e.sticky,
+      cooldown: e.cooldown,
+      delay: e.delay,
+      selective_logic: e.selective_logic,
+      use_probability: e.use_probability,
+      vectorized: e.vectorized,
+    }))
     .join("|");
-  const msgSig = messages.map((m) => `${m.id}:${m.content?.length ?? 0}`).join("|");
+  const msgSig = messages.map((m) => JSON.stringify({ id: m.id, content: m.content })).join("|");
   const stateSig = JSON.stringify(wiState);
   const settingsSig = JSON.stringify(settings);
   return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}`;

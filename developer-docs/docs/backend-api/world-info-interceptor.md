@@ -55,6 +55,7 @@ interface WorldInfoInterceptorEntry {
   content: string
   automation_id: string | null
   selective: boolean
+  // 0=AND all, 1=NOT none, 2=OR any, 3=NOT all for secondary keys.
   selective_logic: number
   match_whole_words: boolean
   case_sensitive: boolean

@@ -1454,6 +1454,8 @@
     "convertIntro_other": "将为 {{count}} 条条目启用向量激活，清除其主/次触发关键词，并立即开始重新索引。",
     "convertKeysCleared_one": "{{count}} 条条目的触发关键词将被清除",
     "convertKeysCleared_other": "{{count}} 条条目的触发关键词将被清除",
+    "convertKeysRetained_one": "{{count}} entry has trigger keywords that will be retained for hybrid activation",
+    "convertKeysRetained_other": "{{count}} entries have trigger keywords that will be retained for hybrid activation",
     "convertConstantSkipped_one": "跳过 {{count}} 条常量条目（始终激活）",
     "convertConstantSkipped_other": "跳过 {{count}} 条常量条目（始终激活）",
     "convertAlreadyVectorized": "{{count}} 条已向量化",

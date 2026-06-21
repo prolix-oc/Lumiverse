@@ -1514,6 +1514,8 @@
     "convertIntro_other": "This will enable vector activation for {{count}} entries, clear their primary and secondary trigger keywords, and immediately start reindexing.",
     "convertKeysCleared_one": "{{count}} entry has trigger keywords that will be cleared",
     "convertKeysCleared_other": "{{count}} entries have trigger keywords that will be cleared",
+    "convertKeysRetained_one": "{{count}} entry has trigger keywords that will be retained for hybrid activation",
+    "convertKeysRetained_other": "{{count}} entries have trigger keywords that will be retained for hybrid activation",
     "convertConstantSkipped_one": "{{count}} constant entry skipped (always active)",
     "convertConstantSkipped_other": "{{count}} constant entries skipped (always active)",
     "convertAlreadyVectorized": "{{count}} already vectorized",

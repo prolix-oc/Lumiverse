@@ -34,14 +34,6 @@ export const embeddingsApi = {
     )
   },
 
-  forceReset() {
-    return post<{ success: boolean; deleted: boolean; path: string }>(
-      '/embeddings/force-reset',
-      {},
-      LONG,
-    )
-  },
-
   getChatMemorySettings() {
     return get<ChatMemorySettings>('/embeddings/chat-memory-settings')
   },
@@ -65,9 +57,82 @@ export const embeddingsApi = {
   optimize() {
     return post<{ success: boolean }>('/embeddings/optimize', {}, LONG)
   },
+
+  resetVectorStore() {
+    return post<{ success: boolean; deleted: boolean; path: string }>(
+      '/embeddings/force-reset',
+      {},
+      LONG,
+    )
+  },
+
+  getVectorStoreConfig() {
+    return get<VectorStoreConfigStatus>('/embeddings/vector-store/config')
+  },
+
+  updateVectorStoreConfig(input: UpdateVectorStoreConfigInput) {
+    return put<VectorStoreConfigStatus>('/embeddings/vector-store/config', input)
+  },
+
+  testVectorStore(input: UpdateVectorStoreConfigInput) {
+    return post<VectorStoreTestResult>('/embeddings/vector-store/test', input, LONG)
+  },
+
+  switchVectorStore(input: UpdateVectorStoreConfigInput) {
+    return post<VectorStoreSwitchResult>('/embeddings/vector-store/switch', input, LONG)
+  },
+}
+
+export type VectorStoreProviderId = 'lancedb' | 'qdrant' | 'milvus'
+export type VectorStoreTuningProfile = 'balanced' | 'low_latency' | 'low_memory' | 'bulk_reindex'
+
+export interface QdrantConnectionConfig {
+  url: string
+  https?: boolean
+  collectionPrefix?: string
+  checkCompatibility?: boolean
+}
+
+export interface MilvusConnectionConfig {
+  address: string
+  ssl?: boolean
+  database?: string
+  username?: string
+  transport?: 'grpc' | 'http'
+}
+
+export interface VectorStoreConfigStatus {
+  provider: VectorStoreProviderId
+  tuningProfile?: VectorStoreTuningProfile
+  qdrant?: QdrantConnectionConfig
+  milvus?: MilvusConnectionConfig
+  managedByEnv: boolean
+  qdrantHasApiKey: boolean
+  milvusHasPassword: boolean
+}
+
+export interface UpdateVectorStoreConfigInput {
+  provider?: VectorStoreProviderId
+  tuningProfile?: VectorStoreTuningProfile
+  qdrant?: Partial<QdrantConnectionConfig>
+  milvus?: Partial<MilvusConnectionConfig>
+  qdrant_api_key?: string | null
+  milvus_password?: string | null
+}
+
+export interface VectorStoreTestResult {
+  ok: boolean
+  provider: VectorStoreProviderId
+  error?: string
+}
+
+export interface VectorStoreSwitchResult extends VectorStoreConfigStatus {
+  reindexScheduled: boolean
 }
 
 export interface VectorStoreHealth {
+  provider?: VectorStoreProviderId
+  capabilities?: VectorStoreCapabilities
   exists: boolean
   rowCount: number
   vectorIndexReady: boolean
@@ -85,5 +150,18 @@ export interface VectorStoreHealth {
     unindexedRowEstimate: number
     lastIndexRebuildAt: number
     indexes: Array<{ name: string; type?: string }>
+    dimension?: number | null
   }>
+}
+
+export interface VectorStoreCapabilities {
+  nativeLexical: boolean
+  requiresUuidIds: boolean
+  requiresExplicitFlush: boolean
+  requiresLoadBeforeQuery: boolean
+  scoreKind: 'cosine_distance' | 'cosine_similarity'
+  managesOwnIndexes: boolean
+  externalService: boolean
+  supportsOptimize: boolean
+  dimensionLockedAtCreate: boolean
 }

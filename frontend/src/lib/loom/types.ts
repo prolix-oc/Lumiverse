@@ -90,6 +90,7 @@ export interface PromptBlock {
   isLocked: boolean
   color: string | null
   injectionTrigger: string[]
+  group?: string | null
   categoryMode?: 'radio' | 'checkbox' | null
   variables?: PromptVariableDef[]
 }
