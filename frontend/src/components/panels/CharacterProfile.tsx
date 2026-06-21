@@ -13,7 +13,7 @@ import {
   Pencil, Settings2, ChevronRight,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { extractPalette, getSurfaceColor } from '@/lib/colorExtraction'
+import { extractPalette, getSurfaceColor, type ImagePalette, type RGB } from '@/lib/colorExtraction'
 import { deriveHeroTextVars } from '@/lib/characterTheme'
 import type { Character } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
@@ -21,6 +21,34 @@ import clsx from 'clsx'
 import styles from './CharacterProfile.module.css'
 
 const profileMarked = new Marked({ gfm: true, breaks: true })
+const HERO_CACHE_LIMIT = 60
+const heroPaletteCache = new Map<string, Promise<ImagePalette>>()
+const heroTextVarsCache = new Map<string, CSSProperties>()
+
+function rememberCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V): V {
+  if (cache.has(key)) cache.delete(key)
+  cache.set(key, value)
+  if (cache.size > HERO_CACHE_LIMIT) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey !== undefined) cache.delete(oldestKey)
+  }
+  return value
+}
+
+function getCachedPalette(src: string): Promise<ImagePalette> {
+  const cached = heroPaletteCache.get(src)
+  if (cached) return cached
+
+  const promise = extractPalette(src).catch((err) => {
+    heroPaletteCache.delete(src)
+    throw err
+  })
+  return rememberCacheEntry(heroPaletteCache, src, promise)
+}
+
+function surfaceKey(surface: RGB | null): string {
+  return surface ? `${surface.r},${surface.g},${surface.b}` : 'none'
+}
 
 function renderProfileMarkdown(text: string): string {
   const html = profileMarked.parse(text, { async: false }) as string
@@ -83,6 +111,7 @@ function SingleCharacterProfile({
   const [character, setCharacter] = useState<Character | null>(storedCharacter)
   const [loading, setLoading] = useState(false)
   const [heroTextVars, setHeroTextVars] = useState<CSSProperties | undefined>(undefined)
+  const [heroImageLoadedUrl, setHeroImageLoadedUrl] = useState<string | null>(null)
   const heroMetaRef = useRef<HTMLDivElement>(null)
 
   const handleEditCharacter = useCallback(() => {
@@ -105,9 +134,16 @@ function SingleCharacterProfile({
   }, [charId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const avatarUrl = getCharacterAvatarLargeUrl(character) ?? ''
+  // Stored images resolve to the large WebP thumbnail tier (`?size=lg`), which
+  // is plenty for palette sampling and avoids decoding original PNG cards.
+  const heroSampleUrl = avatarUrl
 
   useEffect(() => {
-    if (!avatarUrl) {
+    setHeroTextVars(undefined)
+  }, [avatarUrl])
+
+  useEffect(() => {
+    if (!heroSampleUrl || heroImageLoadedUrl !== avatarUrl) {
       setHeroTextVars(undefined)
       return
     }
@@ -115,20 +151,35 @@ function SingleCharacterProfile({
     let cancelled = false
 
     const sampleHeroImage = async () => {
+      const surface = await new Promise<RGB | null>((resolve) => {
+        requestAnimationFrame(() => {
+          if (cancelled) {
+            resolve(null)
+            return
+          }
+          resolve(heroMetaRef.current ? getSurfaceColor(heroMetaRef.current) : null)
+        })
+      })
+
+      if (cancelled) return
+
+      const varsCacheKey = `${heroSampleUrl}|${surfaceKey(surface)}`
+      const cachedVars = heroTextVarsCache.get(varsCacheKey)
+      if (cachedVars) {
+        setHeroTextVars(cachedVars)
+        return
+      }
+
       try {
-        const palette = await extractPalette(avatarUrl)
+        const palette = await getCachedPalette(heroSampleUrl)
         if (cancelled) return
 
-        // Wait one frame so the heroMeta element is guaranteed to exist in the
-        // DOM, then read its effective backing surface colour.
-        requestAnimationFrame(() => {
-          if (cancelled) return
-          const surface = heroMetaRef.current
-            ? getSurfaceColor(heroMetaRef.current)
-            : null
-          const vars = deriveHeroTextVars(palette, surface ?? undefined)
-          setHeroTextVars(vars as CSSProperties)
-        })
+        const vars = rememberCacheEntry(
+          heroTextVarsCache,
+          varsCacheKey,
+          deriveHeroTextVars(palette, surface ?? undefined) as CSSProperties,
+        )
+        setHeroTextVars(vars)
       } catch {
         if (!cancelled) setHeroTextVars(undefined)
       }
@@ -136,7 +187,7 @@ function SingleCharacterProfile({
 
     sampleHeroImage()
     return () => { cancelled = true }
-  }, [avatarUrl])
+  }, [avatarUrl, heroSampleUrl, heroImageLoadedUrl])
 
   if (!charId) {
     return (
@@ -160,6 +211,8 @@ function SingleCharacterProfile({
           <LazyImage
             src={avatarUrl}
             alt={character.name}
+            onLoad={() => setHeroImageLoadedUrl(avatarUrl)}
+            onError={() => setHeroImageLoadedUrl(null)}
             fallback={
               <div className={styles.avatarFallback}>
                 {character.name[0]?.toUpperCase()}

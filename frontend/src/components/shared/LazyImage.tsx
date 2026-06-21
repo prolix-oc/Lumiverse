@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react'
 import { Spinner } from '@/components/shared/Spinner'
 
 interface LazyImageProps {
@@ -24,6 +24,8 @@ export default function LazyImage({
   spinnerSize = 24,
   containerClassName = '',
   containerStyle = {},
+  onLoad,
+  onError,
   ...props
 }: LazyImageProps) {
   const [isLoading, setIsLoading] = useState(true)
@@ -38,11 +40,15 @@ export default function LazyImage({
     }
   }, [src])
 
-  const handleLoad = useCallback(() => setIsLoading(false), [])
-  const handleError = useCallback(() => {
+  const handleLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    setIsLoading(false)
+    onLoad?.(event)
+  }, [onLoad])
+  const handleError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     setIsLoading(false)
     setHasError(true)
-  }, [])
+    onError?.(event)
+  }, [onError])
 
   if (hasError || !src) return <>{fallback}</>
 

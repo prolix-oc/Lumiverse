@@ -292,6 +292,41 @@ function applyGenerationMetrics(payload: GenerationMetricsReadyPayload): void {
   })
 }
 
+function withReasoningSnapshot(
+  message: Message,
+  reasoning: string,
+  reasoningDuration: number | null | undefined,
+  swipeId: number | null | undefined,
+): Message {
+  // Top-level extra.reasoning is the active-swipe projection. If the generation
+  // finished on a background swipe, don't project it onto the visible swipe.
+  if (swipeId != null && message.swipe_id !== swipeId) return message
+  if (typeof message.extra?.reasoning === 'string' && message.extra.reasoning.length > 0) return message
+  return {
+    ...message,
+    extra: {
+      ...(message.extra || {}),
+      reasoning,
+      ...(reasoningDuration != null ? { reasoningDuration } : {}),
+    },
+  }
+}
+
+function patchMessageReasoningSnapshot(
+  messageId: string | undefined,
+  reasoning: string,
+  reasoningDuration: number | null | undefined,
+  swipeId: number | null | undefined,
+): void {
+  if (!messageId || !reasoning) return
+  const state = useStore.getState()
+  const message = state.messages.find((m) => m.id === messageId)
+  if (!message) return
+  const patched = withReasoningSnapshot(message, reasoning, reasoningDuration, swipeId)
+  if (patched === message) return
+  state.updateMessage(messageId, { extra: patched.extra })
+}
+
 /**
  * Push the current extension-registered drawer tab list to the backend so
  * `spindle.ui.getDrawerTabs()` can enumerate them. Built-in drawer tabs are
@@ -771,6 +806,8 @@ export function useWebSocket() {
             // fresh one as unseen so a "new swipe ready" badge points them to it.
             const completedSwipeId = state.streamingSwipeId
             const completedMessageId = payload.messageId
+            const completedReasoning = state.streamingReasoning
+            const completedReasoningDuration = state.streamingReasoningDuration
 
             // ── Multiplayer peers: finalize from the event, never re-fetch ──
             // A peer holds no authoritative local copy of the host's chat (local
@@ -783,7 +820,21 @@ export function useWebSocket() {
               const sPeer = store.getState()
               if (sPeer.mpRoomId && !sPeer.mpIsHost && sPeer.mpChatId === payload.chatId) {
                 if (completedMessageId && typeof payload.content === 'string') {
-                  sPeer.updateMessage(completedMessageId, { content: payload.content })
+                  const current = sPeer.messages.find((m) => m.id === completedMessageId)
+                  const extraSnapshot = current && completedReasoning
+                    ? withReasoningSnapshot(
+                        current,
+                        completedReasoning,
+                        completedReasoningDuration,
+                        completedSwipeId,
+                      ).extra
+                    : undefined
+                  sPeer.updateMessage(completedMessageId, {
+                    content: payload.content,
+                    ...(extraSnapshot
+                      ? { extra: extraSnapshot }
+                      : {}),
+                  })
                 }
                 if (completedMessageId) {
                   const buffered = pendingGenerationMetrics.get(completedMessageId)
@@ -808,7 +859,17 @@ export function useWebSocket() {
             fetchLatestMessages(payload.chatId).then((res) => {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
-                s.setMessages(res.data, res.total)
+                const messages = completedMessageId && completedReasoning
+                  ? res.data.map((message) => message.id === completedMessageId
+                      ? withReasoningSnapshot(
+                          message,
+                          completedReasoning,
+                          completedReasoningDuration,
+                          completedSwipeId,
+                        )
+                      : message)
+                  : res.data
+                s.setMessages(messages, res.total)
                 // Deferred metrics may have arrived (and been wiped by the
                 // setMessages above) before this re-fetch could read them —
                 // re-apply from the buffer so the pill/hover survive the race.
@@ -830,6 +891,12 @@ export function useWebSocket() {
                 s.endStreaming()
               }
             }).catch(() => {
+              patchMessageReasoningSnapshot(
+                completedMessageId,
+                completedReasoning,
+                completedReasoningDuration,
+                completedSwipeId,
+              )
               store.getState().endStreaming()
               if (isLocalStreamPlaceholderId(optimisticMessageId)) {
                 store.getState().removeMessage(optimisticMessageId)
