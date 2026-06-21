@@ -13,6 +13,7 @@ import {
   ensureContrast,
   hslToRgb,
   constrainLuminance,
+  contrastRatio,
 } from './colorExtraction'
 import type { CharacterThemeOverlay } from '@/types/theme'
 
@@ -34,8 +35,33 @@ const DARK_MODE_MAX_LUM = 215
  */
 const LIGHT_MODE_MIN_LUM = 50
 
+const HERO_LIGHT_TEXT: RGB = { r: 247, g: 249, b: 252 }
+const HERO_DARK_TEXT: RGB = { r: 17, g: 22, b: 28 }
+
 function rgbToCss(color: RGB): string {
   return `rgb(${color.r} ${color.g} ${color.b})`
+}
+
+function mixRgb(from: RGB, to: RGB, weight: number): RGB {
+  const w = clamp(weight, 0, 1)
+  return {
+    r: Math.round(from.r + (to.r - from.r) * w),
+    g: Math.round(from.g + (to.g - from.g) * w),
+    b: Math.round(from.b + (to.b - from.b) * w),
+  }
+}
+
+function pickHeroTextColor(seed: RGB, background: RGB): RGB {
+  const candidates = [
+    ensureContrast(shiftTowards(seed, HERO_LIGHT_TEXT, 0.9), background, MIN_TEXT_CONTRAST),
+    ensureContrast(shiftTowards(seed, HERO_DARK_TEXT, 0.9), background, MIN_TEXT_CONTRAST),
+    HERO_LIGHT_TEXT,
+    HERO_DARK_TEXT,
+  ]
+
+  return candidates
+    .map((color) => ({ color, ratio: contrastRatio(color, background) }))
+    .sort((a, b) => b.ratio - a.ratio)[0].color
 }
 
 function deriveSecondaryTone(seed: RGB, surface: RGB, mode: 'dark' | 'light'): RGB {
@@ -93,16 +119,10 @@ export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOve
 /**
  * Compute hero-overlay CSS variables (for the character profile hero section).
  *
- * Core insight: the text sits in the mask FADE ZONE where the image transitions
- * into the page background. So the effective background behind text is always
- * dominated by the page bg color — dark in dark mode, light in light mode.
- *
- * Therefore:
- *   - Dark mode → always bright/white text + dark shadows
- *   - Light mode → always dark text + light shadows
- *
- * The image's bottom+center regions provide a subtle COLOR TINT (hue/saturation)
- * so the text feels connected to the image rather than flat white/black.
+ * The text sits in the mask FADE ZONE where the image transitions into the page
+ * background. We estimate that backing color from the image bottom/center plus
+ * the actual page surface, then choose the light/dark text polarity with the
+ * stronger WCAG contrast.
  */
 export function deriveHeroTextVars(
   palette: ImagePalette,
@@ -126,21 +146,17 @@ export function deriveHeroTextVars(
   let contrastLight = shiftTowards(textZone, palette.ui.light.text, 0.84)
   let mutedLight = shiftTowards(contrastLight, palette.ui.light.mutedText, 0.28)
 
-  // Determine the effective backing surface for contrast checks.
-  // When the caller provides a `surfaceColor` (e.g. the computed page
-  // background of the profile tab) we use that — the text is sitting on
-  // the page surface, not directly on the image.  Otherwise we fall back
-  // to the image's textZone for traditional hero-banner overlays.
-  const contrastBg = surfaceColor ?? textZone
+  // The hero controls overlap the image fade. Estimate the real backing color
+  // by blending the sampled image text-zone with the actual page surface.
+  const contrastBg = surfaceColor ? mixRgb(surfaceColor, textZone, 0.58) : textZone
 
-  // Ensure all hero text colors have sufficient contrast against the actual
-  // backing surface (4.5:1 for normal text readability).
-  // This prevents deep-black images from producing invisible black text labels
-  // when the real background is a dark theme surface.
-  contrastDark = ensureContrast(contrastDark, contrastBg, MIN_TEXT_CONTRAST)
-  mutedDark = ensureContrast(mutedDark, contrastBg, MIN_TEXT_CONTRAST)
-  contrastLight = ensureContrast(contrastLight, contrastBg, MIN_TEXT_CONTRAST)
-  mutedLight = ensureContrast(mutedLight, contrastBg, MIN_TEXT_CONTRAST)
+  // Pick whichever polarity actually wins contrast against that blended hero
+  // background, instead of assuming dark mode always wants light text and light
+  // mode always wants dark text.
+  contrastDark = pickHeroTextColor(contrastDark, contrastBg)
+  contrastLight = pickHeroTextColor(contrastLight, contrastBg)
+  mutedDark = ensureContrast(mixRgb(contrastDark, contrastBg, 0.22), contrastBg, MIN_TEXT_CONTRAST)
+  mutedLight = ensureContrast(mixRgb(contrastLight, contrastBg, 0.22), contrastBg, MIN_TEXT_CONTRAST)
 
   // Eye-comfort clamping: dark-mode text should never be blindingly bright,
   // and light-mode text should never be a harsh smudge.
@@ -149,6 +165,16 @@ export function deriveHeroTextVars(
   contrastLight = constrainLuminance(contrastLight, LIGHT_MODE_MIN_LUM, undefined)
   mutedLight = constrainLuminance(mutedLight, LIGHT_MODE_MIN_LUM, undefined)
 
+  contrastDark = ensureContrast(contrastDark, contrastBg, MIN_TEXT_CONTRAST)
+  mutedDark = ensureContrast(mutedDark, contrastBg, MIN_TEXT_CONTRAST)
+  contrastLight = ensureContrast(contrastLight, contrastBg, MIN_TEXT_CONTRAST)
+  mutedLight = ensureContrast(mutedLight, contrastBg, MIN_TEXT_CONTRAST)
+
+  const darkScrim = contrastRatio(HERO_LIGHT_TEXT, contrastBg) >= contrastRatio(HERO_DARK_TEXT, contrastBg)
+    ? 'rgba(0, 0, 0, 0.38)'
+    : 'rgba(255, 255, 255, 0.40)'
+  const lightScrim = darkScrim
+
   return {
     '--hero-dominant': `rgb(${dominant.r} ${dominant.g} ${dominant.b})`,
     // Per-theme contrast (CSS selects based on data-theme-mode)
@@ -156,13 +182,8 @@ export function deriveHeroTextVars(
     '--hero-contrast-light': `rgb(${contrastLight.r} ${contrastLight.g} ${contrastLight.b})`,
     '--hero-contrast-muted-dark': `rgb(${mutedDark.r} ${mutedDark.g} ${mutedDark.b})`,
     '--hero-contrast-muted-light': `rgb(${mutedLight.r} ${mutedLight.g} ${mutedLight.b})`,
-    // Dark mode: dark shadows create halo against bright image regions
-    '--hero-text-glow-dark': 'rgba(0, 0, 0, 0.48)',
-    // Light mode: white shadows lift dark text off dark image regions
-    '--hero-text-glow-light': 'rgba(255, 255, 255, 0.65)',
-    // Scrim for tag/button backgrounds
-    '--hero-text-scrim-dark': 'rgba(0, 0, 0, 0.38)',
-    '--hero-text-scrim-light': 'rgba(255, 255, 255, 0.40)',
+    '--hero-text-scrim-dark': darkScrim,
+    '--hero-text-scrim-light': lightScrim,
   }
 }
 
