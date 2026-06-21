@@ -97,9 +97,7 @@ export class OpenRouterImageProvider implements ImageProvider {
     const body: any = {
       model: request.model,
       messages: [{ role: "user", content }],
-      // Superset modality — works for image+text models (Gemini, GPT Image) and
-      // image-only models still return their image on message.images.
-      modalities: ["image", "text"],
+      modalities: this.outputModalitiesFor(request.model),
     };
 
     const imageConfig: Record<string, any> = {};
@@ -180,6 +178,25 @@ export class OpenRouterImageProvider implements ImageProvider {
     const bytes = Buffer.from(await res.arrayBuffer());
     const mime = res.headers.get("content-type") || "image/png";
     return `data:${mime};base64,${bytes.toString("base64")}`;
+  }
+
+  /**
+   * OpenRouter routes by requested output modalities. Image-only models return a
+   * 404 when asked for both image and text outputs, so keep the request narrow
+   * for families OpenRouter documents as image-only.
+   */
+  private outputModalitiesFor(model: string): string[] {
+    return this.isImageOnlyModel(model) ? ["image"] : ["image", "text"];
+  }
+
+  private isImageOnlyModel(model: string): boolean {
+    const id = model.toLowerCase();
+    return (
+      id.startsWith("black-forest-labs/flux") ||
+      id.startsWith("sourceful/") ||
+      id.startsWith("recraft/") ||
+      (id.startsWith("x-ai/grok") && (id.includes("imagine") || id.includes("image")))
+    );
   }
 
   private headers(apiKey: string): Record<string, string> {
