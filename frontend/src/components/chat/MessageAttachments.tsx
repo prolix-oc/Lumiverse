@@ -44,6 +44,7 @@ function getRelayPreviewUrl(att: MessageAttachment): string | null {
 export default function MessageAttachments({ attachments, isUser, chatId, messageId }: MessageAttachmentsProps) {
   const { t } = useTranslation('chat')
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [lightboxFallbackSrc, setLightboxFallbackSrc] = useState<string | null>(null)
   const [lightboxImageId, setLightboxImageId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const [targetImageId, setTargetImageId] = useState<string | null>(null)
@@ -53,11 +54,13 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
   const canActOnImage = messageContextMenuEnabled && !!chatId && !!messageId
   const closeLightbox = useCallback(() => {
     setLightboxSrc(null)
+    setLightboxFallbackSrc(null)
     setLightboxImageId(null)
   }, [])
   const openLightbox = useCallback((att: MessageAttachment) => {
     setLightboxImageId(att.image_id)
-    setLightboxSrc(getRelayPreviewUrl(att) || getLocalImageUrl(att))
+    setLightboxSrc(getLocalImageUrl(att))
+    setLightboxFallbackSrc(getRelayPreviewUrl(att))
   }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)
@@ -214,6 +217,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
 
       <ImageLightbox
         src={lightboxSrc}
+        fallbackSrc={lightboxFallbackSrc}
         onClose={closeLightbox}
         onDelete={canActOnImage ? deleteLightboxImage : undefined}
       />

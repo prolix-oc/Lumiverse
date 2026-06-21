@@ -54,7 +54,7 @@ Users grant permissions individually from the Extensions panel. Your extension s
 Permission changes take effect **immediately** — the extension does not restart when a user grants or revokes a permission. This means:
 
 - The host enforces permissions on every API call in real time. A revoked permission blocks the very next request.
-- Your extension receives a `permission_changed` notification so it can react instantly (enable/disable features, update UI, re-register tools, etc.).
+- Your extension receives a scoped `permission_changed` notification so it can react instantly (enable/disable features, update UI, re-register tools, etc.).
 - The local permission cache (`spindle.permissions.has()`) is kept in sync automatically.
 - Shared RPC on-demand handlers run under the endpoint's delegated permission policy during cross-extension calls, so they do not inherit unrelated owner permissions.
 
@@ -124,6 +124,8 @@ spindle.registerInterceptor(async (messages, ctx) => { ... })
 
 Use `spindle.permissions.onChanged()` to respond when a user grants or revokes a permission at runtime. This is the core mechanism for building extensions that activate features on the fly:
 
+The notification is delivered only to the worker for the extension whose grant changed. Other extensions do not receive it, so handlers can safely assume the event is scoped to their own extension.
+
 ```ts
 spindle.permissions.onChanged(({ permission, granted, allGranted }) => {
   if (permission === 'generation') {
@@ -145,6 +147,7 @@ The handler receives a `PermissionChangedDetail` object:
 | `permission` | `string` | The permission that changed |
 | `granted` | `boolean` | `true` if granted, `false` if revoked |
 | `allGranted` | `string[]` | Full list of currently granted permissions after the change |
+| `extensionId` | `string` | Identifier of this extension |
 
 You can also listen for the `PERMISSION_CHANGED` event via `spindle.on()`:
 
@@ -153,6 +156,8 @@ spindle.on('PERMISSION_CHANGED', (detail) => {
   // detail has the same shape as PermissionChangedDetail
 })
 ```
+
+`spindle.on('PERMISSION_CHANGED', ...)` is a local runtime event. It is not a generic EventBus subscription, and it is scoped the same way as `spindle.permissions.onChanged()`.
 
 ## Patterns
 

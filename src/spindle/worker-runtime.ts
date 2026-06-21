@@ -468,6 +468,13 @@ type RuntimeHostToWorker =
       requestId: string;
       ctx: unknown;
     }
+  | {
+      type: "permission_changed";
+      extensionId?: string;
+      permission: string;
+      granted: boolean;
+      allGranted: string[];
+    }
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
@@ -746,6 +753,10 @@ const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promi
 const macroInvocationStack: MacroInvocationState[] = [];
 const sharedRpcPermissionScope = new AsyncLocalStorage<SharedRpcPermissionScope | undefined>();
 
+function isLocalRuntimeEvent(event: string): boolean {
+  return event === "PERMISSION_CHANGED";
+}
+
 // ─── Messaging ───────────────────────────────────────────────────────────
 
 function post(msg: RuntimeWorkerToHost): void {
@@ -1007,7 +1018,9 @@ const spindleApi: RuntimeSpindleAPI = {
   on(event: string, handler: (payload: any) => void): () => void {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, new Set());
-      post({ type: "subscribe_event", event });
+      if (!isLocalRuntimeEvent(event)) {
+        post({ type: "subscribe_event", event });
+      }
     }
     eventHandlers.get(event)!.add(handler);
 
@@ -1015,7 +1028,9 @@ const spindleApi: RuntimeSpindleAPI = {
       eventHandlers.get(event)?.delete(handler);
       if (eventHandlers.get(event)?.size === 0) {
         eventHandlers.delete(event);
-        post({ type: "unsubscribe_event", event });
+        if (!isLocalRuntimeEvent(event)) {
+          post({ type: "unsubscribe_event", event });
+        }
       }
     };
   },
@@ -3849,7 +3864,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       for (const p of msg.allGranted) grantedPermissions.add(p);
 
       const detail: PermissionChangedDetail = {
-        extensionId: manifest.identifier,
+        extensionId: ("extensionId" in msg ? msg.extensionId : undefined) ?? manifest.identifier,
         permission: msg.permission,
         granted: msg.granted,
         allGranted: msg.allGranted,

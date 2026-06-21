@@ -584,6 +584,13 @@ type RuntimeHostToWorker =
       requestId: string;
       ctx: WorldInfoInterceptorCtxDTO;
     }
+  | {
+      type: "permission_changed";
+      extensionId?: string;
+      permission: string;
+      granted: boolean;
+      allGranted: string[];
+    }
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
@@ -1899,7 +1906,13 @@ export class WorkerHost {
    * no restart needed.
    */
   notifyPermissionChanged(permission: string, granted: boolean, allGranted: string[]): void {
-    this.postToWorker({ type: "permission_changed", permission, granted, allGranted });
+    this.postToWorker({
+      type: "permission_changed",
+      extensionId: this.manifest.identifier,
+      permission,
+      granted,
+      allGranted,
+    });
   }
 
   /**
@@ -3114,6 +3127,12 @@ export class WorkerHost {
     const unsub = eventBus.on(eventType, (msg) => {
       if (scopedUserId && msg.userId !== scopedUserId) {
         return;
+      }
+      if (eventType === EventType.SPINDLE_PERMISSION_CHANGED) {
+        const payload = (msg.payload ?? {}) as { extensionId?: string; identifier?: string };
+        if (payload.extensionId !== this.extensionId && payload.identifier !== this.manifest.identifier) {
+          return;
+        }
       }
       this.postToWorker({
         type: "event",
