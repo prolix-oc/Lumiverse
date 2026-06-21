@@ -88,6 +88,39 @@ function sanitizeToastMessage(raw: string | undefined | null): string {
     : stripped
 }
 
+interface EmptyGeneratedSwipeTarget {
+  chatId: string
+  messageId: string
+  swipeId: number
+}
+
+function getEmptyGeneratedSwipeTarget(state: ReturnType<typeof useStore.getState>, chatId?: string): EmptyGeneratedSwipeTarget | null {
+  if ((state.streamingGenerationType ?? '') !== 'swipe') return null
+  if (!chatId || !state.regeneratingMessageId || state.streamingSwipeId == null) return null
+  const buffered = state.getStreamBuffers().content || state.streamingContent
+  if (buffered.trim().length > 0) return null
+  return { chatId, messageId: state.regeneratingMessageId, swipeId: state.streamingSwipeId }
+}
+
+async function deleteEmptyGeneratedSwipe(
+  target: EmptyGeneratedSwipeTarget | null,
+  messages: Message[],
+): Promise<Message[]> {
+  if (!target) return messages
+  const message = messages.find((m) => m.id === target.messageId)
+  if (!message || message.swipes.length <= 1) return messages
+  const swipeContent = message.swipes[target.swipeId]
+  if (typeof swipeContent !== 'string' || swipeContent.trim().length > 0) return messages
+
+  try {
+    const updated = await messagesApi.deleteSwipe(target.chatId, target.messageId, target.swipeId)
+    return messages.map((m) => (m.id === updated.id ? updated : m))
+  } catch (err) {
+    console.error('[useWebSocket] Failed to delete empty generated swipe:', err)
+    return messages
+  }
+}
+
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
 const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
 
@@ -427,7 +460,7 @@ export function useWebSocket() {
             state.setRespondingCharacterId(payload.characterId)
           }
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             // Generation already wired via HTTP response — just set the target message.
             // This happens when council sidecar stages a message after startStreaming was
@@ -458,7 +491,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
@@ -542,6 +575,7 @@ export function useWebSocket() {
           }
 
           if (payload.error) {
+            const emptySwipeTarget = getEmptyGeneratedSwipeTarget(state, payload.chatId)
             // Remove client-side placeholder if regeneration failed before backend saved a real message
             const regenId = state.regeneratingMessageId
             if (isLocalStreamPlaceholderId(regenId)) {
@@ -575,10 +609,11 @@ export function useWebSocket() {
             const sErr = store.getState()
             const mpPeerErr = !!sErr.mpRoomId && !sErr.mpIsHost && sErr.mpChatId === payload.chatId
             if (payload.chatId && !mpPeerErr) {
-              fetchLatestMessages(payload.chatId).then((res) => {
+              fetchLatestMessages(payload.chatId).then(async (res) => {
+                const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
                 if (s.activeChatId === payload.chatId) {
-                  s.setMessages(res.data, res.total)
+                  s.setMessages(messages, res.total)
                 }
               }).catch(() => { /* ignore */ })
             }
@@ -865,6 +900,7 @@ export function useWebSocket() {
         // then both updates (stop streaming + set messages) happen in a single
         // React render — no flash of empty content.
         const chatId = payload?.chatId || state.activeChatId
+        const emptySwipeTarget = getEmptyGeneratedSwipeTarget(state, chatId)
         const mpPeerStop = !!state.mpRoomId && !state.mpIsHost && !!chatId && state.mpChatId === chatId
         if (mpPeerStop) {
           // Peers can't re-fetch the host's chat — finalize the streamed partial
@@ -875,11 +911,12 @@ export function useWebSocket() {
           }
           state.stopStreaming()
         } else if (chatId) {
-          fetchLatestMessages(chatId).then((res) => {
+          fetchLatestMessages(chatId).then(async (res) => {
+            const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
             const s = store.getState()
             if (s.activeChatId === chatId) {
               s.stopStreaming()
-              s.setMessages(res.data, res.total)
+              s.setMessages(messages, res.total)
             } else {
               s.stopStreaming()
             }

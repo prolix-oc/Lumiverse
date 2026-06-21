@@ -290,6 +290,7 @@ export interface GenerationStartedPayload {
   targetMessageId?: string
   /** Swipe index the generation streams into (for swipe-gated streaming display). */
   targetSwipeId?: number
+  generationType?: string
   characterId?: string
   characterName?: string
   contextClipStats?: ContextClipStats
@@ -329,6 +330,7 @@ export interface GenerationEndedPayload {
   messageId?: string
   content?: string
   error?: string
+  generationType?: string
   tokenCount?: number
   generationMetrics?: GenerationMetrics
 }

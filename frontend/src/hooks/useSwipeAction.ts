@@ -64,12 +64,13 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
   const doRegenerate = useCallback(async (feedback?: string | null) => {
     if (isStreaming) return
     const nonce = ++regenerateNonceRef.current
-    beginStreaming(message.id)
+    beginStreaming(message.id, 'swipe')
     try {
       const presetId = getActivePresetForGeneration() || undefined
       const genOpts: GenerateRequest = {
         chat_id: chatId,
         message_id: message.id,
+        generation_type: 'swipe',
         connection_id: activeProfileId || undefined,
         persona_id: activePersonaId || undefined,
         preset_id: presetId,
@@ -79,9 +80,9 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
         genOpts.regen_feedback = feedback
         genOpts.regen_feedback_position = regenFeedback.position
       }
-      const res = await generateApi.regenerate(genOpts)
+      const res = await generateApi.start(genOpts)
       if (regenerateNonceRef.current !== nonce) return
-      startStreaming(res.generationId, message.id)
+      startStreaming(res.generationId, message.id, 'swipe')
     } catch (err: any) {
       if (regenerateNonceRef.current !== nonce) return
       const msg = err?.body?.error || err?.message || te('failedToRegenerate')
@@ -158,12 +159,13 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
     const { regenFeedback, openModal, beginStreaming, startStreaming, setStreamingError, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration } = state
 
     const doRegen = async (feedback?: string | null) => {
-      beginStreaming(message.id)
+      beginStreaming(message.id, 'swipe')
       try {
         const presetId = getActivePresetForGeneration() || undefined
         const genOpts: GenerateRequest = {
           chat_id: chatId,
           message_id: message.id,
+          generation_type: 'swipe',
           connection_id: activeProfileId || undefined,
           persona_id: activePersonaId || undefined,
           preset_id: presetId,
@@ -173,8 +175,8 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
           genOpts.regen_feedback = feedback
           genOpts.regen_feedback_position = regenFeedback.position
         }
-        const res = await generateApi.regenerate(genOpts)
-        startStreaming(res.generationId, message.id)
+        const res = await generateApi.start(genOpts)
+        startStreaming(res.generationId, message.id, 'swipe')
       } catch (err: any) {
         const msg = err?.body?.error || err?.message || i18n.t('errors.failedToRegenerate')
         setStreamingError(msg)

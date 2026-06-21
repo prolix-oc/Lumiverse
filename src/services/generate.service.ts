@@ -1442,7 +1442,7 @@ export async function startGeneration(
   // Skip this check when an explicit message_id is provided — the frontend
   // already validated the target.
   if (
-    (genType === "regenerate" || genType === "continue") &&
+    (genType === "regenerate" || genType === "swipe" || genType === "continue") &&
     !input.message_id
   ) {
     const lastMessage = chatsSvc.getLastMessage(input.userId, input.chat_id);
@@ -1571,7 +1571,7 @@ export async function startGeneration(
         ? (chat.metadata.character_ids as string[])
         : [];
     let targetAssistantMessage: Message | null = null;
-    if (genType === "regenerate") {
+    if (genType === "regenerate" || genType === "swipe") {
       targetAssistantMessage = input.message_id
         ? chatsSvc.getMessage(input.userId, input.message_id)
         : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
@@ -1613,7 +1613,7 @@ export async function startGeneration(
         ? messageTargetCharId
         : undefined;
     const targetExistingAssistant =
-      genType === "regenerate" || genType === "continue";
+      genType === "regenerate" || genType === "swipe" || genType === "continue";
     const resolvedTargetCharId = targetExistingAssistant
       ? inferredGroupTargetCharId || requestedTargetCharId
       : requestedTargetCharId || inferredGroupTargetCharId;
@@ -1682,7 +1682,7 @@ export async function startGeneration(
     // routes the completion write) so we don't perturb normal/continue saving.
     let targetSwipeId: number | undefined;
 
-    if (genType === "regenerate") {
+    if (genType === "regenerate" || genType === "swipe") {
       const targetMsg = targetAssistantMessage;
       if (targetMsg) {
         lifecycle.targetMessageId = targetMsg.id;
@@ -1972,11 +1972,12 @@ export async function startGeneration(
               // so the frontend has a real message bubble to stream tokens into. Without
               // this, the HTTP response (and thus startStreaming) arrives after council
               // completes, racing with WS events that may have already finished.
-              // Guard: normal sends are already staged above; only stage here for swipe
-              // or for sidecar council paths that bypassed the early staging.
+              // Guard: normal sends are already staged above. A swipe/regenerate
+              // already has a blank target swipe, so do not create a duplicate
+              // assistant message here.
               if (
                 !stagedMessageId &&
-                (genType === "normal" || genType === "swipe")
+                genType === "normal"
               ) {
                 const extra: Record<string, any> = {};
                 if (targetCharId) extra.character_id = targetCharId;
