@@ -37,7 +37,10 @@ export default function ModalContainer() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
-      useStore.getState().openSettings(detail?.view || 'extensions')
+      useStore.getState().openSettings(
+        detail?.view || 'extensions',
+        detail?.extensionId ? { extensionId: detail.extensionId } : undefined,
+      )
     }
     window.addEventListener('spindle:open-settings', handler)
     return () => window.removeEventListener('spindle:open-settings', handler)

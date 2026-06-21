@@ -240,6 +240,7 @@ export interface UISlice {
   drawerTab: string | null
   settingsModalOpen: boolean
   settingsActiveView: string
+  settingsScrollTarget: { extensionId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
   toasts: Toast[]
@@ -250,7 +251,7 @@ export interface UISlice {
   openDrawer: (tab?: string) => void
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
-  openSettings: (view?: string) => void
+  openSettings: (view?: string, target?: { extensionId?: string }) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void

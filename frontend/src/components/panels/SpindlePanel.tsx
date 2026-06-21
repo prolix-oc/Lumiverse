@@ -553,7 +553,7 @@ export default function SpindlePanel() {
                   <button
                     type="button"
                     className={styles.labeledBtn}
-                    onClick={() => openSettings('extensions')}
+                    onClick={() => openSettings('extensions', { extensionId: ext.id })}
                     disabled={!ext.has_frontend}
                     title={ext.has_frontend ? t('spindlePanel.openSettings') : t('spindlePanel.noSettings')}
                   >

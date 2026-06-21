@@ -65,6 +65,7 @@ interface SettingsModalProps {
 export default function SettingsModal({ onClose }: SettingsModalProps) {
   const { t: ts } = useTranslation('settings')
   const settingsActiveView = useStore((s) => s.settingsActiveView)
+  const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
   const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
@@ -73,6 +74,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const contentRef = useRef<HTMLDivElement>(null)
   const navNonce = useRef(0)
   const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
+
+  useEffect(() => {
+    setActiveView(settingsActiveView || 'display')
+  }, [settingsActiveView])
 
   useEffect(() => {
     if (!VIEWS.some((tab) => tab.id === activeView) && VIEWS.length > 0) {
@@ -112,6 +117,39 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
       if (raf2) cancelAnimationFrame(raf2)
     }
   }, [scrollTarget])
+
+  useEffect(() => {
+    const extensionId = settingsScrollTarget?.extensionId
+    if (!extensionId) return
+
+    if (activeView !== 'extensions') {
+      setActiveView('extensions')
+      return
+    }
+
+    let frame = 0
+    let attempts = 0
+    const selector = [
+      `[data-spindle-extension-root="${CSS.escape(extensionId)}"]`,
+      '[data-spindle-mount-point="settings_extensions"]',
+    ].join('')
+    const scrollToExtension = () => {
+      const container = contentRef.current
+      const el = container?.querySelector<HTMLElement>(selector)
+      if (el) {
+        el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        el.classList.add(styles.sectionFlash)
+        window.setTimeout(() => el.classList.remove(styles.sectionFlash), 1400)
+        return
+      }
+      if (++attempts < 20) frame = requestAnimationFrame(scrollToExtension)
+    }
+
+    frame = requestAnimationFrame(scrollToExtension)
+    return () => {
+      cancelAnimationFrame(frame)
+    }
+  }, [activeView, settingsScrollTarget])
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose}>
