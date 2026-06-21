@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSettings } from '@/types/store'
 import { settingsApi } from '@/api/settings'
+import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
@@ -559,7 +560,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       const packBundleId = entry.pack.bundleId
       if (packBundleId && packBundleId !== activeBundleId) {
         try {
-          const { themeAssetsApi } = await import('@/api/theme-assets')
           const assets = await themeAssetsApi.list(packBundleId)
           await Promise.all(assets.map((a) => themeAssetsApi.delete(a.id).catch(() => {})))
         } catch {
