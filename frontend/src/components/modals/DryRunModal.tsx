@@ -173,7 +173,7 @@ export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, chatHistoryTokens, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
 
   const [messagesOpen, setMessagesOpen] = useState(
     messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
@@ -385,6 +385,9 @@ export default function DryRunModal() {
                     {tokenCount && (
                       <div className={styles.breakdownSummary}>
                         <span>{t('totalTokens', { count: tokenCount.total_tokens })}</span>
+                        {chatHistoryTokens != null && chatHistoryTokens > 0 && (
+                          <span className={styles.breakdownSource}>{t('chatHistoryTokens', { count: chatHistoryTokens })}</span>
+                        )}
                         {tokenCount.tokenizer_name && (
                           <span className={styles.breakdownSource}>{t('viaTokenizer', { name: tokenCount.tokenizer_name })}</span>
                         )}
@@ -911,6 +914,11 @@ export default function DryRunModal() {
             {tokenCount && (
               <span className={styles.footerMax}>
                 {ts('tokens', { count: tokenCount.total_tokens })}
+              </span>
+            )}
+            {chatHistoryTokens != null && chatHistoryTokens > 0 && (
+              <span className={styles.footerMax}>
+                {t('footerChatHistory', { count: chatHistoryTokens })}
               </span>
             )}
             <div className={styles.footerSpacer} />

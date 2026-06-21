@@ -1168,6 +1168,7 @@ export interface BreakdownCacheEntry {
   }[]
   messages?: import('@/api/generate').DryRunMessage[]
   totalTokens: number
+  chatHistoryTokens?: number
   maxContext: number
   model: string
   provider: string

@@ -245,8 +245,36 @@ function injectConnectionMetadataFlags(
   }
 }
 
+function omitChatHistoryBreakdownEntries<
+  T extends { type: string },
+>(entries: T[]): T[] {
+  return entries.filter((entry) => entry.type !== "chat_history");
+}
+
+function sumChatHistoryBreakdownTokens(
+  entries: Array<{ type: string; tokens: number }>,
+): number {
+  return entries.reduce(
+    (sum, entry) => sum + (entry.type === "chat_history" ? entry.tokens : 0),
+    0,
+  );
+}
+
+function omitChatHistoryTokenBreakdown(
+  tokenCount: DryRunResult["tokenCount"],
+): DryRunResult["tokenCount"] {
+  if (!tokenCount) return tokenCount;
+  return {
+    ...tokenCount,
+    breakdown: omitChatHistoryBreakdownEntries(tokenCount.breakdown),
+  };
+}
+
 export const __test__ = {
   injectConnectionMetadataFlags,
+  omitChatHistoryBreakdownEntries,
+  omitChatHistoryTokenBreakdown,
+  sumChatHistoryBreakdownTokens,
 };
 
 export interface RawGenerateInput {
@@ -333,6 +361,7 @@ export interface DryRunResult {
     tokenizer_id: string | null;
     tokenizer_name: string | null;
   };
+  chatHistoryTokens?: number;
   worldInfoStats?: {
     totalCandidates: number;
     activatedBeforeBudget: number;
@@ -2736,6 +2765,7 @@ export async function dryRunGeneration(
 
   // Compute token counts for the breakdown
   let tokenCount: DryRunResult["tokenCount"];
+  let chatHistoryTokens: number | undefined;
   if (pipeline.breakdown && pipeline.breakdown.length > 0) {
     try {
       tokenCount = await tokenizerSvc.countBreakdown(
@@ -2743,6 +2773,7 @@ export async function dryRunGeneration(
         pipeline.breakdown,
         pipeline.chatHistoryMessages,
       );
+      chatHistoryTokens = sumChatHistoryBreakdownTokens(tokenCount.breakdown);
     } catch {
       // non-fatal: skip token count if tokenizer fails
     }
@@ -2773,12 +2804,13 @@ export async function dryRunGeneration(
       ...m,
       content: flattenContentForDisplay(m.content),
     })),
-    breakdown: pipeline.breakdown || [],
+    breakdown: omitChatHistoryBreakdownEntries(pipeline.breakdown || []),
     parameters: outboundParams,
     assistantPrefill: pipeline.assistantPrefill,
     model: connection.model,
     provider: provider.name,
-    tokenCount,
+    tokenCount: omitChatHistoryTokenBreakdown(tokenCount),
+    chatHistoryTokens,
     worldInfoStats: pipeline.worldInfoStats,
     memoryStats: pipeline.memoryStats,
     databankStats: pipeline.databankStats,
@@ -3703,11 +3735,14 @@ async function runGeneration(
               lifecycle.breakdown,
               lifecycle.chatHistoryMessages,
             );
+            const entries = tokenResult.breakdown.map((entry, index) => ({
+              ...entry,
+              content: lifecycle.breakdown?.[index]?.content,
+            }));
+            const chatHistoryTokens = sumChatHistoryBreakdownTokens(entries);
             const breakdownPayload = {
-              entries: tokenResult.breakdown.map((entry, index) => ({
-                ...entry,
-                content: lifecycle.breakdown?.[index]?.content,
-              })),
+              entries: omitChatHistoryBreakdownEntries(entries),
+              chatHistoryTokens,
               messages: (lifecycle.messages || []).map((message) => ({
                 role: message.role,
                 content:

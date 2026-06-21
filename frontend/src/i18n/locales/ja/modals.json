@@ -282,8 +282,8 @@
     "fixedNoHistoryDetail": "チャット履歴はクリップ対象の唯一のセクションです。システム プロンプト、WI、ペルソナ、およびその他の固定ブロックはプロンプトに残り、{{remaining}} トークンが履歴に残ります。",
     "fixedOverBy": " 固定オーバーヘッドが {{count}} トークン分予算を超えています。",
     "parameters": "パラメータ",
-    "footerMessages": "{{count}} メッセージ",
-    "footerMessages_plural": "{{count}} メッセージ",
+    "footerMessages_one": "{{count}} メッセージ",
+    "footerMessages_other": "{{count}} メッセージ",
     "retrieval": {
       "cache_hit": "キャッシュ ヒット",
       "awaited_prefetch": "待機プリフェッチ",

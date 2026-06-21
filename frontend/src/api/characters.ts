@@ -73,6 +73,10 @@ export const charactersApi = {
     return `${BASE_URL}/characters/${id}/avatar`
   },
 
+  getAvatarBlob(id: string) {
+    return getBlob(`/characters/${id}/avatar`)
+  },
+
   /** Direct image URL — bypasses character DB lookup when image_id is known */
   imageUrl(imageId: string) {
     return `${BASE_URL}/images/${imageId}`

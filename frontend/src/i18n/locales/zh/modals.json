@@ -282,8 +282,8 @@
     "fixedNoHistoryDetail": "仅聊天历史可被裁剪。系统提示、世界书、人设等固定块仍保留，历史剩余 {{remaining}} tokens。",
     "fixedOverBy": " 固定开销超出预算 {{count}} tokens。",
     "parameters": "参数",
-    "footerMessages": "{{count}} 条消息",
-    "footerMessages_plural": "{{count}} 条消息",
+    "footerMessages_one": "{{count}} 条消息",
+    "footerMessages_other": "{{count}} 条消息",
     "retrieval": {
       "cache_hit": "缓存命中",
       "awaited_prefetch": "等待预取",

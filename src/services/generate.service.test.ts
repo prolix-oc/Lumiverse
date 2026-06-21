@@ -58,3 +58,36 @@ describe("injectConnectionMetadataFlags", () => {
     expect(params).toEqual({});
   });
 });
+
+describe("prompt breakdown visibility", () => {
+  test("omits synthetic chat history entries without changing total tokens", () => {
+    const tokenCount = {
+      total_tokens: 42,
+      breakdown: [
+        { name: "System", type: "block", tokens: 10 },
+        { name: "Chat History", type: "chat_history", tokens: 30 },
+        { name: "Author's Note", type: "authors_note", tokens: 2 },
+      ],
+      tokenizer_id: "approx",
+      tokenizer_name: "Approximate",
+    };
+
+    const visible = __test__.omitChatHistoryTokenBreakdown(tokenCount);
+
+    expect(visible?.total_tokens).toBe(42);
+    expect(visible?.breakdown.map((entry) => entry.type)).toEqual([
+      "block",
+      "authors_note",
+    ]);
+  });
+
+  test("summarizes chat history tokens separately", () => {
+    expect(
+      __test__.sumChatHistoryBreakdownTokens([
+        { type: "block", tokens: 10 },
+        { type: "chat_history", tokens: 30 },
+        { type: "chat_history", tokens: 5 },
+      ]),
+    ).toBe(35);
+  });
+});

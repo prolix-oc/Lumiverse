@@ -38,6 +38,7 @@ const LOOM_KEEP_REGEXES = LOOM_TAGS_KEEP_CONTENT.map((tag) => ({
 
 // HTML formatting tags to strip (preserves inner text)
 const HTML_FORMAT_TAGS = ["span", "b", "i", "u", "em", "strong", "s", "strike", "sub", "sup", "mark", "small", "big"];
+const HTML_INLINE_TAGS = new Set([...HTML_FORMAT_TAGS, "font", "a", "abbr", "cite", "q", "kbd", "code", "var", "time"]);
 const HTML_TAG_REGEXES = HTML_FORMAT_TAGS.map((tag) => ({
   open: new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi"),
   close: new RegExp(`</${tag}>`, "gi"),
@@ -86,23 +87,41 @@ export function stripLoomTags(content: string): string {
   return result;
 }
 
-/** Strip HTML formatting tags (preserving inner text) + div handling. */
+/**
+ * Strip HTML markup from chat-history context.
+ *
+ * Inline formatting wrappers keep their authored text. Block-level/custom
+ * elements are treated as UI islands and removed wholesale so embedded HTML
+ * widgets do not leak code, labels, or layout text into the prompt.
+ */
 export function stripHtmlFormattingTags(content: string): string {
   let result = content;
 
-  // Handle divs: extract codeblock containers, then strip remaining divs
+  result = result.replace(/<\s*br\s*\/?>/gi, "\n");
+
+  // Remove paired non-inline elements with their content. Iterate so nested
+  // islands collapse outward without preserving their inner scaffolding.
   let prev: string;
   let iter = 0;
   do {
     if (++iter > MAX_FILTER_ITERATIONS) break;
     prev = result;
     result = result.replace(
-      /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
-      "$1",
+      /<\s*([a-zA-Z][\w:-]*)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/g,
+      (match, tag: string) =>
+        HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
     );
-    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "$1");
   } while (result !== prev);
-  result = result.replace(/<\/div>/gi, "");
+
+  result = result.replace(/<\s*([a-zA-Z][\w:-]*)\b[^>]*\/\s*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
+  result = result.replace(/<\s*\/\s*([a-zA-Z][\w:-]*)\s*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
+  result = result.replace(/<\s*([a-zA-Z][\w:-]*)\b[^>]*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
 
   // Strip formatting tags (preserve inner text)
   for (const { open, close } of HTML_TAG_REGEXES) {
@@ -112,7 +131,9 @@ export function stripHtmlFormattingTags(content: string): string {
     result = result.replace(close, "");
   }
 
-  return result;
+  result = result.replace(/[ \t\f\v]*\n[ \t\f\v]*/g, "\n");
+  result = result.replace(/[ \t\f\v]{2,}/g, " ");
+  return collapseExcessiveNewlines(result).trim();
 }
 
 /** Collapse 3+ consecutive newlines to 2 (standard paragraph break). */

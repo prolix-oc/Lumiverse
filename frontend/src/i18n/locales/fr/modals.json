@@ -282,8 +282,8 @@
     "fixedNoHistoryDetail": "L'historique des discussions est la seule section éligible aux clips. L'invite système, WI, persona et autres blocs fixes restent dans l'invite, laissant {{remaining}} jetons pour l'historique.",
     "fixedOverBy": " Les frais généraux fixes dépassent le budget de {{count}} jetons.",
     "parameters": "Paramètres",
-    "footerMessages": "Message {{count}}",
-    "footerMessages_plural": "Messages {{count}}",
+    "footerMessages_one": "Message {{count}}",
+    "footerMessages_other": "Messages {{count}}",
     "retrieval": {
       "cache_hit": "accès au cache",
       "awaited_prefetch": "prélecture attendue",

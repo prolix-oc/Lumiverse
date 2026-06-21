@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizeForVectorization, stripNonProseTags } from "./content-sanitizer";
+import {
+  sanitizeForVectorization,
+  stripHtmlFormattingTags,
+  stripNonProseTags,
+} from "./content-sanitizer";
 
 describe("sanitizeForVectorization", () => {
   test("preserves text inside common HTML formatting wrappers", () => {
@@ -150,5 +154,28 @@ describe("stripNonProseTags", () => {
   test("strips self-closing and attribute-bearing extension tags", () => {
     const input = 'A. <ext_ping status="ready" /> B. <ext_data type="json">{"key":"val"}</ext_data> C.';
     expect(stripNonProseTags(input, { keepFontTags: true })).toBe("A. B. C.");
+  });
+});
+
+describe("stripHtmlFormattingTags", () => {
+  test("removes block-level HTML islands and preserves inline formatted prose", () => {
+    const input = [
+      'I say <font color="#8B7355">"Y-yeah, that\'s me."</font>',
+      '<div class="html-island">',
+      '  <div class="title">linked_list.cpp</div>',
+      '  <pre><code>head = newNode&nbsp;</code></pre>',
+      '  <div class="problems">expected \';\' after expression</div>',
+      '</div>',
+      '<span>*Still nervous.*</span>',
+    ].join("\n");
+
+    const stripped = stripHtmlFormattingTags(input);
+
+    expect(stripped).toContain('<font color="#8B7355">"Y-yeah, that\'s me."</font>');
+    expect(stripped).toContain("*Still nervous.*");
+    expect(stripped).not.toMatch(/\n{3,}/);
+    expect(stripped).not.toContain("linked_list.cpp");
+    expect(stripped).not.toContain("head = newNode");
+    expect(stripped).not.toContain("expected ';' after expression");
   });
 });

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, Plus, ImagePlus, Download, Code2 } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2 } from 'lucide-react'
 import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
@@ -11,6 +11,7 @@ import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { charactersApi } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
 import { imagesApi } from '@/api/images'
+import { personasApi } from '@/api/personas'
 import { worldBooksApi } from '@/api/world-books'
 import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
@@ -104,6 +105,9 @@ export default function CharacterEditorPage() {
   const editingCharacterId = useStore((s) => s.editingCharacterId)
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
   const openDrawer = useStore((s) => s.openDrawer)
+  const addPersona = useStore((s) => s.addPersona)
+  const updatePersona = useStore((s) => s.updatePersona)
+  const setSelectedPersonaId = useStore((s) => s.setSelectedPersonaId)
   const setPendingWorldBookEditId = useStore((s) => s.setPendingWorldBookEditId)
   const allCharacters = useStore((s) => s.characters)
   const activeChatId = useStore((s) => s.activeChatId)
@@ -139,6 +143,7 @@ export default function CharacterEditorPage() {
   const [worldBooks, setWorldBooks] = useState<Array<{ id: string; name: string; folder: string }>>([])
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
+  const [creatingPersona, setCreatingPersona] = useState(false)
   const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
@@ -725,6 +730,47 @@ export default function CharacterEditorPage() {
     browser.openChat(character)
   }, [character, browser.openChat, close])
 
+  const handleCreatePersonaFromCharacter = useCallback(async () => {
+    if (!character || creatingPersona) return
+
+    const description = (fields.description || '').trim()
+    const personality = (fields.personality || '').trim()
+    const personaDescription = [description, personality].filter(Boolean).join('\n\n')
+    if (!personaDescription) {
+      toast.error(t('characterEditor.personaCreateNoContent'))
+      return
+    }
+
+    setCreatingPersona(true)
+    try {
+      let persona = await personasApi.create({
+        name: (name || character.name).trim() || character.name,
+        description: personaDescription,
+      })
+      addPersona(persona)
+      if (character.image_id || character.avatar_path) {
+        try {
+          const avatarBlob = await charactersApi.getAvatarBlob(character.id)
+          const avatarFile = new File([avatarBlob], `avatar.${avatarExtension(avatarBlob.type)}`, {
+            type: avatarBlob.type || 'image/png',
+          })
+          persona = await personasApi.uploadAvatar(persona.id, avatarFile)
+          updatePersona(persona.id, persona)
+        } catch {
+          toast.warning(t('characterEditor.personaAvatarCopyFailed'))
+        }
+      }
+      setSelectedPersonaId(persona.id)
+      toast.success(t('characterEditor.personaCreateSuccess', { name: persona.name }))
+      close()
+      openDrawer('personas')
+    } catch (err: any) {
+      toast.error(err?.body?.error || err?.message || t('characterEditor.personaCreateFailed'))
+    } finally {
+      setCreatingPersona(false)
+    }
+  }, [addPersona, character, close, creatingPersona, fields.description, fields.personality, name, openDrawer, setSelectedPersonaId, t, updatePersona])
+
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exporting, setExporting] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
@@ -853,6 +899,17 @@ export default function CharacterEditorPage() {
                   <div className={styles.headerActions}>
                     <Button size="icon" variant="ghost" onClick={handleOpenChat} title={t('characterEditor.openChat')}>
                       <MessageSquare size={14} />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={handleCreatePersonaFromCharacter}
+                      title={t('characterEditor.createPersona')}
+                      disabled={creatingPersona}
+                    >
+                      {creatingPersona
+                        ? <Spinner size={14} fast />
+                        : <UserPlus size={14} />}
                     </Button>
                     <div className={styles.exportWrapper} ref={exportMenuRef}>
                       <Button
@@ -1400,6 +1457,14 @@ function Field({
       )}
     </div>
   )
+}
+
+function avatarExtension(mimeType: string): string {
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/webp') return 'webp'
+  if (mimeType === 'image/gif') return 'gif'
+  if (mimeType === 'image/svg+xml') return 'svg'
+  return 'png'
 }
 
 /**
