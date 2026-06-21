@@ -3,8 +3,8 @@ import { evaluate } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
 import { initMacros } from "../macros";
 import type { MacroEnv } from "../macros/types";
-import type { PromptVariableDef } from "../types/preset";
-import { coercePromptVariable } from "./prompt-assembly.service";
+import type { Preset, PromptBlock, PromptVariableDef } from "../types/preset";
+import { coercePromptVariable, resolvePromptVariables } from "./prompt-assembly.service";
 
 // ---------------------------------------------------------------------------
 // Minimal env factory — only the fields {{var}} touches matter here.
@@ -226,5 +226,97 @@ describe("{{var::name::ison::keys}} — multiselect AND-query", () => {
       promptVariables: { tone: "Respond with warmth." },
     });
     expect(await ev("{{var::tone}}", env)).toBe("Respond with warmth.");
+  });
+});
+
+describe("resolvePromptVariables", () => {
+  test("seeds {{var::}} values from enabled prompt block definitions and preset metadata", async () => {
+    const env = makeEnv();
+    const blocks: PromptBlock[] = [
+      {
+        id: "block-1",
+        name: "Style",
+        content: "{{var::tone}}",
+        role: "system",
+        enabled: true,
+        position: "pre_history",
+        depth: 0,
+        marker: null,
+        isLocked: false,
+        color: null,
+        injectionTrigger: [],
+        group: null,
+        variables: [
+          {
+            id: "var-1",
+            name: "tone",
+            label: "Tone",
+            type: "text",
+            defaultValue: "default tone",
+          },
+        ],
+      },
+    ];
+    const preset = {
+      id: "preset-1",
+      name: "Preset",
+      provider: "test",
+      engine: "test",
+      parameters: {},
+      prompt_order: blocks,
+      prompts: {},
+      metadata: { promptVariables: { "block-1": { tone: "configured tone" } } },
+      created_at: 0,
+      updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset);
+
+    expect(await ev("{{var::tone}} / {{getvar::tone}}", env)).toBe("configured tone / configured tone");
+  });
+
+  test("does not seed variables from disabled prompt blocks", async () => {
+    const env = makeEnv();
+    const blocks: PromptBlock[] = [
+      {
+        id: "block-1",
+        name: "Disabled",
+        content: "{{var::tone}}",
+        role: "system",
+        enabled: false,
+        position: "pre_history",
+        depth: 0,
+        marker: null,
+        isLocked: false,
+        color: null,
+        injectionTrigger: [],
+        group: null,
+        variables: [
+          {
+            id: "var-1",
+            name: "tone",
+            label: "Tone",
+            type: "text",
+            defaultValue: "default tone",
+          },
+        ],
+      },
+    ];
+    const preset = {
+      id: "preset-1",
+      name: "Preset",
+      provider: "test",
+      engine: "test",
+      parameters: {},
+      prompt_order: blocks,
+      prompts: {},
+      metadata: { promptVariables: { "block-1": { tone: "configured tone" } } },
+      created_at: 0,
+      updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset);
+
+    expect(await ev("{{var::tone}}", env)).toBe("");
   });
 });

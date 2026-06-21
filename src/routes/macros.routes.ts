@@ -4,12 +4,14 @@ import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/char
 import { isTemporaryChatMetadata } from "../types/chat";
 import type { Chat } from "../types/chat";
 import type { MacroEnv } from "../macros";
+import type { PromptBlock, PromptVariableValue } from "../types/preset";
+import type { Preset } from "../types/preset";
 import * as chatsSvc from "../services/chats.service";
 import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
 import { resolvePersonaForChatMacros } from "../services/persona-addon-states";
 import * as connectionsSvc from "../services/connections.service";
-import { populateLumiaLoomContext } from "../services/prompt-assembly.service";
+import { populateLumiaLoomContext, resolvePromptVariables } from "../services/prompt-assembly.service";
 
 // Ensure macros are initialized
 initMacros();
@@ -29,6 +31,8 @@ app.post("/resolve", async (c) => {
     persona_id?: string;
     connection_id?: string;
     dynamic_macros?: Record<string, string>;
+    prompt_blocks?: PromptBlock[];
+    prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
     // When true, leading/trailing whitespace is stripped from the resolved
     // text. This mirrors the per-block trim the assembly applies to a prompt
     // block (see prompt-assembly.service.ts), so a block-editor preview
@@ -44,6 +48,7 @@ app.post("/resolve", async (c) => {
 
   // Build environment from context IDs
   const env = buildEnvFromIds(userId, body);
+  seedPromptVariablesForPreview(env, body);
 
   const result = await evaluate(body.template, env, registry);
   return c.json({
@@ -69,6 +74,8 @@ app.post("/resolve-batch", async (c) => {
     persona_id?: string;
     connection_id?: string;
     dynamic_macros?: Record<string, string>;
+    prompt_blocks?: PromptBlock[];
+    prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
   }>();
 
   if (!body.templates || typeof body.templates !== "object") {
@@ -87,6 +94,7 @@ app.post("/resolve-batch", async (c) => {
 
   // Build environment once and reuse for all templates
   const env = buildEnvFromIds(userId, body);
+  seedPromptVariablesForPreview(env, body);
   const resolved: Record<string, string> = {};
   const touchedVars: Record<string, string[]> = {};
   const cacheable: Record<string, boolean> = {};
@@ -259,6 +267,26 @@ function buildEnvFromIds(userId: string, body: {
     dynamicMacros: body.dynamic_macros || {},
     extra: {},
   };
+}
+
+function seedPromptVariablesForPreview(env: MacroEnv, body: {
+  prompt_blocks?: PromptBlock[];
+  prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
+}): void {
+  if (!Array.isArray(body.prompt_blocks) || body.prompt_blocks.length === 0) return;
+  const preset = {
+    id: "preview",
+    name: "Preview",
+    provider: "preview",
+    engine: "preview",
+    parameters: {},
+    prompt_order: body.prompt_blocks,
+    prompts: {},
+    metadata: { promptVariables: body.prompt_variables ?? {} },
+    created_at: 0,
+    updated_at: 0,
+  } satisfies Preset;
+  resolvePromptVariables(env, body.prompt_blocks, preset);
 }
 
 export { app as macrosRoutes };

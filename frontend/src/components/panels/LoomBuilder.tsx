@@ -76,7 +76,7 @@ import {
   DEFAULT_COMPLETION_SETTINGS,
   DEFAULT_ADVANCED_SETTINGS,
 } from '@/lib/loom/constants'
-import type { PromptBlock, PromptVariableDef, LoomConnectionProfile, SamplerParam, MacroGroup, CategoryGroup, LoomPreset } from '@/lib/loom/types'
+import type { PromptBlock, PromptVariableDef, PromptVariableValues, LoomConnectionProfile, SamplerParam, MacroGroup, CategoryGroup, LoomPreset } from '@/lib/loom/types'
 import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import { VariablesEditor } from './PromptVariablesEditor'
@@ -359,6 +359,8 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDi
 
 interface BlockEditorProps {
   block: PromptBlock
+  blocks: PromptBlock[]
+  promptVariables: PromptVariableValues
   onSave: (updates: Partial<PromptBlock>) => void
   onBack: () => void
   availableMacros: MacroGroup[]
@@ -366,7 +368,7 @@ interface BlockEditorProps {
   compact: boolean
 }
 
-function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, compact }: BlockEditorProps) {
+function BlockEditor({ block, blocks, promptVariables, onSave, onBack, availableMacros, refreshMacros, compact }: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { injectionTriggerTypes, injectionTriggerLabel } = useLoomOptionLabels()
@@ -409,7 +411,18 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
       // leading/trailing whitespace from each resolved block, except append
       // roles, where it preserves whitespace for inter-append spacing.
       const isAppend = role === 'user_append' || role === 'assistant_append'
-      resolveMacrosApi({ template: content, trim: !isAppend, ...(activeChatId ? { chat_id: activeChatId } : {}) })
+      const previewBlocks = blocks.map((b) =>
+        b.id === block.id
+          ? { ...b, content, role, position, depth, variables, enabled: true }
+          : b,
+      )
+      resolveMacrosApi({
+        template: content,
+        trim: !isAppend,
+        prompt_blocks: previewBlocks,
+        prompt_variables: promptVariables,
+        ...(activeChatId ? { chat_id: activeChatId } : {}),
+      })
         .then((res) => {
           setPreviewText(res.text)
           setPreviewDiagnostics(res.diagnostics)
@@ -421,7 +434,7 @@ function BlockEditor({ block, onSave, onBack, availableMacros, refreshMacros, co
         .finally(() => setPreviewLoading(false))
     }, 500)
     return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview, activeChatId, role])
+  }, [content, showPreview, activeChatId, role, blocks, block.id, position, depth, variables, promptVariables])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']
@@ -1910,6 +1923,8 @@ export default function LoomBuilder({
     return (
       <BlockEditor
         block={editingBlock}
+        blocks={activePreset?.blocks ?? []}
+        promptVariables={activePreset?.promptVariables ?? {}}
         onSave={handleEditSave}
         onBack={() => { setView('list'); setEditingBlock(null) }}
         availableMacros={availableMacros}

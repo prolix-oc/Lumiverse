@@ -833,7 +833,7 @@ function appendBaseRole(role: string): "user" | "assistant" {
  * reappear on re-enable. On a variable-name collision across enabled blocks the
  * last block in prompt_order wins; the UI warns creators about shadowing.
  */
-function resolvePromptVariables(
+export function resolvePromptVariables(
   env: MacroEnv,
   blocks: PromptBlock[],
   preset: Preset | null,
