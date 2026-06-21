@@ -84,15 +84,23 @@ export class OpenRouterImageProvider implements ImageProvider {
     const sources: Array<{ data: string; mimeType?: string }> =
       params.resolvedSourceImages || params.referenceImages || [];
 
-    // Text part first, then images (per OpenRouter parsing guidance).
-    const content: any[] = [{ type: "text", text: request.prompt }];
-    for (const src of sources) {
-      if (!src?.data) continue;
-      const url = src.data.startsWith("data:")
-        ? src.data
-        : `data:${src.mimeType || "image/png"};base64,${src.data}`;
-      content.push({ type: "image_url", image_url: { url } });
-    }
+    // Use a plain string prompt for text-to-image when there are no source
+    // images. OpenRouter docs show this as the canonical basic shape, and some
+    // image-only providers (notably BFL Flux) are stricter about it.
+    const content: any =
+      sources.length === 0
+        ? request.prompt
+        : [
+            { type: "text", text: request.prompt },
+            ...sources
+              .filter((src) => src?.data)
+              .map((src) => {
+                const url = src.data.startsWith("data:")
+                  ? src.data
+                  : `data:${src.mimeType || "image/png"};base64,${src.data}`;
+                return { type: "image_url", image_url: { url } };
+              }),
+          ];
 
     const body: any = {
       model: request.model,
@@ -105,7 +113,13 @@ export class OpenRouterImageProvider implements ImageProvider {
     if (params.imageSize) imageConfig.image_size = params.imageSize;
     // strength only meaningful for image-to-image — gate on having sources.
     if (sources.length > 0 && params.strength != null) imageConfig.strength = Number(params.strength);
-    if (Object.keys(imageConfig).length > 0) body.image_config = imageConfig;
+    // BFL Flux endpoints only advertise `seed` as a supported parameter and have
+    // been observed returning 400 when `image_config` is sent automatically.
+    // Respect the user's explicit values for non-Flux models, and let raw
+    // overrides still add any provider-specific config when the user opts in.
+    if (Object.keys(imageConfig).length > 0 && !this.isFluxModel(request.model)) {
+      body.image_config = imageConfig;
+    }
 
     // Apply raw request override (power-user escape hatch — e.g. force modalities
     // to ["image"] for strict image-only models, or pass provider routing).
@@ -190,9 +204,16 @@ export class OpenRouterImageProvider implements ImageProvider {
   }
 
   private isImageOnlyModel(model: string): boolean {
+    return this.isFluxModel(model) || this.isKnownImageOnlyModel(model);
+  }
+
+  private isFluxModel(model: string): boolean {
+    return model.toLowerCase().startsWith("black-forest-labs/flux");
+  }
+
+  private isKnownImageOnlyModel(model: string): boolean {
     const id = model.toLowerCase();
     return (
-      id.startsWith("black-forest-labs/flux") ||
       id.startsWith("sourceful/") ||
       id.startsWith("recraft/") ||
       (id.startsWith("x-ai/grok") && (id.includes("imagine") || id.includes("image")))

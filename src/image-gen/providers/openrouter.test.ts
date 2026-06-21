@@ -74,4 +74,81 @@ describe("OpenRouterImageProvider", () => {
 
     expect(fetchStub.calls[0].body.modalities).toEqual(["image"]);
   });
+
+  test("uses plain string content for text-to-image with no source images", async () => {
+    fetchStub = stubFetch();
+
+    await provider.generate("key", BASE, req("black-forest-labs/flux.2-klein-4b"));
+
+    expect(fetchStub.calls[0].body.messages[0].content).toBe("a fox");
+  });
+
+  test("uses array content parts when source images are present", async () => {
+    fetchStub = stubFetch();
+
+    await provider.generate(
+      "key",
+      BASE,
+      req("black-forest-labs/flux.2-klein-4b", {
+        resolvedSourceImages: [{ data: "QUJD", mimeType: "image/jpeg" }],
+      }),
+    );
+
+    const content = fetchStub.calls[0].body.messages[0].content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content[0]).toEqual({ type: "text", text: "a fox" });
+    expect(content[1]).toEqual({ type: "image_url", image_url: { url: "data:image/jpeg;base64,QUJD" } });
+  });
+
+  test("does not send image_config for Flux models", async () => {
+    fetchStub = stubFetch();
+
+    await provider.generate(
+      "key",
+      BASE,
+      req("black-forest-labs/flux.2-klein-4b", {
+        aspectRatio: "16:9",
+        imageSize: "2K",
+      }),
+    );
+
+    expect(fetchStub.calls[0].body.image_config).toBeUndefined();
+  });
+
+  test("sends image_config for Gemini models", async () => {
+    fetchStub = stubFetch();
+
+    await provider.generate(
+      "key",
+      BASE,
+      req("google/gemini-2.5-flash-image", {
+        aspectRatio: "16:9",
+        imageSize: "2K",
+      }),
+    );
+
+    expect(fetchStub.calls[0].body.image_config).toEqual({
+      aspect_ratio: "16:9",
+      image_size: "2K",
+    });
+  });
+
+  test("rawRequestOverride can still inject image_config for Flux models", async () => {
+    fetchStub = stubFetch();
+
+    await provider.generate(
+      "key",
+      BASE,
+      req("black-forest-labs/flux.2-klein-4b", {
+        rawRequestOverride: JSON.stringify({
+          image_config: { aspect_ratio: "21:9", image_size: "4K" },
+        }),
+      }),
+    );
+
+    expect(fetchStub.calls[0].body.image_config).toEqual({
+      aspect_ratio: "21:9",
+      image_size: "4K",
+    });
+  });
 });
