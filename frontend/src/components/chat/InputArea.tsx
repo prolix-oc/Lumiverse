@@ -956,7 +956,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       } else {
         bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
       }
-      parent.style.setProperty('--lcs-input-safe-zone', `${h + bottomOffset + 16}px`)
+      parent.style.setProperty('--lcs-input-safe-zone', `${h + bottomOffset + 8}px`)
     }
 
     const ro = new ResizeObserver(update)
