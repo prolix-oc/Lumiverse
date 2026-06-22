@@ -51,7 +51,7 @@ const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
 const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
 const WALLPAPER_TRANSITION_HALF_MS = 260
 const CHAT_CHROME_ENTER_MS = 90
-const CHAT_CHROME_LEAVE_MS = 160
+const CHAT_CHROME_LEAVE_MS = 220
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true

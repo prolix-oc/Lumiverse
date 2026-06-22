@@ -91,6 +91,7 @@
 }
 
 .chatColumnInner[data-chat-chrome-entering] .chatToolbar,
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']),
 .chatColumnInner[data-chat-chrome-entering] :global([data-component='InputArea']),
 .chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageSelectBar']) {
   opacity: 0;
@@ -106,11 +107,24 @@
   transform: translateY(10px);
 }
 
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']) {
+  transform: translateY(6px);
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageList']),
 .chatColumnInner[data-chat-chrome-leaving] :global([data-component='InputArea']),
 .chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageSelectBar']) {
   opacity: 0;
   pointer-events: none;
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='InputArea']),
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageSelectBar']) {
   transform: translateY(10px);
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageList']) {
+  transform: translateY(6px);
 }
 
 .noticeDock,

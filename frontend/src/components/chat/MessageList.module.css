@@ -10,6 +10,7 @@
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--lumiverse-border) 55%, transparent) transparent;
   position: relative;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
 
 .list[data-group-chat] {
