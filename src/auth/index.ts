@@ -1,10 +1,11 @@
 import { betterAuth } from "better-auth";
-import { username, admin, bearer } from "better-auth/plugins";
+import { username, admin, bearer, genericOAuth } from "better-auth/plugins";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
 import { seedDefaultPreset } from "./default-preset";
 import { getAllowedOrigins } from "../services/trusted-hosts.service";
+import { listEnabledSsoAuthConfigs } from "../services/sso-providers.service";
 
 // ─── Signup gate ────────────────────────────────────────────────────────
 // All signups are blocked unless a valid nonce is presented.
@@ -33,6 +34,14 @@ function consumeNonce(expectedNonce: string | null): boolean {
 }
 
 // ─── BetterAuth instance ────────────────────────────────────────────────
+
+const ssoConfigs = listEnabledSsoAuthConfigs();
+if (ssoConfigs.length > 0) {
+  console.log(`[Auth] Registered ${ssoConfigs.length} owner-configured SSO provider${ssoConfigs.length === 1 ? "" : "s"}.`);
+  for (const provider of ssoConfigs) {
+    console.log(`[Auth] SSO ${provider.providerId} redirect URI: ${provider.redirectURI}`);
+  }
+}
 
 export const auth = betterAuth({
   database: getDb(),
@@ -70,8 +79,31 @@ export const auth = betterAuth({
         owner: {} as any,
       },
     }),
+    ...(ssoConfigs.length > 0
+      ? [genericOAuth({
+          config: ssoConfigs.map((provider) => ({
+            providerId: provider.providerId,
+            clientId: provider.clientId,
+            clientSecret: provider.clientSecret,
+            discoveryUrl: provider.discoveryUrl,
+            redirectURI: provider.redirectURI,
+            scopes: provider.scopes,
+            pkce: provider.pkce,
+            disableImplicitSignUp: true,
+            disableSignUp: true,
+          })),
+        })]
+      : []),
     bearer(),
   ],
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ssoConfigs.map((provider) => provider.providerId),
+      allowDifferentEmails: true,
+      disableImplicitLinking: true,
+    },
+  },
   databaseHooks: {
     user: {
       create: {

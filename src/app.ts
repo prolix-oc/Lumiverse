@@ -24,6 +24,7 @@ import { providersRoutes } from "./routes/providers.routes";
 import { macrosRoutes } from "./routes/macros.routes";
 import { spindleRoutes } from "./routes/spindle.routes";
 import { usersRoutes } from "./routes/users.routes";
+import { ssoProvidersRoutes } from "./routes/sso-providers.routes";
 import { packsRoutes } from "./routes/packs.routes";
 import { councilRoutes } from "./routes/council.routes";
 import { weaverRoutes } from "./routes/weaver.routes";
@@ -69,6 +70,7 @@ import {
 } from "./services/trusted-hosts.service";
 import { authLockoutService } from "./services/auth-lockout.service";
 import { getClientIp } from "./utils/client-ip";
+import { listSsoLoginOptions } from "./services/sso-providers.service";
 
 const app = new Hono();
 const SIGN_IN_AUTH_PATTERN = /^\/api\/auth\/sign-in(?:\/|$)/;
@@ -440,6 +442,10 @@ app.get("/api/v1/image-gen/results/:id", async (c) => {
 });
 
 // Auth middleware — AFTER auth handler, BEFORE routes
+app.get("/api/v1/sso-providers/login-options", (c) => {
+  return c.json(listSsoLoginOptions());
+});
+
 app.use("/api/v1/*", requireAuth);
 
 app.route("/api/v1/settings", settingsRoutes);
@@ -463,6 +469,7 @@ app.route("/api/v1/providers", providersRoutes);
 app.route("/api/v1/macros", macrosRoutes);
 app.route("/api/v1/spindle", spindleRoutes);
 app.route("/api/v1/users", usersRoutes);
+app.route("/api/v1/sso-providers", ssoProvidersRoutes);
 app.route("/api/v1/packs", packsRoutes);
 app.route("/api/v1/council", councilRoutes);
 app.route("/api/v1/weaver", weaverRoutes);

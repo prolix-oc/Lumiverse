@@ -59,6 +59,7 @@ New to Lumiverse? Start here:
 | [Push Notifications](settings/push-notifications.md) | Get notified when the AI responds |
 | [LumiHub](settings/lumihub.md) | Browse and install characters from the hub |
 | [Users & Auth](settings/users.md) | Manage users, roles, and passwords |
+| [Single Sign-On](settings/sso.md) | Configure OIDC SSO with authentik, Authelia, or Keycloak |
 
 ### Data Portability
 

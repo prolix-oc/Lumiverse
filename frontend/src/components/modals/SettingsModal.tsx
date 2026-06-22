@@ -42,6 +42,7 @@ import type { EmbeddingConfig, ChatMemorySettings } from '@/types/api'
 import type { WorldBookVectorPresetMode, WorldBookVectorSettings } from '@/types/world-book-vector-settings'
 import AccountSettings from '@/components/settings/AccountSettings'
 import UserManagement from '@/components/settings/UserManagement'
+import SsoProviderSettings from '@/components/settings/SsoProviderSettings'
 import MigrationSettings from '@/components/settings/MigrationSettings'
 import TokenizerManager from '@/components/settings/TokenizerManager'
 import Diagnostics from '@/components/settings/Diagnostics'
@@ -232,6 +233,8 @@ function SettingsView({ view }: { view: string }) {
       return <TokenizerManager />
     case 'users':
       return <UserManagement />
+    case 'ssoProviders':
+      return <SsoProviderSettings />
     case 'memoryCortex':
       return <MemoryCortexSettings />
     case 'notifications':
