@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, type CSSProperties } from 'react'
+import { useState, useCallback, useMemo, type CSSProperties, type SyntheticEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2 } from 'lucide-react'
 import type { MessageAttachment } from '@/types/api'
@@ -11,6 +11,8 @@ import ImageLightbox from '@/components/shared/ImageLightbox'
 import LazyImage from '@/components/shared/LazyImage'
 import styles from './MessageAttachments.module.css'
 import clsx from 'clsx'
+
+const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 
 interface MessageAttachmentsProps {
   attachments: MessageAttachment[]
@@ -61,6 +63,9 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
     setLightboxImageId(att.image_id)
     setLightboxSrc(getLocalImageUrl(att))
     setLightboxFallbackSrc(getRelayPreviewUrl(att))
+  }, [])
+  const notifyImageLayout = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    event.currentTarget.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
   }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)
@@ -164,12 +169,16 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
                 alt={att.original_filename}
                 style={{ objectFit: 'contain' }}
                 spinnerSize={18}
+                onLoad={notifyImageLayout}
+                onError={notifyImageLayout}
                 fallback={getRelayPreviewUrl(att) ? (
                   <LazyImage
                     src={getRelayPreviewUrl(att)}
                     alt={att.original_filename}
                     style={{ objectFit: 'contain' }}
                     spinnerSize={18}
+                    onLoad={notifyImageLayout}
+                    onError={notifyImageLayout}
                   />
                 ) : null}
               />
@@ -196,6 +205,8 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
                 }
                 containerClassName={styles.inlineImageWrap}
                 spinnerSize={20}
+                onLoad={notifyImageLayout}
+                onError={notifyImageLayout}
                 fallback={getRelayPreviewUrl(att) ? (
                   <LazyImage
                     src={getRelayPreviewUrl(att)}
@@ -207,6 +218,8 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
                     }
                     containerClassName={styles.inlineImageWrap}
                     spinnerSize={20}
+                    onLoad={notifyImageLayout}
+                    onError={notifyImageLayout}
                   />
                 ) : null}
               />

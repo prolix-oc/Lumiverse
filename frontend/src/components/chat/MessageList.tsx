@@ -24,16 +24,9 @@ interface MessageListProps {
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
+const SCROLL_END_THRESHOLD = 80
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
-const MOBILE_MOMENTUM_SETTLE_MS = 260
-// After touchend, the prepend visual offset is only flushed once scroll events
-// have been quiet for this long. A fixed post-touchend timer lands mid-fling on
-// iOS (momentum runs 1-2s) and the scrollTop write kills the fling dead.
-const MOBILE_MOMENTUM_QUIET_MS = 150
-// Hard ceiling on flush deferral so a busy event source (streaming repins,
-// settle re-measures) can't postpone history rebasing indefinitely.
-const MOBILE_MOMENTUM_FLUSH_CAP_MS = 4000
 const MOBILE_RANGE_WARM_MS = 1200
 // How long after the first rows render before the mounted range widens from
 // the cold-start window to the full warm range. Long enough for the initial
@@ -172,13 +165,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // height delta would trigger scroll oscillation.
   const lastMeasuredByMessageIdRef = useRef<Map<string, number>>(new Map())
   const averageMeasuredHeightRef = useRef<number | null>(null)
-  const prependVisualOffsetRef = useRef(0)
   const isPrependingRef = useRef(false)
   const suppressNextPinUpdateRef = useRef(false)
-  const touchActiveRef = useRef(false)
-  const touchMomentumTimerRef = useRef<number | null>(null)
-  const momentumFlushDeadlineRef = useRef(0)
-  const lastScrollAtRef = useRef(0)
   const rangeWarmTimerRef = useRef<number | null>(null)
   const initialBottomPinnedChatRef = useRef<string | null>(null)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
@@ -191,7 +179,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // the per-message render pipeline doesn't block the first visible frame.
   const [initialRangeWarm, setInitialRangeWarm] = useState(false)
   const initialWarmTimerRef = useRef<number | null>(null)
-  const [prependVisualOffset, setPrependVisualOffsetState] = useState(0)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -224,12 +211,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     initialBottomPinnedChatRef.current = null
   }, [chatId])
 
-  const setPrependVisualOffset = useCallback((next: number) => {
-    const clamped = Math.max(0, Math.round(next))
-    prependVisualOffsetRef.current = clamped
-    setPrependVisualOffsetState((prev) => (prev === clamped ? prev : clamped))
-  }, [])
-
   // Record a programmatic scrollTop write so handleScroll can identify the
   // matching event. Read back rather than store the requested value — the
   // browser clamps writes past the scroll range, and the clamped position is
@@ -238,21 +219,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = el.scrollTop
   }, [])
-
-  const flushPrependVisualOffset = useCallback(() => {
-    const el = scrollRef.current
-    const pendingOffset = prependVisualOffsetRef.current
-    if (!el || pendingOffset <= 0) return
-
-    // Convert any temporary visual-only prepend offset back into real scroll
-    // position once scrolling has gone quiet so history loading can't get
-    // stuck behind a synthetic top gap.
-    el.scrollTop += pendingOffset
-    markProgrammaticScroll(el)
-    lastScrollTopRef.current = el.scrollTop
-    lastScrollHeightRef.current = el.scrollHeight
-    setPrependVisualOffset(0)
-  }, [markProgrammaticScroll, setPrependVisualOffset])
 
   const warmMobileRange = useCallback((duration = MOBILE_RANGE_WARM_MS) => {
     setMobileRangeWarm(true)
@@ -375,9 +341,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   useEffect(() => {
     return () => {
-      if (touchMomentumTimerRef.current != null) {
-        window.clearTimeout(touchMomentumTimerRef.current)
-      }
       if (rangeWarmTimerRef.current != null) {
         window.clearTimeout(rangeWarmTimerRef.current)
       }
@@ -466,8 +429,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     // chat. The warm flip shortly after mounts the rest.
     const nearTail = initialRangeWarm && range.endIndex >= range.count - (isCoarsePointer ? 10 : 8)
     const isWarm = initialRangeWarm && (mobileRangeWarm || nearTail)
-    const extraBefore = !initialRangeWarm ? 4 : isCoarsePointer ? (isWarm ? 32 : 18) : (isWarm ? 18 : 8)
-    const extraAfter = !initialRangeWarm ? 2 : isCoarsePointer ? (isWarm ? 10 : 6) : (isWarm ? 5 : 3)
+    const extraBefore = !initialRangeWarm ? 3 : isCoarsePointer ? (isWarm ? 18 : 10) : (isWarm ? 10 : 5)
+    const extraAfter = !initialRangeWarm ? 2 : isCoarsePointer ? (isWarm ? 6 : 4) : (isWarm ? 3 : 2)
     const start = Math.max(0, range.startIndex - extraBefore)
     const end = Math.min(range.count - 1, range.endIndex + extraAfter)
 
@@ -506,9 +469,14 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           return 1
       }
     },
-    overscan: initialRangeWarm ? (isCoarsePointer ? 12 : 8) : 3,
+    overscan: initialRangeWarm ? (isCoarsePointer ? 8 : 5) : 2,
     getItemKey,
     rangeExtractor,
+    anchorTo: 'end',
+    followOnAppend: true,
+    scrollEndThreshold: SCROLL_END_THRESHOLD,
+    directDomUpdates: true,
+    directDomUpdatesMode: 'position',
     useAnimationFrameWithResizeObserver: true,
     measureElement: (element, entry) => {
       const size = entry?.borderBoxSize?.[0]?.blockSize
@@ -586,21 +554,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (settleTimer) window.clearTimeout(settleTimer)
     }
   }, [measureMountedRows])
-
-  useLayoutEffect(() => {
-    rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item) => {
-      const el = scrollRef.current
-      if (el && el.scrollHeight - el.scrollTop - el.clientHeight > SCROLLED_UP_EPSILON) {
-        return false
-      }
-      const scrollOffset = rowVirtualizer.scrollOffset ?? el?.scrollTop ?? 0
-      return item.end < scrollOffset
-    }
-
-    return () => {
-      rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined
-    }
-  }, [rowVirtualizer])
 
   const virtualItems = rowVirtualizer.getVirtualItems()
 
@@ -689,11 +642,17 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const pinToBottomIfNeeded = useCallback((el: HTMLElement) => {
     if (hasInListEditableFocus()) return
-    const target = el.scrollHeight - el.clientHeight
-    if (Math.abs(el.scrollTop - target) <= 1) return
-    el.scrollTop = target
-    markProgrammaticScroll(el)
-  }, [hasInListEditableFocus, markProgrammaticScroll])
+    if (rowVirtualizer.isAtEnd(1)) return
+    isProgrammaticScrollRef.current = true
+    programmaticScrollTargetRef.current = null
+    rowVirtualizer.scrollToEnd({ behavior: 'auto' })
+    requestAnimationFrame(() => {
+      const latest = scrollRef.current
+      if (!latest) return
+      lastScrollTopRef.current = latest.scrollTop
+      lastScrollHeightRef.current = latest.scrollHeight
+    })
+  }, [hasInListEditableFocus, rowVirtualizer])
 
   if (isStreamingRef.current && !isStreaming) {
     const el = scrollRef.current
@@ -713,21 +672,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (!el || virtualListItems.length === 0) return
 
     isPinnedRef.current = true
-    // Smooth scrollToIndex emits a stream of events with no single target
+    // Smooth scroll emits a stream of events with no single target
     // position — consume the first one unconditionally (null target).
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
-    setPrependVisualOffset(0)
-    rowVirtualizer.scrollToIndex(virtualListItems.length - 1, { align: 'end', behavior })
-
-    requestAnimationFrame(() => {
-      const latest = scrollRef.current
-      if (!latest) return
-      latest.scrollTop = latest.scrollHeight - latest.clientHeight
-      markProgrammaticScroll(latest)
-      lastScrollTopRef.current = latest.scrollTop
-    })
-  }, [markProgrammaticScroll, rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
+    rowVirtualizer.scrollToEnd({ behavior })
+  }, [rowVirtualizer, virtualListItems.length])
 
   // The route changes before the async tail request resolves, so the chatId
   // effect below can fire against the previous/empty list. Pin again once the
@@ -740,8 +690,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     initialBottomPinnedChatRef.current = chatId
     isPinnedRef.current = true
-    setPrependVisualOffset(0)
-    rowVirtualizer.scrollToIndex(virtualListItems.length - 1, { align: 'end', behavior: 'auto' })
+    rowVirtualizer.scrollToEnd({ behavior: 'auto' })
 
     let raf = 0
     const timers: number[] = []
@@ -767,7 +716,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (raf) cancelAnimationFrame(raf)
       for (const timer of timers) window.clearTimeout(timer)
     }
-  }, [chatId, hasRows, pinToBottomIfNeeded, rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
+  }, [chatId, hasRows, pinToBottomIfNeeded, rowVirtualizer, virtualListItems.length])
 
   const BOTTOM_REPIN_EPSILON = 6
 
@@ -819,8 +768,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (!el) return
 
-    lastScrollAtRef.current = performance.now()
-
     if (recoverTailVoid()) return
 
     const deltaTop = el.scrollTop - lastScrollTopRef.current
@@ -841,10 +788,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       reflowAnchorRef.current = null
     }
 
-    if (prependVisualOffsetRef.current > 0 && deltaTop < 0) {
-      setPrependVisualOffset(prependVisualOffsetRef.current + deltaTop)
-    }
-
     if (deltaTop < 0) {
       isPinnedRef.current = false
       suppressNextPinUpdateRef.current = false
@@ -855,7 +798,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
 
     const topLoadThreshold = getTopLoadThreshold(el.clientHeight, isCoarsePointer)
-    const effectiveScrollTop = el.scrollTop + prependVisualOffsetRef.current
+    const effectiveScrollTop = el.scrollTop
 
     if (effectiveScrollTop > topLoadThreshold) {
       topLoadArmedRef.current = true
@@ -865,7 +808,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       topLoadArmedRef.current = false
       loadMore()
     }
-  }, [hasMore, isCoarsePointer, loadingOlder, loadMore, recoverTailVoid, setPrependVisualOffset])
+  }, [hasMore, isCoarsePointer, loadingOlder, loadMore, recoverTailVoid])
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     if (event.deltaY < -30) {
@@ -875,11 +818,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [])
 
   const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    if (touchMomentumTimerRef.current != null) {
-      window.clearTimeout(touchMomentumTimerRef.current)
-      touchMomentumTimerRef.current = null
-    }
-    touchActiveRef.current = true
     touchYRef.current = event.touches[0]?.clientY ?? null
   }, [])
 
@@ -893,33 +831,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     touchYRef.current = nextY
   }, [])
 
-  // Flush the prepend visual offset once scroll events go quiet instead of on
-  // a fixed timer — an iOS fling keeps emitting scroll events for 1-2s after
-  // touchend, and a scrollTop write during that window halts the momentum.
-  const scheduleMomentumFlush = useCallback(() => {
-    if (touchMomentumTimerRef.current != null) {
-      window.clearTimeout(touchMomentumTimerRef.current)
-    }
-    momentumFlushDeadlineRef.current = performance.now() + MOBILE_MOMENTUM_FLUSH_CAP_MS
-    const tick = () => {
-      touchMomentumTimerRef.current = null
-      const quietFor = performance.now() - lastScrollAtRef.current
-      if (quietFor >= MOBILE_MOMENTUM_QUIET_MS || performance.now() >= momentumFlushDeadlineRef.current) {
-        flushPrependVisualOffset()
-        return
-      }
-      touchMomentumTimerRef.current = window.setTimeout(tick, MOBILE_MOMENTUM_QUIET_MS)
-    }
-    touchMomentumTimerRef.current = window.setTimeout(tick, MOBILE_MOMENTUM_SETTLE_MS)
-  }, [flushPrependVisualOffset])
+  const handleTouchEnd = useCallback(() => {
+    touchYRef.current = null
+  }, [])
 
-  const releaseTouchMomentumHold = useCallback(() => {
-    touchActiveRef.current = false
-    scheduleMomentumFlush()
-  }, [scheduleMomentumFlush])
-
-  // Scroll anchoring: when older messages are prepended, adjust scrollTop so
-  // the user's viewport stays on the same content instead of jumping to the top.
+  // TanStack's end anchoring owns prepend stability. This effect now only
+  // consumes the pagination flag, warms the mounted range, and keeps loader
+  // state/bookkeeping in sync.
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -928,21 +846,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       isPrependingRef.current = true
       justPrependedRef.current = false
       warmMobileRange(900)
-      const heightDiff = el.scrollHeight - lastScrollHeightRef.current
-      if (heightDiff > 0 && lastScrollHeightRef.current > 0) {
-        if (!isPinnedRef.current && isCoarsePointer) {
-          // Never write scrollTop for a prepend on touch devices — the batch
-          // resolves mid-fling more often than not and the write kills the
-          // momentum. Translate rows instead and rebase once scrolling goes
-          // quiet.
-          setPrependVisualOffset(prependVisualOffsetRef.current + heightDiff)
-          if (!touchActiveRef.current) scheduleMomentumFlush()
-        } else {
-          el.scrollTop += heightDiff
-          markProgrammaticScroll(el)
-          lastScrollTopRef.current = el.scrollTop
-        }
-      }
       isPrependingRef.current = false
     }
 
@@ -950,7 +853,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     lastScrollTopRef.current = el.scrollTop
 
     const topLoadThreshold = getTopLoadThreshold(el.clientHeight, isCoarsePointer)
-    const effectiveScrollTop = el.scrollTop + prependVisualOffsetRef.current
+    const effectiveScrollTop = el.scrollTop
 
     if (effectiveScrollTop > topLoadThreshold) {
       topLoadArmedRef.current = true
@@ -964,7 +867,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         loadMore()
       })
     }
-  }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, markProgrammaticScroll, scheduleMomentumFlush, setPrependVisualOffset, warmMobileRange])
+  }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, warmMobileRange])
 
   // Unified scroll guard: watches scrollHeight changes caused by streaming
   // tokens, extension mounts, lazy image loads, or virtual row resizing.
@@ -997,7 +900,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (heightDelta === 0) return
 
       // If scrollTop already moved by roughly the height change, something
-      // else (e.g. the virtualizer's shouldAdjustScrollPositionOnItemSizeChange)
+      // else (e.g. the virtualizer's end anchoring)
       // handled it — don't double-compensate.
       if (Math.abs(scrollTopDelta - heightDelta) < 2) return
 
@@ -1079,12 +982,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (el) {
       isPinnedRef.current = true
-      setPrependVisualOffset(0)
-      el.scrollTop = el.scrollHeight - el.clientHeight
-      markProgrammaticScroll(el)
-      lastScrollTopRef.current = el.scrollTop
+      isProgrammaticScrollRef.current = true
+      programmaticScrollTargetRef.current = null
+      rowVirtualizer.scrollToEnd({ behavior: 'auto' })
     }
-  }, [chatId, markProgrammaticScroll, setPrependVisualOffset])
+  }, [chatId, rowVirtualizer])
 
   useEffect(() => {
     const handleScrollToBottom = () => scrollToHistoryBottom('smooth')
@@ -1099,11 +1001,24 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     let pendingRaf = 0
     let settleRaf = 0
 
-    const handleMessageContentLayout = () => {
+    let pendingRow: HTMLElement | null = null
+
+    const handleMessageContentLayout = (event: Event) => {
+      const target = event.target
+      pendingRow = target instanceof Element
+        ? target.closest<HTMLElement>('[data-virtual-index]')
+        : null
+
       if (pendingRaf) return
       pendingRaf = requestAnimationFrame(() => {
         pendingRaf = 0
-        measureMountedRows()
+        const row = pendingRow
+        pendingRow = null
+        if (row && el.contains(row)) {
+          rowVirtualizer.measureElement(row)
+        } else {
+          measureMountedRows()
+        }
 
         if (recoverTailVoid()) return
         if (!settleRaf) {
@@ -1127,7 +1042,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
       if (settleRaf) cancelAnimationFrame(settleRaf)
     }
-  }, [pinToBottomIfNeeded, measureMountedRows, recoverTailVoid])
+  }, [pinToBottomIfNeeded, measureMountedRows, recoverTailVoid, rowVirtualizer])
 
   return (
     <div
@@ -1138,15 +1053,15 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
-      onTouchEnd={releaseTouchMomentumHold}
-      onTouchCancel={releaseTouchMomentumHold}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       data-chat-scroll="true"
       data-group-chat={isGroupChat || undefined}
     >
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
       <div
+        ref={rowVirtualizer.containerRef}
         className={styles.virtualSpace}
-        style={{ height: rowVirtualizer.getTotalSize() }}
       >
         {virtualItems.map((virtualRow) => {
           const item = virtualListItems[virtualRow.index]
@@ -1199,8 +1114,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
               messageIndex={messageIndex}
               messageId={messageId}
               measureKey={measureKey}
-              start={virtualRow.start}
-              visualOffset={prependVisualOffset}
               styleMode={styleMode}
               measureElement={rowVirtualizer.measureElement}
             >
@@ -1219,14 +1132,12 @@ interface VirtualRowProps {
   messageIndex?: number
   messageId?: string
   measureKey?: string
-  start: number
-  visualOffset: number
   styleMode?: 'bounded' | 'extension-relaxed'
   measureElement: (el: Element | null) => void
   children: ReactNode
 }
 
-function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, start, visualOffset, styleMode, measureElement, children }: VirtualRowProps) {
+function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, styleMode, measureElement, children }: VirtualRowProps) {
   const elRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1234,8 +1145,6 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
     if (!el) return
 
     let pendingRaf = 0
-    const settleTimers: number[] = []
-
     const measure = () => {
       measureElement(el)
     }
@@ -1250,28 +1159,15 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
 
     // Initial measure during commit, before paint
     measure()
-    for (const delay of [80, 180, 420, 900]) {
-      settleTimers.push(window.setTimeout(scheduleMeasure, delay))
-    }
-
-    // Own immediate ResizeObserver bypasses the virtualizer's rAF-batched
-    // observer so dynamic content (extension interceptor injections, lazy
-    // images, etc.) updates row heights without a one-frame delay.
-    const ro = new ResizeObserver(() => {
-      measure()
-    })
-    ro.observe(el)
 
     const mo = new MutationObserver(scheduleMeasure)
-    mo.observe(el, { childList: true, subtree: true, attributes: true, characterData: true })
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
 
     el.addEventListener('load', scheduleMeasure, true)
     el.addEventListener('error', scheduleMeasure, true)
 
     return () => {
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
-      for (const timer of settleTimers) window.clearTimeout(timer)
-      ro.disconnect()
       mo.disconnect()
       el.removeEventListener('load', scheduleMeasure, true)
       el.removeEventListener('error', scheduleMeasure, true)
@@ -1291,10 +1187,6 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
       data-measure-key={measureKey}
       data-style-mode={relaxed ? 'extension-relaxed' : undefined}
       className={styles.virtualRow}
-      style={relaxed
-        ? { top: `${start - visualOffset}px` }
-        : { transform: `translateY(${start - visualOffset}px)` }
-      }
     >
       {children}
     </div>
