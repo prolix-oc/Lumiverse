@@ -21,6 +21,25 @@
     -webkit-backdrop-filter: blur(16px) saturate(1.2);
   }
 
+  /* macOS: the OS draws traffic lights in the top-left of the overlay.
+     The lights are taller than the generic 32px fallback, so raise the
+     minimum height to keep them from overhanging into the app content.
+     Keep the titlebar background uniform so the lights don't sit on a
+     darker patch, and nudge the drag region past the light cluster. */
+  :global(html[data-platform="macos"]) .titlebar {
+    height: max(env(titlebar-area-height, 40px), 40px);
+    background: color-mix(in srgb, var(--lumiverse-bg-deep) 92%, transparent);
+  }
+
+  :global(html[data-platform="macos"]) .dragRegion {
+    top: env(titlebar-area-y, 0px);
+    left: max(env(titlebar-area-x, 78px), 78px);
+    width: calc(100% - max(env(titlebar-area-x, 78px), 78px));
+    height: max(env(titlebar-area-height, 40px), 40px);
+    padding-left: 12px;
+    justify-content: center;
+  }
+
   .dragRegion {
     position: absolute;
     top: env(titlebar-area-y, 0px);
@@ -52,5 +71,9 @@
 
   .title {
     opacity: 0.9;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }

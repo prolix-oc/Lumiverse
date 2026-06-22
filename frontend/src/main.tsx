@@ -225,6 +225,10 @@ const isStandalone =
   window.matchMedia('(display-mode: window-controls-overlay)').matches ||
   (window.navigator as any).standalone === true
 
+if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
+  document.documentElement.setAttribute('data-platform', 'macos')
+}
+
 if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
   // Tag iOS/iPadOS PWAs separately — position:fixed + inset:0 triggers WebKit
