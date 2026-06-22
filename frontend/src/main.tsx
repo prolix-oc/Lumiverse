@@ -222,6 +222,7 @@ window.visualViewport?.addEventListener('scroll', () => {
 // since iOS PWA shells may not advertise display-mode: standalone via CSS.
 const isStandalone =
   window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia('(display-mode: window-controls-overlay)').matches ||
   (window.navigator as any).standalone === true
 
 if (isStandalone) {

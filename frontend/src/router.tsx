@@ -25,6 +25,7 @@ const routes = [
 
 const isStandalone =
   window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia('(display-mode: window-controls-overlay)').matches ||
   (window.navigator as any).standalone === true
 
 const initialEntry = `${window.location.pathname}${window.location.search}${window.location.hash}`

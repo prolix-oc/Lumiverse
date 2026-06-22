@@ -53,6 +53,12 @@
   padding-bottom: var(--spindle-dock-bottom, 0px);
 }
 
+@media (display-mode: window-controls-overlay) {
+  .app {
+    padding-top: calc(env(titlebar-area-height, 0px) + env(safe-area-inset-top, 0px) + var(--spindle-dock-top, 0px));
+  }
+}
+
 .main {
   position: relative;
   z-index: 1;

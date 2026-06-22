@@ -17,6 +17,7 @@ import ToastContainer from '@/components/shared/ToastContainer'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
+import DesktopPwaTitlebar from '@/components/shared/DesktopPwaTitlebar'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
@@ -165,6 +166,7 @@ export default function App() {
               '--spindle-dock-bottom': `${dockInsets.bottom}px`,
             } as React.CSSProperties}
           >
+            <DesktopPwaTitlebar />
             <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} fixed fadeInOnMount />
             <ErrorBoundary label="App">
               {/* Mirrors react-router context out to detached drawer-tab roots */}
