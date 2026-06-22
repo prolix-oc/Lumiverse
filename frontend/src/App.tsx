@@ -16,6 +16,7 @@ import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
+import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
@@ -46,6 +47,7 @@ export default function App() {
   const dockPanels = useStore((s) => s.dockPanels)
   const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
+  const wallpaper = useStore((s) => s.wallpaper)
 
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
@@ -163,6 +165,7 @@ export default function App() {
               '--spindle-dock-bottom': `${dockInsets.bottom}px`,
             } as React.CSSProperties}
           >
+            <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} fixed fadeInOnMount />
             <ErrorBoundary label="App">
               {/* Mirrors react-router context out to detached drawer-tab roots */}
               <RouterContextExporter />

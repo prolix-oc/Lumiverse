@@ -180,6 +180,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const momentumFlushDeadlineRef = useRef(0)
   const lastScrollAtRef = useRef(0)
   const rangeWarmTimerRef = useRef<number | null>(null)
+  const initialBottomPinnedChatRef = useRef<string | null>(null)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   )
@@ -220,6 +221,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     measuredRowHeightsRef.current = new Map()
     lastMeasuredByMessageIdRef.current = new Map()
     averageMeasuredHeightRef.current = null
+    initialBottomPinnedChatRef.current = null
   }, [chatId])
 
   const setPrependVisualOffset = useCallback((next: number) => {
@@ -726,6 +728,46 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       lastScrollTopRef.current = latest.scrollTop
     })
   }, [markProgrammaticScroll, rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
+
+  // The route changes before the async tail request resolves, so the chatId
+  // effect below can fire against the previous/empty list. Pin again once the
+  // first loaded rows for this chat are actually present.
+  useLayoutEffect(() => {
+    if (!hasRows || initialBottomPinnedChatRef.current === chatId) return
+
+    const el = scrollRef.current
+    if (!el || virtualListItems.length === 0) return
+
+    initialBottomPinnedChatRef.current = chatId
+    isPinnedRef.current = true
+    setPrependVisualOffset(0)
+    rowVirtualizer.scrollToIndex(virtualListItems.length - 1, { align: 'end', behavior: 'auto' })
+
+    let raf = 0
+    const timers: number[] = []
+    const pin = () => {
+      if (initialBottomPinnedChatRef.current !== chatId) return
+      const latest = scrollRef.current
+      if (!latest) return
+      pinToBottomIfNeeded(latest)
+      lastScrollTopRef.current = latest.scrollTop
+      lastScrollHeightRef.current = latest.scrollHeight
+    }
+
+    raf = requestAnimationFrame(() => {
+      raf = 0
+      pin()
+    })
+
+    for (const delay of [80, 180, 420]) {
+      timers.push(window.setTimeout(pin, delay))
+    }
+
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      for (const timer of timers) window.clearTimeout(timer)
+    }
+  }, [chatId, hasRows, pinToBottomIfNeeded, rowVirtualizer, setPrependVisualOffset, virtualListItems.length])
 
   const BOTTOM_REPIN_EPSILON = 6
 

@@ -384,6 +384,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.landingPageLayoutMode === 'cards' || settings.landingPageLayoutMode === 'compact') {
       patch.landingPageLayoutMode = settings.landingPageLayoutMode
     }
+    if (settings.wallpaper && typeof settings.wallpaper === 'object') {
+      patch.wallpaper = { ...settings.wallpaper }
+    }
 
     set(patch as any)
   },

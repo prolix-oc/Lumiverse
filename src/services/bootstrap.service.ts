@@ -100,6 +100,7 @@ interface StartupSettings {
   theme?: unknown;
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
+  wallpaper?: unknown;
 }
 
 const LIST_LIMIT_CONNECTIONS = 100;
@@ -117,6 +118,7 @@ const STARTUP_SETTINGS_KEYS = [
   "theme",
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
+  "wallpaper",
 ] as const;
 
 /**
@@ -198,6 +200,10 @@ function getStartupSettings(userId: string): StartupSettings {
   const landingPageLayoutMode = rows.get("landingPageLayoutMode");
   if (landingPageLayoutMode === "cards" || landingPageLayoutMode === "compact") {
     startupSettings.landingPageLayoutMode = landingPageLayoutMode;
+  }
+
+  if (rows.has("wallpaper")) {
+    startupSettings.wallpaper = rows.get("wallpaper");
   }
 
   return startupSettings;

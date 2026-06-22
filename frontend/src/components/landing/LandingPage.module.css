@@ -3,7 +3,7 @@
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--lumiverse-bg-deep);
+  background: transparent;
 }
 
 .container::-webkit-scrollbar {
@@ -29,6 +29,7 @@
   inset: 0;
   height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  z-index: 1;
   pointer-events: none;
   overflow: hidden;
 }
@@ -75,6 +76,7 @@
   inset: 0;
   height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  z-index: 1;
   pointer-events: none;
   background-image:
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
@@ -86,7 +88,7 @@
 /* Content */
 .content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   min-height: 100%;
@@ -304,6 +306,10 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 12px;
   align-items: start;
+}
+
+.chatsLeaving {
+  pointer-events: none;
 }
 
 /* Card tilt wrapper — handles 3D tilt separately from framer-motion entry */

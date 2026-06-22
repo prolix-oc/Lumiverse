@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { motion, AnimatePresence } from 'motion/react'
+import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2 } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
@@ -192,11 +192,19 @@ function EmptyState() {
   )
 }
 
-const containerVariants = {
+const containerVariants: Variants = {
   hidden: { opacity: 0 },
   visible: { opacity: 1 },
+  leaving: {
+    opacity: 0,
+    y: 10,
+    scale: 0.985,
+    transition: { duration: 0.22, ease: 'easeOut' },
+  },
   exit: { opacity: 0 },
 }
+
+const CHAT_NAV_FADE_MS = 220
 
 interface ChatCardProps {
   item: GroupedRecentChat
@@ -396,8 +404,10 @@ export default function LandingPage() {
   const [total, setTotal] = useState(0)
   const [creatingTempChat, setCreatingTempChat] = useState(false)
   const [tempChatMenuOpen, setTempChatMenuOpen] = useState(false)
+  const [navigatingToChat, setNavigatingToChat] = useState(false)
   const tempChatMenuRef = useRef<HTMLDivElement>(null)
   const tempChatMenuOpenedAt = useRef(0)
+  const chatNavigationTimerRef = useRef<number | null>(null)
 
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -425,6 +435,14 @@ export default function LandingPage() {
   // sweeps any the user left behind (closed tab, back navigation, etc.).
   useEffect(() => {
     chatsApi.deleteTemporary().catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (chatNavigationTimerRef.current !== null) {
+        window.clearTimeout(chatNavigationTimerRef.current)
+      }
+    }
   }, [])
 
   // Skeleton shape/count for the pre-settings window and the fetch window.
@@ -524,6 +542,23 @@ export default function LandingPage() {
     return () => observer.disconnect()
   }, [items.length, total, loading, loadMore])
 
+  const navigateToChat = useCallback((chatId: string) => {
+    if (chatNavigationTimerRef.current !== null) return
+
+    setNavigatingToChat(true)
+
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (prefersReducedMotion) {
+      navigate(`/chat/${chatId}`)
+      return
+    }
+
+    chatNavigationTimerRef.current = window.setTimeout(() => {
+      chatNavigationTimerRef.current = null
+      navigate(`/chat/${chatId}`)
+    }, CHAT_NAV_FADE_MS)
+  }, [navigate])
+
   const handleChatClick = useCallback(
     (item: GroupedRecentChat) => {
       // Warm the avatar palette in parallel with the route change + chat
@@ -542,22 +577,22 @@ export default function LandingPage() {
           })
           return
         }
-        navigate(`/chat/${item.latest_chat_id}`)
+        navigateToChat(item.latest_chat_id)
         return
       }
 
       if (item.chat_count === 1) {
-        navigate(`/chat/${item.latest_chat_id}`)
+        navigateToChat(item.latest_chat_id)
         return
       }
 
       openModal('chatPicker', {
         characterId: item.character_id,
         characterName: item.character_name,
-        onSelect: (chatId: string) => navigate(`/chat/${chatId}`)
+        onSelect: (chatId: string) => navigateToChat(chatId)
       })
     },
-    [navigate, openModal, t]
+    [navigateToChat, openModal, t]
   )
 
   const handleDeleteChat = useCallback(
@@ -615,12 +650,12 @@ export default function LandingPage() {
     setTempChatMenuOpen(false)
     try {
       const chat = await chatsApi.createTemporary({ noPreset })
-      navigate(`/chat/${chat.id}`)
+      navigateToChat(chat.id)
     } catch (err: any) {
       console.error('[Lumiverse] Error creating temporary chat:', err)
       setCreatingTempChat(false)
     }
-  }, [creatingTempChat, navigate])
+  }, [creatingTempChat, navigateToChat])
 
   const toggleTempChatMenu = useCallback(() => {
     setTempChatMenuOpen((open) => {
@@ -772,10 +807,13 @@ export default function LandingPage() {
             ) : (
               <motion.div
                 key={`chats-${landingPageLayoutMode}`}
-                className={landingPageLayoutMode === 'compact' ? styles.compactList : styles.gridCards}
+                className={clsx(
+                  landingPageLayoutMode === 'compact' ? styles.compactList : styles.gridCards,
+                  navigatingToChat && styles.chatsLeaving
+                )}
                 variants={containerVariants}
                 initial="hidden"
-                animate="visible"
+                animate={navigatingToChat ? 'leaving' : 'visible'}
                 exit="exit"
               >
                 {items.map((item) => (

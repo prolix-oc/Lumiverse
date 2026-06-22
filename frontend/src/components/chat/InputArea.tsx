@@ -35,6 +35,7 @@ import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type
 
 interface InputAreaProps {
   chatId: string
+  onNavigateHome?: () => void
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
@@ -178,7 +179,7 @@ function slugifyName(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-export default function InputArea({ chatId }: InputAreaProps) {
+export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const { t } = useTranslation('chat')
   const { t: te } = useTranslation('errors')
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
@@ -2109,7 +2110,7 @@ export default function InputArea({ chatId }: InputAreaProps) {
       {/* Action bar */}
       <div data-spindle-mount="chat_toolbar">
         <div className={styles.actionBar}>
-          <button type="button" className={styles.actionBtn} onClick={() => navigate('/')} title={t('input.backHome')}>
+          <button type="button" className={styles.actionBtn} onClick={onNavigateHome ?? (() => navigate('/'))} title={t('input.backHome')}>
             <Home size={14} />
           </button>
           <span className={styles.actionDivider} />

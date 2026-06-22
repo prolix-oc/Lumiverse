@@ -117,6 +117,7 @@ export interface StartupSettings {
   theme?: ThemeConfig | null
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
+  wallpaper?: WallpaperSettings
 }
 
 export interface CharactersSlice {

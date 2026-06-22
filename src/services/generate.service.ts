@@ -79,6 +79,7 @@ import {
   detectExpression,
   detectMultiCharacterExpression,
   getExpressionDetectionSettings,
+  resolveDetectedExpressionLabel,
 } from "./expression-detection.service";
 import {
   hasExpressions,
@@ -3944,10 +3945,7 @@ async function fireExpressionDetection(
 
   // Check if council already produced an expression result
   if (lifecycle.councilNamedResults?.["expression_data"]) {
-    const councilLabel = lifecycle.councilNamedResults["expression_data"]
-      .trim()
-      .toLowerCase();
-    const matched = labels.find((l) => l.toLowerCase() === councilLabel);
+    const matched = resolveDetectedExpressionLabel(lifecycle.councilNamedResults["expression_data"], labels);
     if (matched) {
       emitExpressionChanged(
         userId,

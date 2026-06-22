@@ -25,6 +25,8 @@
     var(--lumiverse-highlight-inset),
     inset 0 -1px 0 var(--lcs-glass-border);
   transition:
+    opacity 180ms ease,
+    transform 180ms ease,
     background var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     border-color var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),
     box-shadow var(--lcs-transition, 220ms cubic-bezier(0.4, 0, 0.2, 1)),

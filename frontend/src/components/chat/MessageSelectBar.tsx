@@ -39,7 +39,7 @@ export default function MessageSelectBar({ chatId }: MessageSelectBarProps) {
   }
 
   return (
-    <div className={styles.bar}>
+    <div className={styles.bar} data-component="MessageSelectBar">
       <div className={styles.left}>
         <button
           type="button"
