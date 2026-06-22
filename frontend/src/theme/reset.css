@@ -42,6 +42,7 @@ html {
      sideways. `clip` shuts that path down entirely. */
   overflow: clip;
   overscroll-behavior: none;
+  overscroll-behavior-x: none;
   -webkit-text-size-adjust: 100%;
   /* Let the browser choose optimal font rendering. On macOS Big Sur+,
      subpixel AA is disabled system-wide so `antialiased` only disables
@@ -54,6 +55,7 @@ html {
 body {
   overflow: clip;
   overscroll-behavior: none;
+  overscroll-behavior-x: none;
   font-family: var(--lumiverse-font-family);
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);
