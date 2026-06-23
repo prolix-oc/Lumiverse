@@ -127,7 +127,7 @@ function applyLandingBootstrap(
     store.hydrateStartupSettings(payload.startupSettings)
   }
 
-  if (!hadSettingsLoaded && !options.skipRecentChats && !errors['recentChats'] && payload.recentChats) {
+  if (!options.skipRecentChats && !errors['recentChats'] && payload.recentChats) {
     store.setLandingRecentChats(payload.recentChats)
     appliedRecentChats = true
   }
