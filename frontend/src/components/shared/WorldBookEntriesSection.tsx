@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
 import {
@@ -32,9 +32,13 @@ import {
   MouseSensor,
   TouchSensor,
   KeyboardSensor,
+  DragOverlay,
   closestCenter,
   useSensor,
   useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+  type DraggableAttributes,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -43,6 +47,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
+import { useVirtualizer, defaultRangeExtractor, type Range } from '@tanstack/react-virtual'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
@@ -109,7 +114,13 @@ interface EntryRowProps {
   onOpenPositionMenu: (entryId: string, position: ContextMenuPos) => void
 }
 
-function SortableEntryRow({
+interface EntryRowContentProps extends EntryRowProps {
+  dragHandleAttributes?: DraggableAttributes
+  dragHandleListeners?: Record<string, unknown>
+  isDragging?: boolean
+}
+
+function EntryRowContent({
   entry,
   expanded,
   dragEnabled,
@@ -122,19 +133,12 @@ function SortableEntryRow({
   onOpenMenu,
   onOpenTypeMenu,
   onOpenPositionMenu,
-}: EntryRowProps) {
+  dragHandleAttributes,
+  dragHandleListeners,
+  isDragging,
+}: EntryRowContentProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
   const labels = useWorldBookEntryLabels()
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
-    id: entry.id,
-    disabled: !dragEnabled,
-  })
-  const { setNodeRef, style } = useScaledSortableStyle({
-    setNodeRef: setSortableRef,
-    transform,
-    transition,
-    isDragging,
-  })
 
   const controlWrapProps = {
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
@@ -142,7 +146,7 @@ function SortableEntryRow({
   }
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(isDragging && styles.rowDragging)}>
+    <div className={clsx(isDragging && styles.rowDragging)}>
       <div
         className={clsx(
           styles.entryRow,
@@ -178,8 +182,8 @@ function SortableEntryRow({
               title={dragEnabled ? t('dragReorder') : t('dragUnavailable')}
               aria-label={t('dragHandle')}
               tabIndex={-1}
-              {...attributes}
-              {...listeners}
+              {...dragHandleAttributes}
+              {...dragHandleListeners}
             >
               <GripVertical size={13} />
             </button>
@@ -263,6 +267,30 @@ function SortableEntryRow({
   )
 }
 
+function SortableEntryRow(props: EntryRowProps) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+    id: props.entry.id,
+    disabled: !props.dragEnabled,
+  })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <EntryRowContent
+        {...props}
+        dragHandleAttributes={attributes}
+        dragHandleListeners={listeners}
+        isDragging={isDragging}
+      />
+    </div>
+  )
+}
+
 interface MoveCopyModalState {
   mode: 'move' | 'copy'
   entryIds: string[]
@@ -288,12 +316,14 @@ interface WorldBookEntriesSectionProps {
   books: WorldBook[]
   selectedBookId: string
   onRefreshVectorSummary?: (bookId: string) => Promise<void> | void
+  scrollElementRef?: React.RefObject<HTMLElement | null>
 }
 
 export default function WorldBookEntriesSection({
   books,
   selectedBookId,
   onRefreshVectorSummary,
+  scrollElementRef,
 }: WorldBookEntriesSectionProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel' })
   const { t: te } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
@@ -332,6 +362,8 @@ export default function WorldBookEntriesSection({
   const [bulkDepth, setBulkDepth] = useState('4')
   const [pendingAction, setPendingAction] = useState(false)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const entryListRef = useRef<HTMLDivElement>(null)
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
   // ── Live-sync (WORLD_BOOK_ENTRY_* / WORLD_BOOK_CHANGED) ──
   // Mirror of `entries` for use inside WS handlers without re-subscribing.
@@ -367,11 +399,34 @@ export default function WorldBookEntriesSection({
   }, [entrySortBy, entrySearchFilter, entryPageSize, te])
   const dragEnabled = entrySortBy === 'custom' && !dragUnavailableReason
 
+  const rangeExtractor = useCallback((range: Range) => {
+    // Drag-and-drop needs every sortable item mounted so @dnd-kit can
+    // measure/position the list. Fall back to the full range in custom-sort
+    // mode; otherwise virtualize normally.
+    if (dragEnabled) {
+      return Array.from({ length: range.count }, (_, i) => i)
+    }
+    return defaultRangeExtractor(range)
+  }, [dragEnabled])
+
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
+
+  const entryVirtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => scrollElementRef?.current ?? entryListRef.current,
+    estimateSize: () => 72,
+    overscan: 6,
+    getItemKey: (index) => entries[index]?.id ?? index,
+    rangeExtractor,
+    measureElement: (element) => {
+      const size = element.getBoundingClientRect().height
+      return Math.max(1, Number.isFinite(size) ? size : 72)
+    },
+  })
 
   const persistViewPref = useCallback((bookId: string, pref: {
     sortBy: WorldBookEntrySortBy
@@ -740,7 +795,12 @@ export default function WorldBookEntriesSection({
     })
   }, [entrySortBy, entrySortDir, persistViewPref, selectedBookId])
 
-  const handleDragEnd = useCallback(async ({ active, over }: any) => {
+  const handleDragStart = useCallback(({ active }: DragStartEvent) => {
+    setActiveDragId(String(active.id))
+  }, [])
+
+  const handleDragEnd = useCallback(async ({ active, over }: DragEndEvent) => {
+    setActiveDragId(null)
     if (!dragEnabled || !over || active.id === over.id) return
     const oldIndex = entries.findIndex((entry) => entry.id === active.id)
     const newIndex = entries.findIndex((entry) => entry.id === over.id)
@@ -758,6 +818,7 @@ export default function WorldBookEntriesSection({
   const selectedEntry = contextMenu ? entries.find((entry) => entry.id === contextMenu.entryId) ?? null : null
   const selectedTypeEntry = typeMenu ? entries.find((entry) => entry.id === typeMenu.entryId) ?? null : null
   const selectedPositionEntry = positionMenu ? entries.find((entry) => entry.id === positionMenu.entryId) ?? null : null
+  const activeDragEntry = activeDragId ? entries.find((entry) => entry.id === activeDragId) ?? null : null
   const contextMenuItems: ContextMenuEntry[] = selectedEntry
     ? [
         {
@@ -869,7 +930,7 @@ export default function WorldBookEntriesSection({
     : []
 
   return (
-    <>
+    <div className={styles.section}>
       <div className={styles.entryListHeader}>
         <span className={styles.entryListTitle}>{te('entriesTitle', { count: entryTotal })}</span>
         <div className={styles.toolbarActions}>
@@ -1050,33 +1111,78 @@ export default function WorldBookEntriesSection({
         <div className={styles.emptyState}>{te('loading')}</div>
       ) : (
         <>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <SortableContext items={entries.map((entry) => entry.id)} strategy={verticalListSortingStrategy}>
-              <div className={styles.entryList}>
-                {entries.map((entry) => (
-                  <SortableEntryRow
-                    key={entry.id}
-                    entry={entry}
-                    expanded={selectedEntryId === entry.id}
-                    dragEnabled={dragEnabled}
-                    selectMode={selectMode}
-                    selected={selectedIds.includes(entry.id)}
-                    onToggleExpand={() => setSelectedEntryId((current) => (current === entry.id ? null : entry.id))}
-                    onToggleSelect={() => handleToggleSelect(entry.id)}
-                    onUpdate={updateEntry}
-                    onDebouncedUpdate={debouncedUpdateEntry}
-                    onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
-                    onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
-                    onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
-                  />
-                ))}
-                {entries.length === 0 && (
+              <div ref={entryListRef} className={styles.entryList}>
+                {entries.length === 0 ? (
                   <div className={styles.emptyState}>
                     {entrySearchFilter.trim() ? te('noMatch') : te('empty')}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      height: entryVirtualizer.getTotalSize(),
+                      position: 'relative',
+                    }}
+                  >
+                    {entryVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const entry = entries[virtualRow.index]
+                      if (!entry) return null
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          data-entry-id={entry.id}
+                          ref={entryVirtualizer.measureElement}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            paddingBottom: 8,
+                            transform: `translateY(${virtualRow.start}px)`,
+                          }}
+                        >
+                          <SortableEntryRow
+                            entry={entry}
+                            expanded={selectedEntryId === entry.id}
+                            dragEnabled={dragEnabled}
+                            selectMode={selectMode}
+                            selected={selectedIds.includes(entry.id)}
+                            onToggleExpand={() => setSelectedEntryId((current) => (current === entry.id ? null : entry.id))}
+                            onToggleSelect={() => handleToggleSelect(entry.id)}
+                            onUpdate={updateEntry}
+                            onDebouncedUpdate={debouncedUpdateEntry}
+                            onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                            onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                            onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                          />
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
             </SortableContext>
+            <DragOverlay dropAnimation={null}>
+              {activeDragEntry && (
+                <EntryRowContent
+                  entry={activeDragEntry}
+                  expanded={selectedEntryId === activeDragEntry.id}
+                  dragEnabled={dragEnabled}
+                  selectMode={selectMode}
+                  selected={selectedIds.includes(activeDragEntry.id)}
+                  onToggleExpand={() => setSelectedEntryId((current) => (current === activeDragEntry.id ? null : activeDragEntry.id))}
+                  onToggleSelect={() => handleToggleSelect(activeDragEntry.id)}
+                  onUpdate={updateEntry}
+                  onDebouncedUpdate={debouncedUpdateEntry}
+                  onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                  onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                  onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                  isDragging
+                />
+              )}
+            </DragOverlay>
           </DndContext>
 
           {entryPageSize !== 'all' && entryTotalPages > 1 && (
@@ -1257,6 +1363,6 @@ export default function WorldBookEntriesSection({
           </div>
         </ModalShell>
       )}
-    </>
+    </div>
   )
 }

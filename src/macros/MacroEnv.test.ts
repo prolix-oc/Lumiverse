@@ -215,6 +215,37 @@ describe("buildEnv variables", () => {
   });
 });
 
+describe("buildEnv lastMessageTime", () => {
+  test("is undefined when there are no messages", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.extra.lastMessageTime).toBeUndefined();
+  });
+
+  test("is derived from the last message's send_date in milliseconds", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [
+        makeMessage({ content: "Hello", send_date: 1_700_000_000 }),
+        makeMessage({ id: "msg-2", content: "World", index_in_chat: 1, send_date: 1_700_000_060 }),
+      ],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.extra.lastMessageTime).toBe(1_700_000_060_000);
+  });
+});
+
 describe("buildEnv groupCardMode", () => {
   test("returns 'solo' for non-group chats regardless of metadata", () => {
     const env = buildEnv({

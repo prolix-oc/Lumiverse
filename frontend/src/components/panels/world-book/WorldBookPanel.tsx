@@ -341,6 +341,7 @@ export default function WorldBookPanel() {
   const [exportPopoverOpen, setExportPopoverOpen] = useState(false)
   const exportBtnRef = useRef<HTMLDivElement>(null)
   const exportPopoverRef = useRef<HTMLDivElement>(null)
+  const panelBodyRef = useRef<HTMLDivElement>(null)
   const [exportPopoverPos, setExportPopoverPos] = useState<{ top: number; left: number } | null>(null)
 
   useEffect(() => {
@@ -581,94 +582,97 @@ export default function WorldBookPanel() {
         )}
       </div>
 
-      {selectedBookId ? (
-        <>
-          {/* Book fields (collapsible) */}
-          <button
-            type="button"
-            className={styles.bookFieldsToggle}
-            onClick={() => setBookFieldsOpen((o) => !o)}
-          >
-            <BookOpen size={12} />
-            <span className={styles.bookFieldsLabel}>{bookName || t('worldBookPanel.bookDetails')}</span>
-            <ChevronDown
-              size={12}
-              className={clsx(styles.chevron, bookFieldsOpen && styles.chevronOpen)}
-            />
-          </button>
+      <div ref={panelBodyRef} className={styles.panelBody}>
+        {selectedBookId ? (
+          <>
+            {/* Book fields (collapsible) */}
+            <button
+              type="button"
+              className={styles.bookFieldsToggle}
+              onClick={() => setBookFieldsOpen((o) => !o)}
+            >
+              <BookOpen size={12} />
+              <span className={styles.bookFieldsLabel}>{bookName || t('worldBookPanel.bookDetails')}</span>
+              <ChevronDown
+                size={12}
+                className={clsx(styles.chevron, bookFieldsOpen && styles.chevronOpen)}
+              />
+            </button>
 
-          {bookFieldsOpen && (
-            <div className={styles.bookFields}>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>{t('worldBookPanel.name')}</label>
-                <input
-                  type="text"
-                  className={styles.fieldInput}
-                  value={bookName}
-                  onChange={(e) => handleBookNameChange(e.target.value)}
-                />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>{t('worldBookPanel.description')}</label>
-                <input
-                  type="text"
-                  className={styles.fieldInput}
-                  value={bookDescription}
-                  onChange={(e) => handleBookDescChange(e.target.value)}
-                  placeholder={t('worldBookPanel.optionalDescription')}
-                />
-              </div>
-              <div className={styles.fieldGroup}>
-                <label className={styles.fieldLabel}>{t('worldBookPanel.folder')}</label>
-                <FolderDropdown
-                  folders={folders}
-                  selectedFolder={bookFolder}
-                  onSelect={handleBookFolderChange}
-                  onCreateFolder={createFolder}
-                />
-              </div>
-              <Button variant="danger-ghost" size="sm" icon={<Trash2 size={11} />} onClick={() => setDeleteBookConfirm(selectedBookId)}>
-                {t('worldBookPanel.deleteBook')}
-              </Button>
-              {vectorSummary && (
-                <div className={styles.vectorSummary}>
-                  <div className={styles.vectorSummaryTitle}>{t('worldBookPanel.vectorStatusTitle')}</div>
-                  <div className={styles.vectorSummaryGrid}>
-                    <span>{t('worldBookPanel.vectorEnabled', { count: vectorSummary.enabled })}</span>
-                    <span>{t('worldBookPanel.vectorNonEmpty', { enabled: vectorSummary.enabled_non_empty, total: vectorSummary.non_empty })}</span>
-                    <span>{t('worldBookPanel.vectorIndexed', { count: vectorSummary.indexed })}</span>
-                    <span>{t('worldBookPanel.vectorPending', { count: vectorSummary.pending })}</span>
-                    <span>{t('worldBookPanel.vectorErrors', { count: vectorSummary.error })}</span>
-                  </div>
+            {bookFieldsOpen && (
+              <div className={styles.bookFields}>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.fieldLabel}>{t('worldBookPanel.name')}</label>
+                  <input
+                    type="text"
+                    className={styles.fieldInput}
+                    value={bookName}
+                    onChange={(e) => handleBookNameChange(e.target.value)}
+                  />
                 </div>
-              )}
-              <div className={styles.bookActionRow}>
-                <Button variant="primary" size="sm" onClick={handleReindexVectors} disabled={reindexing}>
-                  {reindexing ? t('worldBookPanel.reindexing') : t('worldBookPanel.reindexVectorSearch')}
+                <div className={styles.fieldGroup}>
+                  <label className={styles.fieldLabel}>{t('worldBookPanel.description')}</label>
+                  <input
+                    type="text"
+                    className={styles.fieldInput}
+                    value={bookDescription}
+                    onChange={(e) => handleBookDescChange(e.target.value)}
+                    placeholder={t('worldBookPanel.optionalDescription')}
+                  />
+                </div>
+                <div className={styles.fieldGroup}>
+                  <label className={styles.fieldLabel}>{t('worldBookPanel.folder')}</label>
+                  <FolderDropdown
+                    folders={folders}
+                    selectedFolder={bookFolder}
+                    onSelect={handleBookFolderChange}
+                    onCreateFolder={createFolder}
+                  />
+                </div>
+                <Button variant="danger-ghost" size="sm" icon={<Trash2 size={11} />} onClick={() => setDeleteBookConfirm(selectedBookId)}>
+                  {t('worldBookPanel.deleteBook')}
                 </Button>
-                <Button variant="secondary" size="sm" onClick={handleConvertToVectorizedPreview} disabled={reindexing}>
-                  {t('worldBookPanel.convertToVectorized')}
-                </Button>
-                <Button variant="secondary" size="sm" icon={<Search size={12} />} onClick={handleDiagnostics} disabled={!activeChatId}>
-                  {t('worldBookPanel.diagnoseCurrentChat')}
-                </Button>
+                {vectorSummary && (
+                  <div className={styles.vectorSummary}>
+                    <div className={styles.vectorSummaryTitle}>{t('worldBookPanel.vectorStatusTitle')}</div>
+                    <div className={styles.vectorSummaryGrid}>
+                      <span>{t('worldBookPanel.vectorEnabled', { count: vectorSummary.enabled })}</span>
+                      <span>{t('worldBookPanel.vectorNonEmpty', { enabled: vectorSummary.enabled_non_empty, total: vectorSummary.non_empty })}</span>
+                      <span>{t('worldBookPanel.vectorIndexed', { count: vectorSummary.indexed })}</span>
+                      <span>{t('worldBookPanel.vectorPending', { count: vectorSummary.pending })}</span>
+                      <span>{t('worldBookPanel.vectorErrors', { count: vectorSummary.error })}</span>
+                    </div>
+                  </div>
+                )}
+                <div className={styles.bookActionRow}>
+                  <Button variant="primary" size="sm" onClick={handleReindexVectors} disabled={reindexing}>
+                    {reindexing ? t('worldBookPanel.reindexing') : t('worldBookPanel.reindexVectorSearch')}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={handleConvertToVectorizedPreview} disabled={reindexing}>
+                    {t('worldBookPanel.convertToVectorized')}
+                  </Button>
+                  <Button variant="secondary" size="sm" icon={<Search size={12} />} onClick={handleDiagnostics} disabled={!activeChatId}>
+                    {t('worldBookPanel.diagnoseCurrentChat')}
+                  </Button>
+                </div>
+                {vectorStatus && <span className={styles.vectorStatusText}>{vectorStatus}</span>}
               </div>
-              {vectorStatus && <span className={styles.vectorStatusText}>{vectorStatus}</span>}
-            </div>
-          )}
+            )}
 
-          <WorldBookEntriesSection
-            books={books}
-            selectedBookId={selectedBookId}
-            onRefreshVectorSummary={loadVectorSummary}
-          />
+            <WorldBookEntriesSection
+              books={books}
+              selectedBookId={selectedBookId}
+              onRefreshVectorSummary={loadVectorSummary}
+              scrollElementRef={panelBodyRef}
+            />
 
-        </>
-      ) : (
-        <div className={styles.emptyState}>
-          {t('worldBookPanel.selectOrCreate')}
-        </div>
-      )}
+          </>
+        ) : (
+          <div className={styles.emptyState}>
+            {t('worldBookPanel.selectOrCreate')}
+          </div>
+        )}
+      </div>
 
       {/* Delete book confirmation */}
       {deleteBookConfirm && (

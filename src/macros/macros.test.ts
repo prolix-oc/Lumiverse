@@ -16,6 +16,7 @@ function makeEnv(opts: {
   messages?: { content: string; name: string; is_user: boolean }[];
   characterTags?: string[];
   chatCreatedAt?: number;
+  lastMessageTime?: number;
   worldInfoOutlets?: Record<string, string>;
   rejectedSwipe?: string;
   multiplayer?: {
@@ -97,6 +98,7 @@ function makeEnv(opts: {
         { content: "I draw my sword.", name: "Alice", is_user: true },
       ],
       chatCreatedAt: opts.chatCreatedAt ?? Math.floor(Date.now() / 1000) - 3600,
+      lastMessageTime: opts.lastMessageTime,
       characterTags: opts.characterTags ?? ["fantasy", "warrior", "male"],
       worldInfoOutlets: opts.worldInfoOutlets ?? {},
       ...(opts.multiplayer ? { multiplayer: opts.multiplayer } : {}),
@@ -2345,5 +2347,23 @@ describe("foreachVar family", () => {
   test("hygiene: loop variable restored after the loop", async () => {
     const env = makeEnv({ chatVars: { n_a: "1" }, localVars: { p: "ORIG" } });
     expect(await ev("{{foreachChatVar::n_::p}}{{.p}}{{/foreachChatVar}}|{{.p}}", env)).toBe("a|ORIG");
+  });
+});
+
+describe("Temporal macros", () => {
+  test("{{idleDuration}} returns 'unknown' when no last message time is available", async () => {
+    const env = makeEnv();
+    delete (env.extra as any).lastMessageTime;
+    expect(await ev("{{idleDuration}}", env)).toBe("unknown");
+  });
+
+  test("{{idleDuration}} formats time since the last message", async () => {
+    const env = makeEnv({ lastMessageTime: Date.now() - 90_000 });
+    expect(await ev("{{idleDuration}}", env)).toBe("1 minute");
+  });
+
+  test("{{idle_duration}} alias works", async () => {
+    const env = makeEnv({ lastMessageTime: Date.now() - 90_000 });
+    expect(await ev("{{idle_duration}}", env)).toBe("1 minute");
   });
 });

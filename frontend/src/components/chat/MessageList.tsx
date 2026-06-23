@@ -185,6 +185,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // Fade the message list in once TanStack has populated virtual rows on
   // chat load. Reset on every chat switch so the next chat can fade in too.
   const [listVisible, setListVisible] = useState(false)
+  // Bottom inset that TanStack should treat as part of the virtual content.
+  // This replaces CSS padding-bottom so isAtEnd/scrollToEnd/followOnAppend
+  // all land at the true bottom of the list.
+  const [inputSafeZone, setInputSafeZone] = useState(100)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -205,6 +209,33 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     mediaQuery.addListener(update)
     return () => mediaQuery.removeListener(update)
+  }, [])
+
+  // Mirror the dynamic input safe-zone into React state so TanStack's
+  // paddingEnd/scrollPaddingEnd can treat it as virtual content.
+  useEffect(() => {
+    const el = scrollRef.current
+    const parent = el?.parentElement
+    if (!el || !parent) return
+
+    const updateSafeZone = () => {
+      const raw = getComputedStyle(parent).getPropertyValue('--lcs-input-safe-zone')
+      const parsed = Number.parseInt(raw, 10)
+      setInputSafeZone(Number.isFinite(parsed) ? parsed : 100)
+    }
+
+    updateSafeZone()
+
+    const mo = new MutationObserver(updateSafeZone)
+    mo.observe(parent, { attributes: true, attributeFilter: ['style'] })
+
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', updateSafeZone)
+
+    return () => {
+      mo.disconnect()
+      vv?.removeEventListener('resize', updateSafeZone)
+    }
   }, [])
 
   // Re-arm top-pagination on chat switch.
@@ -540,6 +571,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     anchorTo: 'end',
     followOnAppend: true,
     scrollEndThreshold: SCROLL_END_THRESHOLD,
+    paddingEnd: inputSafeZone,
+    scrollPaddingEnd: inputSafeZone,
     directDomUpdates: true,
     directDomUpdatesMode: 'position',
     useAnimationFrameWithResizeObserver: true,
@@ -922,13 +955,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
   }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, warmMobileRange])
 
-  // Re-pin to bottom when the input safe-zone changes — keyboard opening on
-  // mobile/iOS PWA grows --lcs-input-safe-zone. Without this, the last
-  // message would stay behind the newly-raised input bar.
+  // Fallback re-pin during iOS keyboard animation. The safe-zone inset is
+  // now passed to TanStack as paddingEnd, so normal safe-zone growth keeps
+  // an end-pinned viewport pinned automatically. visualViewport resize/scroll
+  // events during the keyboard animation (~250-350ms) can still land
+  // mid-transition, so we nudge the viewport back to the bottom a few times
+  // once the keyboard and safe-zone have settled. Skipped while streaming —
+  // the unified scroll guard already handles content growth.
   useEffect(() => {
     const el = scrollRef.current
-    const parent = el?.parentElement
-    if (!el || !parent) return
+    if (!el) return
 
     const settleTimers: number[] = []
     const clearSettleTimers = () => {
@@ -944,11 +980,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       pinToBottomIfNeeded(latest)
     }
 
-    // iOS keyboard animation (~250-350ms) fires multiple visualViewport
-    // resize events. A single rAF-pin can land mid-animation, so we pin
-    // immediately AND schedule settling retries to catch the final layout
-    // once the keyboard and safe-zone have settled. Skipped while streaming
-    // — the unified scroll guard already handles content growth.
     const repinIfAnchored = () => {
       if (isStreamingRef.current) return
       if (!isPinnedRef.current) return
@@ -958,15 +989,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       settleTimers.push(window.setTimeout(pinToBottom, 420))
     }
 
-    const mo = new MutationObserver(repinIfAnchored)
-    mo.observe(parent, { attributes: true, attributeFilter: ['style'] })
-
     const vv = window.visualViewport
     vv?.addEventListener('resize', repinIfAnchored)
     vv?.addEventListener('scroll', repinIfAnchored)
 
     return () => {
-      mo.disconnect()
       vv?.removeEventListener('resize', repinIfAnchored)
       vv?.removeEventListener('scroll', repinIfAnchored)
       clearSettleTimers()

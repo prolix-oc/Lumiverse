@@ -57,6 +57,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'sortField',
   'sortDirection',
   'filterTab',
+  'favoritesBarCollapsed',
   // Persona browser preferences
   'personaViewMode',
   'personaSortField',
@@ -310,6 +311,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   swipeGesturesEnabled: true,
   showMessageTokenCount: true,
   messageContextMenuEnabled: true,
+  favoritesBarCollapsed: false,
   globalWorldBooks: [],
   worldInfoSettings: {
     globalScanDepth: null,
@@ -377,6 +379,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.sortDirection) patch.sortDirection = settings.sortDirection
     if (settings.viewMode) patch.viewMode = settings.viewMode
     if (typeof settings.charactersPerPage === 'number') patch.charactersPerPage = settings.charactersPerPage
+    if (typeof settings.favoritesBarCollapsed === 'boolean') patch.favoritesBarCollapsed = settings.favoritesBarCollapsed
     if ('theme' in settings) patch.theme = normalizeTheme(settings.theme)
     if (typeof settings.landingPageChatsDisplayed === 'number' && Number.isFinite(settings.landingPageChatsDisplayed)) {
       patch.landingPageChatsDisplayed = settings.landingPageChatsDisplayed

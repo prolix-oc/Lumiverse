@@ -177,11 +177,6 @@
   to { transform: rotate(360deg); }
 }
 
-.paginationBar {
-  margin-top: auto;
-  flex-shrink: 0;
-}
-
 .importProgressInfo {
   flex: 1;
   min-width: 0;
@@ -224,4 +219,12 @@
   background: rgba(100, 160, 255, 0.6);
   transform-origin: left;
   transition: transform 0.15s ease-out;
+}
+
+.paginationBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  flex-shrink: 0;
+  padding: 8px 12px 12px;
 }

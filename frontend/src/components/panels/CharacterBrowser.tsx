@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
 import { charactersApi } from '@/api/characters'
@@ -71,6 +71,12 @@ export default function CharacterBrowser() {
   const browser = useCharacterBrowser()
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
   const openModal = useStore((s) => s.openModal)
+  const favoritesBarCollapsed = useStore((s) => s.favoritesBarCollapsed)
+  const setSetting = useStore((s) => s.setSetting)
+
+  const handleToggleFavoritesCollapse = useCallback(() => {
+    setSetting('favoritesBarCollapsed', !favoritesBarCollapsed)
+  }, [favoritesBarCollapsed, setSetting])
   const handleCreateNew = useCallback(async () => {
     try {
       const character = await browser.createCharacter()
@@ -146,6 +152,28 @@ export default function CharacterBrowser() {
     browser.batchDelete()
     setConfirmDelete(false)
   }, [browser.batchDelete])
+
+  const pagination: ReactNode = useMemo(
+    () => (
+      <Pagination
+        currentPage={browser.currentPage}
+        totalPages={browser.totalPages}
+        onPageChange={browser.setCurrentPage}
+        perPage={browser.charactersPerPage}
+        perPageOptions={[24, 50, 100, 200, 500]}
+        onPerPageChange={browser.setCharactersPerPage}
+        totalItems={browser.totalFiltered}
+      />
+    ),
+    [
+      browser.currentPage,
+      browser.totalPages,
+      browser.setCurrentPage,
+      browser.charactersPerPage,
+      browser.setCharactersPerPage,
+      browser.totalFiltered,
+    ],
+  )
 
   return (
     <div
@@ -244,8 +272,10 @@ export default function CharacterBrowser() {
             <FavoritesSlider
               characters={browser.favoriteCharacters}
               favorites={browser.favorites}
+              collapsed={favoritesBarCollapsed}
               onOpen={browser.openChat}
               onToggleFavorite={browser.toggleFavorite}
+              onToggleCollapse={handleToggleFavoritesCollapse}
             />
           )}
 
@@ -280,17 +310,7 @@ export default function CharacterBrowser() {
             />
           )}
 
-          <div className={styles.paginationBar}>
-            <Pagination
-              currentPage={browser.currentPage}
-              totalPages={browser.totalPages}
-              onPageChange={browser.setCurrentPage}
-              perPage={browser.charactersPerPage}
-              perPageOptions={[24, 50, 100, 200, 500]}
-              onPerPageChange={browser.setCharactersPerPage}
-              totalItems={browser.totalFiltered}
-            />
-          </div>
+          <div className={styles.paginationBar}>{pagination}</div>
         </>
       )}
 

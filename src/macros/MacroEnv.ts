@@ -139,6 +139,9 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
       characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],
+      lastMessageTime: lastMsg && typeof lastMsg.send_date === "number"
+        ? lastMsg.send_date * 1000
+        : undefined,
     },
   };
 }

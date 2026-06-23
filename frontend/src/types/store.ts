@@ -114,6 +114,7 @@ export interface StartupSettings {
   sortDirection?: CharacterSortDirection
   viewMode?: CharacterViewMode
   charactersPerPage?: number
+  favoritesBarCollapsed?: boolean
   theme?: ThemeConfig | null
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
@@ -480,6 +481,7 @@ export interface SettingsSlice {
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
   messageContextMenuEnabled: boolean
+  favoritesBarCollapsed: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings

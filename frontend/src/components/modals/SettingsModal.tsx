@@ -726,7 +726,6 @@ function ChatSettings() {
   const messagesPerPage = useStore((s) => s.messagesPerPage)
   const regenFeedback = useStore((s) => s.regenFeedback)
   const setSetting = useStore((s) => s.setSetting)
-  const isMac = navigator.platform.toUpperCase().includes('MAC')
 
   return (
     <div className={styles.settingsSection}>
@@ -946,9 +945,6 @@ function ChatSettings() {
         checked={enterToSend}
         onChange={(checked) => setSetting('chatSheldEnterToSend', checked)}
         label={t('chat.enterToSend')}
-        hint={enterToSend
-          ? t('chat.enterToSendHintOn')
-          : isMac ? t('chat.enterToSendHintOffMac') : t('chat.enterToSendHintOffWin')}
       />
 
       <Toggle.Checkbox

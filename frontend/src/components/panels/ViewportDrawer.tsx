@@ -306,7 +306,7 @@ export default function ViewportDrawer() {
               </h2>
               <CloseButton onClick={closeDrawer} />
             </div>
-            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)} ref={panelContentRef}>
+            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser' || activeTab === 'lorebook') && styles.panelContentFull)} ref={panelContentRef}>
               <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>
           </div>

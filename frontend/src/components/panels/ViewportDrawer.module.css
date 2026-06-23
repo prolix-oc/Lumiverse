@@ -360,20 +360,19 @@
   overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  /* Bottom buffer keeps the last list item reachable even when something
-     overlays the bottom of the panel (mobile browser chrome, the Spindle
-     dock, iOS home indicator). Mirrors LoomBuilder.scrollArea's pattern. */
-  padding: 12px 12px calc(40px + env(safe-area-inset-bottom, 0px));
+  /* Keep the last list item clear of the home indicator / gesture bar. Any
+     panel-specific bottom chrome (pagination bars, etc.) should add its own
+     spacing rather than relying on this buffer. */
+  padding: 12px 12px env(safe-area-inset-bottom, 0px);
   position: relative;
 }
 
 /* iOS PWA: the drawer doesn't resize when the keyboard opens (layout viewport
-   stays full-screen). Keyboard-height padding at the bottom creates scroll room
-   so the focusin handler can scroll inputs above the keyboard even when the
-   panel's actual content is shorter than the container. Keep the safe-area
-   buffer so the last item is still reachable when no keyboard is open. */
+   stays full-screen). Add keyboard-height padding so the focusin handler can
+   scroll inputs above the keyboard even when the panel's actual content is
+   shorter than the container. */
 :global(html[data-ios-pwa]) .panelContent {
-  padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
 }
 
 .panelContentFull {

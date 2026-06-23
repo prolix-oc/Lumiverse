@@ -554,6 +554,8 @@
     "searchCharacters": "Search characters...",
     "characters": "Characters",
     "favorites": "Favorites",
+    "collapseFavorites": "Collapse favorites bar",
+    "expandFavorites": "Expand favorites bar",
     "groupChats": "Group Chats",
     "sortBy": "Sort by {{field}}",
     "sort": {
