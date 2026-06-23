@@ -21,8 +21,7 @@
   isolation: isolate;
   contain: layout style paint;
   box-shadow:
-    0 14px 34px var(--lumiverse-fill-heavy),
-    var(--lumiverse-highlight-inset),
+    0 2px 8px var(--lumiverse-fill-heavy),
     inset 0 -1px 0 var(--lcs-glass-border);
   transition:
     opacity 180ms ease,
@@ -58,6 +57,10 @@
 :global([data-glass]) .container {
   backdrop-filter: blur(var(--lcs-glass-blur));
   will-change: backdrop-filter;
+  box-shadow:
+    0 14px 34px var(--lumiverse-fill-heavy),
+    var(--lumiverse-highlight-inset),
+    inset 0 -1px 0 var(--lcs-glass-border);
 }
 
 .container::before {

@@ -35,6 +35,7 @@ export default function LazyImage({
   spinnerSize = 24,
   containerClassName = '',
   containerStyle = {},
+  decoding = 'async',
   onLoad,
   onError,
   ...props
@@ -101,6 +102,7 @@ export default function LazyImage({
           ...style,
         }}
         className={className}
+        decoding={decoding}
         loading="lazy"
         onLoad={handleLoad}
         onError={handleError}

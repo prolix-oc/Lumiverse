@@ -1,0 +1,15 @@
+{
+  "name": "lumiverse-e2e-diagnostics",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "diagnose": "node diagnose.mjs",
+    "diagnose-landing": "node diagnose-landing.mjs",
+    "profile-landing": "node profile-landing.mjs",
+    "profile-chat": "node profile-chat.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.61.0"
+  }
+}

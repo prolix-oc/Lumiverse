@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
@@ -171,6 +171,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
                 <LazyImage
                   src={url}
                   alt=""
+                  decoding="async"
                   fallback={
                     <div className={styles.mosaicFallback}>
                       <Users size={variant === 'card' ? 16 : 14} strokeWidth={1.5} />
@@ -196,6 +197,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
             src={imagesApi.largeUrl(layer.image_id)}
             alt={index === perspectiveLayers.length - 1 ? item.character_name : ''}
             loading="lazy"
+            decoding="async"
             draggable={false}
             style={{
               ...getPerspectiveLayerStyle(index, perspectiveLayers.length, layer.intensity),
@@ -213,6 +215,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
       <LazyImage
         src={avatarUrl}
         alt={item.character_name}
+        decoding="async"
         fallback={
           <div className={fallbackClassName}>
             {item.character_name?.[0]?.toUpperCase() || '?'}
@@ -263,7 +266,7 @@ const CARD_MOBILE_MAX_COLUMNS = 2
 const COMPACT_MIN_WIDTH = 320
 const COMPACT_GAP = 12
 const COMPACT_ROW_ESTIMATE = 86
-const VIRTUAL_OVERSCAN = 3
+const VIRTUAL_OVERSCAN = 4
 const MOBILE_PARALLAX_MAX_GAMMA_DELTA = 10
 const MOBILE_PARALLAX_MAX_BETA_DELTA = 14
 
@@ -387,11 +390,26 @@ const CHAT_NAV_FADE_MS = 220
 
 interface ChatCardProps {
   item: GroupedRecentChat
-  onClick: () => void
-  onDelete?: () => void
+  animateEntry?: boolean
+  onClick: (item: GroupedRecentChat) => void
+  onDeleteChat: (item: GroupedRecentChat) => void
+  onDeleteAllChats: (item: GroupedRecentChat) => void
 }
 
-function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
+const ChatCard = memo(function ChatCard({ item, animateEntry, onClick, onDeleteChat, onDeleteAllChats }: ChatCardProps) {
+  const handleClick = useCallback(() => onClick(item), [onClick, item])
+  const handleDelete = useMemo(() => {
+    if (item.is_group && item.chat_count > 1) return undefined
+    return () => {
+      if (item.is_group) {
+        onDeleteChat(item)
+      } else if (item.chat_count > 1) {
+        onDeleteAllChats(item)
+      } else {
+        onDeleteChat(item)
+      }
+    }
+  }, [item, onDeleteChat, onDeleteAllChats])
   const { t } = useTranslation('landing')
   const tiltRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -476,22 +494,22 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
     >
       <div
         ref={cardRef}
-        className={clsx(styles.card, isGroup && styles.groupCard)}
+        className={clsx(styles.card, animateEntry && styles.cardEntry, isGroup && styles.groupCard)}
       >
-        {onDelete && (
+        {handleDelete && (
           <button
             type="button"
             className={styles.deleteBtn}
             onClick={(e) => {
               e.stopPropagation()
-              onDelete()
+              handleDelete()
             }}
             title={!item.is_group && item.chat_count > 1 ? t('deleteAllChats') : t('deleteChat')}
           >
             <Trash2 size={14} strokeWidth={1.5} />
           </button>
         )}
-        <button type="button" className={styles.cardBtn} onClick={onClick}>
+        <button type="button" className={styles.cardBtn} onClick={handleClick}>
           <RecentChatAvatar item={item} variant="card" />
           <div className={styles.cardContent}>
             <h3 className={styles.cardName}>{displayName}</h3>
@@ -519,23 +537,36 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
       </div>
     </div>
   )
-}
+})
 
-function ChatListItem({ item, onClick, onDelete }: ChatCardProps) {
+const ChatListItem = memo(function ChatListItem({ item, animateEntry, onClick, onDeleteChat, onDeleteAllChats }: ChatCardProps) {
+  const handleClick = useCallback(() => onClick(item), [onClick, item])
+  const handleDelete = useMemo(() => {
+    if (item.is_group && item.chat_count > 1) return undefined
+    return () => {
+      if (item.is_group) {
+        onDeleteChat(item)
+      } else if (item.chat_count > 1) {
+        onDeleteAllChats(item)
+      } else {
+        onDeleteChat(item)
+      }
+    }
+  }, [item, onDeleteChat, onDeleteAllChats])
   const { t } = useTranslation('landing')
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
   const displayName = getRecentChatDisplayName(item, t)
   const subtitle = getRecentChatSubtitle(item, t)
 
   return (
-    <div className={clsx(styles.listItem, isGroup && styles.listItemGroup)}>
-      {onDelete && (
+    <div className={clsx(styles.listItem, animateEntry && styles.listItemEntry, isGroup && styles.listItemGroup)}>
+      {handleDelete && (
         <button
           type="button"
           className={styles.listDeleteBtn}
           onClick={(e) => {
             e.stopPropagation()
-            onDelete()
+            handleDelete()
           }}
           title={t('deleteChat')}
         >
@@ -543,7 +574,7 @@ function ChatListItem({ item, onClick, onDelete }: ChatCardProps) {
         </button>
       )}
 
-      <button type="button" className={styles.listBtn} onClick={onClick}>
+      <button type="button" className={styles.listBtn} onClick={handleClick}>
         <RecentChatAvatar item={item} variant="compact" />
         <div className={styles.listBody}>
           <div className={styles.listTopRow}>
@@ -578,7 +609,88 @@ function ChatListItem({ item, onClick, onDelete }: ChatCardProps) {
       </button>
     </div>
   )
+})
+
+interface VirtualRowProps {
+  virtualRow: VirtualItem
+  virtualColumns: number
+  virtualGap: number
+  rowItems: GroupedRecentChat[]
+  layoutMode: 'cards' | 'compact'
+  initialPageSize: number
+  measureElement: (el: Element | null) => void
+  onChatClick: (item: GroupedRecentChat) => void
+  onDeleteChat: (item: GroupedRecentChat) => void
+  onDeleteAllChats: (item: GroupedRecentChat) => void
 }
+
+function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
+  if (prev.virtualRow.key !== next.virtualRow.key) return false
+  if (prev.virtualRow.index !== next.virtualRow.index) return false
+  if (prev.virtualColumns !== next.virtualColumns) return false
+  if (prev.virtualGap !== next.virtualGap) return false
+  if (prev.layoutMode !== next.layoutMode) return false
+  if (prev.initialPageSize !== next.initialPageSize) return false
+  if (prev.measureElement !== next.measureElement) return false
+  if (prev.onChatClick !== next.onChatClick) return false
+  if (prev.onDeleteChat !== next.onDeleteChat) return false
+  if (prev.onDeleteAllChats !== next.onDeleteAllChats) return false
+  if (prev.rowItems.length !== next.rowItems.length) return false
+  for (let i = 0; i < prev.rowItems.length; i += 1) {
+    if (prev.rowItems[i] !== next.rowItems[i]) return false
+  }
+  return true
+}
+
+const VirtualRow = memo(function VirtualRow({
+  virtualRow,
+  virtualColumns,
+  virtualGap,
+  rowItems,
+  layoutMode,
+  initialPageSize,
+  measureElement,
+  onChatClick,
+  onDeleteChat,
+  onDeleteAllChats,
+}: VirtualRowProps) {
+  const animateEntry = virtualRow.index * virtualColumns < initialPageSize
+  return (
+    <div
+      ref={measureElement}
+      data-index={virtualRow.index}
+      className={styles.virtualRow}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
+        gap: virtualGap,
+        paddingBottom: virtualGap,
+      }}
+    >
+      {rowItems.map((item) =>
+        layoutMode === 'compact' ? (
+          <ChatListItem
+            key={getRecentChatKey(item)}
+            item={item}
+            animateEntry={animateEntry}
+            onClick={onChatClick}
+            onDeleteChat={onDeleteChat}
+            onDeleteAllChats={onDeleteAllChats}
+          />
+        ) : (
+          <ChatCard
+            key={getRecentChatKey(item)}
+            item={item}
+            animateEntry={animateEntry}
+            onClick={onChatClick}
+            onDeleteChat={onDeleteChat}
+            onDeleteAllChats={onDeleteAllChats}
+          />
+        ),
+      )}
+    </div>
+  )
+}, virtualRowPropsEqual)
 
 export default function LandingPage() {
   const { t } = useTranslation('landing')
@@ -1013,8 +1125,7 @@ export default function LandingPage() {
     anchorTo: 'start',
     scrollMargin: virtualScrollMargin,
     directDomUpdates: true,
-    directDomUpdatesMode: 'position',
-    useAnimationFrameWithResizeObserver: true,
+    useFlushSync: false,
     getItemKey: (index) => {
       const start = index * virtualColumns
       return items.slice(start, start + virtualColumns).map(getRecentChatKey).join('|') || index
@@ -1033,7 +1144,8 @@ export default function LandingPage() {
   }, [chatVirtualizer, updateVirtualScrollMargin])
 
   return (
-    <div className={styles.container} ref={scrollRef}>
+    <div className={styles.page}>
+      <div className={styles.container} ref={scrollRef} data-component="LandingPage">
       {!hasGlobalWallpaper && (
         <>
           <div className={styles.bg}>
@@ -1180,46 +1292,20 @@ export default function LandingPage() {
               >
                 {chatVirtualizer.getVirtualItems().map((virtualRow) => {
                   const start = virtualRow.index * virtualColumns
-                  const rowItems = items.slice(start, start + virtualColumns)
                   return (
-                    <div
+                    <VirtualRow
                       key={virtualRow.key}
-                      ref={chatVirtualizer.measureElement}
-                      data-index={virtualRow.index}
-                      className={styles.virtualRow}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
-                        gap: virtualGap,
-                        paddingBottom: virtualGap,
-                      }}
-                    >
-                      {rowItems.map((item) => (
-                        landingPageLayoutMode === 'compact' ? (
-                          <ChatListItem
-                            key={getRecentChatKey(item)}
-                            item={item}
-                            onClick={() => handleChatClick(item)}
-                            onDelete={
-                              item.is_group
-                                ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
-                                : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
-                            }
-                          />
-                        ) : (
-                          <ChatCard
-                            key={getRecentChatKey(item)}
-                            item={item}
-                            onClick={() => handleChatClick(item)}
-                            onDelete={
-                              item.is_group
-                                ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
-                                : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
-                            }
-                          />
-                        )
-                      ))}
-                    </div>
+                      virtualRow={virtualRow}
+                      virtualColumns={virtualColumns}
+                      virtualGap={virtualGap}
+                      rowItems={items.slice(start, start + virtualColumns)}
+                      layoutMode={landingPageLayoutMode}
+                      initialPageSize={landingPageChatsDisplayed}
+                      measureElement={chatVirtualizer.measureElement}
+                      onChatClick={handleChatClick}
+                      onDeleteChat={handleDeleteChat}
+                      onDeleteAllChats={handleDeleteAllChats}
+                    />
                   )
                 })}
               </motion.div>
@@ -1237,11 +1323,11 @@ export default function LandingPage() {
             </div>
           )}
         </main>
-
-        <footer className={styles.footer}>
-          <p>{t('footer')}</p>
-        </footer>
       </motion.div>
     </div>
-  )
+    <footer className={styles.footer}>
+      <p>{t('footer')}</p>
+    </footer>
+  </div>
+)
 }

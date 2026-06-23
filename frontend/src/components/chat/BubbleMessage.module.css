@@ -68,8 +68,16 @@
 
 /* Virtualized rows only mount near the viewport, so avoid scroll-time DOM
    attribute toggles here. Toggling a public attribute let custom CSS change
-   row size during measurement, which could feed back into virtualization. */
+   row size during measurement, which could feed back into virtualization.
+
+   Heavy drop shadows are gated behind data-glass so that disabling glass
+   effects (Theme > "Disable glass effects") also drops the expensive GPU
+   shadow stack. The non-glass fallback is a hairline border shadow only. */
 .card {
+  box-shadow: 0 0 0 0.5px var(--lcs-glass-border);
+}
+
+:global([data-glass]) .card {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border),
     0 2px 6px rgba(0, 0, 0, 0.2),
@@ -85,13 +93,19 @@
 .card:hover {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1)),
+    0 1px 2px rgba(0, 0, 0, 0.28);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(255, 255, 255, 0.018) 100%),
+    var(--lcs-bubble-bg-hover);
+}
+
+:global([data-glass]) .card:hover {
+  box-shadow:
+    0 0 0 0.5px var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1)),
     0 1px 2px rgba(0, 0, 0, 0.28),
     0 4px 16px rgba(0, 0, 0, 0.22),
     0 20px 56px rgba(0, 0, 0, 0.12),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.028) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(255, 255, 255, 0.018) 100%),
-    var(--lcs-bubble-bg-hover);
 }
 
 /* Light themes use a light hover fill fallback, so derive the bubble hover var
@@ -103,12 +117,18 @@
 :global([data-theme-mode='light']) .card:hover {
   box-shadow:
     0 0 0 0.5px rgba(0, 0, 0, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.04),
-    0 4px 12px rgba(0, 0, 0, 0.05),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.5);
+    0 1px 2px rgba(0, 0, 0, 0.04);
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(255, 255, 255, 0.04) 100%),
     var(--lcs-bubble-bg-hover);
+}
+
+:global([data-glass][data-theme-mode='light']) .card:hover {
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.05),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.5);
 }
 
 /* Hide dissolving avatar background when user opts out */
@@ -118,14 +138,18 @@
 
 /* Disable bubble hover effects when user opts out */
 :global([data-no-bubble-hover]) .card:hover {
+  box-shadow: 0 0 0 0.5px var(--lcs-glass-border);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
+    var(--lcs-bubble-bg);
+}
+
+:global([data-glass][data-no-bubble-hover]) .card:hover {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border),
     0 1px 2px rgba(0, 0, 0, 0.2),
     0 4px 16px rgba(0, 0, 0, 0.14),
     0 12px 48px rgba(0, 0, 0, 0.08);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.022) 0%, rgba(255, 255, 255, 0.007) 40%, rgba(255, 255, 255, 0.013) 100%),
-    var(--lcs-bubble-bg);
 }
 
 :global([data-no-bubble-hover]) .card:hover .avatarBgImg {

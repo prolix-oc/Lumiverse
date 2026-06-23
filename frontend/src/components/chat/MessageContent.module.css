@@ -378,8 +378,11 @@
 
 .proseImageWrap:hover {
   border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
   transform: scale(1.02);
+}
+
+:global([data-glass]) .proseImageWrap:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .proseImage,

@@ -1,6 +1,13 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .container {
   position: relative;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   background: transparent;
@@ -358,6 +365,9 @@
   transition:
     box-shadow 300ms cubic-bezier(0.22, 1, 0.36, 1),
     border-color 200ms ease;
+}
+
+.cardEntry {
   animation: cardEntry 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -526,9 +536,17 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cardTilt {
+  .cardTilt,
+  .cardTilt.tilting,
+  .cardTilt.mobileMotionTilting {
     perspective: none;
     transform: none !important;
+    transform-style: flat;
+  }
+  .card,
+  .cardTilt.tilting .card,
+  .cardTilt.mobileMotionTilting .card {
+    transform-style: flat;
   }
   .cardImage img,
   .cardImage picture img,
@@ -546,10 +564,16 @@
   .listItem:hover .listAvatar picture img,
   .cardTilt.tilting .cardImage img:not(.perspectiveLayer),
   .cardTilt.tilting .cardImage picture img:not(.perspectiveLayer),
+  .cardTilt.mobileMotionTilting .cardImage img:not(.perspectiveLayer),
+  .cardTilt.mobileMotionTilting .cardImage picture img:not(.perspectiveLayer),
   .cardTilt.tilting .mosaicCell img,
   .cardTilt.tilting .mosaicCell picture img,
+  .cardTilt.mobileMotionTilting .mosaicCell img,
+  .cardTilt.mobileMotionTilting .mosaicCell picture img,
   .cardTilt.tilting .perspectiveLayer,
-  .cardTilt.tilting .cardAvatarFallback {
+  .cardTilt.mobileMotionTilting .perspectiveLayer,
+  .cardTilt.tilting .cardAvatarFallback,
+  .cardTilt.mobileMotionTilting .cardAvatarFallback {
     transform: none;
   }
   .card::after {
@@ -560,6 +584,50 @@
 /* Suppress hover effects while scrolling */
 .container[data-scrolling] .cardTilt {
   pointer-events: none;
+}
+
+/* Disable all card hover/tilt/shine transforms while scrolling to keep the
+   compositor layer tree as small as possible during the scroll gesture. */
+.container[data-scrolling] .cardTilt {
+  perspective: none;
+  transform-style: flat;
+}
+
+.container[data-scrolling] .cardTilt .card {
+  transform-style: flat;
+}
+
+.container[data-scrolling] .card::after {
+  display: none;
+}
+
+.container[data-scrolling] .card,
+.container[data-scrolling] .listItem {
+  transition: none;
+}
+
+.container[data-scrolling] .cardImage img,
+.container[data-scrolling] .cardImage picture img,
+.container[data-scrolling] .listAvatar img,
+.container[data-scrolling] .listAvatar picture img,
+.container[data-scrolling] .mosaicCell img,
+.container[data-scrolling] .mosaicCell picture img,
+.container[data-scrolling] .cardAvatarFallback {
+  --lazy-image-transform-transition: 0ms;
+  transition: none !important;
+  will-change: auto;
+  transform: none !important;
+}
+
+.container[data-scrolling] .cardTilt.tilting .perspectiveLayer,
+.container[data-scrolling] .cardTilt.mobileMotionTilting .perspectiveLayer {
+  transition: none;
+  will-change: auto;
+  transform: none !important;
+}
+
+.container[data-scrolling] .perspectiveStack {
+  transform-style: flat;
 }
 
 .cardBtn {
@@ -796,6 +864,9 @@
     border-color var(--lumiverse-transition-fast),
     box-shadow var(--lumiverse-transition-fast),
     transform var(--lumiverse-transition-fast);
+}
+
+.listItemEntry {
   animation: cardEntry 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 

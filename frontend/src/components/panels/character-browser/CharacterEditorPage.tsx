@@ -359,9 +359,7 @@ export default function CharacterEditorPage() {
     estimateSize: () => galleryRowEstimate,
     overscan: GALLERY_OVERSCAN,
     anchorTo: 'start',
-    directDomUpdates: true,
-    directDomUpdatesMode: 'position',
-    useAnimationFrameWithResizeObserver: true,
+    useFlushSync: false,
     getItemKey: (index) => {
       const start = index * galleryColumns
       const end = Math.min(start + galleryColumns, galleryItems.length)
@@ -1537,8 +1535,8 @@ export default function CharacterEditorPage() {
 
                       <div className={styles.galleryScrollArea} ref={galleryScrollRef}>
                         <div
-                          ref={galleryVirtualizer.containerRef}
                           className={styles.galleryVirtualContainer}
+                          style={{ height: galleryVirtualizer.getTotalSize() }}
                         >
                           {galleryVirtualizer.getVirtualItems().map((virtualRow) => {
                             const rowStart = virtualRow.index * galleryColumns
@@ -1559,6 +1557,10 @@ export default function CharacterEditorPage() {
                                 data-index={virtualRow.index}
                                 className={styles.galleryGridRow}
                                 style={{
+                                  position: 'absolute',
+                                  top: virtualRow.start,
+                                  left: 0,
+                                  width: '100%',
                                   gridTemplateColumns: `repeat(${galleryColumns}, minmax(0, 1fr))`,
                                   gap: GALLERY_GAP,
                                   paddingBottom: GALLERY_GAP,

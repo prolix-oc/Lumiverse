@@ -20,7 +20,6 @@
   border-radius: var(--lcs-radius, 14px);
   max-width: 240px;
   max-height: 240px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
   transition:
     border-color var(--lcs-transition-fast, 120ms ease),
     box-shadow var(--lcs-transition-fast, 120ms ease),
@@ -29,8 +28,15 @@
 
 .imageThumbUser:hover {
   border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
   transform: scale(1.02);
+}
+
+:global([data-glass]) .imageThumbUser {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+:global([data-glass]) .imageThumbUser:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .imageThumbUser img {
@@ -53,7 +59,6 @@
   border-radius: var(--lcs-radius, 14px);
   max-width: 240px;
   max-height: 240px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
   transition:
     border-color var(--lcs-transition-fast, 120ms ease),
     box-shadow var(--lcs-transition-fast, 120ms ease),
@@ -62,8 +67,15 @@
 
 .inlineImageBtn:hover {
   border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
   transform: scale(1.02);
+}
+
+:global([data-glass]) .inlineImageBtn {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+
+:global([data-glass]) .inlineImageBtn:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .inlineImageWrap {

@@ -29,9 +29,7 @@
   border: 1px solid var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
   border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 40%, transparent);
   border-radius: 24px;
-  /* backdrop-filter applied only when glass is enabled — see below */
-  box-shadow: var(--lumiverse-shadow-md);
-  box-shadow: var(--lumiverse-shadow-md), 0 2px 12px color-mix(in srgb, var(--lumiverse-primary) 20%, transparent);
+  /* backdrop-filter and heavy shadow applied only when glass is enabled — see below */
   position: relative;
   overflow: hidden;
   pointer-events: auto;
@@ -43,6 +41,7 @@
 
 :global([data-glass]) .indicator {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  box-shadow: var(--lumiverse-shadow-md), 0 2px 12px color-mix(in srgb, var(--lumiverse-primary) 20%, transparent);
 }
 
 /* Shimmer sweep */

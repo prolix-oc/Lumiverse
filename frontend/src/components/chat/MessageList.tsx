@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range, type Virtualizer } from '@tanstack/react-virtual'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
@@ -24,7 +24,10 @@ interface MessageListProps {
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
-const SCROLL_END_THRESHOLD = 6
+// TanStack recommends a forgiving end threshold for chat so that minor
+// overscroll, mobile momentum settling, and soft-keyboard shrink/growth don't
+// immediately unpin the viewport from new output.
+const SCROLL_END_THRESHOLD = 80
 const INITIAL_SCROLL_TO_END_MAX_MS = 5000
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
@@ -52,11 +55,6 @@ function clampEstimate(value: number) {
   return Math.max(MIN_MEASURED_ROW_HEIGHT, Math.min(MAX_ESTIMATED_ROW_HEIGHT, value))
 }
 
-function clampMeasuredRowHeight(value: number) {
-  if (!Number.isFinite(value)) return MIN_MEASURED_ROW_HEIGHT
-  return Math.max(MIN_MEASURED_ROW_HEIGHT, value)
-}
-
 function getUiScale() {
   if (typeof window === 'undefined') return 1
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-ui-scale')
@@ -69,16 +67,6 @@ function getFontScale() {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--lumiverse-font-scale')
   const parsed = Number.parseFloat(raw)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
-}
-
-function getElementLayoutHeight(element: Element) {
-  if (element instanceof HTMLElement && element.offsetHeight > 0) {
-    return element.offsetHeight
-  }
-
-  // getBoundingClientRect() is affected by body-level CSS zoom; virtualizer
-  // coordinates are not, so normalize the rare rect fallback to layout pixels.
-  return element.getBoundingClientRect().height / getUiScale()
 }
 
 function hashString(value: string) {
@@ -143,6 +131,7 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
 export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const wasScrollingRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isPinnedRef = useRef(true)
   const isProgrammaticScrollRef = useRef(false)
@@ -574,29 +563,19 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     paddingEnd: inputSafeZone,
     scrollPaddingEnd: inputSafeZone,
     directDomUpdates: true,
-    directDomUpdatesMode: 'position',
-    useAnimationFrameWithResizeObserver: true,
+    useScrollendEvent: true,
+    isScrollingResetDelay: 120,
     onChange: (instance, sync) => {
-      if (!sync) scheduleInitialScrollToEnd(instance)
-    },
-    measureElement: (element, entry) => {
-      const size = entry?.borderBoxSize?.[0]?.blockSize
-      const rawMeasured = size ?? getElementLayoutHeight(element)
-      const measured = element.getAttribute('data-item-type') === 'message'
-        ? clampMeasuredRowHeight(rawMeasured)
-        : Math.max(1, Number.isFinite(rawMeasured) ? rawMeasured : 1)
-      const measureKey = element.getAttribute('data-measure-key')
-      if (measureKey && measured >= MIN_MEASURED_ROW_HEIGHT) {
-        measuredRowHeightsRef.current.set(measureKey, measured)
-        const messageId = element.getAttribute('data-message-id')
-        if (messageId) {
-          lastMeasuredByMessageIdRef.current.set(messageId, measured)
+      const scrolling = instance.isScrolling
+      if (scrolling !== wasScrollingRef.current) {
+        wasScrollingRef.current = scrolling
+        const el = scrollRef.current
+        if (el) {
+          if (scrolling) el.setAttribute('data-scrolling', '')
+          else el.removeAttribute('data-scrolling')
         }
-        const values = Array.from(measuredRowHeightsRef.current.values())
-        const sample = values.slice(-80)
-        averageMeasuredHeightRef.current = sample.reduce((sum, value) => sum + value, 0) / sample.length
       }
-      return measured
+      if (!sync) scheduleInitialScrollToEnd(instance)
     },
   })
 
@@ -752,7 +731,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const pinToBottomIfNeeded = useCallback((el: HTMLElement) => {
     if (hasInListEditableFocus()) return
-    if (rowVirtualizer.isAtEnd(1)) return
+    if (rowVirtualizer.isAtEnd(SCROLL_END_THRESHOLD)) return
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
     rowVirtualizer.scrollToEnd({ behavior: 'auto' })
@@ -1010,9 +989,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     if (!el) return
 
-    let pendingRaf = 0
-    let settleRaf = 0
-
+    const LAYOUT_MEASURE_DEBOUNCE_MS = 80
+    let layoutTimer = 0
+    let settleTimer = 0
     let pendingRow: HTMLElement | null = null
 
     const handleMessageContentLayout = (event: Event) => {
@@ -1021,9 +1000,11 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         ? target.closest<HTMLElement>('[data-virtual-index]')
         : null
 
-      if (pendingRaf) return
-      pendingRaf = requestAnimationFrame(() => {
-        pendingRaf = 0
+      // Debounce the burst of layout events fired during streaming/content
+      // changes so we don't re-measure the same row multiple times per frame.
+      if (layoutTimer) window.clearTimeout(layoutTimer)
+      layoutTimer = window.setTimeout(() => {
+        layoutTimer = 0
         const row = pendingRow
         pendingRow = null
         if (row && el.contains(row)) {
@@ -1032,29 +1013,25 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           measureMountedRows()
         }
 
+        // followOnAppend keeps a pinned viewport at the bottom when the last
+        // row grows, so we don't need to manually scroll here. recoverTailVoid
+        // is kept as a safety net for the rare case where measurements drift.
         if (recoverTailVoid()) return
-        if (!settleRaf) {
-          settleRaf = requestAnimationFrame(() => {
-            settleRaf = 0
-            recoverTailVoid()
-          })
-        }
-
-        const latest = scrollRef.current
-        if (!latest || !isPinnedRef.current) return
-        pinToBottomIfNeeded(latest)
-        lastScrollTopRef.current = latest.scrollTop
-        lastScrollHeightRef.current = latest.scrollHeight
-      })
+        if (settleTimer) window.clearTimeout(settleTimer)
+        settleTimer = window.setTimeout(() => {
+          settleTimer = 0
+          recoverTailVoid()
+        }, LAYOUT_MEASURE_DEBOUNCE_MS)
+      }, LAYOUT_MEASURE_DEBOUNCE_MS)
     }
 
     el.addEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleMessageContentLayout)
     return () => {
       el.removeEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleMessageContentLayout)
-      if (pendingRaf) cancelAnimationFrame(pendingRaf)
-      if (settleRaf) cancelAnimationFrame(settleRaf)
+      if (layoutTimer) window.clearTimeout(layoutTimer)
+      if (settleTimer) window.clearTimeout(settleTimer)
     }
-  }, [pinToBottomIfNeeded, measureMountedRows, recoverTailVoid, rowVirtualizer])
+  }, [measureMountedRows, recoverTailVoid, rowVirtualizer])
 
   return (
     <div
@@ -1150,7 +1127,7 @@ interface VirtualRowProps {
   children: ReactNode
 }
 
-function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, styleMode, measureElement, children }: VirtualRowProps) {
+const VirtualRow = memo(function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKey, styleMode, measureElement, children }: VirtualRowProps) {
   const elRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1170,18 +1147,18 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
       })
     }
 
-    // Initial measure during commit, before paint
+    // Initial measure during commit, before paint.
+    // Rely on TanStack's ResizeObserver (via measureElement) and the
+    // MESSAGE_CONTENT_LAYOUT_EVENT dispatched by MessageContent for ongoing
+    // size changes. The MutationObserver that was here fired on every token
+    // during streaming and caused a measurement storm.
     measure()
-
-    const mo = new MutationObserver(scheduleMeasure)
-    mo.observe(el, { childList: true, subtree: true, characterData: true })
 
     el.addEventListener('load', scheduleMeasure, true)
     el.addEventListener('error', scheduleMeasure, true)
 
     return () => {
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
-      mo.disconnect()
       el.removeEventListener('load', scheduleMeasure, true)
       el.removeEventListener('error', scheduleMeasure, true)
       measureElement(null)
@@ -1204,4 +1181,4 @@ function VirtualRow({ virtualIndex, itemType, messageIndex, messageId, measureKe
       {children}
     </div>
   )
-}
+})

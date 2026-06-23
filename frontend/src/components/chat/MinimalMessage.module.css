@@ -50,11 +50,17 @@
 .card:hover {
   background: var(--lumiverse-bg-elevated);
   border-color: var(--lumiverse-border);
+}
+
+:global([data-glass]) .card:hover {
   box-shadow: 0 0 16px var(--lumiverse-primary-010);
 }
 
 :global([data-theme-mode='light']) .card:hover {
   border-color: var(--lumiverse-fill-subtle);
+}
+
+:global([data-glass][data-theme-mode='light']) .card:hover {
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.04);
 }
 

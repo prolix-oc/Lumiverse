@@ -1195,15 +1195,11 @@ function attachCodeCopyHandler(root: HTMLElement | ShadowRoot): () => void {
 }
 
 function notifyMessageContentLayout(el: HTMLElement): void {
-  const dispatch = () => {
-    el.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
-  }
-
-  dispatch()
-  requestAnimationFrame(() => {
-    dispatch()
-    requestAnimationFrame(dispatch)
-  })
+  // One dispatch is enough. TanStack's ResizeObserver (on the row) plus the
+  // load/error listeners below already catch later size changes. The previous
+  // immediate + 2x rAF triple dispatch fired ~3 events for every shadow-DOM
+  // mutation/row mount and caused a measurement storm during scroll/streaming.
+  el.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
 }
 
 function IsolatedHtml({ html }: { html: string }) {
@@ -1539,7 +1535,45 @@ export default function MessageContent({
       if (pendingRaf) window.cancelAnimationFrame(pendingRaf)
       for (const timer of settleTimers) window.clearTimeout(timer)
     }
-  }, [renderContent])
+    // Observers are set up once per mount. DOM mutations, resizes, and child
+    // layout events already notify MessageList via scheduleLayoutNotify(), so
+    // re-creating observers on every renderContent change is unnecessary and
+    // causes observer churn during fast streaming.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // While streaming, ratchet the content container's min-height upward so that
+  // transient DOM shrinkage (unclosed tags snapping shut, image placeholders
+  // collapsing, etc.) cannot make the virtualized row height oscillate. The
+  // lock is applied directly to the DOM to avoid React re-render thrash.
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    if (!isStreaming) {
+      container.style.minHeight = ''
+      return
+    }
+
+    // offsetHeight is zoom-invariant under Lumiverse's body-level CSS zoom,
+    // whereas getBoundingClientRect() would return scaled pixels and the lock
+    // would be applied twice.
+    let maxHeight = container.offsetHeight
+    container.style.minHeight = `${maxHeight}px`
+
+    const updateMinHeight = () => {
+      const h = container.offsetHeight
+      if (h > maxHeight) {
+        maxHeight = h
+        container.style.minHeight = `${h}px`
+      }
+    }
+
+    const observer = new ResizeObserver(updateMinHeight)
+    observer.observe(container)
+
+    return () => observer.disconnect()
+  }, [isStreaming])
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []
