@@ -51,9 +51,12 @@ export default function NotificationSettings() {
   }
 
   const handleSubscribe = async () => {
+    // Start the browser permission request before any React state update. Safari
+    // web apps are strict about preserving transient user activation for prompts.
+    const subscribeAttempt = subscribe()
     setSubscribing(true)
     try {
-      const ok = await subscribe()
+      const ok = await subscribeAttempt
       if (ok) {
         addToast({ type: 'success', message: t('notifications.toastEnabled') })
       } else {
