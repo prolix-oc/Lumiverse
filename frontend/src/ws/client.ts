@@ -91,11 +91,10 @@ export class WebSocketClient {
     const thisSocket = this.ws
     this.ws.onclose = (e) => {
       console.log('[WS] Closed:', e.code, e.reason)
+      if (this.ws !== thisSocket) return
       this.stopPing()
       this.emit(WS_CLOSE, { code: e.code, reason: e.reason })
-      // Only reconnect if this is still the active socket — a newer socket
-      // may have already replaced us (e.g. server-side session eviction).
-      if (this.shouldReconnect && this.ws === thisSocket) {
+      if (this.shouldReconnect) {
         this.scheduleReconnect()
       }
     }
@@ -237,6 +236,10 @@ export class WebSocketClient {
 
   private sendVisibility(forceHidden = false) {
     const visible = !forceHidden && this.isDocumentVisible()
+    if (this.recoverIfSocketAlreadyClosed()) {
+      this.wasVisible = visible
+      return
+    }
     this.send({ type: 'visibility', visible })
     this.sendStreamFocus(forceHidden)
     // Hidden→visible transition: iOS aggressively kills WS in suspended PWAs.
@@ -246,6 +249,22 @@ export class WebSocketClient {
       this.sendPingNow(RESUME_PONG_TIMEOUT_MS)
     }
     this.wasVisible = visible
+  }
+
+  private recoverIfSocketAlreadyClosed() {
+    const socket = this.ws
+    if (!socket) return false
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) return false
+
+    // Some browsers defer onclose while a tab/app is suspended. When lifecycle
+    // events resume, the socket may already be CLOSED, which makes pings no-op
+    // unless we explicitly drive the normal close/reconnect path here.
+    console.warn('[WS] Socket was closed before onclose fired — reconnecting')
+    this.stopPing()
+    this.ws = null
+    this.emit(WS_CLOSE, { code: 1006, reason: 'stale socket detected' })
+    if (this.shouldReconnect) this.scheduleReconnect()
+    return true
   }
 
   private sendStreamFocus(forceHidden = false) {

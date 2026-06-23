@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { COUNCIL_SETTINGS_DEFAULTS, COUNCIL_TOOLS_DEFAULTS } from 'lumiverse-spindle-types'
 import { useStore } from '@/store'
-import { bootstrapApi, type BootstrapPayload } from '@/api/bootstrap'
+import { bootstrapApi, type BootstrapPayload, type LandingBootstrapPayload } from '@/api/bootstrap'
 import { connectionsApi } from '@/api/connections'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
@@ -48,6 +48,18 @@ export function useAppInit() {
 async function initialize(): Promise<void> {
   let payload: BootstrapPayload | null = null
   let errors: Record<string, string> = {}
+  let landingPreloadHandled = false
+
+  const landingPromise = bootstrapApi.fetchLanding()
+    .then((response) => {
+      const appliedRecentChats = applyLandingBootstrap(response.payload, response.errors ?? {}, {
+        skipRecentChats: landingPreloadHandled,
+      })
+      if (appliedRecentChats) landingPreloadHandled = true
+    })
+    .catch((err) => {
+      console.warn('[useAppInit] landing bootstrap failed; landing page will fetch its own chats:', err)
+    })
 
   try {
     const response = await bootstrapApi.fetch()
@@ -68,11 +80,21 @@ async function initialize(): Promise<void> {
     }
   }
 
-  if (payload) applyBootstrap(payload, errors)
+  if (payload) {
+    const appliedRecentChats = applyBootstrap(payload, errors, {
+      skipStartupSettings: useStore.getState().settingsLoaded,
+      // The split landing bootstrap owns first-paint recent chats. Avoid
+      // applying the full bootstrap's placeholder and racing the landing load.
+      skipRecentChats: true,
+    })
+    if (appliedRecentChats) landingPreloadHandled = true
+  }
   if (payload && !errors['startupSettings']) {
     void useStore.getState().loadSettings()
   }
   if (Object.keys(errors).length > 0) await runFallbacks(errors)
+
+  void landingPromise
 
   // Council member pack items — always run after settings are loaded.
   // Walks the (now-populated) council member list and fetches full pack
@@ -92,10 +114,36 @@ async function initialize(): Promise<void> {
 
 /** Fan the bootstrap payload into the store, skipping any section that
  *  the backend reported as failed (the fallback pass will retry those). */
-function applyBootstrap(payload: BootstrapPayload, errors: Record<string, string>): void {
+function applyLandingBootstrap(
+  payload: LandingBootstrapPayload,
+  errors: Record<string, string>,
+  options: { skipRecentChats?: boolean } = {},
+): boolean {
   const store = useStore.getState()
+  const hadSettingsLoaded = store.settingsLoaded
+  let appliedRecentChats = false
 
-  if (!errors['startupSettings']) {
+  if (!hadSettingsLoaded && !errors['startupSettings']) {
+    store.hydrateStartupSettings(payload.startupSettings)
+  }
+
+  if (!hadSettingsLoaded && !options.skipRecentChats && !errors['recentChats'] && payload.recentChats) {
+    store.setLandingRecentChats(payload.recentChats)
+    appliedRecentChats = true
+  }
+
+  return appliedRecentChats
+}
+
+function applyBootstrap(
+  payload: BootstrapPayload,
+  errors: Record<string, string>,
+  options: { skipStartupSettings?: boolean; skipRecentChats?: boolean } = {},
+): boolean {
+  const store = useStore.getState()
+  let appliedRecentChats = false
+
+  if (!options.skipStartupSettings && !errors['startupSettings']) {
     store.hydrateStartupSettings(payload.startupSettings)
   }
 
@@ -117,8 +165,9 @@ function applyBootstrap(payload: BootstrapPayload, errors: Record<string, string
 
   // Landing page preload — no fallback needed: when absent, the landing page
   // falls back to its own recent-grouped fetch.
-  if (!errors['recentChats'] && payload.recentChats) {
+  if (!options.skipRecentChats && !errors['recentChats'] && payload.recentChats) {
     store.setLandingRecentChats(payload.recentChats)
+    appliedRecentChats = true
   }
 
   if (!errors['council.settings']) {
@@ -143,6 +192,8 @@ function applyBootstrap(payload: BootstrapPayload, errors: Record<string, string
       payload.spindle.extensions,
     )
   }
+
+  return appliedRecentChats
 }
 
 /** Fill in sections the bootstrap payload couldn't provide by calling the
@@ -152,7 +203,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
   const store = useStore.getState()
 
   if (errors['startupSettings']) {
-    await store.loadSettings().catch(() => {})
+    if (!store.settingsLoaded) await store.loadSettings().catch(() => {})
   }
 
   if (errors['llm.connections'] || errors['llm.providers']) {

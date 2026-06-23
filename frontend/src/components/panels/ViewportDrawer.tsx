@@ -41,6 +41,7 @@ export default function ViewportDrawer() {
   const openSettings = useStore((s) => s.openSettings)
   const openModal = useStore((s) => s.openModal)
   const setSetting = useStore((s) => s.setSetting)
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
   const drawerSettings = useStore((s) => s.drawerSettings)
   const drawerTabs = useStore((s) => s.drawerTabs)
   const isGroupChat = useStore((s) => s.isGroupChat)
@@ -168,6 +169,8 @@ export default function ViewportDrawer() {
       default: return 'min(420px, calc(100vw - 64px))'
     }
   })()
+
+  if (!settingsLoaded) return null
 
   return (
     <>

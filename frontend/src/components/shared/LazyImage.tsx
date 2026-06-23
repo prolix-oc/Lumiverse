@@ -1,6 +1,17 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react'
 import { Spinner } from '@/components/shared/Spinner'
 
+const MAX_LOADED_IMAGE_SRCS = 500
+const loadedImageSrcs = new Set<string>()
+
+function rememberLoadedSrc(src: string) {
+  loadedImageSrcs.add(src)
+  if (loadedImageSrcs.size > MAX_LOADED_IMAGE_SRCS) {
+    const oldest = loadedImageSrcs.values().next().value as string | undefined
+    if (oldest !== undefined) loadedImageSrcs.delete(oldest)
+  }
+}
+
 interface LazyImageProps {
   src?: string | null
   alt?: string
@@ -28,22 +39,23 @@ export default function LazyImage({
   onError,
   ...props
 }: LazyImageProps) {
-  const [isLoading, setIsLoading] = useState(true)
+  const [isLoading, setIsLoading] = useState(() => Boolean(src && !loadedImageSrcs.has(src)))
   const [hasError, setHasError] = useState(false)
   const prevSrcRef = useRef(src)
 
   useEffect(() => {
     if (src !== prevSrcRef.current) {
       prevSrcRef.current = src
-      setIsLoading(true)
+      setIsLoading(Boolean(src && !loadedImageSrcs.has(src)))
       setHasError(false)
     }
   }, [src])
 
   const handleLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    if (src) rememberLoadedSrc(src)
     setIsLoading(false)
     onLoad?.(event)
-  }, [onLoad])
+  }, [onLoad, src])
   const handleError = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     setIsLoading(false)
     setHasError(true)

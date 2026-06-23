@@ -387,6 +387,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     if (settings.wallpaper && typeof settings.wallpaper === 'object') {
       patch.wallpaper = { ...settings.wallpaper }
     }
+    if (settings.drawerSettings && typeof settings.drawerSettings === 'object') {
+      patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
+    }
 
     set(patch as any)
   },

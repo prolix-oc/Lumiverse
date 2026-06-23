@@ -68,12 +68,12 @@ export interface BootstrapPayload {
     isPrivileged: boolean;
     tools: ToolRegistration[];
   };
-  /**
-   * First page of the landing page's grouped recent chats, sized by the
-   * user's landingPageChatsDisplayed setting. Lets the landing page render
-   * real content straight from bootstrap instead of a third serial round
-   * trip (auth → bootstrap → recent-grouped).
-   */
+  /** Retained for response-shape stability; the split landing bootstrap owns recent-chat preload. */
+  recentChats: PaginatedResult<GroupedRecentChat>;
+}
+
+export interface LandingBootstrapPayload {
+  startupSettings: StartupSettings;
   recentChats: PaginatedResult<GroupedRecentChat>;
 }
 
@@ -101,6 +101,7 @@ interface StartupSettings {
   landingPageChatsDisplayed?: number;
   landingPageLayoutMode?: "cards" | "compact";
   wallpaper?: unknown;
+  drawerSettings?: unknown;
 }
 
 const LIST_LIMIT_CONNECTIONS = 100;
@@ -119,6 +120,7 @@ const STARTUP_SETTINGS_KEYS = [
   "landingPageChatsDisplayed",
   "landingPageLayoutMode",
   "wallpaper",
+  "drawerSettings",
 ] as const;
 
 /**
@@ -126,17 +128,17 @@ const STARTUP_SETTINGS_KEYS = [
  * complete, so a truncated page silently hides connections.
  */
 const CONNECTIONS_PAGE = 200;
-async function collectAll<T>(
+function collectAll<T>(
   fetchPage: (
     pagination: { limit: number; offset: number },
-  ) => PaginatedResult<T> | Promise<PaginatedResult<T>>,
-): Promise<PaginatedResult<T>> {
+  ) => PaginatedResult<T>,
+): PaginatedResult<T> {
   const data: T[] = [];
   let offset = 0;
   for (;;) {
     let page: PaginatedResult<T>;
     try {
-      page = await fetchPage({ limit: CONNECTIONS_PAGE, offset });
+      page = fetchPage({ limit: CONNECTIONS_PAGE, offset });
     } catch (err) {
       // Rethrow a first-page failure for the caller's `safe()` fallback; once
       // pages are in hand, keep them rather than discarding.
@@ -206,6 +208,10 @@ function getStartupSettings(userId: string): StartupSettings {
     startupSettings.wallpaper = rows.get("wallpaper");
   }
 
+  if (rows.has("drawerSettings")) {
+    startupSettings.drawerSettings = rows.get("drawerSettings");
+  }
+
   return startupSettings;
 }
 
@@ -219,6 +225,38 @@ function getLandingRecentChats(userId: string): PaginatedResult<GroupedRecentCha
       ? Math.min(Math.max(Math.floor(stored), 1), LANDING_CHATS_MAX_LIMIT)
       : LANDING_CHATS_DEFAULT_LIMIT;
   return chatsSvc.listRecentChatsGrouped(userId, { limit, offset: 0 });
+}
+
+export function buildLandingBootstrapPayload(
+  userId: string,
+): { payload: LandingBootstrapPayload; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  const emptyRecentChats: PaginatedResult<GroupedRecentChat> = {
+    data: [],
+    total: 0,
+    limit: LANDING_CHATS_DEFAULT_LIMIT,
+    offset: 0,
+  };
+
+  const safe = <T>(key: string, fn: () => T, fallback: T): T => {
+    try {
+      return fn();
+    } catch (err: any) {
+      errors[key] = err?.message || String(err);
+      return fallback;
+    }
+  };
+
+  // Keep the landing bootstrap synchronous and sequential. These are fast
+  // bun:sqlite reads; Promise fan-out only creates extra interleaving points
+  // under rapid refresh churn without making the queries run faster.
+  const startupSettings = safe("startupSettings", () => getStartupSettings(userId), {} as StartupSettings);
+  const recentChats = safe("recentChats", () => getLandingRecentChats(userId), emptyRecentChats);
+
+  return {
+    payload: { startupSettings, recentChats },
+    errors,
+  };
 }
 
 function listLlmProviders(): ProviderListEntry[] {
@@ -267,10 +305,9 @@ async function listSpindle(userId: string, role: string): Promise<BootstrapPaylo
 }
 
 /**
- * Assemble the full bootstrap payload in parallel. Every underlying service
- * call either reads from a cached prepared statement, an in-memory provider
- * registry, or an already-warm manifest cache — so the Promise.all is fan-out
- * over fast synchronous + a couple of async reads, not N sequential queries.
+ * Assemble the full bootstrap payload. Synchronous bun:sqlite sections run
+ * sequentially to avoid unnecessary async handoffs while rapid refreshes can
+ * leave split landing/full bootstrap requests in flight.
  *
  * Failures inside any single section are caught and surfaced as a structured
  * `errors` entry so the frontend can fall back to the per-endpoint fetch for
@@ -282,7 +319,16 @@ export async function buildBootstrapPayload(
 ): Promise<{ payload: BootstrapPayload; errors: Record<string, string> }> {
   const errors: Record<string, string> = {};
 
-  const safe = async <T>(key: string, fn: () => Promise<T> | T, fallback: T): Promise<T> => {
+  const safeSync = <T>(key: string, fn: () => T, fallback: T): T => {
+    try {
+      return fn();
+    } catch (err: any) {
+      errors[key] = err?.message || String(err);
+      return fallback;
+    }
+  };
+
+  const safeAsync = async <T>(key: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
     try {
       return await fn();
     } catch (err: any) {
@@ -301,34 +347,27 @@ export async function buildBootstrapPayload(
     offset: 0,
   });
 
-  const [
-    startupSettings,
-    llmConnections, llmProviders,
-    sttConnections, sttProviders,
-    ttsConnections, ttsProviders,
-    imageGenConnections, imageGenProviders,
-    packs, personas, regexScripts,
-    councilSettings, councilTools,
-    spindle,
-    recentChats,
-  ] = await Promise.all([
-    safe("startupSettings", () => getStartupSettings(userId), {} as StartupSettings),
-    safe("llm.connections", () => collectAll((p) => connectionsSvc.listConnections(userId, p)), emptyPage<ConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
-    safe("llm.providers", () => listLlmProviders(), [] as ProviderListEntry[]),
-    safe("stt.connections", () => collectAll((p) => sttConnectionsSvc.listConnections(userId, p)), emptyPage<SttConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
-    safe("stt.providers", () => listSttProviders(), [] as ProviderSummaryEntry[]),
-    safe("tts.connections", () => collectAll((p) => ttsConnectionsSvc.listConnections(userId, p)), emptyPage<TtsConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
-    safe("tts.providers", () => listTtsProviders(), [] as ProviderSummaryEntry[]),
-    safe("imageGen.connections", () => collectAll((p) => imageGenConnectionsSvc.listConnections(userId, p)), emptyPage<ImageGenConnectionProfile>(LIST_LIMIT_CONNECTIONS)),
-    safe("imageGen.providers", () => listImageGenProviders(), [] as ProviderSummaryEntry[]),
-    safe("packs", () => packsSvc.listPacks(userId, pagLargeMisc), emptyPage<Pack>(LIST_LIMIT_PACKS_PERSONAS)),
-    safe("personas", () => personasSvc.listPersonas(userId, pagLargeMisc), emptyPage<Persona>(LIST_LIMIT_PACKS_PERSONAS)),
-    safe("regexScripts", () => regexSvc.listRegexScripts(userId, pagLargeRegex), emptyPage<RegexScript>(LIST_LIMIT_REGEX)),
-    safe("council.settings", () => councilSvc.getCouncilSettings(userId), {} as CouncilSettings),
-    safe("council.tools", () => councilSvc.getAvailableTools(userId), [] as RuntimeCouncilToolDefinition[]),
-    safe("spindle", () => listSpindle(userId, role), { extensions: [], isPrivileged: false, tools: [] }),
-    safe("recentChats", () => getLandingRecentChats(userId), emptyPage<GroupedRecentChat>(LANDING_CHATS_DEFAULT_LIMIT)),
-  ]);
+  // Run the synchronous DB-heavy reads in one sequential pass. The previous
+  // Promise.all form did not make bun:sqlite reads parallel, but it did create
+  // more async handoff points while a split landing/full bootstrap pair was in
+  // flight during refresh churn.
+  const startupSettings = safeSync("startupSettings", () => getStartupSettings(userId), {} as StartupSettings);
+  const llmConnections = safeSync("llm.connections", () => collectAll((p) => connectionsSvc.listConnections(userId, p)), emptyPage<ConnectionProfile>(LIST_LIMIT_CONNECTIONS));
+  const llmProviders = safeSync("llm.providers", () => listLlmProviders(), [] as ProviderListEntry[]);
+  const sttConnections = safeSync("stt.connections", () => collectAll((p) => sttConnectionsSvc.listConnections(userId, p)), emptyPage<SttConnectionProfile>(LIST_LIMIT_CONNECTIONS));
+  const sttProviders = safeSync("stt.providers", () => listSttProviders(), [] as ProviderSummaryEntry[]);
+  const ttsConnections = safeSync("tts.connections", () => collectAll((p) => ttsConnectionsSvc.listConnections(userId, p)), emptyPage<TtsConnectionProfile>(LIST_LIMIT_CONNECTIONS));
+  const ttsProviders = safeSync("tts.providers", () => listTtsProviders(), [] as ProviderSummaryEntry[]);
+  const imageGenConnections = safeSync("imageGen.connections", () => collectAll((p) => imageGenConnectionsSvc.listConnections(userId, p)), emptyPage<ImageGenConnectionProfile>(LIST_LIMIT_CONNECTIONS));
+  const imageGenProviders = safeSync("imageGen.providers", () => listImageGenProviders(), [] as ProviderSummaryEntry[]);
+  const packs = safeSync("packs", () => packsSvc.listPacks(userId, pagLargeMisc), emptyPage<Pack>(LIST_LIMIT_PACKS_PERSONAS));
+  const personas = safeSync("personas", () => personasSvc.listPersonas(userId, pagLargeMisc), emptyPage<Persona>(LIST_LIMIT_PACKS_PERSONAS));
+  const regexScripts = safeSync("regexScripts", () => regexSvc.listRegexScripts(userId, pagLargeRegex), emptyPage<RegexScript>(LIST_LIMIT_REGEX));
+  const councilSettings = safeSync("council.settings", () => councilSvc.getCouncilSettings(userId), {} as CouncilSettings);
+
+  const councilTools = await safeAsync("council.tools", () => councilSvc.getAvailableTools(userId), [] as RuntimeCouncilToolDefinition[]);
+  const spindle = await safeAsync("spindle", () => listSpindle(userId, role), { extensions: [], isPrivileged: false, tools: [] });
+  const recentChats = emptyPage<GroupedRecentChat>(LANDING_CHATS_DEFAULT_LIMIT);
 
   const payload: BootstrapPayload = {
     startupSettings,

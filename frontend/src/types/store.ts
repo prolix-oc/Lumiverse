@@ -118,6 +118,7 @@ export interface StartupSettings {
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
   wallpaper?: WallpaperSettings
+  drawerSettings?: DrawerSettings
 }
 
 export interface CharactersSlice {

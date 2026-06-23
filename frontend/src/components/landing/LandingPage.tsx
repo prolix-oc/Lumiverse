@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as R
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2 } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
@@ -114,37 +115,27 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
   )
 }
 
-function SkeletonCard({ index }: { index: number }) {
+function SkeletonCard(_props: { index: number }) {
   return (
-    <motion.div
-      className={styles.skeletonCard}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.35) }}
-    >
+    <div className={styles.skeletonCard}>
       <div className={styles.skeletonImage} />
       <div className={styles.skeletonContent}>
         <div className={styles.skeletonTitle} />
         <div className={styles.skeletonMeta} />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
-function SkeletonListItem({ index }: { index: number }) {
+function SkeletonListItem(_props: { index: number }) {
   return (
-    <motion.div
-      className={styles.listSkeleton}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.35) }}
-    >
+    <div className={styles.listSkeleton}>
       <div className={styles.listSkeletonAvatar} />
       <div className={styles.listSkeletonBody}>
         <div className={styles.listSkeletonTitle} />
         <div className={styles.listSkeletonMeta} />
       </div>
-    </motion.div>
+    </div>
   )
 }
 
@@ -154,6 +145,17 @@ function SkeletonListItem({ index }: { index: number }) {
 // a fixed 8 placeholders regardless of how many items would render.
 const LANDING_HINT_KEY = '__lumiverse_landing_hint'
 const SKELETON_MAX = 24
+const CARD_MIN_WIDTH = 200
+const CARD_GAP = 20
+const COMPACT_MIN_WIDTH = 320
+const COMPACT_GAP = 12
+const COMPACT_ROW_ESTIMATE = 86
+const VIRTUAL_OVERSCAN = 3
+
+type IdleWindow = Window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+  cancelIdleCallback?: (handle: number) => void
+}
 
 interface LandingHint {
   layout?: 'cards' | 'compact'
@@ -173,6 +175,13 @@ function writeLandingHint(hint: LandingHint) {
   try {
     localStorage.setItem(LANDING_HINT_KEY, JSON.stringify(hint))
   } catch { /* private mode etc. — hint is best-effort */ }
+}
+
+function getColumnCount(width: number, layout: 'cards' | 'compact') {
+  if (width <= 0) return 1
+  const minWidth = layout === 'compact' ? COMPACT_MIN_WIDTH : CARD_MIN_WIDTH
+  const gap = layout === 'compact' ? COMPACT_GAP : CARD_GAP
+  return Math.max(1, Math.floor((width + gap) / (minWidth + gap)))
 }
 
 function EmptyState() {
@@ -434,7 +443,25 @@ export default function LandingPage() {
   // Temporary chats are disposable by contract: landing on the home page
   // sweeps any the user left behind (closed tab, back navigation, etc.).
   useEffect(() => {
-    chatsApi.deleteTemporary().catch(() => {})
+    const idleWindow = window as IdleWindow
+    let cancelled = false
+    const cleanup = () => {
+      if (!cancelled) chatsApi.deleteTemporary().catch(() => {})
+    }
+
+    const usedIdleCallback = Boolean(idleWindow.requestIdleCallback)
+    const handle = usedIdleCallback && idleWindow.requestIdleCallback
+      ? idleWindow.requestIdleCallback(cleanup, { timeout: 2000 })
+      : window.setTimeout(cleanup, 250)
+
+    return () => {
+      cancelled = true
+      if (usedIdleCallback && idleWindow.cancelIdleCallback) {
+        idleWindow.cancelIdleCallback(handle)
+      } else {
+        window.clearTimeout(handle)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -467,8 +494,47 @@ export default function LandingPage() {
 
   const sentinelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const mainRef = useRef<HTMLElement>(null)
+  const virtualContainerRef = useRef<HTMLDivElement | null>(null)
+  const [mainWidth, setMainWidth] = useState(() => Math.min(1400, Math.max(320, window.innerWidth - 64)))
+  const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
 
   useScrollGate(scrollRef)
+
+  const updateVirtualScrollMargin = useCallback(() => {
+    const scrollEl = scrollRef.current
+    const virtualEl = virtualContainerRef.current
+    if (!scrollEl || !virtualEl) return
+    const next = virtualEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
+    setVirtualScrollMargin(next)
+  }, [])
+
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el) return
+
+    let frame = 0
+    const update = () => {
+      frame = 0
+      setMainWidth(el.clientWidth)
+      updateVirtualScrollMargin()
+    }
+    const scheduleUpdate = () => {
+      if (frame) return
+      frame = requestAnimationFrame(update)
+    }
+
+    scheduleUpdate()
+    const observer = new ResizeObserver(scheduleUpdate)
+    observer.observe(el)
+    window.addEventListener('resize', scheduleUpdate)
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+      observer.disconnect()
+      window.removeEventListener('resize', scheduleUpdate)
+    }
+  }, [updateVirtualScrollMargin])
 
   const fetchChats = useCallback(async () => {
     if (!settingsLoaded) return
@@ -680,6 +746,41 @@ export default function LandingPage() {
   }, [openModal, logout, t])
 
   const hasMore = items.length < total
+  const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
+  const virtualGap = virtualLayout === 'compact' ? COMPACT_GAP : CARD_GAP
+  const virtualColumns = getColumnCount(mainWidth, virtualLayout)
+  const virtualRowCount = Math.ceil(items.length / virtualColumns)
+  const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
+  const virtualRowEstimate = virtualLayout === 'compact'
+    ? COMPACT_ROW_ESTIMATE + virtualGap
+    : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
+
+  const chatVirtualizer = useVirtualizer({
+    count: virtualRowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => virtualRowEstimate,
+    overscan: VIRTUAL_OVERSCAN,
+    anchorTo: 'start',
+    scrollMargin: virtualScrollMargin,
+    directDomUpdates: true,
+    directDomUpdatesMode: 'position',
+    useAnimationFrameWithResizeObserver: true,
+    getItemKey: (index) => {
+      const start = index * virtualColumns
+      return items.slice(start, start + virtualColumns).map(getRecentChatKey).join('|') || index
+    },
+  })
+
+  useEffect(() => {
+    chatVirtualizer.measure()
+    updateVirtualScrollMargin()
+  }, [chatVirtualizer, updateVirtualScrollMargin, virtualColumns, virtualRowEstimate, virtualLayout])
+
+  const setVirtualContainerRef = useCallback((node: HTMLDivElement | null) => {
+    virtualContainerRef.current = node
+    chatVirtualizer.containerRef(node)
+    updateVirtualScrollMargin()
+  }, [chatVirtualizer, updateVirtualScrollMargin])
 
   return (
     <div className={styles.container} ref={scrollRef}>
@@ -697,12 +798,7 @@ export default function LandingPage() {
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
       >
-        <motion.header
-          className={styles.header}
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.1 }}
-        >
+        <header className={styles.header}>
           <div className={styles.logo}>
             <div className={styles.logoIcon}>
               <div className={styles.logoGlow} />
@@ -779,9 +875,9 @@ export default function LandingPage() {
               <LogOut size={13} strokeWidth={1.5} />
             </button>
           </div>
-        </motion.header>
+        </header>
 
-        <main className={styles.main}>
+        <main className={styles.main} ref={mainRef}>
           <AnimatePresence mode="wait">
             {!settingsLoaded || (loading && items.length === 0) ? (
               <motion.div
@@ -808,39 +904,59 @@ export default function LandingPage() {
               <motion.div
                 key={`chats-${landingPageLayoutMode}`}
                 className={clsx(
-                  landingPageLayoutMode === 'compact' ? styles.compactList : styles.gridCards,
+                  styles.virtualChats,
                   navigatingToChat && styles.chatsLeaving
                 )}
+                ref={setVirtualContainerRef}
                 variants={containerVariants}
                 initial="hidden"
                 animate={navigatingToChat ? 'leaving' : 'visible'}
                 exit="exit"
               >
-                {items.map((item) => (
-                  landingPageLayoutMode === 'compact' ? (
-                    <ChatListItem
-                      key={getRecentChatKey(item)}
-                      item={item}
-                      onClick={() => handleChatClick(item)}
-                      onDelete={
-                        item.is_group
-                          ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
-                          : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
-                      }
-                    />
-                  ) : (
-                    <ChatCard
-                      key={getRecentChatKey(item)}
-                      item={item}
-                      onClick={() => handleChatClick(item)}
-                      onDelete={
-                        item.is_group
-                          ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
-                          : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
-                      }
-                    />
+                {chatVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const start = virtualRow.index * virtualColumns
+                  const rowItems = items.slice(start, start + virtualColumns)
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      ref={chatVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      className={styles.virtualRow}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
+                        gap: virtualGap,
+                        paddingBottom: virtualGap,
+                      }}
+                    >
+                      {rowItems.map((item) => (
+                        landingPageLayoutMode === 'compact' ? (
+                          <ChatListItem
+                            key={getRecentChatKey(item)}
+                            item={item}
+                            onClick={() => handleChatClick(item)}
+                            onDelete={
+                              item.is_group
+                                ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
+                                : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
+                            }
+                          />
+                        ) : (
+                          <ChatCard
+                            key={getRecentChatKey(item)}
+                            item={item}
+                            onClick={() => handleChatClick(item)}
+                            onDelete={
+                              item.is_group
+                                ? (item.chat_count === 1 ? () => handleDeleteChat(item) : undefined)
+                                : () => (item.chat_count > 1 ? handleDeleteAllChats(item) : handleDeleteChat(item))
+                            }
+                          />
+                        )
+                      ))}
+                    </div>
                   )
-                ))}
+                })}
               </motion.div>
             )}
           </AnimatePresence>
@@ -857,14 +973,9 @@ export default function LandingPage() {
           )}
         </main>
 
-        <motion.footer
-          className={styles.footer}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.6 }}
-        >
+        <footer className={styles.footer}>
           <p>{t('footer')}</p>
-        </motion.footer>
+        </footer>
       </motion.div>
     </div>
   )

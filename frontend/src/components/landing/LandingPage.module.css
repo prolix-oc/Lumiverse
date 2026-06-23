@@ -308,6 +308,19 @@
   align-items: start;
 }
 
+.virtualChats {
+  position: relative;
+  width: 100%;
+}
+
+.virtualRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .chatsLeaving {
   pointer-events: none;
 }

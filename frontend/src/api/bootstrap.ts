@@ -45,7 +45,12 @@ export interface BootstrapPayload {
     isPrivileged: boolean
     tools: ToolRegistration[]
   }
-  /** First landing-page recent-chats page, sized by landingPageChatsDisplayed. */
+  /** Response-shape placeholder; `/bootstrap/landing` owns recent-chat preload. */
+  recentChats: PaginatedResult<GroupedRecentChat>
+}
+
+export interface LandingBootstrapPayload {
+  startupSettings: StartupSettings
   recentChats: PaginatedResult<GroupedRecentChat>
 }
 
@@ -55,6 +60,13 @@ export interface BootstrapResponse {
   errors: Record<string, string>
 }
 
+export interface LandingBootstrapResponse {
+  payload: LandingBootstrapPayload
+  /** Per-section failures. Missing sections arrive with empty defaults. */
+  errors: Record<string, string>
+}
+
 export const bootstrapApi = {
   fetch: () => get<BootstrapResponse>('/bootstrap'),
+  fetchLanding: () => get<LandingBootstrapResponse>('/bootstrap/landing'),
 }
