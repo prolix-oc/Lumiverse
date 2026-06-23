@@ -369,3 +369,10 @@
     will-change: auto;
   }
 }
+
+/* ── Scroll-time CSS suppression ── */
+:global([data-scrolling]) .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition: none !important;
+}

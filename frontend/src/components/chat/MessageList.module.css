@@ -16,15 +16,10 @@
   padding-top: 0;
 }
 
-/* Strip expensive glass/backdrop-filter effects from message cards while the
-   user is scrolling. This is the dominant cost in image/HTML-heavy chats. */
-.list[data-scrolling] :global(.card),
-.list[data-scrolling] :global(.codeBlock) {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: 0 0 0 0.5px var(--lcs-glass-border) !important;
-  transition: none !important;
-}
+/* Scroll-time CSS suppression is handled in each component's own module CSS
+   via :global([data-scrolling]) selectors, since CSS module class names are
+   hashed and can't be targeted from this file. See BubbleMessage.module.css
+   and MessageContent.module.css for the actual rules. */
 
 .list::-webkit-scrollbar {
   width: 5px;

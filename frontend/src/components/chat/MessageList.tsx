@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range, type Virtualizer } from '@tanstack/react-virtual'
+import { useScrollGate } from '@/hooks/useScrollGate'
 import { useChunkedMessages } from '@/hooks/useChunkedMessages'
 import {
   subscribeTagInterceptorRegistry,
@@ -131,8 +132,8 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
 export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const wasScrollingRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  useScrollGate(scrollRef)
   const isPinnedRef = useRef(true)
   const isProgrammaticScrollRef = useRef(false)
   // scrollTop recorded at the moment of a programmatic write. A scroll event
@@ -563,18 +564,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     paddingEnd: inputSafeZone,
     scrollPaddingEnd: inputSafeZone,
     directDomUpdates: true,
-    useScrollendEvent: true,
-    isScrollingResetDelay: 120,
     onChange: (instance, sync) => {
-      const scrolling = instance.isScrolling
-      if (scrolling !== wasScrollingRef.current) {
-        wasScrollingRef.current = scrolling
-        const el = scrollRef.current
-        if (el) {
-          if (scrolling) el.setAttribute('data-scrolling', '')
-          else el.removeAttribute('data-scrolling')
-        }
-      }
       if (!sync) scheduleInitialScrollToEnd(instance)
     },
   })
