@@ -85,13 +85,15 @@ export default function CharacterToolbar({
 
   useEffect(() => {
     if (!sortOpen) return
-    const handler = (e: MouseEvent) => {
+    const openedAt = Date.now()
+    const handler = (e: PointerEvent) => {
+      if (e.timeStamp < openedAt + 100) return
       if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
         setSortOpen(false)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
   }, [sortOpen])
 
   return (

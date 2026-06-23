@@ -371,6 +371,39 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
   })
 }
 
+// ── Mobile layout recovery after native popups / backgrounding ──
+// iOS/Android can leave position:fixed/sticky elements shifted after system
+// file pickers, share sheets, or backgrounding. Blur any focused editable
+// control, reset every scroll path the browser may have panned, and re-sync
+// viewport measurements so the app shell snaps back to the viewport.
+if (navigator.maxTouchPoints > 0) {
+  function blurActiveEditable() {
+    if (isEditableElement(document.activeElement)) {
+      ;(document.activeElement as HTMLElement).blur()
+    }
+  }
+
+  function recoverMobileLayout() {
+    blurActiveEditable()
+    if (window.scrollY !== 0 || window.scrollX !== 0) window.scrollTo(0, 0)
+    if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0
+    if (document.body.scrollTop !== 0) document.body.scrollTop = 0
+    scheduleViewportSync()
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) blurActiveEditable()
+    else recoverMobileLayout()
+  })
+
+  window.addEventListener('pagehide', blurActiveEditable)
+  window.addEventListener('pageshow', recoverMobileLayout)
+  window.addEventListener('focus', recoverMobileLayout)
+  // Allow code paths that know a system popup just closed (e.g. file inputs)
+  // to request an explicit recovery even if no page-visibility event fired.
+  window.addEventListener('lumiverse:recover-mobile-layout', recoverMobileLayout)
+}
+
 void initI18n().then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
