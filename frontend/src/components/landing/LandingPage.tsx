@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
@@ -23,7 +23,7 @@ import {
   type DeviceRotationSnapshot,
   type DeviceRotationPermissionState,
 } from '@/lib/deviceRotation'
-import type { GroupedRecentChat } from '@/types/api'
+import type { CharacterPerspectiveLayer, GroupedRecentChat } from '@/types/api'
 import styles from './LandingPage.module.css'
 import clsx from 'clsx'
 import type { TFunction } from 'i18next'
@@ -50,10 +50,52 @@ function getRecentChatKey(item: GroupedRecentChat): string {
   return item.is_group ? item.latest_chat_id : item.character_id
 }
 
-function getPerspectiveLayers(value: unknown): GroupedRecentChat['character_perspective_layers'] | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as GroupedRecentChat['character_perspective_layers']
-    : undefined
+function getPerspectiveLayers(value: unknown): CharacterPerspectiveLayer[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is CharacterPerspectiveLayer => {
+        return Boolean(entry)
+          && typeof entry === 'object'
+          && typeof (entry as CharacterPerspectiveLayer).id === 'string'
+          && typeof (entry as CharacterPerspectiveLayer).image_id === 'string'
+      })
+      .slice(0, 5)
+      .map((entry) => ({
+        ...entry,
+        intensity: typeof entry.intensity === 'number' && Number.isFinite(entry.intensity)
+          ? Math.max(0, Math.min(1.5, entry.intensity))
+          : 0.6,
+      }))
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const legacy = value as Record<string, string | undefined>
+    return [
+      legacy.background ? { id: 'background', image_id: legacy.background, label: 'Background', intensity: 0.15 } : null,
+      legacy.framing ? { id: 'framing', image_id: legacy.framing, label: 'Framing', intensity: 1 } : null,
+      legacy.subject ? { id: 'subject', image_id: legacy.subject, label: 'Subject', intensity: 0.6 } : null,
+    ].filter(Boolean) as CharacterPerspectiveLayer[]
+  }
+
+  return []
+}
+
+function getPerspectiveLayerStyle(index: number, total: number, intensity: number): CSSProperties {
+  const frontness = total <= 1 ? 1 : index / (total - 1)
+  const clampedIntensity = Math.max(0, Math.min(1.5, intensity))
+  const baseScale = 1.015 + frontness * 0.06
+  const hoverScale = baseScale + clampedIntensity * (0.012 + frontness * 0.03)
+  return {
+    '--layer-origin-depth': `${-12 + frontness * 58}px`,
+    '--layer-scale': baseScale.toFixed(3),
+    '--layer-hover-depth-target': `${clampedIntensity * (1 + frontness * 18)}px`,
+    '--layer-hover-scale': hoverScale.toFixed(3),
+    '--layer-motion-x': `${clampedIntensity * (2 + frontness * 11)}px`,
+    '--layer-motion-y': `${clampedIntensity * (1.5 + frontness * 8.5)}px`,
+    '--layer-motion-depth': `${clampedIntensity * (-1 + frontness * 4)}px`,
+    '--layer-tilt-amount': `${clampedIntensity * (0.15 + frontness * 0.85)}deg`,
+    '--layer-tilt-amount-neg': `${clampedIntensity * (-0.15 - frontness * 0.85)}deg`,
+  } as CSSProperties
 }
 
 interface RecentChatAvatarProps {
@@ -86,13 +128,12 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
 
   const imageClassName = variant === 'card' ? styles.cardImage : styles.listAvatar
   const fallbackClassName = clsx(styles.cardAvatarFallback, variant === 'compact' && styles.listAvatarFallback)
-  const perspectiveLayers = item.character_perspective_layers
-    ?? getPerspectiveLayers(liveCharacter?.extensions?.landing_perspective_layers)
+  const perspectiveLayers = item.character_perspective_layers?.length
+    ? getPerspectiveLayers(item.character_perspective_layers)
+    : getPerspectiveLayers(liveCharacter?.extensions?.landing_perspective_layers)
   const hasPerspectiveStack = variant === 'card'
     && !isGroup
-    && !!perspectiveLayers?.background
-    && !!perspectiveLayers?.framing
-    && !!perspectiveLayers?.subject
+    && perspectiveLayers.length >= 2
 
   if (isGroup) {
     return (
@@ -124,27 +165,20 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
   if (hasPerspectiveStack) {
     return (
       <div className={clsx(imageClassName, styles.perspectiveStack)}>
-        <img
-          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerBg)}
-          src={imagesApi.largeUrl(perspectiveLayers.background!)}
-          alt=""
-          loading="lazy"
-          draggable={false}
-        />
-        <img
-          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerFrame)}
-          src={imagesApi.largeUrl(perspectiveLayers.framing!)}
-          alt=""
-          loading="lazy"
-          draggable={false}
-        />
-        <img
-          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerSubject)}
-          src={imagesApi.largeUrl(perspectiveLayers.subject!)}
-          alt={item.character_name}
-          loading="lazy"
-          draggable={false}
-        />
+        {perspectiveLayers.map((layer, index) => (
+          <img
+            key={layer.id || layer.image_id}
+            className={styles.perspectiveLayer}
+            src={imagesApi.largeUrl(layer.image_id)}
+            alt={index === perspectiveLayers.length - 1 ? item.character_name : ''}
+            loading="lazy"
+            draggable={false}
+            style={{
+              ...getPerspectiveLayerStyle(index, perspectiveLayers.length, layer.intensity),
+              zIndex: index,
+            }}
+          />
+        ))}
         <div className={styles.cardImageOverlay} />
       </div>
     )
@@ -516,6 +550,7 @@ export default function LandingPage() {
   const openModal = useStore((s) => s.openModal)
   const logout = useStore((s) => s.logout)
   const authUser = useStore((s) => s.user)
+  const hasGlobalWallpaper = useStore((s) => Boolean(s.wallpaper.global?.image_id))
   const accountLabel = authUser?.username || authUser?.name || t('account')
 
   const [items, setItems] = useState<GroupedRecentChat[]>([])
@@ -959,13 +994,17 @@ export default function LandingPage() {
 
   return (
     <div className={styles.container} ref={scrollRef}>
-      <div className={styles.bg}>
-        <div className={clsx(styles.bgGlow, styles.bgGlow1)} />
-        <div className={clsx(styles.bgGlow, styles.bgGlow2)} />
-        <div className={clsx(styles.bgGlow, styles.bgGlow3)} />
-      </div>
+      {!hasGlobalWallpaper && (
+        <>
+          <div className={styles.bg}>
+            <div className={clsx(styles.bgGlow, styles.bgGlow1)} />
+            <div className={clsx(styles.bgGlow, styles.bgGlow2)} />
+            <div className={clsx(styles.bgGlow, styles.bgGlow3)} />
+          </div>
 
-      <div className={styles.grid} />
+          <div className={styles.grid} />
+        </>
+      )}
 
       <motion.div
         className={styles.content}

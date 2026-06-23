@@ -21,10 +21,11 @@ export interface Character {
   updated_at: number;
 }
 
-export interface CharacterPerspectiveLayers {
-  background?: string;
-  framing?: string;
-  subject?: string;
+export interface CharacterPerspectiveLayer {
+  id: string;
+  image_id: string;
+  label?: string;
+  intensity: number;
 }
 
 export interface CreateCharacterInput {
@@ -98,7 +99,7 @@ export interface GroupedRecentChat {
   character_name: string;
   character_avatar_path: string | null;
   character_image_id: string | null;
-  character_perspective_layers?: CharacterPerspectiveLayers;
+  character_perspective_layers?: CharacterPerspectiveLayer[];
   latest_chat_id: string;
   latest_chat_name: string;
   updated_at: number;

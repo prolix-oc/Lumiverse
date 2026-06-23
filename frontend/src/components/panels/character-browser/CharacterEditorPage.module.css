@@ -265,6 +265,165 @@
   margin-top: 6px;
 }
 
+.perspectiveStackEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.perspectiveLayerList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perspectiveLayerRow {
+  display: grid;
+  grid-template-columns: 32px 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 12px;
+  background: var(--lumiverse-fill-subtle);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.perspectiveLayerDragging {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  z-index: 2;
+}
+
+.perspectiveLayerDrag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 9px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+}
+
+.perspectiveLayerDrag:active {
+  cursor: grabbing;
+}
+
+.perspectiveLayerDrag:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.perspectiveLayerRowPreview {
+  position: relative;
+  overflow: hidden;
+  min-height: 92px;
+  border-radius: 10px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+}
+
+.perspectiveLayerRowImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.perspectiveLayerRowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.perspectiveLayerRowTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perspectiveLayerNameInput {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+}
+
+.perspectiveLayerNameInput:focus {
+  border-color: var(--lumiverse-primary-050);
+}
+
+.perspectiveLayerSliderRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perspectiveLayerSliderHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.perspectiveLayerEmptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 80px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 12px;
+  color: var(--lumiverse-text-dim);
+  background: var(--lumiverse-fill-subtle);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.perspectiveLayerAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast);
+}
+
+.perspectiveLayerAdd:hover {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+}
+
+.perspectiveLayerAdd:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
 .perspectiveLayerCard {
   min-width: 0;
   overflow: hidden;
@@ -888,7 +1047,7 @@
     max-height: 100%;
     height: 100%;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top, 12px);
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 12px));
   }
 
   .header {

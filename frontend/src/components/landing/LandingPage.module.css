@@ -473,6 +473,13 @@
   --layer-mouse-tilt-x: 0deg;
   --layer-mouse-tilt-y: 0deg;
   --layer-hover-depth: 0px;
+  --layer-hover-depth-target: 0px;
+  --layer-hover-scale: var(--layer-scale);
+  --layer-motion-x: 0px;
+  --layer-motion-y: 0px;
+  --layer-motion-depth: 0px;
+  --layer-tilt-amount: 0deg;
+  --layer-tilt-amount-neg: 0deg;
   --layer-scale: 1;
   position: absolute;
   inset: -8%;
@@ -494,41 +501,13 @@
   transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.perspectiveLayerBg {
-  z-index: 0;
-  --layer-origin-depth: -10px;
-  --layer-scale: 1.015;
-}
-
-.perspectiveLayerFrame {
-  z-index: 1;
-  --layer-origin-depth: 22px;
-  --layer-scale: 1.045;
-}
-
-.perspectiveLayerSubject {
-  z-index: 2;
-  --layer-origin-depth: 44px;
-  --layer-scale: 1.075;
-}
-
 .perspectiveStack .cardImageOverlay {
   z-index: 3;
 }
 
-.card:hover .perspectiveLayerBg {
-  --layer-hover-depth: -1px;
-  --layer-scale: 1.025;
-}
-
-.card:hover .perspectiveLayerFrame {
-  --layer-hover-depth: 10px;
-  --layer-scale: 1.095;
-}
-
-.card:hover .perspectiveLayerSubject {
-  --layer-hover-depth: 18px;
-  --layer-scale: 1.145;
+.card:hover .perspectiveLayer {
+  --layer-hover-depth: var(--layer-hover-depth-target);
+  --layer-scale: var(--layer-hover-scale);
 }
 
 .cardTilt.tilting .perspectiveLayer {
@@ -536,28 +515,12 @@
   will-change: transform;
 }
 
-.cardTilt.tilting .perspectiveLayerBg {
-  --layer-mouse-x: calc(var(--tilt-x, 0) * 2px);
-  --layer-mouse-y: calc(var(--tilt-y, 0) * 1.5px);
-  --layer-mouse-depth: calc(var(--tilt-y, 0) * -1px);
-  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 0.15deg);
-  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -0.15deg);
-}
-
-.cardTilt.tilting .perspectiveLayerFrame {
-  --layer-mouse-x: calc(var(--tilt-x, 0) * 13px);
-  --layer-mouse-y: calc(var(--tilt-y, 0) * 10px);
-  --layer-mouse-depth: calc(var(--tilt-y, 0) * 3px);
-  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 1deg);
-  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -1deg);
-}
-
-.cardTilt.tilting .perspectiveLayerSubject {
-  --layer-mouse-x: calc(var(--tilt-x, 0) * 8px);
-  --layer-mouse-y: calc(var(--tilt-y, 0) * 6px);
-  --layer-mouse-depth: calc(var(--tilt-y, 0) * 2px);
-  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 0.65deg);
-  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -0.65deg);
+.cardTilt.tilting .perspectiveLayer {
+  --layer-mouse-x: calc(var(--tilt-x, 0) * var(--layer-motion-x));
+  --layer-mouse-y: calc(var(--tilt-y, 0) * var(--layer-motion-y));
+  --layer-mouse-depth: calc(var(--tilt-y, 0) * var(--layer-motion-depth));
+  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * var(--layer-tilt-amount));
+  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * var(--layer-tilt-amount-neg));
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -462,7 +462,7 @@
     max-height: 100%;
     height: 100%;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top, 0);
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   }
 
   .body {

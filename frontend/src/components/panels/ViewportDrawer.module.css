@@ -2,7 +2,7 @@
 
 .wrapper {
   position: fixed;
-  top: env(safe-area-inset-top, 0px);
+  top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   /* The `bottom: calc(0 - var(--ios-viewport-offset))` pattern used on pure
      backdrops (ModalShell, PackBrowser overlay, etc.) is defensive viewport
      overhang — harmless when the element is just a dimmed layer, but the

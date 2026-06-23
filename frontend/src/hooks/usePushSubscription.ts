@@ -19,6 +19,10 @@ const DEFAULT_PUSH_CAPABILITY: PushCapability = {
 
 const SERVICE_WORKER_READY_TIMEOUT_MS = 15_000
 const PUSH_BROWSER_OP_TIMEOUT_MS = 20_000
+const PUSH_SUBSCRIPTION_STATE_TIMEOUT_MESSAGE = 'Timed out while checking the browser push subscription state.'
+const PUSH_SUBSCRIBE_TIMEOUT_MESSAGE = 'Timed out while the browser was creating the push subscription.'
+const CHROMIUM_PUSH_TIMEOUT_REASON =
+  'Chromium timed out while contacting its push service. On macOS this is usually a stuck or blocked Google push/FCM connection; try Chrome/Edge stable, disable VPN/firewall filtering for Google push endpoints, or reinstall/reset the PWA notification permission.'
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return Promise.race([
@@ -79,7 +83,7 @@ async function getExistingPushSubscription(reg: ServiceWorkerRegistration): Prom
   return withTimeout(
     reg.pushManager.getSubscription(),
     PUSH_BROWSER_OP_TIMEOUT_MS,
-    'Timed out while checking the browser push subscription state.'
+    PUSH_SUBSCRIPTION_STATE_TIMEOUT_MESSAGE
   )
 }
 
@@ -174,6 +178,12 @@ function describeSubscribeError(error: unknown): string {
     if (error.name === 'NotAllowedError') {
       return 'The browser blocked push registration. Check the site notification permission and OS notification settings.'
     }
+    if (
+      error.message === PUSH_SUBSCRIPTION_STATE_TIMEOUT_MESSAGE ||
+      error.message === PUSH_SUBSCRIBE_TIMEOUT_MESSAGE
+    ) {
+      return CHROMIUM_PUSH_TIMEOUT_REASON
+    }
     if (error.message) return error.message
   }
   return 'Failed to subscribe this browser for push notifications.'
@@ -249,7 +259,7 @@ export function usePushSubscription() {
             applicationServerKey: urlBase64ToUint8Array(publicKey),
           }),
           PUSH_BROWSER_OP_TIMEOUT_MS,
-          'Timed out while the browser was creating the push subscription.'
+          PUSH_SUBSCRIBE_TIMEOUT_MESSAGE
         )
       })()
 

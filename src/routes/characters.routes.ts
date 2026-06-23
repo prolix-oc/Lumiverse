@@ -580,6 +580,47 @@ app.post("/:id/avatar", async (c) => {
   return c.json(updated);
 });
 
+app.post("/:id/perspective-layers", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  if (!svc.getCharacter(userId, characterId)) return c.json({ error: "Not found" }, 404);
+
+  const formData = await c.req.formData();
+  const file = formData.get("image") as File | null;
+  if (!file) return c.json({ error: "image file is required" }, 400);
+  if (typeof file.type === "string" && file.type && !file.type.startsWith("image/")) {
+    return c.json({ error: "image file is required" }, 400);
+  }
+
+  const label = formData.get("label");
+  const intensityRaw = formData.get("intensity");
+  const intensity = typeof intensityRaw === "string" ? Number(intensityRaw) : undefined;
+
+  try {
+    const updated = await svc.addCharacterPerspectiveLayer(userId, characterId, file, {
+      label: typeof label === "string" ? label : undefined,
+      intensity,
+    });
+    if (!updated) return c.json({ error: "Not found" }, 404);
+    return c.json(updated, 201);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Invalid image" }, 400);
+  }
+});
+
+app.put("/:id/perspective-layers", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || !Array.isArray((body as any).layers)) {
+    return c.json({ error: "layers array is required" }, 400);
+  }
+
+  const updated = svc.updateCharacterPerspectiveLayers(userId, characterId, (body as any).layers);
+  if (!updated) return c.json({ error: "Not found" }, 404);
+  return c.json(updated);
+});
+
 app.post("/:id/perspective-layers/:layer", async (c) => {
   const userId = c.get("userId");
   const characterId = c.req.param("id");
@@ -606,10 +647,11 @@ app.post("/:id/perspective-layers/:layer", async (c) => {
 app.delete("/:id/perspective-layers/:layer", (c) => {
   const userId = c.get("userId");
   const characterId = c.req.param("id");
-  const layer = c.req.param("layer") as svc.PerspectiveLayerKind;
-  if (!PERSPECTIVE_LAYERS.has(layer)) return c.json({ error: "Invalid layer" }, 400);
+  const layer = c.req.param("layer");
 
-  const updated = svc.clearCharacterPerspectiveLayer(userId, characterId, layer);
+  const updated = PERSPECTIVE_LAYERS.has(layer as svc.PerspectiveLayerKind)
+    ? svc.clearCharacterPerspectiveLayer(userId, characterId, layer as svc.PerspectiveLayerKind)
+    : svc.deleteCharacterPerspectiveLayer(userId, characterId, layer);
   if (!updated) return c.json({ error: "Not found" }, 404);
   return c.json(updated);
 });

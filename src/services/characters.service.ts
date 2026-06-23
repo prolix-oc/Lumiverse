@@ -402,6 +402,26 @@ export type CharacterSortMode = "recent" | "discover";
 
 export type PerspectiveLayerKind = "background" | "framing" | "subject";
 export const LANDING_PERSPECTIVE_LAYERS_KEY = "landing_perspective_layers";
+export const MAX_LANDING_PERSPECTIVE_LAYERS = 5;
+
+export interface LandingPerspectiveLayer {
+  id: string;
+  image_id: string;
+  label?: string;
+  intensity: number;
+}
+
+export interface LandingPerspectiveLayerInput {
+  id?: string;
+  image_id: string;
+  label?: string;
+  intensity?: number;
+}
+
+function clampPerspectiveIntensity(value: unknown): number {
+  const num = typeof value === "number" && Number.isFinite(value) ? value : 0.6;
+  return Math.max(0, Math.min(1.5, Math.round(num * 100) / 100));
+}
 
 export function sanitizePerspectiveLayers(value: unknown): Record<PerspectiveLayerKind, string | undefined> {
   const raw = value && typeof value === "object" && !Array.isArray(value)
@@ -412,6 +432,37 @@ export function sanitizePerspectiveLayers(value: unknown): Record<PerspectiveLay
     framing: typeof raw.framing === "string" ? raw.framing : undefined,
     subject: typeof raw.subject === "string" ? raw.subject : undefined,
   };
+}
+
+export function normalizeLandingPerspectiveLayers(value: unknown): LandingPerspectiveLayer[] {
+  if (Array.isArray(value)) {
+    const seen = new Set<string>();
+    const layers: LandingPerspectiveLayer[] = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const entry = raw as Record<string, unknown>;
+      const imageId = typeof entry.image_id === "string" ? entry.image_id : null;
+      if (!imageId || seen.has(imageId)) continue;
+      seen.add(imageId);
+      const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID();
+      const label = typeof entry.label === "string" && entry.label.trim() ? entry.label.trim().slice(0, 80) : undefined;
+      layers.push({ id, image_id: imageId, label, intensity: clampPerspectiveIntensity(entry.intensity) });
+      if (layers.length >= MAX_LANDING_PERSPECTIVE_LAYERS) break;
+    }
+    return layers;
+  }
+
+  const legacy = sanitizePerspectiveLayers(value);
+  const layers: LandingPerspectiveLayer[] = [];
+  if (legacy.background) layers.push({ id: "background", image_id: legacy.background, label: "Background", intensity: 0.15 });
+  if (legacy.framing) layers.push({ id: "framing", image_id: legacy.framing, label: "Framing", intensity: 1 });
+  if (legacy.subject) layers.push({ id: "subject", image_id: legacy.subject, label: "Subject", intensity: 0.6 });
+  return layers;
+}
+
+function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLayer[] {
+  if (!Array.isArray(inputs)) return [];
+  return normalizeLandingPerspectiveLayers(inputs).slice(0, MAX_LANDING_PERSPECTIVE_LAYERS);
 }
 
 function rowToCharacter(row: any): Character {
@@ -730,15 +781,73 @@ export async function setCharacterPerspectiveLayer(
   layer: PerspectiveLayerKind,
   file: File,
 ): Promise<Character | null> {
+  const updated = await addCharacterPerspectiveLayer(userId, id, file, {
+    id: layer,
+    label: layer[0].toUpperCase() + layer.slice(1),
+    intensity: layer === "background" ? 0.15 : layer === "subject" ? 0.6 : 1,
+  });
+  if (!updated) return null;
+  const layers = normalizeLandingPerspectiveLayers(updated.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  const replacement = layers[layers.length - 1];
+  const next = layers.filter((entry) => entry.id !== layer || entry.image_id === replacement.image_id);
+  return updateCharacterPerspectiveLayers(userId, id, next);
+}
+
+export async function addCharacterPerspectiveLayer(
+  userId: string,
+  id: string,
+  file: File,
+  input: { label?: string; intensity?: number; id?: string } = {},
+): Promise<Character | null> {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
+
+  const currentLayers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  if (currentLayers.length >= MAX_LANDING_PERSPECTIVE_LAYERS) {
+    throw new Error(`Maximum ${MAX_LANDING_PERSPECTIVE_LAYERS} perspective layers`);
+  }
 
   const oldImageIds = collectCharacterImageIds(existing);
   const image = await imagesSvc.uploadOptimizedWebpImage(userId, file, { owner_character_id: id });
   const extensions = { ...(existing.extensions ?? {}) };
-  const layers = sanitizePerspectiveLayers(extensions[LANDING_PERSPECTIVE_LAYERS_KEY]);
-  layers[layer] = image.id;
-  extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
+  const label = typeof input.label === "string" && input.label.trim()
+    ? input.label.trim().slice(0, 80)
+    : `Layer ${currentLayers.length + 1}`;
+  extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = [
+    ...currentLayers,
+    {
+      id: input.id?.trim() || crypto.randomUUID(),
+      image_id: image.id,
+      label,
+      intensity: clampPerspectiveIntensity(input.intensity),
+    },
+  ];
+
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  const updated = getCharacter(userId, id);
+  if (!updated) return null;
+  const newImageIds = collectCharacterImageIds(updated);
+  cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
+  eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function updateCharacterPerspectiveLayers(
+  userId: string,
+  id: string,
+  inputs: unknown,
+): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+
+  const oldImageIds = collectCharacterImageIds(existing);
+  const extensions = { ...(existing.extensions ?? {}) };
+  const layers = sanitizePerspectiveLayerInputs(inputs);
+  if (layers.length > 0) extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
+  else delete extensions[LANDING_PERSPECTIVE_LAYERS_KEY];
 
   getDb()
     .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
@@ -762,13 +871,10 @@ export function clearCharacterPerspectiveLayer(
 
   const oldImageIds = collectCharacterImageIds(existing);
   const extensions = { ...(existing.extensions ?? {}) };
-  const layers = sanitizePerspectiveLayers(extensions[LANDING_PERSPECTIVE_LAYERS_KEY]);
-  delete layers[layer];
-  if (layers.background || layers.framing || layers.subject) {
-    extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
-  } else {
-    delete extensions[LANDING_PERSPECTIVE_LAYERS_KEY];
-  }
+  const layers = normalizeLandingPerspectiveLayers(extensions[LANDING_PERSPECTIVE_LAYERS_KEY])
+    .filter((entry) => entry.id !== layer);
+  if (layers.length > 0) extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
+  else delete extensions[LANDING_PERSPECTIVE_LAYERS_KEY];
 
   getDb()
     .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
@@ -780,6 +886,13 @@ export function clearCharacterPerspectiveLayer(
   cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
   return updated;
+}
+
+export function deleteCharacterPerspectiveLayer(userId: string, id: string, layerId: string): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+  const layers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  return updateCharacterPerspectiveLayers(userId, id, layers.filter((entry) => entry.id !== layerId));
 }
 
 export function duplicateCharacter(userId: string, id: string): Character | null {

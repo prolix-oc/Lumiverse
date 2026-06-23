@@ -2,7 +2,7 @@ import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, sanitizePerspectiveLayers } from "./characters.service";
+import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
@@ -616,8 +616,8 @@ function readPerspectiveLayers(extensions: unknown): GroupedRecentChat["characte
   const ext = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
-  const layers = sanitizePerspectiveLayers(ext[LANDING_PERSPECTIVE_LAYERS_KEY]);
-  return layers.background && layers.framing && layers.subject ? layers : undefined;
+  const layers = normalizeLandingPerspectiveLayers(ext[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  return layers.length >= 2 ? layers : undefined;
 }
 
 function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentChatCharacterInfo> {

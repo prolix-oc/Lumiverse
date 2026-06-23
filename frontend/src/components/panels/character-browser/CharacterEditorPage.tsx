@@ -3,12 +3,29 @@ import { useTranslation } from 'react-i18next'
 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2 } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical } from 'lucide-react'
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
 import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
-import { charactersApi, type CharacterPerspectiveLayerKind } from '@/api/characters'
+import { charactersApi, type CharacterPerspectiveLayerInput } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
 import { imagesApi } from '@/api/images'
 import { personasApi } from '@/api/personas'
@@ -28,11 +45,13 @@ import type { Character, CharacterGalleryItem } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
 import { Button } from '@/components/shared/FormComponents'
+import { RangeSlider } from '@/components/shared/RangeSlider'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type { VoiceRef } from '@/types/api'
 import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import styles from './CharacterEditorPage.module.css'
 import clsx from 'clsx'
 import {
@@ -47,11 +66,7 @@ import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
 
 const DEBOUNCE_MS = 2000
-const PERSPECTIVE_LAYERS: Array<{ id: CharacterPerspectiveLayerKind; label: string; hint: string }> = [
-  { id: 'background', label: 'Background', hint: 'Farthest image in the hover stack' },
-  { id: 'framing', label: 'Framing', hint: 'Middle cutout, props, or foreground frame' },
-  { id: 'subject', label: 'Subject', hint: 'Closest character or focal layer' },
-]
+const MAX_PERSPECTIVE_LAYERS = 5
 
 type TabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
 
@@ -83,6 +98,82 @@ function GalleryGridItem({ item, onRemove, onOpenMenu }: GalleryGridItemProps) {
       >
         <X size={12} />
       </button>
+    </div>
+  )
+}
+
+interface SortablePerspectiveLayerProps {
+  layer: CharacterPerspectiveLayerInput
+  index: number
+  disabled: boolean
+  onLabelChange: (layerId: string, label: string) => void
+  onIntensityChange: (layerId: string, intensity: number) => void
+  onRemove: (layerId: string) => void
+}
+
+function SortablePerspectiveLayer({ layer, index, disabled, onLabelChange, onIntensityChange, onRemove }: SortablePerspectiveLayerProps) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: layer.id, disabled })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
+  const [liveIntensity, setLiveIntensity] = useState<number | null>(null)
+  const [draftLabel, setDraftLabel] = useState(layer.label || '')
+  const intensity = liveIntensity ?? layer.intensity
+
+  useEffect(() => {
+    setDraftLabel(layer.label || '')
+  }, [layer.label])
+
+  const commitLabel = useCallback(() => {
+    if (draftLabel !== (layer.label || '')) onLabelChange(layer.id, draftLabel)
+  }, [draftLabel, layer.id, layer.label, onLabelChange])
+
+  return (
+    <div ref={setNodeRef} style={style} className={clsx(styles.perspectiveLayerRow, isDragging && styles.perspectiveLayerDragging)}>
+      <button type="button" className={styles.perspectiveLayerDrag} disabled={disabled} {...attributes} {...listeners} title="Drag to reorder">
+        <GripVertical size={16} />
+      </button>
+      <div className={styles.perspectiveLayerRowPreview}>
+        <LazyImage
+          src={imagesApi.smallUrl(layer.image_id)}
+          alt={layer.label || `Layer ${index + 1}`}
+          className={styles.perspectiveLayerRowImg}
+          fallback={<div className={styles.perspectiveLayerEmpty}><ImagePlus size={16} /></div>}
+        />
+      </div>
+      <div className={styles.perspectiveLayerRowBody}>
+        <div className={styles.perspectiveLayerRowTop}>
+          <input
+            type="text"
+            className={styles.perspectiveLayerNameInput}
+            value={draftLabel}
+            placeholder={`Layer ${index + 1}`}
+            onChange={(e) => setDraftLabel(e.target.value)}
+            onBlur={commitLabel}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+          />
+          <button type="button" className={styles.perspectiveLayerRemove} onClick={() => onRemove(layer.id)} title="Remove layer">
+            <X size={12} />
+          </button>
+        </div>
+        <div className={styles.perspectiveLayerSliderRow}>
+          <div className={styles.perspectiveLayerSliderHeader}>
+            <span>Parallax strength</span>
+            <span>{intensity.toFixed(2)}x</span>
+          </div>
+          <RangeSlider
+            min={0}
+            max={1.5}
+            step={0.05}
+            value={layer.intensity}
+            onDragValue={setLiveIntensity}
+            onCommit={(value) => {
+              setLiveIntensity(null)
+              onIntensityChange(layer.id, value)
+            }}
+          />
+        </div>
+      </div>
     </div>
   )
 }
@@ -152,14 +243,20 @@ export default function CharacterEditorPage() {
   const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
-  const [perspectiveLayerProgress, setPerspectiveLayerProgress] = useState<Partial<Record<CharacterPerspectiveLayerKind, number>>>({})
+  const [perspectiveLayerProgress, setPerspectiveLayerProgress] = useState<number | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const perspectiveLayerFileRef = useRef<HTMLInputElement>(null)
   const galleryFileRef = useRef<HTMLInputElement>(null)
   const savingTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const lastSyncedId = useRef<string | null>(null)
 
   const close = useCallback(() => setEditingCharacterId(null), [setEditingCharacterId])
+  const perspectiveLayerSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   // Escape to close
   useEffect(() => {
@@ -716,43 +813,79 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
-  const perspectiveLayers = useMemo(() => {
+  const perspectiveLayers = useMemo<CharacterPerspectiveLayerInput[]>(() => {
     const raw = character?.extensions?.landing_perspective_layers
-    return raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? raw as Partial<Record<CharacterPerspectiveLayerKind, string>>
-      : {}
+    if (Array.isArray(raw)) {
+      return raw
+        .filter((entry): entry is CharacterPerspectiveLayerInput => {
+          return Boolean(entry)
+            && typeof entry === 'object'
+            && typeof (entry as CharacterPerspectiveLayerInput).id === 'string'
+            && typeof (entry as CharacterPerspectiveLayerInput).image_id === 'string'
+        })
+        .slice(0, MAX_PERSPECTIVE_LAYERS)
+        .map((entry) => ({
+          id: entry.id,
+          image_id: entry.image_id,
+          label: typeof entry.label === 'string' ? entry.label : undefined,
+          intensity: typeof entry.intensity === 'number' && Number.isFinite(entry.intensity)
+            ? Math.max(0, Math.min(1.5, entry.intensity))
+            : 0.6,
+        }))
+    }
+    if (raw && typeof raw === 'object') {
+      const legacy = raw as Record<string, string | undefined>
+      return [
+        legacy.background ? { id: 'background', image_id: legacy.background, label: 'Background', intensity: 0.15 } : null,
+        legacy.framing ? { id: 'framing', image_id: legacy.framing, label: 'Framing', intensity: 1 } : null,
+        legacy.subject ? { id: 'subject', image_id: legacy.subject, label: 'Subject', intensity: 0.6 } : null,
+      ].filter(Boolean) as CharacterPerspectiveLayerInput[]
+    }
+    return []
   }, [character?.extensions?.landing_perspective_layers])
 
-  const handlePerspectiveLayerSelected = useCallback(
-    async (layer: CharacterPerspectiveLayerKind, e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      e.target.value = ''
-      if (!file || !editingCharacterId) return
-      setPerspectiveLayerProgress((prev) => ({ ...prev, [layer]: 0 }))
-      try {
-        const updated = await charactersApi.uploadPerspectiveLayer(editingCharacterId, layer, file, (p) => {
-          setPerspectiveLayerProgress((prev) => ({ ...prev, [layer]: p }))
-        })
-        updateCharInStore(editingCharacterId, updated)
-      } catch (err) {
-        console.error('[Editor] Perspective layer upload failed:', err)
-        toast.error('Perspective layer upload failed')
-      } finally {
-        setPerspectiveLayerProgress((prev) => {
-          const next = { ...prev }
-          delete next[layer]
-          return next
-        })
-      }
+  const savePerspectiveLayers = useCallback(
+    async (layers: CharacterPerspectiveLayerInput[]) => {
+      if (!editingCharacterId) return
+      const updated = await charactersApi.updatePerspectiveLayers(editingCharacterId, layers)
+      updateCharInStore(editingCharacterId, updated)
     },
     [editingCharacterId, updateCharInStore]
   )
 
+  const handlePerspectiveLayerSelected = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId) return
+      if (perspectiveLayers.length >= MAX_PERSPECTIVE_LAYERS) {
+        toast.error(`Maximum ${MAX_PERSPECTIVE_LAYERS} landing layers`)
+        return
+      }
+      setPerspectiveLayerProgress(0)
+      try {
+        const updated = await charactersApi.addPerspectiveLayer(
+          editingCharacterId,
+          file,
+          { label: `Layer ${perspectiveLayers.length + 1}`, intensity: perspectiveLayers.length === 0 ? 0.2 : 0.7 },
+          setPerspectiveLayerProgress,
+        )
+        updateCharInStore(editingCharacterId, updated)
+      } catch (err) {
+        console.error('[Editor] Perspective layer upload failed:', err)
+        toast.error(err instanceof Error ? err.message : 'Perspective layer upload failed')
+      } finally {
+        setPerspectiveLayerProgress(null)
+      }
+    },
+    [editingCharacterId, perspectiveLayers.length, updateCharInStore]
+  )
+
   const handleRemovePerspectiveLayer = useCallback(
-    async (layer: CharacterPerspectiveLayerKind) => {
+    async (layerId: string) => {
       if (!editingCharacterId) return
       try {
-        const updated = await charactersApi.deletePerspectiveLayer(editingCharacterId, layer)
+        const updated = await charactersApi.removePerspectiveLayer(editingCharacterId, layerId)
         updateCharInStore(editingCharacterId, updated)
       } catch (err) {
         console.error('[Editor] Perspective layer remove failed:', err)
@@ -760,6 +893,32 @@ export default function CharacterEditorPage() {
       }
     },
     [editingCharacterId, updateCharInStore]
+  )
+
+  const handlePerspectiveLayerDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      const oldIndex = perspectiveLayers.findIndex((layer) => layer.id === active.id)
+      const newIndex = perspectiveLayers.findIndex((layer) => layer.id === over.id)
+      if (oldIndex < 0 || newIndex < 0) return
+      void savePerspectiveLayers(arrayMove(perspectiveLayers, oldIndex, newIndex))
+    },
+    [perspectiveLayers, savePerspectiveLayers]
+  )
+
+  const handlePerspectiveLayerLabelChange = useCallback(
+    (layerId: string, label: string) => {
+      void savePerspectiveLayers(perspectiveLayers.map((layer) => layer.id === layerId ? { ...layer, label } : layer))
+    },
+    [perspectiveLayers, savePerspectiveLayers]
+  )
+
+  const handlePerspectiveLayerIntensityChange = useCallback(
+    (layerId: string, intensity: number) => {
+      void savePerspectiveLayers(perspectiveLayers.map((layer) => layer.id === layerId ? { ...layer, intensity } : layer))
+    },
+    [perspectiveLayers, savePerspectiveLayers]
   )
 
   // Actions
@@ -1143,59 +1302,56 @@ export default function CharacterEditorPage() {
                       <div className={styles.fieldGroup}>
                         <span className={styles.fieldLabel}>Landing perspective stack</span>
                         <span className={styles.fieldHelper}>
-                          Upload all three WebP-optimized layers to replace this character's avatar on landing-page cards only.
+                          Add up to five WebP-optimized layers. Drag to reorder from back to front; each layer controls its own parallax strength on landing-page cards only.
                         </span>
-                        <div className={styles.perspectiveLayerGrid}>
-                          {PERSPECTIVE_LAYERS.map((layer) => {
-                            const imageId = perspectiveLayers[layer.id]
-                            const progress = perspectiveLayerProgress[layer.id]
-                            return (
-                              <div key={layer.id} className={styles.perspectiveLayerCard}>
-                                <div className={styles.perspectiveLayerPreview}>
-                                  {imageId ? (
-                                    <LazyImage
-                                      src={imagesApi.largeUrl(imageId)}
-                                      alt={layer.label}
-                                      className={styles.perspectiveLayerImg}
-                                      fallback={<div className={styles.perspectiveLayerEmpty}><ImagePlus size={18} /></div>}
+                        <div className={styles.perspectiveStackEditor}>
+                          {perspectiveLayers.length > 0 ? (
+                            <DndContext sensors={perspectiveLayerSensors} collisionDetection={closestCenter} onDragEnd={handlePerspectiveLayerDragEnd}>
+                              <SortableContext items={perspectiveLayers.map((layer) => layer.id)} strategy={verticalListSortingStrategy}>
+                                <div className={styles.perspectiveLayerList}>
+                                  {perspectiveLayers.map((layer, index) => (
+                                    <SortablePerspectiveLayer
+                                      key={layer.id}
+                                      layer={layer}
+                                      index={index}
+                                      disabled={perspectiveLayers.length < 2}
+                                      onLabelChange={handlePerspectiveLayerLabelChange}
+                                      onIntensityChange={handlePerspectiveLayerIntensityChange}
+                                      onRemove={handleRemovePerspectiveLayer}
                                     />
-                                  ) : (
-                                    <div className={styles.perspectiveLayerEmpty}><ImagePlus size={18} /></div>
-                                  )}
-                                  {progress !== undefined && (
-                                    <div className={styles.perspectiveLayerBusy}>{progress}%</div>
-                                  )}
+                                  ))}
                                 </div>
-                                <div className={styles.perspectiveLayerBody}>
-                                  <span className={styles.perspectiveLayerTitle}>{layer.label}</span>
-                                  <span className={styles.perspectiveLayerHint}>{layer.hint}</span>
-                                  <div className={styles.perspectiveLayerActions}>
-                                    <label className={styles.perspectiveLayerUpload}>
-                                      <Upload size={12} />
-                                      {imageId ? 'Replace' : 'Upload'}
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        className={styles.hiddenInput}
-                                        disabled={progress !== undefined}
-                                        onChange={(e) => handlePerspectiveLayerSelected(layer.id, e)}
-                                      />
-                                    </label>
-                                    {imageId && (
-                                      <button
-                                        type="button"
-                                        className={styles.perspectiveLayerRemove}
-                                        onClick={() => handleRemovePerspectiveLayer(layer.id)}
-                                        disabled={progress !== undefined}
-                                      >
-                                        <X size={12} />
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })}
+                              </SortableContext>
+                            </DndContext>
+                          ) : (
+                            <div className={styles.perspectiveLayerEmptyState}>
+                              <ImagePlus size={18} />
+                              <span>No landing layers yet.</span>
+                            </div>
+                          )}
+
+                          <button
+                            type="button"
+                            className={styles.perspectiveLayerAdd}
+                            disabled={perspectiveLayers.length >= MAX_PERSPECTIVE_LAYERS || perspectiveLayerProgress !== null}
+                            onClick={() => perspectiveLayerFileRef.current?.click()}
+                          >
+                            {perspectiveLayerProgress !== null ? (
+                              <span>{perspectiveLayerProgress}%</span>
+                            ) : (
+                              <>
+                                <Upload size={13} />
+                                Add layer ({perspectiveLayers.length}/{MAX_PERSPECTIVE_LAYERS})
+                              </>
+                            )}
+                          </button>
+                          <input
+                            ref={perspectiveLayerFileRef}
+                            type="file"
+                            accept="image/*"
+                            className={styles.hiddenInput}
+                            onChange={handlePerspectiveLayerSelected}
+                          />
                         </div>
                       </div>
                       <div className={styles.fieldGroup}>

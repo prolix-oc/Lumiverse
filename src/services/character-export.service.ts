@@ -1,7 +1,7 @@
 import sharp from "../utils/sharp-config";
 import { extname } from "path";
 import { zipSync } from "fflate";
-import { getCharacter } from "./characters.service";
+import { LANDING_PERSPECTIVE_LAYERS_KEY, getCharacter, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { listGallery } from "./character-gallery.service";
 import { getImage, getImageFilePath } from "./images.service";
@@ -367,6 +367,7 @@ export interface LumiverseModulesExport {
   };
   alternate_fields?: Record<string, Array<{ id: string; label: string; content: string }>>;
   alternate_avatars?: Array<{ id: string; label: string; path: string }>;
+  landing_perspective_layers?: Array<{ id: string; label?: string; path: string; intensity: number }>;
   world_books?: Record<string, any>[];
   regex_scripts?: import("./character-card.service").BundledRegexScript[];
 }
@@ -495,6 +496,26 @@ export async function exportAsCharx(userId: string, characterId: string): Promis
     modules.alternate_avatars = altAvatars;
   }
 
+  // Landing perspective layers (ordered back → front)
+  const landingLayers = normalizeLandingPerspectiveLayers(character.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  const exportedLandingLayers: Array<{ id: string; label?: string; path: string; intensity: number }> = [];
+  for (const layer of landingLayers) {
+    const img = await readImageBytes(userId, layer.image_id);
+    if (!img) continue;
+    const safeName = sanitizeArchiveName(layer.label || layer.id || "layer");
+    const archivePath = `assets/other/image/landing_layer_${safeName}_${layer.id}${img.ext}`;
+    entries[archivePath] = img.bytes;
+    exportedLandingLayers.push({
+      id: layer.id,
+      ...(layer.label ? { label: layer.label } : {}),
+      path: archivePath,
+      intensity: layer.intensity,
+    });
+  }
+  if (exportedLandingLayers.length > 0) {
+    modules.landing_perspective_layers = exportedLandingLayers;
+  }
+
   // World books (individual Lumiverse-format exports for lossless round-trips)
   const charWorldBookIds = getCharacterWorldBookIds(character.extensions);
   if (charWorldBookIds.length > 0) {
@@ -534,7 +555,7 @@ export async function exportAsCharx(userId: string, characterId: string): Promis
 
   // Only include lumiverse_modules.json if there's content
   const hasModules =
-    modules.expressions || modules.expression_groups || modules.alternate_fields || modules.alternate_avatars || modules.world_books?.length || modules.regex_scripts;
+    modules.expressions || modules.expression_groups || modules.alternate_fields || modules.alternate_avatars || modules.landing_perspective_layers || modules.world_books?.length || modules.regex_scripts;
   if (hasModules) {
     entries["lumiverse_modules.json"] = new TextEncoder().encode(
       JSON.stringify(modules, null, 2)
