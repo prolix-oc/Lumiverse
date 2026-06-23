@@ -8,7 +8,7 @@ import styles from './ImportUrlModal.module.css'
 interface ImportUrlModalProps {
   isOpen: boolean
   onClose: () => void
-  onImport: (url: string) => Promise<void>
+  onImport: (urls: string) => Promise<void>
   loading: boolean
   error: string | null
 }
@@ -21,17 +21,17 @@ export default function ImportUrlModal({
   error,
 }: ImportUrlModalProps) {
   const { t } = useTranslation('panels')
-  const [url, setUrl] = useState('')
+  const [urls, setUrls] = useState('')
   const mouseDownTargetRef = useRef<EventTarget | null>(null)
 
   if (!isOpen) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!url.trim() || loading) return
+    if (!urls.trim() || loading) return
     try {
-      await onImport(url.trim())
-      setUrl('')
+      await onImport(urls.trim())
+      setUrls('')
       onClose()
     } catch {
       // Error is displayed via the error prop
@@ -49,21 +49,21 @@ export default function ImportUrlModal({
           <p className={styles.hint}>
             {t('characterBrowser.importFromUrlHint')}
           </p>
-          <input
-            type="url"
+          <textarea
             className={styles.input}
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            value={urls}
+            onChange={(e) => setUrls(e.target.value)}
             placeholder={t('characterBrowser.importUrlPlaceholder')}
             autoFocus
             disabled={loading}
+            rows={5}
           />
           {error && <div className={styles.error}>{error}</div>}
           <div className={styles.actions}>
             <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={loading}>
               {t('characterBrowser.cancel')}
             </button>
-            <button type="submit" className={styles.importBtn} disabled={!url.trim() || loading}>
+            <button type="submit" className={styles.importBtn} disabled={!urls.trim() || loading}>
               {loading ? <Spinner size={14} /> : null}
               {t('characterBrowser.import')}
             </button>

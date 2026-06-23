@@ -8,12 +8,14 @@ import * as exportSvc from "../services/character-export.service";
 import * as tagLibrarySvc from "../services/tag-library-import.service";
 import * as wbSvc from "../services/world-books.service";
 import * as regexSvc from "../services/regex-scripts.service";
+import * as gallerySvc from "../services/character-gallery.service";
 import { parsePagination } from "../services/pagination";
 import { safeFetch, SSRFError, validateHost } from "../utils/safe-fetch";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
+import { mapWithConcurrency } from "../utils/concurrency";
 
 const app = new Hono();
 const PERSPECTIVE_LAYERS = new Set<svc.PerspectiveLayerKind>(["background", "framing", "subject"]);
@@ -64,6 +66,20 @@ const CHUB_DOMAINS = ["chub.ai", "www.chub.ai", "characterhub.org", "www.charact
 const JANNY_DOMAINS = ["janitorai.com", "www.janitorai.com", "jannyai.com", "www.jannyai.com"];
 
 function parseChubUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!CHUB_DOMAINS.includes(parsed.hostname.toLowerCase())) return null;
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const start = segments[0]?.toLowerCase() === "characters" ? 1 : 0;
+    if (segments.length - start >= 2) {
+      return segments.slice(start, start + 2).map(decodeURIComponent).join("/");
+    }
+    return null;
+  } catch {
+    // Fall through to legacy loose parsing below for pasted strings that URL()
+    // will not accept but still contain a recognizable Chub path.
+  }
+
   const parts = url.split("/");
   let domainIdx = -1;
   for (let i = 0; i < parts.length; i++) {
@@ -77,7 +93,7 @@ function parseChubUrl(url: string): string | null {
   const rest = parts.slice(domainIdx + 1);
   // Strip leading "characters" segment if present
   const start = rest[0]?.toLowerCase() === "characters" ? 1 : 0;
-  const pathParts = rest.slice(start).filter(Boolean);
+  const pathParts = rest.slice(start).map((part) => part.split(/[?#]/, 1)[0]).filter(Boolean);
   if (pathParts.length >= 2) {
     return pathParts.slice(0, 2).join("/");
   }
@@ -99,17 +115,103 @@ function parseJannyUrl(url: string): string | null {
 
 // ─── Chub.ai character fetcher ────────────────────────────────────────────
 
-async function fetchChubCharacter(chubPath: string, userId: string) {
-  const apiUrl = `https://gateway.chub.ai/api/characters/${chubPath}?full=true`;
-  const res = await safeFetch(apiUrl, {
-    timeoutMs: 15_000,
-    headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
-  });
-  if (!res.ok) {
-    throw new Error(`Chub API returned ${res.status}`);
-  }
+const CHUB_API_BASES = ["https://gateway.chub.ai/api", "https://api.chub.ai/api"];
 
-  const data = await res.json() as any;
+async function fetchChubJson(path: string): Promise<Record<string, any>> {
+  let lastStatus = 0;
+  for (const base of CHUB_API_BASES) {
+    const res = await safeFetch(`${base}/${path}`, {
+      timeoutMs: 15_000,
+      maxBytes: 100 * 1024 * 1024,
+      headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
+    });
+    if (res.ok) return await res.json() as Record<string, any>;
+    lastStatus = res.status;
+  }
+  throw new Error(`Chub API returned ${lastStatus || "no response"}`);
+}
+
+async function fetchChubLorebookDefinition(idOrPath: string | number): Promise<Record<string, any> | null> {
+  try {
+    const raw = String(idOrPath).replace(/^lorebooks\//, "");
+    const data = await fetchChubJson(`lorebooks/${raw}?full=true`);
+    return data?.node?.definition ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildChubCharacterBook(def: Record<string, any>, data: Record<string, any>): Promise<Record<string, any> | undefined> {
+  const embeddedBook = def.embedded_lorebook ?? def.character_book;
+  const embeddedEntries = Array.isArray(embeddedBook?.entries) ? embeddedBook.entries : [];
+  const relatedLorebooks = Array.isArray(data.node?.related_lorebooks) ? data.node.related_lorebooks : [];
+
+  if (relatedLorebooks.length === 0) return embeddedBook || undefined;
+
+  const linkedBooks = await Promise.all(
+    relatedLorebooks.map(async (id: number) => {
+      const relatedNode = data.nodes?.[String(id)];
+      const definition = await fetchChubLorebookDefinition(relatedNode?.fullPath || id);
+      const entries = definition?.embedded_lorebook?.entries ?? definition?.character_book?.entries;
+      if (!Array.isArray(entries) || entries.length === 0) return null;
+      return {
+        id,
+        name: relatedNode?.name || definition?.name || "Linked Lorebook",
+        entries,
+      };
+    })
+  );
+
+  const linkedEntries = linkedBooks.flatMap((book) => book?.entries ?? []);
+  const entries = [...embeddedEntries, ...linkedEntries];
+  if (entries.length === 0) return embeddedBook || undefined;
+
+  return {
+    ...(embeddedBook && typeof embeddedBook === "object" ? embeddedBook : {}),
+    name: linkedEntries.length > 0 ? `${def.name || data.node?.name || "Character"} Lorebooks` : embeddedBook?.name,
+    entries,
+  };
+}
+
+async function fetchChubGalleryUrls(projectId: unknown): Promise<string[]> {
+  if (!projectId) return [];
+  try {
+    const data = await fetchChubJson(`gallery/project/${projectId}`);
+    return (Array.isArray(data.nodes) ? data.nodes : [])
+      .map((n: any) => typeof n?.primary_image_path === "string" ? n.primary_image_path : null)
+      .filter((url: string | null): url is string => !!url);
+  } catch {
+    return [];
+  }
+}
+
+async function importGalleryFromUrls(userId: string, characterId: string, urls: string[]): Promise<void> {
+  const downloaded = await mapWithConcurrency(urls, 6, async (url): Promise<File | null> => {
+    try {
+      const res = await safeFetch(url, { timeoutMs: 15_000, maxBytes: 50 * 1024 * 1024 });
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+      const contentType = res.headers.get("content-type") || "image/webp";
+      const ext = contentType.includes("png") ? "png" : contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "webp";
+      return new File([buf], `chub_gallery_${crypto.randomUUID()}.${ext}`, { type: contentType });
+    } catch {
+      return null;
+    }
+  });
+
+  const files = downloaded.filter((file): file is File => file !== null);
+  if (files.length === 0) return;
+  if (files.length > 3) {
+    await gallerySvc.uploadBulkToGallery(userId, characterId, files);
+    return;
+  }
+  for (const file of files) {
+    try { await gallerySvc.uploadToGallery(userId, characterId, file); } catch { /* skip */ }
+  }
+}
+
+async function fetchChubCharacter(chubPath: string, userId: string) {
+  const data = await fetchChubJson(`characters/${chubPath}?full=true`);
   const node = data?.node;
   if (!node) throw new Error("Invalid Chub API response: missing node");
 
@@ -131,8 +233,8 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
     spec_version: "2.0",
     data: {
       name,
-      description: def.personality ?? "",
-      personality: def.tavern_personality ?? "",
+      description: def.personality ?? def.description ?? "",
+      personality: def.tavern_personality ?? def.personality ?? "",
       scenario: def.scenario ?? "",
       first_mes: def.first_message ?? def.first_mes ?? "",
       mes_example: def.example_dialogs ?? def.mes_example ?? "",
@@ -146,13 +248,14 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
     },
   };
 
-  const characterBook = def.embedded_lorebook ?? def.character_book;
+  const characterBook = await buildChubCharacterBook(def, data);
   if (characterBook) {
-    card.data.extensions = { ...card.data.extensions, character_book: characterBook };
+    card.data.character_book = characterBook;
   }
 
   const cardInput = cardSvc.parseCardJson(card);
   const character = svc.createCharacter(userId, cardInput);
+  importCardRegexBestEffort(userId, character.id, cardInput.extensions);
 
   // Fetch avatar image
   const avatarUrl = node.max_res_url || node.avatar_url;
@@ -192,6 +295,12 @@ async function fetchChubCharacter(chubPath: string, userId: string) {
   }
 
   autoImportEmbeddedWorldbook(userId, character.id);
+
+  const galleryUrls = await fetchChubGalleryUrls(node.id);
+  if (galleryUrls.length > 0) {
+    await importGalleryFromUrls(userId, character.id, galleryUrls);
+  }
+
   return svc.getCharacter(userId, character.id)!;
 }
 

@@ -372,35 +372,18 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
   const tiltRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const rectRef = useRef<DOMRect | null>(null)
+  const parallaxFrameRef = useRef<number | null>(null)
+  const parallaxPointerRef = useRef<{ clientX: number; clientY: number } | null>(null)
 
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
 
-  const handleMouseEnter = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
-    const tilt = tiltRef.current
-    const card = cardRef.current
-    if (!tilt || !card) return
-    rectRef.current = tilt.getBoundingClientRect()
-    tilt.classList.add(styles.tilting)
-    const rect = rectRef.current
-    const mx = (e.clientX - rect.left) / rect.width
-    const my = (e.clientY - rect.top) / rect.height
-    const tiltX = (mx - 0.5) * 2
-    const tiltY = (my - 0.5) * 2
-    tilt.style.transform =
-      `rotateX(${(my - 0.5) * -18}deg) rotateY(${(mx - 0.5) * 18}deg) scale3d(1.04,1.04,1.04)`
-    tilt.style.setProperty('--tilt-x', String(tiltX))
-    tilt.style.setProperty('--tilt-y', String(tiltY))
-    card.style.setProperty('--shine-x', `${mx * 100}%`)
-    card.style.setProperty('--shine-y', `${my * 100}%`)
-  }, [])
-
-  const handleMouseMove = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+  const applyParallax = useCallback((clientX: number, clientY: number) => {
     const tilt = tiltRef.current
     const card = cardRef.current
     const rect = rectRef.current
     if (!tilt || !card || !rect) return
-    const mx = (e.clientX - rect.left) / rect.width
-    const my = (e.clientY - rect.top) / rect.height
+    const mx = (clientX - rect.left) / rect.width
+    const my = (clientY - rect.top) / rect.height
     const tiltX = (mx - 0.5) * 2
     const tiltY = (my - 0.5) * 2
     tilt.style.transform =
@@ -410,11 +393,44 @@ function ChatCard({ item, onClick, onDelete }: ChatCardProps) {
     card.style.setProperty('--shine-x', `${mx * 100}%`)
     card.style.setProperty('--shine-y', `${my * 100}%`)
   }, [])
+
+  const scheduleParallax = useCallback((clientX: number, clientY: number) => {
+    parallaxPointerRef.current = { clientX, clientY }
+    if (parallaxFrameRef.current !== null) return
+    parallaxFrameRef.current = requestAnimationFrame(() => {
+      parallaxFrameRef.current = null
+      const point = parallaxPointerRef.current
+      if (!point) return
+      applyParallax(point.clientX, point.clientY)
+    })
+  }, [applyParallax])
+
+  useEffect(() => {
+    return () => {
+      if (parallaxFrameRef.current !== null) cancelAnimationFrame(parallaxFrameRef.current)
+    }
+  }, [])
+
+  const handleMouseEnter = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    const tilt = tiltRef.current
+    if (!tilt) return
+    rectRef.current = tilt.getBoundingClientRect()
+    tilt.classList.add(styles.tilting)
+    scheduleParallax(e.clientX, e.clientY)
+  }, [scheduleParallax])
+
+  const handleMouseMove = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!rectRef.current) return
+    scheduleParallax(e.clientX, e.clientY)
+  }, [scheduleParallax])
 
   const handleMouseLeave = useCallback(() => {
     const tilt = tiltRef.current
     const card = cardRef.current
     if (!tilt || !card) return
+    if (parallaxFrameRef.current !== null) cancelAnimationFrame(parallaxFrameRef.current)
+    parallaxFrameRef.current = null
+    parallaxPointerRef.current = null
     tilt.classList.remove(styles.tilting)
     tilt.style.transform = ''
     tilt.style.removeProperty('--tilt-x')
