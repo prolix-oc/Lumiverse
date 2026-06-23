@@ -14,6 +14,7 @@ import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
+import { prefetchImages } from '@/lib/imageDecodeCache'
 import LazyImage from '@/components/shared/LazyImage'
 import {
   doesDeviceRotationNeedPermission,
@@ -48,6 +49,37 @@ function getRecentChatSubtitle(item: GroupedRecentChat, t: TFunction<'landing'>)
 
 function getRecentChatKey(item: GroupedRecentChat): string {
   return item.is_group ? item.latest_chat_id : item.character_id
+}
+
+const PREFETCH_ROWS = 6
+
+/**
+ * Extract avatar image URLs for a list of items, mirroring the logic in
+ * RecentChatAvatar but without the store hook. Used for prefetching.
+ */
+function getItemAvatarUrls(
+  items: GroupedRecentChat[],
+  characters: { id: string; image_id?: string | null }[],
+): string[] {
+  const urls: string[] = []
+  for (const item of items) {
+    const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
+    if (isGroup) {
+      for (const id of item.group_character_ids!.slice(0, 4)) {
+        const char = characters.find((c) => c.id === id)
+        const url = getCharacterAvatarLargeUrlById(id, char?.image_id ?? null)
+        if (url) urls.push(url)
+      }
+    } else if (item.character_id) {
+      const liveChar = characters.find((c) => c.id === item.character_id)
+      const url = getCharacterAvatarLargeUrlById(
+        item.character_id,
+        liveChar?.image_id ?? item.character_image_id,
+      )
+      if (url) urls.push(url)
+    }
+  }
+  return urls
 }
 
 function getPerspectiveLayers(value: unknown): CharacterPerspectiveLayer[] {
@@ -1136,6 +1168,22 @@ export default function LandingPage() {
     chatVirtualizer.measure()
     updateVirtualScrollMargin()
   }, [chatVirtualizer, updateVirtualScrollMargin, virtualColumns, virtualRowEstimate, virtualLayout])
+
+  // Prefetch avatar images for rows near the visible viewport so they're
+  // already decoded when the virtualizer scrolls them into view.
+  const characters = useStore((s) => s.characters)
+  const virtualItems = chatVirtualizer.getVirtualItems()
+  const visStart = virtualItems.length > 0 ? virtualItems[0].index : -1
+  const visEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
+  useEffect(() => {
+    if (visStart < 0 || visEnd < 0 || items.length === 0) return
+    const startRow = Math.max(0, visStart - PREFETCH_ROWS)
+    const endRow = Math.min(virtualRowCount - 1, visEnd + PREFETCH_ROWS)
+    const startItem = startRow * virtualColumns
+    const endItem = Math.min(items.length, (endRow + 1) * virtualColumns)
+    const urls = getItemAvatarUrls(items.slice(startItem, endItem), characters)
+    if (urls.length > 0) prefetchImages(urls)
+  }, [visStart, visEnd, items, virtualColumns, virtualRowCount, characters])
 
   const setVirtualContainerRef = useCallback((node: HTMLDivElement | null) => {
     virtualContainerRef.current = node

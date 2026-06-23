@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react'
 import { Spinner } from '@/components/shared/Spinner'
+import { isImageDecoded, onImageDecoded, prefetchImage } from '@/lib/imageDecodeCache'
 
 const MAX_LOADED_IMAGE_SRCS = 500
 const loadedImageSrcs = new Set<string>()
@@ -40,20 +41,45 @@ export default function LazyImage({
   onError,
   ...props
 }: LazyImageProps) {
-  const [isLoading, setIsLoading] = useState(() => Boolean(src && !loadedImageSrcs.has(src)))
+  // Skip the spinner when the image is already decoded in the cache — it'll
+  // paint within one frame, so showing/hiding a spinner just adds flicker.
+  const [isLoading, setIsLoading] = useState(() => {
+    if (!src) return false
+    if (loadedImageSrcs.has(src)) return false
+    if (isImageDecoded(src)) return false
+    return true
+  })
   const [hasError, setHasError] = useState(false)
   const prevSrcRef = useRef(src)
 
   useEffect(() => {
     if (src !== prevSrcRef.current) {
       prevSrcRef.current = src
-      setIsLoading(Boolean(src && !loadedImageSrcs.has(src)))
+      const decoded = Boolean(src && (loadedImageSrcs.has(src) || isImageDecoded(src)))
+      setIsLoading(!decoded)
       setHasError(false)
     }
   }, [src])
 
+  // When the image is pending in the decode cache, subscribe to its
+  // completion so we can flip isLoading without waiting for the <img>
+  // onload (which fires after a fresh decode on the new element).
+  useEffect(() => {
+    if (!src || !isLoading) return
+    if (loadedImageSrcs.has(src) || isImageDecoded(src)) {
+      setIsLoading(false)
+      return
+    }
+    // Trigger prefetch in case it hasn't been started yet
+    prefetchImage(src)
+    return onImageDecoded(src, () => setIsLoading(false))
+  }, [src, isLoading])
+
   const handleLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
-    if (src) rememberLoadedSrc(src)
+    if (src) {
+      rememberLoadedSrc(src)
+      prefetchImage(src)
+    }
     setIsLoading(false)
     onLoad?.(event)
   }, [onLoad, src])
@@ -103,7 +129,6 @@ export default function LazyImage({
         }}
         className={className}
         decoding={decoding}
-        loading="lazy"
         onLoad={handleLoad}
         onError={handleError}
         {...props}
