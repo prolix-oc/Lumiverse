@@ -24,7 +24,7 @@ interface MessageListProps {
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
-const SCROLL_END_THRESHOLD = 80
+const SCROLL_END_THRESHOLD = 6
 const INITIAL_SCROLL_TO_END_MAX_MS = 5000
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
@@ -750,7 +750,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     scheduleInitialScrollToEnd(rowVirtualizer)
   }, [chatId, hasRows, rowVirtualizer, scheduleInitialScrollToEnd, virtualListItems.length])
 
-  const BOTTOM_REPIN_EPSILON = 6
+  const BOTTOM_REPIN_EPSILON = SCROLL_END_THRESHOLD
 
   const recoverTailVoid = useCallback(() => {
     if (!isPinnedRef.current) return false
@@ -903,63 +903,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       })
     }
   }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, warmMobileRange])
-
-  // Unified scroll guard: watches scrollHeight changes caused by streaming
-  // tokens, extension mounts, lazy image loads, or virtual row resizing.
-  // When pinned we follow the bottom; when floating we leave the viewport
-  // alone so the user can read without being pushed around by new content.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-
-    let pendingRaf = 0
-    let lastSH = el.scrollHeight
-    let lastST = el.scrollTop
-
-    const apply = () => {
-      pendingRaf = 0
-      const latest = scrollRef.current
-      if (!latest) return
-      if (justPrependedRef.current || isPrependingRef.current) return
-
-      const newSH = latest.scrollHeight
-      const newST = latest.scrollTop
-      const heightDelta = newSH - lastSH
-      const scrollTopDelta = newST - lastST
-
-      lastSH = newSH
-      lastST = newST
-
-      if (recoverTailVoid()) return
-
-      if (heightDelta === 0) return
-
-      // If scrollTop already moved by roughly the height change, something
-      // else (e.g. the virtualizer's end anchoring)
-      // handled it — don't double-compensate.
-      if (Math.abs(scrollTopDelta - heightDelta) < 2) return
-
-      // Only auto-scroll when the user is already pinned to the bottom.
-      // If they have scrolled up to read older messages, anchor the view
-      // so streaming tokens (or any other bottom growth) don't push content
-      // up the screen.
-      if (isPinnedRef.current) {
-        pinToBottomIfNeeded(latest)
-      }
-    }
-
-    const mo = new MutationObserver(() => {
-      if (pendingRaf) return
-      pendingRaf = requestAnimationFrame(apply)
-    })
-
-    mo.observe(el, { childList: true, subtree: true, characterData: true })
-
-    return () => {
-      mo.disconnect()
-      if (pendingRaf) cancelAnimationFrame(pendingRaf)
-    }
-  }, [isCoarsePointer, pinToBottomIfNeeded, recoverTailVoid, rowVirtualizer])
 
   // Re-pin to bottom when the input safe-zone changes — keyboard opening on
   // mobile/iOS PWA grows --lcs-input-safe-zone. Without this, the last
