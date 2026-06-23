@@ -20,7 +20,7 @@ interface CharacterGridProps {
 }
 
 const MIN_COL_WIDTH = 200
-const MIN_CARD_WIDTH = 160 // narrowest card that still reads well on a phone
+const MIN_CARD_WIDTH = 140 // narrowest card that still reads well on a phone
 const GAP = 20
 const MOBILE_BREAKPOINT = 600
 const MOBILE_GAP = 12
@@ -94,6 +94,7 @@ export default function CharacterGrid({
     estimateSize: () => rowHeight,
     overscan: 5,
     measureElement: (el) => el.getBoundingClientRect().height,
+    paddingStart: gap,
   })
 
   // When the responsive layout changes, force the virtualizer to re-measure

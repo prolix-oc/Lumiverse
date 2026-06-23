@@ -11,6 +11,19 @@
   pointer-events: none;
 }
 
+/* Disable all card hover/tilt/shine transforms while scrolling to keep the
+   compositor layer tree as small as possible during the scroll gesture. */
+.scrollContainer[data-scrolling] :global(*) {
+  transition: none !important;
+}
+
+.scrollContainer[data-scrolling] :global(img) {
+  --lazy-image-transform-transition: 0ms !important;
+  transition: none !important;
+  will-change: auto !important;
+  transform: none !important;
+}
+
 .row {
   box-sizing: border-box;
 }

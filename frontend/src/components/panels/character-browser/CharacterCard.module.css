@@ -17,8 +17,8 @@
 }
 
 /* Gradient overlay at the card bottom that blends into the image for text
-   contrast. Uses the solid card-bg color (extracted from the card gradient)
-   so it can participate as a color stop inside this gradient. */
+   contrast. Uses the main background color so it seamlessly adapts
+   when CSS classes change with a new palette. */
 .card::after {
   content: '';
   position: absolute;
@@ -29,9 +29,9 @@
   pointer-events: none;
   background: linear-gradient(
     to top,
-    var(--lumiverse-card-bg-bottom) 0%,
-    color-mix(in srgb, var(--lumiverse-card-bg-bottom) 92%, transparent) 25%,
-    color-mix(in srgb, var(--lumiverse-card-bg-bottom) 50%, transparent) 55%,
+    var(--lumiverse-bg) 0%,
+    color-mix(in srgb, var(--lumiverse-bg) 92%, transparent) 25%,
+    color-mix(in srgb, var(--lumiverse-bg) 50%, transparent) 55%,
     transparent 100%
   );
   z-index: 1;
@@ -78,7 +78,9 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  transition: transform 0.3s ease;
+  /* Sync image transform scale with the card's animation timing */
+  --lazy-image-transform-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .card:hover .coverImg {
