@@ -129,6 +129,10 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR"
 FRONTEND_DIR="${FRONTEND_PATH:-$SCRIPT_DIR/frontend}"
+TERMUX_FRONTEND_NATIVE_DEPS=(
+  "@rolldown/binding-android-arm64@1.0.2"
+  "lightningcss-android-arm64@1.32.0"
+)
 
 # ─── Ensure Bun is installed ────────────────────────────────────────────────
 
@@ -553,6 +557,17 @@ kill_pkgs() {
 
 # ─── Install dependencies ───────────────────────────────────────────────────
 
+repair_termux_frontend_native_deps() {
+  local dir="$1"
+
+  [[ "$IS_TERMUX" == true || "$IS_PROOT" == true ]] || return 0
+
+  info "Repairing Termux frontend native bindings with npm..."
+  (cd "$dir" && npm cache clean --force)
+  (cd "$dir" && npm install --force --no-save --no-package-lock --include=optional --no-audit --no-fund "${TERMUX_FRONTEND_NATIVE_DEPS[@]}")
+  ok "Termux frontend native bindings repaired"
+}
+
 install_deps() {
   local dir="$1"
   local name="$2"
@@ -600,6 +615,10 @@ install_deps() {
   if [[ $install_status -ne 0 ]]; then
     err "$name install failed (exit $install_status) — node_modules will be cleaned on next launch"
     return $install_status
+  fi
+
+  if [[ "$name" == "frontend" ]]; then
+    repair_termux_frontend_native_deps "$dir"
   fi
 
   # Stamp success so next launch knows this tree is complete.

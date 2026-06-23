@@ -65,7 +65,7 @@
     "workbox-strategies": "^7.4.0"
   },
   "optionalDependencies": {
-    "@rolldown/binding-android-arm64": "1.0.0-rc.12",
+    "@rolldown/binding-android-arm64": "1.0.2",
     "lightningcss-android-arm64": "1.32.0"
   }
 }

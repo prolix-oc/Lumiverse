@@ -7,6 +7,7 @@ import {
   TIMEOUT_GIT_FETCH_MS,
   TIMEOUT_GIT_PULL_MS,
   TIMEOUT_GIT_CHECKOUT_MS,
+  TIMEOUT_BUN_CACHE_MS,
   TIMEOUT_BUN_INSTALL_MS,
   TIMEOUT_BUN_BUILD_MS,
 } from "./lib/constants.js";
@@ -181,8 +182,8 @@ export async function checkForUpdates(): Promise<UpdateState> {
 }
 
 /**
- * Apply update: stash → clear cache → delete dist → pull → install deps →
- * conditional frontend build → restart
+ * Apply update: stash → clear cache → pull → install deps → conditional
+ * frontend build → restart
  */
 export async function applyUpdate(
   stopServer: () => Promise<void>,
@@ -204,15 +205,13 @@ export async function applyUpdate(
 
   // Clear Bun install cache
   log("Clearing install cache...");
-  Bun.spawnSync(["bun", "pm", "cache", "rm"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
+  await runCommandOrThrow(["bun", "pm", "cache", "rm"], {
+    cwd: PROJECT_ROOT,
+    timeoutMs: TIMEOUT_BUN_CACHE_MS,
+    label: "package cache clear",
+  });
 
-  // Delete frontend/dist to prevent git conflicts
   const frontendDir = join(PROJECT_ROOT, "frontend");
-  const frontendDistDir = join(frontendDir, "dist");
-  if (existsSync(frontendDistDir)) {
-    log("Removing frontend/dist...");
-    rmSync(frontendDistDir, { recursive: true, force: true });
-  }
 
   // Drop any untracked lockfile so the committed one can fast-forward in cleanly.
   clearUntrackedLockfiles();
@@ -259,8 +258,8 @@ export async function applyUpdate(
 }
 
 /**
- * Switch branch: stash → stop → clear cache → delete dist → checkout → pull
- * → install deps → conditional frontend build → restart
+ * Switch branch: stash → stop → clear cache → checkout → pull → install deps
+ * → conditional frontend build → restart
  */
 export async function switchBranch(
   target: string,
@@ -288,15 +287,13 @@ export async function switchBranch(
 
   // Clear install cache
   log("Clearing install cache...");
-  Bun.spawnSync(["bun", "pm", "cache", "rm"], { cwd: PROJECT_ROOT, stdout: "ignore", stderr: "ignore" });
+  await runCommandOrThrow(["bun", "pm", "cache", "rm"], {
+    cwd: PROJECT_ROOT,
+    timeoutMs: TIMEOUT_BUN_CACHE_MS,
+    label: "package cache clear",
+  });
 
-  // Delete frontend/dist
   const frontendDir = join(PROJECT_ROOT, "frontend");
-  const frontendDistDir = join(frontendDir, "dist");
-  if (existsSync(frontendDistDir)) {
-    log("Removing frontend/dist...");
-    rmSync(frontendDistDir, { recursive: true, force: true });
-  }
 
   // Drop any untracked lockfile so a committed one can't block the checkout.
   clearUntrackedLockfiles();
@@ -375,6 +372,38 @@ function writeInstallStamp(dir: string): void {
   try { writeFileSync(join(dir, INSTALL_STAMP), `${Date.now()}\n`); } catch {}
 }
 
+const TERMUX_FRONTEND_NATIVE_DEPS = [
+  "@rolldown/binding-android-arm64@1.0.2",
+  "lightningcss-android-arm64@1.32.0",
+];
+
+async function repairTermuxFrontendNativeDeps(frontendDir: string): Promise<void> {
+  if (!isTermuxRuntime() && !isProotRuntime()) return;
+
+  log("Repairing Termux frontend native bindings with npm...");
+  await runCommandOrThrow(["npm", "cache", "clean", "--force"], {
+    cwd: frontendDir,
+    timeoutMs: 60_000,
+    label: "npm cache clean",
+  });
+  await runCommandOrThrow([
+    "npm",
+    "install",
+    "--force",
+    "--no-save",
+    "--no-package-lock",
+    "--include=optional",
+    "--no-audit",
+    "--no-fund",
+    ...TERMUX_FRONTEND_NATIVE_DEPS,
+  ], {
+    cwd: frontendDir,
+    timeoutMs: TIMEOUT_BUN_INSTALL_MS,
+    label: "Termux frontend native binding install",
+  });
+  log("Termux frontend native bindings repaired.");
+}
+
 export async function ensureDependencies(frontendDir: string): Promise<void> {
   const installCmd = bunInstallCmd();
   clearBunInstallCacheIfTermux();
@@ -396,6 +425,7 @@ export async function ensureDependencies(frontendDir: string): Promise<void> {
     timeoutMs: TIMEOUT_BUN_INSTALL_MS,
     label: "frontend install",
   });
+  await repairTermuxFrontendNativeDeps(frontendDir);
   writeInstallStamp(frontendDir);
   log("Frontend dependencies updated.");
 }
