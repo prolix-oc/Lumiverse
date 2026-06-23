@@ -805,7 +805,7 @@ export default function ChatView() {
       )}
     >
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
-      <WallpaperLayer wallpaper={displayedWallpaper} settings={wallpaper} hidden={!!sceneBackground} videoRef={videoRef} />
+      <WallpaperLayer wallpaper={displayedWallpaper} settings={wallpaper} hidden={!!sceneBackground} videoRef={videoRef} fadeInOnMount />
 
       {/* Scene background layer — overrides wallpaper when active */}
       <div

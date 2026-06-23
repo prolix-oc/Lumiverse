@@ -1,4 +1,4 @@
-import { useEffect, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { imagesApi } from '@/api/images'
 import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import styles from './WallpaperLayer.module.css'
@@ -14,10 +14,12 @@ interface WallpaperLayerProps {
 
 export default function WallpaperLayer({ wallpaper, settings, hidden = false, fixed = false, fadeInOnMount = false, videoRef }: WallpaperLayerProps) {
   const [fadeReady, setFadeReady] = useState(!fadeInOnMount)
+  const revealRef = useRef(() => setFadeReady(true))
 
   useEffect(() => {
     if (!fadeInOnMount || !wallpaper?.image_id) {
       setFadeReady(true)
+      revealRef.current = () => setFadeReady(true)
       return
     }
 
@@ -31,6 +33,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
       if (raf) window.cancelAnimationFrame(raf)
       raf = window.requestAnimationFrame(() => setFadeReady(true))
     }
+    revealRef.current = reveal
 
     if (wallpaper.type === 'image') {
       const image = new Image()
@@ -61,13 +64,16 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
     return (
       <video
         ref={videoRef}
+        key={wallpaper.image_id}
         className={videoClassName}
         src={url}
         autoPlay
         muted
         loop
         playsInline
-        onLoadedData={fadeInOnMount ? () => setFadeReady(true) : undefined}
+        preload="auto"
+        onLoadedData={fadeInOnMount ? () => revealRef.current() : undefined}
+        onError={fadeInOnMount ? () => revealRef.current() : undefined}
         style={{
           opacity,
           objectFit: fit === 'fill' ? 'fill' : fit,
