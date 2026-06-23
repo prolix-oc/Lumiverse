@@ -16,6 +16,7 @@ import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
 
 const app = new Hono();
+const PERSPECTIVE_LAYERS = new Set<svc.PerspectiveLayerKind>(["background", "framing", "subject"]);
 
 // ─── Import error response helper ────────────────────────────────────────
 
@@ -575,6 +576,40 @@ app.post("/:id/avatar", async (c) => {
   if (!file) return c.json({ error: "avatar file is required" }, 400);
 
   const updated = await svc.replaceCharacterAvatar(userId, char.id, file, originalFile ?? undefined);
+  if (!updated) return c.json({ error: "Not found" }, 404);
+  return c.json(updated);
+});
+
+app.post("/:id/perspective-layers/:layer", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const layer = c.req.param("layer") as svc.PerspectiveLayerKind;
+  if (!PERSPECTIVE_LAYERS.has(layer)) return c.json({ error: "Invalid layer" }, 400);
+  if (!svc.getCharacter(userId, characterId)) return c.json({ error: "Not found" }, 404);
+
+  const formData = await c.req.formData();
+  const file = formData.get("image") as File | null;
+  if (!file) return c.json({ error: "image file is required" }, 400);
+  if (typeof file.type === "string" && file.type && !file.type.startsWith("image/")) {
+    return c.json({ error: "image file is required" }, 400);
+  }
+
+  try {
+    const updated = await svc.setCharacterPerspectiveLayer(userId, characterId, layer, file);
+    if (!updated) return c.json({ error: "Not found" }, 404);
+    return c.json(updated);
+  } catch (err: any) {
+    return c.json({ error: err?.message || "Invalid image" }, 400);
+  }
+});
+
+app.delete("/:id/perspective-layers/:layer", (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const layer = c.req.param("layer") as svc.PerspectiveLayerKind;
+  if (!PERSPECTIVE_LAYERS.has(layer)) return c.json({ error: "Invalid layer" }, 400);
+
+  const updated = svc.clearCharacterPerspectiveLayer(userId, characterId, layer);
   if (!updated) return c.json({ error: "Not found" }, 404);
   return c.json(updated);
 });

@@ -8,7 +8,7 @@ import { IconNotebook } from '@tabler/icons-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Spinner } from '@/components/shared/Spinner'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
-import { charactersApi } from '@/api/characters'
+import { charactersApi, type CharacterPerspectiveLayerKind } from '@/api/characters'
 import { characterGalleryApi } from '@/api/character-gallery'
 import { imagesApi } from '@/api/images'
 import { personasApi } from '@/api/personas'
@@ -47,6 +47,11 @@ import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
 
 const DEBOUNCE_MS = 2000
+const PERSPECTIVE_LAYERS: Array<{ id: CharacterPerspectiveLayerKind; label: string; hint: string }> = [
+  { id: 'background', label: 'Background', hint: 'Farthest image in the hover stack' },
+  { id: 'framing', label: 'Framing', hint: 'Middle cutout, props, or foreground frame' },
+  { id: 'subject', label: 'Subject', hint: 'Closest character or focal layer' },
+]
 
 type TabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
 
@@ -147,6 +152,7 @@ export default function CharacterEditorPage() {
   const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
+  const [perspectiveLayerProgress, setPerspectiveLayerProgress] = useState<Partial<Record<CharacterPerspectiveLayerKind, number>>>({})
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const galleryFileRef = useRef<HTMLInputElement>(null)
@@ -710,6 +716,52 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
+  const perspectiveLayers = useMemo(() => {
+    const raw = character?.extensions?.landing_perspective_layers
+    return raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? raw as Partial<Record<CharacterPerspectiveLayerKind, string>>
+      : {}
+  }, [character?.extensions?.landing_perspective_layers])
+
+  const handlePerspectiveLayerSelected = useCallback(
+    async (layer: CharacterPerspectiveLayerKind, e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId) return
+      setPerspectiveLayerProgress((prev) => ({ ...prev, [layer]: 0 }))
+      try {
+        const updated = await charactersApi.uploadPerspectiveLayer(editingCharacterId, layer, file, (p) => {
+          setPerspectiveLayerProgress((prev) => ({ ...prev, [layer]: p }))
+        })
+        updateCharInStore(editingCharacterId, updated)
+      } catch (err) {
+        console.error('[Editor] Perspective layer upload failed:', err)
+        toast.error('Perspective layer upload failed')
+      } finally {
+        setPerspectiveLayerProgress((prev) => {
+          const next = { ...prev }
+          delete next[layer]
+          return next
+        })
+      }
+    },
+    [editingCharacterId, updateCharInStore]
+  )
+
+  const handleRemovePerspectiveLayer = useCallback(
+    async (layer: CharacterPerspectiveLayerKind) => {
+      if (!editingCharacterId) return
+      try {
+        const updated = await charactersApi.deletePerspectiveLayer(editingCharacterId, layer)
+        updateCharInStore(editingCharacterId, updated)
+      } catch (err) {
+        console.error('[Editor] Perspective layer remove failed:', err)
+        toast.error('Could not remove perspective layer')
+      }
+    },
+    [editingCharacterId, updateCharInStore]
+  )
+
   // Actions
   const handleDelete = useCallback(async () => {
     if (!editingCharacterId) return
@@ -1088,6 +1140,64 @@ export default function CharacterEditorPage() {
                         onChange={(v) => handleFieldChange('creator_notes', v)}
                         rows={4}
                       />
+                      <div className={styles.fieldGroup}>
+                        <span className={styles.fieldLabel}>Landing perspective stack</span>
+                        <span className={styles.fieldHelper}>
+                          Upload all three WebP-optimized layers to replace this character's avatar on landing-page cards only.
+                        </span>
+                        <div className={styles.perspectiveLayerGrid}>
+                          {PERSPECTIVE_LAYERS.map((layer) => {
+                            const imageId = perspectiveLayers[layer.id]
+                            const progress = perspectiveLayerProgress[layer.id]
+                            return (
+                              <div key={layer.id} className={styles.perspectiveLayerCard}>
+                                <div className={styles.perspectiveLayerPreview}>
+                                  {imageId ? (
+                                    <LazyImage
+                                      src={imagesApi.largeUrl(imageId)}
+                                      alt={layer.label}
+                                      className={styles.perspectiveLayerImg}
+                                      fallback={<div className={styles.perspectiveLayerEmpty}><ImagePlus size={18} /></div>}
+                                    />
+                                  ) : (
+                                    <div className={styles.perspectiveLayerEmpty}><ImagePlus size={18} /></div>
+                                  )}
+                                  {progress !== undefined && (
+                                    <div className={styles.perspectiveLayerBusy}>{progress}%</div>
+                                  )}
+                                </div>
+                                <div className={styles.perspectiveLayerBody}>
+                                  <span className={styles.perspectiveLayerTitle}>{layer.label}</span>
+                                  <span className={styles.perspectiveLayerHint}>{layer.hint}</span>
+                                  <div className={styles.perspectiveLayerActions}>
+                                    <label className={styles.perspectiveLayerUpload}>
+                                      <Upload size={12} />
+                                      {imageId ? 'Replace' : 'Upload'}
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className={styles.hiddenInput}
+                                        disabled={progress !== undefined}
+                                        onChange={(e) => handlePerspectiveLayerSelected(layer.id, e)}
+                                      />
+                                    </label>
+                                    {imageId && (
+                                      <button
+                                        type="button"
+                                        className={styles.perspectiveLayerRemove}
+                                        onClick={() => handleRemovePerspectiveLayer(layer.id)}
+                                        disabled={progress !== undefined}
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
                       <div className={styles.fieldGroup}>
                         <span className={styles.fieldLabel}>{t('characterEditor.tags')}</span>
                         <span className={styles.fieldHelper}>{t('characterEditor.tagsHelper')}</span>

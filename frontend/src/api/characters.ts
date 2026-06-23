@@ -2,6 +2,7 @@ import { get, post, put, del, upload, uploadWithProgress, getBlob, BASE_URL } fr
 import { triggerBlobDownload } from '@/lib/downloads'
 import type {
   Character,
+  CharacterPerspectiveLayers,
   CharacterSummary,
   TagCount,
   CreateCharacterInput,
@@ -25,6 +26,8 @@ export interface SummaryParams {
   favorite_ids?: string
   seed?: number
 }
+
+export type CharacterPerspectiveLayerKind = keyof CharacterPerspectiveLayers
 
 export const charactersApi = {
   list(params?: { limit?: number; offset?: number; search?: string; sort?: string; seed?: number }) {
@@ -67,6 +70,18 @@ export const charactersApi = {
       return uploadWithProgress<Character>(`/characters/${id}/avatar`, form, onProgress)
     }
     return upload<Character>(`/characters/${id}/avatar`, form)
+  },
+
+  uploadPerspectiveLayer(id: string, layer: CharacterPerspectiveLayerKind, file: File, onProgress?: (percent: number) => void) {
+    const form = new FormData()
+    form.append('image', file)
+    const path = `/characters/${id}/perspective-layers/${layer}`
+    if (onProgress) return uploadWithProgress<Character>(path, form, onProgress)
+    return upload<Character>(path, form)
+  },
+
+  deletePerspectiveLayer(id: string, layer: CharacterPerspectiveLayerKind) {
+    return del<Character>(`/characters/${id}/perspective-layers/${layer}`)
   },
 
   avatarUrl(id: string) {

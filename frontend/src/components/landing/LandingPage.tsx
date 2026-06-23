@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2 } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
+import { imagesApi } from '@/api/images'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
@@ -14,6 +15,14 @@ import { useStore } from '@/store'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import LazyImage from '@/components/shared/LazyImage'
+import {
+  doesDeviceRotationNeedPermission,
+  isDeviceRotationSupported,
+  requestDeviceRotationPermission,
+  subscribeDeviceRotation,
+  type DeviceRotationSnapshot,
+  type DeviceRotationPermissionState,
+} from '@/lib/deviceRotation'
 import type { GroupedRecentChat } from '@/types/api'
 import styles from './LandingPage.module.css'
 import clsx from 'clsx'
@@ -39,6 +48,12 @@ function getRecentChatSubtitle(item: GroupedRecentChat, t: TFunction<'landing'>)
 
 function getRecentChatKey(item: GroupedRecentChat): string {
   return item.is_group ? item.latest_chat_id : item.character_id
+}
+
+function getPerspectiveLayers(value: unknown): GroupedRecentChat['character_perspective_layers'] | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as GroupedRecentChat['character_perspective_layers']
+    : undefined
 }
 
 interface RecentChatAvatarProps {
@@ -71,6 +86,13 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
 
   const imageClassName = variant === 'card' ? styles.cardImage : styles.listAvatar
   const fallbackClassName = clsx(styles.cardAvatarFallback, variant === 'compact' && styles.listAvatarFallback)
+  const perspectiveLayers = item.character_perspective_layers
+    ?? getPerspectiveLayers(liveCharacter?.extensions?.landing_perspective_layers)
+  const hasPerspectiveStack = variant === 'card'
+    && !isGroup
+    && !!perspectiveLayers?.background
+    && !!perspectiveLayers?.framing
+    && !!perspectiveLayers?.subject
 
   if (isGroup) {
     return (
@@ -95,6 +117,35 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
           })}
         </div>
         {variant === 'card' ? <div className={styles.groupOverlay} /> : null}
+      </div>
+    )
+  }
+
+  if (hasPerspectiveStack) {
+    return (
+      <div className={clsx(imageClassName, styles.perspectiveStack)}>
+        <img
+          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerBg)}
+          src={imagesApi.largeUrl(perspectiveLayers.background!)}
+          alt=""
+          loading="lazy"
+          draggable={false}
+        />
+        <img
+          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerFrame)}
+          src={imagesApi.largeUrl(perspectiveLayers.framing!)}
+          alt=""
+          loading="lazy"
+          draggable={false}
+        />
+        <img
+          className={clsx(styles.perspectiveLayer, styles.perspectiveLayerSubject)}
+          src={imagesApi.largeUrl(perspectiveLayers.subject!)}
+          alt={item.character_name}
+          loading="lazy"
+          draggable={false}
+        />
+        <div className={styles.cardImageOverlay} />
       </div>
     )
   }
@@ -151,6 +202,8 @@ const COMPACT_MIN_WIDTH = 320
 const COMPACT_GAP = 12
 const COMPACT_ROW_ESTIMATE = 86
 const VIRTUAL_OVERSCAN = 3
+const MOBILE_PARALLAX_MAX_GAMMA_DELTA = 10
+const MOBILE_PARALLAX_MAX_BETA_DELTA = 14
 
 type IdleWindow = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
@@ -182,6 +235,50 @@ function getColumnCount(width: number, layout: 'cards' | 'compact') {
   const minWidth = layout === 'compact' ? COMPACT_MIN_WIDTH : CARD_MIN_WIDTH
   const gap = layout === 'compact' ? COMPACT_GAP : CARD_GAP
   return Math.max(1, Math.floor((width + gap) / (minWidth + gap)))
+}
+
+function clampParallax(value: number): number {
+  return Math.max(-1, Math.min(1, value))
+}
+
+function shouldUseMobileMotionParallax(): boolean {
+  if (typeof window === 'undefined') return false
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false
+  return Boolean(
+    window.matchMedia?.('(hover: none)').matches ||
+    window.matchMedia?.('(pointer: coarse)').matches
+  )
+}
+
+function getPerspectiveTiltElements(root: HTMLElement): HTMLElement[] {
+  const nodes = root.querySelectorAll<HTMLElement>(`.${styles.perspectiveStack}`)
+  const tilts = new Set<HTMLElement>()
+  nodes.forEach((node) => {
+    const tilt = node.closest<HTMLElement>(`.${styles.cardTilt}`)
+    if (tilt) tilts.add(tilt)
+  })
+  return [...tilts]
+}
+
+function applyMobilePerspectiveParallax(root: HTMLElement, tiltX: number, tiltY: number): void {
+  for (const tilt of getPerspectiveTiltElements(root)) {
+    tilt.classList.add(styles.tilting, styles.mobileMotionTilting)
+    tilt.style.transform = `rotateX(${tiltY * -4}deg) rotateY(${tiltX * 4}deg) scale3d(1.015,1.015,1.015)`
+    tilt.style.setProperty('--tilt-x', String(tiltX))
+    tilt.style.setProperty('--tilt-y', String(tiltY))
+  }
+}
+
+function clearMobilePerspectiveParallax(root: HTMLElement): void {
+  for (const tilt of getPerspectiveTiltElements(root)) {
+    tilt.classList.remove(styles.mobileMotionTilting)
+    if (!tilt.matches(':hover')) {
+      tilt.classList.remove(styles.tilting)
+      tilt.style.transform = ''
+      tilt.style.removeProperty('--tilt-x')
+      tilt.style.removeProperty('--tilt-y')
+    }
+  }
 }
 
 function EmptyState() {
@@ -414,6 +511,8 @@ export default function LandingPage() {
   const [creatingTempChat, setCreatingTempChat] = useState(false)
   const [tempChatMenuOpen, setTempChatMenuOpen] = useState(false)
   const [navigatingToChat, setNavigatingToChat] = useState(false)
+  const [mobileMotionPermission, setMobileMotionPermission] = useState<DeviceRotationPermissionState>('unknown')
+  const [showMobileMotionEnable, setShowMobileMotionEnable] = useState(false)
   const tempChatMenuRef = useRef<HTMLDivElement>(null)
   const tempChatMenuOpenedAt = useRef(0)
   const chatNavigationTimerRef = useRef<number | null>(null)
@@ -500,6 +599,67 @@ export default function LandingPage() {
   const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
 
   useScrollGate(scrollRef)
+
+  useEffect(() => {
+    setShowMobileMotionEnable(
+      landingPageLayoutMode === 'cards' &&
+      shouldUseMobileMotionParallax() &&
+      isDeviceRotationSupported() &&
+      doesDeviceRotationNeedPermission()
+    )
+  }, [landingPageLayoutMode])
+
+  useEffect(() => {
+    const root = scrollRef.current
+    if (!root || landingPageLayoutMode !== 'cards' || !shouldUseMobileMotionParallax()) return
+
+    let frame = 0
+    let baselineBeta: number | null = null
+    let baselineGamma: number | null = null
+    let nextTiltX = 0
+    let nextTiltY = 0
+
+    const scheduleApply = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        applyMobilePerspectiveParallax(root, nextTiltX, nextTiltY)
+      })
+    }
+
+    const handleRotation = (snapshot: DeviceRotationSnapshot) => {
+      setMobileMotionPermission(snapshot.permission)
+      if (snapshot.hasReading) setShowMobileMotionEnable(false)
+
+      const orientation = snapshot.orientation
+      if (!orientation || orientation.beta === null || orientation.gamma === null) return
+
+      baselineBeta ??= orientation.beta
+      baselineGamma ??= orientation.gamma
+
+      nextTiltX = clampParallax((orientation.gamma - baselineGamma) / MOBILE_PARALLAX_MAX_GAMMA_DELTA)
+      nextTiltY = clampParallax((orientation.beta - baselineBeta) / MOBILE_PARALLAX_MAX_BETA_DELTA)
+      scheduleApply()
+    }
+
+    const unsubscribe = subscribeDeviceRotation(handleRotation, { emitCurrent: true })
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      unsubscribe()
+      clearMobilePerspectiveParallax(root)
+    }
+  }, [landingPageLayoutMode, items.length])
+
+  const handleEnableMobileMotion = useCallback(async () => {
+    try {
+      const result = await requestDeviceRotationPermission({ includeMotion: false })
+      setMobileMotionPermission(result.state)
+      if (result.state === 'granted') setShowMobileMotionEnable(false)
+    } catch {
+      setMobileMotionPermission('prompt')
+    }
+  }, [])
 
   const updateVirtualScrollMargin = useCallback(() => {
     const scrollEl = scrollRef.current
@@ -831,6 +991,17 @@ export default function LandingPage() {
             </div>
           </div>
           <div className={styles.headerActions}>
+            {showMobileMotionEnable && mobileMotionPermission !== 'denied' && (
+              <button
+                type="button"
+                className={styles.accountBtn}
+                onClick={handleEnableMobileMotion}
+                title="Enable motion parallax"
+              >
+                <span className={styles.accountName}>Motion</span>
+                <Compass size={13} strokeWidth={1.5} />
+              </button>
+            )}
             <div className={styles.tempChatWrap} ref={tempChatMenuRef}>
               <button
                 type="button"

@@ -2,7 +2,7 @@ import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getCharacter } from "./characters.service";
+import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, sanitizePerspectiveLayers } from "./characters.service";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
@@ -601,6 +601,23 @@ interface RecentChatCharacterInfo {
   name: string;
   avatar_path: string | null;
   image_id: string | null;
+  perspective_layers?: GroupedRecentChat["character_perspective_layers"];
+}
+
+function readPerspectiveLayers(extensions: unknown): GroupedRecentChat["character_perspective_layers"] | undefined {
+  let parsed = extensions;
+  if (typeof extensions === "string") {
+    try {
+      parsed = JSON.parse(extensions || "{}");
+    } catch {
+      parsed = {};
+    }
+  }
+  const ext = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+  const layers = sanitizePerspectiveLayers(ext[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  return layers.background && layers.framing && layers.subject ? layers : undefined;
 }
 
 function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentChatCharacterInfo> {
@@ -613,7 +630,7 @@ function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentCh
 
   const placeholders = ids.map(() => "?").join(",");
   const characterRows = db.query(`
-    SELECT id, name, avatar_path, image_id
+    SELECT id, name, avatar_path, image_id, extensions
     FROM characters
     WHERE id IN (${placeholders})
   `).all(...ids) as any[];
@@ -622,6 +639,7 @@ function loadRecentChatCharacterInfo(db: any, rows: any[]): Map<string, RecentCh
     name: row.name || '',
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
+    perspective_layers: readPerspectiveLayers(row.extensions),
   }]));
 }
 
@@ -656,7 +674,8 @@ export function listRecentChatsGrouped(
             c.updated_at,
             ch.name AS character_name,
             ch.avatar_path AS character_avatar_path,
-            ch.image_id AS character_image_id
+            ch.image_id AS character_image_id,
+            ch.extensions AS character_extensions
           FROM chats c
           LEFT JOIN characters ch ON ch.id = c.character_id
           WHERE c.user_id = ? AND c.character_id IS NOT NULL
@@ -753,6 +772,7 @@ export function listRecentChatsGrouped(
         character_name: characterInfo?.name ?? row.character_name ?? '',
         character_avatar_path: characterInfo?.avatar_path ?? row.character_avatar_path ?? null,
         character_image_id: characterInfo?.image_id ?? row.character_image_id ?? null,
+        character_perspective_layers: characterInfo?.perspective_layers ?? readPerspectiveLayers(row.character_extensions),
         latest_chat_id: row.id,
         latest_chat_name: row.name || '',
         updated_at: row.updated_at,

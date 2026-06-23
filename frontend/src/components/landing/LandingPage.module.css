@@ -328,6 +328,7 @@
 /* Card tilt wrapper — handles 3D tilt separately from framer-motion entry */
 .cardTilt {
   perspective: 800px;
+  transform-style: preserve-3d;
   transition: transform 400ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -340,10 +341,15 @@
   transition: transform 100ms ease-out;
 }
 
+.cardTilt.mobileMotionTilting {
+  transition: transform 180ms ease-out;
+}
+
 /* Card — uses CSS animation for entry (no lingering inline styles that
    would promote every card to its own compositor layer). */
 .card {
   position: relative;
+  transform-style: preserve-3d;
   border-radius: 16px;
   overflow: hidden;
   background: var(--lumiverse-card-bg);
@@ -401,8 +407,8 @@
   --lazy-image-transform-transition: 500ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.card:hover .cardImage img,
-.card:hover .cardImage picture img,
+.card:hover .cardImage img:not(.perspectiveLayer),
+.card:hover .cardImage picture img:not(.perspectiveLayer),
 .listItem:hover .listAvatar img,
 .listItem:hover .listAvatar picture img {
   transform: scale(1.06);
@@ -425,8 +431,8 @@
    translate is scaled down to keep relative intensity in line with
    single cards (otherwise the same 8px shift reads twice as strong
    in a collage). */
-.cardTilt.tilting .cardImage img,
-.cardTilt.tilting .cardImage picture img,
+.cardTilt.tilting .cardImage img:not(.perspectiveLayer),
+.cardTilt.tilting .cardImage picture img:not(.perspectiveLayer),
 .cardTilt.tilting .cardAvatarFallback {
   --lazy-image-transform-transition: 120ms ease-out;
   transition: transform 120ms ease-out;
@@ -449,6 +455,111 @@
   will-change: transform;
 }
 
+.perspectiveStack {
+  isolation: isolate;
+  background: var(--lumiverse-bg-deep);
+  transform-style: preserve-3d;
+}
+
+.perspectiveLayer {
+  --layer-origin-x: 0px;
+  --layer-origin-y: 0px;
+  --layer-origin-depth: 0px;
+  --layer-origin-tilt-x: 0deg;
+  --layer-origin-tilt-y: 0deg;
+  --layer-mouse-x: 0px;
+  --layer-mouse-y: 0px;
+  --layer-mouse-depth: 0px;
+  --layer-mouse-tilt-x: 0deg;
+  --layer-mouse-tilt-y: 0deg;
+  --layer-hover-depth: 0px;
+  --layer-scale: 1;
+  position: absolute;
+  inset: -8%;
+  width: 116%;
+  height: 116%;
+  object-fit: cover;
+  transform-origin: 50% 50%;
+  user-select: none;
+  pointer-events: none;
+  transform:
+    translate3d(
+      calc(var(--layer-origin-x) + var(--layer-mouse-x)),
+      calc(var(--layer-origin-y) + var(--layer-mouse-y)),
+      calc(var(--layer-origin-depth) + var(--layer-hover-depth) + var(--layer-mouse-depth))
+    )
+    rotateX(calc(var(--layer-origin-tilt-x) + var(--layer-mouse-tilt-x)))
+    rotateY(calc(var(--layer-origin-tilt-y) + var(--layer-mouse-tilt-y)))
+    scale(var(--layer-scale));
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.perspectiveLayerBg {
+  z-index: 0;
+  --layer-origin-depth: -10px;
+  --layer-scale: 1.015;
+}
+
+.perspectiveLayerFrame {
+  z-index: 1;
+  --layer-origin-depth: 22px;
+  --layer-scale: 1.045;
+}
+
+.perspectiveLayerSubject {
+  z-index: 2;
+  --layer-origin-depth: 44px;
+  --layer-scale: 1.075;
+}
+
+.perspectiveStack .cardImageOverlay {
+  z-index: 3;
+}
+
+.card:hover .perspectiveLayerBg {
+  --layer-hover-depth: -1px;
+  --layer-scale: 1.025;
+}
+
+.card:hover .perspectiveLayerFrame {
+  --layer-hover-depth: 10px;
+  --layer-scale: 1.095;
+}
+
+.card:hover .perspectiveLayerSubject {
+  --layer-hover-depth: 18px;
+  --layer-scale: 1.145;
+}
+
+.cardTilt.tilting .perspectiveLayer {
+  transition: transform 120ms ease-out;
+  will-change: transform;
+}
+
+.cardTilt.tilting .perspectiveLayerBg {
+  --layer-mouse-x: calc(var(--tilt-x, 0) * 2px);
+  --layer-mouse-y: calc(var(--tilt-y, 0) * 1.5px);
+  --layer-mouse-depth: calc(var(--tilt-y, 0) * -1px);
+  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 0.15deg);
+  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -0.15deg);
+}
+
+.cardTilt.tilting .perspectiveLayerFrame {
+  --layer-mouse-x: calc(var(--tilt-x, 0) * 13px);
+  --layer-mouse-y: calc(var(--tilt-y, 0) * 10px);
+  --layer-mouse-depth: calc(var(--tilt-y, 0) * 3px);
+  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 1deg);
+  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -1deg);
+}
+
+.cardTilt.tilting .perspectiveLayerSubject {
+  --layer-mouse-x: calc(var(--tilt-x, 0) * 8px);
+  --layer-mouse-y: calc(var(--tilt-y, 0) * 6px);
+  --layer-mouse-depth: calc(var(--tilt-y, 0) * 2px);
+  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * 0.65deg);
+  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * -0.65deg);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cardTilt {
     perspective: none;
@@ -464,14 +575,15 @@
     transition: none;
     will-change: auto;
   }
-  .card:hover .cardImage img,
-  .card:hover .cardImage picture img,
+  .card:hover .cardImage img:not(.perspectiveLayer),
+  .card:hover .cardImage picture img:not(.perspectiveLayer),
   .listItem:hover .listAvatar img,
   .listItem:hover .listAvatar picture img,
-  .cardTilt.tilting .cardImage img,
-  .cardTilt.tilting .cardImage picture img,
+  .cardTilt.tilting .cardImage img:not(.perspectiveLayer),
+  .cardTilt.tilting .cardImage picture img:not(.perspectiveLayer),
   .cardTilt.tilting .mosaicCell img,
   .cardTilt.tilting .mosaicCell picture img,
+  .cardTilt.tilting .perspectiveLayer,
   .cardTilt.tilting .cardAvatarFallback {
     transform: none;
   }
@@ -486,9 +598,11 @@
 }
 
 .cardBtn {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
+  transform-style: preserve-3d;
   cursor: pointer;
   background: none;
   border: none;
@@ -500,6 +614,7 @@
   position: relative;
   aspect-ratio: 3 / 4;
   overflow: hidden;
+  transform-style: preserve-3d;
 }
 
 .cardImageOverlay {

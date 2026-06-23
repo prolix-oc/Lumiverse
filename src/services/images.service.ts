@@ -223,6 +223,77 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
   return image;
 }
 
+export async function uploadOptimizedWebpImage(userId: string, file: File, options?: ImageOwnershipOptions): Promise<Image> {
+  const id = crypto.randomUUID();
+  const filename = `${id}.webp`;
+  const dir = getImagesDir();
+  const filepath = join(dir, filename);
+  const inputBuffer = Buffer.from(await file.arrayBuffer());
+
+  let width: number | null = null;
+  let height: number | null = null;
+  let hasThumbnail = false;
+
+  const webpBuffer = await sharp(inputBuffer)
+    .rotate()
+    .webp({ quality: WEBP_QUALITY })
+    .toBuffer({ resolveWithObject: true })
+    .then(({ data, info }) => {
+      width = info.width ?? null;
+      height = info.height ?? null;
+      return Buffer.from(data);
+    });
+
+  await Bun.write(filepath, webpBuffer);
+
+  const sizes = getThumbnailSettings(userId);
+  const [smOk, lgOk] = await Promise.all([
+    generateThumbnail(webpBuffer, join(dir, `${id}${thumbSuffix("sm")}`), sizes.smallSize),
+    generateThumbnail(webpBuffer, join(dir, `${id}${thumbSuffix("lg")}`), sizes.largeSize),
+  ]);
+  hasThumbnail = smOk || lgOk;
+
+  const now = Math.floor(Date.now() / 1000);
+  const ownerExtensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
+  const ownerCharacterId = normalizeOwnershipValue(options?.owner_character_id);
+  const ownerChatId = normalizeOwnershipValue(options?.owner_chat_id);
+  getDb()
+    .query(
+      `INSERT INTO images (
+         id,
+         user_id,
+         filename,
+         original_filename,
+         mime_type,
+         width,
+         height,
+         has_thumbnail,
+         owner_extension_identifier,
+         owner_character_id,
+         owner_chat_id,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      userId,
+      filename,
+      file.name,
+      "image/webp",
+      width,
+      height,
+      hasThumbnail ? 1 : 0,
+      ownerExtensionIdentifier,
+      ownerCharacterId,
+      ownerChatId,
+      now,
+    );
+
+  const image = getImage(userId, id)!;
+  eventBus.emit(EventType.IMAGE_UPLOADED, { image }, userId);
+  return image;
+}
+
 /**
  * Save an image from a base64 data URL (e.g. from image generation).
  * Creates the image record, generates thumbnails, and returns the Image entity.
