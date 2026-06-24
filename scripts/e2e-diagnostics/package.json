@@ -4,9 +4,7 @@
   "type": "module",
   "scripts": {
     "diagnose": "node diagnose.mjs",
-    "diagnose-landing": "node diagnose-landing.mjs",
-    "profile-landing": "node profile-landing.mjs",
-    "profile-chat": "node profile-chat.mjs"
+    "diagnose:spindle": "node diagnose-spindle.mjs",
   },
   "dependencies": {
     "dotenv": "^16.4.5",

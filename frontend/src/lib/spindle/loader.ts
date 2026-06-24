@@ -28,6 +28,7 @@ import { useStore } from '@/store'
 
 interface LoadedExtension {
   id: string
+  generation: number
   identifier: string
   manifestSignature: string
   module: SpindleFrontendModule
@@ -39,6 +40,10 @@ interface LoadedExtension {
   activeProcesses: Map<string, ActiveFrontendProcess>
   mountRoots: Element[]
   stopMountSync?: () => void
+  isReady: boolean
+  holdReady: boolean
+  setupComplete: boolean
+  readyTimeout: ReturnType<typeof setTimeout> | null
 }
 
 type FrontendProcessHandler = (
@@ -74,6 +79,8 @@ interface ActiveFrontendProcess {
 }
 
 type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
+  ready(): void
+  deferReady(): void
   ui: SpindleTabMobilityUI & {
     events: FrontendUIEventsHelper
   }
@@ -115,11 +122,96 @@ type FrontendProcessWirePayload =
       reason?: string
     }
 
+type PendingStartupItem =
+  | {
+      kind: 'backend'
+      payload: unknown
+    }
+  | {
+      kind: 'process'
+      payload: FrontendProcessWirePayload
+    }
+
 const loadedExtensions = new Map<string, LoadedExtension>()
 const loadInFlight = new Map<string, { promise: Promise<void>; force: boolean; manifestSignature: string }>()
 const loadGeneration = new Map<string, number>()
 const recentForceLoads = new Map<string, { manifestSignature: string; completedAt: number }>()
 const FORCE_LOAD_DEDUPE_MS = 2000
+const pendingStartupItems = new Map<string, PendingStartupItem[]>()
+const MAX_PENDING_STARTUP_ITEMS = 100
+const FRONTEND_READY_TIMEOUT_MS = 10_000
+
+function deliverBackendMessage(loaded: LoadedExtension, payload: unknown): void {
+  for (const handler of loaded.backendHandlers) {
+    try {
+      handler(payload)
+    } catch (err) {
+      console.error(`[Spindle] Backend message handler error for ${loaded.identifier}:`, err)
+    }
+  }
+}
+
+function isCurrentLoadedExtension(loaded: LoadedExtension): boolean {
+  return loadedExtensions.get(loaded.id) === loaded && loadGeneration.get(loaded.id) === loaded.generation
+}
+
+function queueStartupItem(extensionId: string, item: PendingStartupItem): void {
+  const queue = pendingStartupItems.get(extensionId) ?? []
+  queue.push(item)
+  if (queue.length > MAX_PENDING_STARTUP_ITEMS) {
+    queue.splice(0, queue.length - MAX_PENDING_STARTUP_ITEMS)
+  }
+  pendingStartupItems.set(extensionId, queue)
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return !!value && typeof value === 'object' && typeof (value as PromiseLike<unknown>).then === 'function'
+}
+
+function clearReadyTimeout(loaded: LoadedExtension): void {
+  if (loaded.readyTimeout) {
+    clearTimeout(loaded.readyTimeout)
+    loaded.readyTimeout = null
+  }
+}
+
+function armReadyTimeout(loaded: LoadedExtension): void {
+  if (loaded.readyTimeout || loaded.isReady || !isCurrentLoadedExtension(loaded)) return
+  loaded.readyTimeout = setTimeout(() => {
+    if (!isCurrentLoadedExtension(loaded) || loaded.isReady) return
+    console.warn(
+      `[Spindle] Frontend ready() timeout for ${loaded.identifier}; auto-releasing queued startup events`
+    )
+    markExtensionReady(loaded, 'timeout')
+  }, FRONTEND_READY_TIMEOUT_MS)
+}
+
+function flushPendingStartupItems(loaded: LoadedExtension): number {
+  const items = pendingStartupItems.get(loaded.id)
+  if (!items?.length) return 0
+  pendingStartupItems.delete(loaded.id)
+  for (const item of items) {
+    if (item.kind === 'backend') {
+      deliverBackendMessage(loaded, item.payload)
+    } else {
+      deliverFrontendProcessEvent(loaded, item.payload)
+    }
+  }
+  return items.length
+}
+
+function markExtensionReady(
+  loaded: LoadedExtension,
+  source: 'manual' | 'legacy-auto' | 'timeout'
+): void {
+  if (loaded.isReady || !isCurrentLoadedExtension(loaded)) return
+  loaded.isReady = true
+  clearReadyTimeout(loaded)
+  const replayed = flushPendingStartupItems(loaded)
+  console.debug(
+    `[Spindle] Frontend ready (${source}): ${loaded.identifier}${replayed > 0 ? ` [replayed ${replayed}]` : ''}`
+  )
+}
 
 function getManifestSignature(manifest: SpindleManifest): string {
   return `${manifest.identifier}:${manifest.version}:${manifest.entry_frontend || 'dist/frontend.js'}`
@@ -292,8 +384,27 @@ async function doLoadFrontendExtension(
       mountRoots.clear()
       mountedPoints.clear()
     }
+
+    let loaded!: LoadedExtension
     const context: FrontendExtensionContext = {
       dom,
+      ready() {
+        markExtensionReady(loaded, 'manual')
+      },
+      deferReady() {
+        if (loaded.isReady) {
+          console.warn(`[Spindle:${manifest.identifier}] deferReady() called after frontend was already ready`)
+          return
+        }
+        if (loaded.setupComplete) {
+          console.warn(`[Spindle:${manifest.identifier}] deferReady() must be called before setup() returns`)
+          return
+        }
+        if (!loaded.holdReady) {
+          loaded.holdReady = true
+          armReadyTimeout(loaded)
+        }
+      },
       events: {
         on(event: string, handler: (payload: unknown) => void): () => void {
           const unsub = wsClient.on(event, handler)
@@ -711,10 +822,35 @@ async function doLoadFrontendExtension(
       manifest,
     }
 
-    let teardownFn: void | (() => void)
+    loaded = {
+      id: extensionId,
+      generation,
+      identifier: manifest.identifier,
+      manifestSignature,
+      module: mod,
+      context,
+      teardown: mod.teardown,
+      eventUnsubs,
+      backendHandlers,
+      processHandlers,
+      activeProcesses,
+      mountRoots: [],
+      stopMountSync: cleanupMountInfra,
+      isReady: false,
+      holdReady: false,
+      setupComplete: false,
+      readyTimeout: null,
+    }
+
+    let teardownResult: unknown
     try {
-      teardownFn = mod.setup(context)
+      loadedExtensions.set(extensionId, loaded)
+      teardownResult = mod.setup(context)
     } catch (err) {
+      if (loadedExtensions.get(extensionId) === loaded) {
+        loadedExtensions.delete(extensionId)
+      }
+      clearReadyTimeout(loaded)
       dom.cleanup()
       cleanupMountInfra()
       throw err
@@ -722,32 +858,51 @@ async function doLoadFrontendExtension(
 
     if (!currentGeneration()) {
       try {
-        if (typeof teardownFn === 'function') teardownFn()
-        else mod.teardown?.()
+        if (typeof teardownResult === 'function') {
+          teardownResult()
+        } else {
+          mod.teardown?.()
+        }
       } catch {
         // no-op
       }
+      if (loadedExtensions.get(extensionId) === loaded) {
+        loadedExtensions.delete(extensionId)
+      }
+      clearReadyTimeout(loaded)
       dom.cleanup()
       cleanupMountInfra()
       return
     }
 
-    loadedExtensions.set(extensionId, {
-      id: extensionId,
-      identifier: manifest.identifier,
-      manifestSignature,
-      module: mod,
-      context,
-      teardown: typeof teardownFn === 'function' ? teardownFn : mod.teardown,
-      eventUnsubs,
-      backendHandlers,
-      processHandlers,
-      activeProcesses,
-      mountRoots: Array.from(mountRoots.values()),
-      stopMountSync: cleanupMountInfra,
-    })
+    loaded.setupComplete = true
+    loaded.mountRoots = Array.from(mountRoots.values())
+
+    if (isPromiseLike(teardownResult)) {
+      void Promise.resolve(teardownResult)
+        .then((resolved) => {
+          if (!isCurrentLoadedExtension(loaded)) return
+          if (typeof resolved === 'function') {
+            loaded.teardown = resolved as () => void
+          }
+        })
+        .catch((err) => {
+          if (!isCurrentLoadedExtension(loaded)) return
+          console.error(`[Spindle] Async setup error for ${loaded.identifier}:`, err)
+          void unloadFrontendExtension(loaded.id)
+        })
+    } else if (typeof teardownResult === 'function') {
+      loaded.teardown = teardownResult as () => void
+    }
 
     console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
+    if (!loaded.isReady) {
+      if (loaded.holdReady) {
+        armReadyTimeout(loaded)
+      } else {
+        markExtensionReady(loaded, 'legacy-auto')
+      }
+    }
   } catch (err) {
     console.error(`[Spindle] Failed to load frontend for ${manifest.identifier}:`, err)
   }
@@ -836,6 +991,7 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
     unsub()
   }
 
+  clearReadyTimeout(loaded)
   loaded.backendHandlers.clear()
   loaded.processHandlers.clear()
   unregisterTagInterceptorsByExtension(extensionId)
@@ -851,21 +1007,16 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
 
 export function routeBackendMessage(extensionId: string, payload: unknown): void {
   const loaded = loadedExtensions.get(extensionId)
-  if (!loaded) return
-
-  for (const handler of loaded.backendHandlers) {
-    try {
-      handler(payload)
-    } catch (err) {
-      console.error(`[Spindle] Backend message handler error for ${loaded.identifier}:`, err)
-    }
+  if (!loaded || !loaded.isReady) {
+    queueStartupItem(extensionId, { kind: 'backend', payload })
+    return
   }
+
+  deliverBackendMessage(loaded, payload)
 }
 
-export function routeFrontendProcessEvent(extensionId: string, payload: FrontendProcessWirePayload): void {
-  const loaded = loadedExtensions.get(extensionId)
-  if (!loaded) return
-
+function deliverFrontendProcessEvent(loaded: LoadedExtension, payload: FrontendProcessWirePayload): void {
+  const extensionId = loaded.id
   if (payload.action === 'spawn') {
     void (async () => {
       const handler = loaded.processHandlers.get(payload.kind)
@@ -1021,6 +1172,16 @@ export function routeFrontendProcessEvent(extensionId: string, payload: Frontend
       }
     }
   }
+}
+
+export function routeFrontendProcessEvent(extensionId: string, payload: FrontendProcessWirePayload): void {
+  const loaded = loadedExtensions.get(extensionId)
+  if (!loaded || !loaded.isReady) {
+    queueStartupItem(extensionId, { kind: 'process', payload })
+    return
+  }
+
+  deliverFrontendProcessEvent(loaded, payload)
 }
 
 export function getLoadedExtensions(): Map<string, LoadedExtension> {
