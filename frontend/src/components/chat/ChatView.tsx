@@ -230,20 +230,36 @@ export default function ChatView() {
 
     if (prefersReducedMotion()) {
       setChatChromeEntering(false)
+      document.body.removeAttribute('data-chat-chrome-entering')
       return
     }
 
     setChatChromeEntering(true)
-    chromeEnterTimerRef.current = window.setTimeout(() => {
-      chromeEnterTimerRef.current = null
+    document.body.setAttribute('data-chat-chrome-entering', 'true')
+    const handlePopulated = () => {
       setChatChromeEntering(false)
-    }, CHAT_CHROME_ENTER_MS)
-
-    return () => {
+      document.body.removeAttribute('data-chat-chrome-entering')
       if (chromeEnterTimerRef.current !== null) {
         window.clearTimeout(chromeEnterTimerRef.current)
         chromeEnterTimerRef.current = null
       }
+    }
+    window.addEventListener('lumiverse:chat-items-populated', handlePopulated, { once: true })
+
+    // Fallback if virtualizer fails or is completely empty
+    chromeEnterTimerRef.current = window.setTimeout(() => {
+      chromeEnterTimerRef.current = null
+      setChatChromeEntering(false)
+      document.body.removeAttribute('data-chat-chrome-entering')
+    }, Math.max(CHAT_CHROME_ENTER_MS, 400))
+
+    return () => {
+      window.removeEventListener('lumiverse:chat-items-populated', handlePopulated)
+      if (chromeEnterTimerRef.current !== null) {
+        window.clearTimeout(chromeEnterTimerRef.current)
+        chromeEnterTimerRef.current = null
+      }
+      document.body.removeAttribute('data-chat-chrome-entering')
     }
   }, [chatId])
 
@@ -464,6 +480,14 @@ export default function ChatView() {
         useStore.getState().setActiveChatDisplayOwner(chat.character_display_owner ?? null)
         useStore.getState().setActiveChatName(chat.name ?? null)
         setMessages(msgPage.data, msgPage.total)
+
+        if (msgPage.data.length === 0) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              window.dispatchEvent(new CustomEvent('lumiverse:chat-items-populated'))
+            })
+          })
+        }
 
         // Chat-derived store state, applied synchronously with setMessages so
         // it lands in the same render batch. Each of these used to trickle in
@@ -803,6 +827,7 @@ export default function ChatView() {
         isStreaming && styles.streaming,
         hasAnyBackground && styles.hasSceneBackground
       )}
+      data-streaming={isStreaming || undefined}
     >
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
       <WallpaperLayer wallpaper={displayedWallpaper} settings={wallpaper} hidden={!!sceneBackground} videoRef={videoRef} fadeInOnMount />

@@ -66,13 +66,45 @@ export function useMessageCard(message: Message, chatId: string) {
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
   const isBubbleMode = useStore((s) => s.chatSheldDisplayMode) === 'bubble'
 
-  const streamingContent = useStore((s) => s.streamingContent)
-  const streamingReasoning = useStore((s) => s.streamingReasoning)
-  const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
-  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingSwipeId = useStore((s) => s.streamingSwipeId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const streamingContent = useStore((s) => {
+    if (!s.isStreaming) return ''
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return ''
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    if (s.regeneratingMessageId === message.id) return s.streamingContent
+    if (s.streamingGenerationType === 'continue' && isTailMessage && !message.is_user) return s.streamingContent
+    return ''
+  })
+  const streamingReasoning = useStore((s) => {
+    if (!s.isStreaming) return ''
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return ''
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoning : ''
+  })
+  const streamingReasoningDuration = useStore((s) => {
+    if (!s.isStreaming) return null
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return null
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoningDuration : null
+  })
+  const streamingReasoningStartedAt = useStore((s) => {
+    if (!s.isStreaming) return null
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return null
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoningStartedAt : null
+  })
 
   const isUser = message.is_user
   const isLastMessage = messages.length > 0 && messages[messages.length - 1].id === message.id

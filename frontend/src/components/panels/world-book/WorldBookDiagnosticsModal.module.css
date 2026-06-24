@@ -24,8 +24,12 @@
   background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
   border-radius: 18px;
-  box-shadow: var(--lumiverse-shadow-xl, 0 28px 80px rgba(0, 0, 0, 0.42));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   overflow: hidden;
+}
+
+:global([data-glass]) .modal {
+  box-shadow: var(--lumiverse-shadow-xl, 0 28px 80px rgba(0, 0, 0, 0.42));
 }
 
 .header {

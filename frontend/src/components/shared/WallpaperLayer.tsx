@@ -3,6 +3,8 @@ import { imagesApi } from '@/api/images'
 import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import styles from './WallpaperLayer.module.css'
 
+const MAX_WALLPAPER_IMAGE_BLUR_PX = 8
+
 interface WallpaperLayerProps {
   wallpaper: WallpaperRef | null
   settings: Pick<WallpaperSettings, 'opacity' | 'fit' | 'blur'>
@@ -15,6 +17,8 @@ interface WallpaperLayerProps {
 export default function WallpaperLayer({ wallpaper, settings, hidden = false, fixed = false, fadeInOnMount = false, videoRef }: WallpaperLayerProps) {
   const [fadeReady, setFadeReady] = useState(!fadeInOnMount)
   const revealRef = useRef(() => setFadeReady(true))
+  const ownedVideoRef = useRef<HTMLVideoElement>(null)
+  const activeVideoRef = videoRef ?? ownedVideoRef
 
   useEffect(() => {
     if (!fadeInOnMount || !wallpaper?.image_id) {
@@ -49,12 +53,35 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
     }
   }, [fadeInOnMount, wallpaper?.image_id, wallpaper?.type])
 
+  useEffect(() => {
+    if (wallpaper?.type !== 'video') return
+
+    const video = activeVideoRef.current
+    if (!video) return
+
+    const syncPlayback = () => {
+      if (hidden || document.hidden) {
+        video.pause()
+        return
+      }
+      void video.play().catch(() => {})
+    }
+
+    syncPlayback()
+    document.addEventListener('visibilitychange', syncPlayback)
+    return () => {
+      document.removeEventListener('visibilitychange', syncPlayback)
+      video.pause()
+    }
+  }, [activeVideoRef, hidden, wallpaper?.image_id, wallpaper?.type])
+
   if (!wallpaper?.image_id) return null
 
   const url = imagesApi.url(wallpaper.image_id)
   const opacity = hidden || !fadeReady ? 0 : settings.opacity ?? 0.3
   const fit = settings.fit ?? 'cover'
-  const blur = settings.blur ?? 0
+  const requestedBlur = Math.max(0, settings.blur ?? 0)
+  const blur = wallpaper.type === 'video' ? 0 : Math.min(requestedBlur, MAX_WALLPAPER_IMAGE_BLUR_PX)
   const filter = blur > 0 ? `blur(${blur}px)` : undefined
 
   const className = fixed ? `${styles.layer} ${styles.fixed}` : styles.layer
@@ -63,7 +90,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
   if (wallpaper.type === 'video') {
     return (
       <video
-        ref={videoRef}
+        ref={activeVideoRef}
         key={wallpaper.image_id}
         className={videoClassName}
         src={url}

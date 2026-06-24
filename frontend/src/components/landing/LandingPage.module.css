@@ -1153,14 +1153,6 @@
   color: var(--lumiverse-text-muted);
 }
 
-/* Footer */
-.footer {
-  text-align: center;
-  padding: 24px 0;
-  color: var(--lumiverse-text-hint);
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
-}
-
 @media (max-width: 600px) {
   .content {
     padding: 16px;

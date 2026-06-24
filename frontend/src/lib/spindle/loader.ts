@@ -261,6 +261,10 @@ async function doLoadFrontendExtension(
     let openModalCount = 0
 
     const attachMountRoots = () => {
+      if (document.body.hasAttribute('data-chat-chrome-entering')) {
+        setTimeout(attachMountRoots, 50)
+        return
+      }
       for (const [point, root] of mountRoots) {
         const selector = `[data-spindle-mount="${point}"]`
         const target = document.querySelector(selector)

@@ -80,6 +80,22 @@
   animation: pulse-glow 3s ease-in-out infinite;
 }
 
+:global([data-component='ChatView'][data-streaming]) .socialCard,
+:global([data-component='ChatView'][data-streaming]) .socialCard::before,
+:global([data-component='ChatView'][data-streaming]) .socialCard::after,
+:global([data-component='ChatView'][data-streaming]) .socialAvatarContainer {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .socialCard,
+  .socialCard::before,
+  .socialCard::after,
+  .socialAvatarContainer {
+    animation: none;
+  }
+}
+
 .socialAvatar {
   width: 42px;
   height: 42px;

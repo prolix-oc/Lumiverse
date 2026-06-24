@@ -27,6 +27,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
+}
+
+:global([data-glass]) .modal {
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
     0 0 40px var(--lumiverse-primary-015);
 }

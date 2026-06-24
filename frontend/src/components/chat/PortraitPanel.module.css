@@ -37,9 +37,7 @@
   border-radius: var(--lcs-radius, 14px);
   margin: 16px 0 8px 0;
   height: calc(100% - 24px);
-  box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
-    0 4px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
   scrollbar-width: thin;
   scrollbar-color: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.08)) transparent;
   contain: layout style;
@@ -47,7 +45,9 @@
 
 :global([data-glass]) .panel {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
-  will-change: backdrop-filter;
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.06),
+    0 4px 24px rgba(0, 0, 0, 0.08);
 }
 
 .panel::-webkit-scrollbar {

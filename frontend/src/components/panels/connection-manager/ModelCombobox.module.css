@@ -105,11 +105,12 @@
   border-radius: 8px;
   z-index: 10;
   padding: 4px;
-  box-shadow: var(--lumiverse-shadow-md);
+  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.2));
 }
 
 :global([data-glass]) .dropdown {
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 
 .dropdownItem {

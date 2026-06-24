@@ -205,14 +205,28 @@ export function stripMessageTags(
 }
 
 export function dispatchMessageTagIntercepts(intercepts: PendingTagIntercept[], delivered: Set<string>): void {
-  for (const { payload, interceptor } of intercepts) {
-    const key = deliveryKey(payload, interceptor)
-    if (delivered.has(key)) continue
-    delivered.add(key)
-    try {
-      interceptor.handler({ ...payload, extensionId: interceptor.extensionId })
-    } catch (err) {
-      console.error(`[Spindle] Tag interceptor failed (${interceptor.extensionId}):`, err)
+  const processIntercepts = () => {
+    for (const { payload, interceptor } of intercepts) {
+      const key = deliveryKey(payload, interceptor)
+      if (delivered.has(key)) continue
+      delivered.add(key)
+      try {
+        interceptor.handler({ ...payload, extensionId: interceptor.extensionId })
+      } catch (err) {
+        console.error(`[Spindle] Tag interceptor failed (${interceptor.extensionId}):`, err)
+      }
     }
+  }
+
+  if (document.body.hasAttribute('data-chat-chrome-entering')) {
+    // Stall processing until the chat container finishes its enter animation
+    const pollTimer = setInterval(() => {
+      if (!document.body.hasAttribute('data-chat-chrome-entering')) {
+        clearInterval(pollTimer)
+        processIntercepts()
+      }
+    }, 50)
+  } else {
+    processIntercepts()
   }
 }

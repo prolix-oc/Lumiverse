@@ -26,11 +26,15 @@
   background: var(--lumiverse-bg-deep, #0a0812);
   border: 1px solid var(--lumiverse-border, rgba(147, 112, 219, 0.14));
   border-radius: var(--lumiverse-radius-lg, 12px);
-  box-shadow: var(--lumiverse-shadow-xl, 0 24px 64px rgba(0, 0, 0, 0.5));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: wv-rise 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:global([data-glass]) .shell {
+  box-shadow: var(--lumiverse-shadow-xl, 0 24px 64px rgba(0, 0, 0, 0.5));
 }
 
 @keyframes wv-rise {

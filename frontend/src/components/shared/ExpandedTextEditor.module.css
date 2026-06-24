@@ -29,8 +29,12 @@
   max-width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(900px, var(--lumiverse-content-max-width, 900px)));
   height: calc(80vh / var(--lumiverse-ui-scale, 1));
   max-height: calc(80vh / var(--lumiverse-ui-scale, 1));
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 1px var(--lumiverse-primary-020);
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4)), 0 0 1px var(--lumiverse-primary-020);
   overflow: hidden;
+}
+
+:global([data-glass]) .dialog {
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 1px var(--lumiverse-primary-020);
 }
 
 /* ── Inline variant (renders in-flow below the field) ── */

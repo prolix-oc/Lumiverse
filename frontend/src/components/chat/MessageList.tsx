@@ -174,7 +174,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const initialWarmTimerRef = useRef<number | null>(null)
   // Fade the message list in once TanStack has populated virtual rows on
   // chat load. Reset on every chat switch so the next chat can fade in too.
-  const [listVisible, setListVisible] = useState(false)
+  const hasFadedInRef = useRef(false)
   // Bottom inset that TanStack should treat as part of the virtual content.
   // This replaces CSS padding-bottom so isAtEnd/scrollToEnd/followOnAppend
   // all land at the true bottom of the list.
@@ -246,7 +246,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // Reset the fade-in state synchronously on chat switch so the next chat
   // starts hidden instead of flashing the new content for one frame.
   useLayoutEffect(() => {
-    setListVisible(false)
+    hasFadedInRef.current = false
   }, [chatId])
 
   // Record a programmatic scrollTop write so handleScroll can identify the
@@ -516,7 +516,14 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     initialScrollRafRef.current = requestAnimationFrame(() => {
       initialScrollRafRef.current = null
-      if (!scrollRef.current || initialBottomPinnedChatRef.current === chatId) return
+      const el = scrollRef.current
+      if (!el || initialBottomPinnedChatRef.current === chatId) return
+
+      if (instance.getTotalSize() <= el.clientHeight) {
+        recordScrollPosition()
+        initialBottomPinnedChatRef.current = chatId
+        return
+      }
 
       const hasLastVirtualItem = instance.getVirtualItems().some((item) => item.index === virtualListItems.length - 1)
       if (hasLastVirtualItem && instance.isAtEnd(SCROLL_END_THRESHOLD)) {
@@ -628,13 +635,19 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const virtualItems = rowVirtualizer.getVirtualItems()
 
   // Trigger the chat-load fade-in as soon as the virtualizer has real rows.
-  // Rows are still measured/painted while opacity is 0, so the user sees the
-  // list only after it has been positioned.
+  // We dispatch an event so the parent ChatView can perform a container-wide
+  // enter animation including the input area and toolbars.
+  const hasPopulated = virtualItems.some((item) => virtualListItems[item.index]?.type === 'message')
   useEffect(() => {
-    if (!listVisible && virtualItems.length > 0) {
-      setListVisible(true)
+    if (!hasFadedInRef.current && hasPopulated) {
+      hasFadedInRef.current = true
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          window.dispatchEvent(new CustomEvent('lumiverse:chat-items-populated'))
+        })
+      })
     }
-  }, [listVisible, virtualItems])
+  }, [hasPopulated, virtualItems])
 
   // Gate that keeps the keyboard/safe-zone repin from fighting the unified
   // scroll guard while streaming is active.
@@ -721,6 +734,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   const pinToBottomIfNeeded = useCallback((el: HTMLElement) => {
     if (hasInListEditableFocus()) return
+    if (rowVirtualizer.getTotalSize() <= el.clientHeight) return
     if (rowVirtualizer.isAtEnd(SCROLL_END_THRESHOLD)) return
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
@@ -749,6 +763,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const scrollToHistoryBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollRef.current
     if (!el || virtualListItems.length === 0) return
+    if (rowVirtualizer.getTotalSize() <= el.clientHeight) return
 
     isPinnedRef.current = true
     // Smooth scroll emits a stream of events with no single target
@@ -1028,7 +1043,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       data-component="MessageList"
       className={styles.list}
       ref={scrollRef}
-      style={{ opacity: listVisible ? 1 : 0 }}
       onScroll={handleScroll}
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}

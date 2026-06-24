@@ -24,10 +24,14 @@
   background: var(--lumiverse-gradient-modal, var(--lumiverse-bg));
   border-radius: var(--lumiverse-radius-xl, 16px);
   border: 1px solid var(--lumiverse-border);
-  box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+:global([data-glass]) .modal {
+  box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5));
 }
 
 @media (max-width: 480px) {

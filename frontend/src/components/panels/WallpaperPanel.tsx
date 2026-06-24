@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ImageIcon, Upload, Trash2, Monitor, MessageSquare } from 'lucide-react'
 import { useStore } from '@/store'
@@ -11,14 +11,49 @@ import type { WallpaperRef } from '@/types/store'
 import styles from './WallpaperPanel.module.css'
 
 const MAX_VIDEO_SIZE = 100 * 1024 * 1024 // 100MB
+const MAX_WALLPAPER_BLUR = 8
 const ACCEPTED_TYPES = 'image/*,video/mp4,video/webm'
 
 function isVideoFile(file: File): boolean {
   return file.type.startsWith('video/')
 }
 
-function isVideoMime(mime?: string): boolean {
-  return !!mime && mime.startsWith('video/')
+function WallpaperPreviewVideo({ src }: { src: string }) {
+  const ref = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    const video = ref.current
+    if (!video) return
+
+    let visible = typeof IntersectionObserver === 'undefined'
+
+    const syncPlayback = () => {
+      if (!visible || document.hidden) {
+        video.pause()
+        return
+      }
+      void video.play().catch(() => {})
+    }
+
+    const observer = typeof IntersectionObserver !== 'undefined'
+      ? new IntersectionObserver(([entry]) => {
+        visible = !!entry?.isIntersecting
+        syncPlayback()
+      }, { threshold: 0.1 })
+      : null
+
+    observer?.observe(video)
+    syncPlayback()
+    document.addEventListener('visibilitychange', syncPlayback)
+
+    return () => {
+      observer?.disconnect()
+      document.removeEventListener('visibilitychange', syncPlayback)
+      video.pause()
+    }
+  }, [src])
+
+  return <video ref={ref} className={styles.previewVideo} src={src} muted loop playsInline preload="metadata" />
 }
 
 export default function WallpaperPanel() {
@@ -40,6 +75,7 @@ export default function WallpaperPanel() {
   const chatWp = activeChatWallpaper
   const globalUrl = globalWp?.image_id ? imagesApi.url(globalWp.image_id) : null
   const chatUrl = chatWp?.image_id ? imagesApi.url(chatWp.image_id) : null
+  const blurValue = Math.min(Math.max(wallpaper.blur ?? 0, 0), MAX_WALLPAPER_BLUR)
 
   const handleUpload = async (target: 'global' | 'chat') => {
     setUploadTarget(target)
@@ -143,7 +179,7 @@ export default function WallpaperPanel() {
       <div className={styles.preview}>
         {globalUrl && globalWp?.type === 'video' ? (
           <>
-            <video className={styles.previewVideo} src={globalUrl} autoPlay muted loop playsInline />
+            <WallpaperPreviewVideo src={globalUrl} />
             <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>
           </>
         ) : globalUrl ? (
@@ -182,7 +218,7 @@ export default function WallpaperPanel() {
           <div className={styles.preview}>
             {chatUrl && chatWp?.type === 'video' ? (
               <>
-                <video className={styles.previewVideo} src={chatUrl} autoPlay muted loop playsInline />
+                <WallpaperPreviewVideo src={chatUrl} />
                 <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>
               </>
             ) : chatUrl ? (
@@ -236,14 +272,14 @@ export default function WallpaperPanel() {
             onChange={(e) => setWallpaper({ opacity: Number(e.target.value) / 100 })}
           />
         </FormField>
-        <FormField label={`Blur (${wallpaper.blur ?? 0}px)`}>
+        <FormField label={`Blur (${blurValue}px)`}>
           <input
             className={styles.slider}
             type="range"
             min={0}
-            max={20}
+            max={MAX_WALLPAPER_BLUR}
             step={1}
-            value={wallpaper.blur ?? 0}
+            value={blurValue}
             onChange={(e) => setWallpaper({ blur: Number(e.target.value) })}
           />
         </FormField>

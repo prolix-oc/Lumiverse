@@ -49,6 +49,9 @@ export default function App() {
   const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const dockPanelDesktopSide = useStore((s) => s.spindleSettings.dockPanelDesktopSide)
   const wallpaper = useStore((s) => s.wallpaper)
+  const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
+  const sceneBackground = useStore((s) => s.sceneBackground)
+  const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
 
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
@@ -167,7 +170,7 @@ export default function App() {
             } as React.CSSProperties}
           >
             <DesktopPwaTitlebar />
-            <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} fixed fadeInOnMount />
+            <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
             <ErrorBoundary label="App">
               {/* Mirrors react-router context out to detached drawer-tab roots */}
               <RouterContextExporter />

@@ -9,20 +9,13 @@
   left: 12px;
   right: 12px;
   z-index: 20;
-  background: var(--lumiverse-bg, rgba(28, 24, 38, 0.95));
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%),
-    color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
-  );
-  border: 1px solid var(--lcs-glass-border);
+  background: var(--lumiverse-bg-elevated, rgba(28, 24, 38, 0.95));
+  border: 1px solid var(--lumiverse-border);
   border-radius: var(--lcs-radius, 14px);
   overflow: hidden;
   isolation: isolate;
   contain: layout style paint;
-  box-shadow:
-    0 2px 8px var(--lumiverse-fill-heavy),
-    inset 0 -1px 0 var(--lcs-glass-border);
+  box-shadow: 0 4px 16px var(--lumiverse-fill-heavy);
   transition:
     opacity 180ms ease,
     transform 180ms ease,
@@ -55,8 +48,13 @@
 }
 
 :global([data-glass]) .container {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--lcs-glass-bg) 78%, var(--lumiverse-bg-elevated) 22%),
+    color-mix(in srgb, var(--lcs-glass-bg) 70%, var(--lumiverse-bg) 30%)
+  );
+  border-color: var(--lcs-glass-border);
   backdrop-filter: blur(var(--lcs-glass-blur));
-  will-change: backdrop-filter;
   box-shadow:
     0 14px 34px var(--lumiverse-fill-heavy),
     var(--lumiverse-highlight-inset),

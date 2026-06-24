@@ -90,6 +90,17 @@
   backdrop-filter: blur(var(--lcs-glass-strong-blur, 12px)) saturate(1.2);
 }
 
+:global([data-component='ChatView'][data-streaming]) .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 0 0 0.5px var(--lcs-glass-border) !important;
+}
+
+:global([data-component='ChatView'][data-streaming]) .avatarBg,
+:global([data-component='ChatView'][data-streaming]) .avatarBgScrim {
+  display: none !important;
+}
+
 .card:hover {
   box-shadow:
     0 0 0 0.5px var(--lcs-glass-border-hover, rgba(255, 255, 255, 0.1)),

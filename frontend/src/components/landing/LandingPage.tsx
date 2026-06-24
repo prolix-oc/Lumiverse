@@ -1373,9 +1373,6 @@ export default function LandingPage() {
         </main>
       </motion.div>
     </div>
-    <footer className={styles.footer}>
-      <p>{t('footer')}</p>
-    </footer>
   </div>
 )
 }

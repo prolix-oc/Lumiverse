@@ -11,12 +11,15 @@
   justify-content: center;
   padding: 24px;
   background: rgba(7, 9, 16, 0.78);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   /* Above ModalShell (10002) and WorkflowEditorModal (10003) so it blocks every
      interactive surface in the app — including any modal already on screen. */
   z-index: 10100;
   pointer-events: auto;
+}
+
+:global([data-glass]) .backdrop {
+  backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  -webkit-backdrop-filter: blur(var(--lcs-glass-blur, 8px));
 }
 
 .card {
@@ -30,8 +33,12 @@
   background: var(--lumiverse-gradient-modal, var(--lumiverse-bg, rgba(28, 24, 38, 0.96)));
   border-radius: var(--lumiverse-radius-xl, 16px);
   border: 1px solid var(--lumiverse-border, rgba(147, 112, 219, 0.18));
-  box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.55));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   text-align: center;
+}
+
+:global([data-glass]) .card {
+  box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.55));
 }
 
 .iconRing,
