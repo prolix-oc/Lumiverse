@@ -188,6 +188,8 @@ interface VectorStoreDraft {
   milvusUsername: string
   milvusSsl: boolean
   milvusTransport: 'grpc' | 'http'
+  milvusConnectTimeoutMs: number
+  milvusRequestTimeoutMs: number
 }
 
 function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorStoreDraft {
@@ -201,6 +203,8 @@ function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorSt
     milvusUsername: config?.milvus?.username ?? '',
     milvusSsl: config?.milvus?.ssl ?? false,
     milvusTransport: config?.milvus?.transport ?? 'grpc',
+    milvusConnectTimeoutMs: config?.milvus?.connectTimeoutMs ?? 5000,
+    milvusRequestTimeoutMs: config?.milvus?.requestTimeoutMs ?? 60000,
   }
 }
 
@@ -228,6 +232,8 @@ function vectorDraftToPayload(
       username: draft.milvusUsername.trim() || undefined,
       ssl: draft.milvusSsl,
       transport: draft.milvusTransport,
+      connectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(draft.milvusConnectTimeoutMs))),
+      requestTimeoutMs: Math.max(0, Math.min(300000, Math.round(draft.milvusRequestTimeoutMs))),
     }
     if (trimmedMilvusPassword) payload.milvus_password = trimmedMilvusPassword
   }
@@ -2192,6 +2198,40 @@ export default function OperatorPanel() {
                         <option value="grpc">gRPC</option>
                       </select>
                       <span className={styles.fieldHint}>Lumiverse uses the Milvus gRPC endpoint, usually port 19530.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Connect Timeout (ms)</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1000}
+                        max={60000}
+                        step={500}
+                        integer
+                        value={vectorDraft.milvusConnectTimeoutMs}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusConnectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(value ?? 5000))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Used only for the initial TCP reachability probe before the SDK connects.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Request Timeout (ms)</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={0}
+                        max={300000}
+                        step={1000}
+                        integer
+                        value={vectorDraft.milvusRequestTimeoutMs}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusRequestTimeoutMs: Math.max(0, Math.min(300000, Math.round(value ?? 60000))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Applied to Milvus gRPC requests, including Memory Cortex searches. Use 0 to disable the SDK deadline.</span>
                     </label>
                     <div className={styles.toggleRowCompact}>
                       <span className={styles.remoteHint}>Use TLS/SSL</span>

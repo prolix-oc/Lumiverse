@@ -822,6 +822,17 @@
 }
 
 /* ── Send / Stop button ── */
+.sendBtnShell {
+  position: relative;
+  display: flex;
+  align-self: stretch;
+  width: 40px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .sendBtn {
   display: flex;
   align-items: center;
@@ -834,12 +845,19 @@
   color: var(--lumiverse-primary-contrast, #fff);
   cursor: pointer;
   flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   transition:
     background var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
     transform var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
-    opacity var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
+    opacity var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1)),
+    box-shadow var(--lcs-transition-fast, 120ms cubic-bezier(0.4, 0, 0.2, 1));
   font-size: calc(16px * var(--lumiverse-font-scale, 1));
   padding: 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
 }
 
 .sendBtn:hover {
@@ -857,12 +875,128 @@
   transform: none;
 }
 
+.sendBtnIcon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sendBtnSpinner {
+  animation: stt-spin 0.9s linear infinite;
+}
+
+.sendBtnHoldTracking {
+  background: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 82%, var(--lumiverse-info, #42a5f5) 18%);
+}
+
+.sendBtnHoldTracking::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, white 24%, transparent),
+    color-mix(in srgb, var(--lumiverse-info, #42a5f5) 68%, transparent)
+  );
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: send-btn-hold-fill var(--send-btn-hold-duration, 900ms) linear forwards;
+  opacity: 0.28;
+  z-index: 0;
+}
+
+.sendBtnHoldReady {
+  background: color-mix(in srgb, var(--lumiverse-success, #22c55e) 78%, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 22%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--lumiverse-success, #22c55e) 38%, transparent);
+  animation: send-btn-ready-pulse 1050ms ease-in-out infinite;
+}
+
+.sendBtnQueueing {
+  background: color-mix(in srgb, var(--lumiverse-success, #22c55e) 84%, black 16%);
+}
+
 .sendBtnStop {
   background: var(--lumiverse-danger, #ef4444);
 }
 
 .sendBtnStop:hover {
   background: var(--lumiverse-danger-hover, #dc2626);
+}
+
+.mobileQueueHint {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: max-content;
+  max-width: min(210px, calc(100vw - 40px));
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-fill, rgba(15, 23, 42, 0.94)) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--lumiverse-border, rgba(255, 255, 255, 0.12)) 82%, transparent);
+  color: var(--lumiverse-text, rgba(230, 230, 240, 0.92));
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-align: center;
+  line-height: 1.15;
+  white-space: normal;
+  pointer-events: none;
+  z-index: 2;
+  animation: mobile-queue-hint-enter 160ms ease;
+}
+
+.mobileQueueHintHolding {
+  border-color: color-mix(in srgb, var(--lumiverse-primary, rgba(140, 130, 255, 0.9)) 42%, transparent);
+}
+
+.mobileQueueHintReady {
+  border-color: color-mix(in srgb, var(--lumiverse-success, #22c55e) 55%, transparent);
+  color: color-mix(in srgb, var(--lumiverse-success, #22c55e) 88%, white 12%);
+}
+
+.mobileQueueHintQueueing {
+  border-color: color-mix(in srgb, var(--lumiverse-success, #22c55e) 46%, transparent);
+  color: color-mix(in srgb, var(--lumiverse-success, #22c55e) 82%, white 18%);
+}
+
+@keyframes send-btn-hold-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes send-btn-ready-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes mobile-queue-hint-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── Extras popover ── */

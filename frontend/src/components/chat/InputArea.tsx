@@ -41,6 +41,7 @@ interface InputAreaProps {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const TEXTAREA_MAX_HEIGHT = 180
 const STT_VISUALIZER_BARS = 18
+const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
 const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
   const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
@@ -50,6 +51,8 @@ const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => 
 type STTCommandState = {
   thoughtDepth: number
 }
+
+type MobileQueueHoldState = 'idle' | 'holding' | 'armed' | 'queueing'
 
 const STT_COMMAND_ALIASES: Record<string, string[]> = {
   'quote': ['quote start', 'quote end', 'open quote', 'close quote'],
@@ -224,12 +227,16 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
-  const queueLockRef = useRef(false)
   const touchTimerRef = useRef<number>(0)
+  const touchHoldStartedAtRef = useRef(0)
+  const ignoreFollowupClickUntilRef = useRef(0)
+  const ignoreFollowupClickCountRef = useRef(0)
+  const mobileQueueHoldStateRef = useRef<MobileQueueHoldState>('idle')
   const isStreaming = useStore((s) => s.isStreaming)
   const editingMessageId = useStore((s) => s.editingMessageId)
   const isMobile = useIsMobile()
   const hideForMobileEdit = isMobile && !!editingMessageId
+  const supportsTouchQueueHold = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   const activeChatId = useStore((s) => s.activeChatId)
   const activeGenerationId = useStore((s) => s.activeGenerationId)
   const liveChatGenerationId = useStore((s) =>
@@ -1159,6 +1166,38 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
     return false
   }, [messages])
+  const hasDraftContent = text.trim().length > 0 || pendingAttachments.length > 0
+  const [mobileQueueHoldState, setMobileQueueHoldState] = useState<MobileQueueHoldState>('idle')
+
+  const setMobileQueueHoldVisualState = useCallback((next: MobileQueueHoldState) => {
+    mobileQueueHoldStateRef.current = next
+    setMobileQueueHoldState(next)
+  }, [])
+
+  const suppressFollowupClick = useCallback((durationMs = 1500) => {
+    ignoreFollowupClickCountRef.current = 1
+    ignoreFollowupClickUntilRef.current = Date.now() + durationMs
+  }, [])
+
+  const clearTouchQueueTimer = useCallback(() => {
+    if (touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = 0
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearTouchQueueTimer()
+    }
+  }, [clearTouchQueueTimer])
+
+  useEffect(() => {
+    if ((mobileQueueHoldState === 'holding' || mobileQueueHoldState === 'armed') && (!hasDraftContent || isGeneratingInChat)) {
+      clearTouchQueueTimer()
+      setMobileQueueHoldVisualState('idle')
+    }
+  }, [mobileQueueHoldState, hasDraftContent, isGeneratingInChat, clearTouchQueueTimer, setMobileQueueHoldVisualState])
 
   // Multiplayer room send. Returns 'sent' (routed to the room — caller stops),
   // 'blocked' (off-turn / closed freeform window — caller stops), or 'local'
@@ -1805,37 +1844,89 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     [enterToSend, handleSend, handleQueueMessage, handleResolveMacros, openPopover, databankResults, databankActiveIdx, handleHashSelect, atResults, atActiveIdx, handleAtSelect]
   )
 
-  // Send button: cmd+click (mac) / ctrl+click (other) queues, normal click sends
+  // Mouse/keyboard activation still routes through click. Touch activation is
+  // handled on touchend and marks the follow-up synthetic click to ignore.
   const handleSendClick = useCallback((e: React.MouseEvent) => {
     unlockNotificationAudio()
     unlockTTSAudio()
-    if (queueLockRef.current) {
-      queueLockRef.current = false
+    if (ignoreFollowupClickCountRef.current > 0) {
+      ignoreFollowupClickCountRef.current -= 1
+      return
+    }
+    if (Date.now() < ignoreFollowupClickUntilRef.current) {
       return
     }
     const queueMod = isMac ? e.metaKey : e.ctrlKey
-    if (queueMod && (text.trim() || pendingAttachments.length > 0)) {
+    if (queueMod && hasDraftContent) {
       handleQueueMessage()
     } else {
       handleSend()
     }
-  }, [text, pendingAttachments, handleQueueMessage, handleSend])
+  }, [hasDraftContent, handleQueueMessage, handleSend])
 
-  // Long-press on send button (mobile, 2s) queues the message
+  // Touch interactions with draft content are handled on touchend directly so
+  // the synthetic follow-up click cannot trigger a second action.
   const handleSendTouchStart = useCallback(() => {
-    if (!text.trim() && pendingAttachments.length === 0) return
+    if (!hasDraftContent || isGeneratingInChat) return
+    touchHoldStartedAtRef.current = Date.now()
+    clearTouchQueueTimer()
+    setMobileQueueHoldVisualState('holding')
     touchTimerRef.current = window.setTimeout(() => {
-      queueLockRef.current = true
-      handleQueueMessage()
-    }, 2000)
-  }, [text, pendingAttachments, handleQueueMessage])
-
-  const handleSendTouchEnd = useCallback(() => {
-    if (touchTimerRef.current) {
-      clearTimeout(touchTimerRef.current)
       touchTimerRef.current = 0
+      setMobileQueueHoldVisualState('armed')
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(12)
+      }
+    }, MOBILE_QUEUE_HOLD_MS)
+  }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimer, setMobileQueueHoldVisualState])
+
+  const handleSendTouchEnd = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
+    const heldLongEnough = touchHoldStartedAtRef.current > 0 && (Date.now() - touchHoldStartedAtRef.current) >= MOBILE_QUEUE_HOLD_MS
+    touchHoldStartedAtRef.current = 0
+    clearTouchQueueTimer()
+    if (heldLongEnough && hasDraftContent) {
+      e.preventDefault()
+      e.stopPropagation()
+      unlockNotificationAudio()
+      unlockTTSAudio()
+      suppressFollowupClick()
+      setMobileQueueHoldVisualState('queueing')
+      void handleQueueMessage().finally(() => {
+        setMobileQueueHoldVisualState('idle')
+      })
+      return
     }
-  }, [])
+    if (hasDraftContent) {
+      e.preventDefault()
+      e.stopPropagation()
+      unlockNotificationAudio()
+      unlockTTSAudio()
+      suppressFollowupClick()
+      setMobileQueueHoldVisualState('idle')
+      void handleSend()
+      return
+    }
+    if (mobileQueueHoldStateRef.current === 'idle' && !hasDraftContent) {
+      e.preventDefault()
+      e.stopPropagation()
+      unlockNotificationAudio()
+      unlockTTSAudio()
+      suppressFollowupClick()
+      void handleSend()
+      return
+    }
+    if (mobileQueueHoldStateRef.current !== 'queueing') {
+      setMobileQueueHoldVisualState('idle')
+    }
+  }, [handleQueueMessage, handleSend, hasDraftContent, suppressFollowupClick, clearTouchQueueTimer, setMobileQueueHoldVisualState])
+
+  const handleSendTouchCancel = useCallback(() => {
+    touchHoldStartedAtRef.current = 0
+    clearTouchQueueTimer()
+    if (mobileQueueHoldStateRef.current !== 'queueing') {
+      setMobileQueueHoldVisualState('idle')
+    }
+  }, [clearTouchQueueTimer, setMobileQueueHoldVisualState])
 
   // Detect `#`/`@` autocomplete triggers from the textarea's current value
   // and caret position. Pulled out of `handleInput` so `compositionend` can
@@ -2077,6 +2168,51 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     const next = guidedGenerations.map((g) => (g.id === id ? { ...g, enabled: !g.enabled } : g))
     setSetting('guidedGenerations', next)
   }, [guidedGenerations, setSetting])
+
+  let mobileQueueHint: string | null = null
+  if (supportsTouchQueueHold && !isGeneratingInChat && (hasDraftContent || mobileQueueHoldState !== 'idle')) {
+    if (mobileQueueHoldState === 'queueing') mobileQueueHint = t('input.queueingMessage')
+    else if (mobileQueueHoldState === 'armed') mobileQueueHint = t('input.releaseToQueue')
+    else if (mobileQueueHoldState === 'holding') mobileQueueHint = t('input.keepHoldingToQueue')
+    else mobileQueueHint = t('input.holdToQueue')
+  }
+
+  let sendButtonTitle = t('input.nudgeFreshReply')
+  if (isGeneratingInChat) {
+    sendButtonTitle = t('input.stopGeneration')
+  } else if (mobileQueueHoldState === 'queueing') {
+    sendButtonTitle = t('input.queueingMessage')
+  } else if (mobileQueueHoldState === 'armed') {
+    sendButtonTitle = t('input.releaseToQueue')
+  } else if (mobileQueueHoldState === 'holding') {
+    sendButtonTitle = t('input.keepHoldingToQueue')
+  } else if (hasDraftContent) {
+    sendButtonTitle = supportsTouchQueueHold
+      ? t('input.sendMessageTouchQueueHint')
+      : t('input.sendMessageQueueHint', { mod: queueModLabel })
+  } else if (hasQueuedMessages) {
+    sendButtonTitle = t('input.sendQueuedMessages')
+  }
+
+  let sendButtonAriaLabel = t('input.nudgeFreshReply')
+  if (isGeneratingInChat) {
+    sendButtonAriaLabel = t('input.stopGeneration')
+  } else if (mobileQueueHoldState === 'queueing') {
+    sendButtonAriaLabel = t('input.queueingMessage')
+  } else if (mobileQueueHoldState === 'armed') {
+    sendButtonAriaLabel = t('input.releaseToQueue')
+  } else if (mobileQueueHoldState === 'holding') {
+    sendButtonAriaLabel = t('input.keepHoldingToQueue')
+  } else if (hasDraftContent) {
+    sendButtonAriaLabel = t('input.sendMessage')
+  } else if (hasQueuedMessages) {
+    sendButtonAriaLabel = t('input.sendQueuedMessages')
+  }
+
+  const sendButtonStyle: CSSProperties = {
+    '--send-btn-hold-duration': `${MOBILE_QUEUE_HOLD_MS}ms`,
+  } as CSSProperties
+  if (isGeneratingInChat) sendButtonStyle.opacity = 0.55
 
   return (
     <div
@@ -3112,46 +3248,60 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
           </div>
 
           {isGeneratingInChat && !isRoomPeer ? (
-            <button
-              type="button"
-              className={clsx(styles.sendBtn, styles.sendBtnStop)}
-              onClick={handleStop}
-              title={t('input.stopGeneration')}
-              aria-label={t('input.stopGeneration')}
-            >
-              <Square size={16} />
-            </button>
+            <div className={styles.sendBtnShell}>
+              <button
+                type="button"
+                className={clsx(styles.sendBtn, styles.sendBtnStop)}
+                onClick={handleStop}
+                title={t('input.stopGeneration')}
+                aria-label={t('input.stopGeneration')}
+              >
+                <Square size={16} />
+              </button>
+            </div>
           ) : (
-            <button
-              type="button"
-              className={styles.sendBtn}
-              onClick={handleSendClick}
-              onTouchStart={handleSendTouchStart}
-              onTouchEnd={handleSendTouchEnd}
-              onTouchCancel={handleSendTouchEnd}
-              disabled={isGeneratingInChat}
-              style={isGeneratingInChat ? { opacity: 0.55 } : undefined}
-              title={
-                isGeneratingInChat
-                  ? t('input.stopGeneration')
-                  : text.trim() || pendingAttachments.length > 0
-                  ? t('input.sendMessageQueueHint', { mod: queueModLabel })
-                  : hasQueuedMessages
-                    ? t('input.sendQueuedMessages')
-                    : t('input.nudgeFreshReply')
-              }
-              aria-label={
-                isGeneratingInChat
-                  ? t('input.stopGeneration')
-                  : text.trim() || pendingAttachments.length > 0
-                  ? t('input.sendMessage')
-                  : hasQueuedMessages
-                    ? t('input.sendQueuedMessages')
-                    : t('input.nudgeFreshReply')
-              }
-            >
-              <Send size={16} />
-            </button>
+            <div className={styles.sendBtnShell}>
+              {mobileQueueHint ? (
+                <span
+                  className={clsx(
+                    styles.mobileQueueHint,
+                    mobileQueueHoldState === 'holding' && styles.mobileQueueHintHolding,
+                    mobileQueueHoldState === 'armed' && styles.mobileQueueHintReady,
+                    mobileQueueHoldState === 'queueing' && styles.mobileQueueHintQueueing
+                  )}
+                  aria-live="polite"
+                >
+                  {mobileQueueHint}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className={clsx(
+                  styles.sendBtn,
+                  mobileQueueHoldState === 'holding' && styles.sendBtnHoldTracking,
+                  mobileQueueHoldState === 'armed' && styles.sendBtnHoldReady,
+                  mobileQueueHoldState === 'queueing' && styles.sendBtnQueueing
+                )}
+                onClick={handleSendClick}
+                onTouchStart={handleSendTouchStart}
+                onTouchEnd={handleSendTouchEnd}
+                onTouchCancel={handleSendTouchCancel}
+                disabled={isGeneratingInChat}
+                style={sendButtonStyle}
+                title={sendButtonTitle}
+                aria-label={sendButtonAriaLabel}
+              >
+                <span className={styles.sendBtnIcon}>
+                  {mobileQueueHoldState === 'queueing' ? (
+                    <LoaderCircle size={16} className={styles.sendBtnSpinner} />
+                  ) : mobileQueueHoldState === 'holding' || mobileQueueHoldState === 'armed' ? (
+                    <IconPlaylistAdd size={18} />
+                  ) : (
+                    <Send size={16} />
+                  )}
+                </span>
+              </button>
+            </div>
           )}
         </div>
       )}

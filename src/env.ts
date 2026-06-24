@@ -65,6 +65,8 @@ export interface EnvConfig {
     milvusUsername: string;
     milvusPassword: string;
     milvusSsl: boolean;
+    milvusConnectTimeoutMs: number | undefined;
+    milvusRequestTimeoutMs: number | undefined;
   };
 }
 
@@ -73,6 +75,22 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   if (!raw) return fallback;
   const parsed = parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function parseOptionalPositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
+function parseOptionalNonNegativeIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
   return parsed;
 }
 
@@ -171,6 +189,8 @@ export function loadEnv(): EnvConfig {
     milvusUsername: process.env.LUMIVERSE_MILVUS_USERNAME || "",
     milvusPassword: process.env.LUMIVERSE_MILVUS_PASSWORD || "",
     milvusSsl: process.env.LUMIVERSE_MILVUS_SSL === "true",
+    milvusConnectTimeoutMs: parseOptionalPositiveIntEnv("LUMIVERSE_MILVUS_CONNECT_TIMEOUT_MS"),
+    milvusRequestTimeoutMs: parseOptionalNonNegativeIntEnv("LUMIVERSE_MILVUS_REQUEST_TIMEOUT_MS"),
   };
 
   return {

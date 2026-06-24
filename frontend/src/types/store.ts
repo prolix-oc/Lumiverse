@@ -897,6 +897,7 @@ export interface SpindleSlice {
   disableExtension: (id: string) => Promise<void>
   restartExtension: (id: string) => Promise<void>
   grantPermission: (id: string, permission: string) => Promise<void>
+  grantPermissions: (id: string, permissions: string[]) => Promise<void>
   revokePermission: (id: string, permission: string) => Promise<void>
   showPermissionRequest: (request: PendingPermissionRequest) => void
   resolvePermissionRequest: (id: string, approved: boolean) => Promise<void>

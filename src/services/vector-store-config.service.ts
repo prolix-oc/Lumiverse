@@ -44,6 +44,8 @@ export interface MilvusConnectionConfig {
   database?: string;
   username?: string;
   transport?: "grpc" | "http";
+  connectTimeoutMs?: number;
+  requestTimeoutMs?: number;
 }
 
 export interface VectorStoreConfig {
@@ -93,6 +95,16 @@ function normalizeTuningProfile(input: unknown): VectorStoreTuningProfile | unde
     : undefined;
 }
 
+function normalizeMilvusConnectTimeoutMs(input: unknown): number | undefined {
+  if (typeof input !== "number" || !Number.isFinite(input)) return undefined;
+  return Math.min(60_000, Math.max(1_000, Math.floor(input)));
+}
+
+function normalizeMilvusRequestTimeoutMs(input: unknown): number | undefined {
+  if (typeof input !== "number" || !Number.isFinite(input) || input < 0) return undefined;
+  return Math.min(300_000, Math.floor(input));
+}
+
 export function normalizeVectorStoreConfig(input: any): VectorStoreConfig {
   const provider: VectorStoreProviderId = isValidProvider(input?.provider) ? input.provider : "lancedb";
   const out: VectorStoreConfig = { provider };
@@ -119,6 +131,8 @@ export function normalizeVectorStoreConfig(input: any): VectorStoreConfig {
       database: typeof m.database === "string" && m.database.trim() ? m.database.trim() : undefined,
       username: typeof m.username === "string" && m.username.trim() ? m.username.trim() : undefined,
       transport: m.transport === "http" ? "http" : "grpc",
+      connectTimeoutMs: normalizeMilvusConnectTimeoutMs(m.connectTimeoutMs),
+      requestTimeoutMs: normalizeMilvusRequestTimeoutMs(m.requestTimeoutMs),
     };
   }
 
@@ -138,6 +152,8 @@ function envVectorStoreConfig(): VectorStoreConfig | null {
       address: env.vectorStore.milvusAddress,
       ssl: env.vectorStore.milvusSsl,
       username: env.vectorStore.milvusUsername || undefined,
+      connectTimeoutMs: env.vectorStore.milvusConnectTimeoutMs,
+      requestTimeoutMs: env.vectorStore.milvusRequestTimeoutMs,
     };
   }
   return cfg;

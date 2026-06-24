@@ -40,7 +40,14 @@ describe("normalizeVectorStoreConfig", () => {
   it("normalizes a milvus connection and defaults transport to grpc", () => {
     const cfg = normalizeVectorStoreConfig({
       provider: "milvus",
-      milvus: { address: "localhost:19530", ssl: true, username: "milvus", database: "lv" },
+      milvus: {
+        address: "localhost:19530",
+        ssl: true,
+        username: "milvus",
+        database: "lv",
+        connectTimeoutMs: 750,
+        requestTimeoutMs: 999_999,
+      },
     });
     expect(cfg.milvus).toEqual({
       address: "localhost:19530",
@@ -48,8 +55,19 @@ describe("normalizeVectorStoreConfig", () => {
       database: "lv",
       username: "milvus",
       transport: "grpc",
+      connectTimeoutMs: 1_000,
+      requestTimeoutMs: 300_000,
     });
     expect(normalizeVectorStoreConfig({ provider: "milvus", milvus: { address: "h:1", transport: "http" } }).milvus?.transport).toBe("http");
+  });
+
+  it("allows disabling the Milvus RPC timeout with 0", () => {
+    expect(
+      normalizeVectorStoreConfig({
+        provider: "milvus",
+        milvus: { address: "localhost:19530", requestTimeoutMs: 0 },
+      }).milvus?.requestTimeoutMs,
+    ).toBe(0);
   });
 
   it("NEVER carries secrets into the persisted config object", () => {

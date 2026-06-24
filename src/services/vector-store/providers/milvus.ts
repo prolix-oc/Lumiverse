@@ -18,7 +18,8 @@ import type {
 
 const COLLECTION_PREFIX = "lumiverse_";
 const VARCHAR_MAX = 65_535;
-const CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_TCP_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 const OUTPUT_FIELDS = ["id", "user_id", "source_type", "source_id", "owner_id", "chunk_index", "content", "metadata_json", "updated_at"];
 const SCALAR_INDEX_FIELDS = ["user_id", "source_type", "source_id", "owner_id", "chunk_index"];
 const SPARSE_FIELD = "sparse";
@@ -61,7 +62,7 @@ export class MilvusStore implements VectorStore {
     if (cfg.transport === "http") {
       throw new Error("Milvus HTTP transport is not supported yet. Use the Milvus gRPC endpoint, typically host:19530, with transport set to gRPC.");
     }
-    await assertTcpReachable(cfg.address, cfg.ssl === true);
+    await assertTcpReachable(cfg.address, cfg.ssl === true, milvusConnectTimeoutMs(cfg));
     this.client = new MilvusClient({
       address: cfg.address,
       ssl: cfg.ssl,
@@ -69,7 +70,7 @@ export class MilvusStore implements VectorStore {
       password: this.password || undefined,
       database: cfg.database,
       logLevel: "error",
-      timeout: CONNECT_TIMEOUT_MS,
+      timeout: milvusRequestTimeoutMs(cfg),
     });
     try {
       await this.client.connectPromise;
@@ -591,14 +592,24 @@ function milvusTuning(profile: VectorStoreTuningProfile): {
   }
 }
 
-async function assertTcpReachable(address: string, ssl: boolean): Promise<void> {
+function milvusConnectTimeoutMs(config: MilvusConnectionConfig): number {
+  const candidate = Number(config.connectTimeoutMs);
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : DEFAULT_TCP_CONNECT_TIMEOUT_MS;
+}
+
+function milvusRequestTimeoutMs(config: MilvusConnectionConfig): number {
+  const candidate = Number(config.requestTimeoutMs);
+  return Number.isFinite(candidate) && candidate >= 0 ? candidate : DEFAULT_RPC_TIMEOUT_MS;
+}
+
+async function assertTcpReachable(address: string, ssl: boolean, timeoutMs: number): Promise<void> {
   const target = parseMilvusAddress(address, ssl);
   await new Promise<void>((resolve, reject) => {
     const socket = connectTcp({ host: target.host, port: target.port });
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`Timed out opening TCP connection to ${target.host}:${target.port} from the Lumiverse backend after ${CONNECT_TIMEOUT_MS}ms.`));
-    }, CONNECT_TIMEOUT_MS);
+      reject(new Error(`Timed out opening TCP connection to ${target.host}:${target.port} from the Lumiverse backend after ${timeoutMs}ms.`));
+    }, timeoutMs);
 
     socket.once("connect", () => {
       clearTimeout(timeout);

@@ -99,6 +99,8 @@ export interface MilvusConnectionConfig {
   database?: string
   username?: string
   transport?: 'grpc' | 'http'
+  connectTimeoutMs?: number
+  requestTimeoutMs?: number
 }
 
 export interface VectorStoreConfigStatus {

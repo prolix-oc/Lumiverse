@@ -221,6 +221,16 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
     }))
   },
 
+  grantPermissions: async (id: string, permissions: string[]) => {
+    if (permissions.length === 0) return
+    const result = await spindleApi.setPermissions(id, { grant: permissions })
+    set((state) => ({
+      extensions: state.extensions.map((e) =>
+        e.id === id ? { ...e, granted_permissions: result.granted as any } : e
+      ),
+    }))
+  },
+
   revokePermission: async (id: string, permission: string) => {
     const result = await spindleApi.setPermissions(id, { revoke: [permission] })
     set((state) => ({
