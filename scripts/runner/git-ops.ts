@@ -1,5 +1,5 @@
 import { join } from "path";
-import { existsSync, rmSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { runGit, getUpstreamRef, getCurrentBranch } from "./lib/git.js";
 import {
   PROJECT_ROOT,
@@ -355,22 +355,118 @@ export async function switchBranch(
 }
 
 // Written into node_modules only after `bun install` exits 0. Its absence
-// alongside an existing node_modules means a previous install was interrupted
-// (crash, kill, OOM, proot path-translation error mid-stream) and the tree
-// can't be trusted — nuke and reinstall.
+// alongside an existing node_modules used to be treated as a broken half-
+// install. That was too aggressive: manual `bun install` never writes the
+// runner stamp, so a healthy tree could be deleted on the next update. We now
+// validate the tree against direct package deps first and only move it aside
+// when it is actually incomplete.
 const INSTALL_STAMP = "node_modules/.lumiverse-install-complete";
+const INSTALL_BACKUP_PREFIX = "node_modules.lumiverse-backup-";
+const MAX_MISSING_DEP_PREVIEW = 5;
 
-function repairHalfInstall(dir: string, label: string): void {
+interface DependencyTreeState {
+  hasNodeModules: boolean;
+  hasStamp: boolean;
+  missingPackages: string[];
+}
+
+interface PreparedDependencyInstall {
+  backupDir: string | null;
+}
+
+function listDeclaredInstallPackages(dir: string): string[] {
+  const manifestPath = join(dir, "package.json");
+  const raw = readFileSync(manifestPath, "utf8");
+  const manifest = JSON.parse(raw) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+
+  return Array.from(new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+  ])).sort();
+}
+
+function packageInstallPath(nodeModulesDir: string, packageName: string): string {
+  return join(nodeModulesDir, ...packageName.split("/"));
+}
+
+export function inspectDependencyTree(dir: string): DependencyTreeState {
   const nodeModules = join(dir, "node_modules");
-  const stamp = join(dir, INSTALL_STAMP);
-  if (existsSync(nodeModules) && !existsSync(stamp)) {
-    log(`Detected interrupted ${label} install — removing node_modules and retrying...`);
-    try { rmSync(nodeModules, { recursive: true, force: true }); } catch {}
-  }
+  const hasNodeModules = existsSync(nodeModules);
+  const declaredPackages = listDeclaredInstallPackages(dir);
+  const missingPackages = declaredPackages.filter((packageName) => !existsSync(packageInstallPath(nodeModules, packageName)));
+
+  return {
+    hasNodeModules,
+    hasStamp: existsSync(join(dir, INSTALL_STAMP)),
+    missingPackages,
+  };
+}
+
+export function summarizeMissingDependencyPackages(missingPackages: string[]): string {
+  if (missingPackages.length === 0) return "no missing packages";
+  const preview = missingPackages.slice(0, MAX_MISSING_DEP_PREVIEW).join(", ");
+  return missingPackages.length > MAX_MISSING_DEP_PREVIEW
+    ? `${preview}, ...`
+    : preview;
 }
 
 function writeInstallStamp(dir: string): void {
   try { writeFileSync(join(dir, INSTALL_STAMP), `${Date.now()}\n`); } catch {}
+}
+
+export function prepareDependencyInstall(dir: string, label: string): PreparedDependencyInstall {
+  const nodeModules = join(dir, "node_modules");
+  const state = inspectDependencyTree(dir);
+  if (!state.hasNodeModules) return { backupDir: null };
+
+  if (state.missingPackages.length === 0) {
+    if (!state.hasStamp) {
+      log(`Detected ${label} dependencies installed without runner stamp; keeping current tree and marking it complete.`);
+      writeInstallStamp(dir);
+    }
+    return { backupDir: null };
+  }
+
+  const backupDir = join(dir, `${INSTALL_BACKUP_PREFIX}${Date.now()}-${process.pid}`);
+  log(
+    `Detected incomplete ${label} dependency tree (${summarizeMissingDependencyPackages(state.missingPackages)} missing); ` +
+    "moving node_modules aside before reinstall..."
+  );
+  try { rmSync(backupDir, { recursive: true, force: true }); } catch {}
+  renameSync(nodeModules, backupDir);
+  return { backupDir };
+}
+
+export function finalizeDependencyInstall(dir: string, prepared: PreparedDependencyInstall): void {
+  writeInstallStamp(dir);
+  if (!prepared.backupDir || !existsSync(prepared.backupDir)) return;
+  try { rmSync(prepared.backupDir, { recursive: true, force: true }); } catch {}
+}
+
+export function restoreDependencyInstall(
+  dir: string,
+  label: string,
+  prepared: PreparedDependencyInstall,
+): void {
+  if (!prepared.backupDir || !existsSync(prepared.backupDir)) return;
+
+  const nodeModules = join(dir, "node_modules");
+  try {
+    rmSync(nodeModules, { recursive: true, force: true });
+    renameSync(prepared.backupDir, nodeModules);
+
+    if (inspectDependencyTree(dir).missingPackages.length === 0) {
+      writeInstallStamp(dir);
+    }
+
+    log(`Restored previous ${label} dependencies after failed reinstall.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`Failed to restore previous ${label} dependencies: ${message}`);
+  }
 }
 
 const TERMUX_FRONTEND_NATIVE_DEPS = [
@@ -404,30 +500,38 @@ async function repairTermuxFrontendNativeDeps(frontendDir: string): Promise<void
   log("Termux frontend native bindings repaired.");
 }
 
+async function installDependenciesForDir(
+  dir: string,
+  label: string,
+  installCmd: string[],
+  postInstall?: () => Promise<void>,
+): Promise<void> {
+  const prepared = prepareDependencyInstall(dir, label);
+  log(`Installing ${label} dependencies...`);
+
+  try {
+    await runCommandOrThrow(installCmd, {
+      cwd: dir,
+      timeoutMs: TIMEOUT_BUN_INSTALL_MS,
+      label: `${label} install`,
+    });
+    if (postInstall) await postInstall();
+    finalizeDependencyInstall(dir, prepared);
+    log(`${label[0]?.toUpperCase() ?? ""}${label.slice(1)} dependencies updated.`);
+  } catch (error) {
+    restoreDependencyInstall(dir, label, prepared);
+    throw error;
+  }
+}
+
 export async function ensureDependencies(frontendDir: string): Promise<void> {
   const installCmd = bunInstallCmd();
   clearBunInstallCacheIfTermux();
 
-  repairHalfInstall(PROJECT_ROOT, "backend");
-  log("Installing backend dependencies...");
-  await runCommandOrThrow(installCmd, {
-    cwd: PROJECT_ROOT,
-    timeoutMs: TIMEOUT_BUN_INSTALL_MS,
-    label: "backend install",
+  await installDependenciesForDir(PROJECT_ROOT, "backend", installCmd);
+  await installDependenciesForDir(frontendDir, "frontend", installCmd, async () => {
+    await repairTermuxFrontendNativeDeps(frontendDir);
   });
-  writeInstallStamp(PROJECT_ROOT);
-  log("Backend dependencies updated.");
-
-  repairHalfInstall(frontendDir, "frontend");
-  log("Installing frontend dependencies...");
-  await runCommandOrThrow(installCmd, {
-    cwd: frontendDir,
-    timeoutMs: TIMEOUT_BUN_INSTALL_MS,
-    label: "frontend install",
-  });
-  await repairTermuxFrontendNativeDeps(frontendDir);
-  writeInstallStamp(frontendDir);
-  log("Frontend dependencies updated.");
 }
 
 export async function rebuildFrontend(frontendDir: string): Promise<void> {
