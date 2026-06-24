@@ -716,7 +716,9 @@ function ChatSettings() {
   const { t: tc } = useTranslation('common')
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
+  const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
+  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
@@ -828,6 +830,20 @@ function ChatSettings() {
               ))}
             </div>
           </div>
+
+          <Toggle.Checkbox
+            checked={bubbleUseFullAvatar}
+            onChange={(checked) => setSetting('bubbleUseFullAvatar', checked)}
+            label={t('chat.bubbleFullAvatar')}
+            hint={t('chat.bubbleFullAvatarHint')}
+          />
+
+          <Toggle.Checkbox
+            checked={!bubbleDisableHover}
+            onChange={(checked) => setSetting('bubbleDisableHover', !checked)}
+            label={t('chat.bubbleHoverHighlight')}
+            hint={t('chat.bubbleHoverHighlightHint')}
+          />
 
           <Toggle.Checkbox
             checked={!bubbleHideAvatarBg}

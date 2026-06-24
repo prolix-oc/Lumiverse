@@ -29,8 +29,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
-  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
-  const displayAvatarUrl = bubbleUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
+  const displayAvatarUrl = avatarUrl
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
