@@ -539,7 +539,7 @@ export default function RegexPanel() {
                 groupedScripts.map((group) => {
                   const folderKey = group.folder || UNCATEGORIZED_KEY
                   const isCollapsed = collapsedFolders.has(folderKey)
-                  const folderLabel = group.folder || t('regexPanel.uncategorized')
+                  const folderLabel = group.folder || t('shared:uncategorized')
                   const isNamedFolder = Boolean(group.folder)
                   return (
                     <div key={folderKey}>
