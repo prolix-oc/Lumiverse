@@ -545,16 +545,19 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }), [activeCharacterId, activeCharacter?.tags, personas, characterPersonaBindings, personaTagBindings])
 
   const currentChatAddonOverrides = activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {}
-  const effectivePersonaAddonStates = useMemo(() => {
+  const basePersonaAddonStates = useMemo(() => {
     const states: Record<string, boolean> = {}
     for (const addon of personaAddons) states[addon.id] = addon.enabled
     for (const addon of attachedGlobalAddons) states[addon.id] = addon.enabled
     if (activePersonaId && resolvedPersonaBinding.personaId === activePersonaId && resolvedPersonaBinding.addonStates) {
       Object.assign(states, resolvedPersonaBinding.addonStates)
     }
-    Object.assign(states, currentChatAddonOverrides)
     return states
-  }, [activePersonaId, personaAddons, attachedGlobalAddons, resolvedPersonaBinding, currentChatAddonOverrides])
+  }, [activePersonaId, personaAddons, attachedGlobalAddons, resolvedPersonaBinding])
+  const effectivePersonaAddonStates = useMemo(
+    () => ({ ...basePersonaAddonStates, ...currentChatAddonOverrides }),
+    [basePersonaAddonStates, currentChatAddonOverrides],
+  )
   const effectivePersonaAddons = useMemo(
     () => personaAddons.map((addon) => ({ ...addon, enabled: effectivePersonaAddonStates[addon.id] ?? addon.enabled })),
     [personaAddons, effectivePersonaAddonStates],
@@ -563,7 +566,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     () => attachedGlobalAddons.map((addon) => ({ ...addon, enabled: effectivePersonaAddonStates[addon.id] ?? addon.enabled })),
     [attachedGlobalAddons, effectivePersonaAddonStates],
   )
-  const chatAddonOverrideCount = Object.keys(currentChatAddonOverrides).length
+  const chatAddonOverrideCount = Object.entries(currentChatAddonOverrides)
+    .filter(([id, enabled]) => id in basePersonaAddonStates && enabled !== basePersonaAddonStates[id])
+    .length
   const activeGenerationAddonStates = activePersonaId && Object.keys(effectivePersonaAddonStates).length > 0
     ? effectivePersonaAddonStates
     : undefined
@@ -2174,12 +2179,39 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                 title={title}
                 aria-label={title}
               >
-                <Layers size={14} />
-                {hasSelection && <span className={styles.badge}>{selectionCount}</span>}
+                <IconPlaylistAdd size={14} />
+                {chatAddonOverrideCount > 0 && <span className={styles.badge}>{chatAddonOverrideCount}</span>}
               </button>
-            )
-          })()}
-          {activePersonaId && (
+            )}
+            <button
+              type="button"
+              className={clsx(
+                styles.actionBtn,
+                openPopover === 'guides' && styles.actionBtnActive,
+                activeGuideCount > 0 && styles.actionBtnHasSelection,
+              )}
+              onClick={() => setOpenPopover((p) => (p === 'guides' ? null : 'guides'))}
+              title={t('input.guidedGenerations')}
+            >
+              <Compass size={14} />
+              {activeGuideCount > 0 && <span className={styles.badge}>{activeGuideCount}</span>}
+            </button>
+            <button
+              type="button"
+              className={clsx(styles.actionBtn, openPopover === 'quick' && styles.actionBtnActive)}
+              onClick={() => setOpenPopover((p) => (p === 'quick' ? null : 'quick'))}
+              title={t('input.quickReplies')}
+            >
+              <MessageSquareQuote size={14} />
+            </button>
+            <button
+              type="button"
+              className={clsx(styles.actionBtn, openPopover === 'tools' && styles.actionBtnActive)}
+              onClick={() => setOpenPopover((p) => (p === 'tools' ? null : 'tools'))}
+              title={t('input.tools')}
+            >
+              <Wrench size={14} />
+            </button>
             <button
               type="button"
               className={clsx(
@@ -2228,16 +2260,6 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
           </button>
         </div>
       </div>
-
-      {activeGuideCount > 0 && (
-        <div className={styles.guidePills}>
-          {activeGuides.map((g) => (
-            <button key={g.id} type="button" className={styles.guidePill} onClick={() => toggleGuide(g.id)}>
-              {g.name}
-            </button>
-          ))}
-        </div>
-      )}
 
       <div className={clsx(styles.popoverSlot, openPopover && styles.popoverSlotOpen)}>
         <div className={styles.popoverSlotInner}>

@@ -183,23 +183,6 @@
   margin-left: 2px;
 }
 
-.guidePills {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.guidePill {
-  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
-  border-radius: 999px;
-  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
-  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.65));
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
-  padding: 2px 8px;
-  cursor: pointer;
-}
-
-
 .popoverSlot {
   display: grid;
   grid-template-rows: 0fr;
