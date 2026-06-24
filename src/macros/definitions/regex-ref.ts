@@ -41,7 +41,11 @@ export function registerRegexRefMacros(): void {
         return ctx.isScoped ? ctx.body : (ctx.args[1] ?? "");
       }
 
-      const script = getRegexScriptByScriptId(userId, scriptId);
+      const script = getRegexScriptByScriptId(userId, scriptId, {
+        characterId: typeof ctx.env.extra.characterId === "string" ? ctx.env.extra.characterId : null,
+        chatId: typeof ctx.env.chat?.id === "string" ? ctx.env.chat.id : null,
+        presetId: typeof ctx.env.extra.presetId === "string" ? ctx.env.extra.presetId : null,
+      });
 
       // No text argument — check mode: return "true"/"false"
       const text = ctx.isScoped ? ctx.body : (ctx.args[1] ?? "");

@@ -136,6 +136,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     signal: ctx.signal,
     extra: {
       userId: ctx.userId ?? (chat as any).user_id as string | undefined,
+      characterId: character.id,
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
       characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],

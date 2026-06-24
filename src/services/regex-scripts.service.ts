@@ -68,6 +68,7 @@ const VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped", "after"]);
 const MAX_PATTERN_LENGTH = 10_000;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
+const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
 interface RegexMutationContext {
   activePresetId?: string | null;
@@ -418,6 +419,40 @@ function normalizeScriptId(raw: string): string {
     .replace(/[^a-z0-9_]/g, "");
 }
 
+function isPlainMetadataRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mapRegexScriptPersistenceError(err: unknown): string | null {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  if (
+    message.includes("idx_regex_scripts_script_id")
+    || message.includes("UNIQUE constraint failed: regex_scripts.user_id, regex_scripts.script_id")
+  ) {
+    return "script_id already exists";
+  }
+  return null;
+}
+
+function prepareCharacterBoundImportedScript<T extends Record<string, any>>(input: T, source: string): T {
+  const importedScriptId = typeof input.script_id === "string"
+    ? normalizeScriptId(input.script_id)
+    : "";
+  const metadata = isPlainMetadataRecord(input.metadata) ? { ...input.metadata } : {};
+  metadata.source = source;
+  if (importedScriptId) {
+    metadata[IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY] = importedScriptId;
+  }
+
+  // Character-bound regexes are rebound per imported character, so their
+  // script_id must not remain globally unique across the whole user.
+  return {
+    ...input,
+    script_id: "",
+    metadata,
+  };
+}
+
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 
 export function listRegexScripts(
@@ -489,39 +524,45 @@ export function createRegexScript(
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const disabled = resolveCreateDisabledState(input, activePresetId);
 
-  getDb()
-    .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id,
-      userId,
-      input.name.trim(),
-      input.script_id ?? "",
-      input.find_regex,
-      input.replace_string ?? "",
-      input.flags ?? "gi",
-      JSON.stringify(input.placement ?? ["ai_output"]),
-      input.scope ?? "global",
-      input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
-      JSON.stringify(input.target ?? ["response"]),
-      input.min_depth ?? null,
-      input.max_depth ?? null,
-      JSON.stringify(input.trim_strings ?? []),
-      input.run_on_edit ? 1 : 0,
-       input.substitute_macros ?? "none",
-       disabled ? 1 : 0,
-       input.sort_order ?? 0,
-      input.description ?? "",
-      input.folder ?? "",
-      input.pack_id ?? null,
-      input.preset_id ?? null,
-      input.character_id ?? null,
-      JSON.stringify(input.metadata ?? {}),
-      now,
-      now
-    );
+  try {
+    getDb()
+      .query(
+        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        userId,
+        input.name.trim(),
+        input.script_id ?? "",
+        input.find_regex,
+        input.replace_string ?? "",
+        input.flags ?? "gi",
+        JSON.stringify(input.placement ?? ["ai_output"]),
+        input.scope ?? "global",
+        input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
+        JSON.stringify(input.target ?? ["response"]),
+        input.min_depth ?? null,
+        input.max_depth ?? null,
+        JSON.stringify(input.trim_strings ?? []),
+        input.run_on_edit ? 1 : 0,
+        input.substitute_macros ?? "none",
+        disabled ? 1 : 0,
+        input.sort_order ?? 0,
+        input.description ?? "",
+        input.folder ?? "",
+        input.pack_id ?? null,
+        input.preset_id ?? null,
+        input.character_id ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        now,
+        now
+      );
+  } catch (err) {
+    const mapped = mapRegexScriptPersistenceError(err);
+    if (mapped) return mapped;
+    throw err;
+  }
 
   const script = getRegexScript(userId, id)!;
   if (script.preset_id && script.preset_id === activePresetId) {
@@ -607,7 +648,13 @@ export function updateRegexScript(
   values.push(id);
   values.push(userId);
 
-  getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  try {
+    getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  } catch (err) {
+    const mapped = mapRegexScriptPersistenceError(err);
+    if (mapped) return mapped;
+    throw err;
+  }
 
   const updated = getRegexScript(userId, id)!;
   if (existing.preset_id && existing.preset_id !== updated.preset_id) {
@@ -766,11 +813,66 @@ export function getCharacterBoundScripts(userId: string, characterId: string): R
 // ── Lookup by script_id ─────────────────────────────────────────────────────
 
 /** Find a regex script by its user-defined script_id. Returns null if not found or script_id is empty. */
-export function getRegexScriptByScriptId(userId: string, scriptId: string): RegexScript | null {
-  if (!scriptId) return null;
+export function getRegexScriptByScriptId(
+  userId: string,
+  scriptId: string,
+  context?: { characterId?: string | null; chatId?: string | null; presetId?: string | null },
+): RegexScript | null {
+  const normalizedScriptId = normalizeScriptId(scriptId);
+  if (!normalizedScriptId) return null;
+
+  const characterId = normalizeOptionalId(context?.characterId);
+  const chatId = normalizeOptionalId(context?.chatId);
+  const presetId = normalizeOptionalId(context?.presetId);
+  const conditions = [
+    "user_id = ?",
+    `(script_id = ? OR json_extract(metadata, '$.${IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY}') = ?)`,
+  ];
+  const params: any[] = [userId, normalizedScriptId, normalizedScriptId];
+
+  const scopeConditions: string[] = ["scope = 'global'"];
+  if (characterId) {
+    scopeConditions.push("(scope = 'character' AND scope_id = ?)");
+    params.push(characterId);
+  }
+  if (chatId) {
+    scopeConditions.push("(scope = 'chat' AND scope_id = ?)");
+    params.push(chatId);
+  }
+  if (characterId || chatId) {
+    conditions.push(`(${scopeConditions.join(" OR ")})`);
+  }
+
   const row = getDb()
-    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND script_id = ?")
-    .get(userId, scriptId) as any;
+    .query(
+      `SELECT * FROM regex_scripts
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY
+         CASE
+           WHEN scope = 'chat' AND scope_id = ? THEN 0
+           WHEN scope = 'character' AND scope_id = ? THEN 1
+           WHEN scope = 'global' THEN 2
+           ELSE 3
+         END ASC,
+         CASE
+           WHEN ? IS NOT NULL AND preset_id = ? THEN 0
+           WHEN preset_id IS NULL THEN 1
+           ELSE 2
+         END ASC,
+         CASE WHEN disabled = 0 THEN 0 ELSE 1 END ASC,
+         CASE WHEN script_id = ? THEN 0 ELSE 1 END ASC,
+         sort_order ASC,
+         created_at ASC
+       LIMIT 1`
+    )
+    .get(
+      ...params,
+      chatId,
+      characterId,
+      presetId,
+      presetId,
+      normalizedScriptId,
+    ) as any;
   return row ? rowToRegexScript(row) : null;
 }
 
@@ -1545,10 +1647,12 @@ export function importCharacterBoundRegexScripts(
   userId: string,
   characterId: string,
   extensions: unknown,
+  options?: { bundleSource?: string },
 ): number {
   if (!extensions || typeof extensions !== "object") return 0;
   const ext = extensions as Record<string, any>;
   let imported = 0;
+  const bundleSource = options?.bundleSource ?? "card_bundle";
 
   // Lumiverse-native bundle: already internal-shaped, rebind directly (mirrors
   // the CHARX bundle import in charx-import.service).
@@ -1556,13 +1660,12 @@ export function importCharacterBoundRegexScripts(
   if (Array.isArray(bundle)) {
     for (const script of bundle) {
       if (!script || typeof script !== "object") continue;
-      const result = createRegexScript(userId, {
+      const result = createRegexScript(userId, prepareCharacterBoundImportedScript({
         ...(script as CreateRegexScriptInput),
         scope: "character",
         scope_id: characterId,
         character_id: characterId,
-        metadata: { ...(script.metadata ?? {}), source: "card_bundle" },
-      });
+      }, bundleSource));
       if (typeof result !== "string") imported++;
     }
     return imported;
@@ -1574,7 +1677,9 @@ export function importCharacterBoundRegexScripts(
   if (Array.isArray(stScripts) && stScripts.length > 0) {
     const result = importRegexScripts(userId, {
       scripts: stScripts.map((s) =>
-        s && typeof s === "object" ? { ...s, scope: "character", scope_id: characterId } : s,
+        s && typeof s === "object"
+          ? prepareCharacterBoundImportedScript({ ...s, scope: "character", scope_id: characterId }, bundleSource)
+          : s,
       ),
       character_id: characterId,
     });

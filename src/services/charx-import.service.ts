@@ -25,7 +25,6 @@ import { LANDING_PERSPECTIVE_LAYERS_KEY } from "./characters.service";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { CreateRegexScriptInput } from "../types/regex-script";
 
 const GALLERY_UPLOAD_CONCURRENCY = 6;
 
@@ -249,18 +248,12 @@ export async function applyCharxModulesAndAssets(
     // Bundled regex scripts — rebound to the new character on import
     let regexScriptCount = 0;
     if (lumiverseModules.regex_scripts?.length) {
-      for (const bundled of lumiverseModules.regex_scripts) {
-        try {
-          regexSvc.createRegexScript(userId, {
-            ...(bundled as CreateRegexScriptInput),
-            scope: "character",
-            scope_id: character.id,
-            character_id: character.id,
-            metadata: { ...bundled.metadata, source: "charx_bundle" },
-          });
-          regexScriptCount++;
-        } catch { /* skip individual failures */ }
-      }
+      regexScriptCount = regexSvc.importCharacterBoundRegexScripts(
+        userId,
+        character.id,
+        { lumiverse_modules: { regex_scripts: lumiverseModules.regex_scripts } },
+        { bundleSource: "charx_bundle" },
+      );
     }
 
     lumiverseModulesSummary = {
