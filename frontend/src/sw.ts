@@ -51,7 +51,10 @@ registerRoute(
 
 // ── Runtime caching: images ─────────────────────────────────────────
 registerRoute(
-  /\/api\/v1\/images\//,
+  ({ url, request }) => (
+    url.pathname.startsWith('/api/v1/images/') &&
+    request.destination === 'image'
+  ),
   new CacheFirst({
     cacheName: 'image-cache',
     plugins: [new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 7 * 24 * 60 * 60 })],

@@ -50,6 +50,7 @@ const SPINDLE_NOTICE_SHOW_DELAY_MS = 180
 const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
 const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
 const WALLPAPER_TRANSITION_HALF_MS = 260
+const WALLPAPER_READY_FALLBACK_MS = 5000
 const CHAT_CHROME_ENTER_MS = 90
 const CHAT_CHROME_LEAVE_MS = 220
 
@@ -759,6 +760,7 @@ export default function ChatView() {
   const effectiveWallpaperKey = effectiveWallpaper ? `${effectiveWallpaper.type}:${effectiveWallpaper.image_id}` : 'none'
   const [displayedWallpaper, setDisplayedWallpaper] = useState<WallpaperRef | null>(effectiveWallpaper)
   const displayedWallpaperKeyRef = useRef(effectiveWallpaperKey)
+  const pendingWallpaperReadyKeyRef = useRef<string | null>(null)
   const [wallpaperTransitioning, setWallpaperTransitioning] = useState(false)
   const hasAnyBackground = !!(sceneBackground || displayedWallpaper?.image_id || wallpaper.global?.image_id)
 
@@ -772,8 +774,20 @@ export default function ChatView() {
     const swapTimer = window.setTimeout(() => {
       displayedWallpaperKeyRef.current = effectiveWallpaperKey
       setDisplayedWallpaper(effectiveWallpaper)
-      const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
-      wallpaperTransitionTimeouts.current.push(revealTimer)
+      if (!effectiveWallpaper) {
+        pendingWallpaperReadyKeyRef.current = null
+        const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
+        wallpaperTransitionTimeouts.current.push(revealTimer)
+        return
+      }
+
+      pendingWallpaperReadyKeyRef.current = effectiveWallpaperKey
+      const fallbackTimer = window.setTimeout(() => {
+        if (pendingWallpaperReadyKeyRef.current !== effectiveWallpaperKey) return
+        pendingWallpaperReadyKeyRef.current = null
+        setWallpaperTransitioning(false)
+      }, WALLPAPER_READY_FALLBACK_MS)
+      wallpaperTransitionTimeouts.current.push(fallbackTimer)
     }, WALLPAPER_TRANSITION_HALF_MS)
 
     wallpaperTransitionTimeouts.current.push(swapTimer)
@@ -785,6 +799,15 @@ export default function ChatView() {
       wallpaperTransitionTimeouts.current = []
     }
   }, [])
+
+  const handleWallpaperVisualReady = (wallpaperKey: string) => {
+    if (pendingWallpaperReadyKeyRef.current !== wallpaperKey) return
+    pendingWallpaperReadyKeyRef.current = null
+    wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
+    wallpaperTransitionTimeouts.current = []
+    const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
+    wallpaperTransitionTimeouts.current.push(revealTimer)
+  }
 
   // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
   // when the background is a solid color (blur on solid = pure GPU waste).
@@ -830,7 +853,14 @@ export default function ChatView() {
       data-streaming={isStreaming || undefined}
     >
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
-      <WallpaperLayer wallpaper={displayedWallpaper} settings={wallpaper} hidden={!!sceneBackground} videoRef={videoRef} fadeInOnMount />
+      <WallpaperLayer
+        wallpaper={displayedWallpaper}
+        settings={wallpaper}
+        hidden={!!sceneBackground}
+        videoRef={videoRef}
+        fadeInOnMount
+        onVisualReady={handleWallpaperVisualReady}
+      />
 
       {/* Scene background layer — overrides wallpaper when active */}
       <div

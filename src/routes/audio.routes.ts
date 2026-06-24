@@ -1,55 +1,8 @@
 import { Hono } from "hono";
 import * as svc from "../services/audio.service";
+import { parseRangeHeader } from "./http-range";
 
 const app = new Hono();
-
-/**
- * Parse a single-range HTTP `Range: bytes=...` header against a known file
- * size. Returns the resolved {start, end} (inclusive, zero-indexed), or
- * "invalid" for syntactically wrong / out-of-bounds requests (caller should
- * 416), or null when the header is absent / malformed in a way we'd rather
- * just serve the full file for (e.g. multipart ranges).
- *
- * Three forms accepted:
- *   bytes=START-END   closed range
- *   bytes=START-      from START to end of file
- *   bytes=-N          last N bytes (suffix range)
- */
-function parseRangeHeader(
-  header: string | undefined | null,
-  totalSize: number,
-): { start: number; end: number } | "invalid" | null {
-  if (!header) return null;
-  const match = header.match(/^bytes=(\d*)-(\d*)$/);
-  if (!match) return null; // multipart or malformed — fall back to 200
-
-  const startStr = match[1];
-  const endStr = match[2];
-
-  let start: number;
-  let end: number;
-
-  if (startStr === "" && endStr !== "") {
-    // Suffix range: last N bytes.
-    const suffix = Number.parseInt(endStr, 10);
-    if (!Number.isFinite(suffix) || suffix <= 0) return "invalid";
-    start = Math.max(0, totalSize - suffix);
-    end = totalSize - 1;
-  } else if (startStr !== "") {
-    start = Number.parseInt(startStr, 10);
-    end = endStr !== "" ? Number.parseInt(endStr, 10) : totalSize - 1;
-    if (!Number.isFinite(start) || !Number.isFinite(end)) return "invalid";
-  } else {
-    return "invalid";
-  }
-
-  // Clamp end so callers don't have to special-case the last byte.
-  if (end >= totalSize) end = totalSize - 1;
-
-  if (start > end || start < 0 || start >= totalSize) return "invalid";
-
-  return { start, end };
-}
 
 app.get("/:id", async (c) => {
   const userId = c.get("userId");
@@ -96,11 +49,14 @@ app.get("/:id", async (c) => {
 
   const { start, end } = parsed;
   const chunkLength = end - start + 1;
-  // BunFile.slice() returns a streaming slice — no full-file read into memory.
-  // The end index is exclusive per Blob.slice(), so add 1 to include `end`.
-  const sliced = file.slice(start, end + 1);
+  // Serve range replies as fixed bytes instead of a lazy BunFile slice.
+  // Some host/proxy paths have been observed to forward the 206 headers but
+  // stall before the first body byte on lazy file slices, especially on Safari.
+  // Materializing only the requested range keeps the response length explicit
+  // while avoiding whole-file buffering.
+  const chunkBytes = new Uint8Array(await file.slice(start, end + 1).arrayBuffer());
 
-  return new Response(sliced, {
+  return new Response(chunkBytes, {
     status: 206,
     headers: {
       ...baseHeaders,

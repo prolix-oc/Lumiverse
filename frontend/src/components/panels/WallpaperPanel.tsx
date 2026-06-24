@@ -4,6 +4,7 @@ import { ImageIcon, Upload, Trash2, Monitor, MessageSquare } from 'lucide-react'
 import { useStore } from '@/store'
 import { imagesApi } from '@/api/images'
 import { chatsApi } from '@/api/chats'
+import { primeWallpaperVideo, useWallpaperVideoSource } from '@/lib/wallpaperVideoCache'
 import { FormField, Select, EditorSection } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import { flushSettingsNow } from '@/store/slices/settings'
@@ -20,6 +21,7 @@ function isVideoFile(file: File): boolean {
 
 function WallpaperPreviewVideo({ src }: { src: string }) {
   const ref = useRef<HTMLVideoElement>(null)
+  const { src: resolvedSrc, fromCache } = useWallpaperVideoSource(src)
 
   useEffect(() => {
     const video = ref.current
@@ -51,9 +53,27 @@ function WallpaperPreviewVideo({ src }: { src: string }) {
       document.removeEventListener('visibilitychange', syncPlayback)
       video.pause()
     }
-  }, [src])
+  }, [resolvedSrc])
 
-  return <video ref={ref} className={styles.previewVideo} src={src} muted loop playsInline preload="metadata" />
+  return (
+    <video
+      ref={ref}
+      className={styles.previewVideo}
+      src={resolvedSrc ?? undefined}
+      crossOrigin="use-credentials"
+      muted
+      loop
+      playsInline
+      preload="metadata"
+      onLoadedData={() => {
+        if (!fromCache) {
+          window.setTimeout(() => {
+            void primeWallpaperVideo(src).catch(() => {})
+          }, 1000)
+        }
+      }}
+    />
+  )
 }
 
 export default function WallpaperPanel() {

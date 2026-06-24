@@ -138,6 +138,7 @@ function EntryRowContent({
   isDragging,
 }: EntryRowContentProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
+  const { t: tEntryFields } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor.fields' })
   const labels = useWorldBookEntryLabels()
 
   const controlWrapProps = {
@@ -226,6 +227,14 @@ function EntryRowContent({
                   <span>{labels.positionLabel(entry.position)}</span>
                   <ChevronDown size={11} />
                 </button>
+                <span
+                  className={clsx(styles.entryMetaItem, styles.orderBadge)}
+                  title={`${tEntryFields('order')}: ${entry.order_value.toLocaleString()}`}
+                  {...controlWrapProps}
+                >
+                  <Hash size={10} aria-hidden="true" />
+                  <span>{entry.order_value.toLocaleString()}</span>
+                </span>
               </div>
             </div>
 

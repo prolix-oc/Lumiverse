@@ -1,9 +1,15 @@
 import { Hono } from "hono";
 import * as svc from "../services/images.service";
+import { parseRangeHeader } from "./http-range";
 
 const app = new Hono();
 
 const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+
+function resolveImageContentType(filepath: string, fallbackMimeType: string): string | null {
+  if (filepath.endsWith(".webp")) return "image/webp";
+  return fallbackMimeType || null;
+}
 
 app.post("/", async (c) => {
   const userId = c.get("userId");
@@ -29,16 +35,67 @@ app.get("/:id", async (c) => {
   const sizeParam = c.req.query("size") as svc.ThumbTier | undefined;
   const tier = sizeParam === "sm" || sizeParam === "lg" ? sizeParam : undefined;
 
+  const row = svc.getImage(userId, id);
+  if (!row) return c.json({ error: "Not found" }, 404);
+
   const filepath = await svc.getImageFilePath(userId, id, tier);
   if (!filepath) return c.json({ error: "Not found" }, 404);
 
-  const response = new Response(Bun.file(filepath));
-  response.headers.set("Cache-Control", "public, max-age=31536000, immutable");
-  // Block MIME sniffing — without this, an uploaded `.svg` would render with
-  // Content-Type: image/svg+xml and execute embedded scripts in the user's
-  // origin (stored XSS).
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  return response;
+  const file = Bun.file(filepath);
+  const totalSize = file.size;
+  const contentType = resolveImageContentType(filepath, row.mime_type);
+
+  const baseHeaders: Record<string, string> = {
+    "Cache-Control": "public, max-age=31536000, immutable, no-transform",
+    // Block MIME sniffing — without this, an uploaded `.svg` would render with
+    // Content-Type: image/svg+xml and execute embedded scripts in the user's
+    // origin (stored XSS).
+    "X-Content-Type-Options": "nosniff",
+    // Video wallpapers need byte-range responses for Safari/WebKit media
+    // playback, and advertising support is harmless for static images too.
+    "Accept-Ranges": "bytes",
+    // nginx-family proxies can buffer upstream file responses and delay time to
+    // first byte. Media seeks work best when the proxy streams immediately.
+    "X-Accel-Buffering": "no",
+  };
+  if (contentType) baseHeaders["Content-Type"] = contentType;
+
+  const parsed = parseRangeHeader(c.req.header("range"), totalSize);
+
+  if (parsed === "invalid") {
+    return new Response("Range Not Satisfiable", {
+      status: 416,
+      headers: {
+        "Content-Range": `bytes */${totalSize}`,
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
+
+  if (parsed === null) {
+    return new Response(file, {
+      status: 200,
+      headers: { ...baseHeaders, "Content-Length": String(totalSize) },
+    });
+  }
+
+  const { start, end } = parsed;
+  const chunkLength = end - start + 1;
+  // Serve range replies as fixed bytes instead of a lazy BunFile slice.
+  // Some host/proxy paths have been observed to forward the 206 headers but
+  // stall before the first body byte on lazy file slices, especially on Safari.
+  // Materializing only the requested range keeps the response length explicit
+  // while avoiding whole-file buffering.
+  const chunkBytes = new Uint8Array(await file.slice(start, end + 1).arrayBuffer());
+
+  return new Response(chunkBytes, {
+    status: 206,
+    headers: {
+      ...baseHeaders,
+      "Content-Range": `bytes ${start}-${end}/${totalSize}`,
+      "Content-Length": String(chunkLength),
+    },
+  });
 });
 
 app.post("/rebuild-thumbnails", async (c) => {

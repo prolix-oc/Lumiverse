@@ -359,6 +359,17 @@
   color: var(--lumiverse-text-muted);
 }
 
+.orderBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orderBadge svg {
+  flex-shrink: 0;
+}
+
 .entryActions {
   display: flex;
   align-items: center;
