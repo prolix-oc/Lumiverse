@@ -6,6 +6,7 @@ import { env } from "../env";
 import type { Image } from "../types/image";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname } from "path";
+import { stripAudioFromVideoBuffer } from "./silent-video.service";
 
 const IMAGES_DIR = "images";
 
@@ -24,6 +25,7 @@ export interface ImageOwnershipOptions {
   owner_extension_identifier?: string;
   owner_character_id?: string;
   owner_chat_id?: string;
+  strip_audio?: boolean;
 }
 
 export interface ImageQueryOptions extends ImageOwnershipOptions {
@@ -160,7 +162,15 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
   const dir = getImagesDir();
   const filepath = join(dir, filename);
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  let buffer = Buffer.from(await file.arrayBuffer());
+
+  // Wallpaper uploads can opt into a best-effort audio-strip pass so iOS gets
+  // a truly silent video without making ffmpeg a hard runtime dependency.
+  if (options?.strip_audio && file.type.startsWith("video/")) {
+    const stripped = await stripAudioFromVideoBuffer(buffer, file.type);
+    if (stripped) buffer = Buffer.from(stripped);
+  }
+
   await Bun.write(filepath, buffer);
 
   let width: number | null = null;

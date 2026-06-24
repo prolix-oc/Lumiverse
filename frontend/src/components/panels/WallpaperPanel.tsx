@@ -123,7 +123,7 @@ export default function WallpaperPanel() {
     setUploading(true)
 
     try {
-      const image = await imagesApi.upload(file)
+      const image = await imagesApi.uploadWallpaper(file)
       const ref: WallpaperRef = {
         image_id: image.id,
         type: isVideo ? 'video' : 'image',

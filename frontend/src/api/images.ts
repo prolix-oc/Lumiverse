@@ -25,6 +25,16 @@ export const imagesApi = {
     return upload<Image>('/images', form)
   },
 
+  uploadWallpaper(file: File, onProgress?: (percent: number) => void) {
+    const form = new FormData()
+    form.append('image', file)
+    const path = file.type.startsWith('video/') ? '/images?strip_audio=1' : '/images'
+    if (onProgress) {
+      return uploadWithProgress<Image>(path, form, onProgress)
+    }
+    return upload<Image>(path, form)
+  },
+
   delete(id: string) {
     return del<void>(`/images/${id}`)
   },

@@ -6,6 +6,11 @@ const app = new Hono();
 
 const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 
+function isTruthyFlag(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
 function resolveImageContentType(filepath: string, fallbackMimeType: string): string | null {
   if (filepath.endsWith(".webp")) return "image/webp";
   return fallbackMimeType || null;
@@ -16,6 +21,7 @@ app.post("/", async (c) => {
   const formData = await c.req.formData();
   const file = formData.get("image") as File | null;
   if (!file) return c.json({ error: "image file is required" }, 400);
+  const stripAudio = isTruthyFlag(c.req.query("strip_audio"));
 
   // Bound the upload to keep a single request from filling memory or disk.
   // The 10 MB API-wide bodyLimit middleware skips this route to allow chunkier
@@ -24,7 +30,7 @@ app.post("/", async (c) => {
     return c.json({ error: "Image too large", maxBytes: MAX_IMAGE_UPLOAD_BYTES }, 413);
   }
 
-  const image = await svc.uploadImage(userId, file);
+  const image = await svc.uploadImage(userId, file, { strip_audio: stripAudio });
   return c.json(image, 201);
 });
 

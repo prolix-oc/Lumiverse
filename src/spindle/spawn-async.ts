@@ -23,6 +23,8 @@ export interface SpawnAsyncResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** True if the process was aborted due to timeoutMs. */
+  timedOut: boolean;
 }
 
 export interface SpawnAsyncOptions {
@@ -78,13 +80,14 @@ export async function spawnAsync(
       proc.exited,
     ]);
 
-    return { exitCode: exitCode ?? -1, stdout, stderr };
+    return { exitCode: exitCode ?? -1, stdout, stderr, timedOut: false };
   } catch (err: any) {
+    const timedOut = err?.name === "AbortError";
     const stderr =
-      err?.name === "AbortError"
+      timedOut
         ? `Command timed out after ${opts.timeoutMs}ms`
         : err?.message || String(err);
-    return { exitCode: -1, stdout: "", stderr };
+    return { exitCode: -1, stdout: "", stderr, timedOut };
   } finally {
     if (timer) clearTimeout(timer);
   }
