@@ -1,4 +1,5 @@
 import type { SpindleManifest, SpindleFrontendContext, SpindleFrontendModule, PermissionRequestOptions } from 'lumiverse-spindle-types'
+import type { SpindleCharacterEditorUI } from './character-editor-types'
 import type { SpindleTabMobilityUI, TabLocation } from './tab-mobility-types'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
@@ -7,6 +8,7 @@ import { invalidateDisplayRegexCacheForVars, invalidateDisplayRegexCache } from 
 import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidget } from './message-widgets'
 import {
   createDrawerTabHandle,
+  createCharacterEditorTabHandle,
   createFloatWidgetHandle,
   createDockPanelHandle,
   createAppMountHandle,
@@ -15,6 +17,13 @@ import {
   clearTabMobilityHandle,
   destroyAllPlacementsForExtension,
 } from './placement-helper'
+import {
+  getCharacterEditorState,
+  subscribeCharacterEditorState,
+  setCharacterEditorExtensions,
+  updateCharacterEditorExtensions,
+  flushCharacterEditorExtensions,
+} from './character-editor-helper'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
@@ -82,7 +91,7 @@ interface ActiveFrontendProcess {
 type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
   ready(): void
   deferReady(): void
-  ui: SpindleTabMobilityUI & {
+  ui: SpindleTabMobilityUI & SpindleCharacterEditorUI & {
     events: FrontendUIEventsHelper
   }
   processes: {
@@ -444,6 +453,13 @@ async function doLoadFrontendExtension(
         registerDrawerTab(options) {
           return createDrawerTabHandle(extensionId, options)
         },
+        registerCharacterEditorTab(options) {
+          const granted = cachedGrantedPermissions
+          if (!granted.includes('characters')) {
+            throw new Error('PERMISSION_DENIED:characters — registerCharacterEditorTab requires the characters permission')
+          }
+          return createCharacterEditorTabHandle(extensionId, options)
+        },
         createFloatWidget(options) {
           const granted = cachedGrantedPermissions
           if (!granted.includes('ui_panels')) {
@@ -488,6 +504,43 @@ async function doLoadFrontendExtension(
         },
         registerInputBarAction(options) {
           return createInputBarActionHandle(extensionId, manifest.name, options)
+        },
+        characterEditor: {
+          getState() {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('characters')) {
+              throw new Error('PERMISSION_DENIED:characters — characterEditor.getState requires the characters permission')
+            }
+            return getCharacterEditorState()
+          },
+          onChange(handler) {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('characters')) {
+              throw new Error('PERMISSION_DENIED:characters — characterEditor.onChange requires the characters permission')
+            }
+            return subscribeCharacterEditorState(handler)
+          },
+          setExtensions(extensions, options) {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('characters')) {
+              throw new Error('PERMISSION_DENIED:characters — characterEditor.setExtensions requires the characters permission')
+            }
+            setCharacterEditorExtensions(extensions, options?.immediate === true)
+          },
+          updateExtensions(mutator, options) {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('characters')) {
+              throw new Error('PERMISSION_DENIED:characters — characterEditor.updateExtensions requires the characters permission')
+            }
+            updateCharacterEditorExtensions(mutator, options?.immediate === true)
+          },
+          flush() {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('characters')) {
+              throw new Error('PERMISSION_DENIED:characters — characterEditor.flush requires the characters permission')
+            }
+            return flushCharacterEditorExtensions()
+          },
         },
         showContextMenu(options: {
           position: { x: number; y: number }

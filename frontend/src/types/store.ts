@@ -1101,6 +1101,7 @@ export interface MultiplayerSlice {
 // ---- Spindle Placement Slice ----
 import type {
   DrawerTabState,
+  CharacterEditorTabState,
   FloatWidgetState,
   DockPanelState,
   AppMountState,
@@ -1111,6 +1112,7 @@ import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
+  characterEditorTabs: CharacterEditorTabState[]
   floatWidgets: FloatWidgetState[]
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
@@ -1126,6 +1128,10 @@ export interface SpindlePlacementSlice {
   registerDrawerTab: (tab: DrawerTabState) => void
   unregisterDrawerTab: (tabId: string) => void
   updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => void
+
+  registerCharacterEditorTab: (tab: CharacterEditorTabState) => void
+  unregisterCharacterEditorTab: (tabId: string) => void
+  updateCharacterEditorTab: (tabId: string, updates: Partial<Pick<CharacterEditorTabState, 'title'>>) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void

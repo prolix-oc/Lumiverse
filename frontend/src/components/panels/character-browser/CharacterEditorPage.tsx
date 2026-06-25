@@ -49,10 +49,12 @@ import { Button } from '@/components/shared/FormComponents'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
+import SpindleCharacterEditorTabContent from '@/components/spindle/SpindleCharacterEditorTabContent'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type { VoiceRef } from '@/types/api'
 import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
+import { setCharacterEditorController, syncCharacterEditorState } from '@/lib/spindle/character-editor-helper'
 import styles from './CharacterEditorPage.module.css'
 import clsx from 'clsx'
 import {
@@ -72,7 +74,8 @@ const GALLERY_MIN_ITEM_WIDTH = 120
 const GALLERY_GAP = 8
 const GALLERY_OVERSCAN = 3
 
-type TabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
+type BuiltInTabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
+type TabId = BuiltInTabId | string
 
 interface GalleryGridItemProps {
   item: CharacterGalleryItem
@@ -241,7 +244,7 @@ export default function CharacterEditorPage() {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
 
-  const tabs = useMemo<{ id: TabId; label: string }[]>(() => [
+  const builtInTabs = useMemo<{ id: BuiltInTabId; label: string }[]>(() => [
     { id: 'core', label: t('characterEditor.tabs.core') },
     { id: 'system', label: t('characterEditor.tabs.system') },
     { id: 'greetings', label: t('characterEditor.tabs.greetings') },
@@ -268,6 +271,7 @@ export default function CharacterEditorPage() {
   const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
   const setSceneBackground = useStore((s) => s.setSceneBackground)
   const updateCharInStore = useStore((s) => s.updateCharacter)
+  const characterEditorTabs = useStore((s) => s.characterEditorTabs)
   const regexScripts = useStore((s) => s.regexScripts)
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
   const updateRegexScript = useStore((s) => s.updateRegexScript)
@@ -275,6 +279,10 @@ export default function CharacterEditorPage() {
 
   const character = allCharacters.find((c) => c.id === editingCharacterId) ?? null
   const isOpen = !!editingCharacterId
+  const tabs = useMemo<{ id: TabId; label: string }[]>(() => [
+    ...builtInTabs,
+    ...characterEditorTabs.map((tab) => ({ id: tab.id, label: tab.title })),
+  ], [builtInTabs, characterEditorTabs])
 
   const [activeTab, setActiveTab] = useState<TabId>('core')
   const [name, setName] = useState('')
@@ -340,6 +348,11 @@ export default function CharacterEditorPage() {
       setActiveTab('core')
     }
   }, [editingCharacterId])
+
+  useEffect(() => {
+    if (tabs.some((tab) => tab.id === activeTab)) return
+    setActiveTab('core')
+  }, [activeTab, tabs])
 
   // Sync form fields from character data — runs when the character object
   // changes, but the lastSyncedId guard skips redundant syncs for the same
@@ -615,15 +628,16 @@ export default function CharacterEditorPage() {
   )
 
   // ── Atomic extensions mutation pipeline ──────────────────────────────
-  // World book attachments, alternate fields, alternate avatars, and the
-  // raw extensions textarea all write to the same `extensions` blob. Without
-  // a single source of truth, an immediate save (e.g. toggling a world book)
-  // and a debounced save (e.g. typing in an alt-field variant) can race and
-  // clobber each other — the debounced save fires last with stale data and
-  // wipes the world book change. The pendingExtensionsRef tracks the latest
-  // mutated extensions so every callsite reads from the freshest value, and
-  // mutateExtensions cancels any pending debounced extensions save when an
-  // immediate save lands so the in-flight changes get persisted together.
+  // World book attachments, alternate fields, alternate avatars, extension-
+  // owned character-editor tabs, and the raw extensions textarea all write to
+  // the same `extensions` blob. Without a single source of truth, an
+  // immediate save (e.g. toggling a world book) and a debounced save (e.g.
+  // typing in an alt-field variant) can race and clobber each other — the
+  // debounced save fires last with stale data and wipes the world book
+  // change. The pendingExtensionsRef tracks the latest mutated extensions so
+  // every callsite reads from the freshest value, and mutateExtensions
+  // cancels any pending debounced extensions save when an immediate save
+  // lands so the in-flight changes get persisted together.
   const pendingExtensionsRef = useRef<Record<string, any> | null>(null)
 
   const workingExtensions = useMemo(() => {
@@ -670,6 +684,63 @@ export default function CharacterEditorPage() {
     },
     [editingCharacterId, character, flushExtensionsSave]
   )
+
+  const activeTabRef = useRef<TabId>('core')
+  const editingCharacterIdRef = useRef<string | null>(editingCharacterId)
+  const workingExtensionsRef = useRef<Record<string, any>>(workingExtensions)
+  const mutateExtensionsRef = useRef(mutateExtensions)
+  const flushExtensionsSaveRef = useRef(flushExtensionsSave)
+
+  useEffect(() => {
+    activeTabRef.current = activeTab
+  }, [activeTab])
+
+  useEffect(() => {
+    editingCharacterIdRef.current = editingCharacterId
+  }, [editingCharacterId])
+
+  useEffect(() => {
+    workingExtensionsRef.current = workingExtensions
+  }, [workingExtensions])
+
+  useEffect(() => {
+    mutateExtensionsRef.current = mutateExtensions
+  }, [mutateExtensions])
+
+  useEffect(() => {
+    flushExtensionsSaveRef.current = flushExtensionsSave
+  }, [flushExtensionsSave])
+
+  useEffect(() => {
+    setCharacterEditorController({
+      getState: () => ({
+        open: Boolean(editingCharacterIdRef.current),
+        characterId: editingCharacterIdRef.current,
+        activeTabId: editingCharacterIdRef.current ? activeTabRef.current : null,
+        extensions: workingExtensionsRef.current,
+      }),
+      setActiveTab: (tabId) => {
+        setActiveTab(tabId)
+      },
+      updateExtensions: (mutator, immediate) => {
+        mutateExtensionsRef.current(mutator, immediate)
+      },
+      flush: () => flushExtensionsSaveRef.current(),
+    })
+
+    return () => {
+      setCharacterEditorController(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    syncCharacterEditorState({
+      open: isOpen,
+      characterId: editingCharacterId ?? null,
+      activeTabId: isOpen ? activeTab : null,
+      extensions: workingExtensions,
+    })
+  }, [activeTab, editingCharacterId, isOpen, workingExtensions])
 
   const handleNameChange = useCallback(
     (value: string) => {
@@ -1208,6 +1279,8 @@ export default function CharacterEditorPage() {
     },
     [close]
   )
+
+  const activeExtensionTab = characterEditorTabs.find((tab) => tab.id === activeTab) ?? null
 
   return createPortal(
     <>
@@ -1890,6 +1963,10 @@ export default function CharacterEditorPage() {
                         {jsonError && <span className={styles.jsonError}>{jsonError}</span>}
                       </div>
                     </>
+                  )}
+
+                  {activeExtensionTab && (
+                    <SpindleCharacterEditorTabContent tab={activeExtensionTab} />
                   )}
                 </div>
               </>

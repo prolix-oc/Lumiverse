@@ -83,6 +83,91 @@ Every registered drawer tab is automatically available in the command palette. U
 
 No extra code needed. The registry handles the wiring.
 
+## Character Editor Tabs (requires `characters`)
+
+Register a tab inside the native character editor modal. Max 4 per extension, 8 global.
+
+Character-editor tabs are scoped to whichever character card the user is currently editing. Your tab root persists like other Spindle placements, but it is only shown while the editor modal is open.
+
+```ts
+const tab = ctx.ui.registerCharacterEditorTab({
+  id: 'bundled-scripts',
+  title: 'Bundled Scripts',
+})
+
+const render = () => {
+  const state = ctx.ui.characterEditor.getState()
+  tab.root.replaceChildren()
+
+  if (!state.open || !state.characterId) {
+    return
+  }
+
+  const pre = document.createElement('pre')
+  pre.textContent = JSON.stringify(state.extensions.regex_scripts ?? [], null, 2)
+  tab.root.appendChild(pre)
+}
+
+const unsub = ctx.ui.characterEditor.onChange(render)
+render()
+
+// Later, when the user confirms a change:
+ctx.ui.characterEditor.updateExtensions((extensions) => {
+  const next = { ...extensions }
+  delete next.regex_scripts
+  return next
+}, { immediate: true })
+
+tab.onActivate(() => {
+  console.log('User opened my character-editor tab')
+})
+```
+
+### SpindleCharacterEditorTabOptions
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `id` | `string` | *required* | Unique identifier within your extension |
+| `title` | `string` | *required* | Label shown in the character editor tab bar |
+
+### SpindleCharacterEditorTabHandle
+
+| Method / Property | Returns | Description |
+|---|---|---|
+| `root` | `HTMLElement` | The tab content container. Render your UI into this element. |
+| `tabId` | `string` | The scoped tab ID assigned by the host. |
+| `setTitle(title)` | `void` | Update the tab label at runtime. |
+| `activate()` | `void` | Switch the open character editor to this tab. No-op if the editor is closed. |
+| `destroy()` | `void` | Remove the tab and all listeners. |
+| `onActivate(handler)` | `() => void` | Register a callback fired when the user switches to this tab. Returns an unsubscribe function. |
+
+### `ctx.ui.characterEditor`
+
+This helper exposes the current editor snapshot and a safe way to mutate the draft `character.extensions` blob without racing the host modal's own save pipeline.
+
+| Method | Returns | Description |
+|---|---|---|
+| `getState()` | `SpindleCharacterEditorState` | Read the current editor snapshot. |
+| `onChange(handler)` | `() => void` | Subscribe to open/close, tab, character, and `extensions` changes. |
+| `setExtensions(extensions, options?)` | `void` | Replace the draft `extensions` object. |
+| `updateExtensions(mutator, options?)` | `void` | Atomically derive the next draft `extensions` object from the current one. |
+| `flush()` | `Promise<void>` | Immediately persist any pending draft `extensions` changes. |
+
+### SpindleCharacterEditorState
+
+| Field | Type | Description |
+|---|---|---|
+| `open` | `boolean` | Whether the character editor modal is currently open. |
+| `characterId` | `string \| null` | The character currently being edited. |
+| `activeTabId` | `string \| null` | The active tab id inside the editor modal. |
+| `extensions` | `Record<string, any>` | The current draft `extensions` blob visible to the editor. |
+
+### Notes
+
+- Requires the `characters` permission because it exposes live character-card edit state.
+- `updateExtensions()` and `setExtensions()` write into the editor's draft, not straight to the database. Pass `{ immediate: true }` or call `flush()` when you want to commit right away.
+- If the editor is closed, the helper throws `CHARACTER_EDITOR_CLOSED` for mutation calls.
+
 ## Float Widgets (requires `ui_panels`)
 
 Create a small draggable widget overlaying the UI. Max 2 per extension, 8 global.
@@ -562,6 +647,7 @@ resetBtn.addEventListener('click', async () => {
 | Placement | Per Extension | Global |
 |---|---|---|
 | Drawer Tab | 4 | 8 |
+| Character Editor Tab | 4 | 8 |
 | Float Widget | 2 | 8 |
 | Dock Panel | 1 per edge | 2 per edge |
 | App Mount | 1 | 4 |

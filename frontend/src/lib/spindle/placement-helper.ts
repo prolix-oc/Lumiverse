@@ -10,9 +10,18 @@ import type {
   SpindleInputBarActionOptions,
   SpindleInputBarActionHandle,
 } from 'lumiverse-spindle-types'
+import type {
+  SpindleCharacterEditorTabOptions,
+  SpindleCharacterEditorTabHandle,
+} from './character-editor-types'
 import { useStore } from '@/store'
 import type { TabLocation } from './tab-mobility-types'
 import { isTabDispatchable } from './tab-dispatch'
+import {
+  getCharacterEditorState,
+  subscribeCharacterEditorState,
+  setCharacterEditorActiveTab,
+} from './character-editor-helper'
 
 let placementCounter = 0
 function nextId(extensionId: string, kind: string): string {
@@ -89,6 +98,58 @@ export function createDrawerTabHandle(
     destroy() {
       unsubscribeStore()
       getStore().unregisterDrawerTab(tabId)
+      activateHandlers.clear()
+    },
+    onActivate(handler: () => void): () => void {
+      activateHandlers.add(handler)
+      return () => { activateHandlers.delete(handler) }
+    },
+  }
+}
+
+// ── Character Editor Tab ──
+
+export function createCharacterEditorTabHandle(
+  extensionId: string,
+  options: SpindleCharacterEditorTabOptions,
+): SpindleCharacterEditorTabHandle {
+  const tabId = nextId(extensionId, `character-editor-tab:${options.id}`)
+  const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
+  root.setAttribute('data-spindle-character-editor-tab', tabId)
+
+  const activateHandlers = new Set<() => void>()
+  let wasActive = getCharacterEditorState().open && getCharacterEditorState().activeTabId === tabId
+
+  const unsubscribeState = subscribeCharacterEditorState((state) => {
+    const isActive = state.open && state.activeTabId === tabId
+    if (isActive && !wasActive) {
+      for (const handler of activateHandlers) {
+        try { handler() } catch { /* no-op */ }
+      }
+    }
+    wasActive = isActive
+  })
+
+  getStore().registerCharacterEditorTab({
+    id: tabId,
+    extensionId,
+    title: options.title,
+    root,
+  })
+
+  return {
+    root,
+    tabId,
+    setTitle(title: string) {
+      getStore().updateCharacterEditorTab(tabId, { title })
+    },
+    activate() {
+      setCharacterEditorActiveTab(tabId)
+    },
+    destroy() {
+      unsubscribeState()
+      getStore().unregisterCharacterEditorTab(tabId)
       activateHandlers.clear()
     },
     onActivate(handler: () => void): () => void {
@@ -409,6 +470,14 @@ function createTabMobilityHandleUncached(extensionId: string): {
 
 export function destroyAllPlacementsForExtension(extensionId: string) {
   const store = getStore()
+
+  for (const tab of store.drawerTabs.filter((t) => t.extensionId === extensionId)) {
+    try { tab.root.remove() } catch { /* no-op */ }
+  }
+
+  for (const tab of store.characterEditorTabs.filter((t) => t.extensionId === extensionId)) {
+    try { tab.root.remove() } catch { /* no-op */ }
+  }
 
   // Clean up DOM for app mounts
   for (const m of store.appMounts.filter((m) => m.extensionId === extensionId)) {
