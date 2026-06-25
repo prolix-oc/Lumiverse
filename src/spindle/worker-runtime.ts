@@ -38,6 +38,8 @@ import type {
   DatabankDocumentCreateDTO,
   DatabankDocumentUpdateDTO,
   PersonaDTO,
+  GlobalAddonDTO,
+  GlobalAddonUpdateDTO,
   PersonaCreateDTO,
   PersonaUpdateDTO,
   CouncilSettings,
@@ -2905,6 +2907,25 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "personas_get_world_book", requestId, personaId, userId });
       return result as WorldBookDTO | null;
+    },
+  },
+
+  global_addons: {
+    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: GlobalAddonDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_list", requestId, limit: options?.limit, offset: options?.offset, userId: options?.userId });
+      return result as { data: GlobalAddonDTO[]; total: number };
+    },
+    async get(addonId: string, userId?: string): Promise<GlobalAddonDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_get", requestId, addonId, userId });
+      return result as GlobalAddonDTO | null;
+    },
+    async update(addonId: string, input: GlobalAddonUpdateDTO, userId?: string): Promise<GlobalAddonDTO> {
+      assertMutationAllowed("spindle.global_addons.update()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_update", requestId, addonId, input, userId });
+      return result as GlobalAddonDTO;
     },
   },
 

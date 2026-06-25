@@ -23,6 +23,7 @@ import type {
   DatabankDocumentDTO,
   DatabankDocumentCreateDTO,
   PersonaDTO,
+  GlobalAddonDTO,
   ActivatedWorldInfoEntryDTO,
   DryRunResultDTO,
   ChatMemoryResultDTO,
@@ -82,6 +83,7 @@ import * as regexScriptsSvc from "../services/regex-scripts.service";
 import * as databanksSvc from "../services/databank";
 import * as filesSvc from "../services/files.service";
 import * as personasSvc from "../services/personas.service";
+import * as globalAddonsSvc from "../services/global-addons.service";
 import * as settingsSvc from "../services/settings.service";
 import * as councilSettingsSvc from "../services/council/council-settings.service";
 import * as packsSvc from "../services/packs.service";
@@ -2887,6 +2889,16 @@ export class WorkerHost {
         break;
       case "personas_get_world_book":
         this.handlePersonasGetWorldBook(msg.requestId, msg.personaId, msg.userId);
+        break;
+      // ─── Global Add-ons (gated: "personas") ─────────────────────────
+      case "global_addons_list":
+        this.handleGlobalAddonsList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        break;
+      case "global_addons_get":
+        this.handleGlobalAddonsGet(msg.requestId, msg.addonId, msg.userId);
+        break;
+      case "global_addons_update":
+        this.handleGlobalAddonsUpdate(msg.requestId, msg.addonId, msg.input, msg.userId);
         break;
       // ─── Council (free tier, read-only) ─────────────────────────────
       case "council_get_settings":
@@ -7740,6 +7752,79 @@ export class WorkerHost {
 
       const wb = worldBooksSvc.getWorldBook(resolvedUserId, persona.attached_world_book_id);
       this.postToWorker({ type: "response", requestId, result: wb ? this.toWorldBookDTO(wb) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  // ─── Global Add-ons (gated: "personas") ──────────────────────────────
+
+  private toGlobalAddonDTO(a: any): GlobalAddonDTO {
+    return {
+      id: a.id,
+      label: a.label || "",
+      content: a.content || "",
+      sort_order: a.sort_order ?? 0,
+      metadata: (typeof a.metadata === "object" && a.metadata) ? a.metadata : {},
+      created_at: a.created_at,
+      updated_at: a.updated_at,
+    };
+  }
+
+  private handleGlobalAddonsList(requestId: string, limit?: number, offset?: number, userId?: string): void {
+    try {
+      if (!this.hasPermission("personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const result = globalAddonsSvc.listGlobalAddons(resolvedUserId, {
+        limit: Math.min(limit || 50, 200),
+        offset: offset || 0,
+      });
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          data: result.data.map((a) => this.toGlobalAddonDTO(a)),
+          total: result.total,
+        },
+      });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleGlobalAddonsGet(requestId: string, addonId: string, userId?: string): void {
+    try {
+      if (!this.hasPermission("personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const addon = globalAddonsSvc.getGlobalAddon(resolvedUserId, addonId);
+      this.postToWorker({ type: "response", requestId, result: addon ? this.toGlobalAddonDTO(addon) : null });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleGlobalAddonsUpdate(requestId: string, addonId: string, input: any, userId?: string): void {
+    try {
+      if (!this.hasPermission("personas")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+
+      const addon = globalAddonsSvc.updateGlobalAddon(resolvedUserId, addonId, input || {});
+      if (!addon) throw new Error("Global add-on not found");
+      this.postToWorker({ type: "response", requestId, result: this.toGlobalAddonDTO(addon) });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
