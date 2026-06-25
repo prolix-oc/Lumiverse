@@ -45,6 +45,8 @@ class EventBus {
   // peers, since publishToRoom/Feed deliver only to local WS topic subscribers.
   private roomBroadcastListeners = new Set<(roomId: string, event: EventType, payload: any) => void>();
   private listeners = new Map<EventType, Set<Listener>>();
+  private pendingListenerDispatches: Array<() => void> = [];
+  private listenerDispatchTimer: ReturnType<typeof setTimeout> | null = null;
   /** Per-user visibility: true if at least one session reports visible. */
   private userVisibility = new Map<string, Map<string, boolean>>();
   private userAllHiddenSince = new Map<string, number>();
@@ -338,6 +340,21 @@ class EventBus {
     return () => this.listeners.get(event)?.delete(listener);
   }
 
+  private flushListenerDispatches(): void {
+    this.listenerDispatchTimer = null;
+    const pending = this.pendingListenerDispatches.splice(0, this.pendingListenerDispatches.length);
+    for (const run of pending) run();
+    if (this.pendingListenerDispatches.length > 0) {
+      this.listenerDispatchTimer = setTimeout(() => this.flushListenerDispatches(), 0);
+    }
+  }
+
+  private scheduleListenerDispatch(task: () => void): void {
+    this.pendingListenerDispatches.push(task);
+    if (this.listenerDispatchTimer) return;
+    this.listenerDispatchTimer = setTimeout(() => this.flushListenerDispatches(), 0);
+  }
+
   emit(
     event: EventType,
     payload: any = {},
@@ -365,7 +382,7 @@ class EventBus {
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
       for (const listener of eventListeners) {
-        queueMicrotask(() => {
+        this.scheduleListenerDispatch(() => {
           try {
             listener(message);
           } catch (err) {

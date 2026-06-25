@@ -15,6 +15,7 @@ import * as audioSvc from "./audio.service";
 import * as memoryCortex from "./memory-cortex";
 import { removePoolEntriesForChat } from "./generation-pool.service";
 import { invalidateChatMemoryCache, scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
+import { enqueueChatPipelineTask } from "./chat-pipeline-coordinator.service";
 import { getReasoningStripOptions } from "../utils/reasoning-strip";
 import { buildEnv, type MacroEnv } from "../macros";
 import { resolvePersonaOrDefault } from "./personas.service";
@@ -2957,7 +2958,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       // Kick the cortex pass onto the next macrotask so chat creation and
       // MESSAGE_SENT delivery complete before CPU-bound heuristics begin.
       setTimeout(() => {
-        memoryCortex.processChunk(
+        memoryCortex.scheduleProcessChunk(
           chunkPayload,
           characterNames,
           generateRawFn,
@@ -3203,6 +3204,15 @@ export async function rebuildChatChunksFromMessages(
 }
 
 async function _rebuildChatChunksImpl(userId: string, chatId: string): Promise<void> {
+  await enqueueChatPipelineTask({
+    chatId,
+    kind: "chunk_rebuild",
+    exclusive: true,
+    run: () => _rebuildChatChunksBody(userId, chatId),
+  });
+}
+
+async function _rebuildChatChunksBody(userId: string, chatId: string): Promise<void> {
   invalidateChatMemoryCache(chatId);
 
   // Clean up old vectors from LanceDB before wiping chat_chunks so they don't leak
@@ -3340,13 +3350,22 @@ async function chunkAndPersistMessages(
  * anchor is chunk 0, preserved chunk's tail message has been deleted).
  */
 async function _rebuildChatChunksFromImpl(userId: string, chatId: string, fromChunkId: string): Promise<void> {
+  await enqueueChatPipelineTask({
+    chatId,
+    kind: "chunk_rebuild",
+    exclusive: true,
+    run: () => _rebuildChatChunksFromBody(userId, chatId, fromChunkId),
+  });
+}
+
+async function _rebuildChatChunksFromBody(userId: string, chatId: string, fromChunkId: string): Promise<void> {
   invalidateChatMemoryCache(chatId);
 
   const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
   if (!cfg.enabled || !cfg.vectorize_chat_messages) {
     // Without embeddings, chunks have no purpose — fall back to the full
     // rebuild path which handles the disabled-embeddings drop cleanly.
-    return _rebuildChatChunksImpl(userId, chatId);
+    return _rebuildChatChunksBody(userId, chatId);
   }
 
   const allChunks = getDb()
@@ -3357,7 +3376,7 @@ async function _rebuildChatChunksFromImpl(userId: string, chatId: string, fromCh
   if (fromIdx <= 0) {
     // Anchor disappeared between selection and execution, or it was the very
     // first chunk (preserving nothing → equivalent to full rebuild).
-    return _rebuildChatChunksImpl(userId, chatId);
+    return _rebuildChatChunksBody(userId, chatId);
   }
 
   const lastPreserved = allChunks[fromIdx - 1];
@@ -3368,7 +3387,7 @@ async function _rebuildChatChunksFromImpl(userId: string, chatId: string, fromCh
   if (preservedEndIdx < 0) {
     // The last preserved chunk's tail message was deleted; the surgical
     // boundary is no longer well-defined. Full rebuild is safer.
-    return _rebuildChatChunksImpl(userId, chatId);
+    return _rebuildChatChunksBody(userId, chatId);
   }
   const messagesToChunk = allMessages.slice(preservedEndIdx + 1);
 

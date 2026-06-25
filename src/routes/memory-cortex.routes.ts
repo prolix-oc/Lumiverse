@@ -14,6 +14,7 @@ import type { Context } from "hono";
 import { getDb } from "../db/connection";
 import { getProvider } from "../llm/registry";
 import * as chatsSvc from "../services/chats.service";
+import { enqueueChatPipelineTask, getChatPipelineStatus } from "../services/chat-pipeline-coordinator.service";
 import * as connectionsSvc from "../services/connections.service";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as memoryCortex from "../services/memory-cortex";
@@ -359,29 +360,41 @@ function launchTrackedCortexRebuild(
   cortexRebuildsInFlight.set(chatId, entry);
 
   entry.done = (startAfter ?? Promise.resolve()).then(() =>
-    memoryCortex.rebuildCortex(
-      userId,
+    enqueueChatPipelineTask({
       chatId,
-      characterNames,
-      generateRawFn,
-      sidecarConnectionId,
-      (rebuildState) => {
-        eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
-          chatId,
-          status: "processing",
-          current: rebuildState.current,
-          total: rebuildState.total,
-          percent: rebuildState.percent,
-          phase: rebuildState.phase,
-          inFlightBatches: rebuildState.inFlightBatches,
-          lastProviderRequestAt: rebuildState.lastProviderRequestAt,
-          lastProviderResponseMs: rebuildState.lastProviderResponseMs,
-          ...(source ? { source } : {}),
-        }, userId);
-      },
-      descriptionAliases,
-      { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature, signal: abort.signal },
-    ).then((result) => {
+      kind: source === "warmup" ? "cortex_warmup" : "cortex_rebuild",
+      exclusive: true,
+      preflight: () => (
+        abort.signal.aborted
+          ? { action: "skip", reason: "aborted_before_start" }
+          : { action: "run" }
+      ),
+      run: () => memoryCortex.rebuildCortex(
+        userId,
+        chatId,
+        characterNames,
+        generateRawFn,
+        sidecarConnectionId,
+        (rebuildState) => {
+          eventBus.emit(EventType.CORTEX_REBUILD_PROGRESS, {
+            chatId,
+            status: "processing",
+            current: rebuildState.current,
+            total: rebuildState.total,
+            percent: rebuildState.percent,
+            phase: rebuildState.phase,
+            inFlightBatches: rebuildState.inFlightBatches,
+            lastProviderRequestAt: rebuildState.lastProviderRequestAt,
+            lastProviderResponseMs: rebuildState.lastProviderResponseMs,
+            ...(source ? { source } : {}),
+          }, userId);
+        },
+        descriptionAliases,
+        { resumable: source === "warmup", warmupSignature: snapshot.rebuildSignature, signal: abort.signal },
+      ),
+    }).then((scheduled) => {
+      if (scheduled.status !== "completed" || !scheduled.value) return;
+      const result = scheduled.value;
       try {
         stampCortexFreshnessSnapshot(userId, chatId, snapshot);
       } catch (err) {
@@ -991,6 +1004,7 @@ app.get("/health", async (c) => {
     relationCount: number;
     consolidationCount: number;
     rebuildStatus: any;
+    pipelineStatus?: any;
   } | null = null;
 
   if (chatId) {
@@ -1009,6 +1023,7 @@ app.get("/health", async (c) => {
         relationCount: 0,
         consolidationCount: 0,
         rebuildStatus: { status: "idle" },
+        pipelineStatus: getChatPipelineStatus(chatId),
       };
       pushCheck(
         "chat_exists",
@@ -1022,6 +1037,7 @@ app.get("/health", async (c) => {
       const vectorStatus = chatsSvc.getVectorizationStatus(userId, chatId);
       const stats = memoryCortex.getCortexUsageStats(chatId);
       const rebuildStatus = memoryCortex.getRebuildStatus(chatId) ?? { status: "idle" };
+      const pipelineStatus = getChatPipelineStatus(chatId);
 
       chatReport = {
         id: chatId,
@@ -1036,6 +1052,7 @@ app.get("/health", async (c) => {
         relationCount: stats.relationCount,
         consolidationCount: stats.consolidationCount,
         rebuildStatus,
+        pipelineStatus,
       };
 
       pushCheck(
@@ -1732,7 +1749,7 @@ app.get("/chats/:chatId/cortex-stats", (c) => {
   if (!owned.ok) return owned.response;
   const stats = memoryCortex.getCortexUsageStats(chatId);
   const telemetry = memoryCortex.getIngestionTelemetry(chatId);
-  return c.json({ ...stats, ingestionTelemetry: telemetry });
+  return c.json({ ...stats, ingestionTelemetry: telemetry, scheduler: getChatPipelineStatus(chatId) });
 });
 
 app.get("/chats/:chatId/ingestion-status", (c) => {
@@ -1740,8 +1757,21 @@ app.get("/chats/:chatId/ingestion-status", (c) => {
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
   const status = memoryCortex.getIngestionStatus(chatId);
-  if (!status) return c.json({ status: "idle", phase: "complete", chatId, chunkId: null, startedAt: null, updatedAt: Date.now(), pendingJobs: 0, timings: null });
-  return c.json(status);
+  const scheduler = getChatPipelineStatus(chatId);
+  if (!status) {
+    return c.json({
+      status: "idle",
+      phase: "complete",
+      chatId,
+      chunkId: null,
+      startedAt: null,
+      updatedAt: Date.now(),
+      pendingJobs: 0,
+      timings: null,
+      scheduler,
+    });
+  }
+  return c.json({ ...status, scheduler });
 });
 
 // ─── Rebuild ───────────────────────────────────────────────────
@@ -1752,8 +1782,9 @@ app.get("/chats/:chatId/rebuild-status", (c) => {
   const owned = ensureChatOwnership(c, chatId);
   if (!owned.ok) return owned.response;
   const status = memoryCortex.getRebuildStatus(chatId);
-  if (!status) return c.json({ status: "idle" });
-  return c.json(status);
+  const scheduler = getChatPipelineStatus(chatId);
+  if (!status) return c.json({ status: "idle", scheduler });
+  return c.json({ ...status, scheduler });
 });
 
 /** POST /chats/:chatId/rebuild — Rebuild cortex from canonical chunks.
