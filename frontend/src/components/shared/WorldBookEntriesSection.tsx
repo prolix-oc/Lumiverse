@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
 import {
@@ -373,6 +373,7 @@ export default function WorldBookEntriesSection({
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const entryListRef = useRef<HTMLDivElement>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const [entryListScrollMargin, setEntryListScrollMargin] = useState(0)
 
   // ── Live-sync (WORLD_BOOK_ENTRY_* / WORLD_BOOK_CHANGED) ──
   // Mirror of `entries` for use inside WS handlers without re-subscribing.
@@ -424,11 +425,51 @@ export default function WorldBookEntriesSection({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
+  const updateEntryListScrollMargin = useCallback(() => {
+    const scrollEl = scrollElementRef?.current
+    const listEl = entryListRef.current
+    if (!scrollEl || !listEl) {
+      setEntryListScrollMargin((current) => (current === 0 ? current : 0))
+      return
+    }
+    const nextMargin = Math.max(
+      0,
+      Math.round(listEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop),
+    )
+    setEntryListScrollMargin((current) => (current === nextMargin ? current : nextMargin))
+  }, [scrollElementRef])
+
+  // This list sits below collapsible controls inside a shared scroll container.
+  // Re-measure after every commit so virtual rows keep the correct top anchor
+  // when book details or bulk bars expand/collapse above the list.
+  useLayoutEffect(() => {
+    updateEntryListScrollMargin()
+  })
+
+  useEffect(() => {
+    if (!scrollElementRef?.current) return
+    let frame = 0
+    const handleResize = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        updateEntryListScrollMargin()
+      })
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [scrollElementRef, updateEntryListScrollMargin])
+
   const entryVirtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollElementRef?.current ?? entryListRef.current,
     estimateSize: () => 72,
     overscan: 6,
+    scrollMargin: entryListScrollMargin,
     getItemKey: (index) => entries[index]?.id ?? index,
     rangeExtractor,
     measureElement: (element) => {
@@ -1149,7 +1190,7 @@ export default function WorldBookEntriesSection({
                             left: 0,
                             right: 0,
                             paddingBottom: 8,
-                            transform: `translateY(${virtualRow.start}px)`,
+                            transform: `translateY(${Math.max(0, virtualRow.start - entryListScrollMargin)}px)`,
                           }}
                         >
                           <SortableEntryRow
