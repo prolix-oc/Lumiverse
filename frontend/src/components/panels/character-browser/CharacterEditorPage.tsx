@@ -186,6 +186,57 @@ function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function readPerspectiveLayers(raw: unknown): CharacterPerspectiveLayerInput[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((entry): entry is CharacterPerspectiveLayerInput => {
+        return Boolean(entry)
+          && typeof entry === 'object'
+          && typeof (entry as CharacterPerspectiveLayerInput).id === 'string'
+          && typeof (entry as CharacterPerspectiveLayerInput).image_id === 'string'
+      })
+      .slice(0, MAX_PERSPECTIVE_LAYERS)
+      .map((entry) => ({
+        id: entry.id,
+        image_id: entry.image_id,
+        label: typeof entry.label === 'string' ? entry.label : undefined,
+        intensity: typeof entry.intensity === 'number' && Number.isFinite(entry.intensity)
+          ? Math.max(0, Math.min(1.5, entry.intensity))
+          : 0.6,
+      }))
+  }
+
+  if (raw && typeof raw === 'object') {
+    const legacy = raw as Record<string, string | undefined>
+    return [
+      legacy.background ? { id: 'background', image_id: legacy.background, label: 'Background', intensity: 0.15 } : null,
+      legacy.framing ? { id: 'framing', image_id: legacy.framing, label: 'Framing', intensity: 1 } : null,
+      legacy.subject ? { id: 'subject', image_id: legacy.subject, label: 'Subject', intensity: 0.6 } : null,
+    ].filter(Boolean) as CharacterPerspectiveLayerInput[]
+  }
+
+  return []
+}
+
+function clonePerspectiveLayers(layers: CharacterPerspectiveLayerInput[]): CharacterPerspectiveLayerInput[] {
+  return layers.map((layer) => ({ ...layer }))
+}
+
+function arePerspectiveLayersEqual(
+  a: CharacterPerspectiveLayerInput[],
+  b: CharacterPerspectiveLayerInput[],
+): boolean {
+  if (a.length !== b.length) return false
+  return a.every((layer, index) => {
+    const other = b[index]
+    return other != null
+      && layer.id === other.id
+      && layer.image_id === other.image_id
+      && (layer.label ?? '') === (other.label ?? '')
+      && layer.intensity === other.intensity
+  })
+}
+
 export default function CharacterEditorPage() {
   const { t } = useTranslation('panels')
   const { t: tc } = useTranslation('common')
@@ -250,6 +301,8 @@ export default function CharacterEditorPage() {
   const [perspectiveLayerProgress, setPerspectiveLayerProgress] = useState<number | null>(null)
   const [localPerspectiveLayers, setLocalPerspectiveLayers] = useState<CharacterPerspectiveLayerInput[]>([])
   const pendingLayersRef = useRef<CharacterPerspectiveLayerInput[]>([])
+  const syncedPerspectiveLayersRef = useRef<CharacterPerspectiveLayerInput[]>([])
+  const skipPerspectiveLayerFlushRef = useRef(false)
   const layersSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layerSaveLockRef = useRef<Promise<void> | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -901,55 +954,37 @@ export default function CharacterEditorPage() {
   )
 
   const perspectiveLayers = useMemo<CharacterPerspectiveLayerInput[]>(() => {
-    const raw = character?.extensions?.landing_perspective_layers
-    if (Array.isArray(raw)) {
-      return raw
-        .filter((entry): entry is CharacterPerspectiveLayerInput => {
-          return Boolean(entry)
-            && typeof entry === 'object'
-            && typeof (entry as CharacterPerspectiveLayerInput).id === 'string'
-            && typeof (entry as CharacterPerspectiveLayerInput).image_id === 'string'
-        })
-        .slice(0, MAX_PERSPECTIVE_LAYERS)
-        .map((entry) => ({
-          id: entry.id,
-          image_id: entry.image_id,
-          label: typeof entry.label === 'string' ? entry.label : undefined,
-          intensity: typeof entry.intensity === 'number' && Number.isFinite(entry.intensity)
-            ? Math.max(0, Math.min(1.5, entry.intensity))
-            : 0.6,
-        }))
-    }
-    if (raw && typeof raw === 'object') {
-      const legacy = raw as Record<string, string | undefined>
-      return [
-        legacy.background ? { id: 'background', image_id: legacy.background, label: 'Background', intensity: 0.15 } : null,
-        legacy.framing ? { id: 'framing', image_id: legacy.framing, label: 'Framing', intensity: 1 } : null,
-        legacy.subject ? { id: 'subject', image_id: legacy.subject, label: 'Subject', intensity: 0.6 } : null,
-      ].filter(Boolean) as CharacterPerspectiveLayerInput[]
-    }
-    return []
+    return readPerspectiveLayers(character?.extensions?.landing_perspective_layers)
   }, [character?.extensions?.landing_perspective_layers])
 
   // Keep the in-editor perspective layer list in sync with the store character
   // when the edited character changes, without clobbering local in-flight edits.
   useEffect(() => {
     if (!character) return
-    setLocalPerspectiveLayers(perspectiveLayers)
-    pendingLayersRef.current = perspectiveLayers
+    const nextLayers = clonePerspectiveLayers(perspectiveLayers)
+    setLocalPerspectiveLayers(nextLayers)
+    pendingLayersRef.current = clonePerspectiveLayers(nextLayers)
+    syncedPerspectiveLayersRef.current = clonePerspectiveLayers(nextLayers)
   }, [character?.id])
 
   const flushPerspectiveLayersSave = useCallback(async () => {
     if (!editingCharacterId) return
     // Chain saves so rapid edits never race or overwrite each other.
     const run = async () => {
-      const toSave = pendingLayersRef.current
       layersSaveTimerRef.current = null
+      if (skipPerspectiveLayerFlushRef.current) return
+
+      const toSave = clonePerspectiveLayers(pendingLayersRef.current)
+      if (arePerspectiveLayersEqual(toSave, syncedPerspectiveLayersRef.current)) return
+      if (!useStore.getState().characters.some((entry) => entry.id === editingCharacterId)) return
+
       try {
         showSaving()
         const updated = await charactersApi.updatePerspectiveLayers(editingCharacterId, toSave)
+        const savedLayers = readPerspectiveLayers(updated.extensions?.landing_perspective_layers)
+        syncedPerspectiveLayersRef.current = clonePerspectiveLayers(savedLayers)
         // Only adopt the server response if local state hasn't moved on since the save started.
-        if (JSON.stringify(pendingLayersRef.current) === JSON.stringify(toSave)) {
+        if (arePerspectiveLayersEqual(pendingLayersRef.current, toSave)) {
           updateCharInStore(editingCharacterId, updated)
         }
       } catch (err) {
@@ -971,6 +1006,10 @@ export default function CharacterEditorPage() {
   // Flush any pending layer edits when the editor closes or the character changes.
   useEffect(() => () => {
     if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+    if (skipPerspectiveLayerFlushRef.current) {
+      skipPerspectiveLayerFlushRef.current = false
+      return
+    }
     void flushPerspectiveLayersSave()
   }, [flushPerspectiveLayersSave])
 
@@ -994,9 +1033,10 @@ export default function CharacterEditorPage() {
           { label: `Layer ${localPerspectiveLayers.length + 1}`, intensity: localPerspectiveLayers.length === 0 ? 0.2 : 0.7 },
           setPerspectiveLayerProgress,
         )
-        const next = (updated.extensions?.landing_perspective_layers ?? []) as CharacterPerspectiveLayerInput[]
+        const next = readPerspectiveLayers(updated.extensions?.landing_perspective_layers)
         setLocalPerspectiveLayers(next)
-        pendingLayersRef.current = next
+        pendingLayersRef.current = clonePerspectiveLayers(next)
+        syncedPerspectiveLayersRef.current = clonePerspectiveLayers(next)
         updateCharInStore(editingCharacterId, updated)
       } catch (err) {
         console.error('[Editor] Perspective layer upload failed:', err)
@@ -1056,9 +1096,15 @@ export default function CharacterEditorPage() {
   // Actions
   const handleDelete = useCallback(async () => {
     if (!editingCharacterId) return
-    await browser.deleteCharacter(editingCharacterId)
-    close()
-    setShowDeleteConfirm(false)
+    skipPerspectiveLayerFlushRef.current = true
+    try {
+      await browser.deleteCharacter(editingCharacterId)
+      close()
+      setShowDeleteConfirm(false)
+    } catch (err) {
+      skipPerspectiveLayerFlushRef.current = false
+      throw err
+    }
   }, [editingCharacterId, browser.deleteCharacter, close])
 
   const handleDuplicate = useCallback(async () => {
