@@ -23,6 +23,7 @@ import { loadWorldBookVectorSettings, type WorldBookVectorSettings } from "./wor
 import { getActiveVectorStore } from "./vector-store";
 import {
   andFilter,
+  cosineSimilarity,
   distanceFromSimilarity,
   eq,
   idsIn,
@@ -86,6 +87,7 @@ const EMBEDDING_SETTINGS_KEY = "embeddingConfig";
 const EMBEDDING_SECRET_KEY = "embedding_api_key";
 const WORLD_BOOK_VECTOR_VERSION = 4;
 const WORLD_BOOK_VECTOR_VERSION_KEY = "worldBookVectorVersion";
+const WORLD_BOOK_ROW_SCAN_FALLBACK_LIMIT = 10_000;
 /** Default safety timeout for embedding API requests. Prevents a hanging
  *  upstream server from stalling the entire generation pipeline.
  *  User-configurable via EmbeddingConfig.request_timeout (seconds). */
@@ -2075,7 +2077,7 @@ export async function searchWorldBookEntriesHybridWithVector(
   const store = await getActiveVectorStore();
   const nativeHybridSearch = store.hybridSearch?.bind(store);
   const canUseNativeHybrid = !!nativeHybridSearch && !!trimmedQuery && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical;
-  const vectorRows = canUseNativeHybrid
+  let vectorRows = canUseNativeHybrid
     ? await nativeHybridSearch({
       collection: "embeddings_world_books",
       vector,
@@ -2096,8 +2098,86 @@ export async function searchWorldBookEntriesHybridWithVector(
       signal,
     });
 
-  if (vectorRows.length === 0) {
-    console.log("[embeddings] WI vector search: 0 rows from vector store for book=%s (limit=%d)", worldBookId.slice(0, 8), effectiveLimit);
+  if (vectorRows.length === 0 && canUseNativeHybrid && !signal?.aborted) {
+    try {
+      const denseFallbackRows = await store.vectorSearch({
+        collection: "embeddings_world_books",
+        vector,
+        filter,
+        limit: rawLimit,
+        withVector: false,
+        refine: true,
+        signal,
+      });
+      if (denseFallbackRows.length > 0) {
+        let recoveredRows = denseFallbackRows;
+        if (trimmedQuery && store.capabilities.nativeLexical) {
+          const lexicalRows = await store.lexicalSearch({
+            collection: "embeddings_world_books",
+            queryText: trimmedQuery,
+            filter,
+            limit: rawLimit,
+            withVector: false,
+            signal,
+          }).catch((err) => {
+            console.warn(
+              "[embeddings] WI lexical fallback failed after native hybrid miss for book=%s in provider=%s: %s",
+              worldBookId.slice(0, 8),
+              store.id,
+              err instanceof Error ? err.message : String(err),
+            );
+            return [] as VectorHit[];
+          });
+          recoveredRows = reciprocalRankFusion(denseFallbackRows, lexicalRows).slice(0, rawLimit);
+        }
+        vectorRows = recoveredRows;
+        console.warn(
+          "[embeddings] WI vector search: native hybrid returned 0 rows for book=%s (provider=%s, limit=%d); dense fallback recovered %d row(s)",
+          worldBookId.slice(0, 8),
+          store.id,
+          effectiveLimit,
+          vectorRows.length,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[embeddings] WI dense fallback failed after native hybrid miss for book=%s in provider=%s: %s",
+        worldBookId.slice(0, 8),
+        store.id,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  if (vectorRows.length === 0 && !signal?.aborted) {
+    const fallback = await recoverWorldBookScopedRowsFromStore(
+      store,
+      filter,
+      vector,
+      rawLimit,
+      trimmedQuery,
+      signal,
+    );
+
+    if (fallback.scopedRowCount > 0) {
+      vectorRows = fallback.hits;
+      console.warn(
+        "[embeddings] WI vector search returned 0 direct rows for book=%s (provider=%s, limit=%d) but %d scoped row(s) exist; row-scan fallback recovered %d row(s)%s",
+        worldBookId.slice(0, 8),
+        store.id,
+        effectiveLimit,
+        fallback.scopedRowCount,
+        vectorRows.length,
+        fallback.truncated ? ` (scan capped at ${WORLD_BOOK_ROW_SCAN_FALLBACK_LIMIT})` : "",
+      );
+    } else {
+      console.log(
+        "[embeddings] WI vector search: 0 rows from vector store for book=%s (limit=%d, provider=%s)",
+        worldBookId.slice(0, 8),
+        effectiveLimit,
+        store.id,
+      );
+    }
   }
 
   const merged = new Map<string, WorldBookSearchCandidate>();
@@ -2173,6 +2253,67 @@ export async function searchWorldBookEntriesHybridWithVector(
       return (b.lexical_score ?? Number.NEGATIVE_INFINITY) - (a.lexical_score ?? Number.NEGATIVE_INFINITY);
     })
     .slice(0, effectiveLimit);
+}
+
+async function recoverWorldBookScopedRowsFromStore(
+  store: Awaited<ReturnType<typeof getActiveVectorStore>>,
+  filter: VectorFilter,
+  queryVector: number[],
+  limit: number,
+  queryText: string,
+  signal?: AbortSignal,
+): Promise<{ hits: VectorHit[]; scopedRowCount: number; truncated: boolean }> {
+  const scopedRowCount = await store.countRows("embeddings_world_books", filter).catch(() => 0);
+  if (scopedRowCount <= 0 || signal?.aborted) {
+    return { hits: [], scopedRowCount, truncated: false };
+  }
+
+  const scanLimit = Math.min(
+    WORLD_BOOK_ROW_SCAN_FALLBACK_LIMIT,
+    Math.max(limit, scopedRowCount),
+  );
+  const storedRows = await store.getRowsByFilter(
+    "embeddings_world_books",
+    filter,
+    scanLimit,
+  ).catch(() => [] as VectorRow[]);
+
+  const denseHits = storedRows
+    .filter((row) => row.vector.length === queryVector.length && row.vector.length > 0)
+    .map((row) => ({
+      id: row.id,
+      source_id: row.source_id,
+      content: row.content,
+      metadata_json: row.metadata_json,
+      similarity: cosineSimilarity(queryVector, row.vector),
+      lexicalScore: null,
+      vector: null,
+    } satisfies VectorHit))
+    .sort((a, b) => (b.similarity ?? Number.NEGATIVE_INFINITY) - (a.similarity ?? Number.NEGATIVE_INFINITY))
+    .slice(0, limit);
+
+  if (!queryText || !store.capabilities.nativeLexical || signal?.aborted) {
+    return {
+      hits: denseHits,
+      scopedRowCount,
+      truncated: scopedRowCount > scanLimit,
+    };
+  }
+
+  const lexicalHits = await store.lexicalSearch({
+    collection: "embeddings_world_books",
+    queryText,
+    filter,
+    limit,
+    withVector: false,
+    signal,
+  }).catch(() => [] as VectorHit[]);
+
+  return {
+    hits: reciprocalRankFusion(denseHits, lexicalHits).slice(0, limit),
+    scopedRowCount,
+    truncated: scopedRowCount > scanLimit,
+  };
 }
 
 /**
