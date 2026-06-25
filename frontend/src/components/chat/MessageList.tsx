@@ -569,6 +569,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     followOnAppend: true,
     scrollEndThreshold: SCROLL_END_THRESHOLD,
     paddingEnd: inputSafeZone,
+    directDomUpdatesMode: 'position',
     scrollPaddingEnd: inputSafeZone,
     directDomUpdates: true,
     onChange: (instance, sync) => {
