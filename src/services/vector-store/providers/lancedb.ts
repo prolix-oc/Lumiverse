@@ -30,6 +30,7 @@ import { resolveBrokenTermuxLanceDbMirrorPath, resolveLanceDbConnectUri } from "
 import type { WorldBookVectorIndexStatus } from "../../../types/world-book";
 import { LANCEDB_CAPABILITIES } from "../capabilities";
 import { toSimilarity } from "../addressing";
+import { worldBookVectorDesiredStatusSql } from "../../world-book-vector-state";
 import type {
   CollectionName,
   LexicalSearchOptions,
@@ -541,7 +542,7 @@ export function resetSqliteVectorizationState(): void {
     const db = getDb();
     db.run(
       `UPDATE world_book_entries
-       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+       SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
            vector_indexed_at = NULL,
            vector_index_error = NULL`
     );

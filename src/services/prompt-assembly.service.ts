@@ -79,6 +79,7 @@ import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
 import { loadWorldBookVectorSettings } from "./world-book-vector-settings.service";
+import { isWorldBookEntryVectorSearchReady } from "./world-book-vector-state";
 import * as imagesSvc from "./images.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
 import * as councilProfilesSvc from "./council/council-profiles.service";
@@ -3928,11 +3929,7 @@ export async function getWorldInfoVectorQueryPreview(
 function isVectorEligibleWorldInfoEntry(
   entry: import("../types/world-book").WorldBookEntry,
 ): boolean {
-  return (
-    entry.vectorized &&
-    !entry.disabled &&
-    (entry.content || "").trim().length > 0
-  );
+  return isWorldBookEntryVectorSearchReady(entry);
 }
 
 // ─── Vector WI retrieval cache (short-TTL for rapid dry-run optimization) ───
@@ -4077,7 +4074,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     );
   if (eligibleEntries.length === 0)
     blockerMessages.push(
-      "This chat has no vector-enabled, non-disabled, non-empty lorebook entries to search.",
+      "This chat has no indexed, vector-enabled, non-disabled, non-empty lorebook entries to search.",
     );
 
   if (blockerMessages.length > 0) {

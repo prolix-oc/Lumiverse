@@ -20,6 +20,13 @@ import { describeProviderError, readBoundedText } from "../utils/provider-errors
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../llm/stream-utils";
 import { chunkDocument } from "./databank/document-chunker.service";
 import { loadWorldBookVectorSettings, type WorldBookVectorSettings } from "./world-book-vector-settings.service";
+import {
+  desiredWorldBookVectorIndexStatus,
+  isWorldBookEntryVectorEligible,
+  worldBookVectorDesiredStatusSql,
+  worldBookVectorSettingsFingerprint,
+  worldBookVectorTrackingFingerprint,
+} from "./world-book-vector-state";
 import { getActiveVectorStore } from "./vector-store";
 import {
   andFilter,
@@ -778,7 +785,7 @@ async function ensureWorldBookVectorVersion(userId: string): Promise<void> {
   try {
     getDb().query(
       `UPDATE world_book_entries
-       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+       SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
            vector_indexed_at = NULL,
            vector_index_error = NULL
        WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
@@ -1313,7 +1320,9 @@ export async function embedTexts(
   return requestEmbeddings(userId, texts, options);
 }
 
-function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
+function getModelFingerprint(
+  cfg: Pick<EmbeddingConfig, "provider" | "model" | "dimensions" | "api_url" | "vertex_region">,
+): ModelFingerprint {
   // For Vertex the `api_url` field is cosmetic — the effective endpoint is
   // derived from `vertex_region`. Encode it into the fingerprint so a region
   // change still invalidates cached vectors.
@@ -1321,6 +1330,18 @@ function getModelFingerprint(cfg: EmbeddingConfig): ModelFingerprint {
     ? `vertex:${cfg.vertex_region || "global"}`
     : cfg.api_url;
   return { provider: cfg.provider, model: cfg.model, dimensions: cfg.dimensions, api_url };
+}
+
+export function getWorldBookVectorWriteFingerprint(
+  cfg: Pick<EmbeddingConfig, "enabled" | "vectorize_world_books" | "provider" | "model" | "dimensions" | "api_url" | "vertex_region">,
+): string {
+  const model = getModelFingerprint(cfg);
+  return JSON.stringify({
+    enabled: !!cfg.enabled,
+    vectorize_world_books: !!cfg.vectorize_world_books,
+    vector_version: WORLD_BOOK_VECTOR_VERSION,
+    ...model,
+  });
 }
 
 /**
@@ -1746,7 +1767,7 @@ async function deleteWorldBookEntryEmbeddingsBatch(userId: string, entryIds: str
 }
 
 function getDesiredWorldBookVectorStatus(entry: WorldBookEntry): WorldBookVectorIndexStatus {
-  return entry.vectorized ? "pending" : "not_enabled";
+  return desiredWorldBookVectorIndexStatus(entry);
 }
 
 function updateWorldBookEntryVectorState(
@@ -1788,7 +1809,7 @@ function updateWorldBookEntriesVectorState(
 }
 
 function isEligibleWorldBookEntry(entry: WorldBookEntry): boolean {
-  return entry.vectorized && !entry.disabled && (entry.content || "").trim().length > 0;
+  return isWorldBookEntryVectorEligible(entry);
 }
 
 function buildWorldBookEmbeddingRows(
@@ -1812,6 +1833,94 @@ function buildWorldBookEmbeddingRows(
   }));
 }
 
+type WorldBookVectorTrackedEntry = Pick<
+  WorldBookEntry,
+  "id" | "world_book_id" | "content" | "comment" | "key" | "keysecondary" | "vectorized" | "disabled" | "updated_at"
+>;
+
+function parseTrackedKeywordArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((item) => typeof item === "string" ? item : "");
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((item) => typeof item === "string" ? item : "") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToTrackedWorldBookEntry(row: any): WorldBookVectorTrackedEntry {
+  return {
+    id: String(row.id),
+    world_book_id: String(row.world_book_id || ""),
+    content: String(row.content || ""),
+    comment: String(row.comment || ""),
+    key: parseTrackedKeywordArray(row.key),
+    keysecondary: parseTrackedKeywordArray(row.keysecondary),
+    vectorized: !!row.vectorized,
+    disabled: !!row.disabled,
+    updated_at: Number(row.updated_at ?? 0),
+  };
+}
+
+function loadTrackedWorldBookEntriesForWrite(userId: string, entryIds: string[]): Map<string, WorldBookVectorTrackedEntry> {
+  if (entryIds.length === 0) return new Map();
+  const placeholders = entryIds.map(() => "?").join(", ");
+  const rows = getDb().query(
+    `SELECT e.id, e.world_book_id, e.content, e.comment, e.key, e.keysecondary, e.vectorized, e.disabled, e.updated_at
+     FROM world_book_entries e
+     JOIN world_books w ON w.id = e.world_book_id
+     WHERE w.user_id = ? AND e.id IN (${placeholders})`
+  ).all(userId, ...entryIds) as any[];
+  return new Map(rows.map((row) => {
+    const tracked = rowToTrackedWorldBookEntry(row);
+    return [tracked.id, tracked] as const;
+  }));
+}
+
+async function filterCurrentWorldBookEntriesForWrite(
+  userId: string,
+  entries: WorldBookEntry[],
+  settingsFingerprint: string,
+  configFingerprint: string,
+): Promise<WorldBookEntry[]> {
+  if (entries.length === 0) return [];
+  try {
+    const currentConfigFingerprint = getWorldBookVectorWriteFingerprint(await getEmbeddingConfig(userId));
+    if (currentConfigFingerprint !== configFingerprint) return [];
+  } catch (err) {
+    console.warn("[embeddings] Failed to verify current world-book embedding config before write:", err);
+    return [];
+  }
+  const currentSettingsFingerprint = worldBookVectorSettingsFingerprint(loadWorldBookVectorSettings(userId));
+  if (currentSettingsFingerprint !== settingsFingerprint) return [];
+
+  const currentEntries = loadTrackedWorldBookEntriesForWrite(userId, entries.map((entry) => entry.id));
+  return entries.filter((entry) => {
+    const current = currentEntries.get(entry.id);
+    return !!current && worldBookVectorTrackingFingerprint(current) === worldBookVectorTrackingFingerprint(entry);
+  });
+}
+
+export async function markWorldBookEntriesVectorErrorIfCurrent(
+  userId: string,
+  entries: WorldBookEntry[],
+  error: string,
+  settingsFingerprint: string,
+  configFingerprint: string,
+): Promise<number> {
+  const stableEntries = await filterCurrentWorldBookEntriesForWrite(userId, entries, settingsFingerprint, configFingerprint);
+  if (stableEntries.length === 0) return 0;
+  const stableIds = stableEntries.map((entry) => entry.id);
+  try {
+    await deleteWorldBookEntryEmbeddingsBatch(userId, stableIds);
+  } catch (err) {
+    console.warn("[embeddings] Failed to delete stale world-book vectors while marking error:", err);
+  }
+  updateWorldBookEntriesVectorState(stableIds, "error", null, error);
+  return stableIds.length;
+}
+
 export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBookEntry): Promise<void> {
   await ensureWorldBookVectorVersion(userId);
   const desiredStatus = getDesiredWorldBookVectorStatus(entry);
@@ -1822,9 +1931,11 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
   }
 
   const cfg = await getEmbeddingConfig(userId);
+  const configFingerprint = getWorldBookVectorWriteFingerprint(cfg);
   const worldBookSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: cfg.retrieval_top_k,
   });
+  const settingsFingerprint = worldBookVectorSettingsFingerprint(worldBookSettings);
   const chunks = buildWorldBookEntryEmbeddingChunks(entry, worldBookSettings);
   if (!cfg.enabled || !cfg.vectorize_world_books || entry.disabled || chunks.length === 0) {
     await deleteWorldBookEntryEmbeddings(userId, entry.id);
@@ -1835,16 +1946,21 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
   try {
     const now = Math.floor(Date.now() / 1000);
     const vectors = await cachedEmbedTexts(userId, chunks.map((chunk) => chunk.searchText));
-    const rows = buildWorldBookEmbeddingRows(userId, entry, chunks, vectors, now);
+    const [stableEntry] = await filterCurrentWorldBookEntriesForWrite(userId, [entry], settingsFingerprint, configFingerprint);
+    if (!stableEntry) {
+      console.info("[embeddings] Skipping stale world-book vector write for entry=%s", entry.id.slice(0, 8));
+      return;
+    }
+    const rows = buildWorldBookEmbeddingRows(userId, stableEntry, chunks, vectors, now);
 
-    await deleteWorldBookEntryRows(userId, [entry.id]);
+    await deleteWorldBookEntryRows(userId, [stableEntry.id]);
     await upsertStoreRows("embeddings_world_books", rows);
 
-    updateWorldBookEntryVectorState(entry.id, "indexed", now, null);
+    updateWorldBookEntryVectorState(stableEntry.id, "indexed", now, null);
     await scheduleStoreOptimize("world_book");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Vector indexing failed";
-    updateWorldBookEntryVectorState(entry.id, "error", null, message);
+    await markWorldBookEntriesVectorErrorIfCurrent(userId, [entry], message, settingsFingerprint, configFingerprint);
     throw err;
   }
 }
@@ -1925,6 +2041,7 @@ export async function reindexWorldBookEntries(
   }
 
   const cfg = await getEmbeddingConfig(userId);
+  const configFingerprint = getWorldBookVectorWriteFingerprint(cfg);
   if (!cfg.enabled || !cfg.vectorize_world_books) {
     for (const entry of toIndex) {
       await deleteWorldBookEntryEmbeddings(userId, entry.id);
@@ -1940,6 +2057,7 @@ export async function reindexWorldBookEntries(
   const worldBookSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: cfg.retrieval_top_k,
   });
+  const settingsFingerprint = worldBookVectorSettingsFingerprint(worldBookSettings);
   const allEntryGroups = toIndex.map((entry) => ({
     entry,
     chunks: buildWorldBookEntryEmbeddingChunks(entry, worldBookSettings),
@@ -1950,7 +2068,7 @@ export async function reindexWorldBookEntries(
 
   for (const group of emptiedEntries) {
     await deleteWorldBookEntryEmbeddings(userId, group.entry.id);
-    updateWorldBookEntryVectorState(group.entry.id, "indexed", Math.floor(Date.now() / 1000), null);
+    updateWorldBookEntryVectorState(group.entry.id, "not_enabled", null, null);
     progress.removed += 1;
     progress.current += 1;
     emitProgress();
@@ -1961,11 +2079,10 @@ export async function reindexWorldBookEntries(
     currentSize: number,
   ): Promise<void> => {
     if (groups.length === 0) return;
-      const payloads = groups.flatMap((group) => group.chunks.map((chunk) => ({ entry: group.entry, chunk })));
+    const payloads = groups.flatMap((group) => group.chunks.map((chunk) => ({ entry: group.entry, chunk })));
     try {
       const vectors = await cachedEmbedTexts(userId, payloads.map((payload) => payload.chunk.searchText));
       const now = Math.floor(Date.now() / 1000);
-      const rows: EmbeddingRow[] = [];
       const vectorSlices = new Map<string, number[][]>();
       let offset = 0;
       for (const group of groups) {
@@ -1973,7 +2090,31 @@ export async function reindexWorldBookEntries(
         vectorSlices.set(group.entry.id, slice);
         offset += group.chunks.length;
       }
-      for (const group of groups) {
+
+      const stableEntries = await filterCurrentWorldBookEntriesForWrite(
+        userId,
+        groups.map((group) => group.entry),
+        settingsFingerprint,
+        configFingerprint,
+      );
+      const stableIds = new Set(stableEntries.map((entry) => entry.id));
+      const stableGroups = groups.filter((group) => stableIds.has(group.entry.id));
+      if (stableGroups.length === 0) {
+        console.info("[embeddings] Skipping stale world-book reindex batch of %d entr%s", groups.length, groups.length === 1 ? "y" : "ies");
+        progress.current += groups.length;
+        emitProgress();
+        return;
+      }
+      if (stableGroups.length !== groups.length) {
+        console.info(
+          "[embeddings] Skipping %d stale world-book entr%s during reindex batch",
+          groups.length - stableGroups.length,
+          groups.length - stableGroups.length === 1 ? "y" : "ies",
+        );
+      }
+
+      const rows: EmbeddingRow[] = [];
+      for (const group of stableGroups) {
         rows.push(...buildWorldBookEmbeddingRows(
           userId,
           group.entry,
@@ -1983,11 +2124,11 @@ export async function reindexWorldBookEntries(
         ));
       }
 
-      await deleteWorldBookEntryRows(userId, groups.map((group) => group.entry.id));
+      await deleteWorldBookEntryRows(userId, stableGroups.map((group) => group.entry.id));
       await upsertStoreRows("embeddings_world_books", rows);
 
-      updateWorldBookEntriesVectorState(groups.map((group) => group.entry.id), "indexed", now, null);
-      progress.indexed += groups.length;
+      updateWorldBookEntriesVectorState(stableGroups.map((group) => group.entry.id), "indexed", now, null);
+      progress.indexed += stableGroups.length;
       progress.current += groups.length;
       emitProgress();
     } catch (err) {
@@ -2003,9 +2144,14 @@ export async function reindexWorldBookEntries(
         return;
       }
       console.warn("[embeddings] Batch embedding failed:", error);
-      await deleteWorldBookEntryEmbeddingsBatch(userId, groups.map((group) => group.entry.id));
-      updateWorldBookEntriesVectorState(groups.map((group) => group.entry.id), "error", null, error.message);
-      progress.failed += groups.length;
+      const failed = await markWorldBookEntriesVectorErrorIfCurrent(
+        userId,
+        groups.map((group) => group.entry),
+        error.message,
+        settingsFingerprint,
+        configFingerprint,
+      );
+      progress.failed += failed;
       progress.current += groups.length;
       emitProgress();
     }
@@ -2354,7 +2500,7 @@ export async function invalidateAllVectors(userId: string): Promise<void> {
     const db = getDb();
     db.run(
       `UPDATE world_book_entries
-       SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+       SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
            vector_indexed_at = NULL,
            vector_index_error = NULL
        WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`,
@@ -2406,7 +2552,7 @@ function markAllVectorStateStaleAfterReset(): void {
     db.transaction(() => {
       db.run(
         `UPDATE world_book_entries
-         SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+         SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
              vector_indexed_at = NULL,
              vector_index_error = NULL`
       );

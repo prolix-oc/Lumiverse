@@ -12,6 +12,10 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as vectorizationQueue from "./vectorization-queue.service";
+import {
+  desiredWorldBookVectorIndexStatus,
+  isWorldBookEntryVectorEligible,
+} from "./world-book-vector-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -87,7 +91,11 @@ function normalizeVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
   ) {
     return row.vector_index_status;
   }
-  return row.vectorized ? "pending" : "not_enabled";
+  return desiredWorldBookVectorIndexStatus({
+    vectorized: !!row.vectorized,
+    disabled: !!row.disabled,
+    content: typeof row.content === "string" ? row.content : "",
+  });
 }
 
 function rowToEntry(row: any): WorldBookEntry {
@@ -120,13 +128,17 @@ function rowToEntry(row: any): WorldBookEntry {
   };
 }
 
-function getPendingVectorIndexState(vectorized: boolean): {
+function getPendingVectorIndexState(entry: { vectorized: boolean; disabled?: boolean; content?: string | null }): {
   vector_index_status: WorldBookVectorIndexStatus;
   vector_indexed_at: null;
   vector_index_error: null;
 } {
   return {
-    vector_index_status: vectorized ? "pending" : "not_enabled",
+    vector_index_status: desiredWorldBookVectorIndexStatus({
+      vectorized: !!entry.vectorized,
+      disabled: !!entry.disabled,
+      content: entry.content ?? "",
+    }),
     vector_indexed_at: null,
     vector_index_error: null,
   };
@@ -376,28 +388,35 @@ function getEntriesForBook(userId: string, worldBookId: string, entryIds: string
   return rows.map(rowToEntry);
 }
 
-function setEntriesPendingReindex(entryIds: string[]): void {
-  if (entryIds.length === 0) return;
-  const placeholders = entryIds.map(() => "?").join(", ");
-  getDb().query(
+function setEntriesPendingReindex(entries: WorldBookEntry[]): void {
+  if (entries.length === 0) return;
+  const stmt = getDb().query(
     `UPDATE world_book_entries
-     SET vector_index_status = 'pending', vector_indexed_at = NULL, vector_index_error = NULL
-     WHERE id IN (${placeholders})`
-  ).run(...entryIds);
+     SET vector_index_status = ?, vector_indexed_at = NULL, vector_index_error = NULL
+     WHERE id = ?`,
+  );
+  for (const entry of entries) {
+    stmt.run(desiredWorldBookVectorIndexStatus(entry), entry.id);
+  }
+}
+
+function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookEntry, requeue: boolean): void {
+  void (async () => {
+    try {
+      await embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id);
+    } catch (err: unknown) {
+      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+    } finally {
+      if (requeue && isWorldBookEntryVectorEligible(entry)) {
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+      }
+    }
+  })();
 }
 
 function queueReindexForEntries(userId: string, entries: WorldBookEntry[]): void {
   for (const entry of entries) {
-    if (!entry.vectorized) {
-      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-      });
-      continue;
-    }
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
-    vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+    deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
   }
 }
 
@@ -606,7 +625,10 @@ export function setWorldBookSemanticActivation(
     updatedEntries = db.query(
       `UPDATE world_book_entries
        SET vectorized = 1,
-           vector_index_status = 'pending',
+           vector_index_status = CASE
+             WHEN disabled = 0 AND length(trim(content)) > 0 THEN 'pending'
+             ELSE 'not_enabled'
+           END,
            vector_indexed_at = NULL,
            vector_index_error = NULL,
            updated_at = ?
@@ -864,7 +886,11 @@ export function createEntry(
   const uid = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const vectorized = !!input.vectorized;
-  const vectorIndexState = getPendingVectorIndexState(vectorized);
+  const vectorIndexState = getPendingVectorIndexState({
+    vectorized,
+    disabled: !!input.disabled,
+    content: input.content || "",
+  });
   const storedExtensions = buildStoredEntryExtensions(input.extensions, input.outlet_name);
 
   getDb()
@@ -921,7 +947,7 @@ export function createEntry(
 
   touchWorldBook(worldBookId, now);
   const created = getEntry(userId, id)!;
-  if (created.vectorized) {
+  if (isWorldBookEntryVectorEligible(created)) {
     vectorizationQueue.queueWorldBookEntryVectorization(userId, created.id);
   }
   if (opts?.emitEvent !== false) emitWorldBookEntryChanged(userId, id);
@@ -964,8 +990,11 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   }
 
   if (shouldResetVectorIndex(input)) {
-    const nextVectorized = input.vectorized ?? existing.vectorized;
-    const vectorIndexState = getPendingVectorIndexState(nextVectorized);
+    const vectorIndexState = getPendingVectorIndexState({
+      vectorized: input.vectorized ?? existing.vectorized,
+      disabled: input.disabled ?? existing.disabled,
+      content: input.content ?? existing.content,
+    });
     fields.push("vector_index_status = ?");
     values.push(vectorIndexState.vector_index_status);
     fields.push("vector_indexed_at = ?");
@@ -983,14 +1012,12 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   getDb().query(`UPDATE world_book_entries SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   touchWorldBook(existing.world_book_id, values[values.length - 2]);
   const updated = getEntry(userId, id)!;
-  if (updated.vectorized) {
-    if (shouldResetVectorIndex(input) || updated.vector_index_status !== "indexed") {
-      vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
-    }
-  } else {
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, updated.id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
+  if (!updated.vectorized) {
+    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
+  } else if (shouldResetVectorIndex(input)) {
+    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true);
+  } else if (updated.vector_index_status !== "indexed" && isWorldBookEntryVectorEligible(updated)) {
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
   }
   emitWorldBookEntryChanged(userId, id);
   return updated;
@@ -1144,7 +1171,7 @@ export function bulkOperateEntries(
         stmt.run(
           targetBook.id,
           now,
-          entry.vectorized ? "pending" : "not_enabled",
+          desiredWorldBookVectorIndexStatus(entry),
           entry.id,
           worldBookId,
         );
@@ -1201,9 +1228,9 @@ export function bulkOperateEntries(
     })();
 
     const affectedVectorized = orderedEntries.filter((entry) => entry.vectorized);
-    setEntriesPendingReindex(affectedVectorized.map((entry) => entry.id));
+    setEntriesPendingReindex(affectedVectorized);
     for (const entry of affectedVectorized) {
-      vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+      deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
     }
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
@@ -1334,7 +1361,11 @@ function bulkInsertEntries(
         const id = crypto.randomUUID();
         const uid = crypto.randomUUID();
         const vectorized = options.forceVectorizedOff ? false : !!input.vectorized;
-        const vectorIndexState = getPendingVectorIndexState(vectorized);
+        const vectorIndexState = getPendingVectorIndexState({
+          vectorized,
+          disabled: !!input.disabled,
+          content: input.content || "",
+        });
         const extensionsJson = buildStoredEntryExtensions(input.extensions, input.outlet_name);
 
         insert.run(
@@ -1377,7 +1408,7 @@ function bulkInsertEntries(
         );
 
         insertedIds.push(id);
-        if (vectorized) vectorizedIds.push(id);
+        if (vectorIndexState.vector_index_status === "pending") vectorizedIds.push(id);
       }
     });
     tx();

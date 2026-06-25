@@ -2,6 +2,12 @@ import * as embeddingsSvc from "./embeddings.service";
 import { getDb } from "../db/connection";
 import { scheduleChatMemoryRefresh } from "./chat-memory-cache.service";
 import type { WorldBookEntry, WorldBookVectorIndexStatus } from "../types/world-book";
+import {
+  desiredWorldBookVectorIndexStatus,
+  isWorldBookEntryVectorEligible,
+  worldBookVectorSettingsFingerprint,
+} from "./world-book-vector-state";
+import { loadWorldBookVectorSettings } from "./world-book-vector-settings.service";
 
 interface VectorizationJob {
   type: "chunk" | "world_book_entry";
@@ -26,7 +32,11 @@ function normalizeWorldBookVectorIndexStatus(row: any): WorldBookVectorIndexStat
   ) {
     return row.vector_index_status;
   }
-  return row.vectorized ? "pending" : "not_enabled";
+  return desiredWorldBookVectorIndexStatus({
+    vectorized: !!row.vectorized,
+    disabled: !!row.disabled,
+    content: typeof row.content === "string" ? row.content : "",
+  });
 }
 
 function rowToWorldBookEntry(row: any): WorldBookEntry {
@@ -286,6 +296,7 @@ class VectorizationQueue {
     if (rows.length === 0) return;
 
     const entries = rows.map(rowToWorldBookEntry);
+    const settingsFingerprint = worldBookVectorSettingsFingerprint(loadWorldBookVectorSettings(jobs[0].userId));
     const bookCounts = new Map<string, number>();
     for (const row of rows) {
       const name = String(row.world_book_name || "Untitled world book");
@@ -295,8 +306,10 @@ class VectorizationQueue {
     const bookLabel = bookParts.length === 1
       ? bookParts[0]
       : `${bookParts.slice(0, 5).join(", ")}${bookParts.length > 5 ? `, +${bookParts.length - 5} more books` : ""}`;
+    let configFingerprint: string | null = null;
     try {
       const cfg = await embeddingsSvc.getEmbeddingConfig(jobs[0].userId);
+      configFingerprint = embeddingsSvc.getWorldBookVectorWriteFingerprint(cfg);
       await embeddingsSvc.reindexWorldBookEntries(jobs[0].userId, entries, {
         batchSize: Math.max(1, Math.min(cfg.batch_size, entries.length, 200)),
         optimizeAfter: false,
@@ -306,10 +319,16 @@ class VectorizationQueue {
     } catch (err) {
       const errorMsg = String(err instanceof Error ? err.message : err);
       console.warn("[vectorization] World book batch failed, marked as error:", errorMsg);
-      for (const job of jobs) {
-        if (job.worldBookEntryId) {
-          getDb().query("UPDATE world_book_entries SET vector_index_status = 'error', vector_index_error = ? WHERE id = ?").run(errorMsg, job.worldBookEntryId);
-        }
+      if (configFingerprint) {
+        await embeddingsSvc.markWorldBookEntriesVectorErrorIfCurrent(
+          jobs[0].userId,
+          entries.filter(isWorldBookEntryVectorEligible),
+          errorMsg,
+          settingsFingerprint,
+          configFingerprint,
+        );
+      } else {
+        console.warn("[vectorization] Skipped world-book error-state update because the job config fingerprint was unavailable");
       }
     }
   }

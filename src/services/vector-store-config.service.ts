@@ -19,6 +19,10 @@ import { getFirstUserId } from "../auth/seed";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import type { VectorStoreProviderId } from "./vector-store/types";
+import {
+  worldBookVectorDesiredStatusSql,
+  worldBookVectorStateDriftSql,
+} from "./world-book-vector-state";
 
 export const VECTOR_STORE_CONFIG_KEY = "vectorStoreConfig";
 
@@ -391,13 +395,9 @@ function scheduleVectorStoreStaleMarking(): boolean {
       const worldBooks = await updateRowsInChunks(
         "world_book_entries",
         "id",
-        `(vectorized = 1 AND vector_index_status != 'pending')
-          OR (vectorized != 1 AND vector_index_status != 'not_enabled')
-          OR vector_index_status IS NULL
-          OR vector_indexed_at IS NOT NULL
-          OR vector_index_error IS NOT NULL`,
+        worldBookVectorStateDriftSql(),
         `UPDATE world_book_entries
-         SET vector_index_status = CASE WHEN vectorized = 1 THEN 'pending' ELSE 'not_enabled' END,
+         SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
              vector_indexed_at = NULL,
              vector_index_error = NULL`,
       );

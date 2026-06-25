@@ -1,6 +1,10 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import {
+  worldBookVectorDesiredStatusSql,
+} from "./world-book-vector-state";
+import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
 
 export interface Setting {
   key: string;
@@ -14,6 +18,16 @@ const SETTING_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 export class InvalidSettingError extends Error {
   status = 400 as const;
+}
+
+function markWorldBookVectorStatesStaleForSettingsChange(userId: string): void {
+  getDb().query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
+         vector_indexed_at = NULL,
+         vector_index_error = NULL
+     WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
+  ).run(userId);
 }
 
 function assertValidKey(key: unknown): asserts key is string {
@@ -74,6 +88,9 @@ export function putSetting(userId: string, key: string, value: any): Setting {
   assertValidKey(key);
   const json = serializeValueOrThrow(key, value);
   const now = Math.floor(Date.now() / 1000);
+  const existingRow = key === WORLD_BOOK_VECTOR_SETTINGS_KEY
+    ? getDb().query("SELECT value FROM settings WHERE key = ? AND user_id = ?").get(key, userId) as { value: string } | null
+    : null;
 
   getDb()
     .query(
@@ -81,6 +98,10 @@ export function putSetting(userId: string, key: string, value: any): Setting {
        ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     )
     .run(key, json, userId, now);
+
+  if (key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingRow?.value !== json) {
+    markWorldBookVectorStatesStaleForSettingsChange(userId);
+  }
 
   const setting = { key, value, updated_at: now };
   eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
@@ -113,6 +134,14 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const results: Setting[] = [];
+  const existingValues = prepared.some((entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY)
+    ? new Map(
+        (db
+          .query(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${prepared.map(() => "?").join(", ")})`)
+          .all(userId, ...prepared.map((entry) => entry.key)) as Array<{ key: string; value: string }>)
+          .map((row) => [row.key, row.value]),
+      )
+    : null;
 
   const upsert = db.query(
     `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
@@ -126,6 +155,13 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
     }
   });
   transaction();
+
+  const worldBookVectorSettingsChanged = prepared.some(
+    (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingValues?.get(entry.key) !== entry.json,
+  );
+  if (worldBookVectorSettingsChanged) {
+    markWorldBookVectorStatesStaleForSettingsChange(userId);
+  }
 
   eventBus.emit(EventType.SETTINGS_UPDATED, { keys: prepared.map((p) => p.key) }, userId);
   const activeChatEntry = prepared.find((p) => p.key === "activeChatId");
