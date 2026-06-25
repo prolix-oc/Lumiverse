@@ -32,7 +32,7 @@ describe("getWorldBookVectorWriteFingerprint", () => {
     const base = getWorldBookVectorWriteFingerprint({
       enabled: true,
       vectorize_world_books: true,
-      provider: "openai_compat",
+      provider: "openai-compatible",
       model: "text-embedding-3-small",
       dimensions: 1536,
       api_url: "https://example.test/v1",
@@ -42,7 +42,7 @@ describe("getWorldBookVectorWriteFingerprint", () => {
     expect(base).toBe(getWorldBookVectorWriteFingerprint({
       enabled: true,
       vectorize_world_books: true,
-      provider: "openai_compat",
+      provider: "openai-compatible",
       model: "text-embedding-3-small",
       dimensions: 1536,
       api_url: "https://example.test/v1",
@@ -51,7 +51,7 @@ describe("getWorldBookVectorWriteFingerprint", () => {
     expect(base).not.toBe(getWorldBookVectorWriteFingerprint({
       enabled: false,
       vectorize_world_books: true,
-      provider: "openai_compat",
+      provider: "openai-compatible",
       model: "text-embedding-3-small",
       dimensions: 1536,
       api_url: "https://example.test/v1",
@@ -60,7 +60,7 @@ describe("getWorldBookVectorWriteFingerprint", () => {
     expect(base).not.toBe(getWorldBookVectorWriteFingerprint({
       enabled: true,
       vectorize_world_books: false,
-      provider: "openai_compat",
+      provider: "openai-compatible",
       model: "text-embedding-3-small",
       dimensions: 1536,
       api_url: "https://example.test/v1",
@@ -69,7 +69,7 @@ describe("getWorldBookVectorWriteFingerprint", () => {
     expect(base).not.toBe(getWorldBookVectorWriteFingerprint({
       enabled: true,
       vectorize_world_books: true,
-      provider: "openai_compat",
+      provider: "openai-compatible",
       model: "text-embedding-3-large",
       dimensions: 1536,
       api_url: "https://example.test/v1",
