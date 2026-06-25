@@ -85,7 +85,9 @@ export default function WallpaperPanel() {
   const setSetting = useStore((s) => s.setSetting)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const setActiveChatWallpaper = useStore((s) => s.setActiveChatWallpaper)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
 
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -176,6 +178,17 @@ export default function WallpaperPanel() {
       if (oldImageId) void imagesApi.deleteIfUnused(oldImageId).catch(() => {})
     } catch (err: any) {
       setError(err?.message || t('wallpaperPanel.clearChatFailed'))
+    }
+  }
+
+  const handleLibraryDelete = (imageId: string) => {
+    if (wallpaper.global?.image_id === imageId) {
+      setWallpaper({ global: null })
+    }
+
+    if (activeChatWallpaper?.image_id === imageId) {
+      setActiveChatWallpaper(null)
+      setActiveChatMetadata(activeChatMetadata ? { ...activeChatMetadata, wallpaper: null } : { wallpaper: null })
     }
   }
 
@@ -351,6 +364,7 @@ export default function WallpaperPanel() {
         currentImageId={libraryTarget === 'chat' ? chatWp?.image_id ?? null : globalWp?.image_id ?? null}
         onClose={() => setLibraryTarget(null)}
         onSelect={(ref) => applyWallpaper(libraryTarget ?? 'global', ref)}
+        onDelete={handleLibraryDelete}
       />
     </div>
   )

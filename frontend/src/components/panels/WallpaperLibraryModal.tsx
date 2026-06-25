@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Film, Image as ImageIcon } from 'lucide-react'
+import { Check, Film, Image as ImageIcon, Loader2, Trash2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
+import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { imagesApi } from '@/api/images'
 import type { Image } from '@/types/api'
@@ -17,6 +18,7 @@ interface WallpaperLibraryModalProps {
   currentImageId: string | null
   onClose: () => void
   onSelect: (ref: WallpaperRef) => Promise<void> | void
+  onDelete?: (imageId: string) => void
 }
 
 function formatBytes(bytes: number, unknownLabel: string): string {
@@ -49,6 +51,7 @@ export default function WallpaperLibraryModal({
   currentImageId,
   onClose,
   onSelect,
+  onDelete,
 }: WallpaperLibraryModalProps) {
   const { t, i18n } = useTranslation('panels')
   const [items, setItems] = useState<Image[]>([])
@@ -56,6 +59,8 @@ export default function WallpaperLibraryModal({
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [applyingId, setApplyingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteCandidate, setDeleteCandidate] = useState<Image | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const loadPage = useCallback(async (offset: number, append: boolean) => {
@@ -83,6 +88,8 @@ export default function WallpaperLibraryModal({
     setItems([])
     setTotal(0)
     setApplyingId(null)
+    setDeletingId(null)
+    setDeleteCandidate(null)
     void loadPage(0, false)
   }, [isOpen, loadPage])
 
@@ -98,9 +105,26 @@ export default function WallpaperLibraryModal({
     }
   }, [onClose, onSelect])
 
+  const handleDelete = useCallback(async (item: Image) => {
+    setDeletingId(item.id)
+    setError(null)
+    try {
+      await imagesApi.deleteWallpaper(item.id)
+      setItems((prev) => prev.filter((entry) => entry.id !== item.id))
+      setTotal((prev) => Math.max(0, prev - 1))
+      setDeleteCandidate(null)
+      onDelete?.(item.id)
+    } catch (err: any) {
+      setError(err?.body?.error || err?.message || t('wallpaperLibrary.deleteFailed'))
+    } finally {
+      setDeletingId(null)
+    }
+  }, [onDelete, t])
+
   const canLoadMore = items.length < total
   const scopeLabel = target === 'chat' ? t('wallpaperPanel.chatWallpaper') : t('wallpaperPanel.globalWallpaper')
   const unknownValue = t('wallpaperLibrary.unknownValue')
+  const actionBusy = applyingId !== null || deletingId !== null
 
   return (
     <ModalShell isOpen={isOpen} onClose={onClose} maxWidth={1040} maxHeight="86vh" className={styles.modal}>
@@ -176,14 +200,26 @@ export default function WallpaperLibraryModal({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    className={styles.applyBtn}
-                    disabled={applyingId !== null}
-                    onClick={() => handleApply(item)}
-                  >
-                    {applyingId === item.id ? t('wallpaperLibrary.applying') : t('wallpaperLibrary.apply', { scope: scopeLabel })}
-                  </button>
+                  <div className={styles.cardActions}>
+                    <button
+                      type="button"
+                      className={styles.applyBtn}
+                      disabled={actionBusy}
+                      onClick={() => handleApply(item)}
+                    >
+                      {applyingId === item.id ? t('wallpaperLibrary.applying') : t('wallpaperLibrary.apply', { scope: scopeLabel })}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.deleteBtn}
+                      disabled={actionBusy}
+                      onClick={() => setDeleteCandidate(item)}
+                      aria-label={t('wallpaperLibrary.delete')}
+                      title={t('wallpaperLibrary.delete')}
+                    >
+                      {deletingId === item.id ? <Loader2 size={14} className={styles.spin} /> : <Trash2 size={14} />}
+                    </button>
+                  </div>
                 </article>
               )
             })}
@@ -197,11 +233,29 @@ export default function WallpaperLibraryModal({
             type="button"
             className={styles.loadMoreBtn}
             onClick={() => void loadPage(items.length, true)}
-            disabled={loadingMore || loading}
+            disabled={loadingMore || loading || actionBusy}
           >
             {loadingMore ? t('wallpaperLibrary.loadingMore') : t('wallpaperLibrary.loadMore')}
           </button>
         </div>
+      )}
+
+      {deleteCandidate && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('wallpaperLibrary.deleteConfirmTitle')}
+          message={t('wallpaperLibrary.deleteConfirmMessage', {
+            name: deleteCandidate.original_filename || t('wallpaperLibrary.untitled'),
+          })}
+          variant="danger"
+          confirmText={t('wallpaperLibrary.delete')}
+          loading={deletingId === deleteCandidate.id}
+          loadingText={t('wallpaperLibrary.deleting')}
+          onConfirm={() => { void handleDelete(deleteCandidate) }}
+          onCancel={() => {
+            if (deletingId === null) setDeleteCandidate(null)
+          }}
+        />
       )}
     </ModalShell>
   )

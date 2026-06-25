@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { WALLPAPER_LIBRARY_OWNER, deleteImageIfUnreferenced, getImage, listImages } from "./images.service";
+import * as chatsSvc from "./chats.service";
+import * as settingsSvc from "./settings.service";
+import {
+  WALLPAPER_LIBRARY_OWNER,
+  deleteImageIfUnreferenced,
+  deleteWallpaperLibraryImage,
+  getImage,
+  listImages,
+} from "./images.service";
 
 function initImagesTestDb(): void {
   closeDatabase();
@@ -20,6 +28,24 @@ function initImagesTestDb(): void {
     owner_character_id TEXT,
     owner_chat_id TEXT,
     created_at INTEGER NOT NULL
+  )`);
+
+  getDb().run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (key, user_id)
+  )`);
+
+  getDb().run(`CREATE TABLE chats (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    character_id TEXT,
+    name TEXT NOT NULL DEFAULT '',
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
   )`);
 }
 
@@ -65,6 +91,28 @@ function seedImage(
       ownership?.owner_chat_id ?? null,
       createdAt,
     );
+}
+
+function seedSetting(key: string, value: unknown, updatedAt = 100): void {
+  getDb()
+    .query("INSERT INTO settings (key, value, updated_at, user_id) VALUES (?, ?, ?, ?)")
+    .run(key, JSON.stringify(value), updatedAt, "u1");
+}
+
+function seedChat(id: string, metadata: Record<string, unknown>, updatedAt = 100): void {
+  getDb()
+    .query(
+      `INSERT INTO chats (
+        id,
+        user_id,
+        character_id,
+        name,
+        metadata,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(id, "u1", "char-1", "Test Chat", JSON.stringify(metadata), updatedAt, updatedAt);
 }
 
 beforeEach(() => {
@@ -118,6 +166,53 @@ describe("images.service ownership filters", () => {
     seedImage("img-1", 100, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
 
     const deleted = deleteImageIfUnreferenced("u1", "img-1");
+
+    expect(deleted).toBe(false);
+    expect(getImage("u1", "img-1")).not.toBeNull();
+  });
+
+  test("deletes wallpaper-library images and clears global plus chat assignments", () => {
+    seedImage("img-1", 100, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
+    seedImage("img-2", 90, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
+    seedSetting("wallpaper", {
+      global: { image_id: "img-1", type: "image" },
+      opacity: 0.35,
+      fit: "cover",
+      blur: 2,
+    });
+    seedChat("chat-1", {
+      wallpaper: { image_id: "img-1", type: "image" },
+      topic: "keep me",
+    });
+    seedChat("chat-2", {
+      wallpaper: { image_id: "img-2", type: "image" },
+      topic: "leave me alone",
+    });
+
+    const deleted = deleteWallpaperLibraryImage("u1", "img-1");
+
+    expect(deleted).toBe(true);
+    expect(getImage("u1", "img-1")).toBeNull();
+    expect(settingsSvc.getSetting("u1", "wallpaper")?.value).toEqual({
+      global: null,
+      opacity: 0.35,
+      fit: "cover",
+      blur: 2,
+    });
+    expect(chatsSvc.getChat("u1", "chat-1")?.metadata).toEqual({
+      wallpaper: null,
+      topic: "keep me",
+    });
+    expect(chatsSvc.getChat("u1", "chat-2")?.metadata).toEqual({
+      wallpaper: { image_id: "img-2", type: "image" },
+      topic: "leave me alone",
+    });
+  });
+
+  test("does not delete non-wallpaper images through the wallpaper delete path", () => {
+    seedImage("img-1", 100);
+
+    const deleted = deleteWallpaperLibraryImage("u1", "img-1");
 
     expect(deleted).toBe(false);
     expect(getImage("u1", "img-1")).not.toBeNull();

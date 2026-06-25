@@ -45,6 +45,14 @@ app.post("/wallpapers", async (c) => {
   return c.json(image, 201);
 });
 
+app.delete("/wallpapers/:id", (c) => {
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  const deleted = svc.deleteWallpaperLibraryImage(userId, id);
+  if (!deleted) return c.json({ error: "Not found" }, 404);
+  return c.json({ success: true, deleted: true });
+});
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const formData = await c.req.formData();

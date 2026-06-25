@@ -44,6 +44,10 @@ export const imagesApi = {
     return get<ImageListResult>('/images/wallpapers', params)
   },
 
+  deleteWallpaper(id: string) {
+    return del<{ success: boolean; deleted: boolean }>(`/images/wallpapers/${id}`)
+  },
+
   delete(id: string) {
     return del<void>(`/images/${id}`)
   },

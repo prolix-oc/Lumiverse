@@ -571,6 +571,15 @@ export function useWebSocket() {
         const changedChatId = payload.chat?.id ?? payload.chatId
         if (changedChatId !== state.activeChatId) return
 
+        if (payload.chat) {
+          state.setActiveChatName(payload.chat.name ?? null)
+          state.setActiveChatMetadata(payload.chat.metadata ?? null)
+          const wallpaper = payload.chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
+          state.setActiveChatWallpaper(wallpaper?.image_id ? wallpaper : null)
+          const avatarOverride = payload.chat.metadata?.active_avatar_id as string | undefined
+          state.setActiveChatAvatarId(avatarOverride || null)
+        }
+
         const changedFields = payload.changedFields
         if (changedFields === undefined) {
           invalidateDisplayRegexCache()

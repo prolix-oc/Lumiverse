@@ -7,6 +7,8 @@ import type { Image } from "../types/image";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname } from "path";
 import { extractVideoPosterBuffer, stripAudioFromVideoBuffer } from "./silent-video.service";
+import * as settingsSvc from "./settings.service";
+import * as chatsSvc from "./chats.service";
 
 const IMAGES_DIR = "images";
 
@@ -48,6 +50,11 @@ function normalizeOwnershipValue(value?: string): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function isWallpaperRef(value: unknown, imageId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return (value as { image_id?: unknown }).image_id === imageId;
 }
 
 function buildImageFilterClause(userId: string, options?: ImageOwnershipOptions): { clause: string; params: string[] } {
@@ -775,6 +782,34 @@ export function deleteImage(userId: string, id: string): boolean {
     eventBus.emit(EventType.IMAGE_DELETED, { id }, userId);
   }
   return result.changes > 0;
+}
+
+function clearWallpaperAssignments(userId: string, imageId: string): void {
+  const wallpaperSetting = settingsSvc.getSetting(userId, "wallpaper");
+  if (wallpaperSetting?.value && typeof wallpaperSetting.value === "object" && !Array.isArray(wallpaperSetting.value)) {
+    const current = wallpaperSetting.value as Record<string, unknown>;
+    if (isWallpaperRef(current.global, imageId)) {
+      settingsSvc.putSetting(userId, "wallpaper", { ...current, global: null });
+    }
+  }
+
+  const candidateRows = getDb()
+    .query("SELECT id FROM chats WHERE user_id = ? AND metadata LIKE ?")
+    .all(userId, `%${imageId}%`) as Array<{ id: string }>;
+
+  for (const row of candidateRows) {
+    const chat = chatsSvc.getChat(userId, row.id);
+    if (!chat || !isWallpaperRef(chat.metadata?.wallpaper, imageId)) continue;
+    chatsSvc.mergeChatMetadata(userId, row.id, { wallpaper: null });
+  }
+}
+
+export function deleteWallpaperLibraryImage(userId: string, id: string): boolean {
+  const image = getImage(userId, id, { owner_extension_identifier: WALLPAPER_LIBRARY_OWNER });
+  if (!image) return false;
+
+  clearWallpaperAssignments(userId, id);
+  return deleteImage(userId, id);
 }
 
 function hasImageReference(sql: string, params: any[]): boolean {
