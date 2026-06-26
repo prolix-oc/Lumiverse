@@ -103,11 +103,17 @@ export interface MilvusConnectionConfig {
   requestTimeoutMs?: number
 }
 
+export interface MilvusHybridSearchConfig {
+  candidateMultiplier?: number
+  candidateCap?: number
+}
+
 export interface VectorStoreConfigStatus {
   provider: VectorStoreProviderId
   tuningProfile?: VectorStoreTuningProfile
   qdrant?: QdrantConnectionConfig
   milvus?: MilvusConnectionConfig
+  milvusHybridSearch?: MilvusHybridSearchConfig
   managedByEnv: boolean
   qdrantHasApiKey: boolean
   milvusHasPassword: boolean
@@ -118,6 +124,7 @@ export interface UpdateVectorStoreConfigInput {
   tuningProfile?: VectorStoreTuningProfile
   qdrant?: Partial<QdrantConnectionConfig>
   milvus?: Partial<MilvusConnectionConfig>
+  milvusHybridSearch?: Partial<MilvusHybridSearchConfig>
   qdrant_api_key?: string | null
   milvus_password?: string | null
 }

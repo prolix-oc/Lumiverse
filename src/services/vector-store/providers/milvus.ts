@@ -1,5 +1,5 @@
 import { connect as connectTcp } from "node:net";
-import type { MilvusConnectionConfig, VectorStoreTuningProfile } from "../../vector-store-config.service";
+import type { MilvusConnectionConfig, MilvusHybridSearchConfig, VectorStoreTuningProfile } from "../../vector-store-config.service";
 import { adaptiveStorageBatch, isRetryableStorageError } from "../addressing";
 import { milvusCapabilities } from "../capabilities";
 import type {
@@ -20,6 +20,8 @@ const COLLECTION_PREFIX = "lumiverse_";
 const VARCHAR_MAX = 65_535;
 const DEFAULT_TCP_CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
+const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 3;
+const DEFAULT_HYBRID_CANDIDATE_CAP = 200;
 const OUTPUT_FIELDS = ["id", "user_id", "source_type", "source_id", "owner_id", "chunk_index", "content", "metadata_json", "updated_at"];
 const SCALAR_INDEX_FIELDS = ["user_id", "source_type", "source_id", "owner_id", "chunk_index"];
 const SPARSE_FIELD = "sparse";
@@ -36,17 +38,24 @@ export class MilvusStore implements VectorStore {
   private readonly config: MilvusConnectionConfig | undefined;
   private readonly password: string | null;
   private readonly tuningProfile: VectorStoreTuningProfile;
+  private readonly hybridSearchConfig: MilvusHybridSearchConfig | undefined;
   private sdk: MilvusSdk | null = null;
   private client: MilvusClientLike | null = null;
   private loaded = new Set<string>();
 
-  constructor(config: MilvusConnectionConfig | undefined, password: string | null, tuningProfile?: VectorStoreTuningProfile) {
+  constructor(
+    config: MilvusConnectionConfig | undefined,
+    password: string | null,
+    tuningProfile?: VectorStoreTuningProfile,
+    hybridSearchConfig?: MilvusHybridSearchConfig,
+  ) {
     if (!config?.address) {
       throw new Error("Milvus vector store requires milvus.address (or LUMIVERSE_MILVUS_ADDRESS)." );
     }
     this.config = config;
     this.password = password;
     this.tuningProfile = tuningProfile || "balanced";
+    this.hybridSearchConfig = hybridSearchConfig;
   }
 
   async init(): Promise<void> {
@@ -296,6 +305,8 @@ export class MilvusStore implements VectorStore {
     const name = this.collectionName(opts.collection);
     if (!(await this.hasCollection(name)) || !(await this.hasSparseField(name))) return this.vectorSearch(opts);
     await this.loadCollection(name);
+    const requestedLimit = Math.max(1, opts.limit);
+    const candidateLimit = milvusHybridCandidateLimit(requestedLimit, this.hybridSearchConfig);
     try {
       const res = await client.hybridSearch({
         collection_name: name,
@@ -304,7 +315,7 @@ export class MilvusStore implements VectorStore {
             data: opts.vector,
             anns_field: "vector",
             expr: translateFilter(opts.filter),
-            limit: Math.max(opts.limit, Math.min(opts.limit * 3, 200)),
+            limit: candidateLimit,
             metric_type: "COSINE",
             params: milvusTuning(this.tuningProfile).searchParams,
           },
@@ -312,13 +323,13 @@ export class MilvusStore implements VectorStore {
             data: opts.queryText.trim(),
             anns_field: SPARSE_FIELD,
             expr: translateFilter(opts.filter),
-            limit: Math.max(opts.limit, Math.min(opts.limit * 3, 200)),
+            limit: candidateLimit,
             metric_type: "BM25",
             params: {},
           },
         ],
         rerank: { strategy: "rrf", params: { k: 60 } },
-        limit: opts.limit,
+        limit: requestedLimit,
         output_fields: opts.withVector ? [...OUTPUT_FIELDS, "vector"] : OUTPUT_FIELDS,
       });
       if (opts.signal?.aborted) return [];
@@ -590,6 +601,21 @@ function milvusTuning(profile: VectorStoreTuningProfile): {
         searchParams: {},
       };
   }
+}
+
+function milvusHybridCandidateLimit(
+  requestedLimit: number,
+  hybridSearchConfig: MilvusHybridSearchConfig | undefined,
+): number {
+  const candidateMultiplier = Math.max(
+    1,
+    Math.floor(hybridSearchConfig?.candidateMultiplier ?? DEFAULT_HYBRID_CANDIDATE_MULTIPLIER),
+  );
+  const candidateCap = Math.max(
+    1,
+    Math.floor(hybridSearchConfig?.candidateCap ?? DEFAULT_HYBRID_CANDIDATE_CAP),
+  );
+  return Math.max(requestedLimit, Math.min(requestedLimit * candidateMultiplier, candidateCap));
 }
 
 function milvusConnectTimeoutMs(config: MilvusConnectionConfig): number {

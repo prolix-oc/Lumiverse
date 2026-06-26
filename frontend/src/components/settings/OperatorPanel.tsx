@@ -178,6 +178,9 @@ function vectorScoreLabel(kind: VectorStoreHealth['capabilities'] extends infer 
   return kind === 'cosine_distance' ? 'cosine distance' : 'cosine similarity'
 }
 
+const DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER = 3
+const DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP = 200
+
 interface VectorStoreDraft {
   provider: VectorStoreProviderId
   tuningProfile: VectorStoreTuningProfile
@@ -190,6 +193,8 @@ interface VectorStoreDraft {
   milvusTransport: 'grpc' | 'http'
   milvusConnectTimeoutMs: number
   milvusRequestTimeoutMs: number
+  milvusHybridCandidateMultiplier: number
+  milvusHybridCandidateCap: number
 }
 
 function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorStoreDraft {
@@ -205,6 +210,8 @@ function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorSt
     milvusTransport: config?.milvus?.transport ?? 'grpc',
     milvusConnectTimeoutMs: config?.milvus?.connectTimeoutMs ?? 5000,
     milvusRequestTimeoutMs: config?.milvus?.requestTimeoutMs ?? 60000,
+    milvusHybridCandidateMultiplier: config?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER,
+    milvusHybridCandidateCap: config?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP,
   }
 }
 
@@ -234,6 +241,10 @@ function vectorDraftToPayload(
       transport: draft.milvusTransport,
       connectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(draft.milvusConnectTimeoutMs))),
       requestTimeoutMs: Math.max(0, Math.min(300000, Math.round(draft.milvusRequestTimeoutMs))),
+    }
+    payload.milvusHybridSearch = {
+      candidateMultiplier: Math.max(1, Math.min(10, Math.round(draft.milvusHybridCandidateMultiplier))),
+      candidateCap: Math.max(1, Math.min(2000, Math.round(draft.milvusHybridCandidateCap))),
     }
     if (trimmedMilvusPassword) payload.milvus_password = trimmedMilvusPassword
   }
@@ -441,7 +452,18 @@ export default function OperatorPanel() {
   const vectorSupportsLexical = vectorCapabilities?.nativeLexical === true
   const vectorIsExternal = vectorCapabilities?.externalService === true
   const vectorConfigManagedByEnv = vectorConfig?.managedByEnv === true
-  const vectorTuningChanged = !!vectorConfig && vectorDraft.tuningProfile !== (vectorConfig.tuningProfile ?? 'balanced')
+  const vectorMilvusCandidateMultiplier = vectorConfig?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER
+  const vectorMilvusCandidateCap = vectorConfig?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP
+  const vectorRuntimeTuningChanged = !!vectorConfig && (
+    vectorDraft.tuningProfile !== (vectorConfig.tuningProfile ?? 'balanced')
+    || (
+      vectorDraft.provider === 'milvus'
+      && (
+        vectorDraft.milvusHybridCandidateMultiplier !== vectorMilvusCandidateMultiplier
+        || vectorDraft.milvusHybridCandidateCap !== vectorMilvusCandidateCap
+      )
+    )
+  )
   const ipcHint = useMemo(() => {
     if (!status) return null
     switch (status.ipcReason) {
@@ -665,23 +687,40 @@ export default function OperatorPanel() {
     }
   }, [addToast, milvusPasswordDraft, qdrantApiKeyDraft, refreshVectorHealth, vectorDraft])
 
-  const handleVectorSaveTuning = useCallback(async () => {
+  const handleVectorSaveRuntimeTuning = useCallback(async () => {
     setVectorConfigBusy('saving')
     setVectorTestResult(null)
     try {
-      const result = await embeddingsApi.updateVectorStoreConfig({ tuningProfile: vectorDraft.tuningProfile })
+      const result = await embeddingsApi.updateVectorStoreConfig({
+        tuningProfile: vectorDraft.tuningProfile,
+        ...(vectorDraft.provider === 'milvus'
+          ? {
+              milvusHybridSearch: {
+                candidateMultiplier: vectorDraft.milvusHybridCandidateMultiplier,
+                candidateCap: vectorDraft.milvusHybridCandidateCap,
+              },
+            }
+          : {}),
+      })
       setVectorConfig(result)
       vectorDraftDirty.current = false
       setVectorDraft(vectorDraftFromConfig(result))
       await refreshVectorHealth()
-      addToast({ type: 'success', message: 'Vector store tuning profile saved.' })
+      addToast({ type: 'success', message: 'Vector store runtime tuning saved.' })
     } catch (err) {
-      const message = vectorStoreErrorMessage(err, 'Failed to save vector store tuning')
+      const message = vectorStoreErrorMessage(err, 'Failed to save vector store runtime tuning')
       addToast({ type: 'error', message })
     } finally {
       setVectorConfigBusy(null)
     }
-  }, [addToast, refreshVectorHealth, vectorDraft.tuningProfile])
+  }, [
+    addToast,
+    refreshVectorHealth,
+    vectorDraft.milvusHybridCandidateCap,
+    vectorDraft.milvusHybridCandidateMultiplier,
+    vectorDraft.provider,
+    vectorDraft.tuningProfile,
+  ])
 
   const handleVectorOptimize = useCallback(async () => {
     setVectorBusy('compacting')
@@ -2233,6 +2272,40 @@ export default function OperatorPanel() {
                       />
                       <span className={styles.fieldHint}>Applied to Milvus gRPC requests, including Memory Cortex searches. Use 0 to disable the SDK deadline.</span>
                     </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Hybrid Candidate Multiplier</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1}
+                        max={10}
+                        step={1}
+                        integer
+                        value={vectorDraft.milvusHybridCandidateMultiplier}
+                        disabled={!!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusHybridCandidateMultiplier: Math.max(1, Math.min(10, Math.round(value ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Per-leg over-fetch before Milvus reranks dense and BM25 hits. Final result count still comes from the feature&apos;s Top-K setting.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Hybrid Candidate Cap</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1}
+                        max={2000}
+                        step={10}
+                        integer
+                        value={vectorDraft.milvusHybridCandidateCap}
+                        disabled={!!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusHybridCandidateCap: Math.max(1, Math.min(2000, Math.round(value ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Upper bound on dense and BM25 candidates per leg before reranking. Keep this above your expected Top-K if you want actual hybrid over-fetch.</span>
+                    </label>
                     <div className={styles.toggleRowCompact}>
                       <span className={styles.remoteHint}>Use TLS/SSL</span>
                       <Toggle.Switch
@@ -2264,13 +2337,13 @@ export default function OperatorPanel() {
                 </button>
                 <button
                   className={styles.controlBtnPrimary}
-                  disabled={!vectorTuningChanged || !!vectorConfigBusy}
-                  onClick={handleVectorSaveTuning}
+                  disabled={!vectorRuntimeTuningChanged || !!vectorConfigBusy}
+                  onClick={handleVectorSaveRuntimeTuning}
                 >
                   {vectorConfigBusy === 'saving'
                     ? <Loader2 size={14} className={spinClass} />
                     : <HardDrive size={14} />}
-                  Apply Tuning
+                  Apply Runtime Tuning
                 </button>
                 <button
                   className={styles.controlBtnPrimary}

@@ -70,6 +70,20 @@ describe("normalizeVectorStoreConfig", () => {
     ).toBe(0);
   });
 
+  it("normalizes milvus hybrid candidate tuning independently of the connection block", () => {
+    const cfg = normalizeVectorStoreConfig({
+      provider: "milvus",
+      milvusHybridSearch: {
+        candidateMultiplier: 0.2,
+        candidateCap: 50_000,
+      },
+    });
+    expect(cfg.milvusHybridSearch).toEqual({
+      candidateMultiplier: 1,
+      candidateCap: 2_000,
+    });
+  });
+
   it("NEVER carries secrets into the persisted config object", () => {
     const cfg = normalizeVectorStoreConfig({
       provider: "qdrant",

@@ -4148,7 +4148,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     }
 
     const byId = new Map(eligibleEntries.map((entry) => [entry.id, entry]));
-    const fetchLimit = Math.min(
+    const candidateLimit = Math.min(
       100,
       Math.max(
         topK * getWorldInfoVectorCandidateMultiplier(cfg.hybrid_weight_mode),
@@ -4183,7 +4183,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
               worldBookIds[i],
               queryText,
               queryVector,
-              fetchLimit,
+              candidateLimit,
               cfg.hybrid_weight_mode,
               signal,
             );

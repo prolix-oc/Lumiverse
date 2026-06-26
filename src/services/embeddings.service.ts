@@ -2665,7 +2665,7 @@ export async function searchWorldBookEntriesHybridWithVector(
   worldBookId: string,
   queryText: string,
   vector: number[],
-  limit = 8,
+  requestedLimit = 8,
   hybridWeightMode?: EmbeddingConfig["hybrid_weight_mode"],
   signal?: AbortSignal,
 ): Promise<WorldBookSearchCandidate[]> {
@@ -2674,8 +2674,8 @@ export async function searchWorldBookEntriesHybridWithVector(
 
   const trimmedQuery = queryText.trim();
   const filter = ownerScope(userId, "world_book_entry", worldBookId);
-  const effectiveLimit = Math.max(1, Math.min(limit, 100));
-  const rawLimit = Math.min(200, Math.max(effectiveLimit * 3, effectiveLimit));
+  const finalLimit = Math.max(1, Math.min(requestedLimit, 100));
+  const candidateLimit = Math.min(200, Math.max(finalLimit * 3, finalLimit));
 
   const store = await getActiveVectorStore();
   const nativeHybridSearch = store.hybridSearch?.bind(store);
@@ -2686,7 +2686,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       vector,
       queryText: trimmedQuery,
       filter,
-      limit: rawLimit,
+      limit: candidateLimit,
       withVector: false,
       refine: true,
       signal,
@@ -2695,7 +2695,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       collection: "embeddings_world_books",
       vector,
       filter,
-      limit: rawLimit,
+      limit: candidateLimit,
       withVector: false,
       refine: true,
       signal,
@@ -2707,7 +2707,7 @@ export async function searchWorldBookEntriesHybridWithVector(
         collection: "embeddings_world_books",
         vector,
         filter,
-        limit: rawLimit,
+        limit: candidateLimit,
         withVector: false,
         refine: true,
         signal,
@@ -2719,7 +2719,7 @@ export async function searchWorldBookEntriesHybridWithVector(
             collection: "embeddings_world_books",
             queryText: trimmedQuery,
             filter,
-            limit: rawLimit,
+            limit: candidateLimit,
             withVector: false,
             signal,
           }).catch((err) => {
@@ -2731,14 +2731,14 @@ export async function searchWorldBookEntriesHybridWithVector(
             );
             return [] as VectorHit[];
           });
-          recoveredRows = reciprocalRankFusion(denseFallbackRows, lexicalRows).slice(0, rawLimit);
+          recoveredRows = reciprocalRankFusion(denseFallbackRows, lexicalRows).slice(0, candidateLimit);
         }
         vectorRows = recoveredRows;
         console.warn(
           "[embeddings] WI vector search: native hybrid returned 0 rows for book=%s (provider=%s, limit=%d); dense fallback recovered %d row(s)",
           worldBookId.slice(0, 8),
           store.id,
-          effectiveLimit,
+          finalLimit,
           vectorRows.length,
         );
       }
@@ -2757,7 +2757,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       store,
       filter,
       vector,
-      rawLimit,
+      candidateLimit,
       trimmedQuery,
       signal,
     );
@@ -2768,7 +2768,7 @@ export async function searchWorldBookEntriesHybridWithVector(
         "[embeddings] WI vector search returned 0 direct rows for book=%s (provider=%s, limit=%d) but %d scoped row(s) exist; row-scan fallback recovered %d row(s)%s",
         worldBookId.slice(0, 8),
         store.id,
-        effectiveLimit,
+        finalLimit,
         fallback.scopedRowCount,
         vectorRows.length,
         fallback.truncated ? ` (scan capped at ${WORLD_BOOK_ROW_SCAN_FALLBACK_LIMIT})` : "",
@@ -2777,7 +2777,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       console.log(
         "[embeddings] WI vector search: 0 rows from vector store for book=%s (limit=%d, provider=%s)",
         worldBookId.slice(0, 8),
-        effectiveLimit,
+        finalLimit,
         store.id,
       );
     }
@@ -2808,7 +2808,7 @@ export async function searchWorldBookEntriesHybridWithVector(
         collection: "embeddings_world_books",
         queryText: trimmedQuery,
         filter,
-        limit: rawLimit,
+        limit: candidateLimit,
         withVector: false,
         signal,
       });
@@ -2855,7 +2855,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       if (a.distance !== b.distance) return a.distance - b.distance;
       return (b.lexical_score ?? Number.NEGATIVE_INFINITY) - (a.lexical_score ?? Number.NEGATIVE_INFINITY);
     })
-    .slice(0, effectiveLimit);
+    .slice(0, finalLimit);
 }
 
 async function recoverWorldBookScopedRowsFromStore(
@@ -3291,7 +3291,7 @@ export async function searchChatChunks(
   chatId: string,
   vector: number[],
   excludeIds: Set<string>,
-  limit = 8,
+  requestedLimit = 8,
   queryText?: string,
   hybridWeightMode?: "keyword_first" | "balanced" | "vector_first",
   allowedChunkIds?: Set<string>,
@@ -3328,12 +3328,12 @@ export async function searchChatChunks(
 
   // When the source filter was dropped (candidate set > MAX_SOURCE_FILTER_IDS),
   // the query searches the entire chat partition and results are client-side
-  // filtered. Increase fetchLimit to compensate for post-filter loss, but skip
+  // filtered. Increase candidateLimit to compensate for post-filter loss, but skip
   // refineFactor since re-scanning 5x results on a large unscoped partition is
   // the biggest cost.
-  const fetchLimit = filterWasScoped
-    ? Math.max(1, Math.min(limit + 50, 150))
-    : Math.max(1, Math.min(limit * 4, 300));
+  const candidateLimit = filterWasScoped
+    ? Math.max(1, Math.min(requestedLimit + 50, 150))
+    : Math.max(1, Math.min(requestedLimit * 4, 300));
 
   // The vector column is only needed for MMR diversity selection downstream.
   // When the caller opts out, we skip the column entirely — that's the bulk of
@@ -3360,7 +3360,7 @@ export async function searchChatChunks(
       queryText: queryText!.trim(),
       vector,
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector,
       refine,
       signal,
@@ -3370,7 +3370,7 @@ export async function searchChatChunks(
       collection: "embeddings",
       vector,
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector,
       refine,
       signal,
@@ -3379,7 +3379,7 @@ export async function searchChatChunks(
       collection: "embeddings",
       queryText: queryText!.trim(),
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector,
       signal,
     };
@@ -3394,7 +3394,7 @@ export async function searchChatChunks(
       collection: "embeddings",
       vector,
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector,
       refine,
       signal,
@@ -3461,7 +3461,7 @@ export async function searchChatChunks(
   if (candidates.length === 0) return [];
 
   // Apply MMR diversity selection on the canonical VectorHit list.
-  const selected = mmrSelect(candidates, vector, limit, 0.7);
+  const selected = mmrSelect(candidates, vector, requestedLimit, 0.7);
 
   // Adapt back to the historical distance-shaped contract: lexical-only hits
   // (similarity == null) keep score: null, otherwise distance = 1 - similarity.
@@ -3888,7 +3888,7 @@ export async function searchDatabankChunks(
   userId: string,
   databankIds: string[],
   vector: number[],
-  limit = 4,
+  requestedLimit = 4,
   queryText?: string,
   signal?: AbortSignal,
 ): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
@@ -3896,7 +3896,7 @@ export async function searchDatabankChunks(
   if (signal?.aborted) return [];
 
   const filter = ownersScope(userId, "databank", databankIds);
-  const fetchLimit = Math.max(1, Math.min(limit + 20, 100));
+  const candidateLimit = Math.max(1, Math.min(requestedLimit + 20, 100));
 
   const store = await getActiveVectorStore();
   const nativeHybridSearch = store.hybridSearch?.bind(store);
@@ -3908,7 +3908,7 @@ export async function searchDatabankChunks(
       queryText: queryText.trim(),
       vector,
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector: false,
       refine: true,
       signal,
@@ -3920,7 +3920,7 @@ export async function searchDatabankChunks(
         collection: "embeddings",
         vector,
         filter,
-        limit: fetchLimit,
+        limit: candidateLimit,
         withVector: false,
         refine: true,
         signal,
@@ -3929,7 +3929,7 @@ export async function searchDatabankChunks(
         collection: "embeddings",
         queryText: queryText.trim(),
         filter,
-        limit: fetchLimit,
+        limit: candidateLimit,
         withVector: false,
         signal,
       }),
@@ -3941,7 +3941,7 @@ export async function searchDatabankChunks(
       collection: "embeddings",
       vector,
       filter,
-      limit: fetchLimit,
+      limit: candidateLimit,
       withVector: false,
       refine: true,
       signal,
@@ -3971,5 +3971,5 @@ export async function searchDatabankChunks(
 
   // Sort by score descending and take top N
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
+  return results.slice(0, requestedLimit);
 }

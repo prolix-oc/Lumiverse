@@ -52,11 +52,19 @@ export interface MilvusConnectionConfig {
   requestTimeoutMs?: number;
 }
 
+export interface MilvusHybridSearchConfig {
+  /** Per-leg candidate pool multiplier before Milvus reranks dense + BM25 hits. */
+  candidateMultiplier?: number;
+  /** Hard cap on the per-leg candidate pool before Milvus reranks the hits. */
+  candidateCap?: number;
+}
+
 export interface VectorStoreConfig {
   provider: VectorStoreProviderId;
   tuningProfile?: VectorStoreTuningProfile;
   qdrant?: QdrantConnectionConfig;
   milvus?: MilvusConnectionConfig;
+  milvusHybridSearch?: MilvusHybridSearchConfig;
 }
 
 /** Connection secrets resolved for internal provider construction. */
@@ -81,7 +89,7 @@ function getStoredVectorStoreConfig(ownerId: string): VectorStoreConfig {
   return raw ? normalizeVectorStoreConfig(raw) : defaultVectorStoreConfig();
 }
 
-function hasVectorStoreFieldsBeyondTuning(input: UpdateVectorStoreConfigInput): boolean {
+function hasVectorStoreProviderOrConnectionFields(input: UpdateVectorStoreConfigInput): boolean {
   return input.provider !== undefined
     || input.qdrant !== undefined
     || input.milvus !== undefined
@@ -107,6 +115,24 @@ function normalizeMilvusConnectTimeoutMs(input: unknown): number | undefined {
 function normalizeMilvusRequestTimeoutMs(input: unknown): number | undefined {
   if (typeof input !== "number" || !Number.isFinite(input) || input < 0) return undefined;
   return Math.min(300_000, Math.floor(input));
+}
+
+function normalizeMilvusHybridCandidateMultiplier(input: unknown): number | undefined {
+  if (typeof input !== "number" || !Number.isFinite(input)) return undefined;
+  return Math.min(10, Math.max(1, Math.floor(input)));
+}
+
+function normalizeMilvusHybridCandidateCap(input: unknown): number | undefined {
+  if (typeof input !== "number" || !Number.isFinite(input)) return undefined;
+  return Math.min(2_000, Math.max(1, Math.floor(input)));
+}
+
+function normalizeMilvusHybridSearchConfig(input: unknown): MilvusHybridSearchConfig | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const candidateMultiplier = normalizeMilvusHybridCandidateMultiplier((input as any).candidateMultiplier);
+  const candidateCap = normalizeMilvusHybridCandidateCap((input as any).candidateCap);
+  if (candidateMultiplier === undefined && candidateCap === undefined) return undefined;
+  return { candidateMultiplier, candidateCap };
 }
 
 export function normalizeVectorStoreConfig(input: any): VectorStoreConfig {
@@ -139,6 +165,9 @@ export function normalizeVectorStoreConfig(input: any): VectorStoreConfig {
       requestTimeoutMs: normalizeMilvusRequestTimeoutMs(m.requestTimeoutMs),
     };
   }
+
+  const milvusHybridSearch = normalizeMilvusHybridSearchConfig(input?.milvusHybridSearch);
+  if (milvusHybridSearch) out.milvusHybridSearch = milvusHybridSearch;
 
   return out;
 }
@@ -178,7 +207,11 @@ export function getResolvedVectorStoreConfig(): VectorStoreConfig {
   if (fromEnv) {
     if (!ownerId) return fromEnv;
     const stored = getStoredVectorStoreConfig(ownerId);
-    return stored.tuningProfile ? { ...fromEnv, tuningProfile: stored.tuningProfile } : fromEnv;
+    return normalizeVectorStoreConfig({
+      ...fromEnv,
+      tuningProfile: stored.tuningProfile ?? fromEnv.tuningProfile,
+      milvusHybridSearch: stored.milvusHybridSearch ?? fromEnv.milvusHybridSearch,
+    });
   }
   if (!ownerId) return defaultVectorStoreConfig();
   return getStoredVectorStoreConfig(ownerId);
@@ -233,9 +266,30 @@ export interface UpdateVectorStoreConfigInput {
   tuningProfile?: VectorStoreTuningProfile;
   qdrant?: Partial<QdrantConnectionConfig>;
   milvus?: Partial<MilvusConnectionConfig>;
+  milvusHybridSearch?: Partial<MilvusHybridSearchConfig>;
   /** Write-only secrets. `null`/"" clears; `undefined` leaves unchanged. */
   qdrant_api_key?: string | null;
   milvus_password?: string | null;
+}
+
+function validateVectorStoreRuntimeTuningInput(input: UpdateVectorStoreConfigInput): void {
+  if (input.tuningProfile !== undefined && !normalizeTuningProfile(input.tuningProfile)) {
+    throw new Error("Invalid vector store tuning profile.");
+  }
+  if (input.milvusHybridSearch !== undefined && !normalizeMilvusHybridSearchConfig(input.milvusHybridSearch)) {
+    throw new Error("Invalid Milvus hybrid candidate tuning.");
+  }
+}
+
+function mergeStoredVectorStoreRuntimeTuning(
+  stored: VectorStoreConfig,
+  input: UpdateVectorStoreConfigInput,
+): VectorStoreConfig {
+  return normalizeVectorStoreConfig({
+    ...stored,
+    ...(input.tuningProfile !== undefined ? { tuningProfile: input.tuningProfile } : {}),
+    ...(input.milvusHybridSearch !== undefined ? { milvusHybridSearch: input.milvusHybridSearch } : {}),
+  });
 }
 
 /**
@@ -252,15 +306,15 @@ export async function updateVectorStoreConfig(
   assertVectorStoreOwner(userId);
   const ownerId = getFirstUserId() ?? userId;
   if (isVectorStoreEnvManaged()) {
-    if (hasVectorStoreFieldsBeyondTuning(input)) {
+    if (hasVectorStoreProviderOrConnectionFields(input)) {
       throw new Error("Vector store provider and connection are managed by environment variables and cannot be changed at runtime.");
     }
-    const tuningProfile = normalizeTuningProfile(input.tuningProfile);
-    if (!tuningProfile) throw new Error("Invalid vector store tuning profile.");
-    settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, {
-      ...getStoredVectorStoreConfig(ownerId),
-      tuningProfile,
-    });
+    validateVectorStoreRuntimeTuningInput(input);
+    settingsSvc.putSetting(
+      ownerId,
+      VECTOR_STORE_CONFIG_KEY,
+      mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
+    );
 
     // Break the static import cycle (index.ts imports this service).
     const { resetActiveVectorStore } = await import("./vector-store");
@@ -268,13 +322,13 @@ export async function updateVectorStoreConfig(
     return getVectorStoreConfigForApi();
   }
 
-  if (!hasVectorStoreFieldsBeyondTuning(input)) {
-    const tuningProfile = normalizeTuningProfile(input.tuningProfile);
-    if (!tuningProfile) throw new Error("Invalid vector store tuning profile.");
-    settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, {
-      ...getStoredVectorStoreConfig(ownerId),
-      tuningProfile,
-    });
+  if (!hasVectorStoreProviderOrConnectionFields(input)) {
+    validateVectorStoreRuntimeTuningInput(input);
+    settingsSvc.putSetting(
+      ownerId,
+      VECTOR_STORE_CONFIG_KEY,
+      mergeStoredVectorStoreRuntimeTuning(getStoredVectorStoreConfig(ownerId), input),
+    );
 
     // Break the static import cycle (index.ts imports this service).
     const { resetActiveVectorStore } = await import("./vector-store");

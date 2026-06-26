@@ -39,7 +39,7 @@ export async function buildVectorStore(
     }
     case "milvus": {
       const { MilvusStore } = await import("./providers/milvus");
-      return new MilvusStore(config.milvus, secrets.milvusPassword, config.tuningProfile);
+      return new MilvusStore(config.milvus, secrets.milvusPassword, config.tuningProfile, config.milvusHybridSearch);
     }
     default:
       return new LanceDbStore();
