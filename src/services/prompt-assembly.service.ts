@@ -1574,13 +1574,18 @@ export async function assemblePrompt(
         );
       } else if (detailed.blockerMessages.length === 0) {
         console.log(
-          "[prompt-assembly] Vector WI retrieval: eligible=%d, hits=%d, afterThreshold=%d, afterRerank=%d, shortlisted=%d (topK=%d)",
+          "[prompt-assembly] Vector WI retrieval: eligible=%d, hits=%d, afterThreshold=%d, afterRerank=%d, shortlisted=%d (topK=%d, timingsMs queryBuild=%d embed=%d search=%d rank=%d total=%d)",
           detailed.eligibleCount,
           detailed.hitsBeforeThreshold,
           detailed.hitsAfterThreshold,
           detailed.hitsAfterRerankCutoff,
           detailed.entries.length,
           detailed.topK,
+          Math.round(detailed.timingsMs?.queryBuildMs ?? 0),
+          Math.round(detailed.timingsMs?.queryEmbedMs ?? 0),
+          Math.round(detailed.timingsMs?.searchMs ?? 0),
+          Math.round(detailed.timingsMs?.rankingMs ?? 0),
+          Math.round(detailed.timingsMs?.totalMs ?? 0),
         );
       }
     } catch (err) {
@@ -4186,6 +4191,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
               candidateLimit,
               cfg.hybrid_weight_mode,
               signal,
+              { expandLimit: false },
             );
             searchResults[i] = { status: "fulfilled", value };
           } catch (reason) {

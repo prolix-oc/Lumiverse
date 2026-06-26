@@ -2668,6 +2668,7 @@ export async function searchWorldBookEntriesHybridWithVector(
   requestedLimit = 8,
   hybridWeightMode?: EmbeddingConfig["hybrid_weight_mode"],
   signal?: AbortSignal,
+  options?: { expandLimit?: boolean },
 ): Promise<WorldBookSearchCandidate[]> {
   await ensureWorldBookVectorVersion(userId);
   if (signal?.aborted) return [];
@@ -2675,7 +2676,13 @@ export async function searchWorldBookEntriesHybridWithVector(
   const trimmedQuery = queryText.trim();
   const filter = ownerScope(userId, "world_book_entry", worldBookId);
   const finalLimit = Math.max(1, Math.min(requestedLimit, 100));
-  const candidateLimit = Math.min(200, Math.max(finalLimit * 3, finalLimit));
+  // Some callers (notably prompt assembly) already expand topK to a wider
+  // candidate pool before calling this helper. Allow them to opt out of a
+  // second 3x expansion so providers like Milvus do not multiply candidates at
+  // multiple layers and turn an 8-hit request into a 72/200-hit search.
+  const candidateLimit = options?.expandLimit === false
+    ? finalLimit
+    : Math.min(200, Math.max(finalLimit * 3, finalLimit));
 
   const store = await getActiveVectorStore();
   const nativeHybridSearch = store.hybridSearch?.bind(store);

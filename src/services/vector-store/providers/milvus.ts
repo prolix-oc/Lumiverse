@@ -42,6 +42,7 @@ export class MilvusStore implements VectorStore {
   private sdk: MilvusSdk | null = null;
   private client: MilvusClientLike | null = null;
   private loaded = new Set<string>();
+  private hybridFallbackCollections = new Set<string>();
 
   constructor(
     config: MilvusConnectionConfig | undefined,
@@ -303,6 +304,9 @@ export class MilvusStore implements VectorStore {
     if (opts.signal?.aborted || !this.capabilities.nativeLexical || !opts.queryText.trim()) return this.vectorSearch(opts);
     const client = await this.getClient();
     const name = this.collectionName(opts.collection);
+    if (this.hybridFallbackCollections.has(name)) {
+      return this.appSideHybridSearch(opts);
+    }
     if (!(await this.hasCollection(name)) || !(await this.hasSparseField(name))) return this.vectorSearch(opts);
     await this.loadCollection(name);
     const requestedLimit = Math.max(1, opts.limit);
@@ -334,21 +338,29 @@ export class MilvusStore implements VectorStore {
       });
       if (opts.signal?.aborted) return [];
       const results = Array.isArray(res?.results) ? res.results : [];
-      return results.map((row: any) => milvusSearchRowToHit(row, opts.withVector)).filter((hit: VectorHit | null): hit is VectorHit => hit != null);
+      const hits = results
+        .map((row: any) => milvusSearchRowToHit(row, opts.withVector))
+        .filter((hit: VectorHit | null): hit is VectorHit => hit != null);
+      if (hits.length > 0) return hits;
+
+      const fusedHits = await this.appSideHybridSearch(opts);
+      if (fusedHits.length > 0) {
+        this.hybridFallbackCollections.add(name);
+        console.warn(
+          "[vector-store] Milvus hybrid search returned 0 rows for %s despite dense/BM25 hits; switching this collection to app-side fusion for the rest of the process.",
+          name,
+        );
+        return fusedHits;
+      }
+      return [];
     } catch (err) {
-      console.warn("[vector-store] Milvus hybrid search failed; falling back to app-side dense/BM25 fusion:", describeMilvusError(err));
-      const [vectorHits, lexicalHits] = await Promise.all([
-        this.vectorSearch(opts),
-        this.lexicalSearch({
-          collection: opts.collection,
-          queryText: opts.queryText,
-          filter: opts.filter,
-          limit: opts.limit,
-          withVector: opts.withVector,
-          signal: opts.signal,
-        }),
-      ]);
-      return fuseHits(vectorHits, lexicalHits);
+      this.hybridFallbackCollections.add(name);
+      console.warn(
+        "[vector-store] Milvus hybrid search failed for %s; switching to app-side dense/BM25 fusion: %s",
+        name,
+        describeMilvusError(err),
+      );
+      return this.appSideHybridSearch(opts);
     }
   }
 
@@ -410,6 +422,7 @@ export class MilvusStore implements VectorStore {
     if (this.client?.closeConnection) await this.client.closeConnection().catch(() => {});
     this.client = null;
     this.loaded.clear();
+    this.hybridFallbackCollections.clear();
   }
 
   private collectionName(collection: CollectionName): string {
@@ -441,6 +454,21 @@ export class MilvusStore implements VectorStore {
     } else {
       await client.flush({ collection_names: [name] }).catch(() => client.flush({ collection_name: name }));
     }
+  }
+
+  private async appSideHybridSearch(opts: HybridSearchOptions): Promise<VectorHit[]> {
+    const [vectorHits, lexicalHits] = await Promise.all([
+      this.vectorSearch(opts),
+      this.lexicalSearch({
+        collection: opts.collection,
+        queryText: opts.queryText,
+        filter: opts.filter,
+        limit: opts.limit,
+        withVector: opts.withVector,
+        signal: opts.signal,
+      }),
+    ]);
+    return fuseHits(vectorHits, lexicalHits);
   }
 
   private async ensureScalarIndexes(name: string): Promise<void> {
