@@ -18,6 +18,14 @@ import { getFirstUserId } from "../auth/seed";
 import { sanitizeForVectorization } from "../utils/content-sanitizer";
 import { describeProviderError, readBoundedText } from "../utils/provider-errors";
 import { fetchWithPreflightAbort, readJsonWithAbort } from "../llm/stream-utils";
+import {
+  buildChatChunkEmbeddingSlices,
+  collapseVectorHitsBySourceId,
+  estimateChatChunkTokens,
+  hashChatChunkContent,
+  splitChatChunkContent,
+  type ChatChunkEmbeddingMetadata,
+} from "./chat-chunk-embedding";
 import { chunkDocument } from "./databank/document-chunker.service";
 import { loadWorldBookVectorSettings, type WorldBookVectorSettings } from "./world-book-vector-settings.service";
 import {
@@ -737,6 +745,437 @@ function parseWorldBookEmbeddingMetadata(raw: unknown): WorldBookEmbeddingMetada
   } catch {
     return {};
   }
+}
+
+function parseChatChunkEmbeddingMetadata(raw: unknown): ChatChunkEmbeddingMetadata {
+  if (!raw || typeof raw !== "string") return {};
+  try {
+    const parsed = JSON.parse(raw) as ChatChunkEmbeddingMetadata;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildChatChunkEmbeddingRows(
+  userId: string,
+  chatId: string,
+  chunkId: string,
+  sourceContent: string,
+  leaves: Array<{ content: string; vector: number[] }>,
+  metadata?: Record<string, any>,
+  now = Math.floor(Date.now() / 1000),
+  sourceTokenCount?: number,
+): EmbeddingRow[] {
+  const normalizedSource = sourceContent.trim();
+  const normalizedMetadata = metadata || {};
+  const metadataSourceTokenCount = Number(normalizedMetadata.sourceTokenCount);
+  const resolvedSourceTokenCount = Math.max(
+    0,
+    sourceTokenCount
+      ?? (Number.isFinite(metadataSourceTokenCount) ? metadataSourceTokenCount : estimateChatChunkTokens(normalizedSource)),
+  );
+  const sourceContentHash = hashChatChunkContent(normalizedSource);
+  const chunkCount = leaves.length;
+
+  return leaves.map((leaf, chunkIndex) => ({
+    id: rowId(userId, "chat_chunk", chunkId, chunkIndex),
+    user_id: userId,
+    source_type: "chat_chunk",
+    source_id: chunkId,
+    owner_id: chatId,
+    chunk_index: chunkIndex,
+    content: leaf.content.trim(),
+    vector: leaf.vector,
+    metadata_json: JSON.stringify({
+      ...normalizedMetadata,
+      autoSplit: chunkCount > 1,
+      splitIndex: chunkIndex,
+      splitCount: chunkCount,
+      sourceCharCount: normalizedSource.length,
+      sourceTokenCount: resolvedSourceTokenCount,
+      sourceContentHash,
+    }),
+    updated_at: now,
+  }));
+}
+
+function buildVaultChunkEmbeddingRows(
+  userId: string,
+  vaultId: string,
+  vaultChunkId: string,
+  sourceContent: string,
+  leaves: Array<{ content: string; vector: number[] }>,
+  metadata?: Record<string, any>,
+  now = Math.floor(Date.now() / 1000),
+  sourceTokenCount?: number,
+): EmbeddingRow[] {
+  const normalizedSource = sourceContent.trim();
+  const normalizedMetadata = metadata || {};
+  const metadataSourceTokenCount = Number(normalizedMetadata.sourceTokenCount);
+  const resolvedSourceTokenCount = Math.max(
+    0,
+    sourceTokenCount
+      ?? (Number.isFinite(metadataSourceTokenCount) ? metadataSourceTokenCount : estimateChatChunkTokens(normalizedSource)),
+  );
+  const sourceContentHash = hashChatChunkContent(normalizedSource);
+  const chunkCount = leaves.length;
+
+  return leaves.map((leaf, chunkIndex) => ({
+    id: rowId(userId, "vault_chunk", vaultChunkId, chunkIndex),
+    user_id: userId,
+    source_type: "vault_chunk",
+    source_id: vaultChunkId,
+    owner_id: vaultId,
+    chunk_index: chunkIndex,
+    content: leaf.content.trim(),
+    vector: leaf.vector,
+    metadata_json: JSON.stringify({
+      ...normalizedMetadata,
+      autoSplit: chunkCount > 1,
+      splitIndex: chunkIndex,
+      splitCount: chunkCount,
+      sourceCharCount: normalizedSource.length,
+      sourceTokenCount: resolvedSourceTokenCount,
+      sourceContentHash,
+    }),
+    updated_at: now,
+  }));
+}
+
+async function replaceChatChunkEmbeddingRows(
+  userId: string,
+  targets: Array<{ chatId: string; chunkId: string }>,
+  rows: EmbeddingRow[],
+): Promise<void> {
+  if (targets.length > 0) {
+    const chunkIdsByChat = new Map<string, string[]>();
+    for (const target of targets) {
+      const bucket = chunkIdsByChat.get(target.chatId);
+      if (bucket) bucket.push(target.chunkId);
+      else chunkIdsByChat.set(target.chatId, [target.chunkId]);
+    }
+    for (const [chatId, chunkIds] of chunkIdsByChat) {
+      await deleteStoreRows("embeddings", andFilter([
+        ownerScope(userId, "chat_chunk", chatId),
+        inSet("source_id", Array.from(new Set(chunkIds))),
+      ]));
+    }
+  }
+  if (rows.length > 0) {
+    await upsertStoreRows("embeddings", rows);
+  }
+}
+
+async function replaceVaultChunkEmbeddingRows(
+  userId: string,
+  vaultId: string,
+  vaultChunkIds: string[],
+  rows: EmbeddingRow[],
+): Promise<void> {
+  if (vaultChunkIds.length > 0) {
+    await deleteStoreRows("embeddings", andFilter([
+      ownerScope(userId, "vault_chunk", vaultId),
+      inSet("source_id", Array.from(new Set(vaultChunkIds))),
+    ]));
+  }
+  if (rows.length > 0) {
+    await upsertStoreRows("embeddings", rows);
+  }
+}
+
+function loadChatChunkMessageIds(chunkId: string): string[] {
+  const row = getDb().query("SELECT message_ids FROM chat_chunks WHERE id = ?").get(chunkId) as { message_ids: string | null } | null;
+  if (!row?.message_ids) return [];
+  try {
+    const parsed = JSON.parse(row.message_ids);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function embedChatChunkContentLeaves(
+  userId: string,
+  content: string,
+  initialError?: Error,
+): Promise<Array<{ content: string; vector: number[] }>> {
+  const text = content.trim();
+  if (!text) return [];
+
+  if (initialError && !isRetryableBatchError(initialError)) {
+    throw initialError;
+  }
+  if (initialError) {
+    const forcedSlices = splitChatChunkContent(text, { forceSplit: true });
+    if (forcedSlices.length < 2) throw initialError;
+    const out: Array<{ content: string; vector: number[] }> = [];
+    for (const slice of forcedSlices) {
+      out.push(...await embedChatChunkContentLeaves(userId, slice));
+    }
+    return out;
+  }
+
+  const proactiveSlices = buildChatChunkEmbeddingSlices(text).map((slice) => slice.content);
+  if (proactiveSlices.length > 1) {
+    const out: Array<{ content: string; vector: number[] }> = [];
+    for (const slice of proactiveSlices) {
+      out.push(...await embedChatChunkContentLeaves(userId, slice));
+    }
+    return out;
+  }
+
+  try {
+    const [vector] = await cachedEmbedTexts(userId, [text]);
+    if (!vector || vector.length === 0) {
+      throw new Error("No embedding vector returned");
+    }
+    return [{ content: text, vector }];
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (!isRetryableBatchError(error)) throw error;
+
+    const parts = splitChatChunkContent(text, { forceSplit: true });
+    if (parts.length < 2) throw error;
+
+    const out: Array<{ content: string; vector: number[] }> = [];
+    for (const part of parts) {
+      out.push(...await embedChatChunkContentLeaves(userId, part));
+    }
+    return out;
+  }
+}
+
+export async function tryRecoverChatChunkEmbeddingWithAutoSplit(
+  userId: string,
+  chatId: string,
+  chunkId: string,
+  content: string,
+  error: Error,
+  metadata?: Record<string, any>,
+  sourceTokenCount?: number,
+): Promise<{
+  recovered: boolean;
+  skipped: boolean;
+  splitCount: number;
+  splitCharCounts: number[];
+  splitTokenCounts: number[];
+}> {
+  const text = content.trim();
+  if (!text || !isRetryableBatchError(error)) {
+    return {
+      recovered: false,
+      skipped: false,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const previewSplits = splitChatChunkContent(text, { forceSplit: true });
+  if (previewSplits.length < 2) {
+    return {
+      recovered: false,
+      skipped: false,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const db = getDb();
+  const liveBefore = db
+    .query("SELECT 1 AS found FROM chat_chunks WHERE id = ? AND chat_id = ?")
+    .get(chunkId, chatId) as { found: number } | null;
+  if (!liveBefore) {
+    return {
+      recovered: true,
+      skipped: true,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const resolvedSourceTokenCount = Math.max(0, sourceTokenCount ?? estimateChatChunkTokens(text));
+  console.warn(
+    "[embeddings] Chat chunk auto-split triggered:",
+    {
+      chunkId,
+      chatId,
+      sourceChars: text.length,
+      sourceTokensApprox: resolvedSourceTokenCount,
+      previewSplits: previewSplits.length,
+      previewSplitChars: previewSplits.map((part) => part.length),
+      previewSplitTokensApprox: previewSplits.map((part) => estimateChatChunkTokens(part)),
+      error: error.message,
+    },
+  );
+
+  const leaves = await embedChatChunkContentLeaves(userId, text, error);
+  const liveAfter = db
+    .query("SELECT 1 AS found FROM chat_chunks WHERE id = ? AND chat_id = ?")
+    .get(chunkId, chatId) as { found: number } | null;
+  if (!liveAfter) {
+    console.info(`[embeddings] Chat chunk auto-split skipped write for deleted chunk ${chunkId}`);
+    return {
+      recovered: true,
+      skipped: true,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const rows = buildChatChunkEmbeddingRows(
+    userId,
+    chatId,
+    chunkId,
+    text,
+    leaves,
+    metadata,
+    Math.floor(Date.now() / 1000),
+    resolvedSourceTokenCount,
+  );
+  await replaceChatChunkEmbeddingRows(userId, [{ chatId, chunkId }], rows);
+  await scheduleStoreOptimize("chat_chunk");
+
+  const splitCharCounts = rows.map((row) => row.content.length);
+  const splitTokenCounts = rows.map((row) => estimateChatChunkTokens(row.content));
+  console.info(
+    "[embeddings] Chat chunk auto-split recovered:",
+    {
+      chunkId,
+      chatId,
+      splitCount: rows.length,
+      splitCharCounts,
+      splitTokenCountsApprox: splitTokenCounts,
+    },
+  );
+
+  return {
+    recovered: true,
+    skipped: false,
+    splitCount: rows.length,
+    splitCharCounts,
+    splitTokenCounts,
+  };
+}
+
+async function tryRecoverVaultChunkEmbeddingWithAutoSplit(
+  userId: string,
+  vaultId: string,
+  vaultChunkId: string,
+  content: string,
+  error: Error,
+  metadata?: Record<string, any>,
+  sourceTokenCount?: number,
+): Promise<{
+  recovered: boolean;
+  skipped: boolean;
+  splitCount: number;
+  splitCharCounts: number[];
+  splitTokenCounts: number[];
+}> {
+  const text = content.trim();
+  if (!text || !isRetryableBatchError(error)) {
+    return {
+      recovered: false,
+      skipped: false,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const previewSplits = splitChatChunkContent(text, { forceSplit: true });
+  if (previewSplits.length < 2) {
+    return {
+      recovered: false,
+      skipped: false,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const db = getDb();
+  const liveBefore = db
+    .query("SELECT 1 AS found FROM cortex_vault_chunks WHERE id = ? AND vault_id = ?")
+    .get(vaultChunkId, vaultId) as { found: number } | null;
+  if (!liveBefore) {
+    return {
+      recovered: true,
+      skipped: true,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const resolvedSourceTokenCount = Math.max(0, sourceTokenCount ?? estimateChatChunkTokens(text));
+  console.warn(
+    "[embeddings] Vault chunk auto-split triggered:",
+    {
+      vaultChunkId,
+      vaultId,
+      sourceChars: text.length,
+      sourceTokensApprox: resolvedSourceTokenCount,
+      previewSplits: previewSplits.length,
+      previewSplitChars: previewSplits.map((part) => part.length),
+      previewSplitTokensApprox: previewSplits.map((part) => estimateChatChunkTokens(part)),
+      error: error.message,
+    },
+  );
+
+  const leaves = await embedChatChunkContentLeaves(userId, text, error);
+  const liveAfter = db
+    .query("SELECT 1 AS found FROM cortex_vault_chunks WHERE id = ? AND vault_id = ?")
+    .get(vaultChunkId, vaultId) as { found: number } | null;
+  if (!liveAfter) {
+    console.info(`[embeddings] Vault chunk auto-split skipped write for deleted chunk ${vaultChunkId}`);
+    return {
+      recovered: true,
+      skipped: true,
+      splitCount: 0,
+      splitCharCounts: [],
+      splitTokenCounts: [],
+    };
+  }
+
+  const rows = buildVaultChunkEmbeddingRows(
+    userId,
+    vaultId,
+    vaultChunkId,
+    text,
+    leaves,
+    metadata,
+    Math.floor(Date.now() / 1000),
+    resolvedSourceTokenCount,
+  );
+  await replaceVaultChunkEmbeddingRows(userId, vaultId, [vaultChunkId], rows);
+  await scheduleStoreOptimize();
+
+  const splitCharCounts = rows.map((row) => row.content.length);
+  const splitTokenCounts = rows.map((row) => estimateChatChunkTokens(row.content));
+  console.info(
+    "[embeddings] Vault chunk auto-split recovered:",
+    {
+      vaultChunkId,
+      vaultId,
+      splitCount: rows.length,
+      splitCharCounts,
+      splitTokenCountsApprox: splitTokenCounts,
+    },
+  );
+
+  return {
+    recovered: true,
+    skipped: false,
+    splitCount: rows.length,
+    splitCharCounts,
+    splitTokenCounts,
+  };
 }
 
 async function deleteStoreRows(collection: CollectionName, filter: VectorFilter): Promise<void> {
@@ -1501,7 +1940,7 @@ export async function embedWithAdaptiveBatching<T>(
   initialBatchSize: number,
   getText: (item: T) => string,
   onBatchReady: (items: T[], texts: string[], vectors: number[][]) => Promise<void>,
-  onItemFailed: (items: T[], error: Error) => void,
+  onItemFailed: (items: T[], error: Error) => void | Promise<void>,
   options?: { signal?: AbortSignal; label?: string },
 ): Promise<void> {
   if (items.length === 0) return;
@@ -1510,7 +1949,7 @@ export async function embedWithAdaptiveBatching<T>(
 
   const process = async (batch: T[], currentSize: number): Promise<void> => {
     if (options?.signal?.aborted) {
-      onItemFailed(batch, options.signal.reason instanceof Error
+      await onItemFailed(batch, options.signal.reason instanceof Error
         ? options.signal.reason
         : new Error("Aborted"));
       return;
@@ -1532,7 +1971,7 @@ export async function embedWithAdaptiveBatching<T>(
         return;
       }
       if (currentSize === 1 && looksLikePhysicalBatchLimit(e)) {
-        onItemFailed(
+        await onItemFailed(
           batch,
           new Error(
             `${e.message} — a single input still exceeds the server's physical batch size. ` +
@@ -1541,7 +1980,7 @@ export async function embedWithAdaptiveBatching<T>(
           ),
         );
       } else {
-        onItemFailed(batch, e);
+        await onItemFailed(batch, e);
       }
     }
   };
@@ -2670,26 +3109,26 @@ export async function syncChatChunkEmbedding(
     return;
   }
 
-  const [vector] = await cachedEmbedTexts(userId, [text]);
-  if (!vector || vector.length === 0) return;
-
-  const now = Math.floor(Date.now() / 1000);
-  const row: EmbeddingRow = {
-    id: rowId(userId, "chat_chunk", chunkId, 0),
-    user_id: userId,
-    source_type: "chat_chunk",
-    source_id: chunkId,
-    owner_id: chatId,
-    chunk_index: 0,
-    content: text,
-    vector,
-    metadata_json: JSON.stringify(metadata || {}),
-    updated_at: now,
+  const baseMetadata = {
+    chunkId,
+    messageIds: loadChatChunkMessageIds(chunkId),
+    ...(metadata || {}),
   };
+  const leaves = await embedChatChunkContentLeaves(userId, text);
+  if (leaves.length === 0) return;
+  const rows = buildChatChunkEmbeddingRows(
+    userId,
+    chatId,
+    chunkId,
+    text,
+    leaves,
+    baseMetadata,
+  );
+  await replaceChatChunkEmbeddingRows(userId, [{ chatId, chunkId }], rows);
 
-  await upsertStoreRows("embeddings", [row]);
-
-  console.info(`[embeddings] Vectorized chat chunk ${chunkId} for chat ${chatId}`);
+  console.info(
+    `[embeddings] Vectorized chat chunk ${chunkId} for chat ${chatId}${rows.length > 1 ? ` (${rows.length} split rows)` : ""}`,
+  );
 
   await scheduleStoreOptimize("chat_chunk");
 }
@@ -2706,20 +3145,21 @@ export async function batchUpsertChunkVectors(
   if (chunks.length === 0) return;
 
   const now = Math.floor(Date.now() / 1000);
-  const rows: EmbeddingRow[] = chunks.map((c) => ({
-    id: rowId(userId, "chat_chunk", c.chunkId, 0),
-    user_id: userId,
-    source_type: "chat_chunk",
-    source_id: c.chunkId,
-    owner_id: c.chatId,
-    chunk_index: 0,
-    content: c.content.trim(),
-    vector: c.vector,
-    metadata_json: JSON.stringify(c.metadata || {}),
-    updated_at: now,
-  }));
+  const rows: EmbeddingRow[] = chunks.flatMap((c) => buildChatChunkEmbeddingRows(
+    userId,
+    c.chatId,
+    c.chunkId,
+    c.content,
+    [{ content: c.content, vector: c.vector }],
+    { chunkId: c.chunkId, ...(c.metadata || {}) },
+    now,
+  ));
 
-  await upsertStoreRows("embeddings", rows);
+  await replaceChatChunkEmbeddingRows(
+    userId,
+    chunks.map((chunk) => ({ chatId: chunk.chatId, chunkId: chunk.chunkId })),
+    rows,
+  );
 
   console.info(`[embeddings] Batch-vectorized ${rows.length} chat chunk(s)`);
   await scheduleStoreOptimize("chat_chunk");
@@ -2730,7 +3170,10 @@ async function getExistingChatChunks(userId: string, chatId: string): Promise<Re
   const rows = await store.getRowsByFilter("embeddings", ownerScope(userId, "chat_chunk", chatId));
   const map: Record<string, string> = {};
   for (const r of rows) {
-    map[r.source_id] = r.content;
+    const meta = parseChatChunkEmbeddingMetadata(r.metadata_json);
+    map[r.source_id] = typeof meta.sourceContentHash === "string" && meta.sourceContentHash.length > 0
+      ? meta.sourceContentHash
+      : hashChatChunkContent(r.content);
   }
   return map;
 }
@@ -2757,8 +3200,8 @@ export async function reindexChatMessages(
   // 1. Find chunks that are entirely new OR have changed content.
   for (const chunk of validChunks) {
     validChunkIds.add(chunk.chunkId);
-    const existingContent = existingChunks[chunk.chunkId];
-    if (existingContent !== chunk.content.trim()) {
+    const existingContentHash = existingChunks[chunk.chunkId];
+    if (existingContentHash !== hashChatChunkContent(chunk.content.trim())) {
       chunksToUpsert.push(chunk);
     }
   }
@@ -2784,22 +3227,35 @@ export async function reindexChatMessages(
     (c) => c.content.trim(),
     async (batch, _texts, vectors) => {
       const now = Math.floor(Date.now() / 1000);
-      const rows: EmbeddingRow[] = batch.map((c, idx) => ({
-        id: rowId(userId, "chat_chunk", c.chunkId, 0),
-        user_id: userId,
-        source_type: "chat_chunk",
-        source_id: c.chunkId,
-        owner_id: chatId,
-        chunk_index: 0,
-        content: c.content.trim(),
-        vector: vectors[idx],
-        metadata_json: JSON.stringify(c.metadata || {}),
-        updated_at: now,
-      }));
+      const rows: EmbeddingRow[] = batch.flatMap((c, idx) => buildChatChunkEmbeddingRows(
+        userId,
+        chatId,
+        c.chunkId,
+        c.content,
+        [{ content: c.content, vector: vectors[idx] }],
+        { chunkId: c.chunkId, ...(c.metadata || {}) },
+        now,
+      ));
 
-      await upsertStoreRows("embeddings", rows);
+      await replaceChatChunkEmbeddingRows(
+        userId,
+        batch.map((chunk) => ({ chatId, chunkId: chunk.chunkId })),
+        rows,
+      );
     },
-    (_batch, err) => {
+    async (failedBatch, err) => {
+      if (failedBatch.length === 1) {
+        const [failed] = failedBatch;
+        const recovered = await tryRecoverChatChunkEmbeddingWithAutoSplit(
+          userId,
+          chatId,
+          failed.chunkId,
+          failed.content,
+          err,
+          { chunkId: failed.chunkId, ...(failed.metadata || {}) },
+        );
+        if (recovered.recovered) return;
+      }
       console.warn("[embeddings] Batch chat embedding failed:", err);
     },
     { label: "chat memory" },
@@ -2926,6 +3382,7 @@ export async function searchChatChunks(
       signal,
     });
   }
+  hits = collapseVectorHitsBySourceId(hits);
 
   if (signal?.aborted) return [];
 
@@ -3053,25 +3510,15 @@ export async function upsertChunkVector(
   vector: number[],
   content: string
 ): Promise<void> {
-  const db = getDb();
-  const chunk = db.query("SELECT message_ids FROM chat_chunks WHERE id = ?").get(chunkId) as any;
-  const messageIds = chunk ? JSON.parse(chunk.message_ids) : [];
-
-  const now = Math.floor(Date.now() / 1000);
-  const row: EmbeddingRow = {
-    id: rowId(userId, "chat_chunk", chunkId, 0),
-    user_id: userId,
-    source_type: "chat_chunk",
-    source_id: chunkId,
-    owner_id: chatId,
-    chunk_index: 0,
-    content: content.trim(),
-    vector,
-    metadata_json: JSON.stringify({ chunkId, messageIds }),
-    updated_at: now,
-  };
-
-  await upsertStoreRows("embeddings", [row]);
+  const rows = buildChatChunkEmbeddingRows(
+    userId,
+    chatId,
+    chunkId,
+    content,
+    [{ content, vector }],
+    { chunkId, messageIds: loadChatChunkMessageIds(chunkId) },
+  );
+  await replaceChatChunkEmbeddingRows(userId, [{ chatId, chunkId }], rows);
 
   await scheduleStoreOptimize("chat_chunk");
 }
@@ -3080,8 +3527,12 @@ export async function upsertChunkVector(
  * Delete a specific chunk's vector from LanceDB.
  */
 export async function deleteChunkVector(userId: string, chunkId: string): Promise<void> {
-  const store = await getActiveVectorStore();
-  await store.deleteByIds("embeddings", [rowId(userId, "chat_chunk", chunkId, 0)]);
+  await deleteStoreRows("embeddings", andFilter([
+    eq("user_id", userId),
+    eq("source_type", "chat_chunk"),
+    eq("source_id", chunkId),
+  ]));
+  await scheduleStoreOptimize("chat_chunk");
 }
 
 // ─── Vault Chunk Vector Operations ─────────────────────────────
@@ -3133,12 +3584,12 @@ export async function copyChunksToVault(
       } catch { /* ignore — use empty metadata */ }
 
       outRows.push({
-        id: rowId(userId, "vault_chunk", vaultChunkId, 0),
+        id: rowId(userId, "vault_chunk", vaultChunkId, Number(row.chunk_index ?? 0)),
         user_id: userId,
         source_type: "vault_chunk",
         source_id: vaultChunkId,
         owner_id: vaultId,
-        chunk_index: 0,
+        chunk_index: Number(row.chunk_index ?? 0),
         content: String(row.content || ""),
         vector,
         metadata_json: JSON.stringify({ ...meta, sourceChatId, sourceChunkId: sourceId, vaultId }),
@@ -3175,7 +3626,7 @@ export async function rebuildVaultEmbeddings(
   if (valid.length === 0) return { embedded: 0 };
 
   const batchSize = Math.max(1, Math.min(cfg.batch_size, 200));
-  let embedded = 0;
+  const embeddedChunkIds = new Set<string>();
 
   await embedWithAdaptiveBatching(
     userId,
@@ -3184,30 +3635,63 @@ export async function rebuildVaultEmbeddings(
     (c) => c.content.trim(),
     async (batch, _texts, vectors) => {
       const now = Math.floor(Date.now() / 1000);
-      const rows: EmbeddingRow[] = batch.map((c, idx) => ({
-        id: rowId(userId, "vault_chunk", c.vaultChunkId, 0),
-        user_id: userId,
-        source_type: "vault_chunk",
-        source_id: c.vaultChunkId,
-        owner_id: vaultId,
-        chunk_index: 0,
-        content: c.content.trim(),
-        vector: vectors[idx],
-        metadata_json: JSON.stringify({ vaultId, rebuiltAt: now }),
-        updated_at: now,
-      }));
+      const rows: EmbeddingRow[] = batch.flatMap((c, idx) => buildVaultChunkEmbeddingRows(
+        userId,
+        vaultId,
+        c.vaultChunkId,
+        c.content,
+        [{ content: c.content, vector: vectors[idx] }],
+        { vaultId, rebuiltAt: now, vaultChunkId: c.vaultChunkId },
+        now,
+      ));
 
-      await upsertStoreRows("embeddings", rows);
-      embedded += rows.length;
+      await replaceVaultChunkEmbeddingRows(
+        userId,
+        vaultId,
+        batch.map((chunk) => chunk.vaultChunkId),
+        rows,
+      );
+      for (const chunk of batch) embeddedChunkIds.add(chunk.vaultChunkId);
     },
-    (_batch, err) => {
+    async (failedBatch, err) => {
+      if (failedBatch.length === 1) {
+        const [chunk] = failedBatch;
+        const sourceTokenCount = estimateChatChunkTokens(chunk.content.trim());
+        console.warn("[embeddings] Terminal vault chunk rebuild failure:", {
+          vaultChunkId: chunk.vaultChunkId,
+          vaultId,
+          sourceChars: chunk.content.length,
+          sourceTokensApprox: sourceTokenCount,
+          model: cfg.model,
+          timeoutSeconds: cfg.request_timeout,
+          error: err.message,
+        });
+
+        const recovered = await tryRecoverVaultChunkEmbeddingWithAutoSplit(
+          userId,
+          vaultId,
+          chunk.vaultChunkId,
+          chunk.content,
+          err,
+          {
+            vaultId,
+            rebuiltAt: Math.floor(Date.now() / 1000),
+            vaultChunkId: chunk.vaultChunkId,
+          },
+          sourceTokenCount,
+        );
+        if (recovered.recovered) {
+          if (!recovered.skipped) embeddedChunkIds.add(chunk.vaultChunkId);
+          return;
+        }
+      }
       console.warn("[embeddings] Batch vault rebuild failed:", err);
     },
     { label: "vault rebuild" },
   );
 
-  if (embedded > 0) await scheduleStoreOptimize();
-  return { embedded };
+  if (embeddedChunkIds.size > 0) await scheduleStoreOptimize();
+  return { embedded: embeddedChunkIds.size };
 }
 
 /**
@@ -3241,8 +3725,9 @@ export async function searchVaultChunks(
   });
 
   if (signal?.aborted) return [];
+  const collapsed = collapseVectorHitsBySourceId(hits);
 
-  return hits.map((hit) => {
+  return collapsed.map((hit) => {
     let meta: any = {};
     try { meta = JSON.parse(hit.metadata_json || "{}"); } catch { /* use empty */ }
     return {

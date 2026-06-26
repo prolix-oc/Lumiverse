@@ -21,18 +21,37 @@ export async function processChatChunkVectorizationBatch(
   }
 
   const db = getDb();
-  const chunks: Array<{ id: string; content: string; chatId: string }> = [];
+  const chunks: Array<{
+    id: string;
+    content: string;
+    chatId: string;
+    messageIds: string[];
+    messageCount: number;
+    tokenCount: number;
+  }> = [];
 
   for (const task of tasks) {
     const chunk = db
-      .query("SELECT id, content, chat_id, vectorized_at FROM chat_chunks WHERE id = ?")
+      .query("SELECT id, content, chat_id, vectorized_at, message_ids, message_count, token_count FROM chat_chunks WHERE id = ?")
       .get(task.chunkId) as any;
 
     if (chunk && chunk.vectorized_at == null) {
+      let messageIds: string[] = [];
+      try {
+        const parsed = JSON.parse(chunk.message_ids || "[]");
+        if (Array.isArray(parsed)) {
+          messageIds = parsed.filter((id): id is string => typeof id === "string");
+        }
+      } catch {
+        messageIds = [];
+      }
       chunks.push({
         id: chunk.id,
         content: chunk.content,
         chatId: chunk.chat_id,
+        messageIds,
+        messageCount: Number(chunk.message_count ?? messageIds.length ?? 0),
+        tokenCount: Number(chunk.token_count ?? 0),
       });
     }
   }
@@ -64,8 +83,21 @@ export async function processChatChunkVectorizationBatch(
           .all(...batchIds) as Array<{ id: string }>).map((row) => row.id),
       );
 
-      const batchItems: Array<{ chatId: string; chunkId: string; vector: number[]; content: string }> = [];
-      const writtenChunks: Array<{ id: string; content: string; chatId: string }> = [];
+      const batchItems: Array<{
+        chatId: string;
+        chunkId: string;
+        vector: number[];
+        content: string;
+        metadata: Record<string, any>;
+      }> = [];
+      const writtenChunks: Array<{
+        id: string;
+        content: string;
+        chatId: string;
+        messageIds: string[];
+        messageCount: number;
+        tokenCount: number;
+      }> = [];
       batchChunks.forEach((chunk, i) => {
         if (!surviving.has(chunk.id)) return;
         batchItems.push({
@@ -73,6 +105,10 @@ export async function processChatChunkVectorizationBatch(
           chunkId: chunk.id,
           vector: vectors[i],
           content: chunk.content,
+          metadata: {
+            chunkId: chunk.id,
+            messageIds: chunk.messageIds,
+          },
         });
         writtenChunks.push(chunk);
       });
@@ -88,7 +124,43 @@ export async function processChatChunkVectorizationBatch(
       ).run(now, cfg.model, ...writtenChunks.map((chunk) => chunk.id));
       for (const chunk of writtenChunks) refreshedChats.add(chunk.chatId);
     },
-    (failedItems, error) => {
+    async (failedItems, error) => {
+      if (failedItems.length === 1) {
+        const [chunk] = failedItems;
+        console.warn("[vectorization] Terminal chat chunk embedding failure:", {
+          chunkId: chunk.id,
+          chatId: chunk.chatId,
+          sourceChars: chunk.content.length,
+          sourceTokensApprox: chunk.tokenCount,
+          messageCount: chunk.messageCount,
+          messageIdCount: chunk.messageIds.length,
+          model: cfg.model,
+          timeoutSeconds: cfg.request_timeout,
+          error: error.message,
+        });
+
+        const recovered = await embeddingsSvc.tryRecoverChatChunkEmbeddingWithAutoSplit(
+          tasks[0].userId,
+          chunk.chatId,
+          chunk.id,
+          chunk.content,
+          error,
+          {
+            chunkId: chunk.id,
+            messageIds: chunk.messageIds,
+          },
+          chunk.tokenCount,
+        );
+        if (recovered.recovered) {
+          if (!recovered.skipped) {
+            db.query("UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?")
+              .run(Math.floor(Date.now() / 1000), cfg.model, chunk.id);
+            refreshedChats.add(chunk.chatId);
+          }
+          return;
+        }
+      }
+
       console.warn(`[vectorization] Failed to embed ${failedItems.length} chunk(s):`, error.message);
       for (const chunk of failedItems) failedChunkIds.add(chunk.id);
     },
