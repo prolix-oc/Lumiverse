@@ -110,7 +110,7 @@ startVectorizationQueueMaintenance();
 const { startDiskMonitor } = await import("./services/disk-monitor.service");
 startDiskMonitor();
 
-// Pre-warm tokenizers for configured connection models (fire-and-forget)
+// Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
 
 // LanceDB startup maintenance: compact fragments, migrate old HNSW_PQ → IVF_PQ (fire-and-forget)
