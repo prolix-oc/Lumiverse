@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { env } from "../env";
+import { resolveFfmpegBinary } from "./ffmpeg-binary.service";
 import * as chatsSvc from "./chats.service";
 import * as settingsSvc from "./settings.service";
 import {
@@ -14,6 +15,7 @@ import {
   getImage,
   getImageFilePath,
   listImages,
+  uploadImage,
 } from "./images.service";
 
 const originalDataDir = env.dataDir;
@@ -255,6 +257,45 @@ describe("images.service ownership filters", () => {
     await expect(getImageFilePath("u1", "clip-1", undefined, "h264")).resolves.toBe(primaryPath);
   });
 
+  test("derives poster thumbnails for legacy video wallpapers when a tier is requested", async () => {
+    const ffmpeg = await resolveFfmpegBinary();
+    if (!ffmpeg) return;
+
+    seedImage("clip-legacy", 100, {
+      filename: "clip-legacy.mp4",
+      original_filename: "clip-legacy.mov",
+      mime_type: "video/mp4",
+    });
+
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(imagesDir, { recursive: true });
+    const primaryPath = join(imagesDir, "clip-legacy.mp4");
+    const expectedThumbPath = join(imagesDir, "clip-legacy_thumb_lg_v2.webp");
+    const generator = Bun.spawn([
+      ffmpeg,
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=black:s=32x32:d=0.2",
+      "-an",
+      "-c:v",
+      "mpeg4",
+      "-y",
+      primaryPath,
+    ], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    expect(await generator.exited).toBe(0);
+
+    await expect(getImageFilePath("u1", "clip-legacy", "lg")).resolves.toBe(expectedThumbPath);
+    expect(existsSync(expectedThumbPath)).toBe(true);
+    expect(getImage("u1", "clip-legacy")?.has_thumbnail).toBe(true);
+  });
+
   test("deletes sidecar video variants with the primary image", () => {
     seedImage("clip-2", 100, {
       filename: "clip-2.mp4",
@@ -272,5 +313,68 @@ describe("images.service ownership filters", () => {
     expect(deleteImage("u1", "clip-2")).toBe(true);
     expect(existsSync(primaryPath)).toBe(false);
     expect(existsSync(hevcPath)).toBe(false);
+  });
+
+  test("emits wallpaper video upload progress through transcoding and finalize stages", async () => {
+    const ffmpeg = await resolveFfmpegBinary();
+    if (!ffmpeg) return;
+
+    const workdir = mkdtempSync(join(tmpdir(), "lumiverse-images-upload-progress-"));
+    try {
+      const inputPath = join(workdir, "input.mov");
+      const generator = Bun.spawn([
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=16x16:d=0.2",
+        "-an",
+        "-c:v",
+        "mpeg4",
+        "-y",
+        inputPath,
+      ], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      expect(await generator.exited).toBe(0);
+
+      const bytes = await Bun.file(inputPath).bytes();
+      const file = new File([bytes], "input.mov", { type: "video/quicktime" });
+      const phases: string[] = [];
+      const codecs: string[] = [];
+      const phasePercents: Array<number | undefined> = [];
+
+      const image = await uploadImage("u1", file, {
+        owner_extension_identifier: WALLPAPER_LIBRARY_OWNER,
+        transcode_video_codec: "h264",
+        sidecar_video_codecs: ["hevc"],
+        strip_audio: true,
+        on_progress: (progress) => {
+          phases.push(progress.phase);
+          if (progress.codec) codecs.push(progress.codec);
+          phasePercents.push(progress.phaseProgressPct);
+        },
+      });
+
+      expect(image.mime_type).toBe("video/mp4");
+      const uniquePhases = phases.filter((phase, index) => phase !== phases[index - 1]);
+      expect(uniquePhases).toEqual([
+        "received",
+        "transcoding_primary",
+        "transcoding_variant",
+        "extracting_poster",
+        "finalizing",
+        "completed",
+      ]);
+      const uniqueCodecs = codecs.filter((codec, index) => codec !== codecs[index - 1]);
+      expect(uniqueCodecs).toEqual(["h264", "hevc"]);
+      expect(phasePercents.some((value) => value === 100)).toBe(true);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
 });

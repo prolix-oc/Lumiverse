@@ -12,6 +12,7 @@ import {
   normalizeVideoBuffer,
   stripAudioFromVideoBuffer,
   type NormalizedVideoCodec,
+  type VideoTranscodeProgress,
 } from "./silent-video.service";
 import * as settingsSvc from "./settings.service";
 import * as chatsSvc from "./chats.service";
@@ -37,10 +38,30 @@ export interface ImageOwnershipOptions {
   strip_audio?: boolean;
   transcode_video_codec?: NormalizedVideoCodec;
   sidecar_video_codecs?: NormalizedVideoCodec[];
+  on_progress?: (progress: ImageUploadProgress) => void;
 }
 
 export interface ImageQueryOptions extends ImageOwnershipOptions {
   specificity?: ImageSpecificity;
+}
+
+export type ImageUploadProgressPhase =
+  | "received"
+  | "transcoding_primary"
+  | "transcoding_variant"
+  | "extracting_poster"
+  | "finalizing"
+  | "completed";
+
+export interface ImageUploadProgress {
+  phase: ImageUploadProgressPhase;
+  step: number;
+  totalSteps: number;
+  codec?: NormalizedVideoCodec;
+  phaseProgressPct?: number;
+  currentTimeMs?: number;
+  durationMs?: number;
+  speed?: number;
 }
 
 export interface ThumbnailSettings {
@@ -164,14 +185,21 @@ async function deriveMediaMetadataAndThumbnails(
   source: Buffer,
   mimeType: string,
   originalFilename?: string,
+  hooks?: {
+    onPosterExtractionStarted?: () => void;
+    onPosterExtractionCompleted?: () => void;
+  },
 ): Promise<{ width: number | null; height: number | null; hasThumbnail: boolean }> {
   let width: number | null = null;
   let height: number | null = null;
   let hasThumbnail = false;
 
-  const thumbnailSource = isLikelyVideoUpload(mimeType, originalFilename)
-    ? await extractVideoPosterBuffer(source, mimeType, originalFilename)
-    : source;
+  let thumbnailSource: Buffer | null = source;
+  if (isLikelyVideoUpload(mimeType, originalFilename)) {
+    hooks?.onPosterExtractionStarted?.();
+    thumbnailSource = await extractVideoPosterBuffer(source, mimeType, originalFilename);
+    hooks?.onPosterExtractionCompleted?.();
+  }
   if (!thumbnailSource) return { width, height, hasThumbnail };
 
   try {
@@ -190,6 +218,17 @@ async function deriveMediaMetadataAndThumbnails(
   }
 
   return { width, height, hasThumbnail };
+}
+
+function emitImageUploadProgress(
+  options: ImageOwnershipOptions | undefined,
+  progress: ImageUploadProgress,
+): void {
+  try {
+    options?.on_progress?.(progress);
+  } catch (err) {
+    console.error("[images] upload progress listener failed:", err);
+  }
 }
 
 /** Read thumbnail size settings from the DB. Returns defaults if not set. */
@@ -264,11 +303,58 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
   const primaryVideoCodec = isVideo ? options?.transcode_video_codec : undefined;
   const sidecarVideoCodecs = uniqueVideoCodecs(options?.sidecar_video_codecs)
     .filter((codec) => codec !== primaryVideoCodec);
+  const totalProgressSteps = (() => {
+    if (!isVideo) return 1;
+    let total = 1; // finalizing
+    if (primaryVideoCodec) total += 1;
+    total += sidecarVideoCodecs.length;
+    total += 1; // poster extraction
+    return total;
+  })();
+  let currentProgressStep = 0;
+  const emitProgress = (
+    phase: ImageUploadProgressPhase,
+    extra?: Omit<Partial<ImageUploadProgress>, "phase" | "step" | "totalSteps">,
+  ) => {
+    emitImageUploadProgress(options, {
+      phase,
+      step: currentProgressStep,
+      totalSteps: totalProgressSteps,
+      ...extra,
+    });
+  };
+  const advanceProgress = (
+    phase: ImageUploadProgressPhase,
+    extra?: Omit<Partial<ImageUploadProgress>, "phase" | "step" | "totalSteps">,
+  ) => {
+    currentProgressStep = Math.min(totalProgressSteps, currentProgressStep + 1);
+    emitProgress(phase, extra);
+  };
+  const emitTranscodeProgress = (
+    phase: Extract<ImageUploadProgressPhase, "transcoding_primary" | "transcoding_variant">,
+    codec: NormalizedVideoCodec,
+    progress: VideoTranscodeProgress,
+  ) => {
+    emitProgress(phase, {
+      codec,
+      phaseProgressPct: progress.percent ?? undefined,
+      currentTimeMs: progress.currentTimeMs ?? undefined,
+      durationMs: progress.durationMs ?? undefined,
+      speed: progress.speed ?? undefined,
+    });
+  };
+
+  emitProgress("received");
 
   if (isVideo && primaryVideoCodec) {
+    advanceProgress("transcoding_primary", {
+      codec: primaryVideoCodec,
+      phaseProgressPct: 0,
+    });
     const normalized = await normalizeVideoBuffer(originalBuffer, originalMimeType, originalFilename, {
       codec: primaryVideoCodec,
       stripAudio: options?.strip_audio,
+      onProgress: (progress) => emitTranscodeProgress("transcoding_primary", primaryVideoCodec, progress),
     });
     if (normalized) {
       buffer = Buffer.from(normalized.buffer);
@@ -292,15 +378,21 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
 
   if (isVideo && sidecarVideoCodecs.length > 0) {
     for (const codec of sidecarVideoCodecs) {
+      advanceProgress("transcoding_variant", {
+        codec,
+        phaseProgressPct: 0,
+      });
       const normalized = await normalizeVideoBuffer(originalBuffer, originalMimeType, originalFilename, {
         codec,
         stripAudio: options?.strip_audio,
+        onProgress: (progress) => emitTranscodeProgress("transcoding_variant", codec, progress),
       });
       if (!normalized) continue;
       await Bun.write(videoVariantPath(dir, id, codec), normalized.buffer);
     }
   }
 
+  let finalizingStarted = false;
   const { width, height, hasThumbnail } = await deriveMediaMetadataAndThumbnails(
     userId,
     id,
@@ -308,7 +400,21 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
     buffer,
     mimeType,
     storedOriginalFilename,
+    {
+      onPosterExtractionStarted: isVideo
+        ? () => advanceProgress("extracting_poster")
+        : undefined,
+      onPosterExtractionCompleted: isVideo
+        ? () => {
+            finalizingStarted = true;
+            advanceProgress("finalizing");
+          }
+        : undefined,
+    },
   );
+  if (!finalizingStarted) {
+    advanceProgress("finalizing");
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const ownerExtensionIdentifier = normalizeOwnershipValue(options?.owner_extension_identifier);
@@ -349,6 +455,7 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
     );
 
   const image = getImage(userId, id)!;
+  emitProgress("completed");
   eventBus.emit(EventType.IMAGE_UPLOADED, { image }, userId);
   return image;
 }
@@ -749,12 +856,28 @@ export async function getImageFilePath(
     const tieredPath = join(dir, `${image.id}${thumbSuffix(tier)}`);
     if (existsSync(tieredPath)) return tieredPath;
 
-    // Lazy generation from original
     const originalPath = join(dir, image.filename);
     if (existsSync(originalPath)) {
       const sizes = getThumbnailSettings(userId);
       const size = tier === "sm" ? sizes.smallSize : sizes.largeSize;
-      const ok = await ensureThumbnail(`${image.id}:${tier}:${userId}`, originalPath, tieredPath, size);
+
+      // Older video uploads may predate poster thumbnail extraction. Generate a
+      // still from the source video on demand so UI thumbnail requests resolve
+      // to an image instead of falling back to the original MP4.
+      const thumbnailSource = image.mime_type.startsWith("video/")
+        ? await (async () => {
+            try {
+              const source = Buffer.from(await Bun.file(originalPath).arrayBuffer());
+              return await extractVideoPosterBuffer(source, image.mime_type, image.original_filename);
+            } catch {
+              return null;
+            }
+          })()
+        : originalPath;
+
+      const ok = thumbnailSource
+        ? await ensureThumbnail(`${image.id}:${tier}:${userId}`, thumbnailSource, tieredPath, size)
+        : false;
       if (ok) {
         getDb()
           .query("UPDATE images SET has_thumbnail = 1 WHERE id = ?")

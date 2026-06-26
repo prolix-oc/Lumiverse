@@ -2,12 +2,15 @@ import { Hono } from "hono";
 import * as svc from "../services/images.service";
 import { parsePagination } from "../services/pagination";
 import { parseRangeHeader } from "./http-range";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 
 const app = new Hono();
 
 const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 const MAX_WALLPAPER_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
 type WallpaperVideoCodec = "h264" | "hevc";
+type WallpaperUploadProgressId = string;
 
 function isTruthyFlag(value: string | undefined): boolean {
   if (!value) return false;
@@ -20,6 +23,14 @@ function parseWallpaperVideoCodec(value: string | undefined): WallpaperVideoCode
   if (!normalized) return undefined;
   if (normalized === "h264" || normalized === "hevc") return normalized;
   return null;
+}
+
+function parseWallpaperUploadProgressId(value: string | undefined): WallpaperUploadProgressId | null | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(normalized)) return null;
+  return normalized;
 }
 
 function resolveImageContentType(filepath: string, fallbackMimeType: string): string | null {
@@ -41,6 +52,10 @@ app.get("/wallpapers", (c) => {
 
 app.post("/wallpapers", async (c) => {
   const userId = c.get("userId");
+  const uploadId = parseWallpaperUploadProgressId(c.req.query("upload_id"));
+  if (uploadId === null) {
+    return c.json({ error: "Invalid upload progress id" }, 400);
+  }
   const formData = await c.req.formData();
   const file = formData.get("image") as File | null;
   if (!file) return c.json({ error: "image file is required" }, 400);
@@ -60,6 +75,18 @@ app.post("/wallpapers", async (c) => {
     transcode_video_codec: primaryVideoCodec,
     sidecar_video_codecs: [primaryVideoCodec === "hevc" ? "h264" : "hevc"],
     owner_extension_identifier: svc.WALLPAPER_LIBRARY_OWNER,
+    on_progress: uploadId
+      ? (progress) => {
+          eventBus.emit(
+            EventType.WALLPAPER_UPLOAD_PROGRESS,
+            {
+              uploadId,
+              ...progress,
+            },
+            userId,
+          );
+        }
+      : undefined,
   });
   return c.json(image, 201);
 });

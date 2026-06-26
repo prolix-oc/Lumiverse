@@ -16,6 +16,11 @@ export interface ThumbnailRebuildProgress {
   failed: number
 }
 
+interface WallpaperUploadOptions {
+  onProgress?: (percent: number) => void
+  uploadId?: string
+}
+
 interface ImageUrlOptions {
   codec?: 'h264' | 'hevc'
 }
@@ -34,16 +39,22 @@ export const imagesApi = {
     return upload<Image>('/images', form)
   },
 
-  uploadWallpaper(file: File, kind: 'image' | 'video', onProgress?: (percent: number) => void) {
+  uploadWallpaper(file: File, kind: 'image' | 'video', options?: WallpaperUploadOptions) {
     const form = new FormData()
     form.append('image', file)
-    const path = kind === 'video'
-      ? '/images/wallpapers?strip_audio=1&video_codec=h264'
-      : '/images/wallpapers'
-    if (onProgress) {
-      return uploadWithProgress<Image>(path, form, onProgress)
+    const params = new URLSearchParams()
+    if (kind === 'video') {
+      params.set('strip_audio', '1')
+      params.set('video_codec', 'h264')
     }
-    return upload<Image>(path, form)
+    if (options?.uploadId) {
+      params.set('upload_id', options.uploadId)
+    }
+    const path = `/images/wallpapers${params.size > 0 ? `?${params.toString()}` : ''}`
+    if (options?.onProgress) {
+      return uploadWithProgress<Image>(path, form, options.onProgress)
+    }
+    return upload<Image>(path, form, kind === 'video' ? { timeout: 0 } : undefined)
   },
 
   listWallpapers(params?: { limit?: number; offset?: number }) {

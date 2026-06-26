@@ -78,4 +78,50 @@ describe("silent-video.service", () => {
       rmSync(workdir, { recursive: true, force: true });
     }
   });
+
+  test("reports ffmpeg transcode progress while normalizing a mov upload", async () => {
+    const ffmpeg = await resolveFfmpegBinary();
+    if (!ffmpeg) return;
+
+    const workdir = mkdtempSync(join(tmpdir(), "lumiverse-silent-video-progress-test-"));
+    try {
+      const inputPath = join(workdir, "progress.mov");
+      const generator = Bun.spawn([
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=1280x720:d=3",
+        "-an",
+        "-c:v",
+        "mpeg4",
+        "-y",
+        inputPath,
+      ], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      expect(await generator.exited).toBe(0);
+
+      const input = Buffer.from(await Bun.file(inputPath).bytes());
+      const progress: Array<{ percent: number | null; done: boolean }> = [];
+      const out = await normalizeVideoBuffer(input, "video/quicktime", "progress.mov", {
+        codec: "h264",
+        stripAudio: true,
+        onProgress: (update) => {
+          progress.push({ percent: update.percent, done: update.done });
+        },
+      });
+
+      expect(out).not.toBeNull();
+      expect(progress.length).toBeGreaterThan(0);
+      expect(progress.some((entry) => entry.done)).toBe(true);
+      expect(progress.some((entry) => entry.percent === 100)).toBe(true);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
 });

@@ -113,6 +113,9 @@ export enum EventType {
   // Avatar
   CHARACTER_AVATAR_CHANGED = 'CHARACTER_AVATAR_CHANGED',
 
+  // Wallpaper uploads
+  WALLPAPER_UPLOAD_PROGRESS = 'WALLPAPER_UPLOAD_PROGRESS',
+
   // Import progress
   IMPORT_GALLERY_PROGRESS = 'IMPORT_GALLERY_PROGRESS',
 
@@ -177,6 +180,18 @@ export interface SystemDiskLowPayload {
   totalBytes: number
   /** 0..1, the threshold that was crossed */
   thresholdPercent: number
+}
+
+export interface WallpaperUploadProgressPayload {
+  uploadId: string
+  phase: 'received' | 'transcoding_primary' | 'transcoding_variant' | 'extracting_poster' | 'finalizing' | 'completed'
+  step: number
+  totalSteps: number
+  codec?: 'h264' | 'hevc'
+  phaseProgressPct?: number
+  currentTimeMs?: number
+  durationMs?: number
+  speed?: number
 }
 
 export interface SummarizationStartedPayload {

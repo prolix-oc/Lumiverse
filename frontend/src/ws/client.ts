@@ -32,6 +32,12 @@ export class WebSocketClient {
   private focusedChatId: string | null = null
   /** Previous visibility state — used to detect hidden→visible transitions. */
   private wasVisible = false
+  /**
+   * One-shot suppression window for the aggressive resume watchdog. Used for
+   * expected system-modal hops like the file picker, which can blur/hide the
+   * page briefly and then return while a large upload is starting.
+   */
+  private suppressNextResumePingUntil = 0
 
   constructor(url?: string) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -195,6 +201,23 @@ export class WebSocketClient {
     this.sendPingNow()
   }
 
+  /**
+   * Suppress the next hidden→visible fast-ping if it happens within the
+   * provided window. This avoids false reconnects around expected system UI
+   * transitions such as opening a file picker before a large upload.
+   */
+  suppressNextResumePingFor(ms: number = 120_000) {
+    const durationMs = Number.isFinite(ms) ? Math.max(0, Math.floor(ms)) : 0
+    if (durationMs <= 0) {
+      this.suppressNextResumePingUntil = 0
+      return
+    }
+    this.suppressNextResumePingUntil = Math.max(
+      this.suppressNextResumePingUntil,
+      Date.now() + durationMs,
+    )
+  }
+
   private visibilityHandler: (() => void) | null = null
 
   private startVisibilityTracking() {
@@ -246,9 +269,22 @@ export class WebSocketClient {
     // Send a fast-watchdog ping so we detect a dead socket within ~3s, instead
     // of waiting up to a full 30s ping window before noticing.
     if (visible && !this.wasVisible) {
-      this.sendPingNow(RESUME_PONG_TIMEOUT_MS)
+      if (!this.consumeResumePingSuppression()) {
+        this.sendPingNow(RESUME_PONG_TIMEOUT_MS)
+      }
     }
     this.wasVisible = visible
+  }
+
+  private consumeResumePingSuppression() {
+    const suppressUntil = this.suppressNextResumePingUntil
+    if (suppressUntil <= 0) return false
+    if (Date.now() >= suppressUntil) {
+      this.suppressNextResumePingUntil = 0
+      return false
+    }
+    this.suppressNextResumePingUntil = 0
+    return true
   }
 
   private recoverIfSocketAlreadyClosed() {
