@@ -22,7 +22,7 @@ import { connect, Index, type Connection, type Table } from "@lancedb/lancedb";
 
 export type { Table } from "@lancedb/lancedb";
 import { dirname, join } from "path";
-import { mkdirSync, readdirSync, renameSync, rmSync, existsSync, readFileSync } from "fs";
+import { mkdirSync, readdirSync, renameSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from "fs";
 import { env } from "../../../env";
 import { getDb } from "../../../db/connection";
 import { embeddingCache } from "../../embedding-cache";
@@ -55,6 +55,12 @@ export const LANCEDB_TERMUX_LIKE = Boolean(process.env.TERMUX_VERSION)
   || process.env.PREFIX?.startsWith(TERMUX_PATH_PREFIX) === true
   || process.env.HOME?.startsWith(`${TERMUX_PATH_PREFIX}files/home`) === true
   || LANCEDB_PATH.startsWith(TERMUX_PATH_PREFIX);
+
+export function shouldUseCrossProcessWriteLock(
+  envVars: Record<string, string | undefined> = process.env,
+): boolean {
+  return envVars.LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK !== "false";
+}
 
 /**
  * Row shape stored in LanceDB. Identical field set to {@link VectorRow}; kept as
@@ -141,6 +147,9 @@ const CROSS_PROCESS_WRITE_LOCK_DIR = join(env.dataDir, ".lancedb-write-lock");
 const CROSS_PROCESS_WRITE_LOCK_INFO = join(CROSS_PROCESS_WRITE_LOCK_DIR, "owner.json");
 const CROSS_PROCESS_WRITE_LOCK_POLL_MS = 250;
 const CROSS_PROCESS_WRITE_LOCK_STALE_MS = 5 * 60_000;
+const CROSS_PROCESS_WRITE_LOCK_ENABLED = shouldUseCrossProcessWriteLock();
+const RETRYABLE_LANCE_WRITE_CONFLICT_MAX_ATTEMPTS = 4;
+const RETRYABLE_LANCE_WRITE_CONFLICT_BASE_BACKOFF_MS = 100;
 const _writeLockQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 let _writeLockHeld = false;
 
@@ -150,14 +159,15 @@ function sleep(ms: number): Promise<void> {
 
 function tryWriteCrossProcessLockInfo(): void {
   try {
-    Bun.write(
+    writeFileSync(
       CROSS_PROCESS_WRITE_LOCK_INFO,
       JSON.stringify({
         pid: process.pid,
         acquiredAt: Date.now(),
         cwd: process.cwd(),
       }),
-    ).catch(() => {});
+      "utf8",
+    );
   } catch {}
 }
 
@@ -189,14 +199,22 @@ function shouldBreakStaleCrossProcessLock(): boolean {
   if (!existsSync(CROSS_PROCESS_WRITE_LOCK_DIR)) return false;
 
   const info = readCrossProcessLockInfo();
-  const ageMs = info?.acquiredAt ? Date.now() - info.acquiredAt : Number.POSITIVE_INFINITY;
+  const fallbackAcquiredAt = (() => {
+    try {
+      return statSync(CROSS_PROCESS_WRITE_LOCK_DIR).mtimeMs;
+    } catch {
+      return undefined;
+    }
+  })();
+  const acquiredAt = info?.acquiredAt ?? fallbackAcquiredAt;
+  const ageMs = acquiredAt ? Date.now() - acquiredAt : Number.POSITIVE_INFINITY;
   if (ageMs < CROSS_PROCESS_WRITE_LOCK_STALE_MS) return false;
   if (info?.pid && isProcessAlive(info.pid)) return false;
   return true;
 }
 
 async function acquireCrossProcessWriteLockIfNeeded(): Promise<(() => void) | null> {
-  if (!LANCEDB_TERMUX_LIKE) return null;
+  if (!CROSS_PROCESS_WRITE_LOCK_ENABLED) return null;
 
   const startedAt = Date.now();
   while (true) {
@@ -453,6 +471,23 @@ function invalidateTableHandle(tableName?: string): void {
   }
 }
 
+export function isRetryableLanceWriteConflict(err: unknown): boolean {
+  const text = collectErrorMessages(err).join(" | ").toLowerCase();
+  if (!text) return false;
+  return (
+    text.includes("retryable commit conflict")
+    || text.includes("preempted by concurrent transaction")
+    || (text.includes("please retry") && text.includes("version"))
+  );
+}
+
+function retryableLanceWriteConflictBackoffMs(attempt: number): number {
+  return Math.min(
+    1_000,
+    RETRYABLE_LANCE_WRITE_CONFLICT_BASE_BACKOFF_MS * (2 ** Math.max(0, attempt - 1)),
+  );
+}
+
 function logLanceDbPathDiagnostics(): void {
   if (lancedbPathDiagnosticsLogged || !LANCEDB_TERMUX_LIKE) return;
   lancedbPathDiagnosticsLogged = true;
@@ -622,15 +657,18 @@ export async function upsertEmbeddingRows(rows: EmbeddingRow[], reason: string):
   const tableName = tableNameForRows(rows);
   await retryAfterSchemaDriftReset(reason, async () => {
     await withWriteLock(async () => {
-      const table = await getOrCreateTable(tableName, rows, true);
-      await ensureVectorIndex(tableName, table);
-      await ensureScalarIndexes(tableName, table);
-      await ensureFtsIndex(tableName, table);
-      await table
-        .mergeInsert("id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute(asLanceRows(rows));
+      let table = await getOrCreateTable(tableName, rows, true);
+      table = await ensureVectorIndex(tableName, table);
+      table = await ensureScalarIndexes(tableName, table);
+      table = await ensureFtsIndex(tableName, table);
+      await withRetryableLanceWriteConflictRetry(`${reason}: mergeInsert`, tableName, async () => {
+        table = await reopenTableForWrite(tableName, rows);
+        await table
+          .mergeInsert("id")
+          .whenMatchedUpdateAll()
+          .whenNotMatchedInsertAll()
+          .execute(asLanceRows(rows));
+      });
     });
   });
 }
@@ -658,18 +696,23 @@ function isRetryableBatchErrorLocal(err: Error): boolean {
 }
 
 async function mergeInsertRowsInBatches(
+  tableName: string,
   table: Table,
   rows: EmbeddingRow[],
   label: string,
   initialBatchSize: number,
 ): Promise<void> {
+  let activeTable = table;
   const process = async (batch: EmbeddingRow[], currentSize: number): Promise<void> => {
     try {
-      await table
-        .mergeInsert("id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute(asLanceRows(batch));
+      await withRetryableLanceWriteConflictRetry(`${label}: mergeInsert batch`, tableName, async () => {
+        activeTable = await reopenTableForWrite(tableName, batch);
+        await activeTable
+          .mergeInsert("id")
+          .whenMatchedUpdateAll()
+          .whenNotMatchedInsertAll()
+          .execute(asLanceRows(batch));
+      });
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       if (isRetryableMergeInsertError(error) && currentSize > 1) {
@@ -774,6 +817,41 @@ export async function getOrCreateTable(tableName = EMBEDDINGS_TABLE, seedRows?: 
   return state.tableHandle;
 }
 
+async function reopenTableForWrite(tableName: string, seedRows?: EmbeddingRow[]): Promise<Table> {
+  invalidateTableHandle(tableName);
+  if (seedRows && seedRows.length > 0) {
+    return getOrCreateTable(tableName, seedRows, true);
+  }
+  const reopened = await getTableIfExists(tableName, true);
+  if (!reopened) {
+    throw new Error(`[embeddings] Table ${tableName} disappeared while reopening a LanceDB write handle`);
+  }
+  return reopened;
+}
+
+async function withRetryableLanceWriteConflictRetry<T>(
+  label: string,
+  tableName: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isRetryableLanceWriteConflict(err) || attempt >= RETRYABLE_LANCE_WRITE_CONFLICT_MAX_ATTEMPTS) {
+        throw err;
+      }
+      invalidateTableHandle(tableName);
+      const backoffMs = retryableLanceWriteConflictBackoffMs(attempt);
+      console.warn(
+        `[embeddings] ${label} hit retryable Lance commit conflict; retrying in ${backoffMs}ms `
+        + `(attempt ${attempt + 1}/${RETRYABLE_LANCE_WRITE_CONFLICT_MAX_ATTEMPTS})`,
+      );
+      await sleep(backoffMs);
+    }
+  }
+}
+
 const MIN_ROWS_FOR_VECTOR_INDEX = 5_000;
 const MIN_ROWS_FOR_PQ_VECTOR_INDEX = 65_536;
 export const MAX_LANCE_SOURCE_FILTER_IDS = 250;
@@ -818,21 +896,27 @@ function getVectorIndexConfig(rowCount: number): any | null {
   } as any);
 }
 
-export async function ensureVectorIndex(tableName: string, table: Table): Promise<void> {
+export async function ensureVectorIndex(tableName: string, table: Table): Promise<Table> {
   const state = getTableState(tableName);
-  if (state.vectorIndexReady) return;
+  if (state.vectorIndexReady) return table;
+  let activeTable = table;
+  let rebuilt = false;
   try {
-    const rowCount = await table.countRows();
+    const rowCount = await activeTable.countRows();
     const indexConfig = getVectorIndexConfig(rowCount);
     if (indexConfig === null) {
       // Brute-force search is fast enough for small tables and avoids
       // KMeans warnings about empty clusters when rows < num_partitions * 256.
       state.vectorIndexReady = true;
-      return;
+      return activeTable;
     }
-    await table.createIndex("vector", {
-      config: indexConfig,
-    } as any);
+    await withRetryableLanceWriteConflictRetry(`${tableName}: create vector index`, tableName, async () => {
+      activeTable = await reopenTableForWrite(tableName);
+      await activeTable.createIndex("vector", {
+        config: indexConfig,
+      } as any);
+    });
+    rebuilt = true;
   } catch {
     // Index may already exist - that's fine
   }
@@ -840,6 +924,12 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
   state.lastIndexRebuildAt = Date.now();
   if (tableName !== WORLD_BOOK_EMBEDDINGS_TABLE) {
     startIndexHealthMonitor(tableName);
+  }
+  if (!rebuilt) return activeTable;
+  try {
+    return await reopenTableForWrite(tableName);
+  } catch {
+    return activeTable;
   }
 }
 
@@ -854,13 +944,17 @@ export async function ensureVectorIndex(tableName: string, table: Table): Promis
  * referencing deleted data versions (manifests as "Object not found" errors on Windows
  * and other platforms).
  */
-export async function ensureScalarIndexes(tableName: string, table: Table, force = false): Promise<void> {
+export async function ensureScalarIndexes(tableName: string, table: Table, force = false): Promise<Table> {
   const state = getTableState(tableName);
-  if (state.scalarIndexReady && !force) return;
+  if (state.scalarIndexReady && !force) return table;
+
+  let activeTable = table;
+  let rebuilt = false;
 
   let indexNames: Set<string>;
   try {
-    indexNames = new Set((await table.listIndices()).map((i: any) => i.name || i.indexName || ""));
+    activeTable = await reopenTableForWrite(tableName);
+    indexNames = new Set((await activeTable.listIndices()).map((i: any) => i.name || i.indexName || ""));
   } catch {
     // listIndices can fail if index files are orphaned from a previous compaction.
     // Treat as empty so every index gets (re)created below.
@@ -869,18 +963,27 @@ export async function ensureScalarIndexes(tableName: string, table: Table, force
 
   const create = async (col: string, config?: any) => {
     // LanceDB names indexes as {col}_idx by convention
-    if (!force && indexNames.has(`${col}_idx`)) return;
+    const indexName = `${col}_idx`;
+    const hasExistingIndex = indexNames.has(indexName);
+    if (!force && hasExistingIndex) return;
+    const build = async (replace: boolean) => {
+      await withRetryableLanceWriteConflictRetry(`${tableName}: create scalar index ${col}`, tableName, async () => {
+        activeTable = await reopenTableForWrite(tableName);
+        const opts: any = config ? { config } : {};
+        if (replace) opts.replace = true;
+        await activeTable.createIndex(col, opts);
+      });
+      rebuilt = true;
+      indexNames.add(indexName);
+    };
     try {
-      const opts: any = config ? { config } : {};
-      if (force && indexNames.has(`${col}_idx`)) opts.replace = true;
-      await table.createIndex(col, opts);
+      await build(force && hasExistingIndex);
     } catch (err) {
       // replace: true can fail when the old index references orphaned files.
       // Fall back to a plain create (LanceDB overwrites by column name).
       if (force) {
         try {
-          const opts: any = config ? { config } : {};
-          await table.createIndex(col, opts);
+          await build(false);
         } catch {
           // Index may already exist in a usable state
         }
@@ -895,41 +998,65 @@ export async function ensureScalarIndexes(tableName: string, table: Table, force
     await create("source_type", Index.bitmap());
   }
   state.scalarIndexReady = true;
+  if (!rebuilt) return activeTable;
+  try {
+    return await reopenTableForWrite(tableName);
+  } catch {
+    return activeTable;
+  }
 }
 
 /**
  * Ensure FTS index exists on the content column for hybrid search.
  * When `force` is true, the index is rebuilt even if it already exists.
  */
-export async function ensureFtsIndex(tableName: string, table: Table, force = false): Promise<void> {
+export async function ensureFtsIndex(tableName: string, table: Table, force = false): Promise<Table> {
   const state = getTableState(tableName);
-  if (state.ftsIndexReady && !force) return;
+  if (state.ftsIndexReady && !force) return table;
+
+  let activeTable = table;
+  let rebuilt = false;
 
   let indexNames: Set<string>;
   try {
-    indexNames = new Set((await table.listIndices()).map((i: any) => i.name || i.indexName || ""));
+    activeTable = await reopenTableForWrite(tableName);
+    indexNames = new Set((await activeTable.listIndices()).map((i: any) => i.name || i.indexName || ""));
   } catch {
     indexNames = new Set();
   }
 
   if (!force && indexNames.has("content_idx")) {
     state.ftsIndexReady = true;
-    return;
+    return activeTable;
   }
   try {
-    const opts: any = { config: Index.fts() };
-    if (force && indexNames.has("content_idx")) opts.replace = true;
-    await table.createIndex("content", opts);
+    await withRetryableLanceWriteConflictRetry(`${tableName}: create FTS index`, tableName, async () => {
+      activeTable = await reopenTableForWrite(tableName);
+      const opts: any = { config: Index.fts() };
+      if (force && indexNames.has("content_idx")) opts.replace = true;
+      await activeTable.createIndex("content", opts);
+    });
+    rebuilt = true;
   } catch {
     if (force) {
       try {
-        await table.createIndex("content", { config: Index.fts() });
+        await withRetryableLanceWriteConflictRetry(`${tableName}: create FTS index`, tableName, async () => {
+          activeTable = await reopenTableForWrite(tableName);
+          await activeTable.createIndex("content", { config: Index.fts() });
+        });
+        rebuilt = true;
       } catch {
         // Index may already exist in a usable state
       }
     }
   }
   state.ftsIndexReady = true;
+  if (!rebuilt) return activeTable;
+  try {
+    return await reopenTableForWrite(tableName);
+  } catch {
+    return activeTable;
+  }
 }
 
 /**
@@ -1000,9 +1127,9 @@ async function checkAndRebuildIndexes(tableName: string, table: Table): Promise<
     if (unindexed >= UNINDEXED_ROW_THRESHOLD) {
       console.info(`[embeddings] ${unindexed} unindexed rows detected, rebuilding vector index...`);
       await withWriteLock(async () => {
-        const t = await getTableIfExists(tableName, true);
-        if (!t) return;
-        const rowCount = await t.countRows();
+        let tableForRebuild = await getTableIfExists(tableName, true);
+        if (!tableForRebuild) return;
+        const rowCount = await tableForRebuild.countRows();
         const indexConfig = getVectorIndexConfig(rowCount);
         if (indexConfig === null) {
           state.vectorIndexReady = true;
@@ -1013,10 +1140,13 @@ async function checkAndRebuildIndexes(tableName: string, table: Table): Promise<
         // createIndex(replace) rewrites index files out from under any reader —
         // the periodic rebuild fires mid-chat, exactly when retrieval is busy.
         await withMaintenanceExclusive(async () => {
-          await t.createIndex("vector", {
-            config: indexConfig,
-            replace: true,
-          } as any);
+          await withRetryableLanceWriteConflictRetry(`${tableName}: rebuild vector index`, tableName, async () => {
+            tableForRebuild = await reopenTableForWrite(tableName);
+            await tableForRebuild.createIndex("vector", {
+              config: indexConfig,
+              replace: true,
+            } as any);
+          });
         });
         state.lastIndexRebuildAt = Date.now();
         state.unindexedRowEstimate = 0;
@@ -1049,7 +1179,7 @@ export async function runStartupVectorMaintenance(): Promise<void> {
     for (const tableName of tablesToMaintain) {
       const exists = await tableExists(conn, tableName);
       if (!exists) continue;
-      const table = await getTableIfExists(tableName, true);
+      let table = await getTableIfExists(tableName, true);
       if (!table) continue;
       const state = getTableState(tableName);
 
@@ -1072,10 +1202,17 @@ export async function runStartupVectorMaintenance(): Promise<void> {
         // below rewrite index files; hold reads off for the whole sequence.
         await withMaintenanceExclusive(async () => {
           try {
-            await table.optimize({ cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS) });
+            await withRetryableLanceWriteConflictRetry(`${tableName}: startup optimize`, tableName, async () => {
+              table = await reopenTableForWrite(tableName);
+              await table.optimize({ cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS) });
+            });
           } catch (err) {
             console.warn(`[embeddings] Startup compaction failed for ${tableName}:`, err);
           }
+
+          try {
+            table = await reopenTableForWrite(tableName);
+          } catch {}
 
           if (needsMigration) {
             const rowCount = await table.countRows();
@@ -1083,10 +1220,13 @@ export async function runStartupVectorMaintenance(): Promise<void> {
             if (indexConfig !== null) {
               console.info(`[embeddings] Migrating vector index for ${tableName} from HNSW_PQ → IVF (${rowCount} rows)...`);
               try {
-                await table.createIndex("vector", {
-                  config: indexConfig,
-                  replace: true,
-                } as any);
+                await withRetryableLanceWriteConflictRetry(`${tableName}: startup vector index migration`, tableName, async () => {
+                  table = await reopenTableForWrite(tableName);
+                  await table.createIndex("vector", {
+                    config: indexConfig,
+                    replace: true,
+                  } as any);
+                });
                 state.vectorIndexReady = true;
                 state.lastIndexRebuildAt = Date.now();
                 console.info(`[embeddings] Vector index migrated successfully for ${tableName}`);
@@ -1096,9 +1236,9 @@ export async function runStartupVectorMaintenance(): Promise<void> {
             }
           }
 
-          await ensureScalarIndexes(tableName, table, true);
-          await ensureFtsIndex(tableName, table, true);
-          await ensureVectorIndex(tableName, table);
+          table = await ensureScalarIndexes(tableName, table, true);
+          table = await ensureFtsIndex(tableName, table, true);
+          table = await ensureVectorIndex(tableName, table);
         });
       } catch (err) {
         console.warn(`[embeddings] Startup maintenance failed for ${tableName}:`, err);
@@ -1116,18 +1256,21 @@ export async function optimizeTable(tableNames?: string[]): Promise<void> {
   await withWriteLock(async () => {
     for (const tableName of targets) {
       try {
-        const table = await getTableIfExists(tableName, true);
+        let table = await getTableIfExists(tableName, true);
         if (!table) continue;
 
         // Block new reads and drain in-flight ones, then compact: optimize()
         // unlinks superseded version files and the forced index rebuilds rewrite
         // index files — either is fatal to a read scanning them concurrently.
         await withMaintenanceExclusive(async () => {
-          await table.optimize({
-            cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS),
+          await withRetryableLanceWriteConflictRetry(`${tableName}: optimize`, tableName, async () => {
+            table = await reopenTableForWrite(tableName);
+            await table.optimize({
+              cleanupOlderThan: new Date(Date.now() - CLEANUP_GRACE_PERIOD_MS),
+            });
           });
-          await ensureScalarIndexes(tableName, table, true);
-          await ensureFtsIndex(tableName, table, true);
+          table = await ensureScalarIndexes(tableName, table, true);
+          table = await ensureFtsIndex(tableName, table, true);
         });
       } catch (err) {
         console.warn(`[embeddings] Optimize failed for ${tableName}:`, err);
@@ -1193,11 +1336,12 @@ async function readTableHealth(tableName: string): Promise<SingleTableHealth> {
       await withWriteLock(async () => {
         const t = await getTableIfExists(tableName, true);
         if (t) {
-          await ensureScalarIndexes(tableName, t, true);
-          await ensureFtsIndex(tableName, t, true);
+          const repaired = await ensureScalarIndexes(tableName, t, true);
+          await ensureFtsIndex(tableName, repaired, true);
         }
       });
-      indices = await table.listIndices();
+      const refreshedTable = await getTableIfExists(tableName);
+      indices = refreshedTable ? await refreshedTable.listIndices() : [];
     } catch {
       indices = [];
     }
@@ -1362,14 +1506,15 @@ async function migrateWorldBookRowsToDedicatedTable(): Promise<{ migratedRows: n
     }
 
     await mergeInsertRowsInBatches(
+      WORLD_BOOK_EMBEDDINGS_TABLE,
       worldBookTable,
       migratedRows,
       "world-book lazy migration",
       WORLD_BOOK_MIGRATION_BATCH_SIZE,
     );
-    await ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
-    await ensureScalarIndexes(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
-    await ensureFtsIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
+    worldBookTable = await ensureVectorIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
+    worldBookTable = await ensureScalarIndexes(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
+    worldBookTable = await ensureFtsIndex(WORLD_BOOK_EMBEDDINGS_TABLE, worldBookTable);
 
     const migratedEntryIds = [...new Set(migratedRows.map((row) => row.source_id))];
     const latestUpdatedAt = migratedRows.reduce((max, row) => Math.max(max, row.updated_at), 0);
@@ -1378,7 +1523,10 @@ async function migrateWorldBookRowsToDedicatedTable(): Promise<{ migratedRows: n
     migratedRowsCount = migratedRows.length;
 
     try {
-      await runtimeTable.delete(`source_type = 'world_book_entry'`);
+      await withRetryableLanceWriteConflictRetry(`${EMBEDDINGS_TABLE}: delete migrated world-book rows`, EMBEDDINGS_TABLE, async () => {
+        const tableForDelete = await reopenTableForWrite(EMBEDDINGS_TABLE);
+        await tableForDelete.delete(`source_type = 'world_book_entry'`);
+      });
     } catch (err) {
       console.warn(
         `[embeddings] World-book migration copied ${migratedRows.length} row(s) into ${WORLD_BOOK_EMBEDDINGS_TABLE}, but failed to delete legacy rows from ${EMBEDDINGS_TABLE}:`,
@@ -1637,9 +1785,12 @@ export class LanceDbStore implements VectorStore {
   async deleteByFilter(collection: CollectionName, filter: VectorFilter): Promise<void> {
     const tableName = collectionToTable(collection);
     await withWriteLock(async () => {
-      const table = await getTableIfExists(tableName, true);
+      let table = await getTableIfExists(tableName, true);
       if (!table) return;
-      await safeTableDelete(table, translateFilter(filter), "general");
+      await withRetryableLanceWriteConflictRetry(`${tableName}: delete by filter`, tableName, async () => {
+        table = await reopenTableForWrite(tableName);
+        await safeTableDelete(table, translateFilter(filter), "general");
+      });
     });
     scheduleOptimize("general");
   }
@@ -1648,13 +1799,16 @@ export class LanceDbStore implements VectorStore {
     if (ids.length === 0) return;
     const tableName = collectionToTable(collection);
     await withWriteLock(async () => {
-      const table = await getTableIfExists(tableName, true);
+      let table = await getTableIfExists(tableName, true);
       if (!table) return;
       const BATCH = 500;
       for (let i = 0; i < ids.length; i += BATCH) {
         const batch = ids.slice(i, i + BATCH);
         const filter = `id IN (${batch.map((id) => sqlValue(id)).join(", ")})`;
-        await safeTableDelete(table, filter, "general");
+        await withRetryableLanceWriteConflictRetry(`${tableName}: delete batch`, tableName, async () => {
+          table = await reopenTableForWrite(tableName);
+          await safeTableDelete(table, filter, "general");
+        });
       }
     });
     scheduleOptimize("general");
