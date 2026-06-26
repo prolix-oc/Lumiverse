@@ -16,6 +16,10 @@ export interface ThumbnailRebuildProgress {
   failed: number
 }
 
+interface ImageUrlOptions {
+  codec?: 'h264' | 'hevc'
+}
+
 export const imagesApi = {
   get(id: string) {
     return get<Image>(`/images/${id}`)
@@ -30,10 +34,12 @@ export const imagesApi = {
     return upload<Image>('/images', form)
   },
 
-  uploadWallpaper(file: File, onProgress?: (percent: number) => void) {
+  uploadWallpaper(file: File, kind: 'image' | 'video', onProgress?: (percent: number) => void) {
     const form = new FormData()
     form.append('image', file)
-    const path = file.type.startsWith('video/') ? '/images/wallpapers?strip_audio=1' : '/images/wallpapers'
+    const path = kind === 'video'
+      ? '/images/wallpapers?strip_audio=1&video_codec=h264'
+      : '/images/wallpapers'
     if (onProgress) {
       return uploadWithProgress<Image>(path, form, onProgress)
     }
@@ -57,7 +63,10 @@ export const imagesApi = {
   },
 
   /** Full-size original */
-  url(id: string) {
+  url(id: string, options?: ImageUrlOptions) {
+    if (options?.codec) {
+      return `${BASE_URL}/images/${id}?codec=${encodeURIComponent(options.codec)}`
+    }
     return `${BASE_URL}/images/${id}`
   },
 

@@ -2444,8 +2444,8 @@
     }
   },
   "wallpaperPanel": {
-    "videoTooLarge": "I file video devono essere inferiori a 100MB. Il file selezionato è {{size}}MB.",
-    "invalidFileType": "Seleziona un file immagine o video (.mp4, .webm).",
+    "videoTooLarge": "I file video devono essere inferiori a 250MB. Il file selezionato è {{size}}MB.",
+    "invalidFileType": "Seleziona un file immagine o video (.mp4, .mov, .m4v, .webm).",
     "uploadFailed": "Errore nel caricamento dello sfondo.",
     "clearChatFailed": "Errore nella cancellazione dello sfondo della chat.",
     "globalWallpaper": "Sfondo globale",

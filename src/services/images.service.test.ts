@@ -1,14 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { env } from "../env";
 import * as chatsSvc from "./chats.service";
 import * as settingsSvc from "./settings.service";
 import {
   WALLPAPER_LIBRARY_OWNER,
+  deleteImage,
   deleteImageIfUnreferenced,
   deleteWallpaperLibraryImage,
   getImage,
+  getImageFilePath,
   listImages,
 } from "./images.service";
+
+const originalDataDir = env.dataDir;
+let testDataDir = "";
 
 function initImagesTestDb(): void {
   closeDatabase();
@@ -52,10 +61,13 @@ function initImagesTestDb(): void {
 function seedImage(
   id: string,
   createdAt: number,
-  ownership?: {
+  options?: {
     owner_extension_identifier?: string;
     owner_character_id?: string;
     owner_chat_id?: string;
+    filename?: string;
+    original_filename?: string;
+    mime_type?: string;
   },
 ): void {
   getDb()
@@ -79,16 +91,16 @@ function seedImage(
     .run(
       id,
       "u1",
-      `${id}.png`,
-      `${id}.png`,
-      "image/png",
+      options?.filename ?? `${id}.png`,
+      options?.original_filename ?? `${id}.png`,
+      options?.mime_type ?? "image/png",
       4096,
       100,
       100,
       1,
-      ownership?.owner_extension_identifier ?? null,
-      ownership?.owner_character_id ?? null,
-      ownership?.owner_chat_id ?? null,
+      options?.owner_extension_identifier ?? null,
+      options?.owner_character_id ?? null,
+      options?.owner_chat_id ?? null,
       createdAt,
     );
 }
@@ -117,10 +129,17 @@ function seedChat(id: string, metadata: Record<string, unknown>, updatedAt = 100
 
 beforeEach(() => {
   initImagesTestDb();
+  testDataDir = mkdtempSync(join(tmpdir(), "lumiverse-images-test-"));
+  env.dataDir = testDataDir;
 });
 
 afterEach(() => {
   closeDatabase();
+  env.dataDir = originalDataDir;
+  if (testDataDir) {
+    rmSync(testDataDir, { recursive: true, force: true });
+    testDataDir = "";
+  }
 });
 
 describe("images.service ownership filters", () => {
@@ -216,5 +235,42 @@ describe("images.service ownership filters", () => {
 
     expect(deleted).toBe(false);
     expect(getImage("u1", "img-1")).not.toBeNull();
+  });
+
+  test("resolves hevc sidecar paths for video wallpapers", async () => {
+    seedImage("clip-1", 100, {
+      filename: "clip-1.mp4",
+      original_filename: "clip-1.mp4",
+      mime_type: "video/mp4",
+    });
+
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(imagesDir, { recursive: true });
+    const primaryPath = join(imagesDir, "clip-1.mp4");
+    const hevcPath = join(imagesDir, "clip-1_hevc.mp4");
+    writeFileSync(primaryPath, "primary");
+    writeFileSync(hevcPath, "hevc");
+
+    await expect(getImageFilePath("u1", "clip-1", undefined, "hevc")).resolves.toBe(hevcPath);
+    await expect(getImageFilePath("u1", "clip-1", undefined, "h264")).resolves.toBe(primaryPath);
+  });
+
+  test("deletes sidecar video variants with the primary image", () => {
+    seedImage("clip-2", 100, {
+      filename: "clip-2.mp4",
+      original_filename: "clip-2.mp4",
+      mime_type: "video/mp4",
+    });
+
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(imagesDir, { recursive: true });
+    const primaryPath = join(imagesDir, "clip-2.mp4");
+    const hevcPath = join(imagesDir, "clip-2_hevc.mp4");
+    writeFileSync(primaryPath, "primary");
+    writeFileSync(hevcPath, "hevc");
+
+    expect(deleteImage("u1", "clip-2")).toBe(true);
+    expect(existsSync(primaryPath)).toBe(false);
+    expect(existsSync(hevcPath)).toBe(false);
   });
 });

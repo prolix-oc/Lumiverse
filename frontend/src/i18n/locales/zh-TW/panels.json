@@ -2436,8 +2436,8 @@
     }
   },
   "wallpaperPanel": {
-    "videoTooLarge": "視頻文件須小於 100MB。所選文件為 {{size}}MB。",
-    "invalidFileType": "請選擇圖片或視頻文件（.mp4、.webm）。",
+    "videoTooLarge": "視頻文件須小於 250MB。所選文件為 {{size}}MB。",
+    "invalidFileType": "請選擇圖片或視頻文件（.mp4、.mov、.m4v、.webm）。",
     "uploadFailed": "上傳壁紙失敗。",
     "clearChatFailed": "清除聊天壁紙失敗。",
     "globalWallpaper": "全局壁紙",

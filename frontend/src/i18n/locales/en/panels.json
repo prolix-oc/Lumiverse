@@ -2526,8 +2526,8 @@
     }
   },
   "wallpaperPanel": {
-    "videoTooLarge": "Video files must be under 100MB. Selected file is {{size}}MB.",
-    "invalidFileType": "Please select an image or video file (.mp4, .webm).",
+    "videoTooLarge": "Video files must be under 250MB. Selected file is {{size}}MB.",
+    "invalidFileType": "Please select an image or video file (.mp4, .mov, .m4v, .webm).",
     "uploadFailed": "Failed to upload wallpaper.",
     "assignFailed": "Failed to apply wallpaper.",
     "clearChatFailed": "Failed to clear chat wallpaper.",

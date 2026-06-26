@@ -4,6 +4,7 @@ import { ImageIcon, Upload, Trash2, Monitor, MessageSquare } from 'lucide-react'
 import { useStore } from '@/store'
 import { imagesApi } from '@/api/images'
 import { chatsApi } from '@/api/chats'
+import { getPreferredWallpaperVideoCodec } from '@/lib/wallpaperVideoCodec'
 import { primeWallpaperVideo, useWallpaperVideoSource } from '@/lib/wallpaperVideoCache'
 import { FormField, Select, EditorSection } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
@@ -12,17 +13,32 @@ import type { WallpaperRef } from '@/types/store'
 import WallpaperLibraryModal from './WallpaperLibraryModal'
 import styles from './WallpaperPanel.module.css'
 
-const MAX_VIDEO_SIZE = 100 * 1024 * 1024 // 100MB
+const MAX_VIDEO_SIZE = 250 * 1024 * 1024 // 250MB
 const MAX_WALLPAPER_BLUR = 8
-const ACCEPTED_TYPES = 'image/*,video/mp4,video/webm'
+const ACCEPTED_TYPES = 'image/*,video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v'
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.m4v'])
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])
 
-function isVideoFile(file: File): boolean {
-  return file.type.startsWith('video/')
+function fileExtension(name: string): string {
+  const index = name.lastIndexOf('.')
+  return index >= 0 ? name.slice(index).toLowerCase() : ''
 }
 
-function WallpaperPreviewVideo({ src }: { src: string }) {
+function detectWallpaperFileKind(file: File): 'image' | 'video' | null {
+  const type = (file.type || '').toLowerCase()
+  if (type.startsWith('image/')) return 'image'
+  if (type.startsWith('video/')) return 'video'
+
+  const ext = fileExtension(file.name)
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
+  return null
+}
+
+function WallpaperPreviewVideo({ imageId }: { imageId: string }) {
   const ref = useRef<HTMLVideoElement>(null)
-  const { src: resolvedSrc, fromCache } = useWallpaperVideoSource(src)
+  const preferredSrc = imagesApi.url(imageId, { codec: getPreferredWallpaperVideoCodec() })
+  const { src: resolvedSrc, fromCache } = useWallpaperVideoSource(preferredSrc)
 
   useEffect(() => {
     const video = ref.current
@@ -69,7 +85,7 @@ function WallpaperPreviewVideo({ src }: { src: string }) {
       onLoadedData={() => {
         if (!fromCache) {
           window.setTimeout(() => {
-            void primeWallpaperVideo(src).catch(() => {})
+            void primeWallpaperVideo(preferredSrc).catch(() => {})
           }, 1000)
         }
       }}
@@ -133,14 +149,15 @@ export default function WallpaperPanel() {
     if (!file) return
     e.target.value = ''
 
-    const isVideo = isVideoFile(file)
+    const kind = detectWallpaperFileKind(file)
+    const isVideo = kind === 'video'
 
     if (isVideo && file.size > MAX_VIDEO_SIZE) {
       setError(t('wallpaperPanel.videoTooLarge', { size: (file.size / 1024 / 1024).toFixed(1) }))
       return
     }
 
-    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+    if (!kind) {
       setError(t('wallpaperPanel.invalidFileType'))
       return
     }
@@ -149,10 +166,10 @@ export default function WallpaperPanel() {
     setUploading(true)
 
     try {
-      const image = await imagesApi.uploadWallpaper(file)
+      const image = await imagesApi.uploadWallpaper(file, kind)
       const ref: WallpaperRef = {
         image_id: image.id,
-        type: isVideo ? 'video' : 'image',
+        type: kind,
       }
       await applyWallpaper(uploadTarget, ref)
     } catch (err: any) {
@@ -223,7 +240,7 @@ export default function WallpaperPanel() {
       <div className={styles.preview}>
         {globalUrl && globalWp?.type === 'video' ? (
           <>
-            <WallpaperPreviewVideo src={globalUrl} />
+            <WallpaperPreviewVideo imageId={globalWp.image_id} />
             <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>
           </>
         ) : globalUrl ? (
@@ -270,7 +287,7 @@ export default function WallpaperPanel() {
           <div className={styles.preview}>
             {chatUrl && chatWp?.type === 'video' ? (
               <>
-                <WallpaperPreviewVideo src={chatUrl} />
+                <WallpaperPreviewVideo imageId={chatWp.image_id} />
                 <span className={styles.previewBadge}>{t('wallpaperPanel.video')}</span>
               </>
             ) : chatUrl ? (

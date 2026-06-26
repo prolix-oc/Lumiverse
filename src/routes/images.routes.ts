@@ -6,15 +6,27 @@ import { parseRangeHeader } from "./http-range";
 const app = new Hono();
 
 const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
-const MAX_WALLPAPER_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_WALLPAPER_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
+type WallpaperVideoCodec = "h264" | "hevc";
 
 function isTruthyFlag(value: string | undefined): boolean {
   if (!value) return false;
   return /^(1|true|yes|on)$/i.test(value.trim());
 }
 
+function parseWallpaperVideoCodec(value: string | undefined): WallpaperVideoCodec | null | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "h264" || normalized === "hevc") return normalized;
+  return null;
+}
+
 function resolveImageContentType(filepath: string, fallbackMimeType: string): string | null {
   if (filepath.endsWith(".webp")) return "image/webp";
+  if (filepath.endsWith(".mp4")) return "video/mp4";
+  if (filepath.endsWith(".webm")) return "video/webm";
+  if (filepath.endsWith(".mov")) return "video/quicktime";
   return fallbackMimeType || null;
 }
 
@@ -33,13 +45,20 @@ app.post("/wallpapers", async (c) => {
   const file = formData.get("image") as File | null;
   if (!file) return c.json({ error: "image file is required" }, 400);
   const stripAudio = isTruthyFlag(c.req.query("strip_audio"));
+  const videoCodec = parseWallpaperVideoCodec(c.req.query("video_codec"));
+  if (videoCodec === null) {
+    return c.json({ error: "Unsupported video codec. Use h264 or hevc." }, 400);
+  }
+  const primaryVideoCodec: WallpaperVideoCodec = videoCodec ?? "h264";
 
   if (typeof file.size === "number" && file.size > MAX_WALLPAPER_UPLOAD_BYTES) {
-    return c.json({ error: "Image too large", maxBytes: MAX_WALLPAPER_UPLOAD_BYTES }, 413);
+    return c.json({ error: "Wallpaper too large", maxBytes: MAX_WALLPAPER_UPLOAD_BYTES }, 413);
   }
 
   const image = await svc.uploadImage(userId, file, {
     strip_audio: stripAudio,
+    transcode_video_codec: primaryVideoCodec,
+    sidecar_video_codecs: [primaryVideoCodec === "hevc" ? "h264" : "hevc"],
     owner_extension_identifier: svc.WALLPAPER_LIBRARY_OWNER,
   });
   return c.json(image, 201);
@@ -77,11 +96,15 @@ app.get("/:id", async (c) => {
 
   const sizeParam = c.req.query("size") as svc.ThumbTier | undefined;
   const tier = sizeParam === "sm" || sizeParam === "lg" ? sizeParam : undefined;
+  const requestedCodec = parseWallpaperVideoCodec(c.req.query("codec"));
+  if (requestedCodec === null) {
+    return c.json({ error: "Unsupported video codec. Use h264 or hevc." }, 400);
+  }
 
   const row = svc.getImage(userId, id);
   if (!row) return c.json({ error: "Not found" }, 404);
 
-  const filepath = await svc.getImageFilePath(userId, id, tier);
+  const filepath = await svc.getImageFilePath(userId, id, tier, requestedCodec ?? undefined);
   if (!filepath) return c.json({ error: "Not found" }, 404);
 
   const file = Bun.file(filepath);

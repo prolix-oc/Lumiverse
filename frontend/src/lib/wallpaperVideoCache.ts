@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 const WALLPAPER_VIDEO_CACHE = 'wallpaper-video-cache-v1'
 const WALLPAPER_VIDEO_CACHE_LOOKUP_MS = 250
 const WALLPAPER_VIDEO_CACHE_MAX_ENTRIES = 6
+const WALLPAPER_VIDEO_CACHE_MAX_BYTES = 96 * 1024 * 1024
 const WALLPAPER_VIDEO_RELEASE_DELAY_MS = 15000
 
 type LiveEntry = {
@@ -29,6 +30,12 @@ function buildRequest(url: string): Request {
     credentials: 'include',
     mode: 'cors',
   })
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) return null
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
 
 function retainLiveEntry(url: string): { src: string; release: () => void } | null {
@@ -231,6 +238,8 @@ export function primeWallpaperVideo(url: string): Promise<void> {
     const response = await fetch(request.clone())
     if (!response.ok) return
     if (response.type !== 'basic' && response.type !== 'cors') return
+    const contentLength = parseContentLength(response.headers.get('content-length'))
+    if (contentLength !== null && contentLength > WALLPAPER_VIDEO_CACHE_MAX_BYTES) return
 
     await cache.put(request, response.clone())
     const blob = await response.blob()

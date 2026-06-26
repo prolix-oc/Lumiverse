@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { imagesApi } from '@/api/images'
+import { getPreferredWallpaperVideoCodec } from '@/lib/wallpaperVideoCodec'
 import { primeWallpaperVideo, useWallpaperVideoSource } from '@/lib/wallpaperVideoCache'
 import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import styles from './WallpaperLayer.module.css'
@@ -24,9 +25,12 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
   const ownedVideoRef = useRef<HTMLVideoElement>(null)
   const activeVideoRef = videoRef ?? ownedVideoRef
 
-  const rawUrl = wallpaper?.image_id ? imagesApi.url(wallpaper.image_id) : null
+  const rawImageUrl = wallpaper?.image_id ? imagesApi.url(wallpaper.image_id) : null
+  const rawVideoUrl = wallpaper?.type === 'video' && wallpaper.image_id
+    ? imagesApi.url(wallpaper.image_id, { codec: getPreferredWallpaperVideoCodec() })
+    : null
   const wallpaperKey = wallpaper ? `${wallpaper.type}:${wallpaper.image_id}` : 'none'
-  const { src: cachedVideoSrc, fromCache } = useWallpaperVideoSource(wallpaper?.type === 'video' ? rawUrl : null)
+  const { src: cachedVideoSrc, fromCache } = useWallpaperVideoSource(rawVideoUrl)
 
   useEffect(() => {
     if (!fadeInOnMount || !wallpaper?.image_id) {
@@ -57,7 +61,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
       const image = new Image()
       image.onload = reveal
       image.onerror = reveal
-      image.src = rawUrl ?? ''
+      image.src = rawImageUrl ?? ''
     }
 
     return () => {
@@ -65,7 +69,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
       window.clearTimeout(fallback)
       if (raf) window.cancelAnimationFrame(raf)
     }
-  }, [fadeInOnMount, onVisualReady, rawUrl, wallpaper?.image_id, wallpaper?.type, wallpaperKey])
+  }, [fadeInOnMount, onVisualReady, rawImageUrl, wallpaper?.image_id, wallpaper?.type, wallpaperKey])
 
   useEffect(() => {
     if (wallpaper?.type !== 'video') return
@@ -91,7 +95,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
 
   if (!wallpaper?.image_id) return null
 
-  const url = rawUrl ?? ''
+  const imageUrl = rawImageUrl ?? ''
   const opacity = hidden || !fadeReady ? 0 : settings.opacity ?? 0.3
   const fit = settings.fit ?? 'cover'
   const requestedBlur = Math.max(0, settings.blur ?? 0)
@@ -118,9 +122,9 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
           fadeInOnMount
             ? () => {
               revealRef.current()
-              if (!fromCache && url) {
+              if (!fromCache && rawVideoUrl) {
                 window.setTimeout(() => {
-                  void primeWallpaperVideo(url).catch(() => {})
+                  void primeWallpaperVideo(rawVideoUrl).catch(() => {})
                 }, 1500)
               }
             }
@@ -138,9 +142,9 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
 
   return (
     <div
-      className={className}
+        className={className}
       style={{
-        backgroundImage: `url("${url}")`,
+        backgroundImage: `url("${imageUrl}")`,
         opacity,
         backgroundSize: fit === 'fill' ? '100% 100%' : fit,
         filter,

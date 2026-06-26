@@ -6,7 +6,13 @@ import { env } from "../env";
 import type { Image } from "../types/image";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
 import { join, extname } from "path";
-import { extractVideoPosterBuffer, stripAudioFromVideoBuffer } from "./silent-video.service";
+import {
+  extractVideoPosterBuffer,
+  isLikelyVideoUpload,
+  normalizeVideoBuffer,
+  stripAudioFromVideoBuffer,
+  type NormalizedVideoCodec,
+} from "./silent-video.service";
 import * as settingsSvc from "./settings.service";
 import * as chatsSvc from "./chats.service";
 
@@ -29,6 +35,8 @@ export interface ImageOwnershipOptions {
   owner_character_id?: string;
   owner_chat_id?: string;
   strip_audio?: boolean;
+  transcode_video_codec?: NormalizedVideoCodec;
+  sidecar_video_codecs?: NormalizedVideoCodec[];
 }
 
 export interface ImageQueryOptions extends ImageOwnershipOptions {
@@ -92,6 +100,48 @@ function getImagesDir(): string {
   return dir;
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".m4v": "video/x-m4v",
+};
+
+function inferUploadMimeType(file: File): string {
+  const explicit = (file.type || "").trim().toLowerCase();
+  if (explicit) return explicit;
+  return MIME_BY_EXT[extname(file.name).toLowerCase()] || "application/octet-stream";
+}
+
+function replaceFileExtension(filename: string, nextExt: string): string {
+  const base = filename.replace(/\.[^.]+$/, "") || "upload";
+  return `${base}${nextExt}`;
+}
+
+function uniqueVideoCodecs(codecs: readonly NormalizedVideoCodec[] | undefined): NormalizedVideoCodec[] {
+  const ordered: NormalizedVideoCodec[] = [];
+  for (const codec of codecs || []) {
+    if (codec !== "h264" && codec !== "hevc") continue;
+    if (!ordered.includes(codec)) ordered.push(codec);
+  }
+  return ordered;
+}
+
+function videoVariantFilename(id: string, codec: NormalizedVideoCodec): string {
+  return `${id}_${codec}.mp4`;
+}
+
+function videoVariantPath(dir: string, id: string, codec: NormalizedVideoCodec): string {
+  return join(dir, videoVariantFilename(id, codec));
+}
+
 function rowToImage(row: any, specificity: ImageSpecificity = "full"): Image {
   return {
     ...row,
@@ -113,13 +163,14 @@ async function deriveMediaMetadataAndThumbnails(
   dir: string,
   source: Buffer,
   mimeType: string,
+  originalFilename?: string,
 ): Promise<{ width: number | null; height: number | null; hasThumbnail: boolean }> {
   let width: number | null = null;
   let height: number | null = null;
   let hasThumbnail = false;
 
-  const thumbnailSource = mimeType.startsWith("video/")
-    ? await extractVideoPosterBuffer(source, mimeType)
+  const thumbnailSource = isLikelyVideoUpload(mimeType, originalFilename)
+    ? await extractVideoPosterBuffer(source, mimeType, originalFilename)
     : source;
   if (!thumbnailSource) return { width, height, hasThumbnail };
 
@@ -200,28 +251,63 @@ async function ensureThumbnail(
 
 export async function uploadImage(userId: string, file: File, options?: ImageOwnershipOptions): Promise<Image> {
   const id = crypto.randomUUID();
-  const ext = extname(file.name) || ".bin";
-  const filename = `${id}${ext}`;
   const dir = getImagesDir();
-  const filepath = join(dir, filename);
 
-  let buffer = Buffer.from(await file.arrayBuffer());
+  const originalBuffer = Buffer.from(await file.arrayBuffer());
+  let buffer = Buffer.from(originalBuffer);
+  const originalMimeType = inferUploadMimeType(file);
+  let mimeType = originalMimeType;
+  const originalFilename = file.name || `upload-${id}`;
+  let storedOriginalFilename = originalFilename;
+  let storedExtension = extname(storedOriginalFilename).toLowerCase() || ".bin";
+  const isVideo = isLikelyVideoUpload(mimeType, storedOriginalFilename);
+  const primaryVideoCodec = isVideo ? options?.transcode_video_codec : undefined;
+  const sidecarVideoCodecs = uniqueVideoCodecs(options?.sidecar_video_codecs)
+    .filter((codec) => codec !== primaryVideoCodec);
 
-  // Wallpaper uploads can opt into a best-effort audio-strip pass so iOS gets
-  // a truly silent video without making ffmpeg a hard runtime dependency.
-  if (options?.strip_audio && file.type.startsWith("video/")) {
-    const stripped = await stripAudioFromVideoBuffer(buffer, file.type);
+  if (isVideo && primaryVideoCodec) {
+    const normalized = await normalizeVideoBuffer(originalBuffer, originalMimeType, originalFilename, {
+      codec: primaryVideoCodec,
+      stripAudio: options?.strip_audio,
+    });
+    if (normalized) {
+      buffer = Buffer.from(normalized.buffer);
+      mimeType = normalized.mimeType;
+      storedExtension = normalized.ext;
+      storedOriginalFilename = replaceFileExtension(storedOriginalFilename, normalized.ext);
+    } else if (options?.strip_audio) {
+      const stripped = await stripAudioFromVideoBuffer(buffer, mimeType, storedOriginalFilename);
+      if (stripped) buffer = Buffer.from(stripped);
+    }
+  } else if (isVideo && options?.strip_audio) {
+    // Wallpaper uploads can opt into a best-effort audio-strip pass so iOS gets
+    // a truly silent video without making ffmpeg a hard runtime dependency.
+    const stripped = await stripAudioFromVideoBuffer(buffer, mimeType, storedOriginalFilename);
     if (stripped) buffer = Buffer.from(stripped);
   }
 
+  const filename = `${id}${storedExtension}`;
+  const filepath = join(dir, filename);
   await Bun.write(filepath, buffer);
+
+  if (isVideo && sidecarVideoCodecs.length > 0) {
+    for (const codec of sidecarVideoCodecs) {
+      const normalized = await normalizeVideoBuffer(originalBuffer, originalMimeType, originalFilename, {
+        codec,
+        stripAudio: options?.strip_audio,
+      });
+      if (!normalized) continue;
+      await Bun.write(videoVariantPath(dir, id, codec), normalized.buffer);
+    }
+  }
 
   const { width, height, hasThumbnail } = await deriveMediaMetadataAndThumbnails(
     userId,
     id,
     dir,
     buffer,
-    file.type || "",
+    mimeType,
+    storedOriginalFilename,
   );
 
   const now = Math.floor(Date.now() / 1000);
@@ -250,8 +336,8 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
       id,
       userId,
       filename,
-      file.name,
-      file.type || "",
+      storedOriginalFilename,
+      mimeType,
       buffer.byteLength,
       width,
       height,
@@ -651,7 +737,8 @@ export function listImages(
 export async function getImageFilePath(
   userId: string,
   id: string,
-  tier?: ThumbTier
+  tier?: ThumbTier,
+  videoCodec?: NormalizedVideoCodec,
 ): Promise<string | null> {
   const image = getImage(userId, id);
   if (!image) return null;
@@ -675,6 +762,11 @@ export async function getImageFilePath(
         return tieredPath;
       }
     }
+  }
+
+  if (!tier && videoCodec && image.mime_type.startsWith("video/")) {
+    const variantPath = videoVariantPath(dir, image.id, videoCodec);
+    if (existsSync(variantPath)) return variantPath;
   }
 
   const filepath = join(dir, image.filename);
@@ -768,6 +860,11 @@ export function deleteImage(userId: string, id: string): boolean {
   // Remove original file
   const filepath = join(dir, image.filename);
   if (existsSync(filepath)) unlinkSync(filepath);
+
+  for (const codec of ["h264", "hevc"] as const) {
+    const variantPath = videoVariantPath(dir, image.id, codec);
+    if (existsSync(variantPath)) unlinkSync(variantPath);
+  }
 
   // Remove all thumbnail tiers
   for (const tier of ["sm", "lg"] as const) {
