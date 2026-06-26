@@ -2,6 +2,7 @@ import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, use
 import { useTranslation } from 'react-i18next'
 import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
+import { processMarkdownInHtmlIsland } from './htmlIslandMarkdown'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
@@ -889,16 +890,6 @@ function renderIslandInlineMarkdownText(markdown: string): string {
   return `${leadingWhitespace}${html}${trailingWhitespace}`
 }
 
-const INLINE_CONTEXT_TAGS = new Set([
-  'button',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'label',
-  'option',
-  'select',
-  'summary',
-  'textarea',
-])
-
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
@@ -961,66 +952,12 @@ function extractHtmlIslands(
   return { content, islands }
 }
 
-/**
- * Convert markdown within HTML island text content to rendered HTML.
- * Preserves <style> blocks and HTML tag structure while running text nodes
- * through the full markdown parser, then unwraps single-paragraph results so
- * inline content inside HTML tags stays inline in Shadow DOM.
- */
 function processMarkdownInIsland(html: string): string {
-  // Protect <style> blocks — CSS selectors can contain '>' which breaks tag splitting
-  const styleBlocks: string[] = []
-  const shielded = html.replace(/<style[\s>][\s\S]*?<\/style\s*>/gi, (m) => {
-    styleBlocks.push(m)
-    return `<!--ISLAND_STYLE_${styleBlocks.length - 1}-->`
+  return processMarkdownInHtmlIsland(html, {
+    renderBlockText: renderIslandMarkdownText,
+    renderInlineText: renderIslandInlineMarkdownText,
+    normalizeHtml: normalizeLegacyFontTags,
   })
-
-  // Split into HTML tags (odd indices) and text content (even indices)
-  const parts = shielded.split(/(<[^>]*>)/)
-  let skipDepth = 0
-  const inlineCtxStack: string[] = []
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
-
-    // HTML tags — track elements whose content should not be processed
-    if (i % 2 === 1) {
-      if (/^<(pre|code|script)\b/i.test(part)) skipDepth++
-      else if (/^<\/(pre|code|script)\b/i.test(part)) skipDepth = Math.max(0, skipDepth - 1)
-
-      const openMatch = part.match(/^<([a-z][\w:-]*)\b/i)
-      const closeMatch = part.match(/^<\/([a-z][\w:-]*)\b/i)
-      const isSelfClose = /\/\s*>$/.test(part)
-      if (openMatch && !closeMatch && !isSelfClose) {
-        const tag = openMatch[1].toLowerCase()
-        if (INLINE_CONTEXT_TAGS.has(tag)) inlineCtxStack.push(tag)
-      } else if (closeMatch) {
-        const tag = closeMatch[1].toLowerCase()
-        if (INLINE_CONTEXT_TAGS.has(tag)) {
-          const idx = inlineCtxStack.lastIndexOf(tag)
-          if (idx >= 0) inlineCtxStack.splice(idx, 1)
-        }
-      }
-      continue
-    }
-
-    // Text content — skip if empty, inside skip element, or a style placeholder
-    if (!part.trim() || skipDepth > 0) continue
-    if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
-
-    parts[i] = inlineCtxStack.length > 0
-      ? renderIslandInlineMarkdownText(part)
-      : renderIslandMarkdownText(part)
-  }
-
-  let result = parts.join('')
-
-  // Restore <style> blocks
-  for (let i = 0; i < styleBlocks.length; i++) {
-    result = result.replace(`<!--ISLAND_STYLE_${i}-->`, styleBlocks[i])
-  }
-
-  return normalizeLegacyFontTags(result)
 }
 
 interface TrustedYouTubeEmbed {
