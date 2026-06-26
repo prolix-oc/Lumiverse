@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import styles from './RangeSlider.module.css'
+import { snapRangeValue } from './rangeSliderMath'
 
 export interface RangeSliderProps {
   min: number
@@ -45,17 +46,11 @@ export function RangeSlider({
   const movedRef = useRef(false)
 
   const [localValue, setLocalValue] = useState<number | null>(null)
-  const currentValue = localValue !== null ? localValue : value
+  const currentValue = localValue !== null ? localValue : snapRangeValue(value, { min, max, step, integer })
   const pct = max === min ? 0 : Math.min(100, Math.max(0, ((currentValue - min) / (max - min)) * 100))
 
   const snap = useCallback(
-    (raw: number) => {
-      const clamped = Math.min(max, Math.max(min, raw))
-      const stepped = Math.round((clamped - min) / step) * step + min
-      if (integer) return Math.round(stepped)
-      const decimals = (String(step).split('.')[1] || '').length
-      return decimals > 0 ? parseFloat(stepped.toFixed(decimals)) : stepped
-    },
+    (raw: number) => snapRangeValue(raw, { min, max, step, integer }),
     [min, max, step, integer],
   )
 

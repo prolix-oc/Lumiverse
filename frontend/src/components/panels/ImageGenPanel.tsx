@@ -10,6 +10,7 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Button, FormField, Select, TextInput, EditorSection, TextArea } from '@/components/shared/FormComponents'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { LabeledRangeSlider } from '@/components/shared/RangeSlider'
+import { snapRangeValue } from '@/components/shared/rangeSliderMath'
 import { useTouchActivate } from '@/hooks/useTouchActivate'
 import ModelCombobox from './connection-manager/ModelCombobox'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
@@ -37,6 +38,30 @@ function normalizeTimeoutSeconds(value: string, fallback: number): number {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
   return Math.max(0, Math.floor(parsed))
+}
+
+function coerceFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function normalizeSliderSchemaValue(value: unknown, schema: ImageGenParameterSchema): number | null {
+  if ((schema.type !== 'number' && schema.type !== 'integer') || schema.min === undefined || schema.max === undefined) {
+    return null
+  }
+
+  const numeric = coerceFiniteNumber(value) ?? coerceFiniteNumber(schema.default) ?? schema.min
+  const step = schema.step ?? (schema.type === 'integer' ? 1 : 0.1)
+  return snapRangeValue(numeric, {
+    min: schema.min,
+    max: schema.max,
+    step,
+    integer: schema.type === 'integer',
+  })
 }
 
 function ToggleRow({ checked, onChange, label, hint }: { checked: boolean; onChange: (checked: boolean) => void; label: string; hint?: string }) {
@@ -194,6 +219,10 @@ function ParamField({
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
     .trim()
+  const normalizedSliderValue = useMemo(
+    () => normalizeSliderSchemaValue(value, schema),
+    [schema, value],
+  )
 
   // Model-component fields get a combobox backed by the API
   if (schema.modelSubtype && schema.type === 'string') {
@@ -236,7 +265,7 @@ function ParamField({
     case 'number':
     case 'integer':
       if (schema.min !== undefined && schema.max !== undefined) {
-        const numValue = value ?? schema.default ?? schema.min
+        const numValue = normalizedSliderValue ?? coerceFiniteNumber(schema.default) ?? schema.min
         const step = schema.step ?? (schema.type === 'integer' ? 1 : 0.1)
         const isInt = schema.type === 'integer'
         return (
@@ -249,7 +278,16 @@ function ParamField({
             integer={isInt}
             value={numValue}
             formatValue={(v) => isInt ? String(v) : v.toFixed(step < 1 ? 2 : 1)}
-            onCommit={(v) => onChange(paramKey, isInt ? Math.round(v) : v)}
+            onCommit={(v) =>
+              onChange(
+                paramKey,
+                snapRangeValue(v, {
+                  min: schema.min!,
+                  max: schema.max!,
+                  step,
+                  integer: isInt,
+                }),
+              )}
           />
         )
       }

@@ -15,6 +15,7 @@ export class PollinationsImageProvider implements ImageProvider {
         min: 256,
         max: 2048,
         default: 1024,
+        step: 2,
         description: "Image width in pixels",
       },
       height: {
@@ -22,6 +23,7 @@ export class PollinationsImageProvider implements ImageProvider {
         min: 256,
         max: 2048,
         default: 1024,
+        step: 2,
         description: "Image height in pixels",
       },
       seed: {

@@ -22,6 +22,7 @@ import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
 import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
 import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
+import type { ImageParameterSchemaMap } from "../image-gen/param-schema";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
@@ -312,7 +313,10 @@ export async function generateSceneBackground(
       ? "custom"
       : opts?.promptMode || settings.promptMode || "scene";
     const outputTarget = opts?.outputTarget || settings.outputTarget || "background";
-    const params = { ...connection.default_parameters };
+    const params = normalizeGenerationParameters(
+      { ...connection.default_parameters },
+      provider.capabilities.parameters,
+    );
     normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
     resolveProviderRandomSeed(params, connection.provider);
     const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
@@ -629,8 +633,13 @@ export async function previewImagePrompt(
   }
   const connection = imageGenConnSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Image generation connection not found");
+  const provider = getImageProvider(connection.provider);
+  if (!provider) throw new Error(`Unknown image generation provider: ${connection.provider}`);
 
-  const params = { ...connection.default_parameters };
+  const params = normalizeGenerationParameters(
+    { ...connection.default_parameters },
+    provider.capabilities.parameters,
+  );
   const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
   const promptMode = opts?.promptMode || settings.promptMode || "scene";
   const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
@@ -916,6 +925,63 @@ function numberParam(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function snapNumericParam(
+  value: number,
+  min: number,
+  max: number,
+  step: number | undefined,
+  integer: boolean,
+): number {
+  let normalized = Math.min(max, Math.max(min, value));
+
+  if (typeof step === "number" && Number.isFinite(step) && step > 0) {
+    normalized = Math.round((normalized - min) / step) * step + min;
+  } else if (integer) {
+    normalized = Math.round(normalized);
+  }
+
+  normalized = Math.min(max, Math.max(min, normalized));
+
+  if (integer) return Math.round(normalized);
+
+  if (typeof step === "number" && Number.isFinite(step) && step > 0) {
+    const decimals = (String(step).split(".")[1] || "").length;
+    return decimals > 0 ? Number(normalized.toFixed(decimals)) : normalized;
+  }
+
+  return normalized;
+}
+
+function normalizeGenerationParameters(
+  params: Record<string, any>,
+  schemaMap: ImageParameterSchemaMap,
+): Record<string, any> {
+  const next = { ...(params || {}) };
+
+  for (const [key, schema] of Object.entries(schemaMap)) {
+    if (next[key] == null) continue;
+    if (schema.type !== "number" && schema.type !== "integer") continue;
+
+    const numeric = numberParam(next[key]);
+    if (numeric === undefined) continue;
+
+    if (schema.min !== undefined && schema.max !== undefined) {
+      next[key] = snapNumericParam(
+        numeric,
+        schema.min,
+        schema.max,
+        schema.step,
+        schema.type === "integer",
+      );
+      continue;
+    }
+
+    if (schema.type === "integer") next[key] = Math.round(numeric);
+  }
+
+  return next;
 }
 
 function stringParam(value: unknown): string | undefined {
