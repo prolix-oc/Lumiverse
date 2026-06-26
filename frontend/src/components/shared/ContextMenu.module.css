@@ -2,7 +2,11 @@
   position: fixed;
   z-index: 11000;
   min-width: 180px;
+  max-height: min(calc(100vh - 16px), 420px);
   padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--lumiverse-bg-deep);
   border: 1px solid var(--lumiverse-border);
   border-radius: 10px;

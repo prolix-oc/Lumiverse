@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import { Minus, X } from 'lucide-react'
+import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/types/ws-events'
@@ -11,7 +12,14 @@ import { EXPRESSION_SIZE_PRESETS } from '@/types/expressions'
 import type { ExpressionConfig, ExpressionDisplaySize } from '@/types/expressions'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
+import { toast } from '@/lib/toast'
 import styles from './ExpressionDisplay.module.css'
+
+type ExpressionMenuView =
+  | { kind: 'display' }
+  | { kind: 'single-picker' }
+  | { kind: 'group-character-picker' }
+  | { kind: 'group-expression-picker'; characterId: string }
 
 export default function ExpressionDisplay() {
   const { t } = useTranslation('chat')
@@ -25,6 +33,8 @@ export default function ExpressionDisplay() {
   const setExpressionDisplay = useStore((s) => s.setExpressionDisplay)
   const toggleMinimized = useStore((s) => s.toggleExpressionMinimized)
   const setActiveExpression = useStore((s) => s.setActiveExpression)
+  const setGroupExpression = useStore((s) => s.setGroupExpression)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
 
   // Group chat state
   const isGroupChat = useStore((s) => s.isGroupChat)
@@ -171,6 +181,8 @@ export default function ExpressionDisplay() {
   // ── Sizing ──
   const [pos, setPos] = useState({ x: display.x, y: display.y })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
+  const [menuView, setMenuView] = useState<ExpressionMenuView>({ kind: 'display' })
+  const [menuTargetCharId, setMenuTargetCharId] = useState<string | null>(null)
   const dragging = useRef(false)
   const resizing = useRef(false)
   const offset = useRef({ x: 0, y: 0 })
@@ -347,18 +359,36 @@ export default function ExpressionDisplay() {
     setExpressionDisplay({ sizePreset: 'custom', customWidth: customSize.width, customHeight: customSize.height })
   }, [customSize, setExpressionDisplay])
 
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null)
+    setMenuView({ kind: 'display' })
+    setMenuTargetCharId(null)
+  }, [])
+
+  const openContextMenu = useCallback((position: ContextMenuPos, targetCharId: string | null = null) => {
+    setMenuTargetCharId(targetCharId)
+    setMenuView({ kind: 'display' })
+    setContextMenu(position)
+  }, [])
+
   const longPress = useLongPress({
-    onLongPress: (pos) => setContextMenu(pos),
+    onLongPress: (pos) => openContextMenu(pos),
   })
 
   const handleContextMenu = longPress.onContextMenu
 
+  const handleGroupSlotContextMenu = useCallback((e: React.MouseEvent, charId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    openContextMenu({ x: e.clientX, y: e.clientY }, charId)
+  }, [openContextMenu])
+
   const selectSize = useCallback(
     (preset: ExpressionDisplaySize) => {
       setExpressionDisplay({ sizePreset: preset })
-      setContextMenu(null)
+      closeContextMenu()
     },
-    [setExpressionDisplay]
+    [closeContextMenu, setExpressionDisplay]
   )
 
   // ── Group expression layout calculations (must be before early returns) ──
@@ -390,66 +420,213 @@ export default function ExpressionDisplay() {
       || null
   }
 
-  const contextMenuItems: ContextMenuEntry[] = useMemo(() => [
-    ...(['small', 'medium', 'large'] as const).map((preset) => ({
-      key: `size-${preset}`,
-      label: t(`expressionDisplay.size${preset.charAt(0).toUpperCase()}${preset.slice(1)}` as 'expressionDisplay.sizeSmall'),
-      active: display.sizePreset === preset,
-      onClick: () => selectSize(preset),
-    })),
-    { key: 'div-1', type: 'divider' as const },
-    {
-      key: 'opacity',
-      type: 'custom' as const,
-      content: (
-        <div className={styles.opacityRow}>
-          <span>{t('expressionDisplay.opacity')}</span>
-          <input
-            type="range"
-            className={styles.opacitySlider}
-            min={0.1}
-            max={1}
-            step={0.05}
-            value={display.opacity}
-            onChange={(e) => setExpressionDisplay({ opacity: parseFloat(e.target.value) })}
-          />
-        </div>
-      ),
-    },
-    { key: 'div-2', type: 'divider' as const },
-    {
-      key: 'frame',
-      label: display.frameless ? t('expressionDisplay.showFrame') : t('expressionDisplay.hideFrame'),
-      onClick: () => { setExpressionDisplay({ frameless: !display.frameless }); setContextMenu(null) },
-    },
-    {
-      key: 'click-through',
-      label: display.clickThrough ? t('expressionDisplay.disableClickThrough') : t('expressionDisplay.enableClickThrough'),
-      active: display.clickThrough,
-      onClick: () => { setExpressionDisplay({ clickThrough: !display.clickThrough }); setContextMenu(null) },
-    },
-    {
-      key: 'minimize',
-      label: t('expressionDisplay.minimize'),
-      onClick: () => { toggleMinimized(); setContextMenu(null) },
-    },
-    {
-      key: 'hide',
-      label: t('expressionDisplay.hide'),
-      onClick: () => { setExpressionDisplay({ enabled: false }); setContextMenu(null) },
-    },
-    {
-      key: 'reset',
-      label: t('expressionDisplay.resetPosition'),
-      onClick: () => {
-        const nx = window.innerWidth - containerSize.width - 24
-        const ny = window.innerHeight - containerSize.height - 100
-        setPos({ x: nx, y: ny })
-        setExpressionDisplay({ x: nx, y: ny })
-        setContextMenu(null)
+  const directGroupMenuCharId = useMemo(() => {
+    if (menuTargetCharId && groupConfigs.has(menuTargetCharId)) return menuTargetCharId
+    if (groupExpressionCharIds.length === 1) return groupExpressionCharIds[0]
+    return null
+  }, [groupConfigs, groupExpressionCharIds, menuTargetCharId])
+
+  const selectSingleExpression = useCallback(async (label: string, imageId: string) => {
+    if (!resolvedCharId) return
+    setActiveExpression(label, imageId, resolvedCharId)
+    closeContextMenu()
+    if (!activeChatId) return
+    try {
+      const updated = await chatsApi.patchMetadata(activeChatId, { active_expression: label })
+      setActiveChatMetadata(updated.metadata ?? null)
+    } catch {
+      toast.error(t('expressionDisplay.failedSaveSelection'))
+    }
+  }, [activeChatId, closeContextMenu, resolvedCharId, setActiveChatMetadata, setActiveExpression, t])
+
+  const selectGroupExpression = useCallback(async (characterId: string, label: string, imageId: string) => {
+    const nextGroupExpressions = {
+      ...useStore.getState().groupExpressions,
+      [characterId]: { label, imageId },
+    }
+    setGroupExpression(characterId, label, imageId)
+    closeContextMenu()
+    if (!activeChatId) return
+    try {
+      const updated = await chatsApi.patchMetadata(activeChatId, { group_expressions: nextGroupExpressions })
+      setActiveChatMetadata(updated.metadata ?? null)
+    } catch {
+      toast.error(t('expressionDisplay.failedSaveSelection'))
+    }
+  }, [activeChatId, closeContextMenu, setActiveChatMetadata, setGroupExpression, t])
+
+  const contextMenuItems: ContextMenuEntry[] = useMemo(() => {
+    const backToDisplayItem: ContextMenuEntry = {
+      key: 'back-display',
+      label: t('expressionDisplay.backToDisplayMenu'),
+      onClick: () => setMenuView({ kind: 'display' }),
+    }
+
+    if (menuView.kind === 'single-picker') {
+      if (!exprConfig || !resolvedCharId) return [backToDisplayItem]
+      return [
+        backToDisplayItem,
+        { key: 'single-divider', type: 'divider' as const },
+        ...Object.entries(exprConfig.mappings).map(([label, imageId]) => ({
+          key: `single-expression-${label}`,
+          label,
+          active: expressionCharacterId === resolvedCharId && currentExpression === label,
+          onClick: () => { void selectSingleExpression(label, imageId) },
+        })),
+      ]
+    }
+
+    if (menuView.kind === 'group-character-picker') {
+      return [
+        backToDisplayItem,
+        { key: 'group-character-divider', type: 'divider' as const },
+        ...groupExpressionCharIds.map((charId) => ({
+          key: `group-character-${charId}`,
+          label: characters.find((c) => c.id === charId)?.name || t('characterFallback'),
+          onClick: () => setMenuView({ kind: 'group-expression-picker', characterId: charId }),
+        })),
+      ]
+    }
+
+    if (menuView.kind === 'group-expression-picker') {
+      const config = groupConfigs.get(menuView.characterId)
+      const backItem: ContextMenuEntry = directGroupMenuCharId
+        ? backToDisplayItem
+        : {
+            key: 'back-character-picker',
+            label: t('expressionDisplay.backToCharacterMenu'),
+            onClick: () => setMenuView({ kind: 'group-character-picker' }),
+          }
+
+      if (!config) return [backItem]
+
+      return [
+        backItem,
+        { key: 'group-expression-divider', type: 'divider' as const },
+        ...Object.entries(config.mappings).map(([label, imageId]) => ({
+          key: `group-expression-${menuView.characterId}-${label}`,
+          label,
+          active: getGroupCharLabel(menuView.characterId) === label,
+          onClick: () => { void selectGroupExpression(menuView.characterId, label, imageId) },
+        })),
+      ]
+    }
+
+    const items: ContextMenuEntry[] = []
+
+    if (isGroupExpressionMode) {
+      if (directGroupMenuCharId) {
+        items.push({
+          key: 'manual-group-expression',
+          label: t('expressionDisplay.switchExpressionFor', {
+            name: characters.find((c) => c.id === directGroupMenuCharId)?.name || t('characterFallback'),
+          }),
+          onClick: () => setMenuView({ kind: 'group-expression-picker', characterId: directGroupMenuCharId }),
+        })
+      } else {
+        items.push({
+          key: 'manual-group-character',
+          label: t('expressionDisplay.chooseCharacter'),
+          onClick: () => setMenuView({ kind: 'group-character-picker' }),
+        })
+      }
+      items.push({ key: 'manual-divider', type: 'divider' as const })
+    } else if (hasExpressions && exprConfig && resolvedCharId) {
+      items.push({
+        key: 'manual-single-expression',
+        label: t('expressionDisplay.switchExpression'),
+        onClick: () => setMenuView({ kind: 'single-picker' }),
+      })
+      items.push({ key: 'manual-divider', type: 'divider' as const })
+    }
+
+    items.push(
+      ...(['small', 'medium', 'large'] as const).map((preset) => ({
+        key: `size-${preset}`,
+        label: t(`expressionDisplay.size${preset.charAt(0).toUpperCase()}${preset.slice(1)}` as 'expressionDisplay.sizeSmall'),
+        active: display.sizePreset === preset,
+        onClick: () => selectSize(preset),
+      })),
+      { key: 'div-1', type: 'divider' as const },
+      {
+        key: 'opacity',
+        type: 'custom' as const,
+        content: (
+          <div className={styles.opacityRow}>
+            <span>{t('expressionDisplay.opacity')}</span>
+            <input
+              type="range"
+              className={styles.opacitySlider}
+              min={0.1}
+              max={1}
+              step={0.05}
+              value={display.opacity}
+              onChange={(e) => setExpressionDisplay({ opacity: parseFloat(e.target.value) })}
+            />
+          </div>
+        ),
       },
-    },
-  ], [display.sizePreset, display.opacity, display.frameless, display.clickThrough, containerSize, selectSize, setExpressionDisplay, toggleMinimized, t])
+      { key: 'div-2', type: 'divider' as const },
+      {
+        key: 'frame',
+        label: display.frameless ? t('expressionDisplay.showFrame') : t('expressionDisplay.hideFrame'),
+        onClick: () => { setExpressionDisplay({ frameless: !display.frameless }); closeContextMenu() },
+      },
+      {
+        key: 'click-through',
+        label: display.clickThrough ? t('expressionDisplay.disableClickThrough') : t('expressionDisplay.enableClickThrough'),
+        active: display.clickThrough,
+        onClick: () => { setExpressionDisplay({ clickThrough: !display.clickThrough }); closeContextMenu() },
+      },
+      {
+        key: 'minimize',
+        label: t('expressionDisplay.minimize'),
+        onClick: () => { toggleMinimized(); closeContextMenu() },
+      },
+      {
+        key: 'hide',
+        label: t('expressionDisplay.hide'),
+        onClick: () => { setExpressionDisplay({ enabled: false }); closeContextMenu() },
+      },
+      {
+        key: 'reset',
+        label: t('expressionDisplay.resetPosition'),
+        onClick: () => {
+          const nx = window.innerWidth - containerSize.width - 24
+          const ny = window.innerHeight - containerSize.height - 100
+          setPos({ x: nx, y: ny })
+          setExpressionDisplay({ x: nx, y: ny })
+          closeContextMenu()
+        },
+      },
+    )
+
+    return items
+  }, [
+    menuView,
+    exprConfig,
+    resolvedCharId,
+    expressionCharacterId,
+    currentExpression,
+    groupExpressionCharIds,
+    characters,
+    groupConfigs,
+    directGroupMenuCharId,
+    isGroupExpressionMode,
+    hasExpressions,
+    display.sizePreset,
+    display.opacity,
+    display.frameless,
+    display.clickThrough,
+    containerSize,
+    selectSize,
+    setExpressionDisplay,
+    toggleMinimized,
+    closeContextMenu,
+    selectSingleExpression,
+    selectGroupExpression,
+    t,
+  ])
 
   // ── Visibility gate ──
   if (!display.enabled) return null
@@ -502,7 +679,7 @@ export default function ExpressionDisplay() {
             }
           </span>
         </div>
-        <ContextMenu position={contextMenu} items={contextMenuItems} onClose={() => setContextMenu(null)} />
+        <ContextMenu position={contextMenu} items={contextMenuItems} onClose={closeContextMenu} />
       </>,
       document.body
     )
@@ -610,6 +787,7 @@ export default function ExpressionDisplay() {
                   }}
                   onMouseEnter={() => setHoveredCharId(charId)}
                   onMouseLeave={() => setHoveredCharId(null)}
+                  onContextMenu={!display.clickThrough ? (e) => handleGroupSlotContextMenu(e, charId) : undefined}
                 >
                   <AnimatePresence mode="sync">
                     {imageUrl && readyUrls.has(imageUrl) && (
@@ -671,7 +849,7 @@ export default function ExpressionDisplay() {
         />
       </div>
 
-      <ContextMenu position={contextMenu} items={contextMenuItems} onClose={() => setContextMenu(null)} />
+      <ContextMenu position={contextMenu} items={contextMenuItems} onClose={closeContextMenu} />
     </>,
     document.body
   )

@@ -272,6 +272,12 @@
     }
   },
   "expressionDisplay": {
+    "switchExpression": "Switch Expression…",
+    "switchExpressionFor": "Switch {{name}}'s Expression…",
+    "chooseCharacter": "Choose Character…",
+    "backToDisplayMenu": "Back to Display Menu",
+    "backToCharacterMenu": "Back to Character Menu",
+    "failedSaveSelection": "Couldn't save the selected expression.",
     "sizeSmall": "Size: Small",
     "sizeMedium": "Size: Medium",
     "sizeLarge": "Size: Large",

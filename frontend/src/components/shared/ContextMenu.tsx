@@ -164,7 +164,7 @@ export default function ContextMenu({ position, items, onClose }: ContextMenuPro
     if (rect.bottom > vh - 8) {
       el.style.top = `${(vh - rect.height - 8) / uiScale}px`
     }
-  }, [position])
+  }, [position, items])
 
   if (!position) return null
 
