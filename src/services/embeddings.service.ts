@@ -26,6 +26,7 @@ import {
   splitChatChunkContent,
   type ChatChunkEmbeddingMetadata,
 } from "./chat-chunk-embedding";
+import { isChatChunkVectorizationBatchTimeoutError } from "./chat-chunk-vectorization-timeouts";
 import { chunkDocument } from "./databank/document-chunker.service";
 import { loadWorldBookVectorSettings, type WorldBookVectorSettings } from "./world-book-vector-settings.service";
 import {
@@ -158,6 +159,14 @@ function linkTimeoutSignal(
     signal: combined,
     cleanup: () => { if (timer) clearTimeout(timer); },
   };
+}
+
+function resolveAbortError(signal: AbortSignal | undefined, fallbackMessage = "Aborted"): Error {
+  if (signal?.aborted) {
+    if (signal.reason instanceof Error) return signal.reason;
+    if (signal.reason != null) return new Error(String(signal.reason));
+  }
+  return new DOMException(fallbackMessage, "AbortError");
 }
 
 export type EmbeddingProvider =
@@ -899,9 +908,11 @@ async function embedChatChunkContentLeaves(
   userId: string,
   content: string,
   initialError?: Error,
+  options?: { signal?: AbortSignal },
 ): Promise<Array<{ content: string; vector: number[] }>> {
   const text = content.trim();
   if (!text) return [];
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
 
   if (initialError && !isRetryableBatchError(initialError)) {
     throw initialError;
@@ -911,7 +922,7 @@ async function embedChatChunkContentLeaves(
     if (forcedSlices.length < 2) throw initialError;
     const out: Array<{ content: string; vector: number[] }> = [];
     for (const slice of forcedSlices) {
-      out.push(...await embedChatChunkContentLeaves(userId, slice));
+      out.push(...await embedChatChunkContentLeaves(userId, slice, undefined, options));
     }
     return out;
   }
@@ -920,18 +931,19 @@ async function embedChatChunkContentLeaves(
   if (proactiveSlices.length > 1) {
     const out: Array<{ content: string; vector: number[] }> = [];
     for (const slice of proactiveSlices) {
-      out.push(...await embedChatChunkContentLeaves(userId, slice));
+      out.push(...await embedChatChunkContentLeaves(userId, slice, undefined, options));
     }
     return out;
   }
 
   try {
-    const [vector] = await cachedEmbedTexts(userId, [text]);
+    const [vector] = await cachedEmbedTexts(userId, [text], { signal: options?.signal });
     if (!vector || vector.length === 0) {
       throw new Error("No embedding vector returned");
     }
     return [{ content: text, vector }];
   } catch (err) {
+    if (options?.signal?.aborted) throw resolveAbortError(options.signal);
     const error = err instanceof Error ? err : new Error(String(err));
     if (!isRetryableBatchError(error)) throw error;
 
@@ -940,7 +952,7 @@ async function embedChatChunkContentLeaves(
 
     const out: Array<{ content: string; vector: number[] }> = [];
     for (const part of parts) {
-      out.push(...await embedChatChunkContentLeaves(userId, part));
+      out.push(...await embedChatChunkContentLeaves(userId, part, undefined, options));
     }
     return out;
   }
@@ -954,6 +966,7 @@ export async function tryRecoverChatChunkEmbeddingWithAutoSplit(
   error: Error,
   metadata?: Record<string, any>,
   sourceTokenCount?: number,
+  options?: { signal?: AbortSignal },
 ): Promise<{
   recovered: boolean;
   skipped: boolean;
@@ -961,6 +974,7 @@ export async function tryRecoverChatChunkEmbeddingWithAutoSplit(
   splitCharCounts: number[];
   splitTokenCounts: number[];
 }> {
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
   const text = content.trim();
   if (!text || !isRetryableBatchError(error)) {
     return {
@@ -1012,7 +1026,7 @@ export async function tryRecoverChatChunkEmbeddingWithAutoSplit(
     },
   );
 
-  const leaves = await embedChatChunkContentLeaves(userId, text, error);
+  const leaves = await embedChatChunkContentLeaves(userId, text, error, options);
   const liveAfter = db
     .query("SELECT 1 AS found FROM chat_chunks WHERE id = ? AND chat_id = ?")
     .get(chunkId, chatId) as { found: number } | null;
@@ -1026,6 +1040,7 @@ export async function tryRecoverChatChunkEmbeddingWithAutoSplit(
       splitTokenCounts: [],
     };
   }
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
 
   const rows = buildChatChunkEmbeddingRows(
     userId,
@@ -1626,7 +1641,7 @@ async function postVertex<T>(url: string, accessToken: string, body: Record<stri
   const { signal, cleanup } = linkTimeoutSignal(externalSignal, timeoutMs);
   const mapAbortError = (err: any): Error => {
     if (err?.name === "AbortError") {
-      if (externalSignal?.aborted) return err;
+      if (externalSignal?.aborted) return resolveAbortError(externalSignal);
       return new Error(`Vertex embedding request timed out after ${timeoutMs / 1000}s`);
     }
     return err;
@@ -1672,7 +1687,7 @@ async function requestEmbeddings(
   const apiKey = await getEmbeddingSecret(ctx.userId, cfg.provider);
   if (!apiKey) throw new Error("Embedding API key is not configured");
   if (!texts.length) return [];
-  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
 
   if (cfg.provider === "google_vertex") {
     return requestVertexEmbeddings(cfg, apiKey, texts, options);
@@ -1714,7 +1729,7 @@ async function requestEmbeddings(
   const mapAbortError = (err: any): Error => {
     if (err?.name === "AbortError") {
       // Distinguish external cancel (caller-initiated) from our own timeout.
-      if (options?.signal?.aborted) return err;
+      if (options?.signal?.aborted) return resolveAbortError(options.signal);
       return new Error(`Embedding request timed out after ${timeoutMs / 1000}s`);
     }
     return err;
@@ -1815,7 +1830,7 @@ export async function cachedEmbedTexts(
   options?: { signal?: AbortSignal },
 ): Promise<number[][]> {
   if (!texts.length) return [];
-  if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+  if (options?.signal?.aborted) throw resolveAbortError(options.signal);
   const cfg = await getEmbeddingConfig(userId);
   const fingerprint = getModelFingerprint(cfg);
 
@@ -1865,6 +1880,7 @@ export async function cachedEmbedTexts(
  * so callers can halve and retry down to size 1 without user intervention.
  */
 function isRetryableBatchError(err: Error): boolean {
+  if (isChatChunkVectorizationBatchTimeoutError(err)) return false;
   const m = err.message;
   if (/timed out|abort/i.test(m)) return true;
   if (/too large to process|physical batch size|increase.*batch.*size/i.test(m)) return true;
@@ -1949,9 +1965,7 @@ export async function embedWithAdaptiveBatching<T>(
 
   const process = async (batch: T[], currentSize: number): Promise<void> => {
     if (options?.signal?.aborted) {
-      await onItemFailed(batch, options.signal.reason instanceof Error
-        ? options.signal.reason
-        : new Error("Aborted"));
+      await onItemFailed(batch, resolveAbortError(options.signal));
       return;
     }
     const texts = batch.map(getText);
@@ -1959,6 +1973,10 @@ export async function embedWithAdaptiveBatching<T>(
       const vectors = await cachedEmbedTexts(userId, texts, { signal: options?.signal });
       await onBatchReady(batch, texts, vectors);
     } catch (err) {
+      if (options?.signal?.aborted) {
+        await onItemFailed(batch, resolveAbortError(options.signal));
+        return;
+      }
       const e = err instanceof Error ? err : new Error(String(err));
       if (isRetryableBatchError(e) && currentSize > 1) {
         const half = Math.max(1, Math.floor(currentSize / 2));

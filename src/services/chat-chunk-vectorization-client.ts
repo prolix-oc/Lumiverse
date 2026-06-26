@@ -1,12 +1,17 @@
 import { join } from "node:path";
 import { bunCmd } from "../utils/bun-cmd";
+import {
+  CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS,
+  CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS,
+  CHAT_CHUNK_VECTORIZATION_WATCHDOG_GRACE_MS,
+} from "./chat-chunk-vectorization-timeouts";
 import type {
   ChatChunkVectorizationBatchResult,
   ChatChunkVectorizationTask,
 } from "./chat-chunk-vectorization-runner";
 
 type HostToSubprocessMessage =
-  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[] }
+  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
   | { type: "shutdown" };
 
 type SubprocessToHostMessage =
@@ -23,7 +28,6 @@ type PendingBatch = {
 };
 
 const READY_TIMEOUT_MS = 30_000;
-const BATCH_TIMEOUT_MS = 15 * 60_000;
 let warnedDisabled = false;
 
 let subprocess: ReturnType<typeof Bun.spawn> | null = null;
@@ -58,6 +62,33 @@ function clearInflightTimeout(item: PendingBatch | null): void {
     clearTimeout(item.timeout);
     item.timeout = null;
   }
+}
+
+function terminateSubprocess(
+  proc: ReturnType<typeof Bun.spawn> | null,
+  {
+    forceAfterMs,
+    signal = "SIGTERM",
+  }: {
+    forceAfterMs?: number;
+    signal?: "SIGTERM" | "SIGKILL";
+  } = {},
+): void {
+  if (!proc) return;
+  try {
+    proc.kill(signal);
+  } catch {
+    return;
+  }
+  if (!forceAfterMs || signal === "SIGKILL") return;
+  setTimeout(() => {
+    if (subprocess !== proc) return;
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      /* noop */
+    }
+  }, forceAfterMs);
 }
 
 function rejectQueued(error: Error): void {
@@ -144,11 +175,7 @@ function ensureSubprocess(): Promise<void> {
     const err = new Error(`Chat chunk vectorization subprocess did not become ready within ${READY_TIMEOUT_MS}ms`);
     if (subprocess) {
       expectedExit = true;
-      try {
-        subprocess.kill("SIGKILL");
-      } catch {
-        /* noop */
-      }
+      terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
     }
     clearStarting(err);
   }, READY_TIMEOUT_MS);
@@ -187,32 +214,27 @@ function dispatch(item: PendingBatch): void {
 
   inflight = item;
   item.timeout = setTimeout(() => {
-    const err = new Error(`Chat chunk vectorization batch timed out after ${Math.floor(BATCH_TIMEOUT_MS / 1000)}s`);
-    console.warn("[vectorization] Chat chunk subprocess batch timed out; restarting subprocess");
+    const err = new Error(
+      `Chat chunk vectorization subprocess became unresponsive ${Math.floor(CHAT_CHUNK_VECTORIZATION_WATCHDOG_GRACE_MS / 1000)}s after the cooperative batch timeout`,
+    );
+    console.warn("[vectorization] Chat chunk subprocess did not honor cooperative batch timeout; terminating subprocess");
     expectedExit = true;
-    try {
-      subprocess?.kill("SIGKILL");
-    } catch {
-      /* noop */
-    }
+    terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
     failInflight(err);
-  }, BATCH_TIMEOUT_MS);
+  }, CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS + CHAT_CHUNK_VECTORIZATION_WATCHDOG_GRACE_MS);
   try {
     subprocess.send({
       type: "process_batch",
       requestId: item.requestId,
       tasks: item.tasks,
+      timeoutMs: CHAT_CHUNK_VECTORIZATION_BATCH_TIMEOUT_MS,
     } satisfies HostToSubprocessMessage);
   } catch (err) {
     inflight = null;
     clearInflightTimeout(item);
     item.reject(err);
     expectedExit = true;
-    try {
-      subprocess.kill("SIGKILL");
-    } catch {
-      /* noop */
-    }
+    terminateSubprocess(subprocess, { forceAfterMs: CHAT_CHUNK_VECTORIZATION_FORCE_KILL_GRACE_MS });
   }
 }
 

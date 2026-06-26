@@ -1,6 +1,7 @@
 import { configureLanceDbNativeOverride } from "../lancedb-preflight";
 import { initIdentity } from "../crypto/init";
 import { initDatabase } from "../db/connection";
+import { createChatChunkVectorizationBatchTimeoutError } from "./chat-chunk-vectorization-timeouts";
 import {
   processChatChunkVectorizationBatch,
   type ChatChunkVectorizationBatchResult,
@@ -8,7 +9,7 @@ import {
 } from "./chat-chunk-vectorization-runner";
 
 type HostToSubprocessMessage =
-  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[] }
+  | { type: "process_batch"; requestId: string; tasks: ChatChunkVectorizationTask[]; timeoutMs?: number }
   | { type: "shutdown" };
 
 type SubprocessToHostMessage =
@@ -35,14 +36,42 @@ function ensureInitialized(): Promise<void> {
   return initialized;
 }
 
+function createBatchSignal(timeoutMs?: number): { signal: AbortSignal | undefined; cleanup: () => void } {
+  const effectiveTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? Math.max(0, Math.floor(timeoutMs))
+    : 0;
+  if (effectiveTimeoutMs <= 0) {
+    return {
+      signal: undefined,
+      cleanup: () => {},
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    console.warn("[vectorization] Chat chunk subprocess batch deadline reached; aborting remaining work without restart");
+    controller.abort(createChatChunkVectorizationBatchTimeoutError(effectiveTimeoutMs));
+  }, effectiveTimeoutMs);
+
+  return {
+    signal: controller.signal,
+    cleanup: () => clearTimeout(timer),
+  };
+}
+
 async function handleProcessBatch(message: Extract<HostToSubprocessMessage, { type: "process_batch" }>): Promise<void> {
   await ensureInitialized();
-  const result = await processChatChunkVectorizationBatch(message.tasks);
-  send({
-    type: "result",
-    requestId: message.requestId,
-    result,
-  });
+  const { signal, cleanup } = createBatchSignal(message.timeoutMs);
+  try {
+    const result = await processChatChunkVectorizationBatch(message.tasks, { signal });
+    send({
+      type: "result",
+      requestId: message.requestId,
+      result,
+    });
+  } finally {
+    cleanup();
+  }
 }
 
 function handleMessage(message: HostToSubprocessMessage): void {

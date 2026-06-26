@@ -13,8 +13,13 @@ export interface ChatChunkVectorizationBatchResult {
   processedCount: number;
 }
 
+interface ProcessChatChunkVectorizationBatchOptions {
+  signal?: AbortSignal;
+}
+
 export async function processChatChunkVectorizationBatch(
   tasks: ChatChunkVectorizationTask[],
+  options?: ProcessChatChunkVectorizationBatchOptions,
 ): Promise<ChatChunkVectorizationBatchResult> {
   if (tasks.length === 0) {
     return { refreshedChatIds: [], failedChunkIds: [], processedCount: 0 };
@@ -125,7 +130,7 @@ export async function processChatChunkVectorizationBatch(
       for (const chunk of writtenChunks) refreshedChats.add(chunk.chatId);
     },
     async (failedItems, error) => {
-      if (failedItems.length === 1) {
+      if (!options?.signal?.aborted && failedItems.length === 1) {
         const [chunk] = failedItems;
         console.warn("[vectorization] Terminal chat chunk embedding failure:", {
           chunkId: chunk.id,
@@ -139,32 +144,42 @@ export async function processChatChunkVectorizationBatch(
           error: error.message,
         });
 
-        const recovered = await embeddingsSvc.tryRecoverChatChunkEmbeddingWithAutoSplit(
-          tasks[0].userId,
-          chunk.chatId,
-          chunk.id,
-          chunk.content,
-          error,
-          {
-            chunkId: chunk.id,
-            messageIds: chunk.messageIds,
-          },
-          chunk.tokenCount,
-        );
-        if (recovered.recovered) {
-          if (!recovered.skipped) {
-            db.query("UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?")
-              .run(Math.floor(Date.now() / 1000), cfg.model, chunk.id);
-            refreshedChats.add(chunk.chatId);
+        try {
+          const recovered = await embeddingsSvc.tryRecoverChatChunkEmbeddingWithAutoSplit(
+            tasks[0].userId,
+            chunk.chatId,
+            chunk.id,
+            chunk.content,
+            error,
+            {
+              chunkId: chunk.id,
+              messageIds: chunk.messageIds,
+            },
+            chunk.tokenCount,
+            { signal: options?.signal },
+          );
+          if (recovered.recovered) {
+            if (!recovered.skipped) {
+              db.query("UPDATE chat_chunks SET vectorized_at = ?, vector_model = ? WHERE id = ?")
+                .run(Math.floor(Date.now() / 1000), cfg.model, chunk.id);
+              refreshedChats.add(chunk.chatId);
+            }
+            return;
           }
-          return;
+        } catch (recoveryErr) {
+          const recoveryError = recoveryErr instanceof Error ? recoveryErr : new Error(String(recoveryErr));
+          console.warn("[vectorization] Chat chunk auto-split recovery failed:", {
+            chunkId: chunk.id,
+            chatId: chunk.chatId,
+            error: recoveryError.message,
+          });
         }
       }
 
       console.warn(`[vectorization] Failed to embed ${failedItems.length} chunk(s):`, error.message);
       for (const chunk of failedItems) failedChunkIds.add(chunk.id);
     },
-    { label: "chat-chunks" },
+    { label: "chat-chunks", signal: options?.signal },
   );
 
   for (const chatId of refreshedChats) {
