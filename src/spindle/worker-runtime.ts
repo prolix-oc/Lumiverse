@@ -277,6 +277,8 @@ type RuntimeWorkerToHost =
   | { type: "preset_blocks_update"; requestId: string; presetId: string; blockId: string; input: Partial<Omit<PromptBlock, "id">>; userId?: string }
   | { type: "preset_blocks_delete"; requestId: string; presetId: string; blockId: string; userId?: string }
   | { type: "preset_categories_list"; requestId: string; presetId: string; userId?: string }
+  | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | {
       type: "tokens_count_text";
       requestId: string;
@@ -590,6 +592,10 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
     categories: {
       list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroup[]>;
     };
+  };
+  uploads: {
+    get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null>;
+    delete(uploadId: string, userId?: string): Promise<boolean>;
   };
   tokens: {
     countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
@@ -1714,6 +1720,19 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
+    },
+  },
+
+  uploads: {
+    async get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null> {
+      const requestId = crypto.randomUUID();
+      return (await request({ type: "uploads_get", requestId, uploadId, userId })) as
+        | { fileName: string; size: number; data: Uint8Array }
+        | null;
+    },
+    async delete(uploadId: string, userId?: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      return (await request({ type: "uploads_delete", requestId, uploadId, userId })) as boolean;
     },
   },
 
