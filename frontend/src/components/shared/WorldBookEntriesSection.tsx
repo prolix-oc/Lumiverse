@@ -397,6 +397,7 @@ export default function WorldBookEntriesSection({
   const localScrollRef = useRef<HTMLDivElement>(null)
   const entryListRef = useRef<HTMLDivElement>(null)
   const focusedEntryClearTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const entryMeasureRaf = useRef<number | null>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null)
   const [virtualScrollMargin, setVirtualScrollMargin] = useState(0)
@@ -484,6 +485,7 @@ export default function WorldBookEntriesSection({
 
   useEffect(() => () => {
     if (focusedEntryClearTimer.current) clearTimeout(focusedEntryClearTimer.current)
+    if (entryMeasureRaf.current != null) cancelAnimationFrame(entryMeasureRaf.current)
   }, [])
 
   const commitFocusedEntryId = useCallback((nextId: string | null) => {
@@ -535,6 +537,23 @@ export default function WorldBookEntriesSection({
     },
   })
 
+  const scheduleEntryMeasure = useCallback((frames = 1) => {
+    if (entryMeasureRaf.current != null) cancelAnimationFrame(entryMeasureRaf.current)
+
+    const tick = (remaining: number) => {
+      entryMeasureRaf.current = requestAnimationFrame(() => {
+        if (remaining > 1) {
+          tick(remaining - 1)
+          return
+        }
+        entryVirtualizer.measure()
+        entryMeasureRaf.current = null
+      })
+    }
+
+    tick(Math.max(1, frames))
+  }, [entryVirtualizer])
+
   const persistViewPref = useCallback((bookId: string, pref: {
     sortBy: WorldBookEntrySortBy
     sortDir: WorldBookEntrySortDir
@@ -570,6 +589,25 @@ export default function WorldBookEntriesSection({
   useEffect(() => {
     entryVirtualizer.measure()
   }, [entryVirtualizer, virtualScrollMargin])
+
+  useEffect(() => {
+    // Android Chrome can miss ResizeObserver updates for transformed,
+    // absolutely-positioned virtual rows while scrolling. Re-measure after
+    // expand/collapse so the next rows pick up the editor's full height.
+    scheduleEntryMeasure(selectedEntryId ? 2 : 1)
+  }, [scheduleEntryMeasure, selectedEntryId])
+
+  useEffect(() => {
+    const scrollEl = activeScrollRef.current
+    if (!scrollEl || !selectedEntryId) return
+
+    const handleScroll = () => {
+      scheduleEntryMeasure()
+    }
+
+    scrollEl.addEventListener('scroll', handleScroll, { passive: true })
+    return () => scrollEl.removeEventListener('scroll', handleScroll)
+  }, [activeScrollRef, scheduleEntryMeasure, selectedEntryId])
 
   const refreshVectorSummary = useCallback(async () => {
     if (!selectedBookId || !onRefreshVectorSummary) return
