@@ -6,6 +6,29 @@ The full stack suite for Lumiverse, a full-featured AI chat application. Provide
 
 Join the conversation on [Discord](https://discord.gg/28rBWVFfCu) for help, updates, and discussion.
 
+## Documentation
+
+- [User guides](https://lumiverse.chat/guides)
+- [Extension developer docs](https://docs.lumiverse.chat)
+
+## Get the Repository
+
+Clone the repo from GitHub. Do **not** use the GitHub **Releases** tab or download a release archive there; those builds are outdated.
+
+```bash
+git clone https://github.com/prolix-oc/Lumiverse.git
+cd Lumiverse
+```
+
+The default clone lands on `main`, which is the usual starting point.
+
+If you specifically need the `staging` branch, switch to it before continuing:
+
+```bash
+git switch staging
+git pull --ff-only
+```
+
 ## Tech Stack
 
 - **Runtime** — [Bun](https://bun.sh) (native TypeScript, built-in SQLite, WebSocket, HTTP)
@@ -17,6 +40,8 @@ Join the conversation on [Discord](https://discord.gg/28rBWVFfCu) for help, upda
 - **Image Processing** — [sharp](https://sharp.pixelplumbing.com) (WebP thumbnail generation)
 
 ## Quick Start
+
+All commands below assume you have already cloned the repo and are working from the branch you want to run.
 
 ### One-line launch (macOS/Linux)
 
@@ -33,10 +58,18 @@ Join the conversation on [Discord](https://discord.gg/28rBWVFfCu) for help, upda
 The launcher will:
 1. Install Bun if not found
 2. Run the **first-time setup wizard** (admin account, port, extension storage)
-3. Build the frontend (if present)
-4. Start the backend with the visual terminal runner
+3. Install backend dependencies and serve the existing frontend build if one is available
+4. Start the backend with the runner and IPC bridge when launched interactively
+
+Use `./start.sh --build` on macOS/Linux or `.\start.ps1 -Build` on Windows if you want to rebuild the frontend before starting.
 
 ### Manual setup
+
+If you use **Nix** or **NixOS** with flakes enabled, enter the bundled dev shell first:
+
+```bash
+nix develop
+```
 
 ```bash
 # Install dependencies
@@ -45,12 +78,20 @@ bun install
 # Run the setup wizard
 bun run setup
 
+# Start with the IPC-enabled runner
+bun run runner
+
+# Start with the IPC-enabled runner in watch mode
+bun run runner:dev
+
 # Start in development mode (watch)
 bun run dev
 
 # Start in production mode
 bun run start
 ```
+
+`bun run start` and `bun run dev` launch the backend directly. If you want the owner-only `Settings -> Operator Panel` controls, start Lumiverse with `./start.sh`, `.\start.ps1`, `bun run runner`, or `bun run runner:dev`.
 
 ### Hugging Face Spaces (free hosting)
 
@@ -154,25 +195,37 @@ The wizard produces a `.env` file and the identity file. Both are required to ru
 
 ## Launcher Options
 
-### `start.sh` / `start.ps1`
+### Common launch modes
 
-| Flag | Description |
-|------|-------------|
-| *(none)* | Build frontend + start backend (default) |
-| `--build-only` | Build frontend only |
-| `--backend-only` | Start backend only, skip frontend build |
-| `--dev` | Start backend in watch mode (no frontend build) |
-| `--setup` | Run the setup wizard only |
-| `--no-runner` | Start without the visual terminal runner |
+| macOS / Linux | Windows | Description |
+|---------------|---------|-------------|
+| `./start.sh` | `.\start.ps1` | Start the backend and serve the existing frontend build if present |
+| `./start.sh --build` | `.\start.ps1 -Build` | Rebuild the frontend before starting |
+| `./start.sh --build-only` | `.\start.ps1 -Mode build-only` | Build the frontend only |
+| `./start.sh --backend-only` | `.\start.ps1 -Mode backend-only` | Start the backend only, skip frontend serving |
+| `./start.sh --dev` | `.\start.ps1 -Mode dev` | Start the backend in watch mode |
+| `./start.sh --setup` | `.\start.ps1 -Mode setup` | Run the setup wizard only |
+| `./start.sh --no-runner` | `.\start.ps1 -NoRunner` | Start directly without runner IPC or Operator Panel control hooks |
 
-### Visual Runner
+### Runner & Operator Panel
 
-When launched in an interactive terminal, the backend runs inside a visual TUI dashboard with:
+When Lumiverse is started through the runner (`./start.sh`, `.\start.ps1`, or `bun run runner`), the backend runs as a child process with runner IPC enabled.
 
-- Real-time log viewer with scrolling
-- Server status, uptime, and PID display
-- Automatic update detection from Git remote
-- Keyboard controls: **R**estart, **U**pdate, **O**pen browser, **C**lear log, **Q**uit
+In an interactive terminal, the runner keeps a lightweight local session open for logs and a couple of local shortcuts:
+
+- `O` opens the app in your browser
+- `Q` or `Ctrl+C` shuts the runner down gracefully
+
+Most operational controls now live in the owner-only `Settings -> Operator Panel` in the web UI. Over runner IPC, it can:
+
+- Check for and apply updates
+- Switch between supported Git branches
+- Restart or shut down the server
+- Clear Bun's package cache and reinstall dependencies
+- Rebuild the frontend
+- Toggle remote mode and restart to apply it
+
+If you start Lumiverse with `--no-runner`, `-NoRunner`, `bun run start`, or `bun run dev`, the Operator Panel still loads but runner-backed controls will be unavailable.
 
 ## Configuration
 
@@ -267,7 +320,7 @@ src/
   auth/                 BetterAuth setup, middleware, seeding
   crypto/               Identity file management, encryption
   db/                   SQLite connection, migration runner
-    migrations/         Sequential SQL migration files (001–021)
+    migrations/         Sequential SQL migration files
   llm/                  LLM provider abstraction
     providers/          19 provider implementations
   macros/               Template macro engine
@@ -279,7 +332,8 @@ src/
   ws/                   WebSocket event bus and handler
 scripts/
   setup-wizard.ts       First-run interactive setup
-  runner.ts             Visual terminal dashboard
+  runner.ts             IPC-enabled launcher entrypoint
+  runner/               Runner internals (IPC, git ops, server lifecycle)
   ui.ts                 Shared terminal UI components
 ```
 

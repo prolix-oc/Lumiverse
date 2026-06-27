@@ -28,7 +28,17 @@ git clone https://github.com/prolix-oc/Lumiverse.git
 cd Lumiverse
 ```
 
-### 2. Start the server
+### 2. Optional: Enter the Nix shell
+
+If you use **Nix** or **NixOS** with flakes enabled, the repository now includes a `flake.nix` with Bun, Node.js/npm, Git, SQLite, FFmpeg, `pkg-config`, Python 3, and common native libraries used by Lumiverse.
+
+```bash
+nix develop
+```
+
+After the shell opens, continue with the normal startup command below.
+
+### 3. Start the server
 
 === "macOS / Linux"
 
@@ -69,7 +79,7 @@ cd Lumiverse
 
 The start script handles everything: auto-installs Bun if needed, runs `bun install`, triggers the setup wizard on first launch, and starts the server.
 
-### 3. Open in your browser
+### 4. Open in your browser
 
 Navigate to `http://localhost:7860`. On first launch, the setup wizard guides you through account creation.
 
