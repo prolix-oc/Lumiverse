@@ -189,6 +189,7 @@ export default function ViewportDrawer() {
       <div
         className={clsx(
           styles.wrapper,
+          isCompact && styles.wrapperCompact,
           isRight ? styles.wrapperRight : styles.wrapperLeft,
           drawerOpen && styles.wrapperOpen,
         )}

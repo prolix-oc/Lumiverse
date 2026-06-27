@@ -56,6 +56,15 @@
   display: none;
 }
 
+/* Chromium/Android uses interactive-widget=resizes-content, so the drawer
+   viewport shrinks when the soft keyboard opens and bottom-pinned flex items
+   would otherwise ride upward above the keyboard. Pull the footer's margin
+   box back below the resized viewport so the pagination stays fixed at the
+   physical screen bottom and remains hidden behind the keyboard. */
+:global(html[data-resizes-content]) .panelFooter {
+  margin-bottom: calc(-1 * var(--app-keyboard-inset-bottom, 0px));
+}
+
 .panelMobile .globalSection,
 .panelMobile .chatSection {
   gap: 5px;

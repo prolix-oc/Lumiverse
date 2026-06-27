@@ -262,6 +262,7 @@ if (isStandalone) {
 const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
 
 if (!isWebKit) {
+  document.documentElement.setAttribute('data-resizes-content', '')
   const viewport = document.querySelector('meta[name="viewport"]')
   if (viewport) {
     viewport.setAttribute('content', viewport.getAttribute('content') + ', interactive-widget=resizes-content')

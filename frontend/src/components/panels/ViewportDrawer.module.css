@@ -1,6 +1,7 @@
 /* ── Wrapper — always rendered, translates to open/close ── */
 
 .wrapper {
+  --drawer-tab-w: 48px;
   position: fixed;
   top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   /* The `bottom: calc(0 - var(--ios-viewport-offset))` pattern used on pure
@@ -17,16 +18,22 @@
   transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.wrapperCompact {
+  --drawer-tab-w: 32px;
+}
+
 .wrapperRight {
   right: 0;
   flex-direction: row;
-  transform: translateX(var(--drawer-panel-w));
+  /* Shift by the actual wrapper width minus the exposed handle width so the
+     tab stays flush even if viewport units and zoom compensation diverge. */
+  transform: translateX(calc(100% - var(--drawer-tab-w)));
 }
 
 .wrapperLeft {
   left: 0;
   flex-direction: row-reverse;
-  transform: translateX(calc(-1 * var(--drawer-panel-w)));
+  transform: translateX(calc(-100% + var(--drawer-tab-w)));
 }
 
 .wrapperOpen {
@@ -38,7 +45,7 @@
 .drawerTab {
   flex-shrink: 0;
   align-self: flex-start;
-  width: 48px;
+  width: var(--drawer-tab-w);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -80,7 +87,6 @@
 }
 
 .drawerTabCompact {
-  width: 32px;
   padding: 8px 6px;
   gap: 0;
 }
@@ -405,22 +411,25 @@
 
 @media (max-width: 600px) {
   .wrapper {
-    --drawer-panel-w: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
+    --drawer-panel-w: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) !important;
+    --drawer-tab-w: 40px;
+  }
+
+  .wrapperCompact {
+    --drawer-tab-w: 28px;
   }
 
   .drawerTab {
-    width: 40px;
     padding: 12px 6px 16px;
     gap: 6px;
   }
 
   .drawerTabCompact {
-    width: 28px;
     padding: 6px 4px;
   }
 
   .drawer {
-    width: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
+    width: var(--drawer-panel-w) !important;
     flex-direction: column !important;
   }
 
