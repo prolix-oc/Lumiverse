@@ -37,6 +37,7 @@ import type {
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
+import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
@@ -443,6 +444,8 @@ type RuntimeWorkerToHost =
       chatId?: string;
       userId?: string;
     }
+  | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
   | {
       type: "images_upload_many";
@@ -2959,6 +2962,13 @@ export class WorkerHost {
         break;
       case "tokens_count_chat":
         this.handleTokensCountChat(msg.requestId, msg.chatId, msg.model, msg.modelSource, msg.userId);
+        break;
+      // ─── Resumable uploads (free tier) ────────────────────────────────
+      case "uploads_get":
+        this.handleUploadsGet(msg.requestId, msg.uploadId, msg.userId);
+        break;
+      case "uploads_delete":
+        this.handleUploadsDelete(msg.requestId, msg.uploadId, msg.userId);
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
@@ -9777,6 +9787,40 @@ export class WorkerHost {
       tokenizer_name: name,
       approximate: name === tokenizerSvc.APPROXIMATE_TOKENIZER_NAME,
     };
+  }
+
+  private async handleUploadsGet(requestId: string, uploadId: string, userId?: string): Promise<void> {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const rec = spindleUploads.getUpload(uploadId);
+      if (!rec || rec.ownerUserId !== resolvedUserId || rec.extensionIdentifier !== this.manifest.identifier) {
+        this.postToWorker({ type: "response", requestId, result: null });
+        return;
+      }
+      const data = await spindleUploads.readUploadBytes(uploadId);
+      this.postToWorker({ type: "response", requestId, result: { fileName: rec.fileName, size: data.byteLength, data } });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleUploadsDelete(requestId: string, uploadId: string, userId?: string): Promise<void> {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      const rec = spindleUploads.getUpload(uploadId);
+      if (!rec || rec.ownerUserId !== resolvedUserId || rec.extensionIdentifier !== this.manifest.identifier) {
+        this.postToWorker({ type: "response", requestId, result: false });
+        return;
+      }
+      spindleUploads.deleteUpload(uploadId);
+      this.postToWorker({ type: "response", requestId, result: true });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
   }
 
   private async handleTokensCountText(

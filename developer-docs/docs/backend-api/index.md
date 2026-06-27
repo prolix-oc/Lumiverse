@@ -30,6 +30,7 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
 | [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |
 | [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against an explicit model or the main/sidecar model |
+| [Uploads](uploads.md) | Free | Receive large files via a resumable tus endpoint, then read them in the worker by id |
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [Presets](presets.md) | `presets` | CRUD on user presets, prompt blocks, and category groups |

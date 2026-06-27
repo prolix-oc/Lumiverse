@@ -18,6 +18,8 @@ export function isLargeUploadBodyLimitExemptPath(path: string): boolean {
     path === "/api/v1/tts/save-message-audio" ||
     path === "/api/v1/chats/import" ||
     path === "/api/v1/chats/import-st" ||
-    path === "/api/v1/user-data/import"
+    path === "/api/v1/user-data/import" ||
+    path === "/api/v1/spindle-uploads" ||
+    path.startsWith("/api/v1/spindle-uploads/")
   );
 }
