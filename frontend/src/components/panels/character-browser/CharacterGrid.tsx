@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { getCharacterAvatarLargeUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { prefetchImages } from '@/lib/imageDecodeCache'
-import { renderedPxToLayoutPx } from '@/lib/uiScale'
+import { measureLayoutHeight } from '@/lib/uiScale'
 import CharacterCard from './CharacterCard'
 import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterGrid.module.css'
@@ -94,7 +94,7 @@ export default function CharacterGrid({
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowHeight,
     overscan: 5,
-    measureElement: (el) => renderedPxToLayoutPx(el.getBoundingClientRect().height),
+    measureElement: (el) => measureLayoutHeight(el),
     paddingStart: gap,
   })
 

@@ -9,3 +9,16 @@ export function renderedPxToLayoutPx(renderedPx: number): number {
   const uiScale = getUiScale()
   return uiScale === 1 ? renderedPx : renderedPx / uiScale
 }
+
+export function measureLayoutHeight(element: Element | null): number {
+  if (!(element instanceof HTMLElement)) return 0
+
+  const layoutHeight = Math.max(
+    element.offsetHeight,
+    element.scrollHeight,
+    element.clientHeight,
+  )
+
+  if (layoutHeight > 0) return layoutHeight
+  return renderedPxToLayoutPx(element.getBoundingClientRect().height)
+}

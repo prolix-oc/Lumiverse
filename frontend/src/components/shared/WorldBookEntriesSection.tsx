@@ -54,7 +54,7 @@ import { useScrollGate } from '@/hooks/useScrollGate'
 import useIsMobile from '@/hooks/useIsMobile'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
-import { renderedPxToLayoutPx } from '@/lib/uiScale'
+import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import type {
@@ -451,6 +451,7 @@ export default function WorldBookEntriesSection({
     return null
   }, [entrySortBy, entrySearchFilter, entryPageSize, te])
   const dragEnabled = entrySortBy === 'custom' && !dragUnavailableReason
+  const useStaticListLayout = isMobile
   const selectedEntryIndex = useMemo(
     () => (selectedEntryId ? entries.findIndex((entry) => entry.id === selectedEntryId) : -1),
     [entries, selectedEntryId],
@@ -533,7 +534,7 @@ export default function WorldBookEntriesSection({
     getItemKey: (index) => entries[index]?.id ?? index,
     rangeExtractor,
     measureElement: (element) => {
-      const size = renderedPxToLayoutPx(element.getBoundingClientRect().height)
+      const size = measureLayoutHeight(element)
       return Math.max(1, Number.isFinite(size) ? size : 72)
     },
   })
@@ -1351,6 +1352,30 @@ export default function WorldBookEntriesSection({
                     <div className={styles.emptyState}>
                       {entrySearchFilter.trim() ? te('noMatch') : te('empty')}
                     </div>
+                  ) : useStaticListLayout ? (
+                    entries.map((entry, index) => (
+                      <div
+                        key={entry.id}
+                        data-index={index}
+                        data-entry-id={entry.id}
+                        className={styles.entryListItem}
+                      >
+                        <SortableEntryRow
+                          entry={entry}
+                          expanded={selectedEntryId === entry.id}
+                          dragEnabled={dragEnabled}
+                          selectMode={selectMode}
+                          selected={selectedIds.includes(entry.id)}
+                          onToggleExpand={() => setSelectedEntryId((current) => (current === entry.id ? null : entry.id))}
+                          onToggleSelect={() => handleToggleSelect(entry.id)}
+                          onUpdate={updateEntry}
+                          onDebouncedUpdate={debouncedUpdateEntry}
+                          onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                          onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                          onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                        />
+                      </div>
+                    ))
                   ) : (
                     <div
                       style={{
