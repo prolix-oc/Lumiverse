@@ -1,4 +1,5 @@
 .panel {
+  --worldbook-footer-height: 0px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -17,7 +18,7 @@
   padding: 12px 12px 0;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  scroll-padding-block: 12px calc(96px + env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
+  scroll-padding-block: 12px calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
 }
 
 .panelScroll > * {
@@ -29,7 +30,7 @@
   flex-direction: column;
   gap: 10px;
   position: relative;
-  padding-bottom: calc(12px + var(--app-keyboard-inset-bottom, 0px));
+  padding-bottom: calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
 }
 
 .panelMobile .panelScroll {
@@ -56,12 +57,13 @@
   display: none;
 }
 
-/* Chromium/Android uses interactive-widget=resizes-content, so the drawer
-   viewport shrinks when the soft keyboard opens and bottom-pinned flex items
-   would otherwise ride upward above the keyboard. Pull the footer's margin
-   box back below the resized viewport so the pagination stays fixed at the
-   physical screen bottom and remains hidden behind the keyboard. */
-:global(html[data-resizes-content]) .panelFooter {
+/* Keep the docked pagination physically pinned to the screen bottom.
+   Chromium/Android shrinks the viewport above the keyboard, while iOS PWA can
+   pan the visual viewport upward when an editor is focused. In both cases we
+   pull the footer's margin box down by the live keyboard inset so it stays
+   behind the keyboard instead of riding up with the focused field. */
+:global(html[data-resizes-content]) .panelFooter,
+:global(html[data-ios-pwa]) .panelFooter {
   margin-bottom: calc(-1 * var(--app-keyboard-inset-bottom, 0px));
 }
 

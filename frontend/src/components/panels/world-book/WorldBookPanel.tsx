@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { Plus, Trash2, BookOpen, Maximize2, ChevronDown, ChevronRight, Upload, Download, Globe, X, User, FileUp, Settings, Search, MessageSquare, ArrowDownAZ, ArrowDownZA, MoreVertical } from 'lucide-react'
@@ -143,8 +143,36 @@ export default function WorldBookPanel() {
   // Debounce refs
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const bookDescTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const panelRootRef = useRef<HTMLDivElement>(null)
   const panelScrollRef = useRef<HTMLDivElement>(null)
   const [paginationContainer, setPaginationContainer] = useState<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    const root = panelRootRef.current
+    if (!root) return
+
+    const syncFooterHeight = () => {
+      const footerHeight = paginationContainer?.childElementCount
+        ? Math.round(paginationContainer.getBoundingClientRect().height)
+        : 0
+      root.style.setProperty('--worldbook-footer-height', `${footerHeight}px`)
+    }
+
+    syncFooterHeight()
+    if (!paginationContainer || typeof ResizeObserver === 'undefined') {
+      return () => {
+        root.style.removeProperty('--worldbook-footer-height')
+      }
+    }
+
+    const observer = new ResizeObserver(syncFooterHeight)
+    observer.observe(paginationContainer)
+
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--worldbook-footer-height')
+    }
+  }, [paginationContainer])
 
   // Load books
   const loadBooks = useCallback(async () => {
@@ -650,7 +678,10 @@ export default function WorldBookPanel() {
   ) : null
 
   return (
-    <div className={clsx(styles.panel, isMobile && styles.panelMobile)}>
+    <div
+      ref={panelRootRef}
+      className={clsx(styles.panel, isMobile && styles.panelMobile)}
+    >
       <div ref={panelScrollRef} className={styles.panelScroll}>
         {/* Global world books section */}
         {isMobile ? (

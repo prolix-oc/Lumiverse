@@ -15,8 +15,40 @@ interface MessageEditAreaProps {
 
 function autoResize(el: HTMLTextAreaElement | null) {
   if (!el) return
+  const computed = window.getComputedStyle(el)
+  const maxHeight = Number.parseFloat(computed.maxHeight)
   el.style.height = 'auto'
-  el.style.height = `${el.scrollHeight}px`
+  const nextHeight = el.scrollHeight
+  if (Number.isFinite(maxHeight) && maxHeight > 0) {
+    el.style.height = `${Math.min(nextHeight, maxHeight)}px`
+    el.style.overflowY = nextHeight > maxHeight ? 'auto' : 'hidden'
+    return
+  }
+  el.style.height = `${nextHeight}px`
+  el.style.overflowY = 'hidden'
+}
+
+function revealEditorInChatScroll(target: HTMLTextAreaElement | null) {
+  if (!target || document.activeElement !== target || navigator.maxTouchPoints <= 0) return
+
+  const container = target.closest<HTMLElement>('[data-chat-scroll="true"]')
+  if (!container) return
+
+  const targetRect = target.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+  const visibleTop = Math.max(containerRect.top, 0) + 12
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - 18
+
+  let delta = 0
+  if (targetRect.bottom > visibleBottom) {
+    delta = targetRect.bottom - visibleBottom
+  } else if (targetRect.top < visibleTop) {
+    delta = targetRect.top - visibleTop
+  }
+
+  if (Math.abs(delta) < 1) return
+  container.scrollTop += delta
 }
 
 export default function MessageEditArea({
@@ -36,17 +68,21 @@ export default function MessageEditArea({
 
   // Fit to initial content on mount, and re-fit when the value changes externally.
   // useLayoutEffect prevents a paint frame at the wrong height.
-  useLayoutEffect(() => { autoResize(contentRef.current) }, [editContent])
-  useLayoutEffect(() => { autoResize(reasoningRef.current) }, [editReasoning])
+  useLayoutEffect(() => {
+    autoResize(contentRef.current)
+    revealEditorInChatScroll(contentRef.current)
+  }, [editContent])
+  useLayoutEffect(() => {
+    autoResize(reasoningRef.current)
+    revealEditorInChatScroll(reasoningRef.current)
+  }, [editReasoning])
 
   const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChangeContent(e.target.value)
-    autoResize(e.currentTarget)
   }, [onChangeContent])
 
   const handleReasoningChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChangeReasoning?.(e.target.value)
-    autoResize(e.currentTarget)
   }, [onChangeReasoning])
 
   const expandContent = useCallback(() => {

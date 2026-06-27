@@ -320,6 +320,14 @@ function SortableEntryRow(props: EntryRowProps) {
   )
 }
 
+function EntryRow(props: EntryRowProps) {
+  if (!props.dragEnabled) {
+    return <EntryRowContent {...props} />
+  }
+
+  return <SortableEntryRow {...props} />
+}
+
 interface MoveCopyModalState {
   mode: 'move' | 'copy'
   entryIds: string[]
@@ -1360,7 +1368,7 @@ export default function WorldBookEntriesSection({
                         data-entry-id={entry.id}
                         className={styles.entryListItem}
                       >
-                        <SortableEntryRow
+                        <EntryRow
                           entry={entry}
                           expanded={selectedEntryId === entry.id}
                           dragEnabled={dragEnabled}
@@ -1401,7 +1409,7 @@ export default function WorldBookEntriesSection({
                               transform: `translateY(${virtualRow.start - virtualScrollMargin}px)`,
                             }}
                           >
-                            <SortableEntryRow
+                            <EntryRow
                               entry={entry}
                               expanded={selectedEntryId === entry.id}
                               dragEnabled={dragEnabled}

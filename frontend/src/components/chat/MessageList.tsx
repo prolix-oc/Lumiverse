@@ -71,6 +71,19 @@ function getFontScale() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
+function getFocusedEditableMessageId(root: HTMLElement | null) {
+  const active = document.activeElement
+  if (!root || !active || !root.contains(active)) return null
+  if (
+    !(active instanceof HTMLInputElement) &&
+    !(active instanceof HTMLTextAreaElement) &&
+    !(active instanceof HTMLElement && active.isContentEditable)
+  ) {
+    return null
+  }
+  return active.closest<HTMLElement>('[data-message-id]')?.dataset.messageId ?? null
+}
+
 function hashString(value: string) {
   let hash = 0x811c9dc5
   for (let i = 0; i < value.length; i += 1) {
@@ -523,6 +536,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     (item: VirtualItem, delta: number, instance: Virtualizer<HTMLDivElement, Element>) => {
       const row = virtualListItems[item.index]
       const isStreamingTail = row?.type === 'message' && row.message.id === streamingTargetMessageId
+      const focusedEditableMessageId = getFocusedEditableMessageId(scrollRef.current)
+      const isFocusedEditableRow = row?.type === 'message' && row.message.id === focusedEditableMessageId
       return shouldAdjustMessageListScrollOnResize({
         delta,
         itemStart: item.start,
@@ -532,6 +547,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         hasMeasuredSize: instance.itemSizeCache.has(item.key),
         isPinned: isPinnedRef.current,
         isStreamingTail,
+        isFocusedEditableRow,
       })
     },
     [streamingTargetMessageId, virtualListItems]

@@ -55,4 +55,32 @@ describe('shouldAdjustMessageListScrollOnResize', () => {
       isStreamingTail: false,
     })).toBe(false)
   })
+
+  test('does not compensate remeasurement of the focused editable row', () => {
+    expect(shouldAdjustMessageListScrollOnResize({
+      delta: 48,
+      itemStart: 1200,
+      itemEnd: 1700,
+      scrollOffset: 1350,
+      scrollDirection: 'forward',
+      hasMeasuredSize: true,
+      isPinned: false,
+      isStreamingTail: false,
+      isFocusedEditableRow: true,
+    })).toBe(false)
+  })
+
+  test('keeps first-measure compensation when the editable row initially mounts', () => {
+    expect(shouldAdjustMessageListScrollOnResize({
+      delta: 320,
+      itemStart: 1200,
+      itemEnd: 1700,
+      scrollOffset: 1350,
+      scrollDirection: 'forward',
+      hasMeasuredSize: false,
+      isPinned: false,
+      isStreamingTail: false,
+      isFocusedEditableRow: true,
+    })).toBe(true)
+  })
 })

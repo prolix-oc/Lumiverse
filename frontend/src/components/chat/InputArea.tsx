@@ -29,6 +29,7 @@ import type { AutocompleteResult } from '@/api/databank'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
+import { didMobileQueueHoldReachThreshold } from './mobileQueueHold'
 import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueHint'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
@@ -942,7 +943,33 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (!hideForMobileEdit) return
     const parent = containerRef.current?.parentElement
     if (!parent) return
-    parent.style.setProperty('--lcs-input-safe-zone', '16px')
+    let syncRaf = 0
+
+    const syncHiddenEditSafeZone = () => {
+      const rootStyle = getComputedStyle(document.documentElement)
+      const keyboardInset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
+      parent.style.setProperty('--lcs-input-safe-zone', `${Math.max(16, Math.round(16 + keyboardInset))}px`)
+    }
+
+    const scheduleHiddenEditSafeZoneSync = () => {
+      if (syncRaf) cancelAnimationFrame(syncRaf)
+      syncRaf = requestAnimationFrame(() => {
+        syncRaf = 0
+        syncHiddenEditSafeZone()
+      })
+    }
+
+    syncHiddenEditSafeZone()
+    window.addEventListener('resize', scheduleHiddenEditSafeZoneSync)
+    window.visualViewport?.addEventListener('resize', scheduleHiddenEditSafeZoneSync)
+    window.visualViewport?.addEventListener('scroll', scheduleHiddenEditSafeZoneSync)
+
+    return () => {
+      if (syncRaf) cancelAnimationFrame(syncRaf)
+      window.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
+      window.visualViewport?.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
+      window.visualViewport?.removeEventListener('scroll', scheduleHiddenEditSafeZoneSync)
+    }
   }, [hideForMobileEdit])
 
   // ResizeObserver — set --lcs-input-safe-zone on parent so scroll padding stays in sync
@@ -1865,9 +1892,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
   // Touch interactions with draft content are handled on touchend directly so
   // the synthetic follow-up click cannot trigger a second action.
-  const handleSendTouchStart = useCallback(() => {
+  const handleSendTouchStart = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
     if (!hasDraftContent || isGeneratingInChat) return
-    touchHoldStartedAtRef.current = Date.now()
+    touchHoldStartedAtRef.current = e.timeStamp
     clearTouchQueueTimer()
     setMobileQueueHoldVisualState('holding')
     touchTimerRef.current = window.setTimeout(() => {
@@ -1880,7 +1907,15 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimer, setMobileQueueHoldVisualState])
 
   const handleSendTouchEnd = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
-    const heldLongEnough = touchHoldStartedAtRef.current > 0 && (Date.now() - touchHoldStartedAtRef.current) >= MOBILE_QUEUE_HOLD_MS
+    // Use the native event timestamps instead of Date.now(). On Android the
+    // button tap can trigger keyboard/viewport reflow before JS handles
+    // touchend, which inflates wall-clock duration and turns a tap into a
+    // false long-press.
+    const heldLongEnough = didMobileQueueHoldReachThreshold({
+      holdStartedAt: touchHoldStartedAtRef.current,
+      releasedAt: e.timeStamp,
+      thresholdMs: MOBILE_QUEUE_HOLD_MS,
+    })
     touchHoldStartedAtRef.current = 0
     clearTouchQueueTimer()
     if (heldLongEnough && hasDraftContent) {

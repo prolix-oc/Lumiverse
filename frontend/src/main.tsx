@@ -205,6 +205,24 @@ function findScrollContainer(el: HTMLElement | null): HTMLElement | null {
   return null
 }
 
+function revealFocusedTargetInContainer(target: HTMLElement, container: HTMLElement) {
+  const targetRect = target.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+  const visibleTop = Math.max(containerRect.top, 0) + 12
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - 18
+
+  let delta = 0
+  if (targetRect.bottom > visibleBottom) {
+    delta = targetRect.bottom - visibleBottom
+  } else if (targetRect.top < visibleTop) {
+    delta = targetRect.top - visibleTop
+  }
+
+  if (Math.abs(delta) < 1) return
+  container.scrollTop += delta
+}
+
 // ── iOS PWA: counteract visual viewport scroll ──
 // When the virtual keyboard opens in standalone mode, iOS scrolls the visual
 // viewport upward to reveal the focused input. This shifts the entire layout
@@ -362,12 +380,7 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
     if (!container) return
 
     setTimeout(() => {
-      const rect = (target as HTMLElement).getBoundingClientRect()
-      const vvBottom = window.visualViewport?.height ?? window.innerHeight
-      // If the input's bottom is behind the keyboard, scroll just enough
-      if (rect.bottom > vvBottom - 30) {
-        container.scrollBy({ top: rect.bottom - vvBottom + 60, behavior: 'smooth' })
-      }
+      revealFocusedTargetInContainer(target as HTMLElement, container)
     }, 350)
   })
 }
