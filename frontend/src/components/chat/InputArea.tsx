@@ -29,7 +29,7 @@ import type { AutocompleteResult } from '@/api/databank'
 import styles from './InputArea.module.css'
 import clsx from 'clsx'
 import InputBarExtensionActions from './InputBarExtensionActions'
-import { didMobileQueueHoldReachThreshold } from './mobileQueueHold'
+import { didMobileQueueHoldReachThreshold, getMobileQueueHoldPreviewState } from './mobileQueueHold'
 import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueHint'
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
@@ -43,6 +43,7 @@ interface InputAreaProps {
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const TEXTAREA_MAX_HEIGHT = 180
 const STT_VISUALIZER_BARS = 18
+const MOBILE_QUEUE_HOLD_PROMPT_MS = 180
 const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
 const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
@@ -227,7 +228,8 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
   const generationNonceRef = useRef(0)
-  const touchTimerRef = useRef<number>(0)
+  const touchHoldPromptTimerRef = useRef<number>(0)
+  const touchQueueArmTimerRef = useRef<number>(0)
   const touchHoldStartedAtRef = useRef(0)
   const ignoreFollowupClickUntilRef = useRef(0)
   const ignoreFollowupClickCountRef = useRef(0)
@@ -1205,25 +1207,46 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     ignoreFollowupClickUntilRef.current = Date.now() + durationMs
   }, [])
 
-  const clearTouchQueueTimer = useCallback(() => {
-    if (touchTimerRef.current) {
-      clearTimeout(touchTimerRef.current)
-      touchTimerRef.current = 0
+  const clearTouchQueueTimers = useCallback(() => {
+    if (touchHoldPromptTimerRef.current) {
+      clearTimeout(touchHoldPromptTimerRef.current)
+      touchHoldPromptTimerRef.current = 0
+    }
+    if (touchQueueArmTimerRef.current) {
+      clearTimeout(touchQueueArmTimerRef.current)
+      touchQueueArmTimerRef.current = 0
     }
   }, [])
 
+  const syncMobileQueueHoldVisualState = useCallback((holdStartedAt: number, evaluatedAt: number) => {
+    if (touchHoldStartedAtRef.current !== holdStartedAt || mobileQueueHoldStateRef.current === 'queueing') {
+      return 'idle'
+    }
+
+    const nextState = getMobileQueueHoldPreviewState({
+      holdStartedAt,
+      evaluatedAt,
+      revealAfterMs: MOBILE_QUEUE_HOLD_PROMPT_MS,
+      thresholdMs: MOBILE_QUEUE_HOLD_MS,
+    })
+    if (nextState !== mobileQueueHoldStateRef.current) {
+      setMobileQueueHoldVisualState(nextState)
+    }
+    return nextState
+  }, [setMobileQueueHoldVisualState])
+
   useEffect(() => {
     return () => {
-      clearTouchQueueTimer()
+      clearTouchQueueTimers()
     }
-  }, [clearTouchQueueTimer])
+  }, [clearTouchQueueTimers])
 
   useEffect(() => {
     if ((mobileQueueHoldState === 'holding' || mobileQueueHoldState === 'armed') && (!hasDraftContent || isGeneratingInChat)) {
-      clearTouchQueueTimer()
+      clearTouchQueueTimers()
       setMobileQueueHoldVisualState('idle')
     }
-  }, [mobileQueueHoldState, hasDraftContent, isGeneratingInChat, clearTouchQueueTimer, setMobileQueueHoldVisualState])
+  }, [mobileQueueHoldState, hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
   // Multiplayer room send. Returns 'sent' (routed to the room — caller stops),
   // 'blocked' (off-turn / closed freeform window — caller stops), or 'local'
@@ -1894,17 +1917,25 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // the synthetic follow-up click cannot trigger a second action.
   const handleSendTouchStart = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
     if (!hasDraftContent || isGeneratingInChat) return
-    touchHoldStartedAtRef.current = e.timeStamp
-    clearTouchQueueTimer()
-    setMobileQueueHoldVisualState('holding')
-    touchTimerRef.current = window.setTimeout(() => {
-      touchTimerRef.current = 0
-      setMobileQueueHoldVisualState('armed')
+    const holdStartedAt = e.timeStamp
+    touchHoldStartedAtRef.current = holdStartedAt
+    clearTouchQueueTimers()
+    if (mobileQueueHoldStateRef.current !== 'idle') {
+      setMobileQueueHoldVisualState('idle')
+    }
+    touchHoldPromptTimerRef.current = window.setTimeout(() => {
+      touchHoldPromptTimerRef.current = 0
+      syncMobileQueueHoldVisualState(holdStartedAt, holdStartedAt + MOBILE_QUEUE_HOLD_PROMPT_MS)
+    }, MOBILE_QUEUE_HOLD_PROMPT_MS)
+    touchQueueArmTimerRef.current = window.setTimeout(() => {
+      touchQueueArmTimerRef.current = 0
+      const nextState = syncMobileQueueHoldVisualState(holdStartedAt, holdStartedAt + MOBILE_QUEUE_HOLD_MS)
+      if (nextState !== 'armed') return
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
         navigator.vibrate(12)
       }
     }, MOBILE_QUEUE_HOLD_MS)
-  }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimer, setMobileQueueHoldVisualState])
+  }, [hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState, syncMobileQueueHoldVisualState])
 
   const handleSendTouchEnd = useCallback((e: React.TouchEvent<HTMLButtonElement>) => {
     // Use the native event timestamps instead of Date.now(). On Android the
@@ -1917,7 +1948,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       thresholdMs: MOBILE_QUEUE_HOLD_MS,
     })
     touchHoldStartedAtRef.current = 0
-    clearTouchQueueTimer()
+    clearTouchQueueTimers()
     if (heldLongEnough && hasDraftContent) {
       e.preventDefault()
       e.stopPropagation()
@@ -1952,15 +1983,15 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (mobileQueueHoldStateRef.current !== 'queueing') {
       setMobileQueueHoldVisualState('idle')
     }
-  }, [handleQueueMessage, handleSend, hasDraftContent, suppressFollowupClick, clearTouchQueueTimer, setMobileQueueHoldVisualState])
+  }, [handleQueueMessage, handleSend, hasDraftContent, suppressFollowupClick, clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
   const handleSendTouchCancel = useCallback(() => {
     touchHoldStartedAtRef.current = 0
-    clearTouchQueueTimer()
+    clearTouchQueueTimers()
     if (mobileQueueHoldStateRef.current !== 'queueing') {
       setMobileQueueHoldVisualState('idle')
     }
-  }, [clearTouchQueueTimer, setMobileQueueHoldVisualState])
+  }, [clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
   // Detect `#`/`@` autocomplete triggers from the textarea's current value
   // and caret position. Pulled out of `handleInput` so `compositionend` can
@@ -2221,7 +2252,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     sendButtonTitle = t('input.keepHoldingToQueue')
   } else if (hasDraftContent) {
     sendButtonTitle = supportsTouchQueueHold
-      ? t('input.sendMessageTouchQueueHint')
+      ? t('input.sendMessage')
       : t('input.sendMessageQueueHint', { mod: queueModLabel })
   } else if (hasQueuedMessages) {
     sendButtonTitle = t('input.sendQueuedMessages')
