@@ -28,6 +28,7 @@ import CustomCSSModal from './CustomCSSModal'
 import ConfigureDrawerTabsModal from './ConfigureDrawerTabsModal'
 import ImagePromptPreviewModal from './ImagePromptPreviewModal'
 import ImageCaptionModal from './ImageCaptionModal'
+import QwenCustomVoiceModal from './QwenCustomVoiceModal'
 import { WeaverStudio } from '@/components/weaver/WeaverStudio'
 
 export default function ModalContainer() {
@@ -144,6 +145,7 @@ export default function ModalContainer() {
       {activeModal === 'customCSS' && <CustomCSSModal />}
       {activeModal === 'imagePromptPreview' && <ImagePromptPreviewModal />}
       {activeModal === 'imageCaptioner' && <ImageCaptionModal />}
+      {activeModal === 'qwenCustomVoice' && modalProps.connectionId && <QwenCustomVoiceModal />}
       {activeModal === 'weaver' && <WeaverStudio />}
 
       <PermissionRequestModal />

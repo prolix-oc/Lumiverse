@@ -13,7 +13,6 @@ import styles from './QwenCustomVoiceManager.module.css'
 interface Props {
   profile: TtsConnectionProfile
   onUpdate: (profile: TtsConnectionProfile) => void
-  onClose: () => void
 }
 
 function errorMessage(err: any, fallback: string) {
@@ -28,7 +27,7 @@ function formatCreatedAt(createdAt: number) {
   }).format(createdAt * 1000)
 }
 
-export default function QwenCustomVoiceManager({ profile, onUpdate, onClose }: Props) {
+export default function QwenCustomVoiceManager({ profile, onUpdate }: Props) {
   const { t } = useTranslation('panels')
   const addToast = useStore((s) => s.addToast)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -127,9 +126,6 @@ export default function QwenCustomVoiceManager({ profile, onUpdate, onClose }: P
           <div className={styles.title}>{t('qwenCustomVoiceManager.title')}</div>
           <div className={styles.hint}>{t('qwenCustomVoiceManager.hint')}</div>
         </div>
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          {t('qwenCustomVoiceManager.close')}
-        </Button>
       </div>
 
       <div className={styles.createCard}>

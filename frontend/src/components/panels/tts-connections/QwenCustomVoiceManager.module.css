@@ -1,19 +1,16 @@
 .panel {
-  margin: 4px 8px 10px 50px;
-  padding: 12px;
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 10px;
-  background: var(--lumiverse-fill-subtle);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  overflow: auto;
 }
 
 .header {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
+  padding-right: 36px;
 }
 
 .titleBlock {
@@ -23,15 +20,16 @@
 }
 
 .title {
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
 .hint {
-  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   line-height: 1.45;
+  max-width: 64ch;
 }
 
 .createCard {
