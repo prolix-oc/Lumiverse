@@ -35,6 +35,12 @@ function normalizePreviewText(text?: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
+function getContentPartBadges(message: DryRunMessage): string[] {
+  return (message.contentParts ?? [])
+    .filter((part) => part.count > 0)
+    .map((part) => `${part.type} x${part.count}`)
+}
+
 function summarizeMessage(message: DryRunMessage): string {
   const normalized = normalizePreviewText(message.content) || normalizePreviewText(message.reasoning)
   if (!normalized) return i18n.t('shared.emptyMessage', { ns: 'modals' })
@@ -63,6 +69,7 @@ function MessageListItem({ msg, index, selected, clipBoundary, clipBoundaryLabel
   const preview = summarizeMessage(msg)
   const lineCount = countLines(msg.content)
   const hasReasoning = normalizePreviewText(msg.reasoning).length > 0
+  const contentPartBadges = getContentPartBadges(msg)
 
   return (
     <button
@@ -85,6 +92,9 @@ function MessageListItem({ msg, index, selected, clipBoundary, clipBoundaryLabel
         {hasReasoning && (
           <span className={styles.messageReasoningBadge}>{t('reasoning')}</span>
         )}
+        {contentPartBadges.map((badge) => (
+          <span key={badge} className={styles.messagePartBadge}>{badge}</span>
+        ))}
         <span className={styles.messageMeta}>
           {ts('chars', { count: msg.content.length })}
           {lineCount > 0 && ` • ${ts('lines', { count: lineCount })}`}
@@ -267,6 +277,9 @@ export default function DryRunModal() {
   const selectedMessageLineCount = selectedMessage ? countLines(selectedMessage.content) : 0
   const selectedMessageHasReasoning =
     normalizePreviewText(selectedMessage?.reasoning).length > 0
+  const selectedMessageContentPartBadges = selectedMessage
+    ? getContentPartBadges(selectedMessage)
+    : []
   const clippedMessagesText = contextClipStats?.enabled && contextClipStats.messagesDropped > 0
     ? t('clipped', { count: contextClipStats.messagesDropped }).trim()
     : ''
@@ -356,6 +369,9 @@ export default function DryRunModal() {
                               {selectedMessage.role}
                             </Badge>
                             <span className={styles.messageIndex}>#{selectedMessageIndex + 1}</span>
+                            {selectedMessageContentPartBadges.map((badge) => (
+                              <span key={badge} className={styles.messagePartBadge}>{badge}</span>
+                            ))}
                           </div>
                           <span className={styles.messageInspectorMeta}>
                             {ts('chars', { count: selectedMessage.content.length })}

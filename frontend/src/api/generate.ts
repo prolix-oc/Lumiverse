@@ -103,6 +103,10 @@ export interface DryRunMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
   reasoning?: string
+  contentParts?: Array<{
+    type: string
+    count: number
+  }>
   __chatHistorySource?: boolean
 }
 

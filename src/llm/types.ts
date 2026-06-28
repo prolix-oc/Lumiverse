@@ -46,6 +46,11 @@ export type LlmMessagePart =
   | LlmToolUsePart
   | LlmToolResultPart;
 
+export interface DisplayContentPartSummary {
+  type: string;
+  count: number;
+}
+
 /**
  * A provider-native reasoning block that must be replayed verbatim on tool-use
  * continuations to preserve interleaved thinking. Currently produced by
@@ -91,6 +96,56 @@ export function getTextContent(msg: LlmMessage): string {
     .join("");
 }
 
+export function describeContentForDisplay(
+  content: string | LlmMessagePart[],
+): { text: string; contentParts: DisplayContentPartSummary[] } {
+  if (typeof content === "string") {
+    return { text: content, contentParts: [] };
+  }
+
+  const partCounts = new Map<string, number>();
+  const countPart = (type: string) => {
+    partCounts.set(type, (partCounts.get(type) ?? 0) + 1);
+  };
+
+  const text = content
+    .map((part) => {
+      switch (part.type) {
+        case "text":
+          return part.text;
+        case "image":
+          countPart("image");
+          return `[image: ${part.mime_type}]`;
+        case "audio":
+          countPart("audio");
+          return `[audio: ${part.mime_type}]`;
+        case "tool_use":
+          countPart("tool_use");
+          return `[tool_call: ${part.name}(${JSON.stringify(part.input)})]`;
+        case "tool_result":
+          countPart("tool_result");
+          return `[tool_result${part.is_error ? " (error)" : ""}: ${part.content}]`;
+        default: {
+          const rawType =
+            typeof (part as { type?: unknown }).type === "string"
+              ? (part as { type: string }).type
+              : "part";
+          countPart(rawType);
+          return `[${rawType}]`;
+        }
+      }
+    })
+    .join("\n");
+
+  return {
+    text,
+    contentParts: [...partCounts.entries()].map(([type, count]) => ({
+      type,
+      count,
+    })),
+  };
+}
+
 /**
  * Flatten message content to a human-readable string for display-only surfaces
  * (e.g. the dry-run prompt viewer) that can't render multimodal parts. Text is
@@ -101,25 +156,7 @@ export function getTextContent(msg: LlmMessage): string {
 export function flattenContentForDisplay(
   content: string | LlmMessagePart[],
 ): string {
-  if (typeof content === "string") return content;
-  return content
-    .map((p) => {
-      switch (p.type) {
-        case "text":
-          return p.text;
-        case "image":
-          return `[image: ${p.mime_type}]`;
-        case "audio":
-          return `[audio: ${p.mime_type}]`;
-        case "tool_use":
-          return `[tool_call: ${p.name}(${JSON.stringify(p.input)})]`;
-        case "tool_result":
-          return `[tool_result${p.is_error ? " (error)" : ""}: ${p.content}]`;
-        default:
-          return "";
-      }
-    })
-    .join("\n");
+  return describeContentForDisplay(content).text;
 }
 
 export interface GenerationRequest {

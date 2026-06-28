@@ -17,6 +17,72 @@ export interface ParsedDelimitedReasoning {
   reasoning?: string;
 }
 
+const TRAILING_NEWLINE_RUN_RE = /(?:\n[ \t\f\v]*)+$/;
+const LEADING_NEWLINE_RUN_RE = /^(?:[ \t\f\v]*\n)+/;
+
+function countNewlines(value: string): number {
+  return value.match(/\n/g)?.length ?? 0;
+}
+
+function hasVisibleText(value: string): boolean {
+  return /\S/.test(value);
+}
+
+function getTrailingNewlineRunCount(value: string): number {
+  const match = value.match(TRAILING_NEWLINE_RUN_RE);
+  return match ? countNewlines(match[0]) : 0;
+}
+
+function joinContentAroundExtractedReasoning(before: string, after: string): string {
+  const beforeMatch = before.match(TRAILING_NEWLINE_RUN_RE);
+  const afterMatch = after.match(LEADING_NEWLINE_RUN_RE);
+
+  if (!beforeMatch && !afterMatch) return before + after;
+
+  const beforeBody = beforeMatch ? before.slice(0, before.length - beforeMatch[0].length) : before;
+  const afterBody = afterMatch ? after.slice(afterMatch[0].length) : after;
+  const hasVisibleBefore = hasVisibleText(beforeBody);
+  const hasVisibleAfter = hasVisibleText(afterBody);
+
+  if (beforeMatch && afterMatch) {
+    const preservedNewlines =
+      hasVisibleBefore && hasVisibleAfter
+        ? Math.max(countNewlines(beforeMatch[0]), countNewlines(afterMatch[0]))
+        : 0;
+    return beforeBody + "\n".repeat(preservedNewlines) + afterBody;
+  }
+
+  if (beforeMatch && !hasVisibleAfter) {
+    return beforeBody;
+  }
+
+  if (afterMatch && !hasVisibleBefore) {
+    return afterBody;
+  }
+
+  return before + after;
+}
+
+function normalizeLeadingContentAfterReasoningBoundary(
+  content: string,
+  opts: { hasVisibleContentBefore: boolean; trailingNewlineRun: number },
+): string {
+  const match = content.match(LEADING_NEWLINE_RUN_RE);
+  if (!match) return content;
+
+  const remainder = content.slice(match[0].length);
+  if (!opts.hasVisibleContentBefore) {
+    return remainder;
+  }
+
+  if (opts.trailingNewlineRun === 0) {
+    return content;
+  }
+
+  const keptNewlines = Math.max(countNewlines(match[0]) - opts.trailingNewlineRun, 0);
+  return "\n".repeat(keptNewlines) + remainder;
+}
+
 export function normalizeReasoningDelimiter(value: unknown, fallback: string): string {
   return (typeof value === "string" ? value : fallback).replace(/^\n+|\n+$/g, "");
 }
@@ -52,10 +118,13 @@ export function extractDelimitedReasoning(content: string, delimiters: Reasoning
     const endIdx = cleaned.indexOf(delimiters.suffix, idx + delimiters.prefix.length);
     if (endIdx !== -1) {
       reasoning += cleaned.slice(idx + delimiters.prefix.length, endIdx);
-      cleaned = cleaned.slice(0, idx) + cleaned.slice(endIdx + delimiters.suffix.length);
+      cleaned = joinContentAroundExtractedReasoning(
+        cleaned.slice(0, idx),
+        cleaned.slice(endIdx + delimiters.suffix.length),
+      );
     } else {
       reasoning += cleaned.slice(idx + delimiters.prefix.length);
-      cleaned = cleaned.slice(0, idx);
+      cleaned = joinContentAroundExtractedReasoning(cleaned.slice(0, idx), "");
       break;
     }
     idx = cleaned.indexOf(delimiters.prefix);
@@ -88,10 +157,31 @@ export class GuidedReasoningStreamParser {
   private phase: "detecting" | "reasoning" | "content";
   private detectBuffer = "";
   private suffixBuffer = "";
+  private hasVisibleContent = false;
+  private trailingNewlineRun = 0;
+  private pendingContentAfterReasoningBoundary = false;
 
   constructor(private readonly delimiters: ReasoningDelimiters, enabled: boolean) {
     this.enabled = enabled && hasReasoningDelimiters(delimiters);
     this.phase = this.enabled ? "detecting" : "content";
+  }
+
+  private trackEmittedContent(text: string): void {
+    if (!text) return;
+
+    if (hasVisibleText(text)) {
+      this.hasVisibleContent = true;
+    }
+
+    const trailingRun = getTrailingNewlineRunCount(text);
+    if (trailingRun > 0) {
+      this.trailingNewlineRun = trailingRun;
+      return;
+    }
+
+    if (hasVisibleText(text) || text.includes("\n")) {
+      this.trailingNewlineRun = 0;
+    }
   }
 
   push(token: string): { content: string; reasoning: string } {
@@ -100,7 +190,19 @@ export class GuidedReasoningStreamParser {
 
     let content = "";
     let reasoning = "";
-    const emitContent = (text: string) => { content += text; };
+    const emitContent = (text: string) => {
+      if (!text) return;
+      const normalized = this.pendingContentAfterReasoningBoundary
+        ? normalizeLeadingContentAfterReasoningBoundary(text, {
+            hasVisibleContentBefore: this.hasVisibleContent,
+            trailingNewlineRun: this.trailingNewlineRun,
+          })
+        : text;
+      this.pendingContentAfterReasoningBoundary = false;
+      if (!normalized) return;
+      content += normalized;
+      this.trackEmittedContent(normalized);
+    };
     const emitReasoning = (text: string) => { reasoning += text; };
 
     const processReasoningChunk = (chunk: string) => {
@@ -111,6 +213,7 @@ export class GuidedReasoningStreamParser {
         const afterSuffix = this.suffixBuffer.slice(suffixIdx + this.delimiters.suffix.length);
         this.phase = "content";
         this.suffixBuffer = "";
+        this.pendingContentAfterReasoningBoundary = true;
         if (afterSuffix) emitContent(afterSuffix);
         return;
       }
@@ -179,13 +282,25 @@ export class GuidedReasoningStreamParser {
     let reasoning = "";
     if (this.detectBuffer) {
       if (this.phase === "reasoning") reasoning += this.detectBuffer;
-      else content += this.detectBuffer;
+      else {
+        const normalized = this.pendingContentAfterReasoningBoundary
+          ? normalizeLeadingContentAfterReasoningBoundary(this.detectBuffer, {
+              hasVisibleContentBefore: this.hasVisibleContent,
+              trailingNewlineRun: this.trailingNewlineRun,
+            })
+          : this.detectBuffer;
+        if (normalized) {
+          content += normalized;
+          this.trackEmittedContent(normalized);
+        }
+      }
       this.detectBuffer = "";
     }
     if (this.phase === "reasoning" && this.suffixBuffer) {
       reasoning += this.suffixBuffer;
       this.suffixBuffer = "";
     }
+    this.pendingContentAfterReasoningBoundary = false;
     this.phase = "content";
     return { content, reasoning };
   }

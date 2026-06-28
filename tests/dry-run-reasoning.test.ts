@@ -72,6 +72,76 @@ describe("dry-run reasoning display messages", () => {
     expect(display.reasoning).toBeUndefined();
   });
 
+  test("preserves user content that happens to contain reasoning delimiters", () => {
+    const messages = [
+      {
+        role: "user",
+        content: "Literal prefix\n<think>manual cot block</think>\nLiteral suffix",
+        __chatHistorySource: true,
+      },
+    ] as unknown as LlmMessage[];
+
+    const [display] = __test__.buildDryRunDisplayMessages(messages);
+
+    expect(display.content).toBe(
+      "Literal prefix\n<think>manual cot block</think>\nLiteral suffix",
+    );
+    expect(display.reasoning).toBeUndefined();
+  });
+
+  test("still extracts delimited reasoning from assistant chat history", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "Visible reply<think>Hidden plan</think>",
+        __chatHistorySource: true,
+      },
+    ] as unknown as LlmMessage[];
+
+    const [display] = __test__.buildDryRunDisplayMessages(messages);
+
+    expect(display.content).toBe("Visible reply");
+    expect(display.reasoning).toBe("Hidden plan");
+  });
+
+  test("preserves assistant content when assembly marks delimiters as literal", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "Visible reply<think>manual block</think>",
+        __chatHistorySource: true,
+        __preserveDisplayReasoningDelimiters: true,
+      },
+    ] as unknown as LlmMessage[];
+
+    const [display] = __test__.buildDryRunDisplayMessages(messages);
+
+    expect(display.content).toBe("Visible reply<think>manual block</think>");
+    expect(display.reasoning).toBeUndefined();
+  });
+
+  test("surfaces non-text message parts separately for dry run display", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Look at this" },
+          { type: "image", data: "aaa", mime_type: "image/png" },
+          { type: "audio", data: "bbb", mime_type: "audio/mpeg" },
+        ],
+      },
+    ] as unknown as LlmMessage[];
+
+    const [display] = __test__.buildDryRunDisplayMessages(messages);
+
+    expect(display.content).toContain("[image: image/png]");
+    expect(display.content).toContain("[audio: audio/mpeg]");
+    expect(display.contentParts).toEqual([
+      { type: "image", count: 1 },
+      { type: "audio", count: 1 },
+    ]);
+  });
+
   test("respects keepInHistory when surfacing chat-history reasoning", () => {
     const messages = [
       {

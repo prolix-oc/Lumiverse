@@ -11,7 +11,11 @@ import * as charactersSvc from "../services/characters.service";
 import * as personasSvc from "../services/personas.service";
 import { resolvePersonaForChatMacros } from "../services/persona-addon-states";
 import * as connectionsSvc from "../services/connections.service";
-import { populateLumiaLoomContext, resolvePromptVariables } from "../services/prompt-assembly.service";
+import {
+  normalizePromptBlockText,
+  populateLumiaLoomContext,
+  resolvePromptVariables,
+} from "../services/prompt-assembly.service";
 
 // Ensure macros are initialized
 initMacros();
@@ -52,7 +56,7 @@ app.post("/resolve", async (c) => {
 
   const result = await evaluate(body.template, env, registry);
   return c.json({
-    text: body.trim ? result.text.trim() : result.text,
+    text: body.trim ? normalizePromptBlockText(result.text) : result.text,
     diagnostics: result.diagnostics,
     touched_vars: Array.from(result.touchedVars),
     cacheable: result.cacheable,

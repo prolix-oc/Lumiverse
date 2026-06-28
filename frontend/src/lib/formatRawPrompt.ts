@@ -10,10 +10,21 @@ export interface RawPromptInput {
   provider?: string
 }
 
+function formatContentPartsSummary(message: DryRunMessage): string {
+  const parts = message.contentParts?.filter((part) => part.count > 0) ?? []
+  if (parts.length === 0) return ''
+  return parts
+    .map((part) => `${part.type} x${part.count}`)
+    .join(' | ')
+}
+
 function formatMessagesText(messages: DryRunMessage[]): string {
   return messages
     .map((m, i) => {
-      const header = `### [${i + 1}] ${m.role.toUpperCase()}`
+      const contentParts = formatContentPartsSummary(m)
+      const header = contentParts
+        ? `### [${i + 1}] ${m.role.toUpperCase()} (${contentParts})`
+        : `### [${i + 1}] ${m.role.toUpperCase()}`
       const sections = [header, m.content]
       if (m.reasoning?.trim()) {
         sections.push(`--- REASONING ---\n${m.reasoning}`)

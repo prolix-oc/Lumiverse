@@ -30,4 +30,21 @@ describe('formatRawPromptText', () => {
 
     expect(text).toBe('### [1] USER\n\nHello')
   })
+
+  test('annotates messages that carry non-text content parts', () => {
+    const text = formatRawPromptText({
+      messages: [
+        {
+          role: 'user',
+          content: 'Hello\n[image: image/png]',
+          contentParts: [
+            { type: 'image', count: 1 },
+            { type: 'audio', count: 1 },
+          ],
+        },
+      ],
+    })
+
+    expect(text).toContain('### [1] USER (image x1 | audio x1)')
+  })
 })

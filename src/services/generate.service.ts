@@ -16,14 +16,16 @@ import {
   mergeActivatedWorldInfoEntries,
   getSourceMessageId,
   isChatHistoryMessage,
+  shouldPreserveDisplayReasoningDelimiters,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
 import * as charactersSvc from "./characters.service";
 import { getEffectiveCharacterName } from "../types/character";
 import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import {
+  describeContentForDisplay,
   getTextContent,
-  flattenContentForDisplay,
+  type DisplayContentPartSummary,
   type LlmMessage,
   type GenerationParameters,
   type GenerationRequest,
@@ -321,6 +323,14 @@ function resolveDryRunMessageReasoning(
   );
 }
 
+function shouldExtractDisplayReasoningFromContent(message: LlmMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    isChatHistoryMessage(message) &&
+    !shouldPreserveDisplayReasoningDelimiters(message)
+  );
+}
+
 function buildDryRunDisplayMessages(
   messages: LlmMessage[],
   sourceMessagesById?: Map<string, Message>,
@@ -333,11 +343,10 @@ function buildDryRunDisplayMessages(
   const delimiters = resolveReasoningDelimiters(reasoningSettings);
 
   const displayMessages = messages.map((message) => {
-    const flattenedContent = flattenContentForDisplay(message.content);
-    const extractedReasoning = extractDelimitedReasoning(
-      flattenedContent,
-      delimiters,
-    );
+    const described = describeContentForDisplay(message.content);
+    const extractedReasoning = shouldExtractDisplayReasoningFromContent(message)
+      ? extractDelimitedReasoning(described.text, delimiters)
+      : { cleaned: described.text, reasoning: "" };
     const sourceMessageId = getSourceMessageId(message);
     const sourceMessage = sourceMessageId
       ? sourceMessagesById?.get(sourceMessageId)
@@ -350,6 +359,9 @@ function buildDryRunDisplayMessages(
       ...(message as any),
       content: extractedReasoning.cleaned,
     };
+    if (described.contentParts.length > 0) {
+      displayMessage.contentParts = described.contentParts;
+    }
 
     if (
       reasoning &&
@@ -515,6 +527,7 @@ export interface DryRunDisplayMessage
   extends Omit<LlmMessage, "content"> {
   content: string;
   reasoning?: string;
+  contentParts?: DisplayContentPartSummary[];
   __chatHistorySource?: boolean;
   __sourceMessageId?: string;
   __sourceIndexInChat?: number;
@@ -2928,10 +2941,13 @@ export async function dryRunGeneration(
     // The dry-run viewer is display-only and assumes string content. Flatten
     // multimodal parts (image/audio/tool) to placeholder-annotated strings so
     // multipart turns don't crash the frontend (TypeError: e.replace is not a
-    // function) when a chat message carries an attachment. When the source chat
-    // message preserved reasoning separately, attach it alongside the flattened
-    // content so the viewer can show both. Token counts come from the
-    // breakdown above, which is already computed from the real parts.
+    // function) when a chat message carries an attachment. Emit structured
+    // non-text part counts alongside the flattened content so the viewer can
+    // badge media-bearing turns without having to re-parse placeholder text.
+    // When the source chat message preserved reasoning separately, attach it
+    // alongside the flattened content so the viewer can show both. Token
+    // counts come from the breakdown above, which is already computed from the
+    // real parts.
     messages: buildDryRunDisplayMessages(
       pipeline.messages,
       sourceMessagesById,

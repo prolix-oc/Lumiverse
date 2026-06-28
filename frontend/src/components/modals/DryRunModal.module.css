@@ -172,6 +172,17 @@
   white-space: nowrap;
 }
 
+.messagePartBadge {
+  padding: 2px 6px;
+  border: 1px solid rgba(91, 192, 222, 0.24);
+  border-radius: 999px;
+  background: rgba(91, 192, 222, 0.1);
+  color: rgba(146, 219, 241, 0.92);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .messageMeta {
   margin-left: auto;
   font-size: calc(10px * var(--lumiverse-font-scale, 1));

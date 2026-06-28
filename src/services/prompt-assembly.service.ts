@@ -139,6 +139,8 @@ export type {
 const CHAT_HISTORY_KEY = "__chatHistorySource";
 const SOURCE_ID_KEY = "__sourceMessageId";
 const SOURCE_INDEX_KEY = "__sourceIndexInChat";
+const PRESERVE_DISPLAY_REASONING_DELIMS_KEY =
+  "__preserveDisplayReasoningDelimiters";
 
 function markAsChatHistory(
   msg: LlmMessage,
@@ -164,6 +166,17 @@ export function getSourceMessageId(msg: LlmMessage): string | undefined {
 export function getSourceIndexInChat(msg: LlmMessage): number | undefined {
   const v = (msg as any)[SOURCE_INDEX_KEY];
   return typeof v === "number" ? v : undefined;
+}
+
+function markPreserveDisplayReasoningDelimiters(msg: LlmMessage): LlmMessage {
+  (msg as any)[PRESERVE_DISPLAY_REASONING_DELIMS_KEY] = true;
+  return msg;
+}
+
+export function shouldPreserveDisplayReasoningDelimiters(
+  msg: LlmMessage,
+): boolean {
+  return (msg as any)[PRESERVE_DISPLAY_REASONING_DELIMS_KEY] === true;
 }
 
 export function resolveChatHistoryInsertionIndex(
@@ -2492,7 +2505,9 @@ export async function assemblePrompt(
       MARKER_TO_MACRO[block.marker]
     ) {
       const macro = MARKER_TO_MACRO[block.marker];
-      const resolved = (await evaluate(macro, macroEnv, registry)).text.trim();
+      const resolved = normalizePromptBlockText(
+        (await evaluate(macro, macroEnv, registry)).text,
+      );
       if (resolved) {
         const role = (block.role || "system") as LlmMessage["role"];
         result.push({ role, content: resolved });
@@ -2536,7 +2551,7 @@ export async function assemblePrompt(
       continue;
     }
 
-    const resolved = rawResolved.trim();
+    const resolved = normalizePromptBlockText(rawResolved);
     if (resolved) {
       const role: LlmMessage["role"] =
         (block.role as LlmMessage["role"]) || "system";
@@ -4718,6 +4733,7 @@ function applyAppendGroup(
           }
           result[i] = { ...result[i], content: parts };
         }
+        markPreserveDisplayReasoningDelimiters(result[i]);
         for (const append of group) {
           breakdown.push({
             type: "append",
@@ -4955,6 +4971,18 @@ const stripDetailsBlocks = _stripDetailsBlocks;
 const stripLoomTags = _stripLoomTags;
 const stripHtmlFormattingTags = _stripHtmlFormattingTags;
 const collapseExcessiveNewlines = _collapseExcessiveNewlines;
+
+/**
+ * Normalize resolved preset-block text for assembled prompts.
+ *
+ * Optional macros commonly sit on their own lines with paragraph spacing
+ * between them. When they resolve to "", they can leave large newline piles
+ * inside a block. Keep ordinary paragraph breaks, but collapse 3+ newlines
+ * back to a standard blank line.
+ */
+export function normalizePromptBlockText(content: string): string {
+  return collapseExcessiveNewlines(content).trim();
+}
 
 /** Extract only the inner text of <details>...</details> blocks, discard everything else. */
 function keepOnlyDetailsBlocks(content: string): string {
