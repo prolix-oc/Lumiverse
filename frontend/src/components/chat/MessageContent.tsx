@@ -34,6 +34,9 @@ interface MessageContentProps {
   messageId?: string
   chatId?: string
   depth?: number
+  characterNameOverride?: string
+  risuAssetMapOverride?: Record<string, string> | null
+  disableInterceptors?: boolean
 }
 
 // Custom renderer for sheld prose classes
@@ -1329,6 +1332,9 @@ export default function MessageContent({
   messageId,
   chatId,
   depth = 0,
+  characterNameOverride,
+  risuAssetMapOverride,
+  disableInterceptors = false,
 }: MessageContentProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -1336,13 +1342,16 @@ export default function MessageContent({
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
 
-  const charName = useMemo(
+  const fallbackCharName = useMemo(
     () => characters.find((c) => c.id === activeCharacterId)?.name ?? t('assistantFallback'),
     [characters, activeCharacterId, t],
   )
+  const charName = characterNameOverride?.trim() || fallbackCharName
 
   // Merge Risu asset maps from active character (and all group members in group chats)
   const risuAssetMap = useMemo(() => {
+    if (risuAssetMapOverride !== undefined) return risuAssetMapOverride
+
     const charIds = isGroupChat && groupCharacterIds.length > 0
       ? groupCharacterIds
       : activeCharacterId ? [activeCharacterId] : []
@@ -1355,7 +1364,7 @@ export default function MessageContent({
       }
     }
     return merged
-  }, [characters, activeCharacterId, isGroupChat, groupCharacterIds])
+  }, [risuAssetMapOverride, characters, activeCharacterId, isGroupChat, groupCharacterIds])
 
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
@@ -1364,13 +1373,16 @@ export default function MessageContent({
   )
   const deliveredTagInterceptsRef = useRef(new Set<string>())
   const interceptedMessageTags = useMemo(
-    () => stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
-    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
+    () => disableInterceptors
+      ? { content, intercepts: [] }
+      : stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
+    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion, disableInterceptors],
   )
 
   useLayoutEffect(() => {
+    if (disableInterceptors || interceptedMessageTags.intercepts.length === 0) return
     dispatchMessageTagIntercepts(interceptedMessageTags.intercepts, deliveredTagInterceptsRef.current)
-  }, [interceptedMessageTags.intercepts])
+  }, [interceptedMessageTags.intercepts, disableInterceptors])
 
   const interceptorCleanedContent = interceptedMessageTags.content
 

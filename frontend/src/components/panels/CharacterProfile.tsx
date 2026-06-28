@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react'
 import { useParams } from 'react-router'
+import { AnimatePresence, motion } from 'motion/react'
 import { Marked } from 'marked'
 import { charactersApi } from '@/api/characters'
 import { chatsApi } from '@/api/chats'
 import { getCharacterAvatarLargeUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import { useStore } from '@/store'
+import MessageContent from '@/components/chat/MessageContent'
 import LazyImage from '@/components/shared/LazyImage'
 import { EditorSection } from '@/components/shared/FormComponents'
 import {
@@ -24,6 +26,7 @@ const profileMarked = new Marked({ gfm: true, breaks: true })
 const HERO_CACHE_LIMIT = 60
 const heroPaletteCache = new Map<string, Promise<ImagePalette>>()
 const heroTextVarsCache = new Map<string, CSSProperties>()
+type ProfileViewMode = 'profile' | 'creatorNotes'
 
 function rememberCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V): V {
   if (cache.has(key)) cache.delete(key)
@@ -106,12 +109,15 @@ function SingleCharacterProfile({
   setDrawerTab: (tab: string) => void
 }) {
   const { t } = useTranslation('panels')
+  const activePersonaId = useStore((s) => s.activePersonaId)
+  const personas = useStore((s) => s.personas)
   const charId = paramId || activeCharacterId
   const storedCharacter = charId ? characters.find((entry) => entry.id === charId) ?? null : null
   const [character, setCharacter] = useState<Character | null>(storedCharacter)
   const [loading, setLoading] = useState(false)
   const [heroTextVars, setHeroTextVars] = useState<CSSProperties | undefined>(undefined)
   const [heroImageLoadedUrl, setHeroImageLoadedUrl] = useState<string | null>(null)
+  const [activeView, setActiveView] = useState<ProfileViewMode>('profile')
   const heroMetaRef = useRef<HTMLDivElement>(null)
 
   const handleEditCharacter = useCallback(() => {
@@ -141,6 +147,30 @@ function SingleCharacterProfile({
   useEffect(() => {
     setHeroTextVars(undefined)
   }, [avatarUrl])
+
+  useEffect(() => {
+    setActiveView('profile')
+  }, [charId])
+
+  const macroUserName = useMemo(
+    () => personas.find((persona) => persona.id === activePersonaId)?.name ?? 'User',
+    [personas, activePersonaId],
+  )
+
+  const creatorNotesAssetMap = useMemo(() => {
+    const assetMap = character?.extensions?.risu_asset_map
+    return assetMap && typeof assetMap === 'object'
+      ? assetMap as Record<string, string>
+      : null
+  }, [character])
+
+  const hasCreatorNotes = !!character?.creator_notes?.trim()
+
+  useEffect(() => {
+    if (!hasCreatorNotes && activeView !== 'profile') {
+      setActiveView('profile')
+    }
+  }, [hasCreatorNotes, activeView])
 
   useEffect(() => {
     if (!heroSampleUrl || heroImageLoadedUrl !== avatarUrl) {
@@ -204,74 +234,140 @@ function SingleCharacterProfile({
 
   return (
     <PanelFadeIn>
-      <div className={styles.profile}>
-        {/* Hero avatar */}
-        <div className={styles.hero}>
-        <div className={styles.heroImage}>
-          <LazyImage
-            src={avatarUrl}
-            alt={character.name}
-            onLoad={() => setHeroImageLoadedUrl(avatarUrl)}
-            onError={() => setHeroImageLoadedUrl(null)}
-            fallback={
-              <div className={styles.avatarFallback}>
-                {character.name[0]?.toUpperCase()}
+      <div className={styles.profileShell}>
+        {hasCreatorNotes && (
+          <div className={styles.viewTabs} role="tablist" aria-label={t('drawer.profile.tabName')}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeView === 'profile'}
+              className={clsx(styles.viewTab, activeView === 'profile' && styles.viewTabActive)}
+              onClick={() => setActiveView('profile')}
+            >
+              {t('drawer.profile.tabName')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeView === 'creatorNotes'}
+              className={clsx(styles.viewTab, activeView === 'creatorNotes' && styles.viewTabActive)}
+              onClick={() => setActiveView('creatorNotes')}
+            >
+              {t('characterEditor.creatorNotes')}
+            </button>
+          </div>
+        )}
+
+        <AnimatePresence mode="wait" initial={false}>
+          {activeView === 'creatorNotes' && hasCreatorNotes ? (
+            <motion.div
+              key="creator-notes"
+              className={styles.creatorNotesView}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            >
+              <div className={styles.creatorNotesHeader}>
+                <span className={styles.creatorNotesEyebrow}>{character.name}</span>
+                <h3 className={styles.creatorNotesTitle}>{t('characterEditor.creatorNotes')}</h3>
+                {character.creator && (
+                  <span className={styles.creatorNotesCreator}>
+                    {t('characterProfile.byCreator', { creator: character.creator })}
+                  </span>
+                )}
+                <p className={styles.creatorNotesHelper}>{t('characterEditor.creatorNotesHelper')}</p>
               </div>
-            }
-          />
-        </div>
-        <div className={styles.heroMeta} style={heroTextVars} ref={heroMetaRef}>
-          <h2 className={styles.name}>{character.name}</h2>
-          <button type="button" className={styles.editBtn} onClick={handleEditCharacter}>
-            <Pencil size={12} />
-            <span>{t('characterProfile.editCharacter')}</span>
-          </button>
-          {character.creator && <span className={styles.creator}>{t('characterProfile.byCreator', { creator: character.creator })}</span>}
-          {character.tags.length > 0 && (
-            <TagList tags={character.tags} />
+              <div className={styles.creatorNotesSurface}>
+                <MessageContent
+                  content={character.creator_notes}
+                  isUser={false}
+                  userName={macroUserName}
+                  characterNameOverride={character.name}
+                  risuAssetMapOverride={creatorNotesAssetMap}
+                  disableInterceptors
+                />
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="profile"
+              className={styles.profile}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            >
+              {/* Hero avatar */}
+              <div className={styles.hero}>
+                <div className={styles.heroImage}>
+                  <LazyImage
+                    src={avatarUrl}
+                    alt={character.name}
+                    onLoad={() => setHeroImageLoadedUrl(avatarUrl)}
+                    onError={() => setHeroImageLoadedUrl(null)}
+                    fallback={
+                      <div className={styles.avatarFallback}>
+                        {character.name[0]?.toUpperCase()}
+                      </div>
+                    }
+                  />
+                </div>
+                <div className={styles.heroMeta} style={heroTextVars} ref={heroMetaRef}>
+                  <h2 className={styles.name}>{character.name}</h2>
+                  <button type="button" className={styles.editBtn} onClick={handleEditCharacter}>
+                    <Pencil size={12} />
+                    <span>{t('characterProfile.editCharacter')}</span>
+                  </button>
+                  {character.creator && <span className={styles.creator}>{t('characterProfile.byCreator', { creator: character.creator })}</span>}
+                  {character.tags.length > 0 && (
+                    <TagList tags={character.tags} />
+                  )}
+                </div>
+              </div>
+
+              {/* Description */}
+              <EditorSection Icon={BookOpen} title={t('characterProfile.sections.description')} defaultExpanded={false}>
+                {character.description
+                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.description) }} />
+                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.description')}</span></div>
+                }
+              </EditorSection>
+
+              {/* Personality */}
+              <EditorSection Icon={Sparkles} title={t('characterProfile.sections.personality')} defaultExpanded={false}>
+                {character.personality
+                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.personality) }} />
+                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.personality')}</span></div>
+                }
+              </EditorSection>
+
+              {/* Scenario */}
+              <EditorSection Icon={FileText} title={t('characterProfile.sections.scenario')} defaultExpanded={false}>
+                {character.scenario
+                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.scenario) }} />
+                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.scenario')}</span></div>
+                }
+              </EditorSection>
+
+              {/* First Message */}
+              <EditorSection Icon={MessageSquare} title={t('characterProfile.sections.firstMessage')} defaultExpanded={false}>
+                {character.first_mes
+                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.first_mes) }} />
+                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.firstMessage')}</span></div>
+                }
+              </EditorSection>
+
+              {/* System Prompt */}
+              <EditorSection Icon={FileText} title={t('characterProfile.sections.systemPrompt')} defaultExpanded={false}>
+                {character.system_prompt
+                  ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.system_prompt) }} />
+                  : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.systemPrompt')}</span></div>
+                }
+              </EditorSection>
+            </motion.div>
           )}
-        </div>
-      </div>
-
-      {/* Description */}
-      <EditorSection Icon={BookOpen} title={t('characterProfile.sections.description')} defaultExpanded={false}>
-        {character.description
-          ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.description) }} />
-          : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.description')}</span></div>
-        }
-      </EditorSection>
-
-      {/* Personality */}
-      <EditorSection Icon={Sparkles} title={t('characterProfile.sections.personality')} defaultExpanded={false}>
-        {character.personality
-          ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.personality) }} />
-          : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.personality')}</span></div>
-        }
-      </EditorSection>
-
-      {/* Scenario */}
-      <EditorSection Icon={FileText} title={t('characterProfile.sections.scenario')} defaultExpanded={false}>
-        {character.scenario
-          ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.scenario) }} />
-          : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.scenario')}</span></div>
-        }
-      </EditorSection>
-
-      {/* First Message */}
-      <EditorSection Icon={MessageSquare} title={t('characterProfile.sections.firstMessage')} defaultExpanded={false}>
-        {character.first_mes
-          ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.first_mes) }} />
-          : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.firstMessage')}</span></div>
-        }
-      </EditorSection>
-
-      {/* System Prompt */}
-      <EditorSection Icon={FileText} title={t('characterProfile.sections.systemPrompt')} defaultExpanded={false}>
-        {character.system_prompt
-          ? <div className={styles.fieldContent} dangerouslySetInnerHTML={{ __html: renderProfileMarkdown(character.system_prompt) }} />
-          : <div className={styles.fieldContent}><span className={styles.placeholder}>{t('characterProfile.empty.systemPrompt')}</span></div>
-        }
-      </EditorSection>
+        </AnimatePresence>
       </div>
     </PanelFadeIn>
   )
