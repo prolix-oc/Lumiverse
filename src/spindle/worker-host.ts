@@ -9740,7 +9740,7 @@ export class WorkerHost {
         throw new Error("No sidecar connection configured");
       }
 
-      const connection = connectionsSvc.getConnection(userId, sidecar.connectionProfileId);
+      const connection = connectionsSvc.resolveConnection(userId, sidecar.connectionProfileId);
       if (!connection) {
         throw new Error("Selected sidecar connection not found");
       }
@@ -9753,7 +9753,7 @@ export class WorkerHost {
       return { model, modelSource: "sidecar" };
     }
 
-    const connection = connectionsSvc.getDefaultConnection(userId);
+    const connection = connectionsSvc.resolveConnection(userId);
     if (!connection) {
       throw new Error("No default connection configured");
     }
@@ -10559,7 +10559,7 @@ export class WorkerHost {
               ? null
               : personaAddonStatesSvc.resolvePersonaForChatMacros(resolvedUserId, personasSvc.resolvePersonaOrDefault(resolvedUserId), chat.metadata);
             const messages = chatsSvc.getMessages(resolvedUserId, chatId);
-            const connection = connectionsSvc.getDefaultConnection(resolvedUserId);
+            const connection = connectionsSvc.resolveConnection(resolvedUserId);
 
             env = buildEnv({
               character,
@@ -10578,7 +10578,7 @@ export class WorkerHost {
         const character = charactersSvc.getCharacter(resolvedUserId, characterId);
         if (character) {
           const persona = personaAddonStatesSvc.resolvePersonaForChatMacros(resolvedUserId, personasSvc.resolvePersonaOrDefault(resolvedUserId), null);
-          const connection = connectionsSvc.getDefaultConnection(resolvedUserId);
+          const connection = connectionsSvc.resolveConnection(resolvedUserId);
 
           env = buildEnv({
             character,
@@ -10596,7 +10596,7 @@ export class WorkerHost {
         // Minimal fallback
         const persona = personasSvc.getDefaultPersona(resolvedUserId);
         const personaPronouns = resolvePersonaPronouns(persona);
-        const connection = connectionsSvc.getDefaultConnection(resolvedUserId);
+        const connection = connectionsSvc.resolveConnection(resolvedUserId);
         env = {
           commit,
           names: {

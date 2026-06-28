@@ -38,14 +38,15 @@ export async function detectExpression(input: DetectExpressionInput, generateFn:
   let maxTokens = Math.min(sidecar.maxTokens ?? 50, 100);
 
   if (!connectionId) {
-    const defaultConn = connectionsSvc.getDefaultConnection(userId);
+    const defaultConn = connectionsSvc.resolveConnection(userId);
     if (!defaultConn) return null;
     connectionId = defaultConn.id;
     model = model || defaultConn.model || undefined;
   }
 
-  const conn = connectionsSvc.getConnection(userId, connectionId);
+  const conn = connectionsSvc.resolveConnection(userId, connectionId);
   if (!conn) return null;
+  connectionId = conn.id;
 
   const systemPrompt = `Select a character sprite image. Read the LAST assistant message and choose the single available label that best matches the character's visible state in that moment.
 
@@ -281,14 +282,15 @@ async function identifyCharacterLLM(
   let model: string | undefined = modelOverride || sidecar.model || undefined;
 
   if (!connectionId) {
-    const defaultConn = connectionsSvc.getDefaultConnection(userId);
+    const defaultConn = connectionsSvc.resolveConnection(userId);
     if (!defaultConn) return null;
     connectionId = defaultConn.id;
     model = model || defaultConn.model || undefined;
   }
 
-  const conn = connectionsSvc.getConnection(userId, connectionId);
+  const conn = connectionsSvc.resolveConnection(userId, connectionId);
   if (!conn) return null;
+  connectionId = conn.id;
 
   const systemPrompt = `You are analyzing a roleplay conversation. Identify which character is the primary focus of the most recent response (the one speaking, acting, or being described).
 

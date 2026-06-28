@@ -46,6 +46,11 @@
   border: 1px solid var(--lumiverse-border);
 }
 
+.rouletteIcon {
+  background: color-mix(in srgb, #0f9f8f 14%, transparent);
+  color: #0f9f8f;
+}
+
 .itemInfo {
   display: flex;
   flex-direction: column;

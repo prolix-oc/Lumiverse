@@ -170,9 +170,7 @@ function buildEnvFromIds(userId: string, body: {
               chat.metadata,
             );
 
-        const connection = body.connection_id
-          ? connectionsSvc.getConnection(userId, body.connection_id)
-          : connectionsSvc.getDefaultConnection(userId);
+        const connection = connectionsSvc.resolveConnection(userId, body.connection_id);
 
         const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) => {
           const c = charactersSvc.getCharacter(userId, cid);
@@ -207,9 +205,7 @@ function buildEnvFromIds(userId: string, body: {
         null,
       );
 
-      const connection = body.connection_id
-        ? connectionsSvc.getConnection(userId, body.connection_id)
-        : connectionsSvc.getDefaultConnection(userId);
+      const connection = connectionsSvc.resolveConnection(userId, body.connection_id);
 
       const chat: Chat = {
         id: "",
@@ -239,7 +235,7 @@ function buildEnvFromIds(userId: string, body: {
     null,
   );
   const personaPronouns = resolvePersonaPronouns(persona);
-  const connection = connectionsSvc.getDefaultConnection(userId);
+  const connection = connectionsSvc.resolveConnection(userId);
 
   return {
     commit: true,

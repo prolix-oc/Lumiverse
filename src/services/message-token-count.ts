@@ -25,9 +25,7 @@ const defaultDeps: MessageTokenCountDeps = {
   isEnabled: (userId) =>
     settingsSvc.getSetting(userId, SHOW_MESSAGE_TOKEN_COUNT_KEY)?.value !== false,
   resolveModel: (userId, connectionId) =>
-    (connectionId
-      ? connectionsSvc.getConnection(userId, connectionId)
-      : connectionsSvc.getDefaultConnection(userId))?.model,
+    connectionsSvc.resolveConnection(userId, connectionId)?.model,
   countForModel: tokenizerSvc.countForModel,
 };
 

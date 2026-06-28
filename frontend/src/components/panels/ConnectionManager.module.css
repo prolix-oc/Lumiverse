@@ -11,6 +11,13 @@
   color: var(--lumiverse-text-muted);
 }
 
+.createActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .createBtn {
   display: flex;
   align-items: center;

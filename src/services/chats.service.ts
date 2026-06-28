@@ -2921,14 +2921,14 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
       // Resolve the provider from the connection profile for structured output injection
       let sidecarProvider: string | null = null;
       if (memoryCortex.shouldUseCortexSidecar(cortexConfig)) {
-        const { getConnection } = require("./connections.service");
+        const { resolveConnection } = require("./connections.service");
         const { getProvider } = require("../llm/registry");
         const requestedSidecarConnectionId = cortexConfig.sidecar.connectionProfileId || undefined;
-        const conn = requestedSidecarConnectionId ? getConnection(userId, requestedSidecarConnectionId) : null;
+        const conn = requestedSidecarConnectionId ? resolveConnection(userId, requestedSidecarConnectionId) : null;
         const provider = conn ? getProvider(conn.provider) : null;
         const apiKeyRequired = provider?.capabilities.apiKeyRequired ?? true;
         if (conn && provider && (!apiKeyRequired || conn.has_api_key)) {
-          sidecarConnectionId = requestedSidecarConnectionId;
+          sidecarConnectionId = conn.id;
           sidecarProvider = conn.provider;
         }
       }

@@ -14,9 +14,10 @@ interface MultiChipSelectProps {
   onChange: (selected: string[]) => void
   placeholder?: string
   loading?: boolean
+  showValues?: boolean
 }
 
-export default function MultiChipSelect({ options, selected, onChange, placeholder, loading }: MultiChipSelectProps) {
+export default function MultiChipSelect({ options, selected, onChange, placeholder, loading, showValues = true }: MultiChipSelectProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'multiChipSelect' })
   const { t: tc } = useTranslation('common')
   const [open, setOpen] = useState(false)
@@ -87,7 +88,7 @@ export default function MultiChipSelect({ options, selected, onChange, placehold
               onClick={() => handleAdd(o.value)}
             >
               <span className={styles.dropdownLabel}>{o.label}</span>
-              <span className={styles.dropdownSlug}>{o.value}</span>
+              {showValues && <span className={styles.dropdownSlug}>{o.value}</span>}
             </button>
           ))}
         </div>

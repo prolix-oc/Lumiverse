@@ -243,6 +243,7 @@
   "connectionManager": {
     "loading": "Loading connections...",
     "newConnection": "New Connection",
+    "newRoulette": "New Roulette",
     "empty": "No connections configured. Add one to start chatting.",
     "deleteTitle": "Delete Connection",
     "deleteMessage": "Delete \"{{name}}\"? This cannot be undone.",
@@ -403,7 +404,8 @@
     "weeklyTokens": "Weekly tokens",
     "dailyImages": "Daily images",
     "comfyWorkflow": "ComfyUI workflow",
-    "loadComfyWorkflowFailed": "Failed to load ComfyUI workflow"
+    "loadComfyWorkflowFailed": "Failed to load ComfyUI workflow",
+    "modelRouletteMeta": "Model Roulette / {{count}} profiles"
   },
   "connectionForm": {
     "pollinationsSaved": "Signed in with Pollinations. API key saved automatically.",
@@ -418,6 +420,10 @@
     "name": "Name",
     "connectionName": "Connection name",
     "provider": "Provider",
+    "modelRoulette": "Model Roulette",
+    "rouletteConnections": "Roulette profiles",
+    "rouletteConnectionsHint": "Choose existing connection profiles. Each generation randomly uses one of these profiles.",
+    "rouletteConnectionsPlaceholder": "Add connection profiles...",
     "serviceAccountJson": "Service Account JSON",
     "credentialsLoaded": "Credentials loaded{{file}}. Upload a new file to replace.",
     "uploadServiceAccount": "Upload your Google Cloud service account key JSON file",

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, Shuffle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { connectionsApi } from '@/api/connections'
 import { listAllConnections } from '@/api/listAllConnections'
@@ -19,6 +19,8 @@ const FALLBACK_PROVIDERS = [
   { id: 'pollinations', name: 'Pollinations', default_url: 'https://gen.pollinations.ai/v1' },
 ]
 
+const MODEL_ROULETTE_PROVIDER = 'model_roulette'
+
 export default function ConnectionManager() {
   const { t } = useTranslation('panels')
   const profiles = useStore((s) => s.profiles)
@@ -33,6 +35,7 @@ export default function ConnectionManager() {
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [creatingProvider, setCreatingProvider] = useState('openai')
   const [deleteTarget, setDeleteTarget] = useState<ConnectionProfile | null>(null)
 
   useEffect(() => {
@@ -149,15 +152,30 @@ export default function ConnectionManager() {
   return (
     <div className={styles.manager}>
       {!creating && (
-        <button type="button" className={styles.createBtn} onClick={() => setCreating(true)}>
-          <Plus size={14} />
-          <span>{t('connectionManager.newConnection')}</span>
-        </button>
+        <div className={styles.createActions}>
+          <button
+            type="button"
+            className={styles.createBtn}
+            onClick={() => { setCreatingProvider('openai'); setCreating(true) }}
+          >
+            <Plus size={14} />
+            <span>{t('connectionManager.newConnection')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles.createBtn}
+            onClick={() => { setCreatingProvider(MODEL_ROULETTE_PROVIDER); setCreating(true) }}
+          >
+            <Shuffle size={14} />
+            <span>{t('connectionManager.newRoulette')}</span>
+          </button>
+        </div>
       )}
 
       {creating && (
         <ConnectionForm
           providers={providers}
+          initialProvider={creatingProvider}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
           onOAuthCreated={(profile) => {

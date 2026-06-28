@@ -22,15 +22,19 @@ import {
   type NanoGptCachingSettings,
 } from '@/lib/nanogpt-prompt-caching'
 import ModelCombobox from './ModelCombobox'
+import MultiChipSelect from './MultiChipSelect'
 import OpenRouterSettings from './OpenRouterSettings'
 import type { ProviderInfo, ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import type { OpenRouterConnectionSettings } from '@/api/openrouter'
 import type { ReasoningSettings } from '@/types/store'
 import styles from '../ConnectionManager.module.css'
 
+const MODEL_ROULETTE_PROVIDER = 'model_roulette'
+
 interface ConnectionFormProps {
   providers: ProviderInfo[]
   profile?: ConnectionProfile
+  initialProvider?: string
   onSave: (input: CreateConnectionProfileInput) => void
   onCancel: () => void
   /** Called when OAuth auto-creates the connection during creation flow. */
@@ -47,6 +51,20 @@ const FALLBACK_PROVIDERS = [
   { value: 'nanogpt', label: 'NanoGPT' },
   { value: 'custom', label: 'Custom (OpenAI-compatible)' },
 ]
+
+function parseRouletteConnectionIds(profile?: ConnectionProfile): string[] {
+  const raw = profile?.metadata?.connection_roulette?.connection_ids
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  return raw
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    .map((id) => id.trim())
+    .filter((id) => {
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+}
 
 const VERTEX_REGIONS = [
   'us-central1', 'us-east1', 'us-east4', 'us-west1', 'us-west4',
@@ -68,7 +86,7 @@ const BEDROCK_ENDPOINTS = [
   { value: 'runtime', label: 'Runtime (cross-region profiles)' },
 ]
 
-export default function ConnectionForm({ providers, profile, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
+export default function ConnectionForm({ providers, profile, initialProvider, onSave, onCancel, onOAuthCreated }: ConnectionFormProps) {
   const { t } = useTranslation('panels')
   const anthropicCacheTtlOptions = [
     { value: '5m', label: t('connectionForm.fiveMinutes') },
@@ -79,7 +97,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     { value: '1h', label: t('connectionForm.oneHour') },
   ]
   const [name, setName] = useState(profile?.name || '')
-  const [provider, setProvider] = useState(profile?.provider || 'openai')
+  const [provider, setProvider] = useState(profile?.provider || initialProvider || 'openai')
   const [apiKey, setApiKey] = useState('')
   const [apiUrl, setApiUrl] = useState(profile?.api_url || '')
   const [model, setModel] = useState(profile?.model || '')
@@ -112,6 +130,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const [byopStatus, setByopStatus] = useState<string | null>(null)
   const [nanoGptOauthLoading, setNanoGptOauthLoading] = useState(false)
   const [nanoGptOauthStatus, setNanoGptOauthStatus] = useState<string | null>(null)
+  const [rouletteConnectionIds, setRouletteConnectionIds] = useState<string[]>(() => parseRouletteConnectionIds(profile))
 
   // Vertex AI specific state
   const [vertexRegion, setVertexRegion] = useState(profile?.metadata?.vertex_region || 'us-central1')
@@ -129,17 +148,33 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     profile?.metadata?.openrouter || {}
   )
 
-  const providerOptions = providers.length > 0
+  const providerOptionsBase = providers.length > 0
     ? providers.map((p) => ({ value: p.id, label: p.name }))
     : FALLBACK_PROVIDERS
+  const providerOptions = providerOptionsBase
 
   const selectedProvider = providers.find((p) => p.id === provider)
   const urlPlaceholder = selectedProvider?.default_url || 'https://api.openai.com/v1'
+  const isRoulette = provider === MODEL_ROULETTE_PROVIDER
   const isVertexAI = provider === 'google_vertex'
   const isPollinations = provider === 'pollinations'
   const isBedrock = provider === 'bedrock'
+  const allProfiles = useStore((s) => s.profiles)
+  const rouletteOptions = allProfiles
+    .filter((p) => p.id !== profile?.id && p.provider !== MODEL_ROULETTE_PROVIDER)
+    .map((p) => ({
+      value: p.id,
+      label: `${p.name} (${p.provider}${p.model ? ` / ${p.model}` : ''})`,
+    }))
+  const rouletteOptionIds = new Set(rouletteOptions.map((o) => o.value))
+  const validRouletteConnectionIds = rouletteConnectionIds.filter((id) => rouletteOptionIds.has(id))
 
   const fetchModels = useCallback(async () => {
+    if (isRoulette) {
+      setModels([])
+      setModelLabels({})
+      return
+    }
     setModelsLoading(true)
     try {
       const metadata: Record<string, any> = { ...profile?.metadata }
@@ -176,7 +211,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     } finally {
       setModelsLoading(false)
     }
-  }, [apiKey, apiUrl, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
+  }, [apiKey, apiUrl, isRoulette, isVertexAI, isBedrock, profile?.id, profile?.metadata, provider, useSubscriptionApi, useZaiCodingPlanEndpoint, vertexRegion, bedrockRegion, bedrockEndpoint])
 
   useEffect(() => {
     if (profile?.id) fetchModels()
@@ -275,7 +310,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const isNanoGpt = provider === 'nanogpt'
   // Vertex AI derives its host from `metadata.vertex_region`, so the API URL
   // field has no purpose and we don't display it.
-  const hideApiUrl = isOpenRouter || provider === 'nanogpt' || isVertexAI || isBedrock
+  const hideApiUrl = isRoulette || isOpenRouter || provider === 'nanogpt' || isVertexAI || isBedrock
   const normalizedBoundReasoningSettings = normalizeReasoningSettingsForProvider(boundReasoningSettings, provider, model)
   const normalizedCurrentReasoningSettings = normalizeReasoningSettingsForProvider(reasoningSettings, provider, model)
   const bindingMatchesCurrent = areReasoningSettingsEqual(normalizedBoundReasoningSettings, normalizedCurrentReasoningSettings)
@@ -288,6 +323,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
     setBoundPromptBias(typeof storedPromptBias === 'string' ? storedPromptBias : promptBias)
     setAnthropicPromptCachingSettings(parseAnthropicPromptCachingSettings(profile?.metadata?.prompt_caching))
     setNanogptCachingSettings(parseNanoGptCachingSettings(profile?.metadata?.nanogpt_caching))
+    setRouletteConnectionIds(parseRouletteConnectionIds(profile))
   }, [profile?.id])
 
   const handlePollinationsSignIn = useCallback(async () => {
@@ -399,6 +435,35 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
     const metadata: Record<string, any> = { ...profile?.metadata }
+    if (isRoulette) {
+      metadata.connection_roulette = {
+        connection_ids: validRouletteConnectionIds,
+      }
+
+      delete metadata.use_responses_api
+      delete metadata.use_subscription_api
+      delete metadata.use_coding_plan_endpoint
+      delete metadata.prompt_caching
+      delete metadata.nanogpt_caching
+      delete metadata.reasoningBindings
+      delete metadata.vertex_region
+      delete metadata.sa_file_name
+      delete metadata.region
+      delete metadata.bedrock_endpoint
+      delete metadata.openrouter
+
+      onSave({
+        name: name.trim(),
+        provider,
+        api_key: '',
+        api_url: '',
+        model: '',
+        is_default: isDefault,
+        metadata,
+      })
+      return
+    }
+    delete metadata.connection_roulette
     if (showResponsesApiToggle) {
       metadata.use_responses_api = useResponsesApi
     } else {
@@ -471,18 +536,45 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
       is_default: isDefault,
       metadata,
     })
-  }, [name, provider, apiKey, apiUrl, model, isDefault, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+  }, [name, provider, apiKey, apiUrl, model, isDefault, isRoulette, validRouletteConnectionIds, useResponsesApi, showResponsesApiToggle, useSubscriptionApi, showSubscriptionApiToggle, useZaiCodingPlanEndpoint, showZaiCodingPlanToggle, showAnthropicPromptCachingToggle, anthropicPromptCachingSettings, showNanoGptCachingToggle, nanogptCachingSettings, bindReasoning, boundReasoningSettings, boundPromptBias, profile?.id, profile?.metadata, onSave, isVertexAI, vertexRegion, saFileName, isBedrock, bedrockRegion, bedrockEndpoint, isOpenRouter, openrouterSettings])
+
+  const canSubmit = name.trim().length > 0 && (!isRoulette || validRouletteConnectionIds.length > 0)
 
   return (
     <div className={styles.form}>
       <FormField label={t('connectionForm.name')} required>
         <TextInput value={name} onChange={setName} placeholder={t('connectionForm.connectionName')} autoFocus={!profile} />
       </FormField>
-      <FormField label={t('connectionForm.provider')}>
-        <Select value={provider} onChange={setProvider} options={providerOptions} />
-      </FormField>
+      {!isRoulette && (
+        <FormField label={t('connectionForm.provider')}>
+          <Select value={provider} onChange={setProvider} options={providerOptions} />
+        </FormField>
+      )}
 
-      {isVertexAI ? (
+      {isRoulette && (
+        <>
+          <FormField label={t('connectionForm.rouletteConnections')} hint={t('connectionForm.rouletteConnectionsHint')}>
+            <MultiChipSelect
+              options={rouletteOptions}
+              selected={rouletteConnectionIds}
+              onChange={setRouletteConnectionIds}
+              placeholder={t('connectionForm.rouletteConnectionsPlaceholder')}
+              showValues={false}
+            />
+          </FormField>
+          <FormField label="">
+            <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('connectionForm.setAsDefault')} />
+          </FormField>
+          <div className={styles.formActions}>
+            <Button variant="ghost" size="sm" onClick={onCancel}>{t('connectionForm.cancel')}</Button>
+            <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!canSubmit}>
+              {profile ? t('connectionForm.save') : t('connectionForm.create')}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {!isRoulette && (isVertexAI ? (
         <>
           <FormField
             label={t('connectionForm.serviceAccountJson')}
@@ -558,14 +650,14 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
             <TextInput value={apiKey} onChange={setApiKey} placeholder={profile?.has_api_key ? '••••••••' : t('connectionForm.enterApiKey')} type="password" />
           </FormField>
         </>
-      )}
+      ))}
 
-      {!hideApiUrl && (
+      {!isRoulette && !hideApiUrl && (
         <FormField label={t('connectionForm.apiUrl')} hint={isVertexAI ? t('connectionForm.vertexApiUrlHint') : t('connectionForm.defaultApiUrlHint')}>
           <TextInput value={apiUrl} onChange={setApiUrl} placeholder={urlPlaceholder} />
         </FormField>
       )}
-      {isBedrock && (
+      {!isRoulette && isBedrock && (
         <>
           <FormField label={t('connectionForm.region')} hint={t('connectionForm.bedrockRegionHint')}>
             <Select
@@ -583,7 +675,7 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           </FormField>
         </>
       )}
-      <FormField label={t('connectionForm.model')} hint={t('connectionForm.modelHint')}>
+      {!isRoulette && <FormField label={t('connectionForm.model')} hint={t('connectionForm.modelHint')}>
         <ModelCombobox
           value={model}
           onChange={setModel}
@@ -594,10 +686,10 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           appearance="standard"
           placeholder={isVertexAI ? 'gemini-2.5-flash' : isBedrock ? 'us.anthropic.claude-sonnet-4-6' : 'gpt-4o'}
         />
-      </FormField>
-      <FormField label="">
+      </FormField>}
+      {!isRoulette && <FormField label="">
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('connectionForm.setAsDefault')} />
-      </FormField>
+      </FormField>}
       {showResponsesApiToggle && (
         <FormField label="">
           <Toggle.Checkbox
@@ -785,15 +877,15 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           onConnectionCreated={onOAuthCreated}
         />
       )}
-      <FormField label="">
+      {!isRoulette && <FormField label="">
         <Toggle.Checkbox
           checked={bindReasoning}
           onChange={setBindReasoning}
           label={t('connectionForm.bindReasoningSettings')}
           hint={t('connectionForm.bindReasoningSettingsHint')}
         />
-      </FormField>
-      {bindReasoning && (
+      </FormField>}
+      {!isRoulette && bindReasoning && (
         <div className={styles.bindingCard}>
           <div className={styles.bindingCardHeader}>
             <div>
@@ -819,12 +911,12 @@ export default function ConnectionForm({ providers, profile, onSave, onCancel, o
           )}
         </div>
       )}
-      <div className={styles.formActions}>
+      {!isRoulette && <div className={styles.formActions}>
         <Button variant="ghost" size="sm" onClick={onCancel}>{t('connectionForm.cancel')}</Button>
-        <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!name.trim()}>
+        <Button variant="primary" size="sm" onClick={handleSubmit} disabled={!canSubmit}>
           {profile ? t('connectionForm.save') : t('connectionForm.create')}
         </Button>
-      </div>
+      </div>}
     </div>
   )
 }

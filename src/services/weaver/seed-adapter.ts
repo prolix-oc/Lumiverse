@@ -1,5 +1,5 @@
 import { rawGenerate } from "../generate.service";
-import { getConnection, getDefaultConnection } from "../connections.service";
+import { resolveConnection } from "../connections.service";
 import { isSlotId, slotParts, type SpineSlot } from "./slots";
 import { getBuildRegistry } from "./build-registry";
 import { buildExtractionPrompt, buildExtractionUserMessage } from "./prompts";
@@ -66,8 +66,7 @@ async function runExtraction(
   signal?: AbortSignal,
 ): Promise<{ committed_facts: WeaverCommittedFact[]; gaps: WeaverGap[] }> {
   const reg = getBuildRegistry(session.build_type);
-  const conn = (session.connection_id ? getConnection(userId, session.connection_id) : null)
-    ?? getDefaultConnection(userId);
+  const conn = resolveConnection(userId, session.connection_id || undefined);
   if (!conn) throw new Error("Weaver session has no connection configured");
   const model = session.model?.trim() || conn.model;
   if (!model) throw new Error("Weaver session has no model configured");

@@ -125,9 +125,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   );
 
   const connection = profiler.measureSync("connection", () =>
-    ctx.connectionId
-      ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-      : connectionsSvc.getDefaultConnection(ctx.userId)
+    connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId)
   );
 
   // No-preset temp chats skip preset loading entirely (assembly re-checks the

@@ -1,5 +1,5 @@
 import { rawGenerate } from "../generate.service";
-import { getConnection, getDefaultConnection } from "../connections.service";
+import { resolveConnection } from "../connections.service";
 import { getWeaverTuning } from "./tuning";
 
 export interface WeaverConnectionPrefs {
@@ -9,8 +9,7 @@ export interface WeaverConnectionPrefs {
 
 export function resolveWeaverConnection(userId: string, session: WeaverConnectionPrefs) {
   const conn =
-    (session.connection_id ? getConnection(userId, session.connection_id) : null) ??
-    getDefaultConnection(userId);
+    resolveConnection(userId, session.connection_id || undefined);
   if (!conn) throw new Error("Weaver session has no connection configured");
   const model = session.model?.trim() || conn.model;
   if (!model) throw new Error("Weaver session has no model configured");

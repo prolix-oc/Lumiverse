@@ -15,6 +15,11 @@ import { describeProviderError } from "../utils/provider-errors";
 const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000;
 const ZAI_GENERAL_API_URL = "https://api.z.ai/api/paas/v4";
 const ZAI_CODING_PLAN_API_URL = "https://api.z.ai/api/coding/paas/v4";
+export const MODEL_ROULETTE_PROVIDER = "model_roulette";
+
+export interface ConnectionRouletteConfig {
+  connection_ids: string[];
+}
 
 function resolveZaiApiUrl(rawUrl: string, useCodingPlanEndpoint: boolean): string {
   const trimmed = rawUrl.trim();
@@ -220,6 +225,31 @@ function rowToProfile(row: any): ConnectionProfile {
   };
 }
 
+export function isModelRouletteProfile(profile: Pick<ConnectionProfile, "provider"> | null | undefined): boolean {
+  return profile?.provider === MODEL_ROULETTE_PROVIDER;
+}
+
+export function getConnectionRouletteConfig(
+  profile: Pick<ConnectionProfile, "metadata"> | null | undefined
+): ConnectionRouletteConfig {
+  const raw = profile?.metadata?.connection_roulette;
+  if (!raw || typeof raw !== "object") return { connection_ids: [] };
+
+  const seen = new Set<string>();
+  const connection_ids = Array.isArray(raw.connection_ids)
+    ? raw.connection_ids
+      .filter((id: unknown): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id: string) => id.trim())
+      .filter((id: string) => {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
+    : [];
+
+  return { connection_ids };
+}
+
 // Prepared statements for hot-path queries
 let _stmtConnById: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
 let _stmtConnDefault: ReturnType<ReturnType<typeof getDb>["query"]> | null = null;
@@ -257,6 +287,27 @@ export function getConnection(userId: string, id: string): ConnectionProfile | n
 export function getDefaultConnection(userId: string): ConnectionProfile | null {
   const row = getConnStmts().byDefault.get(userId) as any;
   return row ? rowToProfile(row) : null;
+}
+
+export function resolveConnection(userId: string, id?: string): ConnectionProfile | null {
+  const profile = id ? getConnection(userId, id) : getDefaultConnection(userId);
+  if (!profile) return null;
+  if (!isModelRouletteProfile(profile)) return profile;
+
+  const targetIds = getConnectionRouletteConfig(profile).connection_ids
+    .filter((targetId) => targetId !== profile.id);
+  const candidates: ConnectionProfile[] = [];
+  for (const targetId of targetIds) {
+    const candidate = getConnection(userId, targetId);
+    if (!candidate || isModelRouletteProfile(candidate)) continue;
+    candidates.push(candidate);
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(`Model roulette "${profile.name}" has no available connection profiles.`);
+  }
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 export async function createConnection(userId: string, input: CreateConnectionProfileInput): Promise<ConnectionProfile> {
@@ -415,6 +466,33 @@ export async function testConnection(
     };
   }
 
+  if (isModelRouletteProfile(profile)) {
+    const targetIds = getConnectionRouletteConfig(profile).connection_ids;
+    const validTargets = targetIds
+      .map((targetId) => getConnection(userId, targetId))
+      .filter((target): target is ConnectionProfile => !!target && !isModelRouletteProfile(target));
+
+    if (validTargets.length === 0) {
+      return {
+        success: false,
+        message: `Model roulette "${profile.name}" has no available connection profiles.`,
+        provider: MODEL_ROULETTE_PROVIDER,
+        durationMs: Date.now() - startedAt,
+        timedOut: false,
+        error: "No roulette targets configured",
+      };
+    }
+
+    return {
+      success: true,
+      message: `Model roulette is ready with ${validTargets.length} connection${validTargets.length === 1 ? "" : "s"}.`,
+      provider: MODEL_ROULETTE_PROVIDER,
+      durationMs: Date.now() - startedAt,
+      timedOut: false,
+      error: null,
+    };
+  }
+
   const provider = getProvider(profile.provider);
   if (!provider) {
     return {
@@ -469,6 +547,9 @@ export async function testConnection(
 export async function listConnectionModels(userId: string, id: string): Promise<{ models: string[]; model_labels?: Record<string, string>; provider: string; error?: string }> {
   const profile = getConnection(userId, id);
   if (!profile) return { models: [], provider: "", error: "Connection not found" };
+  if (isModelRouletteProfile(profile)) {
+    return { models: [], provider: MODEL_ROULETTE_PROVIDER, error: "Model roulette uses the selected member profile models." };
+  }
 
   const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(id));
   return listConnectionModelsPreview(userId, {

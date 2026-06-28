@@ -678,10 +678,10 @@ function resolveCortexSidecarAdapter(
 } {
   if (!memoryCortex.shouldUseCortexSidecar(cortexConfig)) return {};
 
-  const sidecarConnectionId = cortexConfig.sidecar?.connectionProfileId || undefined;
-  if (!sidecarConnectionId) return { unavailableReason: "sidecar_not_configured" };
+  const configuredSidecarConnectionId = cortexConfig.sidecar?.connectionProfileId || undefined;
+  if (!configuredSidecarConnectionId) return { unavailableReason: "sidecar_not_configured" };
 
-  const sidecarConn = connectionsSvc.getConnection(userId, sidecarConnectionId);
+  const sidecarConn = connectionsSvc.resolveConnection(userId, configuredSidecarConnectionId);
   if (!sidecarConn) return { unavailableReason: "sidecar_connection_missing" };
 
   const provider = getProvider(sidecarConn.provider);
@@ -699,7 +699,7 @@ function resolveCortexSidecarAdapter(
     cortexConfig,
   });
 
-  return { generateRawFn, sidecarConnectionId };
+  return { generateRawFn, sidecarConnectionId: sidecarConn.id };
 }
 
 // ─── Configuration ─────────────────────────────────────────────
@@ -865,7 +865,7 @@ app.get("/health", async (c) => {
     config.consolidation.useSidecar;
 
   const sidecarProfile = sidecarConnectionId
-    ? connectionsSvc.getConnection(userId, sidecarConnectionId)
+    ? connectionsSvc.resolveConnection(userId, sidecarConnectionId)
     : null;
   const sidecarProvider = sidecarProfile ? getProvider(sidecarProfile.provider) : null;
   const sidecarApiKeyRequired = sidecarProvider?.capabilities.apiKeyRequired ?? true;

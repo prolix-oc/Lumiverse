@@ -55,7 +55,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
               personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id),
               chat.metadata,
             );
-        const connection = connectionsSvc.getDefaultConnection(userId);
+        const connection = connectionsSvc.resolveConnection(userId);
         const groupCharacterNames = resolveGroupCharacterNames(chat, (cid) => {
           const c = charactersSvc.getCharacter(userId, cid);
           return c ? getEffectiveCharacterName(c) : undefined;
@@ -86,7 +86,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
         personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id),
         null,
       );
-      const connection = connectionsSvc.getDefaultConnection(userId);
+      const connection = connectionsSvc.resolveConnection(userId);
       const chat: Chat = {
         id: "",
         character_id: character.id,
@@ -114,7 +114,7 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     null,
   );
   const personaPronouns = resolvePersonaPronouns(persona);
-  const connection = connectionsSvc.getDefaultConnection(userId);
+  const connection = connectionsSvc.resolveConnection(userId);
   return {
     commit: true,
     names: {

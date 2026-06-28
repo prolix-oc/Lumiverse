@@ -119,7 +119,7 @@ export async function executeCouncil(
   // Verify the sidecar connection exists (if tools need it)
   let sidecarConn = null;
   if (hasTools && sidecar.connectionProfileId) {
-    sidecarConn = connectionsSvc.getConnection(input.userId, sidecar.connectionProfileId);
+    sidecarConn = connectionsSvc.resolveConnection(input.userId, sidecar.connectionProfileId);
     if (!sidecarConn) {
       console.warn("[council] Tools skipped: sidecar connection profile '%s' not found", sidecar.connectionProfileId);
     }
@@ -665,7 +665,7 @@ ${tool.prompt}${dynamicSuffix}${brevityNote}${userControlNote}`;
   ];
 
   // Resolve the connection to get the provider name
-  const conn = connectionsSvc.getConnection(userId, sidecar.connectionProfileId);
+  const conn = connectionsSvc.resolveConnection(userId, sidecar.connectionProfileId);
   if (!conn) throw new Error("Sidecar connection not found");
 
   const response = await rawGenerate(userId, {
@@ -993,7 +993,7 @@ async function planCallableToolArgs(
     throw new Error(`Sidecar connection is required to plan arguments for \"${tool.displayName}\"`);
   }
 
-  const conn = connectionsSvc.getConnection(userId, sidecar.connectionProfileId);
+  const conn = connectionsSvc.resolveConnection(userId, sidecar.connectionProfileId);
   if (!conn) throw new Error("Sidecar connection not found");
 
   const roleNote = member.role

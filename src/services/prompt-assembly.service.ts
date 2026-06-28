@@ -1124,9 +1124,7 @@ export async function assemblePrompt(
   const connection =
     pf?.connection !== undefined
       ? pf.connection
-      : ctx.connectionId
-        ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-        : connectionsSvc.getDefaultConnection(ctx.userId);
+      : connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId);
 
   // Resolve preset: request presetId takes priority, then connection's
   // preset_id, then any more-specific preset-profile binding can override that

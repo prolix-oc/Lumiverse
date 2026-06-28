@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Check, Star, BrainCircuit, Copy, LogIn, RefreshCw, MoreVertical, Shuffle } from 'lucide-react'
 import { connectionsApi } from '@/api/connections'
 import { buildOpenRouterOAuthCallbackUrl, openrouterApi, type OpenRouterCreditsInfo } from '@/api/openrouter'
 import { buildNanoGptOAuthCallbackUrl, nanoGptApi } from '@/api/nanogpt'
@@ -26,6 +26,8 @@ const COMPACT_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 })
 
+const MODEL_ROULETTE_PROVIDER = 'model_roulette'
+
 function formatCompactCount(value: number) {
   return COMPACT_NUMBER_FORMATTER.format(value)
 }
@@ -47,6 +49,12 @@ function formatTimeUntil(resetAt: number | null) {
 function isNanoGptSubscriptionInactive(usage: NanoGptSubscriptionUsage) {
   const state = usage.state?.toLowerCase()
   return !usage.active || state === 'disabled' || state === 'inactive' || state === 'canceled' || state === 'cancelled'
+}
+
+function getRouletteConnectionCount(profile: ConnectionProfile) {
+  const raw = profile.metadata?.connection_roulette?.connection_ids
+  if (!Array.isArray(raw)) return 0
+  return new Set(raw.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)).size
 }
 
 interface ConnectionItemProps {
@@ -74,6 +82,8 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
 
   const isOpenRouter = profile.provider === 'openrouter'
   const isNanoGpt = profile.provider === 'nanogpt'
+  const isRoulette = profile.provider === MODEL_ROULETTE_PROVIDER
+  const rouletteCount = isRoulette ? getRouletteConnectionCount(profile) : 0
   const showCredits = isOpenRouter && isActive && profile.has_api_key && !editing
   const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
   const unknownReset = t('connectionItem.unknown')
@@ -243,7 +253,13 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
     <div className={clsx(styles.item, isActive && styles.itemActive)}>
       <div className={styles.itemRow}>
         <button type="button" className={styles.itemBtn} onClick={onSelect}>
-          <ProviderIcon kind="llm" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
+          {isRoulette ? (
+            <span className={clsx(styles.itemIcon, styles.rouletteIcon)}>
+              <Shuffle size={16} />
+            </span>
+          ) : (
+            <ProviderIcon kind="llm" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
+          )}
             <div className={styles.itemInfo}>
               <span className={styles.itemName}>
                 {profile.name}
@@ -251,7 +267,9 @@ profile, isActive, providers, onSelect, onUpdate, onDuplicate, onDelete }: Conne
                 {boundReasoning && <span title={boundReasoningTitle}><BrainCircuit size={11} className={styles.reasoningBound} /></span>}
               </span>
               <span className={styles.itemMeta}>
-                {profile.provider}{profile.model ? ` / ${profile.model}` : ''}
+                {isRoulette
+                  ? t('connectionItem.modelRouletteMeta', { count: rouletteCount })
+                  : `${profile.provider}${profile.model ? ` / ${profile.model}` : ''}`}
               </span>
               {boundReasoningSummary && (
                 <span className={styles.itemReasoningMeta} title={boundReasoningTitle}>

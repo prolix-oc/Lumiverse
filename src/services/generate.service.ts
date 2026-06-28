@@ -966,9 +966,7 @@ export function resolveCouncilRetry(
 
 /** Resolve connection profile by ID or fall back to the user's default. */
 function resolveConnection(userId: string, connectionId?: string) {
-  const connection = connectionId
-    ? connectionsSvc.getConnection(userId, connectionId)
-    : connectionsSvc.getDefaultConnection(userId);
+  const connection = connectionsSvc.resolveConnection(userId, connectionId);
   if (!connection) {
     throw new Error("No connection profile found. Create one first.");
   }
@@ -1161,8 +1159,8 @@ function applyEffectiveReasoningSettings(
 async function resolveProviderAndKey(
   userId: string,
   connectionId: string,
-): Promise<{ provider: LlmProvider; apiKey: string; apiUrl: string }> {
-  const connection = connectionsSvc.getConnection(userId, connectionId);
+): Promise<{ provider: LlmProvider; apiKey: string; apiUrl: string; connection: ConnectionProfile }> {
+  const connection = connectionsSvc.resolveConnection(userId, connectionId);
   if (!connection) {
     throw new Error(`Connection not found: ${connectionId}`);
   }
@@ -1174,7 +1172,7 @@ async function resolveProviderAndKey(
 
   const apiKey = await secretsSvc.getSecret(
     userId,
-    connectionsSvc.connectionSecretKey(connectionId),
+    connectionsSvc.connectionSecretKey(connection.id),
   );
   if (!apiKey && provider.capabilities.apiKeyRequired) {
     throw new Error(
@@ -1186,6 +1184,7 @@ async function resolveProviderAndKey(
     provider,
     apiKey: apiKey || "",
     apiUrl: connectionsSvc.resolveEffectiveApiUrl(connection),
+    connection,
   };
 }
 
@@ -1554,7 +1553,7 @@ async function runPromptPipeline(opts: {
 async function resolveRawProviderAndKey(
   userId: string,
   input: RawGenerateInput,
-): Promise<{ provider: LlmProvider; apiKey: string; apiUrl: string }> {
+): Promise<{ provider: LlmProvider; apiKey: string; apiUrl: string; connection: ConnectionProfile | null }> {
   // If a connection_id is provided, use per-connection key
   if (input.connection_id) {
     return resolveProviderAndKey(userId, input.connection_id);
@@ -1564,7 +1563,7 @@ async function resolveRawProviderAndKey(
   if (input.api_key) {
     const provider = getProvider(input.provider);
     if (!provider) throw new Error(`Unknown provider: ${input.provider}`);
-    return { provider, apiKey: input.api_key, apiUrl: input.api_url || "" };
+    return { provider, apiKey: input.api_key, apiUrl: input.api_url || "", connection: null };
   }
 
   // Fallback: look up provider by name, but there's no global key anymore.
@@ -1578,7 +1577,7 @@ async function resolveRawProviderAndKey(
     );
   }
 
-  return { provider, apiKey: "", apiUrl: input.api_url || "" };
+  return { provider, apiKey: "", apiUrl: input.api_url || "", connection: null };
 }
 
 export async function startGeneration(
@@ -1675,6 +1674,7 @@ export async function startGeneration(
 
   try {
     const connection = resolveConnection(input.userId, input.connection_id);
+    input.connection_id = connection.id;
     // Loaded before preset resolution: no-preset temp chats bypass the preset
     // requirement entirely (assertUsablePreset would otherwise reject them).
     const chat = chatsSvc.getChat(input.userId, input.chat_id);
@@ -2861,6 +2861,7 @@ export async function dryRunGeneration(
   }
 
   const connection = resolveConnection(input.userId, input.connection_id);
+  input.connection_id = connection.id;
   if (!isNoPresetChat) {
     presetsSvc.assertUsablePreset(
       input.userId,
@@ -4308,14 +4309,12 @@ async function prepareRawCall(
   userId: string,
   input: RawGenerateInput & { signal?: AbortSignal },
 ): Promise<PreparedGenerationCall> {
-  const { provider, apiKey, apiUrl } = await resolveRawProviderAndKey(
+  const { provider, apiKey, apiUrl, connection } = await resolveRawProviderAndKey(
     userId,
     input,
   );
   const parameters: GenerationParameters = { ...(input.parameters || {}) };
-  const reasoningConnection = input.connection_id
-    ? connectionsSvc.getConnection(userId, input.connection_id)
-    : null;
+  const reasoningConnection = connection;
   applyEffectiveReasoningSettings(
     userId,
     reasoningConnection || {},
