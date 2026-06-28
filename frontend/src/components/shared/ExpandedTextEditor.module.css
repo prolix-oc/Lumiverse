@@ -131,6 +131,7 @@
 }
 
 .editorArea {
+  --expanded-editor-tab-size: 4;
   flex: 1;
   min-width: 0;
   /* min-height:0 lets this flex child shrink below its (very tall) content so
@@ -159,6 +160,8 @@
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
@@ -219,7 +222,8 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  tab-size: 2;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   color: var(--lumiverse-text);
   pointer-events: none;
   box-sizing: border-box;
@@ -246,7 +250,8 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  tab-size: 2;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   -webkit-text-fill-color: transparent;
   box-sizing: border-box;
 }
@@ -256,25 +261,26 @@
   -webkit-text-fill-color: var(--lumiverse-text-dim);
 }
 
-/* Lock per-character glyph advance across BOTH layers so the caret (which lives
-   in the <textarea>) and the visible glyphs (in the <pre>) never drift apart.
-   A <textarea> shapes text with kerning/ligatures effectively OFF (it treats
-   glyphs as fixed cells for caret math), while a <pre> applies the font's
-   kerning + contextual ligatures by default. That asymmetry shifts the
-   highlighted text away from the caret — worsening along each line and around
-   ligature-prone tokens this editor is full of ({{ }} :: -> ==), especially on
-   ligature mono fonts (Fira Code, JetBrains Mono). Forcing the same minimal
-   shaping on both keeps them in step. text-size-adjust pins mobile text
-   inflation, which hits the <pre> (content) but not the form control.
-   These two selectors MUST stay grouped — divergence here = caret drift. */
+/* Lock every text metric across BOTH layers so the caret (which lives in the
+   <textarea>) and the visible glyphs (in the <pre>) never drift apart. Under
+   UI zoom, even small UA-default differences between form controls and block
+   text compound into visible x/y offset by the time a line wraps. Keep these
+   selectors grouped and layout-neutral: color/background-only highlighting,
+   no font-weight/style changes, and identical shaping/wrapping rules. */
 .highlightPre,
 .textareaHighlighted {
+  font-weight: 400;
+  font-style: normal;
   letter-spacing: 0;
   word-spacing: 0;
+  text-indent: 0;
+  text-transform: none;
   font-kerning: none;
   font-variant-ligatures: none;
+  font-variant-numeric: normal;
   font-feature-settings: "liga" 0, "calt" 0;
-  text-rendering: optimizeSpeed;
+  font-synthesis: none;
+  text-rendering: auto;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -283,12 +289,10 @@
 
 .hlBracket {
   color: #c792ea;
-  font-weight: 700;
 }
 
 .hlMacroName {
   color: var(--lumiverse-primary, #9370db);
-  font-weight: 700;
 }
 
 .hlSep {
@@ -311,7 +315,6 @@
 
 .hlMdHeader {
   color: #f78c6c;
-  font-weight: 700;
 }
 
 /* ── Macro sidebar ── */

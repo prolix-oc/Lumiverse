@@ -1,4 +1,16 @@
-import { useState, useEffect, useRef, useMemo, useCallback, type ChangeEvent, type ReactNode } from 'react'
+import {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  useLayoutEffect,
+  type ChangeEvent,
+  type CompositionEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { Minimize2, Maximize2, Hash, Search } from 'lucide-react'
@@ -172,6 +184,26 @@ interface ExpandedTextEditorProps {
   markdownOnly?: boolean
 }
 
+type TextSelectionDirection = 'forward' | 'backward' | 'none'
+
+interface TextSelectionSnapshot {
+  start: number
+  end: number
+  direction: TextSelectionDirection
+}
+
+function normalizeSelectionDirection(direction: HTMLTextAreaElement['selectionDirection']): TextSelectionDirection {
+  return direction === 'forward' || direction === 'backward' ? direction : 'none'
+}
+
+function clampSelection(selection: TextSelectionSnapshot, valueLength: number): TextSelectionSnapshot {
+  const start = Math.max(0, Math.min(selection.start, valueLength))
+  const end = Math.max(0, Math.min(selection.end, valueLength))
+  return start <= end
+    ? { start, end, direction: selection.direction }
+    : { start: end, end: start, direction: selection.direction }
+}
+
 export default function ExpandedTextEditor({
   value,
   onChange,
@@ -188,6 +220,11 @@ export default function ExpandedTextEditor({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const overlayMouseDownRef = useRef<EventTarget | null>(null)
   const onCloseRef = useRef(onClose)
+  const selectionRef = useRef<TextSelectionSnapshot | null>(null)
+  const hasInitializedSelectionRef = useRef(false)
+  const shouldRestoreSelectionRef = useRef(true)
+  const shouldFocusSelectionRef = useRef(true)
+  const isComposingRef = useRef(false)
   onCloseRef.current = onClose
 
   const [showMacros, setShowMacros] = useState(false)
@@ -229,6 +266,59 @@ export default function ExpandedTextEditor({
     })).filter(g => g.macros.length > 0)
   }, [resolvedMacros, macroSearch])
 
+  const captureSelection = useCallback((target: HTMLTextAreaElement | null) => {
+    if (!target) return
+    selectionRef.current = {
+      start: target.selectionStart,
+      end: target.selectionEnd,
+      direction: normalizeSelectionDirection(target.selectionDirection),
+    }
+  }, [])
+
+  const restoreSelection = useCallback(() => {
+    const textarea = textareaRef.current
+    const selection = selectionRef.current
+    if (!textarea || !selection || isComposingRef.current) return
+    if (document.activeElement !== textarea && !shouldFocusSelectionRef.current) return
+
+    const nextSelection = clampSelection(selection, textarea.value.length)
+    selectionRef.current = nextSelection
+
+    if (shouldFocusSelectionRef.current && document.activeElement !== textarea) {
+      textarea.focus()
+    }
+
+    const currentDirection = normalizeSelectionDirection(textarea.selectionDirection)
+    if (
+      textarea.selectionStart !== nextSelection.start ||
+      textarea.selectionEnd !== nextSelection.end ||
+      currentDirection !== nextSelection.direction
+    ) {
+      textarea.setSelectionRange(nextSelection.start, nextSelection.end, nextSelection.direction)
+    }
+
+    shouldRestoreSelectionRef.current = false
+    shouldFocusSelectionRef.current = false
+  }, [])
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+
+    if (!hasInitializedSelectionRef.current) {
+      const initialPos = Math.max(0, Math.min(initialCursorPos ?? textarea.value.length, textarea.value.length))
+      selectionRef.current = { start: initialPos, end: initialPos, direction: 'none' }
+      hasInitializedSelectionRef.current = true
+      shouldRestoreSelectionRef.current = true
+      shouldFocusSelectionRef.current = true
+    } else if (document.activeElement === textarea || shouldFocusSelectionRef.current) {
+      shouldRestoreSelectionRef.current = true
+    }
+
+    if (!shouldRestoreSelectionRef.current || isComposingRef.current) return
+    restoreSelection()
+  }, [initialCursorPos, restoreSelection, value])
+
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -240,14 +330,6 @@ export default function ExpandedTextEditor({
     document.addEventListener('keydown', handleEscape, true)
     if (!inline) document.body.style.overflow = 'hidden'
 
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus()
-        const pos = initialCursorPos ?? textareaRef.current.value.length
-        textareaRef.current.setSelectionRange(pos, pos)
-      }
-    })
-
     return () => {
       document.removeEventListener('keydown', handleEscape, true)
       if (!inline) document.body.style.overflow = ''
@@ -255,22 +337,81 @@ export default function ExpandedTextEditor({
   }, [])
 
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    captureSelection(e.currentTarget)
+    shouldRestoreSelectionRef.current = true
     onChange(e.currentTarget.value)
-  }, [onChange])
+  }, [captureSelection, onChange])
+
+  const handleTextareaSelect = useCallback((e: SyntheticEvent<HTMLTextAreaElement>) => {
+    captureSelection(e.currentTarget)
+  }, [captureSelection])
+
+  const handleCompositionStart = useCallback((e: CompositionEvent<HTMLTextAreaElement>) => {
+    isComposingRef.current = true
+    captureSelection(e.currentTarget)
+  }, [captureSelection])
+
+  const handleCompositionEnd = useCallback((e: CompositionEvent<HTMLTextAreaElement>) => {
+    isComposingRef.current = false
+    captureSelection(e.currentTarget)
+    shouldRestoreSelectionRef.current = true
+  }, [captureSelection])
+
+  const replaceSelection = useCallback((
+    insertedText: string,
+    opts?: {
+      target?: HTMLTextAreaElement | null
+      focus?: boolean
+      appendIfMissing?: boolean
+    },
+  ) => {
+    const target = opts?.target ?? textareaRef.current
+    if (!target) {
+      const nextValue = opts?.appendIfMissing === false ? value : value + insertedText
+      selectionRef.current = {
+        start: nextValue.length,
+        end: nextValue.length,
+        direction: 'none',
+      }
+      shouldRestoreSelectionRef.current = true
+      shouldFocusSelectionRef.current = opts?.focus ?? true
+      onChange(nextValue)
+      return
+    }
+
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    const nextValue = value.substring(0, start) + insertedText + value.substring(end)
+    selectionRef.current = {
+      start: start + insertedText.length,
+      end: start + insertedText.length,
+      direction: 'none',
+    }
+    shouldRestoreSelectionRef.current = true
+    shouldFocusSelectionRef.current = opts?.focus ?? document.activeElement !== target
+    onChange(nextValue)
+  }, [onChange, value])
+
+  const handleTextareaKeyDown = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      e.key !== 'Tab' ||
+      e.shiftKey ||
+      e.altKey ||
+      e.ctrlKey ||
+      e.metaKey ||
+      isComposingRef.current
+    ) {
+      return
+    }
+
+    e.preventDefault()
+    replaceSelection('\t', { target: e.currentTarget, focus: false })
+  }, [replaceSelection])
 
   const insertMacro = useCallback((syntax: string) => {
-    const ta = textareaRef.current
-    if (!ta) { onChange(value + syntax); return }
-    const start = ta.selectionStart
-    const end = ta.selectionEnd
-    onChange(value.substring(0, start) + syntax + value.substring(end))
+    replaceSelection(syntax, { focus: true })
     setShowMacros(false)
-    requestAnimationFrame(() => {
-      ta.focus()
-      const pos = start + syntax.length
-      ta.setSelectionRange(pos, pos)
-    })
-  }, [value, onChange])
+  }, [replaceSelection])
 
   const hasMacros = resolvedMacros.length > 0
   const showHighlight = hasMacros || !!markdownOnly
@@ -338,6 +479,10 @@ export default function ExpandedTextEditor({
                   className={s.textareaHighlighted}
                   value={value}
                   onChange={handleTextareaChange}
+                  onSelect={handleTextareaSelect}
+                  onKeyDown={handleTextareaKeyDown}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
                   placeholder={placeholder}
                   spellCheck={false}
                 />
@@ -349,6 +494,10 @@ export default function ExpandedTextEditor({
               className={s.textarea}
               value={value}
               onChange={handleTextareaChange}
+              onSelect={handleTextareaSelect}
+              onKeyDown={handleTextareaKeyDown}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
               placeholder={placeholder}
             />
           )}
