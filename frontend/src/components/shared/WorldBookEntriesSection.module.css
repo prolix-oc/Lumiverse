@@ -324,6 +324,55 @@
   margin: 0 auto;
 }
 
+@media (max-height: 860px) and (min-width: 720px) {
+  .section {
+    padding: 0 8px;
+  }
+
+  .entryListHeader {
+    gap: 8px;
+  }
+
+  .toolbarActions {
+    gap: 6px;
+  }
+
+  .toolbarBtn,
+  .newEntryBtn,
+  .bulkActionBtn {
+    padding: 5px 9px;
+  }
+
+  .entrySearchRow,
+  .entrySortRow {
+    margin-top: 6px;
+  }
+
+  .entrySearch {
+    padding: 5px 9px;
+  }
+
+  .entrySortSelect,
+  .entryPageSizeSelect,
+  .entrySortDirBtn {
+    padding-block: 5px;
+  }
+
+  .customSortHint,
+  .bulkBar {
+    margin-top: 6px;
+    padding: 8px 10px;
+  }
+
+  .entryList {
+    margin-top: 8px;
+  }
+
+  .entryListItem {
+    padding-bottom: 6px;
+  }
+}
+
 .rowDragging {
   z-index: 2;
 }

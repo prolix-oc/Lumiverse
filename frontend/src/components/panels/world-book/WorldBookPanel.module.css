@@ -659,6 +659,72 @@
   border: 1px solid var(--lumiverse-border);
 }
 
+@media (max-height: 860px) and (min-width: 720px) {
+  .panelScroll {
+    gap: 8px;
+    padding: 8px 10px 0;
+    scroll-padding-block-start: 8px;
+  }
+
+  .panelBody {
+    gap: 8px;
+    padding-bottom: calc(8px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
+  }
+
+  .panelFooter {
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bookFields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+    gap: 6px 10px;
+    padding: 8px;
+  }
+
+  .bookFields > .bookSourceNote,
+  .bookFields > .vectorSummary,
+  .bookFields > .bookActionRow,
+  .bookFields > .vectorStatusText {
+    grid-column: 1 / -1;
+  }
+
+  .bookFields > button {
+    justify-self: start;
+  }
+
+  .fieldGroup {
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .fieldInput {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 8px;
+  }
+
+  .vectorSummary {
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+  }
+
+  .vectorSummaryGrid {
+    gap: 6px 8px;
+  }
+
+  .vectorSummaryGrid span {
+    padding: 2px 7px;
+  }
+
+  .bookActionRow {
+    gap: 6px;
+    padding-top: 0;
+  }
+}
+
 .bulkSemanticToggle {
   display: flex;
   align-items: flex-start;
