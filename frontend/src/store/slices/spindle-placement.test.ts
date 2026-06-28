@@ -99,3 +99,38 @@ describe('moveTabTo / clearPendingActiveTabReset', () => {
     expect(slice.state.pendingActiveTabReset).toBe('profile')
   })
 })
+
+describe('hideAllPlacements / showAllPlacements', () => {
+  let slice: ReturnType<typeof makeSlice>
+  beforeEach(() => {
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.clear() } catch { /* no-op */ }
+    }
+    slice = makeSlice()
+  })
+
+  test('hideAllPlacements includes extension drawer tabs', () => {
+    slice.set({
+      drawerTabs: [{ id: 'drawer-1' } as any, { id: 'drawer-2' } as any],
+      floatWidgets: [{ id: 'float-1' } as any],
+      dockPanels: [{ id: 'dock-1' } as any],
+      appMounts: [{ id: 'mount-1' } as any],
+    } as any)
+
+    slice.state.hideAllPlacements()
+
+    expect(slice.state.hiddenPlacements).toEqual(['drawer-1', 'drawer-2', 'float-1', 'dock-1', 'mount-1'])
+  })
+
+  test('showAllPlacements clears drawer tab visibility hidden by hideAllPlacements', () => {
+    slice.set({
+      drawerTabs: [{ id: 'drawer-1' } as any],
+      floatWidgets: [{ id: 'float-1' } as any],
+    } as any)
+
+    slice.state.hideAllPlacements()
+    slice.state.showAllPlacements()
+
+    expect(slice.state.hiddenPlacements).toEqual([])
+  })
+})

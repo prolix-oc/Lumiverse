@@ -44,6 +44,7 @@ export default function ViewportDrawer() {
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const drawerSettings = useStore((s) => s.drawerSettings)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const isGroupChat = useStore((s) => s.isGroupChat)
 
   const isMobile = useIsMobile()
@@ -78,6 +79,7 @@ export default function ViewportDrawer() {
   const showTabLabels = drawerSettings.showTabLabels ?? true
   const hiddenTabIds = sanitizeHiddenDrawerTabIds(drawerSettings.hiddenTabIds)
   const hiddenTabIdsSet = new Set(hiddenTabIds)
+  const hiddenPlacementIdsSet = new Set(hiddenPlacements)
   const tabOrder = sanitizeDrawerTabOrder(drawerSettings.tabOrder)
 
   const updateDrawer = useCallback(
@@ -96,8 +98,8 @@ export default function ViewportDrawer() {
   const orderedDrawerTabs = applyDrawerTabOrder(drawerTabs, tabOrder)
   const orderedExtensionEntries = applyDrawerTabOrder(extensionEntries, tabOrder)
   const visibleBuiltInTabs = orderedBuiltInTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id))
-  const visibleDrawerTabs = orderedDrawerTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id))
-  const visibleExtensionEntries = orderedExtensionEntries.filter((entry) => !hiddenTabIdsSet.has(entry.id))
+  const visibleDrawerTabs = orderedDrawerTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id) && !hiddenPlacementIdsSet.has(tab.id))
+  const visibleExtensionEntries = orderedExtensionEntries.filter((entry) => !hiddenTabIdsSet.has(entry.id) && !hiddenPlacementIdsSet.has(entry.id))
   const requestedActiveTab = drawerTab || 'profile'
   const allTabs = [...visibleBuiltInTabs, ...visibleExtensionEntries]
   const activeTab = allTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'profile'

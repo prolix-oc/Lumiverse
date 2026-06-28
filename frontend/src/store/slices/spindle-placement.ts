@@ -375,6 +375,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   hideAllPlacements: () => {
     const state = get()
     const allIds = [
+      ...state.drawerTabs.map((t) => t.id),
       ...state.floatWidgets.map((w) => w.id),
       ...state.dockPanels.map((p) => p.id),
       ...state.appMounts.map((m) => m.id),

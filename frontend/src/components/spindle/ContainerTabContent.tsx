@@ -20,8 +20,11 @@ export default function ContainerTabContent() {
   const containers = useStore((s) => s.containers)
   const tabLocations = useStore((s) => s.tabLocations)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const hiddenPlacements = useStore((s) => s.hiddenPlacements)
 
   useEffect(() => {
+    const hiddenPlacementIds = new Set(hiddenPlacements)
+
     // Pass 1: mount tabs into their matching registered container
     for (const container of containers) {
       if (!container.element) continue
@@ -29,6 +32,7 @@ export default function ContainerTabContent() {
       for (const [tabId, location] of Object.entries(tabLocations)) {
         if (location.kind !== 'container') continue
         if (location.containerId !== container.id) continue
+        if (hiddenPlacementIds.has(tabId)) continue
 
         const registryRoot = ensureRegistryRoot(tabId)
         const extTab = drawerTabs.find((t) => t.id === tabId)
@@ -52,6 +56,7 @@ export default function ContainerTabContent() {
         if (!root) continue
 
         const belongsHere =
+          !hiddenPlacementIds.has(tabId) &&
           location.kind === 'container' && location.containerId === container.id
         if (!belongsHere && container.element.contains(root)) {
           container.element.removeChild(root)
@@ -66,7 +71,7 @@ export default function ContainerTabContent() {
       if (containers.some((c) => c.id === location.containerId)) continue
       moveTabTo(tabId, { kind: 'main-drawer' })
     }
-  }, [containers, tabLocations, drawerTabs])
+  }, [containers, tabLocations, drawerTabs, hiddenPlacements])
 
   return null
 }
