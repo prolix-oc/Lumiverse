@@ -124,7 +124,7 @@ Same fields as `RegexScriptCreateDTO`, all optional.
   find_regex: string
   replace_string: string
   flags: string                 // any subset of "dgimsuvy" (full JS regex flag set)
-  placement: ("user_input" | "ai_output" | "world_info" | "reasoning")[]
+  placement: ("user_input" | "ai_output" | "world_info" | "reasoning" | "memory")[]
   scope: "global" | "character" | "chat"
   scope_id: string | null       // character ID or chat ID when scoped
   target: "prompt" | "response" | "display"

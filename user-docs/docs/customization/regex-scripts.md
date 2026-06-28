@@ -52,8 +52,11 @@ This converts `*italic text*` into `<em>italic text</em>`.
 | **AI Output** | The AI's response |
 | **World Info** | World book entry content |
 | **Reasoning** | Reasoning/thinking blocks |
+| **Memory** | Content as it's written to long-term memory |
 
 You can select multiple placements for the same script.
+
+**Memory** placement is independent of target: it strips text as it's saved to long-term memory (vector search and the memory cortex), before storage and embedding, while the displayed message keeps the full text. Use it to keep tracker or HUD blocks out of recalled memory. Macros aren't available at ingestion, so memory scripts must use literal patterns.
 
 ---
 
