@@ -434,6 +434,30 @@ function isDecorativeNewChatSeparator(text: string): boolean {
   return /^\[Start a new group chat(?:\. Group members:.*)?\]$/i.test(trimmed);
 }
 
+function isGenuinelyNewChat(messages: Message[]): boolean {
+  for (const msg of messages) {
+    if (msg.extra?.hidden === true) continue;
+    if (!msg.is_user && msg.extra?.greeting !== true) return false;
+  }
+  return true;
+}
+
+function resolveNewChatPromptConfig(
+  promptBehavior: PromptBehavior,
+  chat: Chat,
+): { prompt: string | undefined; label: string } {
+  if (chat.metadata?.group === true) {
+    return {
+      prompt: promptBehavior.newGroupChatPrompt ?? promptBehavior.newChatPrompt,
+      label: "New Group Chat Prompt",
+    };
+  }
+  return {
+    prompt: promptBehavior.newChatPrompt,
+    label: "New Chat Prompt",
+  };
+}
+
 const DEFAULT_EMPTY_SEND_NUDGE = "[Write the next reply only as {{char}}.]";
 
 // ---------------------------------------------------------------------------
@@ -2164,20 +2188,25 @@ export async function assemblePrompt(
         });
       }
 
-      // Insert new-chat separator if configured
-      const newChatPrompt = promptBehavior.newChatPrompt;
-      if (newChatPrompt) {
-        const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
-          .text;
-        const trimmed = resolved.trim();
-        if (trimmed && !isDecorativeNewChatSeparator(trimmed)) {
-          result.push({ role: "system", content: trimmed });
-          breakdown.push({
-            type: "separator",
-            name: "New Chat Prompt",
-            role: "system",
-            content: trimmed,
-          });
+      // Insert new-chat separator only before the first real assistant reply.
+      if (isGenuinelyNewChat(messages)) {
+        const {
+          prompt: newChatPrompt,
+          label: newChatPromptLabel,
+        } = resolveNewChatPromptConfig(promptBehavior, chat);
+        if (newChatPrompt) {
+          const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
+            .text;
+          const trimmed = resolved.trim();
+          if (trimmed && !isDecorativeNewChatSeparator(trimmed)) {
+            result.push({ role: "system", content: trimmed });
+            breakdown.push({
+              type: "separator",
+              name: newChatPromptLabel,
+              role: "system",
+              content: trimmed,
+            });
+          }
         }
       }
 
