@@ -11,7 +11,11 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 26px 36px 22px;
+  padding:
+    26px
+    calc(36px + var(--weaver-safe-right, 0px))
+    calc(22px + var(--weaver-safe-bottom, 0px))
+    calc(36px + var(--weaver-safe-left, 0px));
   transition: opacity 0.2s ease;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
@@ -311,7 +315,11 @@
 
 @media (max-width: 760px) {
   .body {
-    padding: 18px 16px;
+    padding:
+      18px
+      calc(16px + var(--weaver-safe-right, 0px))
+      calc(18px + var(--weaver-safe-bottom, 0px))
+      calc(16px + var(--weaver-safe-left, 0px));
   }
   .shelf {
     grid-template-columns: 1fr;
