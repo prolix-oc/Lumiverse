@@ -20,6 +20,7 @@ export default function useEditKeyboard(): void {
       const state = useStore.getState()
 
       // Guard conditions (mirror useSwipeKeyboard)
+      if (!state.swipeGesturesEnabled) return
       if (!state.activeChatId) return
       if (state.isStreaming) return
       if (state.activeModal) return
