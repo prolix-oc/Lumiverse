@@ -1369,6 +1369,38 @@
   color: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.65));
 }
 
+.keptBand {
+  margin-bottom: 24px;
+  padding: 14px 18px 16px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--lumiverse-radius, 8px);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+}
+.keptBandHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+}
+.keptBandHead svg {
+  color: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.65));
+  flex: none;
+}
+.keptBandTitle {
+  flex: 1;
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  color: var(--lumiverse-text, rgba(255, 255, 255, 0.92));
+  letter-spacing: 0.01em;
+}
+.keptBandBody {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  line-height: 1.6;
+  color: var(--lumiverse-text-muted, rgba(255, 255, 255, 0.65));
+  max-width: 68ch;
+  text-wrap: pretty;
+}
+
 .flagband {
   position: relative;
   background: color-mix(
