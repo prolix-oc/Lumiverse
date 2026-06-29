@@ -114,16 +114,22 @@ export const auth = betterAuth({
           }
         },
         after: async (user) => {
-          // BetterAuth swallows hook exceptions, so a failed directory
-          // provision used to leave the operator without any signal that
-          // the user couldn't write to disk. Surface the failure to the
-          // log instead of silently dropping it.
+          // BetterAuth swallows hook exceptions, so surface directory or
+          // preset-seed failures independently instead of dropping the user
+          // into a half-provisioned state with no signal in the logs.
           try {
             provisionUserDirectories(user.id);
-            seedDefaultPreset(user.id);
           } catch (err) {
             console.error(
-              `[Auth] Failed to provision user ${user.id}:`,
+              `[Auth] Failed to provision directories for user ${user.id}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+          try {
+            seedDefaultPreset(user.id, { setActive: true });
+          } catch (err) {
+            console.error(
+              `[Auth] Failed to seed default preset for user ${user.id}:`,
               err instanceof Error ? err.message : err,
             );
           }
