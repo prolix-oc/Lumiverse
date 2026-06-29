@@ -70,6 +70,17 @@ export async function resolveRenderedMessageContent(
   return healFormattingArtifacts((await evaluate(content, env, registry)).text);
 }
 
+export function buildPersistedMacroVariables(
+  existingMacroVars: Record<string, unknown>,
+  incomingGlobal: Record<string, string>,
+): Record<string, unknown> {
+  const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
+  return {
+    ...existingMacroVars,
+    global: { ...existingGlobal, ...incomingGlobal },
+  };
+}
+
 export function persistMacroVariableState(
   userId: string,
   chatId: string,
@@ -79,16 +90,9 @@ export function persistMacroVariableState(
   if (!chat) return;
 
   const existingMacroVars = (chat.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
-  const macroVarsWithoutLocal = { ...existingMacroVars };
-  delete macroVarsWithoutLocal.local;
-  const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
   const existingChatVars = (chat.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
-  const macroVariables = {
-    ...macroVarsWithoutLocal,
-    global: { ...existingGlobal, ...Object.fromEntries(env.variables.global) },
-  };
   chatsSvc.mergeChatMetadata(userId, chatId, {
-    macro_variables: macroVariables,
+    macro_variables: buildPersistedMacroVariables(existingMacroVars, Object.fromEntries(env.variables.global)),
     chat_variables: { ...existingChatVars, ...Object.fromEntries(env.variables.chat) },
   });
 }
@@ -119,16 +123,9 @@ export async function reconcileChatMessageMacros(
     const chat = chatsSvc.getChat(input.userId, input.chatId);
     // Env values win on collision but concurrent extension writes survive.
     const existingMacroVars = (chat?.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
-    const macroVarsWithoutLocal = { ...existingMacroVars };
-    delete macroVarsWithoutLocal.local;
-    const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
     const existingChatVars = (chat?.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
-    const macroVariables = {
-      ...macroVarsWithoutLocal,
-      global: { ...existingGlobal, ...globalVariables },
-    };
     chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
-      macro_variables: macroVariables,
+      macro_variables: buildPersistedMacroVariables(existingMacroVars, globalVariables),
       chat_variables: { ...existingChatVars, ...chatVariables },
     });
   }
