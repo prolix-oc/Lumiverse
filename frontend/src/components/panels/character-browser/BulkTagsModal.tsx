@@ -46,11 +46,20 @@ export default function BulkTagsModal({ isOpen, selectedIds, allTags, onClose, o
     setApplying(true)
     try {
       const result = await charactersApi.bulkUpdateTags(selectedIds, operation, staged)
-      addToast({ type: 'success', message: t('characterBrowser.bulkTagsApplied', { count: result.updated }) })
-      setStaged([])
-      setDraft('')
-      setOperation('add')
-      onApplied()
+      if (result.updated > 0) {
+        addToast({ type: 'success', message: t('characterBrowser.bulkTagsApplied', { count: result.updated }) })
+        setStaged([])
+        setDraft('')
+        setOperation('add')
+        onApplied()
+      } else {
+        const zeroKey = operation === 'add'
+          ? 'characterBrowser.bulkTagsAlreadyPresent'
+          : operation === 'remove'
+            ? 'characterBrowser.bulkTagsNoneToRemove'
+            : 'characterBrowser.bulkTagsNoChange'
+        addToast({ type: 'info', message: t(zeroKey, { count: selectedIds.length }) })
+      }
     } catch (err) {
       let message: string | undefined
       if (err && typeof err === 'object' && 'body' in err) {
