@@ -345,6 +345,11 @@ export function FlagBand({ subject, criteria, detail, fix, fixSteps, note, inFie
         <Icon name="shield" size={14} />
         <span>{note}</span>
       </div>
+      {action && (
+        <div className={styles.flagbandFoot}>
+          <Btn className={styles.btnTiny} iconRight="arrowRight" onClick={action.onClick}>{action.label}</Btn>
+        </div>
+      )}
     </div>
   )
 }
