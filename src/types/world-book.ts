@@ -15,6 +15,8 @@ export interface WorldBookEntry {
   world_book_id: string;
   uid: string;
   outlet_name: string | null;
+  wi_marker: string | null;
+  wi_marker_side: "before" | "after" | null;
   key: string[];
   keysecondary: string[];
   content: string;
@@ -239,6 +241,8 @@ export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
 
 export interface CreateWorldBookEntryInput {
   outlet_name?: string | null;
+  wi_marker?: string | null;
+  wi_marker_side?: "before" | "after" | null;
   key?: string[];
   keysecondary?: string[];
   content?: string;
@@ -339,4 +343,5 @@ export interface WorldInfoCache {
   emBefore: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 5
   emAfter: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;        // position 6
   atMarker: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 7
+  pinnedMarkers: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string; marker: string; side: "before" | "after" }>;
 }

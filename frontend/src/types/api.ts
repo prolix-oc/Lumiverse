@@ -782,6 +782,8 @@ export interface WorldBookEntry {
   world_book_id: string;
   uid: string;
   outlet_name: string | null;
+  wi_marker: string | null;
+  wi_marker_side: "before" | "after" | null;
   key: string[];
   keysecondary: string[];
   content: string;
@@ -984,6 +986,8 @@ export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
 
 export interface CreateWorldBookEntryInput {
   outlet_name?: string | null;
+  wi_marker?: string | null;
+  wi_marker_side?: "before" | "after" | null;
   key?: string[];
   keysecondary?: string[];
   content?: string;

@@ -32,11 +32,47 @@ function emitWorldBookEntryChanged(userId: string, id: string): void {
 }
 
 const ENTRY_OUTLET_NAME_KEYS = ["outlet_name", "outletName"] as const;
+const ENTRY_WI_MARKER_KEYS = ["wi_marker", "wiMarker"] as const;
+const ENTRY_WI_MARKER_SIDE_KEYS = ["wi_marker_side", "wiMarkerSide"] as const;
+
+// Valid WI marker ids — must match ADDABLE_MARKERS in
+// frontend/src/lib/loom/constants.ts. Pinned-marker entries splice adjacent
+// to the loom block whose `marker` equals this id.
+const VALID_WI_MARKERS: Record<string, true> = {
+  chat_history: true,
+  world_info_before: true,
+  world_info_after: true,
+  char_description: true,
+  char_personality: true,
+  persona_description: true,
+  scenario: true,
+  dialogue_examples: true,
+  main_prompt: true,
+  enhance_definitions: true,
+  jailbreak: true,
+  nsfw_prompt: true,
+};
 
 function normalizeEntryOutletName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// Marker id must be one of the 12 valid ids; anything else coerces to null.
+function normalizeEntryWiMarker(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return VALID_WI_MARKERS[normalized] === true ? normalized : null;
+}
+
+// Side is "before" | "after" (case-insensitive); anything else coerces to null.
+function normalizeEntryWiMarkerSide(value: unknown): "before" | "after" | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "before") return "before";
+  if (normalized === "after") return "after";
+  return null;
 }
 
 function cloneUnknownRecord(value: unknown): Record<string, any> {
@@ -47,23 +83,51 @@ function cloneUnknownRecord(value: unknown): Record<string, any> {
 function splitManagedEntryExtensions(raw: unknown): {
   extensions: Record<string, any>;
   outletName: string | null;
+  wiMarker: string | null;
+  wiMarkerSide: "before" | "after" | null;
 } {
   const extensions = typeof raw === "string"
     ? JSON.parse(raw)
     : cloneUnknownRecord(raw);
   const next = cloneUnknownRecord(extensions);
   const outletName = normalizeEntryOutletName(next.outlet_name ?? next.outletName);
+  const wiMarker = normalizeEntryWiMarker(next.wi_marker ?? next.wiMarker);
+  const wiMarkerSide = normalizeEntryWiMarkerSide(next.wi_marker_side ?? next.wiMarkerSide);
   for (const key of ENTRY_OUTLET_NAME_KEYS) delete next[key];
-  return { extensions: next, outletName };
+  for (const key of ENTRY_WI_MARKER_KEYS) delete next[key];
+  for (const key of ENTRY_WI_MARKER_SIDE_KEYS) delete next[key];
+  return { extensions: next, outletName, wiMarker, wiMarkerSide };
 }
 
-function buildStoredEntryExtensions(raw: unknown, outletValue: unknown): string {
-  const { extensions, outletName: embeddedOutletName } = splitManagedEntryExtensions(raw);
+function buildStoredEntryExtensions(
+  raw: unknown,
+  outletValue: unknown,
+  wiMarkerValue?: unknown,
+  wiMarkerSideValue?: unknown,
+): string {
+  const {
+    extensions,
+    outletName: embeddedOutletName,
+    wiMarker: embeddedWiMarker,
+    wiMarkerSide: embeddedWiMarkerSide,
+  } = splitManagedEntryExtensions(raw);
   const outletName = outletValue !== undefined
     ? normalizeEntryOutletName(outletValue)
     : embeddedOutletName;
+  const wiMarker = wiMarkerValue !== undefined
+    ? normalizeEntryWiMarker(wiMarkerValue)
+    : embeddedWiMarker;
+  const wiMarkerSide = wiMarkerSideValue !== undefined
+    ? normalizeEntryWiMarkerSide(wiMarkerSideValue)
+    : embeddedWiMarkerSide;
   if (outletName) {
     extensions.outlet_name = outletName;
+  }
+  if (wiMarker) {
+    extensions.wi_marker = wiMarker;
+  }
+  if (wiMarkerSide) {
+    extensions.wi_marker_side = wiMarkerSide;
   }
   return JSON.stringify(extensions);
 }
@@ -100,10 +164,12 @@ function normalizeVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
 
 function rowToEntry(row: any): WorldBookEntry {
   const vectorIndexStatus = normalizeVectorIndexStatus(row);
-  const { extensions, outletName } = splitManagedEntryExtensions(row.extensions);
+  const { extensions, outletName, wiMarker, wiMarkerSide } = splitManagedEntryExtensions(row.extensions);
   return {
     ...row,
     outlet_name: outletName,
+    wi_marker: wiMarker,
+    wi_marker_side: wiMarkerSide,
     key: JSON.parse(row.key),
     keysecondary: JSON.parse(row.keysecondary),
     role: row.role || null,
@@ -279,7 +345,8 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     "prevent_recursion", "preventRecursion", "exclude_recursion", "excludeRecursion",
     "delay_until_recursion", "delayUntilRecursion",
     "priority", "sticky", "cooldown", "delay",
-    "id", "entry", "uid", "vectorized", "extensions", "outlet_name", "outletName",
+    "id", "entry", "uid", "vectorized", "extensions",
+    "outlet_name", "outletName", "wi_marker", "wiMarker", "wi_marker_side", "wiMarkerSide",
   ]);
   const extras: Record<string, any> = {};
   for (const [k, v] of Object.entries(raw)) {
@@ -288,6 +355,8 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
 
   return {
     outlet_name: importValue(raw, ext, "outlet_name", "outletName"),
+    wi_marker: importValue(raw, ext, "wi_marker", "wiMarker"),
+    wi_marker_side: importValue(raw, ext, "wi_marker_side", "wiMarkerSide"),
     key: keys,
     keysecondary: secondaryKeys,
     content: raw.content || "",
@@ -330,11 +399,15 @@ export function materializeCharacterBookEntriesForRuntime(
   return rawEntries.map((raw, index) => {
     const input = normalizeImportedEntryInput(raw, index);
     const outletName = normalizeEntryOutletName(input.outlet_name);
+    const wiMarker = normalizeEntryWiMarker(input.wi_marker);
+    const wiMarkerSide = normalizeEntryWiMarkerSide(input.wi_marker_side);
     return {
       id: typeof raw.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
       world_book_id: worldBookId,
       uid: typeof raw.uid === "string" && raw.uid ? raw.uid : crypto.randomUUID(),
       outlet_name: outletName,
+      wi_marker: wiMarker,
+      wi_marker_side: wiMarkerSide,
       key: input.key ?? [],
       keysecondary: input.keysecondary ?? [],
       content: input.content ?? "",
@@ -891,7 +964,12 @@ export function createEntry(
     disabled: !!input.disabled,
     content: input.content || "",
   });
-  const storedExtensions = buildStoredEntryExtensions(input.extensions, input.outlet_name);
+  const storedExtensions = buildStoredEntryExtensions(
+    input.extensions,
+    input.outlet_name,
+    input.wi_marker,
+    input.wi_marker_side,
+  );
 
   getDb()
     .query(
@@ -981,11 +1059,18 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f] ? 1 : 0); }
   }
 
-  if (input.extensions !== undefined || input.outlet_name !== undefined) {
+  if (
+    input.extensions !== undefined
+    || input.outlet_name !== undefined
+    || input.wi_marker !== undefined
+    || input.wi_marker_side !== undefined
+  ) {
     fields.push("extensions = ?");
     values.push(buildStoredEntryExtensions(
       input.extensions ?? existing.extensions,
       input.outlet_name !== undefined ? input.outlet_name : existing.outlet_name,
+      input.wi_marker !== undefined ? input.wi_marker : existing.wi_marker,
+      input.wi_marker_side !== undefined ? input.wi_marker_side : existing.wi_marker_side,
     ));
   }
 
@@ -1053,6 +1138,8 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
 
   return createEntry(userId, targetBook.id, {
     outlet_name: existing.outlet_name,
+    wi_marker: existing.wi_marker,
+    wi_marker_side: existing.wi_marker_side,
     key: [...existing.key],
     keysecondary: [...existing.keysecondary],
     content: existing.content,
@@ -1366,7 +1453,12 @@ function bulkInsertEntries(
           disabled: !!input.disabled,
           content: input.content || "",
         });
-        const extensionsJson = buildStoredEntryExtensions(input.extensions, input.outlet_name);
+        const extensionsJson = buildStoredEntryExtensions(
+          input.extensions,
+          input.outlet_name,
+          input.wi_marker,
+          input.wi_marker_side,
+        );
 
         insert.run(
           id, worldBookId, uid,
@@ -1619,6 +1711,8 @@ function entryToCharacterBookSpec(entry: WorldBookEntry, index: number): Record<
     uid: entry.uid,
   };
   if (entry.outlet_name) extensions.outlet_name = entry.outlet_name;
+  if (entry.wi_marker) extensions.wi_marker = entry.wi_marker;
+  if (entry.wi_marker_side) extensions.wi_marker_side = entry.wi_marker_side;
 
   return {
     id: index,
@@ -1688,6 +1782,8 @@ function exportSillyTavern(book: WorldBook, entries: WorldBookEntry[]): Record<s
           delay: entry.delay,
           vectorized: entry.vectorized,
           ...(entry.outlet_name ? { outlet_name: entry.outlet_name } : {}),
+          ...(entry.wi_marker ? { wi_marker: entry.wi_marker } : {}),
+          ...(entry.wi_marker_side ? { wi_marker_side: entry.wi_marker_side } : {}),
           ...entry.extensions,
         },
       ])

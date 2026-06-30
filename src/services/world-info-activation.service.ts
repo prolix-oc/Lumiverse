@@ -669,6 +669,7 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
     emBefore: [],
     emAfter: [],
     atMarker: [],
+    pinnedMarkers: [],
   };
 
   for (const entry of entries) {
@@ -705,7 +706,20 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
         cache.emAfter.push({ content, role, entryLabel });
         break;
       case 7:
-        cache.atMarker.push({ content, role, entryLabel });
+        if (typeof entry.wi_marker === "string" && entry.wi_marker.length > 0) {
+          // Marker-pinned: splice adjacent to the loom block whose marker
+          // matches, instead of joining the legacy {{wi_marker}} pool.
+          cache.pinnedMarkers.push({
+            content,
+            role,
+            entryLabel,
+            marker: entry.wi_marker,
+            side: entry.wi_marker_side === "before" ? "before" : "after",
+          });
+        } else {
+          // Legacy: position-7 entries without a pin join the {{wi_marker}} pool.
+          cache.atMarker.push({ content, role, entryLabel });
+        }
         break;
       case 8:
         // Outlet-only: not injected at any position; resolved solely via the

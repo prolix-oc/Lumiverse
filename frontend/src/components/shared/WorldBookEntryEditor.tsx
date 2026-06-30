@@ -8,6 +8,7 @@ import clsx from 'clsx'
 import type { WorldBookEntry } from '@/types/api'
 import { getVectorIndexStatusDescription, getVectorIndexStatusLabel } from '@/lib/worldBookVectorization'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
+import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import NumberStepper from './NumberStepper'
 import styles from './WorldBookEntryEditor.module.css'
 
@@ -20,6 +21,7 @@ export interface EntryEditorProps {
 export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdate }: EntryEditorProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor' })
   const { positionOptions, roleOptions, selectiveLogicOptions } = useWorldBookEntryLabels()
+  const { addableMarkers, markerLabel, markerSectionLabel } = useLoomOptionLabels()
 
   const [groupOpen, setGroupOpen] = useState(false)
   const [timingOpen, setTimingOpen] = useState(false)
@@ -39,6 +41,8 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
   const [content, setContent] = useState(entry.content)
   const [comment, setComment] = useState(entry.comment)
   const [outletName, setOutletName] = useState(entry.outlet_name || '')
+  const [wiMarker, setWiMarker] = useState(entry.wi_marker || '')
+  const [wiMarkerSide, setWiMarkerSide] = useState(entry.wi_marker_side || 'after')
   const [primaryKeys, setPrimaryKeys] = useState(entry.key.join(', '))
   const [secondaryKeys, setSecondaryKeys] = useState(entry.keysecondary.join(', '))
   const lastSyncedId = useRef<string | null>(null)
@@ -50,6 +54,8 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     setContent(entry.content)
     setComment(entry.comment)
     setOutletName(entry.outlet_name || '')
+    setWiMarker(entry.wi_marker || '')
+    setWiMarkerSide(entry.wi_marker_side || 'after')
     setPrimaryKeys(entry.key.join(', '))
     setSecondaryKeys(entry.keysecondary.join(', '))
   }, [entry])
@@ -78,6 +84,23 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     },
     [entry.id, onUpdate]
   )
+  const handleWiMarkerChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value
+      setWiMarker(value)
+      onImmediateUpdate(entry.id, { wi_marker: value || null })
+    },
+    [entry.id, onImmediateUpdate]
+  )
+
+  const handleWiMarkerSideChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value as 'before' | 'after'
+      setWiMarkerSide(value)
+      onImmediateUpdate(entry.id, { wi_marker_side: value })
+    },
+    [entry.id, onImmediateUpdate]
+  )
 
   const handlePrimaryKeysChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -98,6 +121,19 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     },
     [entry.id, onUpdate]
   )
+  const markerGroups = (() => {
+    const groups: Array<{ section: string; items: string[] }> = []
+    let current: { section: string; items: string[] } | null = null
+    for (const item of addableMarkers) {
+      if (typeof item === 'object' && 'section' in item) {
+        current = { section: item.section, items: [] }
+        groups.push(current)
+      } else if (current) {
+        current.items.push(item)
+      }
+    }
+    return groups
+  })()
 
   return (
     <div className={styles.entryEditor} data-world-book-entry-editor="true">
@@ -208,6 +244,42 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
         </div>
         {entry.position === 8 && !(entry.outlet_name || '').trim() && (
           <p className={styles.fieldHint}>{t('outletOnlyHint')}</p>
+        )}
+        {entry.position === 7 && (
+          <div className={styles.entryFieldRow}>
+            <div className={styles.entryField}>
+              <label className={styles.fieldLabel}>{t('markerTarget')}</label>
+              <select
+                className={styles.entrySelect}
+                value={wiMarker}
+                onChange={handleWiMarkerChange}
+              >
+                <option value="">{t('markerTargetNone')}</option>
+                {markerGroups.map((group) => (
+                  <optgroup key={group.section} label={markerSectionLabel(group.section)}>
+                    {group.items.map((marker) => (
+                      <option key={marker} value={marker}>
+                        {markerLabel(marker)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            {wiMarker && (
+              <div className={styles.entryField}>
+                <label className={styles.fieldLabel}>{t('markerSideLabel')}</label>
+                <select
+                  className={styles.entrySelect}
+                  value={wiMarkerSide}
+                  onChange={handleWiMarkerSideChange}
+                >
+                  <option value="before">{t('markerSideBefore')}</option>
+                  <option value="after">{t('markerSideAfter')}</option>
+                </select>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

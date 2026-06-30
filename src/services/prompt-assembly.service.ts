@@ -2110,6 +2110,7 @@ export async function assemblePrompt(
       wiCache.emAfter,
       wiCache.depth,
       wiCache.atMarker,
+      wiCache.pinnedMarkers,
     ];
     let wiEvalCounter = 0;
     for (const bucket of allWiEntries) {
@@ -2163,8 +2164,36 @@ export async function assemblePrompt(
   let phiMacroReferenced = false;
   let blockYieldCounter = 0;
   phaseStartedAt = performance.now();
+  // Marker-pinned WI entries (position-7 entries whose wi_marker targets a
+  // specific loom block): splice adjacent to that block rather than joining
+  // the legacy {{wi_marker}} macro pool. Group by target marker, then by side.
+  type PinnedMarkerEntry = WorldInfoCache["pinnedMarkers"][number];
+  const pinnedByMarker = new Map<
+    string,
+    { before: PinnedMarkerEntry[]; after: PinnedMarkerEntry[] }
+  >();
+  for (const pin of wiCache.pinnedMarkers) {
+    let slot = pinnedByMarker.get(pin.marker);
+    if (!slot) {
+      slot = { before: [], after: [] };
+      pinnedByMarker.set(pin.marker, slot);
+    }
+    slot[pin.side].push(pin);
+  }
+  // "After" entries for a block are flushed at the top of the NEXT iteration
+  // so they always trail the block's full output — including multi-message
+  // blocks like chat_history, which push several messages before the loop
+  // advances. The final block's after-entries are flushed after the loop.
+  let pendingPinnedAfter: PinnedMarkerEntry[] | null = null;
 
   for (const block of blocks) {
+    // Flush the previous block's marker-pinned "after" entries before this
+    // iteration emits anything. Runs unconditionally — it belongs to the
+    // previous block, so it must land even if this block is skipped below.
+    if (pendingPinnedAfter) {
+      pushPinnedMarkerEntries(result, breakdown, pendingPinnedAfter);
+      pendingPinnedAfter = null;
+    }
     // Skip disabled blocks
     if (!block.enabled) continue;
 
@@ -2185,6 +2214,15 @@ export async function assemblePrompt(
     // generation type is not in the list
     if (block.injectionTrigger && block.injectionTrigger.length > 0) {
       if (!block.injectionTrigger.includes(ctx.generationType)) continue;
+    }
+    // Marker-pinned WI: emit this block's "before" entries ahead of its own
+    // output, and queue its "after" entries for the next-iteration flush.
+    const pin = block.marker ? pinnedByMarker.get(block.marker) : undefined;
+    if (pin) {
+      pushPinnedMarkerEntries(result, breakdown, pin.before);
+      if (pin.after.length > 0) {
+        pendingPinnedAfter = pin.after;
+      }
     }
 
     // ---- Handle by marker type ----
@@ -2592,6 +2630,11 @@ export async function assemblePrompt(
         });
       }
     }
+  }
+  // Trailing flush: the final emitting block's marker-pinned "after" entries.
+  if (pendingPinnedAfter) {
+    pushPinnedMarkerEntries(result, breakdown, pendingPinnedAfter);
+    pendingPinnedAfter = null;
   }
   profiler.addPhase("assembly-loop", performance.now() - phaseStartedAt);
 
@@ -4697,6 +4740,21 @@ function formatWorldInfoBreakdownName(
 ): string {
   return `${positionLabel}: ${entryLabel}`;
 }
+function pushPinnedMarkerEntries(
+  result: LlmMessage[],
+  breakdown: AssemblyBreakdownEntry[],
+  entries: WorldInfoCache["pinnedMarkers"],
+): void {
+  for (const entry of entries) {
+    result.push({ role: entry.role, content: entry.content });
+    breakdown.push({
+      type: "world_info",
+      name: formatWorldInfoBreakdownName(`WI @ ${entry.marker}`, entry.entryLabel),
+      role: entry.role,
+      content: entry.content,
+    });
+  }
+}
 
 function pruneEmptyWorldInfoEntriesInPlace<T extends { content: string }>(
   entries: T[],
@@ -4716,6 +4774,7 @@ function pruneEmptyWorldInfoCacheEntries(cache: WorldInfoCache): void {
   pruneEmptyWorldInfoEntriesInPlace(cache.emBefore);
   pruneEmptyWorldInfoEntriesInPlace(cache.emAfter);
   pruneEmptyWorldInfoEntriesInPlace(cache.atMarker);
+  pruneEmptyWorldInfoEntriesInPlace(cache.pinnedMarkers);
 }
 
 function injectPromptBlocksAt(

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
+import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import {
   ArrowDown,
   ArrowUp,
@@ -205,6 +206,7 @@ function EntryRowContent({
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
   const { t: tEntryFields } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor.fields' })
   const labels = useWorldBookEntryLabels()
+  const { markerLabel } = useLoomOptionLabels()
 
   const controlWrapProps = {
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
@@ -289,7 +291,7 @@ function EntryRowContent({
                   title={t('changeEntryPosition')}
                   aria-label={t('changeEntryPositionFrom', { position: labels.positionLabel(entry.position) })}
                 >
-                  <span>{labels.positionLabel(entry.position)}</span>
+                  <span>{entry.position === 7 && entry.wi_marker ? `${labels.positionLabel(entry.position)} · ${markerLabel(entry.wi_marker)}` : labels.positionLabel(entry.position)}</span>
                   <ChevronDown size={11} />
                 </button>
                 <span
