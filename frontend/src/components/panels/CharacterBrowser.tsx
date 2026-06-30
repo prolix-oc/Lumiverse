@@ -14,6 +14,7 @@ import CharacterGrid from './character-browser/CharacterGrid'
 import CharacterList from './character-browser/CharacterList'
 import CharacterEditorPage from './character-browser/CharacterEditorPage'
 import ImportUrlModal from './character-browser/ImportUrlModal'
+import BulkTagsModal from './character-browser/BulkTagsModal'
 import DragDropOverlay from './character-browser/DragDropOverlay'
 import GroupChatsPanel from './character-browser/GroupChatsPanel'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -88,6 +89,7 @@ export default function CharacterBrowser() {
 
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [bulkTagsOpen, setBulkTagsOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
   const dragCounterRef = useRef(0)
@@ -220,6 +222,7 @@ export default function CharacterBrowser() {
           onSelectAll={() => browser.selectAllBatch(browser.characters.map((c) => c.id))}
           onClearSelection={browser.clearBatchSelection}
           onDelete={handleBatchDelete}
+          onTags={() => setBulkTagsOpen(true)}
           onCancel={() => browser.setBatchMode(false)}
         />
       )}
@@ -332,6 +335,13 @@ export default function CharacterBrowser() {
         message={t('characterBrowser.deleteCharactersMessage', { count: browser.batchSelected.length })}
         variant="danger"
         confirmText={t('characterBrowser.delete')}
+      />
+      <BulkTagsModal
+        isOpen={bulkTagsOpen}
+        selectedIds={browser.batchSelected}
+        allTags={browser.allTags}
+        onClose={() => setBulkTagsOpen(false)}
+        onApplied={() => { setBulkTagsOpen(false); browser.refreshBrowser() }}
       />
 
       <ConfirmationModal

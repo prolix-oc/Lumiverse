@@ -1310,6 +1310,10 @@ export interface BatchDeleteResult {
   deleted: string[]
   failed: string[]
 }
+export interface BulkTagResult {
+  updated: number;
+  unchanged: number;
+}
 
 export interface LumiModule {
   key: string;

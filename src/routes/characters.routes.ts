@@ -471,6 +471,23 @@ app.get("/tags", (c) => {
   return c.json(svc.listCharacterTags(userId));
 });
 
+// ─── Bulk tag update (batch-select bar) ───────────────────────────────────
+app.post("/bulk-tags", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  try {
+    const result = svc.bulkUpdateCharacterTags(userId, {
+      ids: Array.isArray(body?.ids) ? body.ids : [],
+      operation: body?.operation,
+      tags: Array.isArray(body?.tags) ? body.tags : [],
+    });
+    return c.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to update tags";
+    return c.json({ error: message }, 400);
+  }
+});
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();

@@ -380,6 +380,85 @@ export function listCharacterTags(userId: string): { tag: string; count: number 
   return rows;
 }
 
+// ─── Bulk tag update (batch-select bar) ───────────────────────────────────
+
+export type CharacterTagBulkOperation = "add" | "remove" | "replace";
+
+export interface CharacterTagBulkInput {
+  ids: string[];
+  operation: CharacterTagBulkOperation;
+  tags: string[];
+}
+
+export interface CharacterTagBulkResult {
+  updated: number;
+  unchanged: number;
+}
+
+function applyTagOperation(current: string[], operation: CharacterTagBulkOperation, tags: string[]): string[] {
+  if (operation === "add") {
+    const merged = [...current];
+    for (const t of tags) if (!merged.includes(t)) merged.push(t);
+    return merged;
+  }
+  if (operation === "remove") {
+    const remove = new Set(tags);
+    return current.filter((t) => !remove.has(t));
+  }
+  return [...tags]; // replace
+}
+
+function stringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * Apply a tag operation to many characters in a single transaction.
+ * Mirrors the transactional pattern in tag-library-import.service.ts.
+ * Emits no per-character events; callers refresh the browser afterwards.
+ */
+export function bulkUpdateCharacterTags(userId: string, input: CharacterTagBulkInput): CharacterTagBulkResult {
+  const ids = Array.from(new Set(input.ids.filter((id) => typeof id === "string" && id.length > 0)));
+  if (ids.length === 0) throw new Error("At least one character id is required");
+  const operation = input.operation;
+  if (operation !== "add" && operation !== "remove" && operation !== "replace") {
+    throw new Error("Invalid tag operation");
+  }
+  const tags = Array.from(new Set(input.tags.map((t) => (typeof t === "string" ? t.trim() : "")).filter((t) => t.length > 0)));
+  if (tags.length === 0) throw new Error("At least one tag is required");
+
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = db
+    .query(`SELECT id, tags FROM characters WHERE id IN (${placeholders}) AND user_id = ?`)
+    .all(...ids, userId) as Array<{ id: string; tags: string | null }>;
+
+  const now = Math.floor(Date.now() / 1000);
+  const updateStmt = db.query("UPDATE characters SET tags = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+  let updated = 0;
+  let unchanged = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      let current: string[] = [];
+      try {
+        const parsed = JSON.parse(row.tags || "[]");
+        if (Array.isArray(parsed)) current = parsed.filter((t) => typeof t === "string");
+      } catch {}
+      const next = applyTagOperation(current, operation, tags);
+      if (stringArraysEqual(current, next)) {
+        unchanged++;
+        continue;
+      }
+      updateStmt.run(JSON.stringify(next), now, row.id, userId);
+      updated++;
+    }
+  })();
+
+  return { updated, unchanged };
+}
+
 // ─── Avatar info (lightweight, no JSON parsing) ───────────────────────────
 
 export function getCharacterAvatarInfo(

@@ -11,6 +11,7 @@ import type {
   ImportResult,
   BulkImportResult,
   BatchDeleteResult,
+  BulkTagResult,
   TagLibraryImportResult,
 } from '@/types/api'
 
@@ -147,6 +148,10 @@ export const charactersApi = {
 
   batchDelete(ids: string[], keepChats = false) {
     return post<BatchDeleteResult>('/characters/batch-delete', { ids, keep_chats: keepChats })
+  },
+
+  bulkUpdateTags(ids: string[], operation: 'add' | 'remove' | 'replace', tags: string[]) {
+    return post<BulkTagResult>('/characters/bulk-tags', { ids, operation, tags })
   },
 
   async exportCharacter(id: string, format: 'json' | 'png' | 'charx', characterName?: string) {
