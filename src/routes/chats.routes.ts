@@ -15,6 +15,10 @@ import {
 import { resolveRenderedMessageContent } from "../services/chat-macro-render.service";
 import { contentHasMacroHints } from "../services/vectorization-content.service";
 import { computeMessageTokenCount } from "../services/message-token-count";
+import {
+  getActivatedWorldInfoEntriesForChat,
+  resolveWorldInfoOutlets,
+} from "../services/prompt-assembly.service";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -52,6 +56,9 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
+/** Matches the `{{outlet::name}}` macro so display resolution can populate
+ *  the world-info outlet map only when a message actually references it. */
+const OUTLET_MACRO_RE = /\{\{outlet::/i;
 const DISPLAY_PREPROCESS_BATCH_MAX = 100;
 
 interface DisplayPreprocessItem {
@@ -102,7 +109,19 @@ async function runDisplayPreprocessItem(
   let content = processed.content ?? item.rawContent;
   if (contentHasMacroHints(content)) {
     const env = svc.buildMacroEnvForChat(userId, chatId);
-    if (env) content = await resolveRenderedMessageContent(content, env);
+    if (env) {
+      // {{outlet::name}} is only populated during prompt assembly; mirror it
+      // here so displayed messages match what the model actually receives.
+      if (OUTLET_MACRO_RE.test(content)) {
+        try {
+          const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
+          await resolveWorldInfoOutlets(entries, env, signal);
+        } catch {
+          // Leave outlets unresolved — base macro resolution still runs.
+        }
+      }
+      content = await resolveRenderedMessageContent(content, env);
+    }
   }
 
   return { messageId: item.messageId, content };

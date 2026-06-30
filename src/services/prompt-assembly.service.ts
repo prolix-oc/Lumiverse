@@ -4282,14 +4282,15 @@ export async function collectVectorActivatedWorldInfo(
 }
 
 /**
- * Get all activated world info entries for a chat (keyword + vector).
- * Standalone helper for the Spindle RPC bridge — runs WI activation
- * without the full prompt assembly pipeline.
+ * Run WI activation (keyword + vector) for a chat and return the full merge
+ * result — both the lightweight `activatedWorldInfo` DTO (for the Spindle
+ * bridge) and the full `activatedEntries` models (with content + outlet_name),
+ * which `resolveWorldInfoOutlets` needs to populate `{{outlet::name}}`.
  */
-export async function getActivatedWorldInfoForChat(
+async function computeActivatedWorldInfoForChat(
   userId: string,
   chatId: string,
-): Promise<ActivatedWorldInfoEntry[]> {
+): Promise<MergedWorldInfoEntriesResult> {
   const chat = chatsSvc.getChat(userId, chatId);
   if (!chat) throw new Error("Chat not found");
 
@@ -4343,7 +4344,32 @@ export async function getActivatedWorldInfoForChat(
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
-  ).activatedWorldInfo;
+  );
+}
+
+/**
+ * Get all activated world info entries for a chat (keyword + vector).
+ * Standalone helper for the Spindle RPC bridge — runs WI activation
+ * without the full prompt assembly pipeline.
+ */
+export async function getActivatedWorldInfoForChat(
+  userId: string,
+  chatId: string,
+): Promise<ActivatedWorldInfoEntry[]> {
+  return (await computeActivatedWorldInfoForChat(userId, chatId)).activatedWorldInfo;
+}
+
+/**
+ * Full activated world-info entry models for a chat (keyword + vector).
+ * Used to populate `{{outlet::name}}` outside prompt assembly — e.g. the
+ * display-preprocess path that resolves macros in rendered chat messages,
+ * so what the user sees matches what the model receives.
+ */
+export async function getActivatedWorldInfoEntriesForChat(
+  userId: string,
+  chatId: string,
+): Promise<WorldBookEntryModel[]> {
+  return (await computeActivatedWorldInfoForChat(userId, chatId)).activatedEntries;
 }
 
 /**
