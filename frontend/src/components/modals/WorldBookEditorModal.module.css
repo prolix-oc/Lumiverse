@@ -38,10 +38,17 @@
 
 .sidebarHeader {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 10px 8px;
   border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.sidebarSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
 }
 
 .searchInput {
@@ -58,6 +65,57 @@
 
 .searchInput:focus {
   border-color: var(--lumiverse-primary);
+}
+
+.sidebarControlRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.sidebarSelect {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.sidebarSelect:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
+.sidebarPageSizeSelect {
+  flex: 0 0 calc(54px * var(--lumiverse-font-scale, 1));
+}
+
+.sidebarIconBtn {
+  width: calc(28px * var(--lumiverse-font-scale, 1));
+  height: calc(28px * var(--lumiverse-font-scale, 1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.sidebarIconBtn:hover,
+.sidebarIconBtnActive {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-light);
 }
 
 .newBookBtn {
@@ -114,6 +172,11 @@
   color: var(--lumiverse-primary);
 }
 
+.bookItemSelected {
+  background: var(--lumiverse-primary-light);
+  color: var(--lumiverse-primary);
+}
+
 .bookName {
   flex: 1;
   overflow: hidden;
@@ -121,6 +184,21 @@
   white-space: nowrap;
 }
 
+.bookCheckbox {
+  width: calc(14px * var(--lumiverse-font-scale, 1));
+  height: calc(14px * var(--lumiverse-font-scale, 1));
+  accent-color: var(--lumiverse-primary);
+  flex-shrink: 0;
+}
+
+.bookActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.bookExportBtn,
 .bookDeleteBtn {
   width: 20px;
   height: 20px;
@@ -137,12 +215,120 @@
   transition: all var(--lumiverse-transition-fast);
 }
 
-.bookItem:hover .bookDeleteBtn {
+.bookItem:hover .bookExportBtn,
+.bookItem:hover .bookDeleteBtn,
+.bookExportBtn:focus-visible,
+.bookDeleteBtn:focus-visible {
   opacity: 1;
+}
+
+.bookExportBtn:hover {
+  color: var(--lumiverse-primary);
 }
 
 .bookDeleteBtn:hover {
   color: var(--lumiverse-error);
+}
+
+.bookPagination {
+  flex-shrink: 0;
+  padding: 6px;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.bulkBar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.bulkSelectionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bulkToggle {
+  width: calc(26px * var(--lumiverse-font-scale, 1));
+  height: calc(26px * var(--lumiverse-font-scale, 1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.bulkToggle:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.bulkToggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bulkCount {
+  flex: 1;
+  min-width: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-align: right;
+}
+
+.bulkActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.bulkActionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--lumiverse-surface);
+  border: 1px solid var(--lumiverse-border);
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.bulkActionBtn:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.bulkActionBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.bulkDeleteBtn:hover:not(:disabled) {
+  border-color: var(--lumiverse-error);
+  color: var(--lumiverse-error);
+}
+
+.bulkFolderDropdown {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.bulkFolderDropdown > button {
+  min-height: calc(30px * var(--lumiverse-font-scale, 1));
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
 }
 
 .sourceBadge {
@@ -393,6 +579,63 @@
 .newEntryBtn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.bulkDialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+
+.bulkDialogTitle {
+  margin: 0;
+  color: var(--lumiverse-text);
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+
+.bulkDialogText {
+  margin: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.5;
+}
+
+.exportFormatOptions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.exportFormatOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.exportFormatOption:hover,
+.exportFormatOptionActive {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-light);
+}
+
+.exportFormatOption input {
+  accent-color: var(--lumiverse-primary);
+}
+
+.bulkDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .vectorSummary {

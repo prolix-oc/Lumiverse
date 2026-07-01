@@ -211,6 +211,48 @@ export async function getBlob(path: string, params?: Record<string, any>, option
   }
 }
 
+function parseContentDispositionFilename(header: string | null): string | null {
+  if (!header) return null
+  const encoded = header.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return encoded
+    }
+  }
+  return header.match(/filename="?([^";]+)"?/i)?.[1] ?? null
+}
+
+export async function postBlob(path: string, body?: any, options?: RequestOptions): Promise<Blob> {
+  const { signal, cleanup, timeoutMs } = buildSignal(options)
+  const url = `${BASE_URL}${path}`
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/octet-stream',
+      },
+      credentials: 'include',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
+    })
+    if (!res.ok) {
+      let responseBody: any
+      try { responseBody = await res.json() } catch { responseBody = await res.text().catch(() => null) }
+      throw new ApiError(res.status, res.statusText, responseBody)
+    }
+    const blob = await res.blob()
+    const filename = parseContentDispositionFilename(res.headers.get('Content-Disposition'))
+    return filename ? new File([blob], filename, { type: blob.type }) : blob
+  } catch (error) {
+    throw maybeWrapTimeoutError(error, url, signal, timeoutMs)
+  } finally {
+    cleanup()
+  }
+}
+
 export async function upload<T>(path: string, formData: FormData, options?: RequestOptions): Promise<T> {
   const { signal, cleanup, timeoutMs } = buildSignal(options)
   const url = `${BASE_URL}${path}`

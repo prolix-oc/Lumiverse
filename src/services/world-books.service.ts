@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { zipSync, strToU8 } from "fflate";
 import type {
   WorldBook, WorldBookEntry,
   CreateWorldBookInput, UpdateWorldBookInput,
@@ -23,6 +24,10 @@ function emitWorldBookChanged(userId: string, id: string): void {
   const worldBook = getWorldBook(userId, id);
   if (!worldBook) return;
   eventBus.emit(EventType.WORLD_BOOK_CHANGED, { id, worldBook }, userId);
+}
+
+function emitWorldBookDeleted(userId: string, id: string): void {
+  eventBus.emit(EventType.WORLD_BOOK_DELETED, { id }, userId);
 }
 
 function emitWorldBookEntryChanged(userId: string, id: string): void {
@@ -634,8 +639,99 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
 
 export function deleteWorldBook(userId: string, id: string): boolean {
   const deleted = getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
-  if (deleted) eventBus.emit(EventType.WORLD_BOOK_DELETED, { id }, userId);
+  if (deleted) emitWorldBookDeleted(userId, id);
   return deleted;
+}
+
+export function bulkDeleteWorldBooks(userId: string, ids: string[]): { deleted: string[] } {
+  const uniqueIds = dedupeWorldBookIds(ids);
+  const deleted: string[] = [];
+  const db = getDb();
+
+  db.transaction(() => {
+    const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
+    for (const id of uniqueIds) {
+      if (stmt.run(id, userId).changes > 0) deleted.push(id);
+    }
+  })();
+
+  for (const id of deleted) {
+    emitWorldBookDeleted(userId, id);
+  }
+
+  return { deleted };
+}
+
+export function bulkUpdateWorldBooksFolder(userId: string, ids: string[], folder: string): { updated: number } {
+  const uniqueIds = dedupeWorldBookIds(ids);
+  const normalizedFolder = folder.trim();
+  const now = Math.floor(Date.now() / 1000);
+  const updatedIds: string[] = [];
+  const db = getDb();
+
+  db.transaction(() => {
+    const stmt = db.query("UPDATE world_books SET folder = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+    for (const id of uniqueIds) {
+      if (stmt.run(normalizedFolder, now, id, userId).changes > 0) updatedIds.push(id);
+    }
+  })();
+
+  for (const id of updatedIds) {
+    emitWorldBookChanged(userId, id);
+  }
+
+  return { updated: updatedIds.length };
+}
+
+export function bulkExportWorldBooks(
+  userId: string,
+  ids: string[],
+  format: WorldBookExportFormat = "lumiverse"
+): { filename: string; bytes: Uint8Array } {
+  const entries: Record<string, Uint8Array> = {};
+  const usedNames = new Set<string>();
+
+  for (const id of dedupeWorldBookIds(ids)) {
+    const payload = exportWorldBook(userId, id, format);
+    if (!payload) continue;
+
+    const bookName = typeof payload.name === "string" ? payload.name : "";
+    const baseName = sanitizeWorldBookExportFilenameBase(bookName, id);
+    const entryName = makeUniqueWorldBookExportEntryName(baseName, usedNames);
+    entries[entryName] = strToU8(JSON.stringify(payload, null, 2));
+  }
+
+  return {
+    filename: buildWorldBooksExportFilename(),
+    bytes: zipSync(entries),
+  };
+}
+
+function dedupeWorldBookIds(ids: string[]): string[] {
+  return [...new Set(ids)];
+}
+
+function sanitizeWorldBookExportFilenameBase(name: string, fallback: string): string {
+  const sanitized = name.replace(/[\/\\:*?"<>|\x00-\x1F\x7F]/g, "").trim();
+  return sanitized || fallback;
+}
+
+function makeUniqueWorldBookExportEntryName(baseName: string, usedNames: Set<string>): string {
+  let candidate = `${baseName}.json`;
+  let index = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${baseName} (${index}).json`;
+    index += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function buildWorldBooksExportFilename(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `world-books-${year}${month}${day}.zip`;
 }
 
 export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): number {

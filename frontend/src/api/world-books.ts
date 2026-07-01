@@ -1,4 +1,4 @@
-import { get, post, put, del } from './client'
+import { get, post, postBlob, put, del } from './client'
 import type {
   WorldBook, CreateWorldBookInput, UpdateWorldBookInput,
   WorldBookEntry, CreateWorldBookEntryInput, UpdateWorldBookEntryInput,
@@ -7,6 +7,18 @@ import type {
   DuplicateWorldBookEntryInput, ReorderWorldBookEntriesInput,
   WorldBookEntryBulkActionInput, WorldBookEntryBulkActionResult,
 } from '@/types/api'
+import { triggerBlobDownload } from '@/lib/downloads'
+
+export type WorldBookExportFormat = 'lumiverse' | 'character_book' | 'sillytavern'
+
+function sanitizeDownloadName(name: string): string {
+  return name
+    .trim()
+    .replace(/[\\/:*?"<>|\x00-\x1f]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+$/, '')
+    || 'world-book'
+}
 
 export const worldBooksApi = {
   list(params?: { limit?: number; offset?: number }) {
@@ -71,8 +83,26 @@ export const worldBooksApi = {
     return del<void>(`/world-books/${bookId}/entries/${entryId}`)
   },
 
-  export(bookId: string, format: 'lumiverse' | 'character_book' | 'sillytavern' = 'lumiverse') {
+  export(bookId: string, format: WorldBookExportFormat = 'lumiverse') {
     return get<Record<string, any>>(`/world-books/${bookId}/export`, { format })
+  },
+
+  bulkDelete(ids: string[]) {
+    return post<{ deleted: string[] }>('/world-books/bulk-delete', { ids })
+  },
+
+  bulkMoveFolder(ids: string[], folder: string) {
+    return post<{ updated: number }>('/world-books/bulk-move-folder', { ids, folder })
+  },
+
+  bulkExport(ids: string[], format: WorldBookExportFormat = 'lumiverse') {
+    return postBlob('/world-books/bulk-export', { ids, format })
+  },
+
+  async downloadWorldBook(bookId: string, bookName: string, format: WorldBookExportFormat = 'lumiverse') {
+    const data = await worldBooksApi.export(bookId, format)
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    triggerBlobDownload(blob, `${sanitizeDownloadName(bookName)}.json`)
   },
 
   importJson(payload: Record<string, any>) {

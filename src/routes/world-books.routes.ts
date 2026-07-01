@@ -28,6 +28,22 @@ import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/cha
 import { loadWorldBookVectorSettings } from "../services/world-book-vector-settings.service";
 
 const MAX_IMPORT_RESPONSE_BYTES = 100 * 1024 * 1024; // 100 MB
+const WORLD_BOOK_EXPORT_FORMATS: svc.WorldBookExportFormat[] = ["lumiverse", "character_book", "sillytavern"];
+
+function parseBulkWorldBookIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.every((id) => typeof id === "string") ? value : null;
+}
+
+function isWorldBookExportFormat(value: unknown): value is svc.WorldBookExportFormat {
+  return typeof value === "string" && WORLD_BOOK_EXPORT_FORMATS.includes(value as svc.WorldBookExportFormat);
+}
+
+function parseBulkWorldBookExportFormat(value: unknown): svc.WorldBookExportFormat | null {
+  if (value === undefined) return "lumiverse";
+  return isWorldBookExportFormat(value) ? value : null;
+}
+
 
 const app = new Hono();
 
@@ -417,14 +433,55 @@ app.get("/:id", (c) => {
 
 app.get("/:id/export", (c) => {
   const userId = c.get("userId");
-  const format = (c.req.query("format") || "lumiverse") as svc.WorldBookExportFormat;
-  const validFormats: svc.WorldBookExportFormat[] = ["lumiverse", "character_book", "sillytavern"];
-  if (!validFormats.includes(format)) {
-    return c.json({ error: `Invalid format. Must be one of: ${validFormats.join(", ")}` }, 400);
+  const formatValue = c.req.query("format") || "lumiverse";
+  if (!isWorldBookExportFormat(formatValue)) {
+    return c.json({ error: `Invalid format. Must be one of: ${WORLD_BOOK_EXPORT_FORMATS.join(", ")}` }, 400);
   }
+  const format = formatValue;
   const result = svc.exportWorldBook(userId, c.req.param("id"), format);
   if (!result) return c.json({ error: "Not found" }, 404);
   return c.json(result);
+});
+
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+
+  const result = svc.bulkDeleteWorldBooks(userId, ids);
+  return c.json({ deleted: result.deleted });
+});
+
+app.post("/bulk-export", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; format?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+
+  const format = parseBulkWorldBookExportFormat(body?.format);
+  if (!format) {
+    return c.json({ error: `Invalid format. Must be one of: ${WORLD_BOOK_EXPORT_FORMATS.join(", ")}` }, 400);
+  }
+
+  const result = svc.bulkExportWorldBooks(userId, ids, format);
+  return new Response(new Uint8Array(result.bytes), {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${result.filename}"`,
+    },
+  });
+});
+
+app.post("/bulk-move-folder", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; folder?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+  if (typeof body?.folder !== "string") return c.json({ error: "folder must be a string" }, 400);
+
+  const result = svc.bulkUpdateWorldBooksFolder(userId, ids, body.folder);
+  return c.json({ updated: result.updated });
 });
 
 app.put("/:id", async (c) => {
