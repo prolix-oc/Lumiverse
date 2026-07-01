@@ -392,7 +392,9 @@
     "positionBefore": "Prima del messaggio",
     "positionAfter": "Dopo il messaggio",
     "guideName": "Nome della guida",
-    "guideContent": "Contenuto del prompt della guida"
+    "guideContent": "Contenuto del prompt della guida",
+    "deleteGuideTitle": "Elimina guida",
+    "deleteGuideMessage": "Eliminare \"{{name}}\"?"
   },
   "quickReplies": {
     "title": "Risposte rapide",
@@ -408,7 +410,11 @@
     "label": "Etichetta",
     "message": "Messaggio",
     "addReply": "Aggiungi risposta",
-    "remove": "Rimuovi"
+    "remove": "Rimuovi",
+    "deleteSetTitle": "Elimina set di risposte rapide",
+    "deleteSetMessage": "Eliminare \"{{name}}\" e tutte le sue risposte?",
+    "deleteReplyTitle": "Elimina risposta",
+    "deleteReplyMessage": "Eliminare \"{{name}}\"?"
   },
   "extensionPools": {
     "title": "Pool effimeri estensioni",

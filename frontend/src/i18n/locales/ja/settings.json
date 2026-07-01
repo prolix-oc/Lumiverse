@@ -476,7 +476,9 @@
     "positionBefore": "メッセージ前",
     "positionAfter": "メッセージ後",
     "guideName": "ガイド名",
-    "guideContent": "ガイド プロンプトの内容"
+    "guideContent": "ガイド プロンプトの内容",
+    "deleteGuideTitle": "ガイドを削除",
+    "deleteGuideMessage": "「{{name}}」を削除しますか？"
   },
   "quickReplies": {
     "title": "素早い返信",
@@ -492,7 +494,11 @@
     "label": "ラベル",
     "message": "メッセージ",
     "addReply": "返信を追加",
-    "remove": "削除"
+    "remove": "削除",
+    "deleteSetTitle": "クイック返信セットを削除",
+    "deleteSetMessage": "「{{name}}」とその返信をすべて削除しますか？",
+    "deleteReplyTitle": "返信を削除",
+    "deleteReplyMessage": "「{{name}}」を削除しますか？"
   },
   "extensionPools": {
     "title": "拡張機能一時プール",

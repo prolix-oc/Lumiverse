@@ -392,7 +392,9 @@
     "positionBefore": "消息之前",
     "positionAfter": "消息之后",
     "guideName": "引导名称",
-    "guideContent": "引导提示词内容"
+    "guideContent": "引导提示词内容",
+    "deleteGuideTitle": "删除引导",
+    "deleteGuideMessage": "要删除“{{name}}”吗？"
   },
   "quickReplies": {
     "title": "快捷回复",
@@ -408,7 +410,11 @@
     "label": "标签",
     "message": "消息",
     "addReply": "添加回复",
-    "remove": "移除"
+    "remove": "移除",
+    "deleteSetTitle": "删除快捷回复集",
+    "deleteSetMessage": "要删除“{{name}}”及其全部回复吗？",
+    "deleteReplyTitle": "删除回复",
+    "deleteReplyMessage": "要删除“{{name}}”吗？"
   },
   "extensionPools": {
     "title": "扩展临时存储池",

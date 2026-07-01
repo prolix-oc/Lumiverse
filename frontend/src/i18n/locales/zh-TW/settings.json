@@ -476,7 +476,9 @@
     "positionBefore": "消息之前",
     "positionAfter": "消息之後",
     "guideName": "引導名稱",
-    "guideContent": "引導提示詞內容"
+    "guideContent": "引導提示詞內容",
+    "deleteGuideTitle": "刪除引導",
+    "deleteGuideMessage": "要刪除「{{name}}」嗎？"
   },
   "quickReplies": {
     "title": "快捷回覆",
@@ -492,7 +494,11 @@
     "label": "標籤",
     "message": "消息",
     "addReply": "添加回復",
-    "remove": "移除"
+    "remove": "移除",
+    "deleteSetTitle": "刪除快捷回覆集",
+    "deleteSetMessage": "要刪除「{{name}}」及其所有回覆嗎？",
+    "deleteReplyTitle": "刪除回覆",
+    "deleteReplyMessage": "要刪除「{{name}}」嗎？"
   },
   "extensionPools": {
     "title": "擴展臨時存儲池",

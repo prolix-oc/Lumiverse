@@ -24,10 +24,11 @@ import { CloseButton } from '@/components/shared/CloseButton'
 import LanguageSwitcher from '@/components/shared/LanguageSwitcher'
 import { useTranslation } from 'react-i18next'
 import { translateSettingsField } from '@/lib/i18n/resolveLabel'
-import { Button } from '@/components/shared/FormComponents'
+import { Button, TextInput } from '@/components/shared/FormComponents'
 import NumericInput from '@/components/shared/NumericInput'
 import { Toggle } from '@/components/shared/Toggle'
 import { spinClass } from '@/components/shared/Spinner'
+import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import { connectionsApi } from '@/api/connections'
@@ -57,6 +58,7 @@ import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { getVisibleSettingsTabs, sectionAnchorId } from '@/lib/settings-tab-registry'
 import SettingsSearch from './SettingsSearch'
 import styles from './SettingsModal.module.css'
+import formStyles from '@/components/shared/FormComponents.module.css'
 import clsx from 'clsx'
 
 interface SettingsModalProps {
@@ -1115,10 +1117,9 @@ function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpd
 
       {editing && (
         <div className={styles.editorGrid}>
-          <input
-            className={styles.select}
+          <TextInput
             value={guide.name}
-            onChange={(e) => onUpdate(guide.id, { name: e.target.value })}
+            onChange={(value) => onUpdate(guide.id, { name: value })}
             placeholder={t('guided.guideName')}
           />
           <div className={styles.drawerRow}>
@@ -1132,12 +1133,13 @@ function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpd
               <option value="oneshot">{t('guided.oneshot')}</option>
             </select>
           </div>
-          <textarea
-            className={styles.textarea}
+          <ExpandableTextarea
+            className={formStyles.textarea}
             value={guide.content}
-            onChange={(e) => onUpdate(guide.id, { content: e.target.value })}
+            onChange={(value) => onUpdate(guide.id, { content: value })}
             placeholder={t('guided.guideContent')}
             rows={4}
+            title={guide.name || t('guided.untitled')}
           />
         </div>
       )}
@@ -1147,8 +1149,10 @@ function SortableGuideRow({ guide, editing, onToggleEnabled, onToggleEdit, onUpd
 
 function GuidedGenerationSettings() {
   const { t } = useTranslation('settings')
+  const { t: tc } = useTranslation('common')
   const guides = useStore((s) => s.guidedGenerations)
   const setSetting = useStore((s) => s.setSetting)
+  const openModal = useStore((s) => s.openModal)
   const [editingId, setEditingId] = useState<string | null>(null)
 
   const sensors = useSensors(
@@ -1176,8 +1180,19 @@ function GuidedGenerationSettings() {
   }
 
   const removeGuide = (id: string) => {
-    setSetting('guidedGenerations', guides.filter((g) => g.id !== id))
-    if (editingId === id) setEditingId(null)
+    const guide = guides.find((g) => g.id === id)
+    if (!guide) return
+    openModal('confirm', {
+      title: t('guided.deleteGuideTitle'),
+      message: t('guided.deleteGuideMessage', { name: guide.name || t('guided.untitled') }),
+      variant: 'danger',
+      confirmText: tc('actions.delete'),
+      onConfirm: () => {
+        const currentGuides = useStore.getState().guidedGenerations
+        setSetting('guidedGenerations', currentGuides.filter((g) => g.id !== id))
+        setEditingId((prev) => (prev === id ? null : prev))
+      },
+    })
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -1223,6 +1238,7 @@ function QuickRepliesSettings() {
   const { t: tc } = useTranslation('common')
   const sets = useStore((s) => s.quickReplySets)
   const setSetting = useStore((s) => s.setSetting)
+  const openModal = useStore((s) => s.openModal)
   const [editingSetId, setEditingSetId] = useState<string | null>(null)
 
   const addSet = () => {
@@ -1242,8 +1258,19 @@ function QuickRepliesSettings() {
   }
 
   const removeSet = (id: string) => {
-    setSetting('quickReplySets', sets.filter((s) => s.id !== id))
-    if (editingSetId === id) setEditingSetId(null)
+    const set = sets.find((entry) => entry.id === id)
+    if (!set) return
+    openModal('confirm', {
+      title: t('quickReplies.deleteSetTitle'),
+      message: t('quickReplies.deleteSetMessage', { name: set.name || t('quickReplies.untitled') }),
+      variant: 'danger',
+      confirmText: tc('actions.delete'),
+      onConfirm: () => {
+        const currentSets = useStore.getState().quickReplySets
+        setSetting('quickReplySets', currentSets.filter((entry) => entry.id !== id))
+        setEditingSetId((prev) => (prev === id ? null : prev))
+      },
+    })
   }
 
   const addReply = (setId: string) => {
@@ -1267,13 +1294,25 @@ function QuickRepliesSettings() {
   }
 
   const removeReply = (setId: string, replyId: string) => {
-    setSetting('quickReplySets', sets.map((s) => {
-      if (s.id !== setId) return s
-      return {
-        ...s,
-        replies: s.replies.filter((r) => r.id !== replyId),
-      }
-    }))
+    const set = sets.find((entry) => entry.id === setId)
+    const reply = set?.replies.find((entry) => entry.id === replyId)
+    if (!set || !reply) return
+    openModal('confirm', {
+      title: t('quickReplies.deleteReplyTitle'),
+      message: t('quickReplies.deleteReplyMessage', { name: reply.label || t('quickReplies.newReplyDefault') }),
+      variant: 'danger',
+      confirmText: tc('actions.delete'),
+      onConfirm: () => {
+        const currentSets = useStore.getState().quickReplySets
+        setSetting('quickReplySets', currentSets.map((entry) => {
+          if (entry.id !== setId) return entry
+          return {
+            ...entry,
+            replies: entry.replies.filter((item) => item.id !== replyId),
+          }
+        }))
+      },
+    })
   }
 
   return (

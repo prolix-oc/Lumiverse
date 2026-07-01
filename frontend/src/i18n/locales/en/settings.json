@@ -398,7 +398,9 @@
     "positionBefore": "Before message",
     "positionAfter": "After message",
     "guideName": "Guide name",
-    "guideContent": "Guide prompt content"
+    "guideContent": "Guide prompt content",
+    "deleteGuideTitle": "Delete Guide",
+    "deleteGuideMessage": "Delete \"{{name}}\"?"
   },
   "quickReplies": {
     "title": "Quick Replies",
@@ -414,7 +416,11 @@
     "label": "Label",
     "message": "Message",
     "addReply": "Add Reply",
-    "remove": "Remove"
+    "remove": "Remove",
+    "deleteSetTitle": "Delete Quick Reply Set",
+    "deleteSetMessage": "Delete \"{{name}}\" and all of its replies?",
+    "deleteReplyTitle": "Delete Reply",
+    "deleteReplyMessage": "Delete \"{{name}}\"?"
   },
   "extensionPools": {
     "title": "Extension Ephemeral Pools",

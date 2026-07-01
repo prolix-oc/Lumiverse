@@ -476,7 +476,9 @@
     "positionBefore": "Avant le message",
     "positionAfter": "Après le message",
     "guideName": "Nom du guide",
-    "guideContent": "Contenu de l'invite du guide"
+    "guideContent": "Contenu de l'invite du guide",
+    "deleteGuideTitle": "Supprimer le guide",
+    "deleteGuideMessage": "Supprimer « {{name}} » ?"
   },
   "quickReplies": {
     "title": "Réponses rapides",
@@ -492,7 +494,11 @@
     "label": "Étiquette",
     "message": "Message",
     "addReply": "Ajouter une réponse",
-    "remove": "Supprimer"
+    "remove": "Supprimer",
+    "deleteSetTitle": "Supprimer l'ensemble de réponses rapides",
+    "deleteSetMessage": "Supprimer « {{name}} » et toutes ses réponses ?",
+    "deleteReplyTitle": "Supprimer la réponse",
+    "deleteReplyMessage": "Supprimer « {{name}} » ?"
   },
   "extensionPools": {
     "title": "Pools éphémères d’extension",
