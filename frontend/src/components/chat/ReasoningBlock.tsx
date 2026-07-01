@@ -24,6 +24,7 @@ type ReasoningRenderMode = 'markdown' | 'text'
 // Approximate cutoff where full markdown rendering starts to create enough DOM
 // churn during long CoT streams that switching to plain text is noticeably smoother.
 const LARGE_REASONING_RENDER_THRESHOLD = 40_000
+const REASONING_TOGGLE_LAYOUT_EVENT = 'lumiverse:reasoning-toggle-layout'
 
 const md = new Marked({
   gfm: true,
@@ -52,6 +53,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
   const [renderMode, setRenderMode] = useState<ReasoningRenderMode>(() => (
     reasoning.length >= LARGE_REASONING_RENDER_THRESHOLD ? 'text' : 'markdown'
   ))
+  const containerRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<number | null>(null)
   const startTimeRef = useRef<number | null>(null)
   const shouldPreferPlainText = reasoning.length >= LARGE_REASONING_RENDER_THRESHOLD
@@ -59,6 +61,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
   const deferredReasoning = useDeferredValue(reasoning)
 
   const toggle = useCallback(() => {
+    containerRef.current?.dispatchEvent(new CustomEvent(REASONING_TOGGLE_LAYOUT_EVENT, { bubbles: true }))
     setIsOpen((o) => !o)
   }, [])
 
@@ -130,12 +133,16 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
   )
 
   return (
-    <div className={clsx(styles.container, variant === 'bubble' && styles.bubble, align === 'right' && styles.alignRight)}>
+    <div
+      ref={containerRef}
+      className={clsx(styles.container, variant === 'bubble' && styles.bubble, align === 'right' && styles.alignRight)}
+    >
       <button
         type="button"
         className={styles.toggle}
         onClick={toggle}
         aria-expanded={isOpen}
+        data-reasoning-toggle="true"
       >
         <ChevronRight className={clsx(styles.chevron, isOpen && styles.chevronOpen)} />
         <Brain className={styles.brain} />

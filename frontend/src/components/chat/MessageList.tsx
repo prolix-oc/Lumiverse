@@ -26,6 +26,7 @@ interface MessageListProps {
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
+const REASONING_TOGGLE_LAYOUT_EVENT = 'lumiverse:reasoning-toggle-layout'
 // TanStack recommends a forgiving end threshold for chat so that minor
 // overscroll, mobile momentum settling, and soft-keyboard shrink/growth don't
 // immediately unpin the viewport from new output.
@@ -39,6 +40,7 @@ const MOBILE_RANGE_WARM_MS = 1200
 // frame to paint on slow devices, short enough that early scrolling still
 // finds rows mounted.
 const INITIAL_RANGE_WARM_DELAY_MS = 300
+const USER_CONTROLLED_ROW_RESIZE_SETTLE_MS = 450
 
 type VirtualListItem =
   | { type: 'loadingOlder'; key: string }
@@ -83,6 +85,13 @@ function getFocusedEditableMessageId(root: HTMLElement | null) {
   const active = document.activeElement
   if (!root || !active || !root.contains(active)) return null
   if (!(active instanceof Element) || !isEditableElement(active)) return null
+  return active.closest<HTMLElement>('[data-message-id]')?.dataset.messageId ?? null
+}
+
+function getFocusedReasoningToggleMessageId(root: HTMLElement | null) {
+  const active = document.activeElement
+  if (!root || !active || !root.contains(active)) return null
+  if (!(active instanceof Element) || !active.matches('[data-reasoning-toggle]')) return null
   return active.closest<HTMLElement>('[data-message-id]')?.dataset.messageId ?? null
 }
 
@@ -196,6 +205,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // all land at the true bottom of the list.
   const [inputSafeZone, setInputSafeZone] = useState(100)
   const [editableFocusInList, setEditableFocusInList] = useState(false)
+  const recentReasoningToggleMessageIdRef = useRef<string | null>(null)
+  const recentReasoningToggleUntilRef = useRef(0)
+  const recentReasoningToggleTimerRef = useRef<number | null>(null)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -255,6 +267,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     initialBottomPinnedChatRef.current = null
     initialScrollStartedAtRef.current = 0
     setEditableFocusInList(false)
+    recentReasoningToggleMessageIdRef.current = null
+    recentReasoningToggleUntilRef.current = 0
+    if (recentReasoningToggleTimerRef.current != null) {
+      window.clearTimeout(recentReasoningToggleTimerRef.current)
+      recentReasoningToggleTimerRef.current = null
+    }
     if (initialScrollRafRef.current != null) {
       cancelAnimationFrame(initialScrollRafRef.current)
       initialScrollRafRef.current = null
@@ -482,6 +500,44 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
   }, [cancelInitialScrollToEnd, hasInListEditableFocus, recordScrollPosition])
 
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const clearRecentReasoningToggle = () => {
+      recentReasoningToggleMessageIdRef.current = null
+      recentReasoningToggleUntilRef.current = 0
+      recentReasoningToggleTimerRef.current = null
+    }
+
+    const handleReasoningToggle = (event: Event) => {
+      const target = event.target
+      const messageId = target instanceof Element
+        ? target.closest<HTMLElement>('[data-message-id]')?.dataset.messageId ?? null
+        : null
+      if (!messageId) return
+
+      recentReasoningToggleMessageIdRef.current = messageId
+      recentReasoningToggleUntilRef.current = performance.now() + USER_CONTROLLED_ROW_RESIZE_SETTLE_MS
+      if (recentReasoningToggleTimerRef.current != null) {
+        window.clearTimeout(recentReasoningToggleTimerRef.current)
+      }
+      recentReasoningToggleTimerRef.current = window.setTimeout(
+        clearRecentReasoningToggle,
+        USER_CONTROLLED_ROW_RESIZE_SETTLE_MS + 120,
+      )
+    }
+
+    el.addEventListener(REASONING_TOGGLE_LAYOUT_EVENT, handleReasoningToggle)
+    return () => {
+      el.removeEventListener(REASONING_TOGGLE_LAYOUT_EVENT, handleReasoningToggle)
+      if (recentReasoningToggleTimerRef.current != null) {
+        window.clearTimeout(recentReasoningToggleTimerRef.current)
+        recentReasoningToggleTimerRef.current = null
+      }
+    }
+  }, [])
+
   const estimateMessageSize = useCallback((message: Message, measureKey: string) => {
     const measured = measuredRowHeightsRef.current.get(measureKey)
     if (measured) return measured
@@ -586,7 +642,15 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       const row = virtualListItems[item.index]
       const isStreamingTail = row?.type === 'message' && row.message.id === streamingTargetMessageId
       const focusedEditableMessageId = getFocusedEditableMessageId(scrollRef.current)
+      const focusedReasoningToggleMessageId = getFocusedReasoningToggleMessageId(scrollRef.current)
       const isFocusedEditableRow = row?.type === 'message' && row.message.id === focusedEditableMessageId
+      const isUserToggledCollapsibleRow = row?.type === 'message' && (
+        row.message.id === focusedReasoningToggleMessageId
+        || (
+          row.message.id === recentReasoningToggleMessageIdRef.current
+          && performance.now() <= recentReasoningToggleUntilRef.current
+        )
+      )
       return shouldAdjustMessageListScrollOnResize({
         delta,
         itemStart: item.start,
@@ -597,6 +661,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         isPinned: isPinnedRef.current,
         isStreamingTail,
         isFocusedEditableRow,
+        isUserToggledCollapsibleRow,
       })
     },
     [streamingTargetMessageId, virtualListItems]

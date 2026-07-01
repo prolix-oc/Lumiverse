@@ -8,6 +8,7 @@ export interface MessageListScrollAdjustmentInput {
   isPinned: boolean
   isStreamingTail: boolean
   isFocusedEditableRow?: boolean
+  isUserToggledCollapsibleRow?: boolean
 }
 
 export function shouldAdjustMessageListScrollOnResize({
@@ -20,6 +21,7 @@ export function shouldAdjustMessageListScrollOnResize({
   isPinned,
   isStreamingTail,
   isFocusedEditableRow,
+  isUserToggledCollapsibleRow,
 }: MessageListScrollAdjustmentInput) {
   const overlapsViewportTop = itemStart < scrollOffset && itemEnd > scrollOffset
 
@@ -37,6 +39,13 @@ export function shouldAdjustMessageListScrollOnResize({
   // Keep first-measure compensation intact when the edit mode mounts, then
   // leave subsequent growth/shrink of the focused row to the browser.
   if (hasMeasuredSize && isFocusedEditableRow && overlapsViewportTop) {
+    return false
+  }
+
+  // User-driven collapses/expands inside the viewport should feel local to the
+  // row. Compensating scrollTop while the row animates makes the whole chat
+  // appear to lurch even though only a collapsible section changed.
+  if (hasMeasuredSize && isUserToggledCollapsibleRow && overlapsViewportTop) {
     return false
   }
 

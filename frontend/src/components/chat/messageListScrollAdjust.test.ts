@@ -70,6 +70,20 @@ describe('shouldAdjustMessageListScrollOnResize', () => {
     })).toBe(false)
   })
 
+  test('does not compensate remeasurement of a user-toggled collapsible row', () => {
+    expect(shouldAdjustMessageListScrollOnResize({
+      delta: -180,
+      itemStart: 1200,
+      itemEnd: 1700,
+      scrollOffset: 1350,
+      scrollDirection: 'forward',
+      hasMeasuredSize: true,
+      isPinned: false,
+      isStreamingTail: false,
+      isUserToggledCollapsibleRow: true,
+    })).toBe(false)
+  })
+
   test('keeps first-measure compensation when the editable row initially mounts', () => {
     expect(shouldAdjustMessageListScrollOnResize({
       delta: 320,
