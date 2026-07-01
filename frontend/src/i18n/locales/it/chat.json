@@ -43,7 +43,7 @@
     "backHome": "Torna alla home",
     "regenerate": "Rigenera",
     "continue": "Continua",
-    "sendAsPersona": "Invia messaggio come persona",
+    "sendAsPersona": "Cambia persona per questa chat",
     "personaAddons": "Addon Persona",
     "personaAddonsCustomized": "Addon Persona — personalizzati per questa chat",
     "guidedGenerations": "Generazioni guidate",
@@ -92,7 +92,7 @@
     "manageInSettings": "Gestisci nelle impostazioni",
     "noQuickReplySets": "Nessun set di risposte rapide attivo.",
     "untitledReply": "Risposta senza titolo",
-    "clearOneShotPersona": "Cancella persona one-shot",
+    "clearOneShotPersona": "Cancella la persona della chat",
     "noPersonas": "Nessuna persona disponibile.",
     "manageChats": "Gestisci conversazioni",
     "manageConnections": "Gestisci connessioni",
@@ -200,7 +200,8 @@
     "noMemoryRebuildNeeded": "Nessuna ricostruzione memoria necessaria per questa conversazione.",
     "failedRecompileMemories": "Ricompilazione memorie fallita",
     "chatDocuments": "Documenti chat",
-    "chatDocumentsNamed": "{{name}} Chat"
+    "chatDocumentsNamed": "{{name}} Chat",
+    "failedSaveChatPersona": "Impossibile salvare la persona per questa chat"
   },
   "addGroupMember": {
     "title": "Aggiungi membro al gruppo",

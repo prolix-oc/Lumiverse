@@ -45,7 +45,7 @@
     "backHome": "Back to home",
     "regenerate": "Regenerate",
     "continue": "Continue",
-    "sendAsPersona": "Send next message as persona",
+    "sendAsPersona": "Switch persona for this chat",
     "personaAddons": "Persona add-ons",
     "personaAddonsCustomized": "Persona add-ons — customized for this chat",
     "guidedGenerations": "Guided generations",
@@ -95,7 +95,7 @@
     "manageInSettings": "Manage in settings",
     "noQuickReplySets": "No enabled quick reply sets.",
     "untitledReply": "Untitled reply",
-    "clearOneShotPersona": "Clear one-shot persona",
+    "clearOneShotPersona": "Clear chat persona",
     "noPersonas": "No personas available.",
     "manageChats": "Manage Chats",
     "manageConnections": "Manage Connections",
@@ -203,7 +203,8 @@
     "noMemoryRebuildNeeded": "No memory rebuild was needed for this chat.",
     "failedRecompileMemories": "Failed to recompile memories",
     "chatDocuments": "Chat Documents",
-    "chatDocumentsNamed": "{{name}} Chat"
+    "chatDocumentsNamed": "{{name}} Chat",
+    "failedSaveChatPersona": "Failed to save persona for this chat"
   },
   "addGroupMember": {
     "title": "Add Group Member",

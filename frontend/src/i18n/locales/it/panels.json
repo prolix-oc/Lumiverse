@@ -325,7 +325,8 @@
     "deleteFolderFailed": "Errore nell'eliminazione della cartella",
     "toast": {
       "personaDeactivated": "Persona disattivata",
-      "switchedToPersona": "Passato alla persona: {{name}}"
+      "switchedToPersona": "Passato alla persona: {{name}}",
+      "failedSaveChatPersona": "Impossibile salvare la persona per questa chat"
     },
     "renamedFolderSuccess": "Cartella rinominata in \"{{name}}\" e aggiornate {{count}} persone",
     "deletedFolderSuccess": "Cartella \"{{name}}\" eliminata e {{count}} persone spostate in Non categorizzata"

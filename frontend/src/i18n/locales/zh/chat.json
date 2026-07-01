@@ -43,7 +43,7 @@
     "backHome": "返回主页",
     "regenerate": "重新生成",
     "continue": "继续",
-    "sendAsPersona": "以人设身份发送下一条消息",
+    "sendAsPersona": "为此聊天切换人设",
     "personaAddons": "人设附加项",
     "personaAddonsCustomized": "人设附加项 — 已为本聊天定制",
     "guidedGenerations": "引导生成",
@@ -92,7 +92,7 @@
     "manageInSettings": "在设置中管理",
     "noQuickReplySets": "没有已启用的快捷回复集。",
     "untitledReply": "未命名回复",
-    "clearOneShotPersona": "清除一次性人设",
+    "clearOneShotPersona": "清除此聊天的人设",
     "noPersonas": "暂无可用人设。",
     "manageChats": "管理聊天",
     "manageConnections": "管理连接",
@@ -200,7 +200,8 @@
     "noMemoryRebuildNeeded": "此聊天无需重建记忆。",
     "failedRecompileMemories": "重新编译记忆失败",
     "chatDocuments": "聊天文档",
-    "chatDocumentsNamed": "{{name}} 聊天"
+    "chatDocumentsNamed": "{{name}} 聊天",
+    "failedSaveChatPersona": "无法保存此聊天的人设"
   },
   "addGroupMember": {
     "title": "添加群组成员",

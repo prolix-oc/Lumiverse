@@ -369,7 +369,8 @@
     "deleteFolderFailed": "Failed to delete folder",
     "toast": {
       "personaDeactivated": "Persona deactivated",
-      "switchedToPersona": "Switched to persona: {{name}}"
+      "switchedToPersona": "Switched to persona: {{name}}",
+      "failedSaveChatPersona": "Failed to save persona for this chat"
     },
     "renamedFolderSuccess": "Renamed folder to \"{{name}}\" and updated {{count}} personas",
     "deletedFolderSuccess": "Deleted folder \"{{name}}\" and moved {{count}} personas to Uncategorized"

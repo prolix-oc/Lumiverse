@@ -325,7 +325,8 @@
     "deleteFolderFailed": "フォルダの削除に失敗しました",
     "toast": {
       "personaDeactivated": "ペルソナが非アクティブ化されました",
-      "switchedToPersona": "ペルソナに切り替えました： {{name}}"
+      "switchedToPersona": "ペルソナに切り替えました： {{name}}",
+      "failedSaveChatPersona": "このチャットのペルソナを保存できませんでした"
     },
     "renamedFolderSuccess": "フォルダの名前を「{{name}}」に変更し、{{count}} ペルソナを更新しました",
     "deletedFolderSuccess": "フォルダ「{{name}}」を削除し、{{count}} ペルソナを未分類に移動しました"

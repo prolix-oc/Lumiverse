@@ -60,6 +60,7 @@ const ROLE_OPTIONS = [
 interface PersonaEditorProps {
   persona: Persona
   isActive: boolean
+  isSwitchActive: boolean
   onUpdate: (id: string, input: Record<string, any>) => Promise<any>
   onDelete: (id: string) => Promise<void>
   onDuplicate: (id: string) => Promise<any>
@@ -72,6 +73,7 @@ interface PersonaEditorProps {
 export default function PersonaEditor({
   persona,
   isActive,
+  isSwitchActive,
   onUpdate,
   onDelete,
   onDuplicate,
@@ -785,7 +787,7 @@ export default function PersonaEditor({
           icon={<Play size={13} />}
           onClick={() => onSwitchTo(persona.id)}
         >
-          {isActive ? t('personaEditor.deactivate') : t('personaEditor.switchTo')}
+          {isSwitchActive ? t('personaEditor.deactivate') : t('personaEditor.switchTo')}
         </Button>
         <Button
           variant="secondary" size="sm"

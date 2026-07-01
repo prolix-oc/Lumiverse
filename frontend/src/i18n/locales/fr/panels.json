@@ -325,7 +325,8 @@
     "deleteFolderFailed": "Échec de la suppression du dossier",
     "toast": {
       "personaDeactivated": "Personne désactivée",
-      "switchedToPersona": "Passer au personnage : {{name}}"
+      "switchedToPersona": "Passer au personnage : {{name}}",
+      "failedSaveChatPersona": "Impossible d’enregistrer la persona pour ce chat"
     },
     "renamedFolderSuccess": "Dossier renommé en \"{{name}}\" et {{count}} personnes mis à jour",
     "deletedFolderSuccess": "Dossier supprimé \"{{name}}\" et déplacé {{count}} personnes vers Non classé"

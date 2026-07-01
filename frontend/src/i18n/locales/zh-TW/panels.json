@@ -325,7 +325,8 @@
     "deleteFolderFailed": "刪除文件夾失敗",
     "toast": {
       "personaDeactivated": "已停用人設",
-      "switchedToPersona": "已切換到人設：{{name}}"
+      "switchedToPersona": "已切換到人設：{{name}}",
+      "failedSaveChatPersona": "無法儲存此聊天的人設"
     },
     "renamedFolderSuccess": "已將文件夾重命名為“{{name}}”，並更新 {{count}} 個人設",
     "deletedFolderSuccess": "已刪除文件夾“{{name}}”，並將 {{count}} 個人設移動到“未分類”"

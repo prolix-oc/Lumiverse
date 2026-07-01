@@ -18,6 +18,12 @@ import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
+import {
+  CHAT_PERSONA_METADATA_KEY,
+  getPersistedChatPersonaId,
+  resolveChatPersonaSelection,
+  setPersistedChatPersonaId,
+} from '@/lib/chatPersonaSelection'
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
@@ -197,7 +203,6 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
-  const [sendPersonaId, setSendPersonaId] = useState<string | null>(null)
   const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
   const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
@@ -261,6 +266,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // persona_id is attached to message extras or generation requests.
   const isTemporaryChat = useStore((s) => s.activeChatMetadata?.temporary === true)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const setActivePersona = useStore((s) => s.setActivePersona)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
   const regenFeedback = useStore((s) => s.regenFeedback)
   const retainCouncilForRegens = useStore((s) => s.councilSettings.toolsSettings.retainResultsForRegens)
@@ -287,6 +293,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
   const mutedCharacterIds = useStore((s) => s.mutedCharacterIds)
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
   const characters = useStore((s) => s.characters)
   const setMentionQueue = useStore((s) => s.setMentionQueue)
   const expressionDisplay = useStore((s) => s.expressionDisplay)
@@ -558,6 +565,53 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     characterPersonaBindings,
     personaTagBindings,
   }), [activeCharacterId, activeCharacter?.tags, personas, characterPersonaBindings, personaTagBindings])
+  const persistedChatPersonaId = useMemo(
+    () => getPersistedChatPersonaId(activeChatMetadata),
+    [activeChatMetadata],
+  )
+
+  const persistChatPersonaSelection = useCallback(async (personaId: string | null) => {
+    if (!chatId || isTemporaryChat) return false
+
+    const previousMetadata = activeChatMetadata
+    const previousActivePersonaId = activePersonaId
+    const nextMetadata = setPersistedChatPersonaId(previousMetadata, personaId)
+    const fallbackPersonaId = personaId ?? resolveChatPersonaSelection({
+      metadata: nextMetadata,
+      characterId: activeCharacterId,
+      characterTags: activeCharacter?.tags ?? [],
+      personas,
+      characterPersonaBindings,
+      personaTagBindings,
+    }).personaId
+
+    setActiveChatMetadata(nextMetadata)
+    setActivePersona(fallbackPersonaId)
+
+    try {
+      await chatsApi.patchMetadata(chatId, { [CHAT_PERSONA_METADATA_KEY]: personaId })
+      return true
+    } catch (err) {
+      console.error('[InputArea] Failed to save chat persona selection:', err)
+      setActiveChatMetadata(previousMetadata)
+      setActivePersona(previousActivePersonaId)
+      toast.error(t('toast.failedSaveChatPersona'))
+      return false
+    }
+  }, [
+    chatId,
+    isTemporaryChat,
+    activeChatMetadata,
+    activePersonaId,
+    activeCharacterId,
+    activeCharacter?.tags,
+    personas,
+    characterPersonaBindings,
+    personaTagBindings,
+    setActiveChatMetadata,
+    setActivePersona,
+    t,
+  ])
 
   const currentChatAddonOverrides = activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {}
   const basePersonaAddonStates = useMemo(() => {
@@ -1064,12 +1118,6 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [openPopover, personas])
 
   useEffect(() => {
-    if (!sendPersonaId) return
-    if (personas.some((p) => p.id === sendPersonaId)) return
-    setSendPersonaId(null)
-  }, [sendPersonaId, personas])
-
-  useEffect(() => {
     if (!activeCharacterId) return
     charactersApi.get(activeCharacterId).then((c) => setCharacterName(c.name)).catch(() => {})
   }, [activeCharacterId])
@@ -1307,7 +1355,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
+      const effectivePersonaId = isTemporaryChat ? null : activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const extra: Record<string, any> = {}
       if (effectivePersonaId) extra.persona_id = effectivePersonaId
@@ -1320,7 +1368,6 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         extra: Object.keys(extra).length > 0 ? extra : undefined,
       })
       addMessage(msg)
-      if (sendPersonaId) setSendPersonaId(null)
       toast.info(t('toast.messageQueued'), { duration: 1500 })
     } catch (err: any) {
       console.error('[InputArea] Failed to queue message:', err)
@@ -1328,7 +1375,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, sendPersonaId, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend])
 
   const handleSend = useCallback(async () => {
     if (sendingRef.current || isGeneratingInChat) return
@@ -1360,7 +1407,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     })
 
     try {
-      const effectivePersonaId = isTemporaryChat ? null : (sendPersonaId || activePersonaId)
+      const effectivePersonaId = isTemporaryChat ? null : activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
       const presetId = getActivePresetForGeneration() || undefined
       const genOpts: import('@/api/generate').GenerateRequest = {
@@ -1449,7 +1496,6 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         if (generationNonceRef.current !== nonce) return
         startStreaming(res.generationId)
         consumeOneshotGuides()
-        if (sendPersonaId) setSendPersonaId(null)
       } else if (hasQueuedMessages) {
         // Queued user messages waiting — trigger normal generation
         beginStreaming()
@@ -1475,7 +1521,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, sendPersonaId, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -2362,12 +2408,16 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
           </button>
           <button
             type="button"
-            className={clsx(styles.actionBtn, openPopover === 'persona' && styles.actionBtnActive)}
+            className={clsx(
+              styles.actionBtn,
+              openPopover === 'persona' && styles.actionBtnActive,
+              persistedChatPersonaId && styles.actionBtnHasSelection,
+            )}
             onClick={() => setOpenPopover((p) => (p === 'persona' ? null : 'persona'))}
             title={t('input.sendAsPersona')}
           >
             <UserCircle size={14} />
-            {sendPersonaId && <span className={styles.badge}>1</span>}
+            {persistedChatPersonaId && <span className={styles.badge}>1</span>}
           </button>
           <button
             type="button"
@@ -2533,12 +2583,12 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
           {renderPopover === 'persona' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
-              {sendPersonaId && (
+              {persistedChatPersonaId && (
                 <button
                   type="button"
                   className={styles.popLink}
                   onClick={() => {
-                    setSendPersonaId(null)
+                    void persistChatPersonaSelection(null)
                     setOpenPopover(null)
                   }}
                 >
@@ -2550,9 +2600,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                 <button
                   key={p.id}
                   type="button"
-                  className={clsx(styles.popRowBtn, sendPersonaId === p.id && styles.popRowBtnActive)}
+                  className={clsx(styles.popRowBtn, activePersonaId === p.id && styles.popRowBtnActive)}
                   onClick={() => {
-                    setSendPersonaId(p.id)
+                    void persistChatPersonaSelection(p.id)
                     setOpenPopover(null)
                   }}
                 >

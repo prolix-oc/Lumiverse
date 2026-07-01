@@ -12,7 +12,12 @@ import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
 import { expressionsApi } from '@/api/expressions'
-import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
+import { personaToastName } from '@/store/slices/personas'
+import {
+  CHAT_PERSONA_METADATA_KEY,
+  resolveChatPersonaSelection,
+  setPersistedChatPersonaId,
+} from '@/lib/chatPersonaSelection'
 import type { WallpaperRef } from '@/types/store'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
@@ -181,7 +186,6 @@ export default function ChatView() {
   const { t } = useTranslation('chat')
   const { chatId } = useParams<{ chatId: string }>()
   const navigate = useNavigate()
-  const autoSwitchedPersonaIdRef = useRef<string | null>(null)
   const spindleActiveRef = useRef(new Map<string, SpindlePreGenerationActivityPayload>())
   const spindleLatestRef = useRef<SpindlePreGenerationActivityPayload | null>(null)
   const spindleShowTimerRef = useRef<number | null>(null)
@@ -596,10 +600,9 @@ export default function ChatView() {
 
         const openedCharacter = await characterPromise
 
-        // Character bindings are temporary chat-context overrides. When a chat
-        // has no binding, fall back to the user's default persona instead of
-        // leaking the previous chat's bound persona into the new chat.
-        // Temporary chats are persona-less — leave the global persona alone.
+        // Resolve persona per chat: explicit chat selections win, then
+        // character/tag auto-bindings, then the default persona. Temporary
+        // chats are persona-less — leave the global persona alone.
         if (chat.metadata?.temporary !== true) {
           const {
             characterPersonaBindings,
@@ -607,38 +610,54 @@ export default function ChatView() {
             personas: allPersonas,
             setActivePersona,
             activePersonaId,
+            setActiveChatMetadata,
           } = useStore.getState()
-          const defaultPersonaId = allPersonas.find((p) => p.is_default)?.id ?? null
-          const resolvedBinding = resolveAutoPersonaBinding({
+          const resolvedPersona = resolveChatPersonaSelection({
+            metadata: chat.metadata,
             characterId: chat.character_id,
             characterTags: openedCharacter?.tags ?? [],
             personas: allPersonas,
             characterPersonaBindings,
             personaTagBindings,
           })
-          const boundPersona = resolvedBinding.personaId
-            ? allPersonas.find((p) => p.id === resolvedBinding.personaId) ?? null
+          const resolvedChatPersona = resolvedPersona.personaId
+            ? allPersonas.find((p) => p.id === resolvedPersona.personaId) ?? null
             : null
 
-          if (resolvedBinding.personaId && boundPersona) {
-            if (activePersonaId !== resolvedBinding.personaId) {
-              setActivePersona(resolvedBinding.personaId)
-              toast.info(t('chatView.switchedPersona', { name: personaToastName(boundPersona) }))
+          if (resolvedPersona.persistedPersonaStale) {
+            const nextMetadata = setPersistedChatPersonaId(chat.metadata, null)
+            chat.metadata = nextMetadata ?? {}
+            if (!cancelled) {
+              setActiveChatMetadata(nextMetadata)
             }
-            autoSwitchedPersonaIdRef.current = resolvedBinding.personaId
+            chatsApi.patchMetadata(chatId, { [CHAT_PERSONA_METADATA_KEY]: null }).catch(() => {})
+          }
 
+          if (!cancelled && activePersonaId !== resolvedPersona.personaId) {
+            setActivePersona(resolvedPersona.personaId)
+            if (resolvedChatPersona && resolvedPersona.source !== 'default') {
+              toast.info(t('chatView.switchedPersona', { name: personaToastName(resolvedChatPersona) }))
+            }
+          }
+
+          if (
+            (resolvedPersona.source === 'character' || resolvedPersona.source === 'tag') &&
+            resolvedChatPersona &&
+            resolvedPersona.addonStates &&
+            Object.keys(resolvedPersona.addonStates).length > 0 &&
+            !cancelled
+          ) {
             // Apply the binding's add-on snapshot so the bound selections take
             // effect and are visible in this chat. Seed only when the chat has
             // no per-chat states for the persona yet, so a fresh chat picks up
             // the binding while later in-chat tweaks are never clobbered.
             if (
-              resolvedBinding.addonStates &&
-              Object.keys(resolvedBinding.addonStates).length > 0 &&
-              !cancelled
+              resolvedPersona.addonStates &&
+              Object.keys(resolvedPersona.addonStates).length > 0
             ) {
               const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
-              if (!existing[resolvedBinding.personaId]) {
-                const nextStates = { ...existing, [resolvedBinding.personaId]: { ...resolvedBinding.addonStates } }
+              if (!existing[resolvedChatPersona.id]) {
+                const nextStates = { ...existing, [resolvedChatPersona.id]: { ...resolvedPersona.addonStates } }
                 // Fold into chat.metadata and re-publish the snapshot (the
                 // canonical publish already happened alongside setMessages);
                 // persist for future opens.
@@ -647,19 +666,6 @@ export default function ChatView() {
                 chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
               }
             }
-
-          } else {
-            const shouldRestoreDefault =
-              autoSwitchedPersonaIdRef.current !== null &&
-              defaultPersonaId !== null &&
-              activePersonaId !== defaultPersonaId &&
-              (activePersonaId === null || autoSwitchedPersonaIdRef.current === activePersonaId)
-
-            if (shouldRestoreDefault) {
-              setActivePersona(defaultPersonaId)
-            }
-
-            autoSwitchedPersonaIdRef.current = null
           }
         }
 

@@ -2,8 +2,15 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import Fuse from 'fuse.js'
 import { personasApi } from '@/api/personas'
+import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
+import {
+  CHAT_PERSONA_METADATA_KEY,
+  getPersistedChatPersonaId,
+  resolveChatPersonaSelection,
+  setPersistedChatPersonaId,
+} from '@/lib/chatPersonaSelection'
 import { toast } from '@/lib/toast'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
 
@@ -23,6 +30,13 @@ export function usePersonaBrowser() {
   const removePersona = useStore((s) => s.removePersona)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const setActivePersona = useStore((s) => s.setActivePersona)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const characters = useStore((s) => s.characters)
+  const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
+  const personaTagBindings = useStore((s) => s.personaTagBindings)
   const searchQuery = useStore((s) => s.personaSearchQuery)
   const setSearchQuery = useStore((s) => s.setPersonaSearchQuery)
   const filterType = useStore((s) => s.personaFilterType)
@@ -39,6 +53,11 @@ export function usePersonaBrowser() {
   // Local state
   const [loading, setLoading] = useState(false)
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery)
+  const isChatScoped = !!activeChatId && activeChatMetadata?.temporary !== true
+  const persistedChatPersonaId = useMemo(
+    () => getPersistedChatPersonaId(activeChatMetadata),
+    [activeChatMetadata],
+  )
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -287,18 +306,70 @@ export function usePersonaBrowser() {
 
   const switchToPersona = useCallback(
     (id: string) => {
-      const deactivating = activePersonaId === id
-      setActivePersona(deactivating ? null : id)
-      if (deactivating) {
-        toast.info(t('personaDeactivated'))
-      } else {
+      const deactivating = isChatScoped ? persistedChatPersonaId === id : activePersonaId === id
+
+      if (!isChatScoped) {
+        setActivePersona(deactivating ? null : id)
+        if (deactivating) {
+          toast.info(t('personaDeactivated'))
+        } else {
+          const persona = personas.find((p) => p.id === id)
+          if (persona) {
+            toast.info(t('switchedToPersona', { name: personaToastName(persona) }))
+          }
+        }
+        return
+      }
+
+      const activeCharacter = activeCharacterId
+        ? characters.find((character) => character.id === activeCharacterId) ?? null
+        : null
+      const nextPersonaId = deactivating ? null : id
+      const previousMetadata = activeChatMetadata
+      const previousActivePersonaId = activePersonaId
+      const nextMetadata = setPersistedChatPersonaId(previousMetadata, nextPersonaId)
+      const fallbackPersonaId = nextPersonaId ?? resolveChatPersonaSelection({
+        metadata: nextMetadata,
+        characterId: activeCharacterId,
+        characterTags: activeCharacter?.tags ?? [],
+        personas,
+        characterPersonaBindings,
+        personaTagBindings,
+      }).personaId
+
+      setActiveChatMetadata(nextMetadata)
+      setActivePersona(fallbackPersonaId)
+
+      chatsApi.patchMetadata(activeChatId, { [CHAT_PERSONA_METADATA_KEY]: nextPersonaId }).then(() => {
+        if (deactivating) {
+          toast.info(t('personaDeactivated'))
+          return
+        }
         const persona = personas.find((p) => p.id === id)
         if (persona) {
           toast.info(t('switchedToPersona', { name: personaToastName(persona) }))
         }
-      }
+      }).catch((err) => {
+        console.error('[PersonaBrowser] Failed to save chat persona selection:', err)
+        setActiveChatMetadata(previousMetadata)
+        setActivePersona(previousActivePersonaId)
+        toast.error(t('failedSaveChatPersona'))
+      })
     },
-    [activePersonaId, setActivePersona, personas, t]
+    [
+      activeChatId,
+      activeChatMetadata,
+      activeCharacterId,
+      activePersonaId,
+      characters,
+      characterPersonaBindings,
+      personaTagBindings,
+      persistedChatPersonaId,
+      personas,
+      setActiveChatMetadata,
+      setActivePersona,
+      t,
+    ]
   )
 
   const refresh = useCallback(async () => {
@@ -328,6 +399,8 @@ export function usePersonaBrowser() {
     viewMode,
     selectedPersonaId,
     activePersonaId,
+    isChatScoped,
+    persistedChatPersonaId,
     currentPage: safePage,
     totalPages,
     personasPerPage,

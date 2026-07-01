@@ -154,6 +154,7 @@ export default function PersonaManager() {
         <PersonaEditor
           persona={persona}
           isActive={browser.activePersonaId === persona.id}
+          isSwitchActive={browser.isChatScoped ? browser.persistedChatPersonaId === persona.id : browser.activePersonaId === persona.id}
           onUpdate={browser.updatePersona}
           onDelete={async (id) => {
             await browser.deletePersona(id)

@@ -43,7 +43,7 @@
     "backHome": "ホームに戻る",
     "regenerate": "再生成",
     "continue": "続行",
-    "sendAsPersona": "次のメッセージをペルソナとして送信",
+    "sendAsPersona": "このチャットのペルソナを切り替え",
     "personaAddons": "ペルソナアドオン",
     "personaAddonsCustomized": "ペルソナアドオン—このチャット用にカスタマイズ",
     "guidedGenerations": "ガイド付き世代",
@@ -92,7 +92,7 @@
     "manageInSettings": "設定で管理",
     "noQuickReplySets": "有効なクイック返信セットはありません。",
     "untitledReply": "無題の返信",
-    "clearOneShotPersona": "ワンショットペルソナをクリア",
+    "clearOneShotPersona": "チャットのペルソナをクリア",
     "noPersonas": "利用可能なペルソナはありません。",
     "manageChats": "チャットを管理",
     "manageConnections": "接続を管理",
@@ -200,7 +200,8 @@
     "noMemoryRebuildNeeded": "このチャットにはメモリの再構築は必要ありませんでした。",
     "failedRecompileMemories": "メモリの再コンパイルに失敗しました",
     "chatDocuments": "チャットドキュメント",
-    "chatDocumentsNamed": "{{name}}チャット"
+    "chatDocumentsNamed": "{{name}}チャット",
+    "failedSaveChatPersona": "このチャットのペルソナを保存できませんでした"
   },
   "addGroupMember": {
     "title": "グループメンバー",
