@@ -15,6 +15,7 @@ export type {
 import { registerCoreMacros } from "./definitions/primitives";
 import { registerNamesMacros } from "./definitions/identity";
 import { registerCharacterMacros } from "./definitions/persona-card";
+import { registerTagMacros } from "./definitions/tags";
 import { registerChatMacros } from "./definitions/conversation";
 import { registerTimeMacros } from "./definitions/temporal";
 import { registerRandomMacros } from "./definitions/entropy";
@@ -49,6 +50,7 @@ export function initMacros(): void {
   registerCoreMacros();
   registerNamesMacros();
   registerCharacterMacros();
+  registerTagMacros();
   registerChatMacros();
   registerTimeMacros();
   registerRandomMacros();

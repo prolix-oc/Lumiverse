@@ -138,36 +138,6 @@ export function registerChatUtilsMacros(): void {
     },
   });
 
-  registry.registerMacro({
-    builtIn: true,
-    terminal: true,
-    name: "charTags",
-    category: "Chat Utils",
-    description: "Comma-separated list of the character's tags",
-    returnType: "string",
-    aliases: ["char_tags", "characterTags"],
-    handler: (ctx) => {
-      const tags = ctx.env.extra.characterTags as string[] | undefined;
-      return Array.isArray(tags) ? tags.join(", ") : "";
-    },
-  });
-
-  registry.registerMacro({
-    builtIn: true,
-    terminal: true,
-    name: "charTag",
-    category: "Chat Utils",
-    description: "Check if the character has a specific tag (returns 'true' or 'false')",
-    returnType: "boolean",
-    args: [{ name: "tag", description: "Tag to check" }],
-    aliases: ["char_tag", "hasTag", "has_tag"],
-    handler: (ctx) => {
-      const tags = ctx.env.extra.characterTags as string[] | undefined;
-      const tag = (ctx.args[0] ?? "").trim().toLowerCase();
-      if (!Array.isArray(tags) || !tag) return "false";
-      return tags.some((t) => t.toLowerCase() === tag) ? "true" : "false";
-    },
-  });
 }
 
 function getMessages(extra: Record<string, any>): SimpleMessage[] {

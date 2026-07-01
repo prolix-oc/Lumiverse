@@ -424,6 +424,35 @@ Macros that pull from the character card fields. These respect [alternate field]
 | `{{firstMessage}}` | `{{firstMes}}`, `{{first_message}}` | Character's first/greeting message |
 | `{{original}}` | — | Character description (original card text) |
 
+### Character Tags
+
+Macros that read the current character card's tags — categorical labels such as `Fantasy`, `Warrior`, `OC`, or `Female`.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{charTags}}` | `{{characterTags}}`, `{{char_tags}}`, `{{tags}}` | Comma-separated list of all the character's tags |
+| `{{tag::index}}` | `{{tagAt}}`, `{{tag_at}}`, `{{charTagAt}}`, `{{nthTag}}` | Single tag at a 0-based index (negative counts from the end); empty if out of range |
+| `{{tagCount}}` | `{{tag_count}}`, `{{tags_count}}`, `{{numTags}}`, `{{charTagCount}}` | Number of tags |
+| `{{randomTag}}` | `{{random_tag}}`, `{{randomCharTag}}` | One randomly chosen tag (empty if the character has none) |
+| `{{hasTag::name}}` | `{{charTag}}`, `{{char_tag}}`, `{{has_tag}}`, `{{tagged}}` | `"true"` if the character has the tag (case-insensitive), else empty — usable as a condition |
+
+```
+{{charTags}}                         — "Fantasy, Warrior, Male"
+{{tagCount}}                         — "3"
+{{tag::0}}                           — "Fantasy" (first tag)
+{{tag::-1}}                          — "Male" (last tag)
+{{hasTag::warrior}}                  — "true" (case-insensitive)
+{{randomTag}}                        — one of the tags at random
+
+{{if::{{hasTag::villain}}}}The character is a villain.{{/if}}
+{{foreach::{{charTags}}::t}}- {{.t}}{{newline}}{{/foreach}}
+{{count::{{charTags}}}}              — same as {{tagCount}}
+{{includes::{{charTags}}::Warrior}}  — "true"
+```
+
+!!! tip "Composing with Lists"
+    `{{charTags}}` returns the same clean comma-separated list form used by the [Lists](#lists) macros, so it feeds directly into `{{count}}`, `{{first}}`, `{{includes}}`, `{{foreach}}`, `{{slice}}`, and the rest of the Lists/Iteration family. Use `{{hasTag}}` when you need a condition-friendly gate for tag-specific content. Like the rest of the list family, these macros split on commas, so a tag label that itself contains a comma is treated as two entries.
+
 ---
 
 ## Chat & Conversation
@@ -632,7 +661,7 @@ Include internal thoughts
 
 ## Chat Utilities
 
-Access individual messages, track state, and query character metadata.
+Access individual messages, track state, and query chat metadata.
 
 | Macro | Aliases | Returns | Args |
 |-------|---------|---------|------|
@@ -641,8 +670,6 @@ Access individual messages, track state, and query character metadata.
 | `{{chatAge}}` | `{{chat_age}}` | Human-readable time since chat creation | — |
 | `{{counter::name}}` | — | Incremented value (1, 2, 3...) | Counter name (stored as local variable) |
 | `{{toggle::name}}` | — | Flipped boolean (`"true"` ↔ `"false"`) | Toggle name (stored as local variable) |
-| `{{charTags}}` | `{{char_tags}}`, `{{characterTags}}` | Comma-separated list of the character's tags | — |
-| `{{charTag::tag}}` | `{{char_tag}}`, `{{hasTag}}`, `{{has_tag}}` | `"true"` / `"false"` — whether character has this tag | Tag name (case-insensitive) |
 | `{{rcounter::name}}` | — | Render-scoped counter (resets each prompt build, never persisted) | Counter name; optional second arg `reset` to zero it |
 
 **Examples:**
@@ -654,10 +681,6 @@ Access individual messages, track state, and query character metadata.
 
 {{counter::scene_count}}          — auto-incrementing scene counter
 {{toggle::narrator_mode}}         — flip between narrator on/off
-
-{{if::{{charTag::fantasy}}}}
-Include world-building details.
-{{/if}}
 
 This chat started {{chatAge}} ago.
 ```
@@ -1005,7 +1028,7 @@ Macros for the Loom narrative system.
 
 ## Condition-Compatible Macros
 
-These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed for use with `{{if}}`:
+These macros return condition-friendly truthy/falsy values (such as `"yes"` / `"no"` or `"true"` / empty) and are designed for use with `{{if}}`:
 
 | Macro | True When |
 |-------|-----------|
@@ -1022,8 +1045,8 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | `{{haschatvar::key}}` | Chat-persisted variable exists |
 | `{{hasgvar::key}}` | Global variable exists |
 | `{{hasPromptVar::name}}` | A prompt variable is available |
+| `{{hasTag::name}}` | Character has the given tag (case-insensitive) |
 | `{{var::name::ison::keyA,keyB}}` | All listed option keys are selected on a multi-select prompt variable |
-| `{{charTag::tag}}` | Character has the specified tag |
 | `{{regexInstalled::id}}` | Regex script with that ID is installed and enabled |
 | `{{and::a::b}}` | All arguments are truthy |
 | `{{or::a::b}}` | Any argument is truthy |
@@ -1041,7 +1064,7 @@ Council deliberation results:
 {{lumiaCouncilDeliberation}}
 {{/if}}
 
-{{if::{{and::{{charTag::fantasy}}::{{gt::{{messageCount}}::5}}}}}}
+{{if::{{and::{{hasTag::fantasy}}::{{gt::{{messageCount}}::5}}}}}}
 The adventure is well underway.
 {{/if}}
 ```
