@@ -177,16 +177,60 @@ function getGalleryItem(
 
 const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
 const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi;
+const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi;
+const IMAGE_PATH_RE = /\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|jfif|pjp|pjpeg|png|svg|webp)$/i;
 
-function extractImageUrls(text: string): string[] {
+function trimTrailingUrlPunctuation(url: string): string {
+  let trimmed = url.trim();
+
+  while (/[.,!?;:]$/.test(trimmed)) {
+    trimmed = trimmed.slice(0, -1);
+  }
+
+  while (trimmed.endsWith(")") && ((trimmed.match(/\(/g)?.length ?? 0) < (trimmed.match(/\)/g)?.length ?? 0))) {
+    trimmed = trimmed.slice(0, -1);
+  }
+
+  while (trimmed.endsWith("]") && ((trimmed.match(/\[/g)?.length ?? 0) < (trimmed.match(/\]/g)?.length ?? 0))) {
+    trimmed = trimmed.slice(0, -1);
+  }
+
+  return trimmed;
+}
+
+function isDirectImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return IMAGE_PATH_RE.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function extractImageUrls(text: string): string[] {
+  const seen = new Set<string>();
   const urls: string[] = [];
   let m: RegExpExecArray | null;
 
+  const push = (url: string): void => {
+    if (!seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  };
+
   MD_IMAGE_RE.lastIndex = 0;
-  while ((m = MD_IMAGE_RE.exec(text)) !== null) urls.push(m[1]);
+  while ((m = MD_IMAGE_RE.exec(text)) !== null) push(m[1]);
 
   HTML_IMG_RE.lastIndex = 0;
-  while ((m = HTML_IMG_RE.exec(text)) !== null) urls.push(m[1]);
+  while ((m = HTML_IMG_RE.exec(text)) !== null) push(m[1]);
+
+  BARE_URL_RE.lastIndex = 0;
+  while ((m = BARE_URL_RE.exec(text)) !== null) {
+    const candidate = trimTrailingUrlPunctuation(m[0]);
+    if (isDirectImageUrl(candidate)) push(candidate);
+  }
 
   return urls;
 }
@@ -203,6 +247,9 @@ async function fetchUrlAsFile(url: string): Promise<File> {
   const res = await safeFetch(url, { maxBytes: 50 * 1024 * 1024 });
   if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
   const blob = await res.blob();
+  if (blob.type && !blob.type.startsWith("image/")) {
+    throw new Error(`Fetch did not return an image: ${blob.type}`);
+  }
   const urlPath = new URL(url).pathname;
   const ext = urlPath.split(".").pop()?.split("?")[0] || "png";
   const name = `extracted.${ext}`;

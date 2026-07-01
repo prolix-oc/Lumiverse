@@ -6,6 +6,7 @@ import * as svc from "../services/characters.service";
 import * as cardSvc from "../services/character-card.service";
 import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
+import { fetchChubGalleryUrls, fetchChubJson } from "../services/chub-api.service";
 import { safeFetch } from "../utils/safe-fetch";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
@@ -73,7 +74,7 @@ export async function installCharacter(
       stampInstallSource(userId, result.characterId, payload);
 
       // Download and import gallery images (best-effort, non-blocking)
-      if (payload.galleryImageUrls && payload.galleryImageUrls.length > 0) {
+      if (payload.source !== "chub" && payload.galleryImageUrls && payload.galleryImageUrls.length > 0) {
         importGalleryFromUrls(userId, result.characterId, payload.galleryImageUrls).catch((err) => {
           console.warn("[LumiHub Installer] Gallery import failed:", err);
         });
@@ -400,17 +401,7 @@ async function installFromChub(
     };
   }
 
-  // Fetch from Chub API (same logic as characters.routes.ts fetchChubCharacter)
-  const apiUrl = `https://gateway.chub.ai/api/characters/${chubPath}?full=true`;
-  const res = await safeFetch(apiUrl, {
-    timeoutMs: 15_000,
-    headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
-  });
-  if (!res.ok) {
-    return { requestId, success: false, error: `Chub API returned ${res.status}`, errorCode: "UNKNOWN" };
-  }
-
-  const data = (await res.json()) as any;
+  const data = await fetchChubJson(`characters/${chubPath}?full=true`);
   const node = data?.node;
   if (!node) {
     return { requestId, success: false, error: "Invalid Chub API response", errorCode: "PARSE_ERROR" };
@@ -471,6 +462,17 @@ async function installFromChub(
   }
 
   maybeExtractWorldbook(userId, character.id, name, payload);
+
+  try {
+    const galleryUrls = payload.galleryImageUrls?.length
+      ? payload.galleryImageUrls
+      : await fetchChubGalleryUrls(node.id);
+    if (galleryUrls.length > 0) {
+      await importGalleryFromUrls(userId, character.id, galleryUrls);
+    }
+  } catch (err) {
+    console.warn("[LumiHub Installer] Chub gallery import failed:", err);
+  }
 
   const final = svc.getCharacter(userId, character.id);
 

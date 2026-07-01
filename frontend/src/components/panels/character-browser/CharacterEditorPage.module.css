@@ -561,6 +561,29 @@
   margin-bottom: 2px;
 }
 
+.creatorAttribution {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: -6px;
+}
+
+.creatorAttributionLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-primary);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.creatorAttributionLink:hover {
+  color: var(--lumiverse-text);
+  text-decoration: underline;
+}
+
 .fieldTextarea {
   width: 100%;
   background: var(--lumiverse-bg);

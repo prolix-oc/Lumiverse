@@ -9,6 +9,7 @@ import * as tagLibrarySvc from "../services/tag-library-import.service";
 import * as wbSvc from "../services/world-books.service";
 import * as regexSvc from "../services/regex-scripts.service";
 import * as gallerySvc from "../services/character-gallery.service";
+import { fetchChubGalleryUrls, fetchChubJson } from "../services/chub-api.service";
 import { parsePagination } from "../services/pagination";
 import { safeFetch, SSRFError, validateHost } from "../utils/safe-fetch";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
@@ -115,22 +116,6 @@ function parseJannyUrl(url: string): string | null {
 
 // ─── Chub.ai character fetcher ────────────────────────────────────────────
 
-const CHUB_API_BASES = ["https://gateway.chub.ai/api", "https://api.chub.ai/api"];
-
-async function fetchChubJson(path: string): Promise<Record<string, any>> {
-  let lastStatus = 0;
-  for (const base of CHUB_API_BASES) {
-    const res = await safeFetch(`${base}/${path}`, {
-      timeoutMs: 15_000,
-      maxBytes: 100 * 1024 * 1024,
-      headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
-    });
-    if (res.ok) return await res.json() as Record<string, any>;
-    lastStatus = res.status;
-  }
-  throw new Error(`Chub API returned ${lastStatus || "no response"}`);
-}
-
 async function fetchChubLorebookDefinition(idOrPath: string | number): Promise<Record<string, any> | null> {
   try {
     const raw = String(idOrPath).replace(/^lorebooks\//, "");
@@ -171,18 +156,6 @@ async function buildChubCharacterBook(def: Record<string, any>, data: Record<str
     name: linkedEntries.length > 0 ? `${def.name || data.node?.name || "Character"} Lorebooks` : embeddedBook?.name,
     entries,
   };
-}
-
-async function fetchChubGalleryUrls(projectId: unknown): Promise<string[]> {
-  if (!projectId) return [];
-  try {
-    const data = await fetchChubJson(`gallery/project/${projectId}`);
-    return (Array.isArray(data.nodes) ? data.nodes : [])
-      .map((n: any) => typeof n?.primary_image_path === "string" ? n.primary_image_path : null)
-      .filter((url: string | null): url is string => !!url);
-  } catch {
-    return [];
-  }
 }
 
 async function importGalleryFromUrls(userId: string, characterId: string, urls: string[]): Promise<void> {

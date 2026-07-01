@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical, ExternalLink } from 'lucide-react'
 import {
   DndContext,
   closestCenter,
@@ -74,6 +74,10 @@ const MAX_PERSPECTIVE_LAYERS = 5
 const GALLERY_MIN_ITEM_WIDTH = 120
 const GALLERY_GAP = 8
 const GALLERY_OVERSCAN = 3
+const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g
+const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi
+const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi
+const IMAGE_PATH_RE = /\.(?:apng|avif|bmp|gif|heic|heif|ico|jpe?g|jfif|pjp|pjpeg|png|svg|webp)$/i
 
 type BuiltInTabId = 'core' | 'system' | 'greetings' | 'identity' | 'gallery' | 'expressions' | 'voice' | 'imageLora' | 'advanced'
 type TabId = BuiltInTabId | string
@@ -190,6 +194,74 @@ function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+function readChubFullPath(extensions: unknown): string | null {
+  if (!isRecord(extensions)) return null
+
+  const chub = isRecord(extensions.chub) ? extensions.chub : null
+  const fullPath =
+    typeof chub?.full_path === 'string' ? chub.full_path
+      : typeof chub?.fullPath === 'string' ? chub.fullPath
+        : typeof extensions._lumiverse_chub_slug === 'string' ? extensions._lumiverse_chub_slug
+          : ''
+
+  const normalized = fullPath.trim().replace(/^\/+|\/+$/g, '')
+  return normalized || null
+}
+
+function trimTrailingUrlPunctuation(url: string): string {
+  let trimmed = url.trim()
+
+  while (/[.,!?;:]$/.test(trimmed)) {
+    trimmed = trimmed.slice(0, -1)
+  }
+
+  while (trimmed.endsWith(')') && ((trimmed.match(/\(/g)?.length ?? 0) < (trimmed.match(/\)/g)?.length ?? 0))) {
+    trimmed = trimmed.slice(0, -1)
+  }
+
+  while (trimmed.endsWith(']') && ((trimmed.match(/\[/g)?.length ?? 0) < (trimmed.match(/\]/g)?.length ?? 0))) {
+    trimmed = trimmed.slice(0, -1)
+  }
+
+  return trimmed
+}
+
+function isDirectImageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && IMAGE_PATH_RE.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+function extractEmbeddedImageUrls(text: string): string[] {
+  const seen = new Set<string>()
+  const urls: string[] = []
+  let match: RegExpExecArray | null
+
+  const push = (url: string) => {
+    if (!seen.has(url)) {
+      seen.add(url)
+      urls.push(url)
+    }
+  }
+
+  MD_IMAGE_RE.lastIndex = 0
+  while ((match = MD_IMAGE_RE.exec(text)) !== null) push(match[1])
+
+  HTML_IMG_RE.lastIndex = 0
+  while ((match = HTML_IMG_RE.exec(text)) !== null) push(match[1])
+
+  BARE_URL_RE.lastIndex = 0
+  while ((match = BARE_URL_RE.exec(text)) !== null) {
+    const candidate = trimTrailingUrlPunctuation(match[0])
+    if (isDirectImageUrl(candidate)) push(candidate)
+  }
+
+  return urls
+}
+
 function readPerspectiveLayers(raw: unknown): CharacterPerspectiveLayerInput[] {
   if (Array.isArray(raw)) {
     return raw
@@ -280,6 +352,8 @@ export default function CharacterEditorPage() {
 
   const character = allCharacters.find((c) => c.id === editingCharacterId) ?? null
   const isOpen = !!editingCharacterId
+  const chubFullPath = useMemo(() => readChubFullPath(character?.extensions), [character?.extensions])
+  const chubAttributionUrl = chubFullPath ? `https://chub.ai/characters/${chubFullPath}` : null
   const tabs = useMemo<{ id: TabId; label: string }[]>(() => [
     ...builtInTabs,
     ...characterEditorTabs.map((tab) => ({ id: tab.id, label: tab.title })),
@@ -587,8 +661,6 @@ export default function CharacterEditorPage() {
 
   const embeddedImageCount = useMemo(() => {
     if (!character) return 0
-    const MD_RE = /!\[[^\]]*\]\([^)]+\)/g
-    const IMG_RE = /<img[^>]+src=["'][^"']+["']/gi
     const texts = [
       character.first_mes,
       character.description,
@@ -604,14 +676,7 @@ export default function CharacterEditorPage() {
     const seen = new Set<string>()
     for (const t of texts) {
       if (!t) continue
-      for (const m of t.matchAll(MD_RE)) {
-        const url = m[0].match(/\(([^)]+)\)/)?.[1]
-        if (url && (url.startsWith('http') || url.startsWith('data:'))) seen.add(url)
-      }
-      for (const m of t.matchAll(IMG_RE)) {
-        const url = m[0].match(/src=["']([^"']+)["']/)?.[1]
-        if (url && (url.startsWith('http') || url.startsWith('data:'))) seen.add(url)
-      }
+      for (const url of extractEmbeddedImageUrls(t)) seen.add(url)
     }
     return seen.size
   }, [character])
@@ -1551,6 +1616,22 @@ export default function CharacterEditorPage() {
                         onChange={(v) => handleFieldChange('creator', v)}
                         multiline={false}
                       />
+                      {chubAttributionUrl && (
+                        <div className={styles.creatorAttribution}>
+                          <span className={styles.fieldHelper}>
+                            {t('characterEditor.chubAttribution', { defaultValue: 'Original source' })}
+                          </span>
+                          <a
+                            href={chubAttributionUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.creatorAttributionLink}
+                          >
+                            <span>{chubFullPath}</span>
+                            <ExternalLink size={12} />
+                          </a>
+                        </div>
+                      )}
                       <Field
                         label={t('characterEditor.creatorNotes')}
                         helper={t('characterEditor.creatorNotesHelper')}
