@@ -23,7 +23,7 @@ import {
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
-import { spawnAsync } from "./spawn-async";
+import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
 import { bunCmd } from "../utils/bun-cmd";
 
@@ -67,6 +67,8 @@ const DANGEROUS_MODULE_LABELS = new Map<string, string>([
 
 const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync", "serve", "connect", "listen"]);
 const DANGEROUS_PROCESS_PROPERTIES = new Set(["env", "exit", "kill", "chdir", "dlopen"]);
+const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
+const warnedWindowsSpindleBunFallback = new Set<string>();
 
 const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
   {
@@ -1039,6 +1041,67 @@ export function bunInstallCmd(): string[] {
   ];
 }
 
+/**
+ * Bun-on-Bun subprocesses that pipe stdout/stderr have been prone to host-process
+ * assertion failures on Windows during long-running extension installs/builds.
+ * Fall back to spawnSync there so the admin action may block briefly, but the
+ * server stays alive. Allow an escape hatch for users who want to try newer Bun
+ * builds without the fallback.
+ */
+export function shouldUseWindowsSpindleBunSyncFallback(
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (platform !== "win32") return false;
+  return env[WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE] !== "1";
+}
+
+function warnWindowsSpindleBunSyncFallback(context: string): void {
+  if (!shouldUseWindowsSpindleBunSyncFallback() || warnedWindowsSpindleBunFallback.has(context)) {
+    return;
+  }
+  warnedWindowsSpindleBunFallback.add(context);
+  console.warn(
+    `[Spindle] ${context} is using a synchronous Bun subprocess fallback on Windows to avoid known Bun.spawn pipe crashes. Set ${WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE}=1 to re-enable the async path.`,
+  );
+}
+
+async function runSpindleBunSubprocess(
+  cmd: string[],
+  opts: { cwd: string; context: string },
+): Promise<SpawnAsyncResult> {
+  if (!shouldUseWindowsSpindleBunSyncFallback()) {
+    return spawnAsync(cmd, { cwd: opts.cwd });
+  }
+
+  warnWindowsSpindleBunSyncFallback(opts.context);
+  const proc = Bun.spawnSync({
+    cmd,
+    cwd: opts.cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  return {
+    exitCode: proc.exitCode ?? -1,
+    stdout: proc.stdout.toString(),
+    stderr: proc.stderr.toString(),
+    timedOut: false,
+  };
+}
+
+function formatCommandFailure(
+  result: Pick<SpawnAsyncResult, "exitCode" | "stdout" | "stderr">,
+  label: string,
+): string {
+  const stderr = result.stderr.trim();
+  if (stderr) return stderr;
+  const stdout = result.stdout.trim();
+  if (stdout) return stdout;
+  return `${label} exited with code ${result.exitCode}`;
+}
+
 // ─── Build ───────────────────────────────────────────────────────────────
 
 export async function buildExtension(identifier: string): Promise<void> {
@@ -1053,9 +1116,12 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
-    const install = await spawnAsync(bunInstallCmd(), { cwd: repo });
+    const install = await runSpindleBunSubprocess(bunInstallCmd(), {
+      cwd: repo,
+      context: `dependency install for ${identifier}`,
+    });
     if (install.exitCode !== 0) {
-      throw new Error(`Dependency install failed: ${install.stderr}`);
+      throw new Error(`Dependency install failed: ${formatCommandFailure(install, "bun install")}`);
     }
   }
 
@@ -1087,23 +1153,29 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   // Build backend entry if source exists
   if (needsBackendBuild) {
-    const proc = await spawnAsync(
+    const proc = await runSpindleBunSubprocess(
       bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
-      { cwd: repo }
+      {
+        cwd: repo,
+        context: `backend build for ${identifier}`,
+      }
     );
     if (proc.exitCode !== 0) {
-      throw new Error(`Backend build failed: ${proc.stderr}`);
+      throw new Error(`Backend build failed: ${formatCommandFailure(proc, "bun build")}`);
     }
   }
 
   // Build frontend entry if source exists
   if (needsFrontendBuild) {
-    const proc = await spawnAsync(
+    const proc = await runSpindleBunSubprocess(
       bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
-      { cwd: repo }
+      {
+        cwd: repo,
+        context: `frontend build for ${identifier}`,
+      }
     );
     if (proc.exitCode !== 0) {
-      throw new Error(`Frontend build failed: ${proc.stderr}`);
+      throw new Error(`Frontend build failed: ${formatCommandFailure(proc, "bun build")}`);
     }
   }
 

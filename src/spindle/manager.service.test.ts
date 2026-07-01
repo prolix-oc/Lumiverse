@@ -5,6 +5,7 @@ import {
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
   PRIVILEGED_PERMISSIONS,
+  shouldUseWindowsSpindleBunSyncFallback,
 } from "./manager.service";
 import type { SpindleCapability, SpindleManifest } from "lumiverse-spindle-types";
 
@@ -406,5 +407,24 @@ describe("bunInstallCmd", () => {
         ]);
       }
     );
+  });
+});
+
+describe("shouldUseWindowsSpindleBunSyncFallback", () => {
+  test("defaults to the sync fallback on Windows", () => {
+    expect(shouldUseWindowsSpindleBunSyncFallback("win32", {})).toBe(true);
+  });
+
+  test("allows an explicit Windows override", () => {
+    expect(
+      shouldUseWindowsSpindleBunSyncFallback("win32", {
+        LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN: "1",
+      }),
+    ).toBe(false);
+  });
+
+  test("keeps the async path on non-Windows platforms", () => {
+    expect(shouldUseWindowsSpindleBunSyncFallback("darwin", {})).toBe(false);
+    expect(shouldUseWindowsSpindleBunSyncFallback("linux", {})).toBe(false);
   });
 });
