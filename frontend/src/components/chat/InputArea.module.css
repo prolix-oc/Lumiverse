@@ -269,6 +269,11 @@
   cursor: pointer;
 }
 
+.popRowBtn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .personaMain {
   display: inline-flex;
   align-items: center;
@@ -329,7 +334,7 @@
   }
 }
 
-.popRowBtn:hover {
+.popRowBtn:hover:not(:disabled) {
   background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
   border-color: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
 }

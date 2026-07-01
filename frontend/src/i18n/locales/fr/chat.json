@@ -88,6 +88,7 @@
   },
   "quickMenu": {
     "noGuidedGenerations": "Aucune génération guidée configurée.",
+    "disableAllGuidedGenerations": "Désactiver toutes les générations guidées",
     "manageInSettings": "Gérer dans les paramètres",
     "noQuickReplySets": "Aucun jeu de réponses rapides activé.",
     "untitledReply": "Réponse sans titre",

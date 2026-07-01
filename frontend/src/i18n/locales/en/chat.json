@@ -91,6 +91,7 @@
   },
   "quickMenu": {
     "noGuidedGenerations": "No guided generations configured.",
+    "disableAllGuidedGenerations": "Disable all guided generations",
     "manageInSettings": "Manage in settings",
     "noQuickReplySets": "No enabled quick reply sets.",
     "untitledReply": "Untitled reply",

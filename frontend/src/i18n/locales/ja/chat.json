@@ -88,6 +88,7 @@
   },
   "quickMenu": {
     "noGuidedGenerations": "ガイド付き世代が設定されていません。",
+    "disableAllGuidedGenerations": "すべてのガイド付き生成を無効化",
     "manageInSettings": "設定で管理",
     "noQuickReplySets": "有効なクイック返信セットはありません。",
     "untitledReply": "無題の返信",

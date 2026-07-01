@@ -88,6 +88,7 @@
   },
   "quickMenu": {
     "noGuidedGenerations": "未配置引導生成。",
+    "disableAllGuidedGenerations": "停用全部引導生成",
     "manageInSettings": "在設置中管理",
     "noQuickReplySets": "沒有已啟用的快捷回覆集。",
     "untitledReply": "未命名回覆",

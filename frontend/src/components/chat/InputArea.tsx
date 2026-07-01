@@ -2247,6 +2247,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setSetting('guidedGenerations', next)
   }, [guidedGenerations, setSetting])
 
+  const disableAllGuides = useCallback(() => {
+    const next = guidedGenerations.map((g) => (g.enabled ? { ...g, enabled: false } : g))
+    if (next.some((g, i) => g.enabled !== guidedGenerations[i].enabled)) {
+      setSetting('guidedGenerations', next)
+    }
+  }, [guidedGenerations, setSetting])
+
   const mobileQueueHintKey = getMobileQueueHintKey({
     supportsTouchQueueHold,
     isGeneratingInChat,
@@ -2468,6 +2475,20 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
           {renderPopover === 'guides' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
               {guidedGenerations.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noGuidedGenerations')}</div>}
+              {guidedGenerations.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className={styles.popRowBtn}
+                    onClick={disableAllGuides}
+                    disabled={activeGuideCount === 0}
+                  >
+                    <span>{t('quickMenu.disableAllGuidedGenerations')}</span>
+                    <span className={styles.popMeta}>{t('quickMenu.activeCount', { count: activeGuideCount })}</span>
+                  </button>
+                  <div className={styles.popDivider} />
+                </>
+              )}
               {guidedGenerations.map((g) => (
                 <button key={g.id} type="button" className={styles.popRowBtn} onClick={() => toggleGuide(g.id)}>
                   <span>{g.name}</span>
