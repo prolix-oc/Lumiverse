@@ -78,6 +78,8 @@ Notes for other users (or yourself) about the character. These are **never sent 
 
 Labels for organizing your library. Add tags like "fantasy," "sci-fi," "male," "OC," etc. You can filter your Character Browser by tags.
 
+Tags are also available to your prompts through macros, so a character's tags can shape what gets generated. Gate content on a tag with `{{if::{{hasTag::villain}}}}...{{/if}}`, list them with `{{charTags}}`, grab a specific one with `{{tag::0}}`, or pick one at random with `{{randomTag}}`. See the [Character Tags macros](../presets/macros-reference.md#character-tags) in the Macros Reference for the full set.
+
 ---
 
 ## Uploading an Avatar

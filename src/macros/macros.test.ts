@@ -241,6 +241,68 @@ describe("Persona pronoun macros", () => {
   });
 });
 
+describe("Character Tags macros", () => {
+  test("charTags and tags alias return a clean list", async () => {
+    expect(await ev("{{charTags}}")).toBe("fantasy, warrior, male");
+    expect(await ev("{{tags}}")).toBe("fantasy, warrior, male");
+  });
+
+  test("tag indexes support positive, negative, and out-of-range access", async () => {
+    expect(await ev("{{tag::0}}")).toBe("fantasy");
+    expect(await ev("{{tag::2}}")).toBe("male");
+    expect(await ev("{{tag::-1}}")).toBe("male");
+    expect(await ev("{{tag::-3}}")).toBe("fantasy");
+    expect(await ev("{{tag::5}}")).toBe("");
+  });
+
+  test("tag aliases resolve indexed tags", async () => {
+    expect(await ev("{{tagAt::1}}")).toBe("warrior");
+    expect(await ev("{{charTagAt::2}}")).toBe("male");
+    expect(await ev("{{nthTag::-1}}")).toBe("male");
+  });
+
+  test("tagCount and numTags alias count character tags", async () => {
+    expect(await ev("{{tagCount}}")).toBe("3");
+    expect(await ev("{{numTags}}")).toBe("3");
+  });
+
+  test("randomTag returns one of the character tags", async () => {
+    expect(["fantasy", "warrior", "male"]).toContain(await ev("{{randomTag}}"));
+  });
+
+  test("hasTag is case-insensitive and condition-compatible", async () => {
+    expect(await ev("{{hasTag::fantasy}}")).toBe("true");
+    expect(await ev("{{hasTag::WARRIOR}}")).toBe("true");
+    expect(await ev("{{hasTag::scifi}}")).toBe("");
+    expect(await ev("{{tagged::male}}")).toBe("true");
+    expect(await ev("{{if::{{hasTag::fantasy}}}}has{{/if}}")).toBe("has");
+  });
+
+  test("charTags composes with list macros", async () => {
+    expect(await ev("{{count::{{charTags}}}}")).toBe("3");
+    expect(await ev("{{first::{{charTags}}}}")).toBe("fantasy");
+    expect(await ev("{{includes::{{charTags}}::warrior}}")).toBe("true");
+  });
+
+  test("empty character tags produce empty-friendly results", async () => {
+    const env = makeEnv({ characterTags: [] });
+    expect(await ev("{{charTags}}", env)).toBe("");
+    expect(await ev("{{tagCount}}", env)).toBe("0");
+    expect(await ev("{{tag::0}}", env)).toBe("");
+    expect(await ev("{{randomTag}}", env)).toBe("");
+    expect(await ev("{{hasTag::anything}}", env)).toBe("");
+  });
+  test("non-string tag entries are ignored without throwing", async () => {
+    const env = makeEnv({
+      characterTags: ["fantasy", 3, null, "warrior", "  "] as unknown as string[],
+    });
+    expect(await ev("{{charTags}}", env)).toBe("fantasy, warrior");
+    expect(await ev("{{tagCount}}", env)).toBe("2");
+    expect(await ev("{{tag::1}}", env)).toBe("warrior");
+    expect(await ev("{{hasTag::warrior}}", env)).toBe("true");
+  });
+});
+
 describe("if / else", () => {
   test("truthy condition with ::", async () => {
     expect(await ev("{{if::1}}yes{{/if}}")).toBe("yes");
@@ -1220,21 +1282,6 @@ describe("Chat Utils macros", () => {
     expect(await ev(template, env)).toBe("1. A\n2. C");
   });
 
-  test("charTags", async () => {
-    expect(await ev("{{charTags}}")).toBe("fantasy, warrior, male");
-  });
-
-  test("charTag exists", async () => {
-    expect(await ev("{{charTag::fantasy}}")).toBe("true");
-  });
-
-  test("charTag case insensitive", async () => {
-    expect(await ev("{{charTag::WARRIOR}}")).toBe("true");
-  });
-
-  test("charTag missing", async () => {
-    expect(await ev("{{charTag::scifi}}")).toBe("false");
-  });
 });
 
 // ===========================================================================

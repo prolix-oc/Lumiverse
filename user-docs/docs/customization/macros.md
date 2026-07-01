@@ -45,7 +45,7 @@ Current time: 14:30 on Wednesday.
 | Category | Examples | Full List |
 |----------|----------|-----------|
 | **Names** | `{{user}}`, `{{char}}`, `{{group}}` | [Identity macros](../presets/macros-reference.md#identity-names) |
-| **Character data** | `{{description}}`, `{{personality}}`, `{{scenario}}` | [Character macros](../presets/macros-reference.md#character-data) |
+| **Character data** | `{{description}}`, `{{personality}}`, `{{scenario}}`, `{{charTags}}`, `{{hasTag}}` | [Character macros](../presets/macros-reference.md#character-data) |
 | **Chat state** | `{{lastMessage}}`, `{{messageCount}}`, `{{messageAt::0}}` | [Chat macros](../presets/macros-reference.md#chat-conversation) |
 | **String** | `{{upper}}`, `{{replace}}`, `{{len}}`, `{{split}}` | [String macros](../presets/macros-reference.md#string-manipulation) |
 | **Math** | `{{calc::2+3}}`, `{{clamp}}`, `{{min}}`, `{{max}}` | [Math macros](../presets/macros-reference.md#math) |
