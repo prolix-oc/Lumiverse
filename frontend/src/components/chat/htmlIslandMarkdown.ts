@@ -1,6 +1,7 @@
 const STYLE_PLACEHOLDER_RE = /^<!--ISLAND_STYLE_\d+-->$/
 const VOID_HTML_TAG_RE = /^<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i
 const RAW_TEXT_CONTEXT_TAGS = new Set(['code', 'pre', 'script'])
+const NO_MARKDOWN_SUBTREE_TAGS = new Set(['svg'])
 
 // Only these containers are allowed to promote child text into block markdown
 // like headings or lists. Everything else stays inline to avoid emitting
@@ -58,6 +59,10 @@ function shouldRenderInlineMarkdown(tagStack: string[]): boolean {
   return currentTag != null && !BLOCK_MARKDOWN_PARENT_TAGS.has(currentTag)
 }
 
+function isMarkdownExcludedSubtree(tagStack: string[]): boolean {
+  return tagStack.some((tag) => NO_MARKDOWN_SUBTREE_TAGS.has(tag))
+}
+
 export function processMarkdownInHtmlIsland(
   html: string,
   renderer: HtmlIslandMarkdownRenderer,
@@ -80,7 +85,7 @@ export function processMarkdownInHtmlIsland(
       continue
     }
 
-    if (!part.trim() || rawTextState.depth > 0) continue
+    if (!part.trim() || rawTextState.depth > 0 || isMarkdownExcludedSubtree(tagStack)) continue
     if (STYLE_PLACEHOLDER_RE.test(part.trim())) continue
 
     parts[i] = shouldRenderInlineMarkdown(tagStack)

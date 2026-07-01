@@ -1,11 +1,47 @@
 import DOMPurify from 'dompurify'
 import { isSafeBrowserNavigationTarget } from '@/lib/navigationSafety'
 
-const BASE_FORBID_TAGS = ['script', 'iframe', 'frame', 'object', 'embed', 'meta', 'base', 'link', 'svg', 'math']
+const BASE_FORBID_TAGS = ['script', 'iframe', 'frame', 'object', 'embed', 'meta', 'base', 'link', 'math']
 const BASE_FORBID_ATTR = ['srcdoc', 'formaction']
 const SAFE_DATA_IMAGE_RE = /^data:image\/(?:png|apng|jpeg|jpg|gif|webp|avif|bmp);/i
 const DOCUMENT_HTML_RE = /<(?:!doctype\b|html\b|head\b|body\b)/i
 const STYLE_TAG_RE = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi
+const SVG_LOCAL_REF_RE = /^#[^\s"'`()<>]+$/
+const SVG_URL_FUNC_RE = /url\(\s*(['"]?)(.*?)\1\s*\)/gi
+const SVG_BLOCKED_TAGS = new Set(['image', 'feimage'])
+const SVG_URL_VALUE_ATTRS = new Set([
+  'clip-path',
+  'cursor',
+  'fill',
+  'filter',
+  'marker-end',
+  'marker-mid',
+  'marker-start',
+  'mask',
+  'stroke',
+])
+
+type DOMPurifyLike = {
+  sanitize: typeof DOMPurify.sanitize
+}
+
+interface SanitizeHtmlOptions {
+  allowInlineSvg: boolean
+  allowStyleTag: boolean
+}
+
+let domPurifyInstance: DOMPurifyLike | null = null
+
+function getDOMPurify(): DOMPurifyLike {
+  if (typeof DOMPurify.sanitize === 'function') return DOMPurify
+  if (domPurifyInstance) return domPurifyInstance
+
+  const root = typeof window !== 'undefined' ? window : (globalThis as { window?: Window }).window
+  if (!root) throw new Error('DOMPurify requires a window-like global')
+
+  domPurifyInstance = DOMPurify(root as unknown as Parameters<typeof DOMPurify>[0])
+  return domPurifyInstance
+}
 
 function isAllowedCustomAttributeName(attrName: string): boolean {
   const normalized = attrName.toLowerCase()
@@ -102,20 +138,128 @@ function extractStyleBlocks(html: string): { htmlWithoutStyles: string; styles: 
   return { htmlWithoutStyles, styles }
 }
 
-function sanitizeHtml(html: string, allowStyleTag: boolean): string {
-  const normalizedHtml = normalizeDocumentHtml(html, allowStyleTag)
-  const styleExtraction = allowStyleTag
+function isAllowedLocalSvgReference(rawValue: string): boolean {
+  return SVG_LOCAL_REF_RE.test(rawValue.trim())
+}
+
+function sanitizeSvgUrlFunctions(value: string): string | null {
+  let sawUnsafeUrl = false
+  const sanitized = value.replace(SVG_URL_FUNC_RE, (_match, quote: string, rawTarget: string) => {
+    const target = rawTarget.trim()
+    if (isAllowedLocalSvgReference(target)) return `url(${quote}${target}${quote})`
+    sawUnsafeUrl = true
+    return ''
+  }).trim()
+
+  if (!sawUnsafeUrl) return value.trim() || null
+  return sanitized || null
+}
+
+function sanitizeSvgStyleAttribute(styleValue: string): string | null {
+  const sanitizedDeclarations: string[] = []
+
+  for (const declaration of styleValue.split(';')) {
+    const separator = declaration.indexOf(':')
+    if (separator < 0) continue
+
+    const property = declaration.slice(0, separator).trim()
+    const value = declaration.slice(separator + 1).trim()
+    if (!property || !value) continue
+
+    const normalizedProperty = property.toLowerCase()
+    if (normalizedProperty === 'behavior' || normalizedProperty === '-moz-binding') continue
+    if (/\bexpression\s*\(/i.test(value)) continue
+
+    const sanitizedValue = sanitizeSvgUrlFunctions(value)
+    if (!sanitizedValue) continue
+    sanitizedDeclarations.push(`${property}: ${sanitizedValue}`)
+  }
+
+  return sanitizedDeclarations.length > 0 ? sanitizedDeclarations.join('; ') : null
+}
+
+function sanitizeSvgHref(tagName: string, rawValue: string): string | null {
+  const trimmed = rawValue.trim()
+  if (!trimmed) return null
+
+  if (tagName === 'a') {
+    return isSafeBrowserNavigationTarget(trimmed) ? trimmed : null
+  }
+
+  return isAllowedLocalSvgReference(trimmed) ? trimmed : null
+}
+
+function getSvgRoots(root: ParentNode): Element[] {
+  const svgRoots = Array.from(root.querySelectorAll('svg'))
+  if (root instanceof Element && root.matches('svg')) svgRoots.unshift(root)
+  return svgRoots
+}
+
+// DOMPurify strips active content inside SVG, but still allows some passive
+// resource-reference surfaces that are fine for static icons only when they are
+// limited to local fragment ids.
+function sanitizeSvgSubtrees(root: ParentNode): void {
+  for (const svgRoot of getSvgRoots(root)) {
+    const nodes = [svgRoot, ...Array.from(svgRoot.querySelectorAll('*'))]
+
+    for (const node of nodes) {
+      const tagName = node.localName.toLowerCase()
+      if (SVG_BLOCKED_TAGS.has(tagName)) {
+        node.remove()
+        continue
+      }
+
+      for (const attr of Array.from(node.attributes)) {
+        const attrName = attr.name.toLowerCase()
+
+        if (attrName === 'href' || attrName === 'xlink:href') {
+          const sanitizedHref = sanitizeSvgHref(tagName, attr.value)
+          if (!sanitizedHref) {
+            node.removeAttribute(attr.name)
+            continue
+          }
+
+          node.setAttribute('href', sanitizedHref)
+          if (attr.name !== 'href') node.removeAttribute(attr.name)
+          continue
+        }
+
+        if (attrName === 'style') {
+          const sanitizedStyle = sanitizeSvgStyleAttribute(attr.value)
+          if (!sanitizedStyle) node.removeAttribute(attr.name)
+          else node.setAttribute(attr.name, sanitizedStyle)
+          continue
+        }
+
+        if (SVG_URL_VALUE_ATTRS.has(attrName) && /url\(/i.test(attr.value)) {
+          const sanitizedValue = sanitizeSvgUrlFunctions(attr.value)
+          if (!sanitizedValue) node.removeAttribute(attr.name)
+          else node.setAttribute(attr.name, sanitizedValue)
+        }
+      }
+    }
+  }
+}
+
+function sanitizeHtml(html: string, options: SanitizeHtmlOptions): string {
+  const normalizedHtml = normalizeDocumentHtml(html, options.allowStyleTag)
+  const styleExtraction = options.allowStyleTag
     ? extractStyleBlocks(normalizedHtml)
     : { htmlWithoutStyles: normalizedHtml, styles: [] }
-  const sanitized = DOMPurify.sanitize(styleExtraction.htmlWithoutStyles, {
+  const forbidTags = [...BASE_FORBID_TAGS, 'style', 'form']
+  if (!options.allowInlineSvg) forbidTags.push('svg')
+
+  const sanitized = getDOMPurify().sanitize(styleExtraction.htmlWithoutStyles, {
     ADD_ATTR: (attrName) => isAllowedCustomAttributeName(attrName),
+    ADD_TAGS: options.allowInlineSvg ? ['use'] : undefined,
     ALLOW_DATA_ATTR: true,
     ALLOW_ARIA_ATTR: true,
-    FORBID_TAGS: [...BASE_FORBID_TAGS, 'style', 'form'],
+    FORBID_TAGS: forbidTags,
     FORBID_ATTR: BASE_FORBID_ATTR,
     RETURN_DOM_FRAGMENT: true,
   }) as DocumentFragment
 
+  if (options.allowInlineSvg) sanitizeSvgSubtrees(sanitized)
   sanitizeNavigableElements(sanitized)
 
   for (const img of sanitized.querySelectorAll('img')) {
@@ -140,9 +284,9 @@ function sanitizeHtml(html: string, allowStyleTag: boolean): string {
 }
 
 export function sanitizeRichHtml(html: string): string {
-  return sanitizeHtml(html, false)
+  return sanitizeHtml(html, { allowInlineSvg: true, allowStyleTag: false })
 }
 
 export function sanitizeHtmlIsland(html: string): string {
-  return sanitizeHtml(html, true)
+  return sanitizeHtml(html, { allowInlineSvg: true, allowStyleTag: true })
 }

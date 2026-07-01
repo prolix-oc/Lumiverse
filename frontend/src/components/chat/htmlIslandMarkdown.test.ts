@@ -35,4 +35,8 @@ describe('processMarkdownInHtmlIsland', () => {
     expect(render('<code>**bold**</code>')).toBe('<code>**bold**</code>')
     expect(render('<script># heading</script>')).toBe('<script># heading</script>')
   })
+
+  test('does not parse text inside svg subtrees', () => {
+    expect(render('<svg><text>*bold*</text></svg>')).toBe('<svg><text>*bold*</text></svg>')
+  })
 })
