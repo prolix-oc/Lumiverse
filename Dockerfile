@@ -78,8 +78,9 @@ WORKDIR /app
 # Backend dependencies
 COPY --from=backend-deps /app/node_modules ./node_modules
 
-# Built frontend
+# Built frontend assets + manifest used by spindle.version.getFrontend()
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+COPY --from=frontend-build /app/frontend/package.json ./frontend/package.json
 
 # Backend source
 COPY package.json ./
