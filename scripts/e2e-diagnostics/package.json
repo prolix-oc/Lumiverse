@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "diagnose": "node diagnose.mjs",
-    "diagnose:spindle": "node diagnose-spindle.mjs",
+    "diagnose:spindle": "node diagnose-spindle.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
