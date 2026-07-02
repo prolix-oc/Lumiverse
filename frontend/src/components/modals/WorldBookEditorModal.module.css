@@ -1,4 +1,5 @@
 .modal {
+  --worldbook-footer-height: 0px;
   max-height: calc(85vh / var(--lumiverse-ui-scale, 1));
 }
 
@@ -375,12 +376,48 @@
 /* ── Right panel: book content ── */
 .content {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+}
+
+.contentScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px 0;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-padding-block: 16px calc(16px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
+}
+
+.contentFooter {
+  flex-shrink: 0;
+  background: var(--lumiverse-bg-deep);
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 55%, transparent);
+  padding: 8px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.contentFooter::-webkit-scrollbar {
+  display: none;
+}
+
+.contentFooter:empty {
+  display: none;
+}
+
+/* Match the docked panel behavior so the footer stays behind the on-screen
+   keyboard instead of sliding upward with the focused field. */
+:global(html[data-resizes-content]) .contentFooter,
+:global(html[data-ios-pwa]) .contentFooter {
+  margin-bottom: calc(-1 * var(--app-keyboard-inset-bottom, 0px));
 }
 
 .emptyState {
@@ -874,5 +911,13 @@
     max-height: 200px;
     border-right: none;
     border-bottom: 1px solid var(--lumiverse-border);
+  }
+
+  .contentScroll {
+    padding: 12px 14px 0;
+  }
+
+  .contentFooter {
+    padding: 8px 14px calc(14px + env(safe-area-inset-bottom, 0px));
   }
 }

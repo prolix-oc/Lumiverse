@@ -948,6 +948,13 @@ export default function WorldBookPanel() {
                   icon={<BookOpen size={14} />}
                 />
               )}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={handlePopOut}
+                title={t('worldBookPanel.popOut')}
+                icon={<Maximize2 size={14} />}
+              />
               <Button size="icon-sm" variant="ghost" onClick={handleCreateBook} title={t('worldBookPanel.newBook')} icon={<Plus size={14} />} />
               <Button size="icon-sm" variant="ghost" onClick={handleOpenBookActionMenu} title={t('moreActions')} icon={<MoreVertical size={14} />} />
             </div>

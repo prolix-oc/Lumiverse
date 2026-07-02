@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, type KeyboardEvent } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type KeyboardEvent } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -89,6 +89,36 @@ export default function WorldBookEditorModal() {
   // Debounce refs
   const bookNameTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const bookDescTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const contentRootRef = useRef<HTMLDivElement>(null)
+  const contentScrollRef = useRef<HTMLDivElement>(null)
+  const [paginationContainer, setPaginationContainer] = useState<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    const root = contentRootRef.current
+    if (!root) return
+
+    const syncFooterHeight = () => {
+      const footerHeight = paginationContainer?.childElementCount
+        ? Math.round(paginationContainer.getBoundingClientRect().height)
+        : 0
+      root.style.setProperty('--worldbook-footer-height', `${footerHeight}px`)
+    }
+
+    syncFooterHeight()
+    if (!paginationContainer || typeof ResizeObserver === 'undefined') {
+      return () => {
+        root.style.removeProperty('--worldbook-footer-height')
+      }
+    }
+
+    const observer = new ResizeObserver(syncFooterHeight)
+    observer.observe(paginationContainer)
+
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--worldbook-footer-height')
+    }
+  }, [paginationContainer])
 
   // Load books
   const loadBooks = useCallback(async () => {
@@ -653,94 +683,99 @@ export default function WorldBookEditorModal() {
           </div>
 
           {/* Right panel: Book content */}
-          {selectedBookId ? (
-            <div className={styles.content}>
-              {/* Book name & description */}
-              <div className={styles.bookFields}>
-                <div className={styles.fieldRow}>
-                  <label className={styles.fieldLabel}>{tp('name')}</label>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={bookName}
-                    onChange={(e) => handleBookNameChange(e.target.value)}
-                  />
-                </div>
-                <div className={styles.fieldRow}>
-                  <label className={styles.fieldLabel}>{tp('description')}</label>
-                  <input
-                    type="text"
-                    className={styles.fieldInput}
-                    value={bookDescription}
-                    onChange={(e) => handleBookDescChange(e.target.value)}
-                  />
-                </div>
-                <div className={styles.fieldRow}>
-                  <label className={styles.fieldLabel}>{tp('folder')}</label>
-                  <FolderDropdown
-                    folders={folders}
-                    selectedFolder={bookFolder}
-                    onSelect={handleBookFolderChange}
-                    onCreateFolder={createFolder}
-                  />
-                </div>
-                {vectorSummary && (
-                  <div className={styles.vectorSummary}>
-                    <div className={styles.vectorSummaryTitle}>{tp('vectorStatusTitle')}</div>
-                    <div className={styles.vectorSummaryGrid}>
-                      <span>{tp('vectorEnabled', { count: vectorSummary.enabled })}</span>
-                      <span>{tp('vectorNonEmpty', { enabled: vectorSummary.enabled_non_empty, total: vectorSummary.non_empty })}</span>
-                      <span>{tp('vectorIndexed', { count: vectorSummary.indexed })}</span>
-                      <span>{tp('vectorPending', { count: vectorSummary.pending })}</span>
-                      <span>{tp('vectorErrors', { count: vectorSummary.error })}</span>
+          <div ref={contentRootRef} className={styles.content}>
+            <div ref={contentScrollRef} className={styles.contentScroll}>
+              {selectedBookId ? (
+                <>
+                  {/* Book name & description */}
+                  <div className={styles.bookFields}>
+                    <div className={styles.fieldRow}>
+                      <label className={styles.fieldLabel}>{tp('name')}</label>
+                      <input
+                        type="text"
+                        className={styles.fieldInput}
+                        value={bookName}
+                        onChange={(e) => handleBookNameChange(e.target.value)}
+                      />
+                    </div>
+                    <div className={styles.fieldRow}>
+                      <label className={styles.fieldLabel}>{tp('description')}</label>
+                      <input
+                        type="text"
+                        className={styles.fieldInput}
+                        value={bookDescription}
+                        onChange={(e) => handleBookDescChange(e.target.value)}
+                      />
+                    </div>
+                    <div className={styles.fieldRow}>
+                      <label className={styles.fieldLabel}>{tp('folder')}</label>
+                      <FolderDropdown
+                        folders={folders}
+                        selectedFolder={bookFolder}
+                        onSelect={handleBookFolderChange}
+                        onCreateFolder={createFolder}
+                      />
+                    </div>
+                    {vectorSummary && (
+                      <div className={styles.vectorSummary}>
+                        <div className={styles.vectorSummaryTitle}>{tp('vectorStatusTitle')}</div>
+                        <div className={styles.vectorSummaryGrid}>
+                          <span>{tp('vectorEnabled', { count: vectorSummary.enabled })}</span>
+                          <span>{tp('vectorNonEmpty', { enabled: vectorSummary.enabled_non_empty, total: vectorSummary.non_empty })}</span>
+                          <span>{tp('vectorIndexed', { count: vectorSummary.indexed })}</span>
+                          <span>{tp('vectorPending', { count: vectorSummary.pending })}</span>
+                          <span>{tp('vectorErrors', { count: vectorSummary.error })}</span>
+                        </div>
+                      </div>
+                    )}
+                    <div className={styles.bookActionRow}>
+                      <button
+                        type="button"
+                        className={styles.primaryActionBtn}
+                        onClick={handleReindexVectors}
+                        disabled={reindexing}
+                      >
+                        {reindexing ? tp('reindexing') : t('reindexButton')}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryBtn}
+                        onClick={handleConvertToVectorizedPreview}
+                        disabled={reindexing}
+                      >
+                        {tp('convertToVectorized')}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryBtn}
+                        onClick={handleDiagnostics}
+                        disabled={!activeChatId}
+                      >
+                        <Search size={12} />
+                        {t('diagnoseCurrentChat')}
+                      </button>
+                      {vectorStatus && (
+                        <span className={styles.vectorStatusText}>{vectorStatus}</span>
+                      )}
                     </div>
                   </div>
-                )}
-                <div className={styles.bookActionRow}>
-                  <button
-                    type="button"
-                    className={styles.primaryActionBtn}
-                    onClick={handleReindexVectors}
-                    disabled={reindexing}
-                  >
-                    {reindexing ? tp('reindexing') : t('reindexButton')}
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryBtn}
-                    onClick={handleConvertToVectorizedPreview}
-                    disabled={reindexing}
-                  >
-                    {tp('convertToVectorized')}
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryBtn}
-                    onClick={handleDiagnostics}
-                    disabled={!activeChatId}
-                  >
-                    <Search size={12} />
-                    {t('diagnoseCurrentChat')}
-                  </button>
-                  {vectorStatus && (
-                    <span className={styles.vectorStatusText}>{vectorStatus}</span>
-                  )}
-                </div>
-              </div>
 
-              <WorldBookEntriesSection
-                books={books}
-                selectedBookId={selectedBookId}
-                onRefreshVectorSummary={loadVectorSummary}
-              />
+                  <WorldBookEntriesSection
+                    books={books}
+                    selectedBookId={selectedBookId}
+                    onRefreshVectorSummary={loadVectorSummary}
+                    scrollContainerRef={contentScrollRef}
+                    paginationContainer={paginationContainer}
+                  />
+                </>
+              ) : (
+                <div className={styles.emptyState}>
+                  {t('selectOrCreate')}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className={styles.content}>
-              <div className={styles.emptyState}>
-                {t('selectOrCreate')}
-              </div>
-            </div>
-          )}
+            <div ref={setPaginationContainer} className={styles.contentFooter} />
+          </div>
         </div>
     </ModalShell>
 
