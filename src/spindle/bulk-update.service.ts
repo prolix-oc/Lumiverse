@@ -103,27 +103,6 @@ export function isBulkUpdateInProgress(): boolean {
   return bulkUpdateInProgress;
 }
 
-/**
- * Sleep helper used to give Bun breathing room between phases.
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Best-effort GC hint between phases. Bun exposes `Bun.gc(true)` which
- * runs a synchronous full collection; this helps finalize terminated
- * Workers and drain subprocess pipe handles before we move on. Wrapped
- * in a try/catch so older Bun builds don't blow up the bulk run.
- */
-function maybeGc(): void {
-  try {
-    (globalThis as any).Bun?.gc?.(true);
-  } catch {
-    // ignore
-  }
-}
-
 interface BulkPlanEntry {
   ext: ExtensionInfo;
   wasRunning: boolean;
@@ -182,8 +161,7 @@ async function runBulkUpdate(
   // Let JSC finalize the terminated Worker state before we start spawning
   // git/bun subprocesses. This is the specific interleaving that has
   // triggered segfaults on Bun 1.3.x.
-  await sleep(500);
-  maybeGc();
+  await lifecycle.settleRuntimeBoundary();
 
   // ─── Phase 2: update every extension (no Worker activity) ─────────────
   let completed = 0;
@@ -235,14 +213,12 @@ async function runBulkUpdate(
     // Small breather between subprocess bursts so pipe handles and
     // child-process zombies can be reaped before the next extension's
     // git + bun install + bun build chain fires.
-    await sleep(150);
-    maybeGc();
+    await lifecycle.settleRuntimeBoundary(150);
   }
 
   // Let the last extension's build subprocesses fully drain before we
   // start spinning up new Workers.
-  await sleep(500);
-  maybeGc();
+  await lifecycle.settleRuntimeBoundary();
 
   // ─── Phase 3: start previously-running extensions ─────────────────────
   // Only restart extensions that were enabled before the bulk run started.
@@ -278,7 +254,7 @@ async function runBulkUpdate(
 
     // Pace worker startups so we don't stack N Worker() constructors
     // inside the same tick.
-    await sleep(250);
+    await lifecycle.settleRuntimeBoundary(250);
   }
 
   // "updated" = Phase 2 succeeded AND Phase 3 restart (if attempted) succeeded.

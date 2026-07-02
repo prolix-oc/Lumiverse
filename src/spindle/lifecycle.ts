@@ -5,6 +5,28 @@ import { EventType } from "../ws/events";
 
 const runningExtensions = new Map<string, WorkerHost>();
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function maybeGc(): void {
+  try {
+    (globalThis as any).Bun?.gc?.(true);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Bun 1.3.x has shown native cleanup crashes when extension runtime teardown
+ * is immediately interleaved with git/bun subprocess work, especially on
+ * Windows. Keep update paths separated into runtime and subprocess phases.
+ */
+export async function settleRuntimeBoundary(ms = 500): Promise<void> {
+  await sleep(ms);
+  maybeGc();
+}
+
 export async function startAllExtensions(): Promise<void> {
   const extensions = await managerSvc.getEnabledExtensions();
   console.log(`[Spindle] Starting ${extensions.length} extension(s)...`);

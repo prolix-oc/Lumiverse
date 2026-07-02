@@ -256,9 +256,11 @@ app.post("/:id/update", async (c) => {
     // Stop if running
     if (lifecycle.isRunning(ext.id)) {
       await lifecycle.stopExtension(ext.id);
+      await lifecycle.settleRuntimeBoundary();
     }
 
     await managerSvc.update(ext.identifier);
+    await lifecycle.settleRuntimeBoundary();
 
     // Restart if was enabled
     if (ext.enabled) {
@@ -507,9 +509,11 @@ app.post("/:id/switch-branch", async (c) => {
     // Stop if running
     if (lifecycle.isRunning(ext.id)) {
       await lifecycle.stopExtension(ext.id);
+      await lifecycle.settleRuntimeBoundary();
     }
 
     await managerSvc.switchBranch(ext.identifier, body.branch);
+    await lifecycle.settleRuntimeBoundary();
 
     // Restart if was enabled
     if (ext.enabled) {
