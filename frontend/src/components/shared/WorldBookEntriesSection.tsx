@@ -65,9 +65,9 @@ import type {
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { ModalPresentation } from '@/components/shared/ModalPresentation'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { FormField, Select, TextInput, Button } from '@/components/shared/FormComponents'
-import { ModalShell } from '@/components/shared/ModalShell'
 import Pagination from '@/components/shared/Pagination'
 import { useStore } from '@/store'
 import type {
@@ -1429,128 +1429,150 @@ export default function WorldBookEntriesSection({
       )}
 
       {moveCopyState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setMoveCopyState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{moveCopyState.title}</h3>
-            <p className={styles.dialogText}>
-              {selectedBook ? te('moveCopyFrom', { name: selectedBook.name }) : null}
-            </p>
-            <FormField label={te('targetWorldBook')} className={styles.dialogFormField}>
-              <SearchableSelect
-                value={moveTargetBookId}
-                onChange={(value) => setMoveTargetBookId(value || '')}
-                options={availableTargetBooks}
-                placeholder={te('chooseWorldBook')}
-                searchPlaceholder={t('searchWorldBooks')}
-                emptyMessage={te('noOtherBooks')}
-                portal
-              />
-            </FormField>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setMoveCopyState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setMoveCopyState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={moveCopyState.title}
+          subtitle={selectedBook ? te('moveCopyFrom', { name: selectedBook.name }) : undefined}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setMoveCopyState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleMoveOrCopy()} disabled={pendingAction || !moveTargetBookId}>
                 {moveCopyState.confirmText}
               </Button>
-            </div>
-          </div>
-        </ModalShell>
+            </>
+          )}
+        >
+          <FormField label={te('targetWorldBook')} className={styles.dialogFormField}>
+            <SearchableSelect
+              value={moveTargetBookId}
+              onChange={(value) => setMoveTargetBookId(value || '')}
+              options={availableTargetBooks}
+              placeholder={te('chooseWorldBook')}
+              searchPlaceholder={t('searchWorldBooks')}
+              emptyMessage={te('noOtherBooks')}
+              portal
+            />
+          </FormField>
+        </ModalPresentation>
       )}
       {dockedPagination}
 
       {renumberState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setRenumberState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('renumberTitle')}</h3>
-            <p className={styles.dialogText}>{te('renumberHint')}</p>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('startNumber')} className={styles.dialogFormField}>
-                <TextInput
-                  type="number"
-                  value={renumberStart}
-                  onChange={setRenumberStart}
-                  placeholder={te('startNumberPlaceholder')}
-                />
-              </FormField>
-              <FormField label={te('step')} className={styles.dialogFormField}>
-                <TextInput type="number" min={1} value={renumberStep} onChange={setRenumberStep} />
-              </FormField>
-              <FormField label={te('direction')} className={styles.dialogFormField}>
-                <Select
-                  value={renumberDirection}
-                  onChange={(value) => setRenumberDirection(value as 'asc' | 'desc')}
-                  options={[
-                    { value: 'asc', label: te('sortAsc') },
-                    { value: 'desc', label: te('sortDesc') },
-                  ]}
-                />
-              </FormField>
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setRenumberState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setRenumberState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('renumberTitle')}
+          subtitle={te('renumberHint')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setRenumberState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkRenumber()} disabled={pendingAction}>{tc('actions.apply')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('startNumber')} className={styles.dialogFormField}>
+              <TextInput
+                type="number"
+                value={renumberStart}
+                onChange={setRenumberStart}
+                placeholder={te('startNumberPlaceholder')}
+              />
+            </FormField>
+            <FormField label={te('step')} className={styles.dialogFormField}>
+              <TextInput type="number" min={1} value={renumberStep} onChange={setRenumberStep} />
+            </FormField>
+            <FormField label={te('direction')} className={styles.dialogFormField}>
+              <Select
+                value={renumberDirection}
+                onChange={(value) => setRenumberDirection(value as 'asc' | 'desc')}
+                options={[
+                  { value: 'asc', label: te('sortAsc') },
+                  { value: 'desc', label: te('sortDesc') },
+                ]}
+              />
+            </FormField>
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
 
       {keywordState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setKeywordState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('keywordTitle')}</h3>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('keyword')} className={styles.dialogFormField}>
-                <TextInput
-                  value={keywordValue}
-                  onChange={setKeywordValue}
-                  placeholder={te('keywordPlaceholder')}
-                />
-              </FormField>
-              <FormField label={te('keywordList')} className={styles.dialogFormField}>
-                <Select
-                  value={keywordTarget}
-                  onChange={(value) => setKeywordTarget(value as 'primary' | 'secondary')}
-                  options={[
-                    { value: 'primary', label: te('keywordPrimary') },
-                    { value: 'secondary', label: te('keywordSecondary') },
-                  ]}
-                />
-              </FormField>
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setKeywordState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setKeywordState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('keywordTitle')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setKeywordState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkKeyword()} disabled={pendingAction || !keywordValue.trim()}>{tc('actions.add')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('keyword')} className={styles.dialogFormField}>
+              <TextInput
+                value={keywordValue}
+                onChange={setKeywordValue}
+                placeholder={te('keywordPlaceholder')}
+              />
+            </FormField>
+            <FormField label={te('keywordList')} className={styles.dialogFormField}>
+              <Select
+                value={keywordTarget}
+                onChange={(value) => setKeywordTarget(value as 'primary' | 'secondary')}
+                options={[
+                  { value: 'primary', label: te('keywordPrimary') },
+                  { value: 'secondary', label: te('keywordSecondary') },
+                ]}
+              />
+            </FormField>
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
 
       {positionState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setPositionState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('setPositionTitle')}</h3>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('position')} className={styles.dialogFormField}>
-                <Select
-                  value={String(bulkPosition)}
-                  onChange={(value) => setBulkPosition(Number(value))}
-                  options={labels.positionOptions.map((opt) => ({
-                    value: String(opt.value),
-                    label: opt.label,
-                  }))}
-                />
-              </FormField>
-              {bulkPosition === 4 && (
-                <FormField label={te('depth')} className={styles.dialogFormField}>
-                  <TextInput type="number" min={0} value={bulkDepth} onChange={setBulkDepth} />
-                </FormField>
-              )}
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setPositionState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setPositionState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('setPositionTitle')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setPositionState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkSetPosition()} disabled={pendingAction}>{tc('actions.apply')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('position')} className={styles.dialogFormField}>
+              <Select
+                value={String(bulkPosition)}
+                onChange={(value) => setBulkPosition(Number(value))}
+                options={labels.positionOptions.map((opt) => ({
+                  value: String(opt.value),
+                  label: opt.label,
+                }))}
+              />
+            </FormField>
+            {bulkPosition === 4 && (
+              <FormField label={te('depth')} className={styles.dialogFormField}>
+                <TextInput type="number" min={0} value={bulkDepth} onChange={setBulkDepth} />
+              </FormField>
+            )}
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
     </div>
   )
