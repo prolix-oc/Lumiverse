@@ -6,7 +6,8 @@
 import type { LumiHubWSMessage } from "./types";
 import { installCharacter, installPreset, installTheme, installWorldbook } from "./installer";
 import { buildInstallManifest } from "./manifest";
-import { updateLastConnected } from "../services/lumihub-link.service";
+import { buildStatsSyncPayload } from "./usage-stats";
+import { updateLastConnected, isStatsSharingEnabled } from "../services/lumihub-link.service";
 import { getFirstUserId } from "../auth/seed";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -21,6 +22,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 60_000;
 const MANIFEST_SYNC_DEBOUNCE_MS = 5_000;
+const STATS_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 // Fail fast if LumiHub doesn't complete the WebSocket handshake in time.
 // Without this, an unreachable host can leave the socket stuck in CONNECTING
 // (no close/error fires) and no reconnect is ever scheduled.
@@ -37,6 +39,7 @@ class LumiHubWSClient {
   private wsUrl: string = "";
   private linkToken: string = "";
   private manifestSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private statsSyncTimer: ReturnType<typeof setInterval> | null = null;
   private eventListenersRegistered = false;
 
   /** Open a WebSocket connection to LumiHub. */
@@ -148,13 +151,16 @@ class LumiHubWSClient {
           type: "instance_info",
           id: crypto.randomUUID(),
           payload: {
-            capabilities: ["character_import", "chub_import", "worldbook_import", "theme_import", "preset_import", "manifest_sync"],
+            capabilities: ["character_import", "chub_import", "worldbook_import", "theme_import", "preset_import", "manifest_sync", "stats_sync"],
             version: "1.0.0",
           },
           timestamp: Date.now(),
         });
         // Send initial install manifest
         this.syncManifest();
+        // Send usage counters (no-op unless pted in)
+        this.syncStats();
+        this.startStatsSyncTimer();
         // Register event listeners for character mutations (once)
         this.registerManifestListeners();
         break;
@@ -361,6 +367,37 @@ class LumiHubWSClient {
     }
   }
 
+  syncStats(): void {
+    try {
+      if (!this.connected || !isStatsSharingEnabled()) return;
+      const userId = getFirstUserId();
+      if (!userId) return;
+      const payload = buildStatsSyncPayload(userId);
+      if (!payload) return;
+      this.send({
+        type: "stats_sync",
+        id: crypto.randomUUID(),
+        payload,
+        timestamp: Date.now(),
+      });
+      console.log(`[LumiHub WS] Sent stats sync (${payload.days.length} days)`);
+    } catch (err) {
+      console.warn("[LumiHub WS] Failed to build/send stats:", err);
+    }
+  }
+
+  private startStatsSyncTimer(): void {
+    this.stopStatsSyncTimer();
+    this.statsSyncTimer = setInterval(() => this.syncStats(), STATS_SYNC_INTERVAL_MS);
+  }
+
+  private stopStatsSyncTimer(): void {
+    if (this.statsSyncTimer) {
+      clearInterval(this.statsSyncTimer);
+      this.statsSyncTimer = null;
+    }
+  }
+
   /** Debounced manifest re-sync (collapses rapid character mutations). */
   private debouncedManifestSync(): void {
     if (this.manifestSyncTimer) clearTimeout(this.manifestSyncTimer);
@@ -420,6 +457,7 @@ class LumiHubWSClient {
 
   private cleanup(): void {
     this.stopHeartbeat();
+    this.stopStatsSyncTimer();
     this.clearConnectTimeout();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
