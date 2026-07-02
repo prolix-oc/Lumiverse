@@ -31,12 +31,11 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Badge } from '@/components/shared/Badge'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { RegexScript, RegexScope, RegexPerformanceMetadata } from '@/types/regex'
+import { resolveRegexCreateScope, type RegexPanelScopeFilterValue } from './regexPanelScope'
 import styles from './RegexPanel.module.css'
 import clsx from 'clsx'
 
-type ScopeFilterValue = 'all' | 'global' | 'character' | 'chat' | 'preset'
-
-const SCOPE_FILTER_LABEL_KEYS: Record<ScopeFilterValue, string> = {
+const SCOPE_FILTER_LABEL_KEYS: Record<RegexPanelScopeFilterValue, string> = {
   all: 'regexPanel.scopeAll',
   global: 'regexPanel.scopeGlobal',
   character: 'regexPanel.scopeThisChar',
@@ -104,7 +103,7 @@ export default function RegexPanel() {
   const activeChatId = useStore((s) => s.activeChatId)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
 
-  const [scopeFilter, setScopeFilter] = useState<ScopeFilterValue>('all')
+  const [scopeFilter, setScopeFilter] = useState<RegexPanelScopeFilterValue>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
   const [showCreatePopover, setShowCreatePopover] = useState(false)
@@ -283,18 +282,30 @@ export default function RegexPanel() {
   }, [regexScripts, renderedScriptIds, reorderRegexScripts, t])
 
   const handleAdd = useCallback(async (folder?: string) => {
+    const createScope = resolveRegexCreateScope(scopeFilter, activeCharacterId, activeChatId)
+    if (createScope.ok === false) {
+      const errorMessage = createScope.error === 'missingCharacter'
+        ? i18n.t('modals:regexEditor.saveErrorCharacterScope')
+        : i18n.t('modals:regexEditor.saveErrorChatScope')
+      toast.error(
+        errorMessage,
+      )
+      return
+    }
+
     try {
       const script = await addRegexScript({
         name: t('regexPanel.newScript'),
         find_regex: '',
         flags: 'gi',
         folder: folder || '',
+        ...createScope.input,
       })
       setExpandedId(script.id)
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [addRegexScript])
+  }, [scopeFilter, activeCharacterId, activeChatId, addRegexScript, t])
 
   const handleCreateFolder = useCallback(() => {
     const trimmed = creatingFolderName.trim()
@@ -515,7 +526,7 @@ export default function RegexPanel() {
           'character',
           'chat',
           ...(presetHasRegexes ? (['preset'] as const) : []),
-        ] as ScopeFilterValue[]).map((v) => (
+        ] as RegexPanelScopeFilterValue[]).map((v) => (
           <button
             key={v}
             className={clsx(styles.scopePill, scopeFilter === v && styles.scopePillActive)}
