@@ -422,6 +422,8 @@
     "userAlign": "User message alignment",
     "left": "Left",
     "right": "Right",
+    "minimalFullAvatar": "Use full-size avatars",
+    "minimalFullAvatarHint": "Minimal mode only. Uses the larger avatar image in message rows",
     "bubbleFullAvatar": "Use full-size avatars",
     "bubbleFullAvatarHint": "Bubble mode only. Uses the larger avatar image in message bubbles",
     "bubbleHoverHighlight": "Highlight message bubbles on hover/tap",

@@ -416,6 +416,8 @@
     "userAlign": "Alignement du message utilisateur",
     "left": "Gauche",
     "right": "Droite",
+    "minimalFullAvatar": "Utiliser des avatars en taille réelle",
+    "minimalFullAvatarHint": "Mode Minimal uniquement. Utilise l'image d'avatar plus grande dans les lignes de message",
     "bubbleFullAvatar": "Utiliser des avatars en taille réelle",
     "bubbleFullAvatarHint": "Mode Bulle uniquement. Utilise l'image d'avatar plus grande dans les bulles de message",
     "bubbleHoverHighlight": "Mettre en surbrillance les bulles au survol/toucher",

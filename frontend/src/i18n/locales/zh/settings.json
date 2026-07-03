@@ -332,6 +332,8 @@
     "userAlign": "用户消息对齐",
     "left": "左",
     "right": "右",
+    "minimalFullAvatar": "使用全尺寸头像",
+    "minimalFullAvatarHint": "仅极简模式。在消息行中使用更大的头像图像",
     "bubbleFullAvatar": "使用全尺寸头像",
     "bubbleFullAvatarHint": "仅气泡模式。在消息气泡中使用更大的头像图像",
     "bubbleHoverHighlight": "悬停/点按时高亮消息气泡",

@@ -21,6 +21,7 @@ interface MinimalMessageProps {
 }
 
 export default function MinimalMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect }: MinimalMessageProps) {
+  const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
@@ -29,7 +30,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
-  const displayAvatarUrl = avatarUrl
+  const displayAvatarUrl = minimalUseFullAvatar && fullAvatarUrl ? fullAvatarUrl : avatarUrl
   const handlePromptBreakdown = useCallback(() => {
     openModal('promptItemizer', { messageId: message.id })
   }, [openModal, message.id])
@@ -43,7 +44,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
       isUser,
       displayName,
       initial: (displayName || '').charAt(0).toUpperCase() || '?',
-      avatarUrl,
+      avatarUrl: displayAvatarUrl,
       fullAvatarUrl,
       avatar,
       isHidden,

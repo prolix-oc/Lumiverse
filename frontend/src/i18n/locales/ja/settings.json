@@ -416,6 +416,8 @@
     "userAlign": "ユーザー メッセージの配置",
     "left": "左",
     "right": "右",
+    "minimalFullAvatar": "フルサイズのアバターを使う",
+    "minimalFullAvatarHint": "最小表示のみ。メッセージ行で大きいアバター画像を使用します",
     "bubbleFullAvatar": "フルサイズのアバターを使う",
     "bubbleFullAvatarHint": "バブル表示のみ。メッセージの吹き出しで大きいアバター画像を使用します",
     "bubbleHoverHighlight": "ホバー/タップ時にメッセージの吹き出しを強調表示する",

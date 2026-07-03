@@ -717,6 +717,7 @@ function ChatSettings() {
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
+  const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
@@ -814,6 +815,15 @@ function ChatSettings() {
           </button>
         </div>
       </div>
+
+      {displayMode === 'minimal' && (
+        <Toggle.Checkbox
+          checked={minimalUseFullAvatar}
+          onChange={(checked) => setSetting('minimalUseFullAvatar', checked)}
+          label={t('chat.minimalFullAvatar')}
+          hint={t('chat.minimalFullAvatarHint')}
+        />
+      )}
 
       {displayMode === 'bubble' && (
         <>

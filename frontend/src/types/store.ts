@@ -446,6 +446,7 @@ export interface SettingsSlice {
   personasPerPage: number
   messagesPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  minimalUseFullAvatar: boolean
   bubbleUserAlign: 'left' | 'right'
   bubbleDisableHover: boolean
   bubbleHideAvatarBg: boolean
