@@ -953,12 +953,14 @@ export function useWebSocket() {
                 }
               }
 
-              // Don't trigger image gen if a new generation already started,
-              // we're in a group nudge loop, or the user has navigated away
-              // from the chat that just finished generating (the backend would
-              // still create the attachment message, but the local store would
-              // silently drop it because the active chat no longer matches).
+              const pageVisible = document.visibilityState === 'visible' && document.hasFocus()
+
+              // Foreground pages keep the existing client-side auto-generate
+              // flow. Hidden/backgrounded sessions hand off to the backend
+              // fallback listener so mobile suspends and closed tabs can still
+              // reach ComfyUI without double-firing the request.
               if (
+                pageVisible &&
                 !latest.isStreaming &&
                 !latest.isNudgeLoopActive &&
                 latest.activeChatId === payload.chatId &&

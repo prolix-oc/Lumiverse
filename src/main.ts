@@ -136,6 +136,10 @@ const { default: app, websocket } = await import("./app");
 const { initPushListeners } = await import("./services/push.service");
 initPushListeners();
 
+// Register background image-generation fallback listeners
+const { initImageGenAutoListeners } = await import("./services/image-gen-auto.service");
+initImageGenAutoListeners();
+
 // Start extensions after app is imported but before serving —
 // ensures extension macros are registered in the global registry
 await startAllExtensions().catch((err) => {
