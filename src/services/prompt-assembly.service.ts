@@ -118,14 +118,14 @@ export type {
 } from "./world-info-vector-ranking";
 
 // ---------------------------------------------------------------------------
-// Chat history identity marker
+// Chat history and World Info identity markers
 // ---------------------------------------------------------------------------
-// Each LlmMessage that originates from the user's chat history (as opposed to
-// system blocks, world info, author's note, depth-injected blocks, etc.) is
-// tagged with this property. Downstream consumers (regex script depth filter,
-// tokenizer breakdown snapshot) use the tag to identify chat history messages
-// regardless of where they end up in the final assembled array, since later
-// insertions/merges can shift positions and even break contiguity.
+// LlmMessages that originate from the user's chat history or standalone World
+// Info entries are tagged with source properties. Downstream consumers (regex
+// script depth filters, tokenizer breakdown snapshots, Spindle interceptors)
+// use these tags to identify source messages regardless of where they end up in
+// the final assembled array, since later insertions/merges can shift positions
+// and even break contiguity.
 //
 // The tag is preserved by every mutation that uses object spread
 // (`{ ...result[i], content: ... }`). The merge function — which constructs
@@ -137,6 +137,7 @@ export type {
 // outbound requests, so the tag never leaks to the LLM.
 
 const CHAT_HISTORY_KEY = "__chatHistorySource";
+const WORLD_INFO_KEY = "__worldInfoSource";
 const SOURCE_ID_KEY = "__sourceMessageId";
 const SOURCE_INDEX_KEY = "__sourceIndexInChat";
 const PRESERVE_DISPLAY_REASONING_DELIMS_KEY =
@@ -156,6 +157,15 @@ function markAsChatHistory(
 
 export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+function markAsWorldInfoEntry(msg: LlmMessage): LlmMessage {
+  (msg as any)[WORLD_INFO_KEY] = true;
+  return msg;
+}
+
+export function isWorldInfoEntryMessage(msg: LlmMessage): boolean {
+  return (msg as any)[WORLD_INFO_KEY] === true;
 }
 
 export function getSourceMessageId(msg: LlmMessage): string | undefined {
@@ -2514,7 +2524,7 @@ export async function assemblePrompt(
       if (wiCache.before.length > 0) {
         for (const entry of wiCache.before) {
           const role = (block.role as LlmMessage["role"]) || entry.role;
-          result.push({ role, content: entry.content });
+          result.push(markAsWorldInfoEntry({ role, content: entry.content }));
           breakdown.push({
             type: "world_info",
             name: formatWorldInfoBreakdownName(
@@ -2534,7 +2544,7 @@ export async function assemblePrompt(
       if (wiCache.after.length > 0) {
         for (const entry of wiCache.after) {
           const role = (block.role as LlmMessage["role"]) || entry.role;
-          result.push({ role, content: entry.content });
+          result.push(markAsWorldInfoEntry({ role, content: entry.content }));
           breakdown.push({
             type: "world_info",
             name: formatWorldInfoBreakdownName(
@@ -2764,7 +2774,11 @@ export async function assemblePrompt(
   for (const depthEntry of wiCache.depth) {
     const insertAt = Math.max(0, result.length - depthEntry.depth);
     const role = depthEntry.role as LlmMessage["role"];
-    result.splice(insertAt, 0, { role, content: depthEntry.content });
+    result.splice(
+      insertAt,
+      0,
+      markAsWorldInfoEntry({ role, content: depthEntry.content }),
+    );
     breakdown.push({
       type: "world_info",
       name: formatWorldInfoBreakdownName(
@@ -4722,7 +4736,11 @@ function injectWorldInfoAt(
   if (entries.length === 0) return 0;
   let idx = Math.max(0, Math.min(insertAt, result.length));
   for (const entry of entries) {
-    result.splice(idx, 0, { role: entry.role, content: entry.content });
+    result.splice(
+      idx,
+      0,
+      markAsWorldInfoEntry({ role: entry.role, content: entry.content }),
+    );
     breakdown.push({
       type: "world_info",
       name: formatWorldInfoBreakdownName(name, entry.entryLabel),
@@ -4746,7 +4764,9 @@ function pushPinnedMarkerEntries(
   entries: WorldInfoCache["pinnedMarkers"],
 ): void {
   for (const entry of entries) {
-    result.push({ role: entry.role, content: entry.content });
+    result.push(
+      markAsWorldInfoEntry({ role: entry.role, content: entry.content }),
+    );
     breakdown.push({
       type: "world_info",
       name: formatWorldInfoBreakdownName(`WI @ ${entry.marker}`, entry.entryLabel),
@@ -4913,10 +4933,12 @@ function mergeConsecutiveUserMessages(
         typeof b === "string" ? [] : b.filter((p) => p.type !== "text");
       const allParts = [...aParts, ...bParts];
 
-      // Preserve the chat-history marker if either source message carried it
-      // — both are typically chat-history user turns being merged.
+      // Preserve source markers if either source message carried them.
       const wasChatHistory =
         isChatHistoryMessage(result[i]) || isChatHistoryMessage(result[i + 1]);
+      const wasWorldInfo =
+        isWorldInfoEntryMessage(result[i]) ||
+        isWorldInfoEntryMessage(result[i + 1]);
       const mergedSourceId =
         getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
       const mergedSourceIndex =
@@ -4937,6 +4959,7 @@ function mergeConsecutiveUserMessages(
             : undefined,
         );
       }
+      if (wasWorldInfo) markAsWorldInfoEntry(result[i]);
       result.splice(i + 1, 1);
       remaining--;
       // Don't increment — next element slid into i+1, check again

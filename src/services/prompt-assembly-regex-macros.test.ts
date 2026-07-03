@@ -3,6 +3,7 @@ import type { LlmMessage } from "../llm/types";
 import { initMacros, type MacroEnv } from "../macros";
 import {
   isChatHistoryMessage,
+  isWorldInfoEntryMessage,
   resolvePromptMacrosAfterRegexPass,
 } from "./prompt-assembly.service";
 
@@ -78,6 +79,11 @@ function markChatHistory(message: LlmMessage): LlmMessage {
   return message;
 }
 
+function markWorldInfo(message: LlmMessage): LlmMessage {
+  (message as any).__worldInfoSource = true;
+  return message;
+}
+
 describe("resolvePromptMacrosAfterRegexPass", () => {
   beforeAll(() => {
     initMacros();
@@ -103,5 +109,22 @@ describe("resolvePromptMacrosAfterRegexPass", () => {
     expect(env.variables.local.get("scene")).toBe("lantern-lit alley");
     expect(isChatHistoryMessage(messages[0])).toBe(true);
     expect(isChatHistoryMessage(messages[1])).toBe(true);
+  });
+
+  test("preserves world info source markers while resolving prompt macros", async () => {
+    const env = makeEnv();
+    env.variables.local.set("lore", "the doors answer to moonlight");
+    const messages: LlmMessage[] = [
+      markWorldInfo({
+        role: "system",
+        content: "Lore: {{getvar::lore}}",
+      }),
+    ];
+
+    await resolvePromptMacrosAfterRegexPass(messages, env);
+
+    expect(messages[0].content).toBe("Lore: the doors answer to moonlight");
+    expect(isWorldInfoEntryMessage(messages[0])).toBe(true);
+    expect(isChatHistoryMessage(messages[0])).toBe(false);
   });
 });

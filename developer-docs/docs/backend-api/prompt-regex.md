@@ -41,9 +41,11 @@ spindle.registerInterceptor(async (messages, context) => {
 
 The invariant is **apply if you own**. If you declare ownership but cannot apply (your runtime is unavailable, a fetch fails), the prompt ships with no prompt regex at all, because the host already skipped its pass. Release ownership in that case so the host runs its own pass, and log loudly when an owned chat would otherwise ship un-transformed.
 
-### Chat history flag
+### Assembly source flags
 
 Messages passed to your interceptor carry `__isChatHistory` when they are genuine chat-history turns, as opposed to depth-injected world info, preset, or author's note blocks spliced into the history range. The host gates `min_depth` / `max_depth` on chat-history messages only, so use this flag to rebuild the same depth frame and to number turns. Injected non-history blocks must not shift the index of real turns.
+
+Standalone World Info / world-book messages carry `__isWorldInfoEntry`. World Info inserted inline through marker macros is part of the surrounding prompt block and is not flagged as a separate message.
 
 ```ts
 interface LlmMessageDTO {
@@ -51,10 +53,11 @@ interface LlmMessageDTO {
   content: string | LlmMessagePartDTO[]
   name?: string
   __isChatHistory?: boolean // host-set, present only on interceptor input
+  __isWorldInfoEntry?: boolean // host-set, present only on interceptor input
 }
 ```
 
-The flag is set by the host on interceptor input only. It is never sent to the LLM.
+These flags are set by the host on interceptor input only. They are never sent to the LLM.
 
 ## `spindle.promptRegex.setOwnedChats(chatIds)`
 
