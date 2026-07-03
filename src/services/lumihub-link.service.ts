@@ -12,6 +12,7 @@ interface LinkRow {
   instance_id: string;
   linked_at: string;
   last_connected_at: string | null;
+  share_usage_stats: number;
 }
 
 export interface LinkConfig {
@@ -23,6 +24,7 @@ export interface LinkConfig {
   instanceId: string;
   linkedAt: string;
   lastConnectedAt: string | null;
+  shareUsageStats: boolean;
 }
 
 let _cachedKey: CryptoKey | null = null;
@@ -86,6 +88,7 @@ export async function getLinkConfig(): Promise<LinkConfig | null> {
     instanceId: row.instance_id,
     linkedAt: row.linked_at,
     lastConnectedAt: row.last_connected_at,
+    shareUsageStats: row.share_usage_stats === 1,
   };
 }
 
@@ -123,6 +126,19 @@ export function isLinked(): boolean {
 /** Update the last_connected_at timestamp. */
 export function updateLastConnected(): void {
   getDb().run("UPDATE lumihub_link SET last_connected_at = datetime('now')");
+}
+
+/** Whether the user has opted in to sharing anonymous usage counters. */
+export function isStatsSharingEnabled(): boolean {
+  const row = getDb().query("SELECT share_usage_stats FROM lumihub_link LIMIT 1").get() as
+    | { share_usage_stats: number }
+    | null;
+  return row?.share_usage_stats === 1;
+}
+
+/** Enable/disable sharing anonymous usage counters with the linked hub. */
+export function setStatsSharing(enabled: boolean): void {
+  getDb().query("UPDATE lumihub_link SET share_usage_stats = ?").run(enabled ? 1 : 0);
 }
 
 /** Generate a PKCE code_verifier and code_challenge (S256). */

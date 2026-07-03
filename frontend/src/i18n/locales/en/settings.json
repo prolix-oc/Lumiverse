@@ -8,27 +8,111 @@
     "noResults": "No matching settings"
   },
   "tabs": {
-    "account": { "shortName": "Account", "tabName": "Account Settings", "tabDescription": "Manage your account details and password" },
-    "display": { "shortName": "Display", "tabName": "Display & Layout", "tabDescription": "Panel width, sidebar position, and layout options" },
-    "chat": { "shortName": "Chat", "tabName": "Chat Behavior", "tabDescription": "Message display mode, send key, and chat options" },
-    "extensions": { "shortName": "Extensions", "tabName": "Extension Settings", "tabDescription": "Manage Spindle extension configuration" },
-    "guided": { "shortName": "Guided Gen", "tabName": "Guided Generation", "tabDescription": "Configure guided generation sequences and prompt biases" },
-    "quickReplies": { "shortName": "Quick Replies", "tabName": "Quick Replies", "tabDescription": "Manage quick reply sets and message shortcuts" },
-    "extensionPools": { "shortName": "Extension Pools", "tabName": "Extension Pools", "tabDescription": "Configure extension resource pool limits" },
-    "webSearch": { "shortName": "Web Search", "tabName": "Web Search", "tabDescription": "Configure SearXNG-backed web search for council tools" },
-    "embeddings": { "shortName": "Embeddings", "tabName": "Embeddings", "tabDescription": "Configure embedding models and vector storage" },
-    "memoryCortex": { "shortName": "Memory Cortex", "tabName": "Memory Cortex Settings", "tabDescription": "Configure memory cortex extraction and salience" },
-    "notifications": { "shortName": "Notifications", "tabName": "Notifications", "tabDescription": "Configure notification preferences and alerts" },
-    "voice": { "shortName": "Voice", "tabName": "Voice & Speech", "tabDescription": "Text-to-speech, speech-to-text, and voice settings" },
-    "mcpServers": { "shortName": "MCP Servers", "tabName": "MCP Servers", "tabDescription": "Connect to external MCP tool servers for function calling" },
-    "advanced": { "shortName": "Advanced", "tabName": "Advanced Settings", "tabDescription": "Advanced configuration and debug options" },
-    "lumihub": { "shortName": "LumiHub", "tabName": "LumiHub", "tabDescription": "LumiHub cloud sync and sharing settings" },
-    "dataPortability": { "shortName": "Data", "tabName": "Data Portability", "tabDescription": "Export your data or import a previously exported archive" },
-    "diagnostics": { "shortName": "Diagnostics", "tabName": "Diagnostics", "tabDescription": "System health, performance metrics, and debug info" },
-    "operator": { "shortName": "Operator", "tabName": "Operator Panel", "tabDescription": "Server management, updates, and restart controls" },
-    "tokenizers": { "shortName": "Tokenizers", "tabName": "Tokenizer Manager", "tabDescription": "Manage and test tokenizer configurations" },
-    "users": { "shortName": "Users", "tabName": "User Management", "tabDescription": "Manage user accounts, roles, and permissions" },
-    "migration": { "shortName": "Migration", "tabName": "Migration", "tabDescription": "Import data from SillyTavern and other sources" }
+    "account": {
+      "shortName": "Account",
+      "tabName": "Account Settings",
+      "tabDescription": "Manage your account details and password"
+    },
+    "display": {
+      "shortName": "Display",
+      "tabName": "Display & Layout",
+      "tabDescription": "Panel width, sidebar position, and layout options"
+    },
+    "chat": {
+      "shortName": "Chat",
+      "tabName": "Chat Behavior",
+      "tabDescription": "Message display mode, send key, and chat options"
+    },
+    "extensions": {
+      "shortName": "Extensions",
+      "tabName": "Extension Settings",
+      "tabDescription": "Manage Spindle extension configuration"
+    },
+    "guided": {
+      "shortName": "Guided Gen",
+      "tabName": "Guided Generation",
+      "tabDescription": "Configure guided generation sequences and prompt biases"
+    },
+    "quickReplies": {
+      "shortName": "Quick Replies",
+      "tabName": "Quick Replies",
+      "tabDescription": "Manage quick reply sets and message shortcuts"
+    },
+    "extensionPools": {
+      "shortName": "Extension Pools",
+      "tabName": "Extension Pools",
+      "tabDescription": "Configure extension resource pool limits"
+    },
+    "webSearch": {
+      "shortName": "Web Search",
+      "tabName": "Web Search",
+      "tabDescription": "Configure SearXNG-backed web search for council tools"
+    },
+    "embeddings": {
+      "shortName": "Embeddings",
+      "tabName": "Embeddings",
+      "tabDescription": "Configure embedding models and vector storage"
+    },
+    "memoryCortex": {
+      "shortName": "Memory Cortex",
+      "tabName": "Memory Cortex Settings",
+      "tabDescription": "Configure memory cortex extraction and salience"
+    },
+    "notifications": {
+      "shortName": "Notifications",
+      "tabName": "Notifications",
+      "tabDescription": "Configure notification preferences and alerts"
+    },
+    "voice": {
+      "shortName": "Voice",
+      "tabName": "Voice & Speech",
+      "tabDescription": "Text-to-speech, speech-to-text, and voice settings"
+    },
+    "mcpServers": {
+      "shortName": "MCP Servers",
+      "tabName": "MCP Servers",
+      "tabDescription": "Connect to external MCP tool servers for function calling"
+    },
+    "advanced": {
+      "shortName": "Advanced",
+      "tabName": "Advanced Settings",
+      "tabDescription": "Advanced configuration and debug options"
+    },
+    "lumihub": {
+      "shortName": "LumiHub",
+      "tabName": "LumiHub",
+      "tabDescription": "LumiHub cloud sync and sharing settings"
+    },
+    "dataPortability": {
+      "shortName": "Data",
+      "tabName": "Data Portability",
+      "tabDescription": "Export your data or import a previously exported archive"
+    },
+    "diagnostics": {
+      "shortName": "Diagnostics",
+      "tabName": "Diagnostics",
+      "tabDescription": "System health, performance metrics, and debug info"
+    },
+    "operator": {
+      "shortName": "Operator",
+      "tabName": "Operator Panel",
+      "tabDescription": "Server management, updates, and restart controls"
+    },
+    "tokenizers": {
+      "shortName": "Tokenizers",
+      "tabName": "Tokenizer Manager",
+      "tabDescription": "Manage and test tokenizer configurations"
+    },
+    "users": {
+      "shortName": "Users",
+      "tabName": "User Management",
+      "tabDescription": "Manage user accounts, roles, and permissions"
+    },
+    "migration": {
+      "shortName": "Migration",
+      "tabName": "Migration",
+      "tabDescription": "Import data from SillyTavern and other sources"
+    }
   },
   "account": {
     "title": "Account",
@@ -527,7 +611,11 @@
     "errLinkFailed": "Failed to start linking",
     "errConnectFailed": "Failed to connect to LumiHub",
     "errUnlinkFailed": "Failed to unlink",
-    "defaultInstance": "My Lumiverse"
+    "defaultInstance": "My Lumiverse",
+    "statsSharingLabel": "Share anonymous usage stats with creators",
+    "statsSharingHint": "Off by default. When enabled, daily totals per installed card (times used, chats started, message counts) are sent to your linked LumiHub so creators can see how their work performs. Numbers only. Never chat content, names, or anything that identifies you; the hub also hides an asset's stats entirely until at least 5 different Lumiverses report it.",
+    "errStatsSharing": "Failed to update stats sharing.",
+    "statsSharingUnlinkedHint": "Off by default. You can turn this on after linking — nothing is ever shared until you do."
   },
   "dataPortability": {
     "exportTitle": "Export your data",

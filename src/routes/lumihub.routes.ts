@@ -227,7 +227,27 @@ lumihubRoutes.get("/status", async (c) => {
     instance_name: config.instanceName,
     connected: client.isConnected(),
     last_connected_at: config.lastConnectedAt,
+    share_usage_stats: config.shareUsageStats,
   });
+});
+
+/** Toggle sharing anonymous usage counters with the linked hub. */
+lumihubRoutes.post("/stats-sharing", requireOwner, async (c) => {
+  const config = await linkSvc.getLinkConfig();
+  if (!config) {
+    return c.json({ error: "Not linked to a LumiHub" }, 400);
+  }
+
+  const body = await c.req.json().catch(() => null) as { enabled?: unknown } | null;
+  if (!body || typeof body.enabled !== "boolean") {
+    return c.json({ error: "Body must be { enabled: boolean }" }, 400);
+  }
+
+  linkSvc.setStatsSharing(body.enabled);
+  if (body.enabled) {
+    getLumiHubClient().syncStats();
+  }
+  return c.json({ success: true, share_usage_stats: body.enabled });
 });
 
 /** Unlink from LumiHub (owner only). */

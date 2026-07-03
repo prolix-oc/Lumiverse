@@ -3195,7 +3195,9 @@ function LumiHubSettings() {
     instance_name?: string
     connected?: boolean
     last_connected_at?: string | null
+    share_usage_stats?: boolean
   } | null>(null)
+  const [savingStatsSharing, setSavingStatsSharing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [linking, setLinking] = useState(false)
   const [unlinking, setUnlinking] = useState(false)
@@ -3264,6 +3266,27 @@ function LumiHubSettings() {
     }
   }
 
+  const handleStatsSharing = async (enabled: boolean) => {
+    setSavingStatsSharing(true)
+    try {
+      const res = await fetch('/api/v1/lumihub/stats-sharing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ enabled }),
+      })
+      if (res.ok) {
+        setStatus((prev) => (prev ? { ...prev, share_usage_stats: enabled } : prev))
+      } else {
+        setError(t('lumihub.errStatsSharing'))
+      }
+    } catch {
+      setError(t('lumihub.errStatsSharing'))
+    } finally {
+      setSavingStatsSharing(false)
+    }
+  }
+
   const handleUnlink = async () => {
     setUnlinking(true)
     try {
@@ -3326,6 +3349,14 @@ function LumiHubSettings() {
             </span>
           </div>
 
+          <Toggle.Checkbox
+            checked={status.share_usage_stats ?? false}
+            onChange={handleStatsSharing}
+            disabled={savingStatsSharing}
+            label={t('lumihub.statsSharingLabel')}
+            hint={t('lumihub.statsSharingHint')}
+          />
+
           <Button
             variant="danger-ghost"
             size="sm"
@@ -3370,6 +3401,14 @@ function LumiHubSettings() {
           >
             {linking ? t('lumihub.waitingApproval') : t('lumihub.link')}
           </button>
+
+          <Toggle.Checkbox
+            checked={false}
+            onChange={() => {}}
+            disabled
+            label={t('lumihub.statsSharingLabel')}
+            hint={t('lumihub.statsSharingUnlinkedHint')}
+          />
         </div>
       )}
 
