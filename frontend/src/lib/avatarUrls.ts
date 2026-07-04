@@ -6,7 +6,15 @@ type AvatarEntity = {
   id: string
   image_id?: string | null
   extensions?: { avatar_crop_image_id?: string | null } & Record<string, any>
+  metadata?: {
+    avatar_crop_image_id?: string | null
+    original_image_id?: string | null
+  } & Record<string, any>
 } | null | undefined
+
+function asImageId(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null
+}
 
 function resolveAvatarUrl(
   id: string | null | undefined,
@@ -32,8 +40,32 @@ export function pickCharacterThumbImageId(
   entity: AvatarEntity
 ): string | null | undefined {
   if (!entity) return null
-  const crop = entity.extensions?.avatar_crop_image_id
-  if (typeof crop === 'string' && crop) return crop
+  const crop = asImageId(entity.extensions?.avatar_crop_image_id)
+  if (crop) return crop
+  return entity.image_id
+}
+
+/**
+ * Personas now mirror characters: the original upload lives on `image_id`,
+ * while a square crop is tracked separately in metadata for avatar surfaces.
+ * Older personas only have the cropped image on `image_id` plus an optional
+ * `metadata.original_image_id`, so both selectors fall back accordingly.
+ */
+export function pickPersonaThumbImageId(
+  entity: AvatarEntity
+): string | null | undefined {
+  if (!entity) return null
+  const crop = asImageId(entity.metadata?.avatar_crop_image_id)
+  if (crop) return crop
+  return entity.image_id
+}
+
+export function pickPersonaOriginalImageId(
+  entity: AvatarEntity
+): string | null | undefined {
+  if (!entity) return null
+  const original = asImageId(entity.metadata?.original_image_id)
+  if (original) return original
   return entity.image_id
 }
 
@@ -48,7 +80,7 @@ export function getCharacterAvatarUrlById(characterId?: string | null, imageId?:
 }
 
 export function getPersonaAvatarUrl(entity: AvatarEntity) {
-  return getPersonaAvatarUrlById(entity?.id, entity?.image_id)
+  return getPersonaAvatarUrlById(entity?.id, pickPersonaOriginalImageId(entity))
 }
 
 export function getPersonaAvatarUrlById(personaId?: string | null, imageId?: string | null) {
@@ -75,7 +107,7 @@ export function getCharacterAvatarThumbUrlById(characterId?: string | null, imag
 }
 
 export function getPersonaAvatarThumbUrl(entity: AvatarEntity) {
-  return getPersonaAvatarThumbUrlById(entity?.id, entity?.image_id)
+  return getPersonaAvatarThumbUrlById(entity?.id, pickPersonaThumbImageId(entity))
 }
 
 export function getPersonaAvatarThumbUrlById(personaId?: string | null, imageId?: string | null) {
@@ -102,7 +134,7 @@ export function getCharacterAvatarLargeUrlById(characterId?: string | null, imag
 }
 
 export function getPersonaAvatarLargeUrl(entity: AvatarEntity) {
-  return getPersonaAvatarLargeUrlById(entity?.id, entity?.image_id)
+  return getPersonaAvatarLargeUrlById(entity?.id, pickPersonaThumbImageId(entity))
 }
 
 export function getPersonaAvatarLargeUrlById(personaId?: string | null, imageId?: string | null) {

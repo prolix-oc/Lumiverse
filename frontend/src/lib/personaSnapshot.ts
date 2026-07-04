@@ -16,7 +16,7 @@
  */
 
 import { useStore } from '@/store'
-import { getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
+import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { compressAvatarToWebP } from '@/lib/webpAvatar'
 import { globalAddonsApi } from '@/api/global-addons'
 import type { PersonaSnapshot } from '@/types/multiplayer'
@@ -131,7 +131,8 @@ export async function buildActivePersonaSnapshot(): Promise<PersonaSnapshot | nu
 
   if (persona.image_id) {
     try {
-      const src = getPersonaAvatarLargeUrlById(persona.id, persona.image_id)
+      const src = getPersonaAvatarLargeUrl(persona)
+      if (!src) return snapshot
       const blob = await compressAvatarToWebP(src, 128, 0.72)
       const dataUrl = await blobToDataUrl(blob)
       if (dataUrl.length <= MAX_DATA_URL_LEN) snapshot.avatarUrl = dataUrl

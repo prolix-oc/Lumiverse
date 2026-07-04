@@ -13,7 +13,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
-import { getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
@@ -203,7 +203,14 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
-  const [personaList, setPersonaList] = useState<Array<{ id: string; name: string; title: string; avatar_path: string | null; image_id: string | null }>>([])
+  const [personaList, setPersonaList] = useState<Array<{
+    id: string
+    name: string
+    title: string
+    avatar_path: string | null
+    image_id: string | null
+    metadata?: Record<string, any>
+  }>>([])
   const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
@@ -1109,11 +1116,25 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   useEffect(() => {
     if (openPopover !== 'persona') return
     if (personas.length > 0) {
-      setPersonaList(personas.map((p) => ({ id: p.id, name: p.name, title: p.title || '', avatar_path: p.avatar_path, image_id: p.image_id })))
+      setPersonaList(personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        title: p.title || '',
+        avatar_path: p.avatar_path,
+        image_id: p.image_id,
+        metadata: p.metadata,
+      })))
       return
     }
     personasApi.list({ limit: 200 }).then((res) => {
-      setPersonaList(res.data.map((p) => ({ id: p.id, name: p.name, title: p.title || '', avatar_path: p.avatar_path, image_id: p.image_id })))
+      setPersonaList(res.data.map((p) => ({
+        id: p.id,
+        name: p.name,
+        title: p.title || '',
+        avatar_path: p.avatar_path,
+        image_id: p.image_id,
+        metadata: p.metadata,
+      })))
     }).catch(() => {})
   }, [openPopover, personas])
 
@@ -2611,7 +2632,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                       {p.avatar_path || p.image_id ? (
                         <img
                           className={styles.personaAvatarImg}
-                          src={getPersonaAvatarThumbUrlById(p.id, p.image_id) || undefined}
+                          src={getPersonaAvatarThumbUrl(p) || undefined}
                           alt={p.name}
                           loading="lazy"
                         />

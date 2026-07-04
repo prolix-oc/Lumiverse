@@ -42,12 +42,23 @@ export function getPersona(userId: string, id: string): Persona | null {
 export function getPersonaAvatarInfo(
   userId: string,
   id: string
-): { image_id: string | null; avatar_path: string | null } | null {
+): { image_id: string | null; avatar_path: string | null; avatar_crop_image_id: string | null } | null {
   const row = getDb()
-    .query("SELECT image_id, avatar_path FROM personas WHERE id = ? AND user_id = ?")
+    .query("SELECT image_id, avatar_path, metadata FROM personas WHERE id = ? AND user_id = ?")
     .get(id, userId) as any;
   if (!row) return null;
-  return { image_id: row.image_id || null, avatar_path: row.avatar_path || null };
+  let avatarCropImageId: string | null = null;
+  try {
+    const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata;
+    avatarCropImageId = typeof metadata?.avatar_crop_image_id === "string" ? metadata.avatar_crop_image_id : null;
+  } catch {
+    avatarCropImageId = null;
+  }
+  return {
+    image_id: row.image_id || null,
+    avatar_path: row.avatar_path || null,
+    avatar_crop_image_id: avatarCropImageId,
+  };
 }
 
 export function createPersona(userId: string, input: CreatePersonaInput): Persona {

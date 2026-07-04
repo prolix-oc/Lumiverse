@@ -9,6 +9,23 @@ import { EventType } from "../ws/events";
 
 const app = new Hono();
 
+function collectPersonaImageIds(persona: { image_id?: string | null; metadata?: Record<string, any> | null }): string[] {
+  const ids = new Set<string>();
+  if (persona.image_id) ids.add(persona.image_id);
+
+  const cropImageId = typeof persona.metadata?.avatar_crop_image_id === "string"
+    ? persona.metadata.avatar_crop_image_id
+    : null;
+  if (cropImageId) ids.add(cropImageId);
+
+  const originalImageId = typeof persona.metadata?.original_image_id === "string"
+    ? persona.metadata.original_image_id
+    : null;
+  if (originalImageId) ids.add(originalImageId);
+
+  return [...ids];
+}
+
 app.get("/", (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
@@ -66,14 +83,14 @@ app.delete("/:id", async (c) => {
   const persona = svc.getPersona(userId, c.req.param("id"));
   if (!persona) return c.json({ error: "Not found" }, 404);
 
-  // Clean up images
-  if (persona.image_id) images.deleteImage(userId, persona.image_id);
-  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
-  const origImageId = persona.metadata?.original_image_id;
-  if (origImageId) images.deleteImage(userId, origImageId);
+  const imageIds = collectPersonaImageIds(persona);
 
   const deleted = svc.deletePersona(userId, persona.id);
   if (!deleted) return c.json({ error: "Not found" }, 404);
+  for (const imageId of imageIds) {
+    images.deleteImageIfUnreferenced(userId, imageId);
+  }
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
   return c.json({ success: true });
 });
 
@@ -85,12 +102,13 @@ app.get("/:id/avatar", async (c) => {
   const sizeParam = c.req.query("size") as images.ThumbTier | undefined;
   const tier = sizeParam === "sm" || sizeParam === "lg" ? sizeParam : undefined;
 
-  if (info.image_id) {
-    const filepath = await images.getImageFilePath(userId, info.image_id, tier);
+  for (const imageId of [info.avatar_crop_image_id, info.image_id]) {
+    if (!imageId) continue;
+    const filepath = await images.getImageFilePath(userId, imageId, tier);
     if (filepath) {
       return createAvatarResolverResponse(
         filepath,
-        info.image_id + (tier ? `_${tier}` : ""),
+        imageId + (tier ? `_${tier}` : ""),
         c.req.header("If-None-Match")
       );
     }
@@ -127,24 +145,21 @@ app.post("/:id/avatar", async (c) => {
   const originalFile = formData.get("original_avatar") as File | null;
   if (!file) return c.json({ error: "avatar file is required" }, 400);
 
-  // Clean up old image if present
-  if (persona.image_id) images.deleteImage(userId, persona.image_id);
-  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
-  const oldOriginalImageId = persona.metadata?.original_image_id;
-  if (oldOriginalImageId) images.deleteImage(userId, oldOriginalImageId);
-
-  const image = await images.uploadImage(userId, file);
-  svc.setPersonaImage(userId, persona.id, image.id);
-  svc.setPersonaAvatar(userId, persona.id, image.filename);
+  const oldImageIds = collectPersonaImageIds(persona);
+  const originalImage = await images.uploadImage(userId, originalFile ?? file);
+  const cropImage = originalFile ? await images.uploadImage(userId, file) : null;
+  svc.setPersonaImage(userId, persona.id, originalImage.id);
+  svc.setPersonaAvatar(userId, persona.id, originalImage.filename);
 
   const nextMetadata = { ...(persona.metadata ?? {}) };
-  if (originalFile) {
-    const originalImage = await images.uploadImage(userId, originalFile);
-    nextMetadata.original_image_id = originalImage.id;
-  } else {
-    delete nextMetadata.original_image_id;
-  }
+  delete nextMetadata.original_image_id;
+  if (cropImage) nextMetadata.avatar_crop_image_id = cropImage.id;
+  else delete nextMetadata.avatar_crop_image_id;
   svc.updatePersona(userId, persona.id, { metadata: nextMetadata });
+  for (const imageId of oldImageIds) {
+    images.deleteImageIfUnreferenced(userId, imageId);
+  }
+  if (persona.avatar_path) await files.deleteAvatar(persona.avatar_path);
 
   const updated = svc.getPersona(userId, persona.id);
   if (!updated) return c.json({ error: "Not found" }, 404);

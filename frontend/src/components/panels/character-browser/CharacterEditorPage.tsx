@@ -1280,7 +1280,22 @@ export default function CharacterEditorPage() {
           const avatarFile = new File([avatarBlob], `avatar.${avatarExtension(avatarBlob.type)}`, {
             type: avatarBlob.type || 'image/png',
           })
-          persona = await personasApi.uploadAvatar(persona.id, avatarFile)
+          const originalImageId = typeof character.extensions?.original_image_id === 'string'
+            ? character.extensions.original_image_id
+            : character.image_id
+          let originalFile: File | undefined
+          if (originalImageId) {
+            const originalRes = await fetch(imagesApi.url(originalImageId), { credentials: 'include' })
+            if (originalRes.ok) {
+              const originalBlob = await originalRes.blob()
+              originalFile = new File(
+                [originalBlob],
+                `avatar-original.${avatarExtension(originalBlob.type)}`,
+                { type: originalBlob.type || 'image/png' },
+              )
+            }
+          }
+          persona = await personasApi.uploadAvatar(persona.id, avatarFile, originalFile)
           updatePersona(persona.id, persona)
         } catch {
           toast.warning(t('characterEditor.personaAvatarCopyFailed'))
