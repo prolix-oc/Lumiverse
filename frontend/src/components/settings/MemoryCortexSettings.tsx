@@ -805,6 +805,9 @@ export default function MemoryCortexSettings() {
                     <div className={styles.toggleRow}>
                       <Toggle.Checkbox checked={config.retrieval.relationshipInjection} onChange={(v) => updateConfig({ retrieval: { ...config.retrieval, relationshipInjection: v } })} label={t("memoryCortex.relationshipEdges")} hint={t("memoryCortex.relationshipEdgesHint")} />
                     </div>
+                    <div className={styles.toggleRow}>
+                      <Toggle.Checkbox checked={config.retrieval.arcInjection} onChange={(v) => updateConfig({ retrieval: { ...config.retrieval, arcInjection: v } })} label={t("memoryCortex.arcSummaries")} hint={t("memoryCortex.arcSummariesHint")} />
+                    </div>
                     <div className={styles.infoRow}>
                       <span className={styles.infoLabel}>{t("memoryCortex.contextTokenBudget")}</span>
                       <NumericInput className={styles.numberInput} value={config.contextTokenBudget} min={100} max={2000} step={50} integer onChange={(value) => updateConfig({ contextTokenBudget: value ?? 600 })} />
