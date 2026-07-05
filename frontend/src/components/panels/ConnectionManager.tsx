@@ -3,14 +3,12 @@ import { Plus, Shuffle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   DndContext,
-  DragOverlay,
   closestCenter,
   MouseSensor,
   TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
-  type DragStartEvent,
   type DragEndEvent,
 } from '@dnd-kit/core'
 import {
@@ -55,7 +53,7 @@ export default function ConnectionManager() {
   const connectionsOrder = useStore((s) => s.connectionsOrder)
 
   const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
-  const touchSensor = useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 5 } })
+  const touchSensor = useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
   const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
 
@@ -75,8 +73,6 @@ export default function ConnectionManager() {
   const [creating, setCreating] = useState(false)
   const [creatingProvider, setCreatingProvider] = useState('openai')
   const [deleteTarget, setDeleteTarget] = useState<ConnectionProfile | null>(null)
-  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
-  const activeProfile = orderedProfiles.find((p) => p.id === dragActiveId) ?? null
 
   useEffect(() => {
     const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
@@ -188,16 +184,7 @@ export default function ConnectionManager() {
   }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
 
 
-  const handleDragStart = useCallback(({ active }: DragStartEvent) => {
-    setDragActiveId(String(active.id))
-  }, [])
-
-  const handleDragCancel = useCallback(() => {
-    setDragActiveId(null)
-  }, [])
-
   const handleDragEnd = useCallback((event: DragEndEvent) => {
-    setDragActiveId(null)
     const { active, over } = event
     if (!over || active.id === over.id) return
     const oldIndex = orderedIds.indexOf(String(active.id))
@@ -248,7 +235,7 @@ export default function ConnectionManager() {
         />
       )}
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
           <div className={styles.list}>
             {orderedProfiles.map((profile) => (
@@ -268,21 +255,6 @@ export default function ConnectionManager() {
             )}
           </div>
         </SortableContext>
-        {activeProfile && (
-        <DragOverlay dropAnimation={null}>
-          <div className={styles.itemDraggingOverlay}>
-            <ConnectionItem
-              profile={activeProfile}
-              isActive={activeProfileId === activeProfile.id}
-              providers={providers}
-              onSelect={() => setActiveProfile(activeProfileId === activeProfile.id ? null : activeProfile.id)}
-              onUpdate={handleUpdate}
-              onDuplicate={() => handleDuplicate(activeProfile.id)}
-              onDelete={() => setDeleteTarget(activeProfile)}
-            />
-          </div>
-        </DragOverlay>
-        )}
       </DndContext>
 
       {deleteTarget && (
