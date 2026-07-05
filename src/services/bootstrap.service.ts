@@ -102,6 +102,7 @@ interface StartupSettings {
   landingPageLayoutMode?: "cards" | "compact";
   wallpaper?: unknown;
   drawerSettings?: unknown;
+  connectionsOrder?: Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>>;
 }
 
 const LIST_LIMIT_CONNECTIONS = 100;
@@ -121,6 +122,7 @@ const STARTUP_SETTINGS_KEYS = [
   "landingPageLayoutMode",
   "wallpaper",
   "drawerSettings",
+  "connectionsOrder",
 ] as const;
 
 /**
@@ -154,6 +156,31 @@ function collectAll<T>(
     if (page.data.length === 0 || offset >= page.total) break;
   }
   return { data, total: data.length, limit: data.length, offset: 0 };
+}
+
+/**
+ * Validate and sanitize a raw `connectionsOrder` value from the settings store.
+ *
+ * - Drops keys that aren't valid connection types.
+ * - Drops non-array values.
+ * - Drops arrays that contain non-string elements.
+ *
+ * Returns the sanitized object (which may be empty) and whether anything was
+ * kept. When `Object.keys(sanitized).length === 0`, the caller should skip
+ * setting the field entirely.
+ */
+export function sanitizeConnectionsOrder(
+  raw: unknown,
+): Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>> {
+  const sanitized: Partial<Record<"llm" | "imageGen" | "stt" | "tts", string[]>> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return sanitized;
+  for (const key of ["llm", "imageGen", "stt", "tts"] as const) {
+    const value = (raw as Record<string, unknown>)[key];
+    if (Array.isArray(value) && value.every((id) => typeof id === "string")) {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
 }
 
 function getStartupSettings(userId: string): StartupSettings {
@@ -210,6 +237,11 @@ function getStartupSettings(userId: string): StartupSettings {
 
   if (rows.has("drawerSettings")) {
     startupSettings.drawerSettings = rows.get("drawerSettings");
+  }
+
+  const connectionsOrder = sanitizeConnectionsOrder(rows.get("connectionsOrder"));
+  if (Object.keys(connectionsOrder).length > 0) {
+    startupSettings.connectionsOrder = connectionsOrder;
   }
 
   return startupSettings;

@@ -120,6 +120,7 @@ export interface StartupSettings {
   landingPageLayoutMode?: 'cards' | 'compact'
   wallpaper?: WallpaperSettings
   drawerSettings?: DrawerSettings
+  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
 export interface CharactersSlice {
@@ -506,6 +507,7 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
+  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
@@ -582,6 +584,7 @@ export interface ConnectionsSlice {
   addProfile: (profile: ConnectionProfile) => void
   updateProfile: (id: string, updates: Partial<ConnectionProfile>) => void
   removeProfile: (id: string) => void
+  applyProfileOrder: (orderedIds: string[]) => void
 
   providers: ProviderInfo[]
   setProviders: (providers: ProviderInfo[]) => void
@@ -1259,6 +1262,7 @@ export interface ImageGenConnectionsSlice {
   addImageGenProfile: (profile: ImageGenConnectionProfile) => void
   updateImageGenProfile: (id: string, updates: Partial<ImageGenConnectionProfile>) => void
   removeImageGenProfile: (id: string) => void
+  applyImageGenProfileOrder: (orderedIds: string[]) => void
   setImageGenProviders: (providers: ImageGenProviderInfo[]) => void
 }
 
@@ -1283,6 +1287,7 @@ export interface SttConnectionsSlice {
   addSttProfile: (profile: import('@/types/api').SttConnectionProfile) => void
   updateSttProfile: (id: string, updates: Partial<import('@/types/api').SttConnectionProfile>) => void
   removeSttProfile: (id: string) => void
+  applySttProfileOrder: (orderedIds: string[]) => void
   setSttProviders: (providers: import('@/types/api').SttProviderInfo[]) => void
 }
 
@@ -1295,6 +1300,7 @@ export interface TtsConnectionsSlice {
   addTtsProfile: (profile: import('@/types/api').TtsConnectionProfile) => void
   updateTtsProfile: (id: string, updates: Partial<import('@/types/api').TtsConnectionProfile>) => void
   removeTtsProfile: (id: string) => void
+  applyTtsProfileOrder: (orderedIds: string[]) => void
   setTtsProviders: (providers: import('@/types/api').TtsProviderInfo[]) => void
 }
 

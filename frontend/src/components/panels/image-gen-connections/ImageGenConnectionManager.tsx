@@ -1,6 +1,24 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from '@dnd-kit/sortable'
 import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
@@ -17,14 +35,37 @@ export default function ImageGenConnectionManager() {
   const addProfile = useStore((s) => s.addImageGenProfile)
   const updateProfile = useStore((s) => s.updateImageGenProfile)
   const removeProfile = useStore((s) => s.removeImageGenProfile)
+  const applyProfileOrder = useStore((s) => s.applyImageGenProfileOrder)
   const activeId = useStore((s) => s.activeImageGenConnectionId)
   const setActive = useStore((s) => s.setActiveImageGenConnection)
   const providers = useStore((s) => s.imageGenProviders)
   const setProviders = useStore((s) => s.setImageGenProviders)
+  const setSetting = useStore((s) => s.setSetting)
+  const connectionsOrder = useStore((s) => s.connectionsOrder)
+
+  const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
+  const touchSensor = useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
+  const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
+
+  const orderedProfiles = useMemo(() => {
+    const imageGenOrder = connectionsOrder?.imageGen ?? []
+    if (imageGenOrder.length === 0) return profiles
+    const byId = new Map(profiles.map((p) => [p.id, p]))
+    const ordered = imageGenOrder.map((id) => byId.get(id)).filter((p): p is ImageGenConnectionProfile => Boolean(p))
+    const seen = new Set(ordered.map((p) => p.id))
+    const missing = profiles.filter((p) => !seen.has(p.id))
+    return [...ordered, ...missing]
+  }, [profiles, connectionsOrder])
+
+  const orderedIds = useMemo(() => orderedProfiles.map((p) => p.id), [orderedProfiles])
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ImageGenConnectionProfile | null>(null)
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
+
+  const activeProfile = orderedProfiles.find((p) => p.id === dragActiveId) ?? null
 
   useEffect(() => {
     const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
@@ -117,11 +158,28 @@ export default function ImageGenConnectionManager() {
     try {
       await imageGenConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
+      const nextOrder = (connectionsOrder?.imageGen ?? []).filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...connectionsOrder, imageGen: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[ImageGenConnectionManager] Failed to delete:', err)
     }
-  }, [deleteTarget, removeProfile])
+  }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
+
+  const handleDragStart = useCallback(({ active }: DragStartEvent) => setDragActiveId(String(active.id)), [])
+  const handleDragCancel = useCallback(() => setDragActiveId(null), [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setDragActiveId(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = orderedIds.indexOf(String(active.id))
+    const newIndex = orderedIds.indexOf(String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+    const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
+    applyProfileOrder(newOrder)
+    setSetting('connectionsOrder', { ...connectionsOrder, imageGen: newOrder })
+  }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {
     return <div className={styles.loading}>{t('imageGenConnectionManager.loading')}</div>
@@ -144,23 +202,42 @@ export default function ImageGenConnectionManager() {
         />
       )}
 
-      <div className={styles.list}>
-        {profiles.map((profile) => (
-          <ImageGenConnectionItem
-            key={profile.id}
-            profile={profile}
-            isActive={activeId === profile.id}
-            providers={providers}
-            onSelect={() => setActive(activeId === profile.id ? null : profile.id)}
-            onUpdate={handleUpdate}
-            onDuplicate={() => handleDuplicate(profile.id)}
-            onDelete={() => setDeleteTarget(profile)}
-          />
-        ))}
-        {profiles.length === 0 && !creating && (
-          <div className={styles.empty}>{t('imageGenConnectionManager.empty')}</div>
-        )}
-      </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+          <div className={styles.list}>
+            {orderedProfiles.map((profile) => (
+              <ImageGenConnectionItem
+                key={profile.id}
+                profile={profile}
+                isActive={activeId === profile.id}
+                providers={providers}
+                onSelect={() => setActive(activeId === profile.id ? null : profile.id)}
+                onUpdate={handleUpdate}
+                onDuplicate={() => handleDuplicate(profile.id)}
+                onDelete={() => setDeleteTarget(profile)}
+              />
+            ))}
+            {profiles.length === 0 && !creating && (
+              <div className={styles.empty}>{t('imageGenConnectionManager.empty')}</div>
+            )}
+          </div>
+        </SortableContext>
+        <DragOverlay dropAnimation={null}>
+          {activeProfile && (
+            <div className={styles.itemDraggingOverlay}>
+              <ImageGenConnectionItem
+                profile={activeProfile}
+                isActive={activeId === activeProfile.id}
+                providers={providers}
+                onSelect={() => setActive(activeId === activeProfile.id ? null : activeProfile.id)}
+                onUpdate={handleUpdate}
+                onDuplicate={() => handleDuplicate(activeProfile.id)}
+                onDelete={() => setDeleteTarget(activeProfile)}
+              />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
 
       {deleteTarget && (
         <ConfirmationModal

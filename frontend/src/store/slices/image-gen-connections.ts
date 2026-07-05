@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, ImageGenConnectionsSlice } from '@/types/store'
+import type { ImageGenConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 import { clearDirtyKey } from './settings'
 
@@ -55,7 +56,13 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
         : { ...state.imageGeneration, activeImageGenConnectionId }
 
       if (imageGeneration !== state.imageGeneration) persistImageGeneration(imageGeneration)
-      return { imageGenProfiles, activeImageGenConnectionId, imageGeneration }
+      const order = state.connectionsOrder.imageGen
+      return {
+        imageGenProfiles,
+        activeImageGenConnectionId,
+        imageGeneration,
+        connectionsOrder: { ...state.connectionsOrder, imageGen: [...order, profile.id] },
+      }
     }),
 
   updateImageGenProfile: (id, updates) =>
@@ -87,6 +94,13 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
       if (imageGeneration !== state.imageGeneration) persistImageGeneration(imageGeneration)
       return { imageGenProfiles, activeImageGenConnectionId, imageGeneration }
     }),
+
+  applyImageGenProfileOrder: (orderedIds) =>
+    set((state) => ({
+      imageGenProfiles: orderedIds
+        .map((id) => state.imageGenProfiles.find((p) => p.id === id))
+        .filter((p): p is ImageGenConnectionProfile => Boolean(p)),
+    })),
 
   setImageGenProviders: (providers) => set({ imageGenProviders: providers }),
 })

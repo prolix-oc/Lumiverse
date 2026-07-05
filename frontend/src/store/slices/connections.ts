@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, ConnectionsSlice } from '@/types/store'
+import type { ConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 import { areReasoningSettingsEqual, normalizeReasoningSettingsForProvider } from '@/lib/reasoning-binding'
 import { REASONING_DEFAULTS, clearDirtyKey } from './settings'
@@ -61,7 +62,13 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
     }
   },
 
-  addProfile: (profile) => set((state) => ({ profiles: [...state.profiles, profile] })),
+  addProfile: (profile) => set((state) => {
+    const order = state.connectionsOrder.llm
+    return {
+      profiles: [...state.profiles, profile],
+      connectionsOrder: { ...state.connectionsOrder, llm: [...order, profile.id] },
+    }
+  }),
   updateProfile: (id, updates) =>
     set((state) => ({
       profiles: state.profiles.map((p) => (p.id === id ? { ...p, ...updates } : p)),
@@ -88,6 +95,13 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       clearDirtyKey('promptBias')
     }
   },
+
+  applyProfileOrder: (orderedIds) =>
+    set((state) => ({
+      profiles: orderedIds
+        .map((id) => state.profiles.find((p) => p.id === id))
+        .filter((p): p is ConnectionProfile => Boolean(p)),
+    })),
 
   providers: [],
   setProviders: (providers) => set({ providers }),

@@ -5,6 +5,7 @@ import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { deriveReorderArgs, type ConnectionsOrder } from './connections-order-merge'
 
 /** Default reasoning settings — used as initial state and for restore-on-unbind. */
 export const REASONING_DEFAULTS: ReasoningSettings = {
@@ -111,6 +112,8 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'thumbnailSettings',
   // Push notification preferences
   'pushNotificationPreferences',
+  // Connection reorder persistence
+  'connectionsOrder',
   'customCSS',
   'componentOverrides',
   // Saved theme library (My Themes)
@@ -372,6 +375,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     narrationVoice: null,
   },
 
+  connectionsOrder: { llm: [], imageGen: [], stt: [], tts: [] },
+
   hydrateStartupSettings: (settings: StartupSettings) => {
     const patch: Record<string, any> = { settingsLoaded: true }
 
@@ -394,6 +399,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
     if (settings.drawerSettings && typeof settings.drawerSettings === 'object') {
       patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
+    }
+    if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
+      patch.connectionsOrder = { llm: [], imageGen: [], stt: [], tts: [], ...settings.connectionsOrder }
     }
 
     set(patch as any)
@@ -673,6 +681,24 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       }
       if (Object.keys(patch).length > 0) {
         set(patch as any)
+      }
+
+      // Reorder profile slices to match persisted connectionsOrder. Without
+      // this, consumers that read state.profiles directly (input bar dropdown,
+      // ConnectionSelect, etc.) keep the backend order until the user drags
+      // something in the panel — which is the visible divergence C3 found.
+      if (patch.connectionsOrder) {
+        const order = patch.connectionsOrder as ConnectionsOrder
+        const args = deriveReorderArgs(order, {
+          llm: get().profiles,
+          imageGen: get().imageGenProfiles,
+          stt: get().sttProfiles,
+          tts: get().ttsProfiles,
+        })
+        if (args.llm) get().applyProfileOrder(args.llm)
+        if (args.imageGen) get().applyImageGenProfileOrder(args.imageGen)
+        if (args.stt) get().applySttProfileOrder(args.stt)
+        if (args.tts) get().applyTtsProfileOrder(args.tts)
       }
       if (migratedCharacterFilterTab) {
         settingsApi.put('filterTab', 'characters').catch(() => {})

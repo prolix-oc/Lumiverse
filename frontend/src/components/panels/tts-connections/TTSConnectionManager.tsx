@@ -1,6 +1,24 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from '@dnd-kit/sortable'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
@@ -17,12 +35,35 @@ export default function TTSConnectionManager() {
   const addProfile = useStore((s) => s.addTtsProfile)
   const updateProfile = useStore((s) => s.updateTtsProfile)
   const removeProfile = useStore((s) => s.removeTtsProfile)
+  const applyProfileOrder = useStore((s) => s.applyTtsProfileOrder)
   const providers = useStore((s) => s.ttsProviders)
   const setProviders = useStore((s) => s.setTtsProviders)
+  const setSetting = useStore((s) => s.setSetting)
+  const connectionsOrder = useStore((s) => s.connectionsOrder)
+
+  const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
+  const touchSensor = useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
+  const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
+
+  const orderedProfiles = useMemo(() => {
+    const ttsOrder = connectionsOrder?.tts ?? []
+    if (ttsOrder.length === 0) return profiles
+    const byId = new Map(profiles.map((p) => [p.id, p]))
+    const ordered = ttsOrder.map((id) => byId.get(id)).filter((p): p is TtsConnectionProfile => Boolean(p))
+    const seen = new Set(ordered.map((p) => p.id))
+    const missing = profiles.filter((p) => !seen.has(p.id))
+    return [...ordered, ...missing]
+  }, [profiles, connectionsOrder])
+
+  const orderedIds = useMemo(() => orderedProfiles.map((p) => p.id), [orderedProfiles])
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<TtsConnectionProfile | null>(null)
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
+
+  const activeProfile = orderedProfiles.find((p) => p.id === dragActiveId) ?? null
 
   // `useAppInit` preloads TTS profiles + providers right after auth. Only
   // show the loading placeholder on a true cold mount (empty store);
@@ -99,11 +140,28 @@ export default function TTSConnectionManager() {
     try {
       await ttsConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
+      const nextOrder = (connectionsOrder?.tts ?? []).filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...connectionsOrder, tts: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[TTSConnectionManager] Failed to delete:', err)
     }
-  }, [deleteTarget, removeProfile])
+  }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
+
+  const handleDragStart = useCallback(({ active }: DragStartEvent) => setDragActiveId(String(active.id)), [])
+  const handleDragCancel = useCallback(() => setDragActiveId(null), [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setDragActiveId(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = orderedIds.indexOf(String(active.id))
+    const newIndex = orderedIds.indexOf(String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+    const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
+    applyProfileOrder(newOrder)
+    setSetting('connectionsOrder', { ...connectionsOrder, tts: newOrder })
+  }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {
     return <div className={styles.loading}>{t('ttsConnectionManager.loading')}</div>
@@ -126,21 +184,38 @@ export default function TTSConnectionManager() {
         />
       )}
 
-      <div className={styles.list}>
-        {profiles.map((profile) => (
-          <TTSConnectionItem
-            key={profile.id}
-            profile={profile}
-            providers={providers}
-            onUpdate={handleUpdate}
-            onDuplicate={() => handleDuplicate(profile.id)}
-            onDelete={() => setDeleteTarget(profile)}
-          />
-        ))}
-        {profiles.length === 0 && !creating && (
-          <div className={styles.empty}>{t('ttsConnectionManager.empty')}</div>
-        )}
-      </div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+          <div className={styles.list}>
+            {orderedProfiles.map((profile) => (
+              <TTSConnectionItem
+                key={profile.id}
+                profile={profile}
+                providers={providers}
+                onUpdate={handleUpdate}
+                onDuplicate={() => handleDuplicate(profile.id)}
+                onDelete={() => setDeleteTarget(profile)}
+              />
+            ))}
+            {profiles.length === 0 && !creating && (
+              <div className={styles.empty}>{t('ttsConnectionManager.empty')}</div>
+            )}
+          </div>
+        </SortableContext>
+        <DragOverlay dropAnimation={null}>
+          {activeProfile && (
+            <div className={styles.itemDraggingOverlay}>
+              <TTSConnectionItem
+                profile={activeProfile}
+                providers={providers}
+                onUpdate={handleUpdate}
+                onDuplicate={() => handleDuplicate(activeProfile.id)}
+                onDelete={() => setDeleteTarget(activeProfile)}
+              />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
 
       {deleteTarget && (
         <ConfirmationModal

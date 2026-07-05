@@ -406,7 +406,8 @@
     "dailyImages": "Daily images",
     "comfyWorkflow": "ComfyUI workflow",
     "loadComfyWorkflowFailed": "Failed to load ComfyUI workflow",
-    "modelRouletteMeta": "Model Roulette / {{count}} profiles"
+    "modelRouletteMeta": "Model Roulette / {{count}} profiles",
+    "dragToReorder": "Drag to reorder"
   },
   "connectionForm": {
     "pollinationsSaved": "Signed in with Pollinations. API key saved automatically.",
