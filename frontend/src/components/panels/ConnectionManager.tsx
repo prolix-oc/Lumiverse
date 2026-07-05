@@ -1,6 +1,24 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus, Shuffle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  arrayMove,
+  sortableKeyboardCoordinates,
+} from '@dnd-kit/sortable'
 import { connectionsApi } from '@/api/connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
@@ -32,11 +50,33 @@ export default function ConnectionManager() {
   const setActiveProfile = useStore((s) => s.setActiveProfile)
   const providers = useStore((s) => s.providers)
   const setProviders = useStore((s) => s.setProviders)
+  const applyProfileOrder = useStore((s) => s.applyProfileOrder)
+  const setSetting = useStore((s) => s.setSetting)
+  const connectionsOrder = useStore((s) => s.connectionsOrder)
+
+  const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
+  const touchSensor = useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 5 } })
+  const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
+
+  const orderedProfiles = useMemo(() => {
+    const llmOrder = connectionsOrder?.llm ?? []
+    if (llmOrder.length === 0) return profiles
+    const byId = new Map(profiles.map((p) => [p.id, p]))
+    const ordered = llmOrder.map((id) => byId.get(id)).filter((p): p is ConnectionProfile => Boolean(p))
+    const seen = new Set(ordered.map((p) => p.id))
+    const missing = profiles.filter((p) => !seen.has(p.id))
+    return [...ordered, ...missing]
+  }, [profiles, connectionsOrder])
+
+  const orderedIds = useMemo(() => orderedProfiles.map((p) => p.id), [orderedProfiles])
 
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [creatingProvider, setCreatingProvider] = useState('openai')
   const [deleteTarget, setDeleteTarget] = useState<ConnectionProfile | null>(null)
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
+  const activeProfile = orderedProfiles.find((p) => p.id === dragActiveId) ?? null
 
   useEffect(() => {
     const returnedKey = sessionStorage.getItem('pollinations_byop_returned_api_key')
@@ -139,11 +179,34 @@ export default function ConnectionManager() {
     try {
       await connectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
+      const nextOrder = (connectionsOrder?.llm ?? []).filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...connectionsOrder, llm: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[ConnectionManager] Failed to delete:', err)
     }
-  }, [deleteTarget, removeProfile])
+  }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
+
+
+  const handleDragStart = useCallback(({ active }: DragStartEvent) => {
+    setDragActiveId(String(active.id))
+  }, [])
+
+  const handleDragCancel = useCallback(() => {
+    setDragActiveId(null)
+  }, [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setDragActiveId(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = orderedIds.indexOf(String(active.id))
+    const newIndex = orderedIds.indexOf(String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+    const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
+    applyProfileOrder(newOrder)
+    setSetting('connectionsOrder', { ...connectionsOrder, llm: newOrder })
+  }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {
     return <div className={styles.loading}>{t('connectionManager.loading')}</div>
@@ -185,23 +248,42 @@ export default function ConnectionManager() {
         />
       )}
 
-      <div className={styles.list}>
-        {profiles.map((profile) => (
-          <ConnectionItem
-            key={profile.id}
-            profile={profile}
-            isActive={activeProfileId === profile.id}
-            providers={providers}
-            onSelect={() => setActiveProfile(activeProfileId === profile.id ? null : profile.id)}
-            onUpdate={handleUpdate}
-            onDuplicate={() => handleDuplicate(profile.id)}
-            onDelete={() => setDeleteTarget(profile)}
-          />
-        ))}
-        {profiles.length === 0 && !creating && (
-          <div className={styles.empty}>{t('connectionManager.empty')}</div>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+          <div className={styles.list}>
+            {orderedProfiles.map((profile) => (
+              <ConnectionItem
+                key={profile.id}
+                profile={profile}
+                isActive={activeProfileId === profile.id}
+                providers={providers}
+                onSelect={() => setActiveProfile(activeProfileId === profile.id ? null : profile.id)}
+                onUpdate={handleUpdate}
+                onDuplicate={() => handleDuplicate(profile.id)}
+                onDelete={() => setDeleteTarget(profile)}
+              />
+            ))}
+            {profiles.length === 0 && !creating && (
+              <div className={styles.empty}>{t('connectionManager.empty')}</div>
+            )}
+          </div>
+        </SortableContext>
+        {activeProfile && (
+        <DragOverlay dropAnimation={null}>
+          <div className={styles.itemDraggingOverlay}>
+            <ConnectionItem
+              profile={activeProfile}
+              isActive={activeProfileId === activeProfile.id}
+              providers={providers}
+              onSelect={() => setActiveProfile(activeProfileId === activeProfile.id ? null : activeProfile.id)}
+              onUpdate={handleUpdate}
+              onDuplicate={() => handleDuplicate(activeProfile.id)}
+              onDelete={() => setDeleteTarget(activeProfile)}
+            />
+          </div>
+        </DragOverlay>
         )}
-      </div>
+      </DndContext>
 
       {deleteTarget && (
         <ConfirmationModal

@@ -353,7 +353,8 @@
     "daily": "每日",
     "monthly": "每月",
     "comfyWorkflow": "ComfyUI 工作流",
-    "loadComfyWorkflowFailed": "加载 ComfyUI 工作流失败"
+    "loadComfyWorkflowFailed": "加载 ComfyUI 工作流失败",
+    "dragToReorder": "拖动以重新排序"
   },
   "connectionForm": {
     "pollinationsSaved": "已登录 Pollinations，API Key 已自动保存。",

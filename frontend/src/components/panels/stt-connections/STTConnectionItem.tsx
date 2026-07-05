@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSortable } from '@dnd-kit/sortable'
 
-import { Trash2, Edit3, Zap, Star, Copy, MoreVertical } from 'lucide-react'
+import { Trash2, Edit3, Zap, Star, Copy, MoreVertical, GripVertical } from 'lucide-react'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import type { SttConnectionProfile, SttProviderInfo, CreateSttConnectionInput } from '@/types/api'
 import STTConnectionForm from './STTConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
@@ -56,66 +58,77 @@ export default function STTConnectionItem({
     }
   }, [profile.id, onUpdate])
 
-  if (editing) {
-    return (
-      <div className={styles.item}>
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
+
+  return (
+    <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging)}>
+      {editing ? (
         <STTConnectionForm
           providers={providers}
           profile={profile}
           onSave={handleSaveEdit}
           onCancel={() => setEditing(false)}
         />
-      </div>
-    )
-  }
-
-  return (
-    <div className={styles.item}>
-      <div className={styles.itemRow}>
-        <div className={styles.itemBtn} style={{ cursor: 'default' }}>
-          <ProviderIcon kind="stt" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
-          <div className={styles.itemInfo}>
-            <span className={styles.itemName}>
-              {profile.name}
-              {profile.is_default && <Star size={11} className={styles.defaultStar} fill="#f5a623" />}
-            </span>
-            <span className={styles.itemMeta}>
-              {profile.provider}
-              {profile.model ? ` / ${profile.model}` : ''}
-            </span>
+      ) : (
+        <>
+          <div className={styles.itemRow}>
+            <button
+              type="button"
+              className={styles.dragHandle}
+              aria-label={t('connectionItem.dragToReorder')}
+              title={t('connectionItem.dragToReorder')}
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical size={16} />
+            </button>
+            <div className={styles.itemBtn} style={{ cursor: 'default' }}>
+              <ProviderIcon kind="stt" provider={profile.provider} size={32} iconSize={16} className={styles.itemIcon} />
+              <div className={styles.itemInfo}>
+                <span className={styles.itemName}>
+                  {profile.name}
+                  {profile.is_default && <Star size={11} className={styles.defaultStar} fill="#f5a623" />}
+                </span>
+                <span className={styles.itemMeta}>
+                  {profile.provider}
+                  {profile.model ? ` / ${profile.model}` : ''}
+                </span>
+              </div>
+            </div>
+            <div className={styles.itemActions}>
+              <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')}>
+                <Edit3 size={13} />
+              </button>
+              <button
+                type="button"
+                className={styles.actionBtn}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setMenuPos({ x: rect.right, y: rect.bottom + 4 })
+                }}
+                title={t('connectionItem.moreActions')}
+              >
+                <MoreVertical size={13} />
+              </button>
+              <ContextMenu
+                position={menuPos}
+                onClose={() => setMenuPos(null)}
+                items={[
+                  { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
+                  { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
+                  { key: 'div', type: 'divider' as const },
+                  { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
+                ] satisfies ContextMenuEntry[]}
+              />
+            </div>
           </div>
-        </div>
-        <div className={styles.itemActions}>
-          <button type="button" className={styles.actionBtn} onClick={() => setEditing(true)} title={tc('actions.edit')}>
-            <Edit3 size={13} />
-          </button>
-          <button
-            type="button"
-            className={styles.actionBtn}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              setMenuPos({ x: rect.right, y: rect.bottom + 4 })
-            }}
-            title={t('connectionItem.moreActions')}
-          >
-            <MoreVertical size={13} />
-          </button>
-          <ContextMenu
-            position={menuPos}
-            onClose={() => setMenuPos(null)}
-            items={[
-              { key: 'test', label: testing ? t('connectionItem.testing') : t('connectionItem.testConnection'), icon: <Zap size={14} />, onClick: () => { setMenuPos(null); handleTest() }, disabled: testing },
-              { key: 'duplicate', label: t('connectionItem.duplicate'), icon: <Copy size={14} />, onClick: () => { setMenuPos(null); onDuplicate() } },
-              { key: 'div', type: 'divider' as const },
-              { key: 'delete', label: t('connectionItem.delete'), icon: <Trash2 size={14} />, onClick: () => { setMenuPos(null); onDelete() }, danger: true },
-            ] satisfies ContextMenuEntry[]}
-          />
-        </div>
-      </div>
-      {testResult && (
-        <div className={clsx(styles.testMessage, testResult.success ? styles.testMessageSuccess : styles.testMessageFail)}>
-          {testResult.message}
-        </div>
+          {testResult && (
+            <div className={clsx(styles.testMessage, testResult.success ? styles.testMessageSuccess : styles.testMessageFail)}>
+              {testResult.message}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

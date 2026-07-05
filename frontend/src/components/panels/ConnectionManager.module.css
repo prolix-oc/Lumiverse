@@ -127,3 +127,33 @@
   flex-direction: column;
   gap: 2px;
 }
+
+/* Lift visual applied to the <DragOverlay> clone wrapper in
+   ConnectionManager.tsx. Gives the dragged card the tinted opaque
+   surface, drop shadow, and primary outline ring at the cursor.
+   Needed because the clone sits outside SortableContext, where
+   useSortable returns defaults — so the cloned <ConnectionItem>
+   does not receive .itemDragging or .itemActive state classes on
+   its own and would otherwise render without the lift styling. */
+.itemDraggingOverlay {
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary));
+  border-radius: 10px;
+  cursor: grabbing;
+}
+
+/* Suppress all CSS animations on the DragOverlay clone. The dnd-kit
+   DragOverlay portal mounts a fresh React instance, so any animation
+   on the cloned subtree re-fires on drag-begin. The in-list row is
+   outside this wrapper, so its first-visit fade-ins still play. */
+.itemDraggingOverlay * { animation: none !important; }
+
+/* Also suppress CSS transitions on the clone. Without this, the .item
+   background transition animates the clone's tinted surface from
+   transparent to opaque over ~100 ms on drag-begin, producing a brief
+   "handle disappears then fades back in" flicker. */
+.itemDraggingOverlay,
+.itemDraggingOverlay * {
+  transition: none !important;
+}

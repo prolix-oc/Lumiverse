@@ -3,16 +3,79 @@
   flex-direction: column;
   border-radius: 10px;
   transition: background var(--lumiverse-transition-fast);
+  /* Prevent the browser from interpreting a touch on the row as a scroll
+     gesture on .panelContent during the 180ms TouchSensor activation delay.
+     Without this, the panel scrolls a few px before drag activates and
+     useRect(activeNode) measures the card at its new (scrolled) position —
+     the DragOverlay then anchors there, making the overlay's top-left "snap"
+     away from the user's original touch point (top of handle ends up at thumb,
+     not handle bottom). The handle already has touch-action:none, but it's
+     only 24x32px and the touch can land on the row gap or below the row,
+     which inherits the default touch-action:auto from .panelContent. */
+  touch-action: none;
+}
+
+.itemDragging {
+  /* Hidden slot for the dragged card. The visible "lifted" card during a
+     reorder is the <DragOverlay> clone at the document-body level (via
+     React Portal) — it escapes the drawer panel's overflow:hidden +
+     isolation:isolate stacking context so it can be dragged over chat
+     and other panels without being clipped.
+
+     Without opacity:0 the slot would render as a translated ghost beside
+     the overlay (it still receives useSortable's transform during the
+     drag). Hiding it leaves only the overlay visible, but keeps the
+     layout footprint so neighbor cards reflow correctly.
+
+     The overlay clone sits outside SortableContext, so useSortable there
+     returns defaults (isDragging=false) and the overlay does NOT receive
+     .itemDragging — it's only this in-list slot that gets hidden. */
+  opacity: 0;
+  pointer-events: none;
 }
 
 .itemActive {
-  background: var(--lumiverse-primary-light);
+  /* Solid color-mix (not --lumiverse-primary-light's 10% alpha overlay) so
+     the active card reads as opaque instead of see-through against the
+     page background. */
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
 }
 
 .itemRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.dragHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  margin-left: 6px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  touch-action: none;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.dragHandle:hover {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.dragHandle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 1px;
 }
 
 .itemBtn {
@@ -126,7 +189,7 @@
 }
 
 .testMessage {
-  padding: 0 8px 8px 50px;
+  padding: 0 8px 8px 82px;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   animation: fadeIn 0.2s ease-out;
 }
@@ -143,7 +206,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 8px 50px;
+  padding: 8px 12px 8px 82px;
   background: var(--lumiverse-primary-light);
   border: none;
   border-radius: 0 0 10px 10px;
@@ -169,7 +232,14 @@
   display: flex;
   align-items: baseline;
   gap: 0;
-  padding: 0 10px 10px 50px;
+  padding: 0 10px 10px 82px;
+}
+
+/* The fadeIn animation runs only on the bar's initial mount for a given
+   profile (controlled by JS via the `animatedBarKeys` Set and a per-
+   instance ref in ConnectionItem.tsx — false→true of `show*` adds the key,
+   true→false removes it so re-activation animates again). */
+.creditsBarAnimateIn {
   animation: fadeIn 0.2s ease-out;
 }
 

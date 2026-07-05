@@ -353,7 +353,8 @@
     "daily": "日次",
     "monthly": "月次",
     "comfyWorkflow": "ComfyUI ワークフロー",
-    "loadComfyWorkflowFailed": "ComfyUI ワークフローの読み込みに失敗しました"
+    "loadComfyWorkflowFailed": "ComfyUI ワークフローの読み込みに失敗しました",
+    "dragToReorder": "ドラッグして並べ替え"
   },
   "connectionForm": {
     "pollinationsSaved": "Pollinations でサインインしました。 API キーは自動的に保存されました。",

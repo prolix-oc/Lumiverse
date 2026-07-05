@@ -353,7 +353,8 @@
     "daily": "Quotidien",
     "monthly": "Mensuel",
     "comfyWorkflow": "Flux de travail ComfyUI",
-    "loadComfyWorkflowFailed": "Échec du chargement du flux de travail ComfyUI"
+    "loadComfyWorkflowFailed": "Échec du chargement du flux de travail ComfyUI",
+    "dragToReorder": "Réorganiser par glisser-déposer"
   },
   "connectionForm": {
     "pollinationsSaved": "Connecté avec Pollinations. Clé API enregistrée automatiquement.",

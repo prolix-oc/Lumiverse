@@ -11,6 +11,10 @@ import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import {
+  dispatchCollapsibleToggleLayoutEvent,
+  findDetailsToggleLayoutTarget,
+} from './collapsibleLayout'
+import {
   dispatchMessageTagIntercepts,
   stripMessageTags,
   subscribeTagInterceptorRegistry,
@@ -317,6 +321,7 @@ marked.setOptions({
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const YOUTUBE_EMBED_TOKEN = 'LUMIVERSE_YOUTUBE_EMBED'
 const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
+const DETAILS_TOGGLE_KEYS = new Set(['Enter', ' ', 'Spacebar'])
 const SPECIAL_PIECE_RE = new RegExp(`<!--(${HTML_ISLAND_TOKEN}|${YOUTUBE_EMBED_TOKEN})_(\\d+)-->`, 'g')
 const YOUTUBE_NOCOOKIE_ORIGIN = 'https://www.youtube-nocookie.com'
 const YOUTUBE_EMBED_PATH_RE = /^\/embed\/[A-Za-z0-9_-]{6,}$/
@@ -1438,6 +1443,36 @@ export default function MessageContent({
     const container = containerRef.current
     if (!container) return
     return attachCodeCopyHandler(container)
+  }, [])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const signalCollapsibleToggle = (event: Event) => {
+      const details = findDetailsToggleLayoutTarget(event)
+      if (details) dispatchCollapsibleToggleLayoutEvent(details)
+    }
+
+    const handleSummaryClickCapture = (event: MouseEvent) => {
+      signalCollapsibleToggle(event)
+    }
+
+    const handleSummaryKeyDownCapture = (event: KeyboardEvent) => {
+      if (!DETAILS_TOGGLE_KEYS.has(event.key)) return
+      signalCollapsibleToggle(event)
+    }
+
+    // Native <details> elements toggle immediately after activation. Mark the
+    // row before that happens so the virtualizer treats the resulting resize as
+    // a user-controlled collapse/expand, just like the dedicated reasoning box.
+    container.addEventListener('click', handleSummaryClickCapture, true)
+    container.addEventListener('keydown', handleSummaryKeyDownCapture, true)
+
+    return () => {
+      container.removeEventListener('click', handleSummaryClickCapture, true)
+      container.removeEventListener('keydown', handleSummaryKeyDownCapture, true)
+    }
   }, [])
 
   useLayoutEffect(() => {
