@@ -1,5 +1,17 @@
 import { registry } from "../MacroRegistry";
 
+function getFocusedCharacterField(
+  ctx: { env: { extra?: Record<string, any>; character: Record<string, string> } },
+  field: "description" | "personality",
+): string {
+  const focused = ctx.env.extra?.groupFocusedCharacter as
+    | Record<string, unknown>
+    | undefined;
+  return typeof focused?.[field] === "string"
+    ? (focused[field] as string)
+    : (ctx.env.character[field] || "");
+}
+
 export function registerCharacterMacros(): void {
   registry.registerMacro({
     builtIn: true,
@@ -19,6 +31,26 @@ export function registerCharacterMacros(): void {
     returnType: "string",
     aliases: ["charPersonality"],
     handler: (ctx) => ctx.env.character.personality,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "charGroupFocusedDescription",
+    category: "Character",
+    description: "Focused group character description",
+    returnType: "string",
+    aliases: ["charFocusedDescription", "char_group_focused_description"],
+    handler: (ctx) => getFocusedCharacterField(ctx, "description"),
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "charGroupFocusedPersonality",
+    category: "Character",
+    description: "Focused group character personality",
+    returnType: "string",
+    aliases: ["charFocusedPersonality", "char_group_focused_personality"],
+    handler: (ctx) => getFocusedCharacterField(ctx, "personality"),
   });
 
   registry.registerMacro({

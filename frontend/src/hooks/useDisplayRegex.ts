@@ -462,6 +462,7 @@ export function useDisplayRegex(
 ): string {
   const regexScripts = useStore((s) => s.regexScripts)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const messageIndex = useStore((s) => {
@@ -483,6 +484,7 @@ export function useDisplayRegex(
     if (messageIndex < 0) return undefined
     return { chat_index: String(messageIndex) }
   }, [messageIndex])
+  const macroCharacterId = activeGroupCharacterId ?? activeCharacterId
 
   const content = useDisplayPreprocessed(rawContent, activeChatId, preprocessOpts)
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
@@ -527,7 +529,7 @@ export function useDisplayRegex(
 
     return JSON.stringify({
       activeChatId,
-      activeCharacterId,
+      macroCharacterId,
       activePersonaId,
       scripts: scriptsNeedingResolution.map((s) => [
         s.id,
@@ -537,7 +539,7 @@ export function useDisplayRegex(
         s.substitute_macros,
       ]),
     })
-  }, [scriptsNeedingResolution, activeChatId, activeCharacterId, activePersonaId])
+  }, [scriptsNeedingResolution, activeChatId, macroCharacterId, activePersonaId])
 
   const cachedTemplates = templateCacheKey ? displayRegexResolutionCache.get(templateCacheKey)?.value : undefined
   const [resolvedTemplatesState, setResolvedTemplatesState] = useState<ResolvedTemplatesState | null>(() => (
@@ -588,7 +590,7 @@ export function useDisplayRegex(
       let assignedPromise: Promise<ResolvedDisplayRegexTemplates>
       const promise = resolveTemplatesWithResolver(templates, {
         chatId: activeChatId ?? undefined,
-        characterId: activeCharacterId ?? undefined,
+        characterId: macroCharacterId ?? undefined,
         personaId: activePersonaId ?? undefined,
       })
         .then((res) => {
@@ -624,7 +626,7 @@ export function useDisplayRegex(
     displayRegexResolutionCache.get(templateCacheKey)?.promise?.then(applyResolvedTemplates)
 
     return () => { cancelled = true }
-  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, activeCharacterId, activePersonaId, cvSnapshot])
+  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, macroCharacterId, activePersonaId, cvSnapshot])
 
   const fallbackContent = useMemo(
     () => {
@@ -678,7 +680,7 @@ export function useDisplayRegex(
 
     return JSON.stringify({
       activeChatId,
-      activeCharacterId,
+      macroCharacterId,
       activePersonaId,
       isUser,
       depth,
@@ -704,7 +706,7 @@ export function useDisplayRegex(
     displayScripts,
     hasAsyncMacroScripts,
     activeChatId,
-    activeCharacterId,
+    macroCharacterId,
     activePersonaId,
     isUser,
     depth,
@@ -746,7 +748,7 @@ export function useDisplayRegex(
           isUser,
           depth,
           chatId: activeChatId ?? undefined,
-          characterId: activeCharacterId ?? undefined,
+          characterId: macroCharacterId ?? undefined,
           personaId: activePersonaId ?? undefined,
           macroCtx,
           resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
@@ -757,7 +759,7 @@ export function useDisplayRegex(
         },
         (templates) => resolveMacrosBatchChunked(templates, {
           chat_id: activeChatId ?? undefined,
-          character_id: activeCharacterId ?? undefined,
+          character_id: macroCharacterId ?? undefined,
           persona_id: activePersonaId ?? undefined,
         }),
       )
@@ -803,7 +805,7 @@ export function useDisplayRegex(
     resolvedTemplateKey,
     resolvedTemplates,
     activeChatId,
-    activeCharacterId,
+    macroCharacterId,
     activePersonaId,
     contentCacheKey,
     dynamicMacros,

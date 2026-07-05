@@ -400,6 +400,8 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const activeChatId = __contextMeterStore((s) => s.activeChatId)
+  const activeCharacterId = __contextMeterStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = __contextMeterStore((s) => s.activeGroupCharacterId)
 
   // Debounced macro preview resolution
   useEffect(() => {
@@ -426,6 +428,9 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
         prompt_blocks: previewBlocks,
         prompt_variables: promptVariables,
         ...(activeChatId ? { chat_id: activeChatId } : {}),
+        ...(activeGroupCharacterId || activeCharacterId
+          ? { character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined }
+          : {}),
       })
         .then((res) => {
           setPreviewText(res.text)
@@ -438,7 +443,7 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
         .finally(() => setPreviewLoading(false))
     }, 500)
     return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview, activeChatId, role, blocks, block.id, position, depth, variables, promptVariables])
+  }, [content, showPreview, activeChatId, activeCharacterId, activeGroupCharacterId, role, blocks, block.id, position, depth, variables, promptVariables])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']

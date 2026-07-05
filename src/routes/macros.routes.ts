@@ -163,9 +163,24 @@ async function buildEnvFromIds(userId: string, body: {
     const chat = chatsSvc.getChat(userId, body.chat_id);
     if (chat) {
       const messages = chatsSvc.getMessages(userId, body.chat_id);
-      const character = chat.character_id
+      const isGroup = !!chat.metadata?.group;
+      const groupCharacterIds =
+        isGroup && Array.isArray(chat.metadata?.character_ids)
+          ? (chat.metadata.character_ids as string[])
+          : [];
+      const targetCharacterId =
+        isGroup &&
+        typeof body.character_id === "string" &&
+        groupCharacterIds.includes(body.character_id)
+          ? body.character_id
+          : undefined;
+      const defaultCharacter = chat.character_id
         ? charactersSvc.getCharacter(userId, chat.character_id)
         : makeAssistantCharacter();
+      const focusedCharacter = targetCharacterId
+        ? charactersSvc.getCharacter(userId, targetCharacterId) ?? defaultCharacter
+        : defaultCharacter;
+      const character = focusedCharacter;
       if (character) {
         const persona = isTemporaryChatMetadata(chat.metadata)
           ? null
@@ -181,9 +196,9 @@ async function buildEnvFromIds(userId: string, body: {
           const c = charactersSvc.getCharacter(userId, cid);
           return c ? getEffectiveCharacterName(c) : undefined;
         });
-        const isGroup = !!chat.metadata?.group;
         const env = buildEnv({
           character,
+          focusedCharacter,
           persona,
           chat,
           messages,
@@ -191,6 +206,7 @@ async function buildEnvFromIds(userId: string, body: {
           connection,
           dynamicMacros: body.dynamic_macros,
           groupCharacterNames,
+          targetCharacterId,
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
         populateLumiaLoomContext(env, userId, chat);

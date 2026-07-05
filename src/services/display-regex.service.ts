@@ -44,9 +44,24 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     const chat = chatsSvc.getChat(userId, ctx.chat_id);
     if (chat) {
       const messages = chatsSvc.getMessages(userId, ctx.chat_id);
-      const character = chat.character_id
+      const isGroup = !!chat.metadata?.group;
+      const groupCharacterIds =
+        isGroup && Array.isArray(chat.metadata?.character_ids)
+          ? (chat.metadata.character_ids as string[])
+          : [];
+      const targetCharacterId =
+        isGroup &&
+        typeof ctx.character_id === "string" &&
+        groupCharacterIds.includes(ctx.character_id)
+          ? ctx.character_id
+          : undefined;
+      const defaultCharacter = chat.character_id
         ? charactersSvc.getCharacter(userId, chat.character_id)
         : makeAssistantCharacter();
+      const focusedCharacter = targetCharacterId
+        ? charactersSvc.getCharacter(userId, targetCharacterId) ?? defaultCharacter
+        : defaultCharacter;
+      const character = focusedCharacter;
       if (character) {
         const persona = isTemporaryChatMetadata(chat.metadata)
           ? null
@@ -60,15 +75,16 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
           const c = charactersSvc.getCharacter(userId, cid);
           return c ? getEffectiveCharacterName(c) : undefined;
         });
-        const isGroup = !!chat.metadata?.group;
         const env = buildEnv({
           character,
+          focusedCharacter,
           persona,
           chat,
           messages,
           generationType: "normal",
           connection,
           groupCharacterNames,
+          targetCharacterId,
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
         });
         populateLumiaLoomContext(env, userId, chat);

@@ -1331,6 +1331,23 @@ describe("Integration: nested and combined macros", () => {
     expect(result).toBe("A brave warrior with a heart of gold".length);
   });
 
+  test("focused group character card macros read the focused member snapshot", async () => {
+    const env = makeEnv();
+    env.names.charGroupFocused = "Charlie";
+    env.names.groupCardMode = "merge";
+    env.character.description = "Merged description";
+    env.character.personality = "Merged personality";
+    env.extra.groupFocusedCharacter = {
+      id: "char-2",
+      name: "Charlie",
+      description: "Focused description",
+      personality: "Focused personality",
+    };
+
+    expect(await ev("{{charGroupFocusedDescription}}", env)).toBe("Focused description");
+    expect(await ev("{{charGroupFocusedPersonality}}", env)).toBe("Focused personality");
+  });
+
   test("counter in if condition", async () => {
     const env = makeEnv({ localVars: { step: "4" } });
     expect(

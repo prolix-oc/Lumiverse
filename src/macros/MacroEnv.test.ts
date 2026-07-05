@@ -246,6 +246,50 @@ describe("buildEnv lastMessageTime", () => {
   });
 });
 
+describe("buildEnv focused group character state", () => {
+  test("keeps focused member card fields separate from merged card fields", () => {
+    const focusedCharacter: Character = {
+      ...baseCharacter,
+      id: "char-2",
+      name: "Charlie",
+      description: "Focused description",
+      personality: "Focused personality",
+    };
+
+    const env = buildEnv({
+      character: {
+        ...baseCharacter,
+        description: "Merged description",
+        personality: "Merged personality",
+      },
+      focusedCharacter,
+      persona: null,
+      chat: {
+        ...baseChat,
+        metadata: {
+          group: true,
+          character_ids: ["char-1", "char-2"],
+          group_card_mode: "merge",
+        },
+      },
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      targetCharacterId: "char-2",
+    });
+
+    expect(env.names.charGroupFocused).toBe("Charlie");
+    expect(env.character.description).toBe("Merged description");
+    expect(env.character.personality).toBe("Merged personality");
+    expect(env.extra.groupFocusedCharacter).toMatchObject({
+      id: "char-2",
+      name: "Charlie",
+      description: "Focused description",
+      personality: "Focused personality",
+    });
+  });
+});
+
 describe("buildEnv groupCardMode", () => {
   test("returns 'solo' for non-group chats regardless of metadata", () => {
     const env = buildEnv({

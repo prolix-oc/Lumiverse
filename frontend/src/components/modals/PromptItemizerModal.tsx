@@ -53,6 +53,7 @@ export default function PromptItemizerModal() {
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
 
   const messageId = modalProps?.messageId as string | undefined
@@ -61,6 +62,15 @@ export default function PromptItemizerModal() {
     const m = messages.find((x) => x.id === messageId) as { chat_id?: string } | undefined
     return m?.chat_id ?? activeChatId
   }, [messageId, messages, activeChatId])
+  const rawTargetCharacterId = useMemo(() => {
+    const sourceMessage = messageId
+      ? messages.find((x) => x.id === messageId)
+      : null
+    if (typeof sourceMessage?.extra?.character_id === 'string') {
+      return sourceMessage.extra.character_id
+    }
+    return activeGroupCharacterId ?? activeCharacterId ?? null
+  }, [messageId, messages, activeGroupCharacterId, activeCharacterId])
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BreakdownCacheEntry | null>(null)
@@ -131,6 +141,7 @@ export default function PromptItemizerModal() {
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         exclude_message_id: messageId,
+        target_character_id: rawTargetCharacterId || undefined,
       })
       setRawData(res)
       return res
@@ -140,7 +151,7 @@ export default function PromptItemizerModal() {
     } finally {
       setRawLoading(false)
     }
-  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration])
+  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId])
 
   const handleToggleRaw = useCallback(async () => {
     if (rawView !== 'off') {

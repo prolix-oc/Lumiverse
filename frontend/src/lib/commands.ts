@@ -289,7 +289,16 @@ export const COMMANDS: Command[] = [
     group: 'actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
+      const {
+        activeChatId,
+        activeProfileId,
+        activePersonaId,
+        activeCharacterId,
+        activeGroupCharacterId,
+        getActivePresetForGeneration,
+        openModal,
+        addToast,
+      } = useStore.getState()
       if (!activeChatId) return
       try {
         const presetId = getActivePresetForGeneration() || undefined
@@ -299,6 +308,7 @@ export const COMMANDS: Command[] = [
           persona_id: activePersonaId || undefined,
           preset_id: presetId,
           force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
+          target_character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined,
         })
 
         openModal('dryRun', result)

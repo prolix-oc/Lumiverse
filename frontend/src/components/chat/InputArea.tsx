@@ -262,6 +262,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     )?.generationId ?? null
   )
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const enterToSend = useStore((s) => s.chatSheldEnterToSend)
   const saveDraftInput = useStore((s) => s.saveDraftInput)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -316,6 +317,22 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     () => readGroupResponseOrder(activeChatMetadata),
     [activeChatMetadata],
   )
+  const focusedPreviewCharacterId = useMemo(() => {
+    if (!isGroupChat) return activeCharacterId ?? null
+    if (activeGroupCharacterId) return activeGroupCharacterId
+    const firstUnmuted = orderGroupResponseIds(
+      groupCharacterIds.filter((id) => !mutedCharacterIds.includes(id)),
+      groupResponseOrder,
+    )[0]
+    return firstUnmuted ?? activeCharacterId ?? null
+  }, [
+    activeCharacterId,
+    activeGroupCharacterId,
+    groupCharacterIds,
+    groupResponseOrder,
+    isGroupChat,
+    mutedCharacterIds,
+  ])
 
   // Track whether the active character has expressions configured
   const [hasExpressions, setHasExpressions] = useState(false)
@@ -1858,6 +1875,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })
       openModal('dryRun', result)
     } catch (err: any) {
@@ -1867,7 +1885,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setDryRunning(false)
     }
-  }, [chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError])
+  }, [chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -1881,7 +1899,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       const res = await resolveMacros({
         template: text,
         chat_id: chatId,
-        character_id: activeCharacterId || undefined,
+        character_id: focusedPreviewCharacterId || undefined,
         persona_id: activePersonaId || undefined,
         connection_id: activeProfileId || undefined,
       })
@@ -1904,7 +1922,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setResolvingMacros(false)
     }
-  }, [text, chatId, resolvingMacros, activeCharacterId, activePersonaId, activeProfileId, queueTextareaSelection])
+  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection])
 
   const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, hashStartIndex)

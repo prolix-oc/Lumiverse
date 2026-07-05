@@ -359,6 +359,8 @@ Macros for character and user identity.
 | `{{groupNotMuted}}` | `{{group_not_muted}}` | Names of non-muted group members |
 | `{{notChar}}` | `{{not_char}}` | The non-character party (usually the user) |
 | `{{charGroupFocused}}` | `{{charFocused}}`, `{{char_group_focused}}` | The targeted character in a group chat |
+| `{{charGroupFocusedDescription}}` | `{{charFocusedDescription}}`, `{{char_group_focused_description}}` | The focused group character's description |
+| `{{charGroupFocusedPersonality}}` | `{{charFocusedPersonality}}`, `{{char_group_focused_personality}}` | The focused group character's personality |
 | `{{isGroupChat}}` | `{{is_group_chat}}` | `"yes"` or `"no"` — usable as a condition |
 | `{{isNarrator}}` | `{{is_narrator}}` | `"yes"` or `"no"` — whether the active persona is a narrator (not a self-insert) |
 | `{{groupOthers}}` | `{{group_others}}` | Group members excluding the focused character |

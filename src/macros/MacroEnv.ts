@@ -9,6 +9,8 @@ import type { MacroEnv, MacroHandler, MacroDefinition } from "./types";
 
 export interface BuildEnvContext {
   character: Character;
+  /** Raw target/focused character card for group chats. Used by focused-member macros even when the main character card is merged. */
+  focusedCharacter?: Character;
   persona: Persona | null;
   chat: Chat;
   messages: Message[];
@@ -24,7 +26,7 @@ export interface BuildEnvContext {
   groupNotMutedNames?: string[];
   /** The target character ID for group chats (the character whose turn it is). */
   targetCharacterId?: string;
-  /** Pre-resolved name of the target/focused character. Falls back to character.name if targetCharacterId is set. */
+  /** Pre-resolved name of the target/focused character. Falls back to focusedCharacter/character when omitted. */
   targetCharacterName?: string;
   /** Optional abort signal — threaded onto MacroEnv so the evaluator can cancel between iterations. */
   signal?: AbortSignal;
@@ -46,6 +48,7 @@ export function resolvePersonaPronouns(persona: Persona | null): {
 
 export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   const { character, persona, chat, messages, generationType, connection } = ctx;
+  const focusedCharacter = ctx.focusedCharacter ?? character;
   const personaPronouns = resolvePersonaPronouns(persona);
 
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -54,7 +57,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
 
   const isGroup = !!chat.metadata?.group && Array.isArray(chat.metadata?.character_ids);
   const allGroupNames = ctx.groupCharacterNames;
-  const focusedName = isGroup ? (ctx.targetCharacterName || character.name) : "";
+  const focusedName = isGroup ? (ctx.targetCharacterName || getEffectiveCharacterName(focusedCharacter)) : "";
   const groupLastSpeaker = isGroup
     ? (findLast(messages, (m) => !m.is_user)?.name || "")
     : "";
@@ -137,6 +140,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     extra: {
       userId: ctx.userId ?? (chat as any).user_id as string | undefined,
       characterId: character.id,
+      groupFocusedCharacter: buildFocusedCharacterMacroState(focusedCharacter, chat, messages),
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
       characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],
@@ -144,6 +148,28 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
         ? lastMsg.send_date * 1000
         : undefined,
     },
+  };
+}
+
+function buildFocusedCharacterMacroState(
+  character: Character,
+  chat: Chat,
+  messages: Message[],
+): Record<string, string> {
+  return {
+    id: character.id,
+    name: getEffectiveCharacterName(character),
+    description: character.description || "",
+    personality: character.personality || "",
+    scenario: character.scenario || "",
+    mesExamples: character.mes_example || "",
+    systemPrompt: character.system_prompt || "",
+    postHistoryInstructions: character.post_history_instructions || "",
+    depthPrompt: (character.extensions?.depth_prompt as string) || "",
+    creatorNotes: character.creator_notes || "",
+    version: (character.extensions?.version as string) || "",
+    creator: character.creator || "",
+    firstMessage: resolveChatGreeting(character, chat, messages),
   };
 }
 

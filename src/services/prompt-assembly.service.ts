@@ -1714,12 +1714,13 @@ export async function assemblePrompt(
           mutedIds.includes(cid) ? undefined : resolveCharName(cid),
         )
       : undefined;
+  const focusedCharacter = resolveCharacterWithAlternateFields(character, chat);
   // Resolve alternate field overrides, apply group card merge/swap mode, then
   // group scenario override. This is done at assembly time so chat settings and
   // mute state cannot be ignored by an older client payload.
   const effectiveCharacter = resolveGroupScenarioOverride(
     buildGroupMergedCharacter(
-      resolveCharacterWithAlternateFields(character, chat),
+      focusedCharacter,
       chat,
       ctx.userId,
       groupCharsMap,
@@ -1730,6 +1731,7 @@ export async function assemblePrompt(
 
   const macroEnv: MacroEnv = buildEnv({
     character: effectiveCharacter,
+    focusedCharacter,
     persona,
     chat,
     messages,
@@ -1740,7 +1742,7 @@ export async function assemblePrompt(
     groupNotMutedNames,
     targetCharacterId: ctx.targetCharacterId,
     targetCharacterName: ctx.targetCharacterId
-      ? getEffectiveCharacterName(effectiveCharacter)
+      ? getEffectiveCharacterName(focusedCharacter)
       : undefined,
     signal: ctx.signal,
   });
@@ -6107,10 +6109,14 @@ async function legacyAssembly(
         : undefined;
     // Resolve alternate field overrides, group card mode, and group scenario
     // override (legacy path)
+    const legacyFocusedChar = resolveCharacterWithAlternateFields(
+      character as Character,
+      chatObj,
+    );
     const legacyEffectiveChar = userId
       ? resolveGroupScenarioOverride(
           buildGroupMergedCharacter(
-            resolveCharacterWithAlternateFields(character as Character, chatObj),
+            legacyFocusedChar,
             chatObj,
             userId,
           ),
@@ -6121,6 +6127,7 @@ async function legacyAssembly(
 
     macroEnv = buildEnv({
       character: legacyEffectiveChar,
+      focusedCharacter: legacyFocusedChar,
       persona: persona ?? null,
       chat: chatObj,
       messages,
@@ -6129,7 +6136,7 @@ async function legacyAssembly(
       groupCharacterNames: groupNames,
       groupNotMutedNames: legacyNotMuted,
       targetCharacterName: isGroup
-        ? getEffectiveCharacterName(legacyEffectiveChar)
+        ? getEffectiveCharacterName(legacyFocusedChar)
         : undefined,
       signal,
     });
