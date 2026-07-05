@@ -20,6 +20,7 @@ import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/compo
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import { useFolders } from '@/hooks/useFolders'
 import { useWorldBookListLiveSync } from '@/hooks/useWorldBookListLiveSync'
+import { upsertById } from '@/lib/worldBookList'
 import type { WorldBook, WorldBookVectorSummary, WorldInfoSettings } from '@/types/api'
 
 import styles from './WorldBookPanel.module.css'
@@ -235,10 +236,10 @@ export default function WorldBookPanel() {
   const handleCreateBook = useCallback(async () => {
     try {
       const book = await worldBooksApi.create({ name: t('worldBookPanel.defaultBookName') })
-      setBooks((prev) => [book, ...prev])
+      setBooks((prev) => upsertById(prev, book))
       setSelectedBookId(book.id)
     } catch {}
-  }, [])
+  }, [t])
 
   const handleDeleteBook = useCallback(
     async (id: string) => {
@@ -360,7 +361,7 @@ export default function WorldBookPanel() {
   }, [selectedBookId, activeChatId])
 
   const handleImport = useCallback((result: WorldBookImportResult) => {
-    setBooks((prev) => [result.world_book, ...prev])
+    setBooks((prev) => upsertById(prev, result.world_book))
     setSelectedBookId(result.world_book.id)
     setShowImport(false)
     setPostImportBook(result.world_book)

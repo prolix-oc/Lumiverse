@@ -16,6 +16,7 @@ import { useFolders } from '@/hooks/useFolders'
 import { useWorldBookListLiveSync } from '@/hooks/useWorldBookListLiveSync'
 import Pagination from '@/components/shared/Pagination'
 import { triggerBlobDownload } from '@/lib/downloads'
+import { upsertById } from '@/lib/worldBookList'
 import type { WorldBook, WorldBookVectorSummary } from '@/types/api'
 import type { WorldBookExportFormat } from '@/api/world-books'
 
@@ -215,7 +216,7 @@ export default function WorldBookEditorModal() {
   const handleCreateBook = useCallback(async () => {
     try {
       const book = await worldBooksApi.create({ name: t('newBookName') })
-      setBooks((prev) => [book, ...prev])
+      setBooks((prev) => upsertById(prev, book))
       setSelectedBookId(book.id)
     } catch {}
   }, [t])
@@ -458,7 +459,7 @@ export default function WorldBookEditorModal() {
   }, [selectedBookId, activeChatId])
 
   const handleImport = useCallback((result: WorldBookImportResult) => {
-    setBooks((prev) => [result.world_book, ...prev])
+    setBooks((prev) => upsertById(prev, result.world_book))
     setSelectedBookId(result.world_book.id)
     setShowImport(false)
     setPostImportBook(result.world_book)
