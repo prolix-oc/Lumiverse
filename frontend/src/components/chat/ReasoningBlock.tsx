@@ -6,6 +6,7 @@ import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
 import { sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import { ChevronRight, Brain } from 'lucide-react'
+import { dispatchCollapsibleToggleLayoutEvent } from './collapsibleLayout'
 import styles from './ReasoningBlock.module.css'
 import clsx from 'clsx'
 
@@ -24,7 +25,6 @@ type ReasoningRenderMode = 'markdown' | 'text'
 // Approximate cutoff where full markdown rendering starts to create enough DOM
 // churn during long CoT streams that switching to plain text is noticeably smoother.
 const LARGE_REASONING_RENDER_THRESHOLD = 40_000
-const REASONING_TOGGLE_LAYOUT_EVENT = 'lumiverse:reasoning-toggle-layout'
 
 const md = new Marked({
   gfm: true,
@@ -61,7 +61,7 @@ export default function ReasoningBlock({ reasoning, reasoningDuration, reasoning
   const deferredReasoning = useDeferredValue(reasoning)
 
   const toggle = useCallback(() => {
-    containerRef.current?.dispatchEvent(new CustomEvent(REASONING_TOGGLE_LAYOUT_EVENT, { bubbles: true }))
+    dispatchCollapsibleToggleLayoutEvent(containerRef.current)
     setIsOpen((o) => !o)
   }, [])
 
