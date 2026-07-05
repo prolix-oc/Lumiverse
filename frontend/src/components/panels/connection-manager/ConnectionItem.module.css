@@ -3,35 +3,13 @@
   flex-direction: column;
   border-radius: 10px;
   transition: background var(--lumiverse-transition-fast);
-  /* Prevent the browser from interpreting a touch on the row as a scroll
-     gesture on .panelContent during the 180ms TouchSensor activation delay.
-     Without this, the panel scrolls a few px before drag activates and
-     useRect(activeNode) measures the card at its new (scrolled) position —
-     the DragOverlay then anchors there, making the overlay's top-left "snap"
-     away from the user's original touch point (top of handle ends up at thumb,
-     not handle bottom). The handle already has touch-action:none, but it's
-     only 24x32px and the touch can land on the row gap or below the row,
-     which inherits the default touch-action:auto from .panelContent. */
-  touch-action: none;
 }
 
 .itemDragging {
-  /* Hidden slot for the dragged card. The visible "lifted" card during a
-     reorder is the <DragOverlay> clone at the document-body level (via
-     React Portal) — it escapes the drawer panel's overflow:hidden +
-     isolation:isolate stacking context so it can be dragged over chat
-     and other panels without being clipped.
-
-     Without opacity:0 the slot would render as a translated ghost beside
-     the overlay (it still receives useSortable's transform during the
-     drag). Hiding it leaves only the overlay visible, but keeps the
-     layout footprint so neighbor cards reflow correctly.
-
-     The overlay clone sits outside SortableContext, so useSortable there
-     returns defaults (isDragging=false) and the overlay does NOT receive
-     .itemDragging — it's only this in-list slot that gets hidden. */
-  opacity: 0;
-  pointer-events: none;
+  z-index: 5;
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary));
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
 }
 
 .itemActive {
