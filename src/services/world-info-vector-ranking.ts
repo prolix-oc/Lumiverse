@@ -28,9 +28,16 @@ interface PhraseSpecificityState {
   tokenDocFrequency: Map<string, number>;
 }
 
+interface QueryTokenSignal {
+  count: number;
+  hasNameLikeForm: boolean;
+  hasUppercaseForm: boolean;
+}
+
 interface VectorQueryLexicalState {
   normalizedText: string;
   tokenSet: Set<string>;
+  queryTokenSignals: Map<string, QueryTokenSignal>;
   focusTokenSet: Set<string>;
   specificityState: PhraseSpecificityState;
 }
@@ -508,6 +515,34 @@ function getPartialMatchThreshold(
   return tokenCount === 2 ? 0.75 : 0.6;
 }
 
+function hasStrongSingleTokenPartialSignal(
+  token: string,
+  queryState: VectorQueryLexicalState,
+  specificity: number,
+  kind: "key" | "comment",
+): boolean {
+  const signal = queryState.queryTokenSignals.get(token);
+  if (!signal) return false;
+  if (signal.hasUppercaseForm && token.length >= 3) return true;
+
+  const nameSpecificityFloor = kind === "comment" ? 0.34 : 0.3;
+  if (signal.hasNameLikeForm && specificity >= nameSpecificityFloor) {
+    return true;
+  }
+
+  const repeatedSpecificityFloor = kind === "comment" ? 0.48 : 0.42;
+  if (
+    signal.count >= 2 &&
+    token.length >= 4 &&
+    specificity >= repeatedSpecificityFloor
+  ) {
+    return true;
+  }
+
+  const longTokenSpecificityFloor = kind === "comment" ? 0.78 : 0.7;
+  return token.length >= 8 && specificity >= longTokenSpecificityFloor;
+}
+
 function getRareTokenPartialScore(
   value: string,
   queryState: VectorQueryLexicalState,
@@ -517,11 +552,31 @@ function getRareTokenPartialScore(
   const tokens = Array.from(new Set(tokenizeLexicalText(value)));
   if (tokens.length < 2) return 0;
 
-  const matchedTokenSpecificities = tokens
+  const matchedTokens = tokens
     .filter((token) => queryState.tokenSet.has(token))
-    .map((token) => getTokenSpecificity(queryState.specificityState, token));
-  if (matchedTokenSpecificities.length === 0) return 0;
+    .map((token) => ({
+      token,
+      specificity: getTokenSpecificity(queryState.specificityState, token),
+    }));
+  if (matchedTokens.length === 0) return 0;
 
+  if (matchedTokens.length === 1) {
+    const matchedToken = matchedTokens[0];
+    if (
+      !hasStrongSingleTokenPartialSignal(
+        matchedToken.token,
+        queryState,
+        matchedToken.specificity,
+        kind,
+      )
+    ) {
+      return 0;
+    }
+  }
+
+  const matchedTokenSpecificities = matchedTokens.map(
+    (token) => token.specificity,
+  );
   const bestTokenSpecificity = Math.max(...matchedTokenSpecificities);
   const minimumSpecificity = kind === "comment" ? 0.42 : 0.34;
   if (bestTokenSpecificity < minimumSpecificity) return 0;
@@ -654,14 +709,10 @@ function estimateReferenceEntryPenalty(
   );
 }
 
-function buildFocusTokenSet(
+function buildQueryTokenSignals(
   queryText: string,
-  specificityState: PhraseSpecificityState,
-): Set<string> {
-  const queryTokenSignals = new Map<
-    string,
-    { count: number; hasNameLikeForm: boolean; hasUppercaseForm: boolean }
-  >();
+): Map<string, QueryTokenSignal> {
+  const queryTokenSignals = new Map<string, QueryTokenSignal>();
   for (const match of queryText.matchAll(/\b[A-Za-z0-9]+\b/g)) {
     const rawToken = match[0];
     const normalizedToken = normalizeLexicalText(rawToken);
@@ -680,7 +731,9 @@ function buildFocusTokenSet(
     };
     const isUppercaseForm =
       /[A-Z]/.test(rawToken) && rawToken === rawToken.toUpperCase();
-    const isNameLikeForm = isUppercaseForm || /^[A-Z][a-z0-9]+$/.test(rawToken);
+    const isNameLikeForm =
+      /^[A-Z][a-z0-9]+$/.test(rawToken) ||
+      (isUppercaseForm && normalizedToken.length >= 3);
 
     queryTokenSignals.set(normalizedToken, {
       count: previous.count + 1,
@@ -689,6 +742,14 @@ function buildFocusTokenSet(
     });
   }
 
+  return queryTokenSignals;
+}
+
+function buildFocusTokenSet(
+  queryText: string,
+  specificityState: PhraseSpecificityState,
+  queryTokenSignals: Map<string, QueryTokenSignal>,
+): Set<string> {
   const tokens = tokenizeLexicalText(queryText);
   return new Set(
     tokens.filter((token) => {
@@ -700,7 +761,7 @@ function buildFocusTokenSet(
       const specificity = getTokenSpecificity(specificityState, token);
       const repeated = signal.count >= 2 && token.length >= 4;
       const named = signal.hasNameLikeForm && token.length >= 3;
-      const uppercase = signal.hasUppercaseForm && token.length >= 2;
+      const uppercase = signal.hasUppercaseForm && token.length >= 3;
       const verySpecificLongToken = token.length >= 8 && specificity >= 0.48;
 
       if (uppercase) return true;
@@ -937,10 +998,16 @@ function buildVectorQueryLexicalState(
   queryText: string,
   specificityState: PhraseSpecificityState,
 ): VectorQueryLexicalState {
+  const queryTokenSignals = buildQueryTokenSignals(queryText);
   return {
     normalizedText: normalizeLexicalText(queryText),
     tokenSet: new Set(tokenizeLexicalText(queryText)),
-    focusTokenSet: buildFocusTokenSet(queryText, specificityState),
+    queryTokenSignals,
+    focusTokenSet: buildFocusTokenSet(
+      queryText,
+      specificityState,
+      queryTokenSignals,
+    ),
     specificityState,
   };
 }
@@ -955,6 +1022,199 @@ export function getWorldInfoVectorCandidateMultiplier(
   mode: HybridWeightMode,
 ): number {
   return getWorldInfoVectorPreset(mode).candidateMultiplier;
+}
+
+export function getWorldInfoVectorCandidateRecallLimit(
+  mode: HybridWeightMode,
+  topK: number,
+  eligibleCount: number,
+): number {
+  const normalizedTopK = Math.max(
+    1,
+    Number.isFinite(topK) ? Math.floor(topK) : 1,
+  );
+  const expandedLimit = Math.max(
+    normalizedTopK * getWorldInfoVectorCandidateMultiplier(mode),
+    normalizedTopK,
+  );
+  const normalizedEligibleCount = Math.max(
+    0,
+    Number.isFinite(eligibleCount) ? Math.floor(eligibleCount) : 0,
+  );
+
+  if (normalizedEligibleCount === 0) return expandedLimit;
+  return Math.max(1, Math.min(normalizedEligibleCount, expandedLimit));
+}
+
+const EXACT_ANCHOR_LEXICAL_SCORE = 30;
+
+function buildSearchTextPreview(entry: WorldBookEntryModel): string {
+  const sections: string[] = [];
+  const comment = (entry.comment || "").trim();
+  const primaryKeys = dedupeStringsCaseInsensitive(entry.key || []);
+  const secondaryKeys = dedupeStringsCaseInsensitive(entry.keysecondary || []);
+  const content = (entry.content || "").trim();
+
+  if (comment) sections.push(`Entry title: ${comment}`);
+  if (primaryKeys.length > 0)
+    sections.push(`Primary keys: ${primaryKeys.join(", ")}`);
+  if (secondaryKeys.length > 0)
+    sections.push(`Secondary keys: ${secondaryKeys.join(", ")}`);
+  if (content) sections.push(`Content:\n${content}`);
+
+  return sections.join("\n\n");
+}
+
+function buildExactAnchorCandidate(
+  entry: WorldBookEntryModel,
+  queryState: VectorQueryLexicalState,
+): WorldBookSearchCandidate | null {
+  const anchors = [
+    ...(entry.key || []),
+    ...(entry.keysecondary || []),
+    entry.comment || "",
+  ];
+  if (
+    !anchors.some((anchor) =>
+      hasExactPhraseMatch(queryState.normalizedText, anchor),
+    )
+  ) {
+    return null;
+  }
+  const searchTextPreview = buildSearchTextPreview(entry);
+
+  return {
+    entry_id: entry.id,
+    distance: Number.POSITIVE_INFINITY,
+    lexical_score: EXACT_ANCHOR_LEXICAL_SCORE,
+    content: entry.content || "",
+    searchTextPreview,
+    metadata: {
+      comment: entry.comment,
+      key: entry.key,
+      keysecondary: entry.keysecondary,
+      world_book_id: entry.world_book_id,
+      search_text: searchTextPreview,
+    },
+  };
+}
+
+function augmentPooledCandidatesWithExactAnchors(
+  eligibleEntries: WorldBookEntryModel[],
+  pooledCandidates: VectorCandidatePoolEntry[],
+  queryState: VectorQueryLexicalState,
+): VectorCandidatePoolEntry[] {
+  const byEntryId = new Map<string, VectorCandidatePoolEntry>();
+  for (const item of pooledCandidates) {
+    byEntryId.set(item.entry.id, item);
+  }
+
+  for (const entry of eligibleEntries) {
+    const exactCandidate = buildExactAnchorCandidate(entry, queryState);
+    if (!exactCandidate) continue;
+
+    const existing = byEntryId.get(entry.id);
+    if (!existing) {
+      byEntryId.set(entry.id, { entry, candidate: exactCandidate });
+      continue;
+    }
+
+    const lexical_score =
+      existing.candidate.lexical_score == null
+        ? exactCandidate.lexical_score
+        : Math.max(
+            existing.candidate.lexical_score,
+            exactCandidate.lexical_score,
+          );
+    byEntryId.set(entry.id, {
+      entry,
+      candidate: {
+        ...existing.candidate,
+        lexical_score,
+        content: existing.candidate.content || exactCandidate.content,
+        searchTextPreview:
+          existing.candidate.searchTextPreview || exactCandidate.searchTextPreview,
+        metadata: {
+          ...exactCandidate.metadata,
+          ...existing.candidate.metadata,
+          search_text:
+            existing.candidate.metadata.search_text ||
+            exactCandidate.metadata.search_text,
+        },
+      },
+    });
+  }
+
+  return Array.from(byEntryId.values());
+}
+
+function getExactTitleAnchorBoost(
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  if (rawCommentMatches.exactScore <= 0) return 0;
+  return 0.08 + clamp01(rawCommentMatches.matchedSpecificity) * 0.08;
+}
+
+function getLexicalContentBoostScale(
+  primaryMatches: ReturnType<typeof scorePhraseMatches>,
+  secondaryMatches: ReturnType<typeof scorePhraseMatches>,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  const hasExactAnchor =
+    primaryMatches.exactScore > 0 ||
+    secondaryMatches.exactScore > 0 ||
+    rawCommentMatches.exactScore > 0;
+  if (hasExactAnchor) return 0.3;
+
+  const hasPartialAnchor =
+    primaryMatches.partialScore > 0 ||
+    secondaryMatches.partialScore > 0 ||
+    rawCommentMatches.partialScore > 0;
+  if (hasPartialAnchor) return 0.22;
+
+  return 0.18;
+}
+
+function getActiveTitleTokenBoost(
+  comment: string,
+  queryState: VectorQueryLexicalState,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+  isFtsOnly: boolean,
+  commentMultiplier: number,
+): number {
+  if (
+    !comment ||
+    commentMultiplier < 0.8 ||
+    rawCommentMatches.exactScore > 0 ||
+    rawCommentMatches.partialScore <= 0
+  ) {
+    return 0;
+  }
+
+  const titleTokens = Array.from(new Set(tokenizeLexicalText(comment)));
+  if (titleTokens.length < 2) return 0;
+
+  let bestBoost = 0;
+  for (const token of titleTokens) {
+    if (!queryState.tokenSet.has(token)) continue;
+
+    const signal = queryState.queryTokenSignals.get(token);
+    if (!signal) continue;
+
+    const specificity = getTokenSpecificity(queryState.specificityState, token);
+    const acronymMention = signal.hasUppercaseForm && token.length >= 3;
+    const nameMention = signal.hasNameLikeForm;
+    const repeatedDistinctMention =
+      signal.count >= 2 && token.length >= 4 && specificity >= 0.45;
+    if (!acronymMention && !nameMention && !repeatedDistinctMention) continue;
+
+    const repetitionBoost = clamp01((signal.count - 1) / 4) * 0.035;
+    const rawBoost = 0.035 + specificity * 0.045 + repetitionBoost;
+    bestBoost = Math.max(bestBoost, rawBoost);
+  }
+
+  if (bestBoost <= 0) return 0;
+  return Math.min(isFtsOnly ? 0.13 : 0.075, bestBoost + (isFtsOnly ? 0.065 : 0));
 }
 
 function scoreVectorWorldInfoCandidate(
@@ -1007,6 +1267,13 @@ function scoreVectorWorldInfoCandidate(
   const matchedComment = rawCommentMatches.matchedValues[0] ?? null;
 
   const isFtsOnly = !Number.isFinite(candidate.distance);
+  const activeTitleTokenBoost = getActiveTitleTokenBoost(
+    comment,
+    queryState,
+    rawCommentMatches,
+    isFtsOnly,
+    commentMultiplier,
+  );
   const vectorSimilarity = distanceToSimilarity(
     isFtsOnly ? 2 : candidate.distance,
   );
@@ -1015,18 +1282,25 @@ function scoreVectorWorldInfoCandidate(
   const secondaryExactScore = secondaryMatches.exactScore;
   const secondaryPartialScore = secondaryMatches.partialScore;
   const commentExactScore = commentMatches.exactScore;
-  const commentPartialScore = commentMatches.partialScore;
+  const commentPartialScore =
+    commentMatches.partialScore + activeTitleTokenBoost;
   const focusOverlap = getEntryFocusOverlap(entry, queryState);
   const focusBoost = focusOverlap.score * 0.05;
   const priorityScore =
     clamp01((entry.priority || 0) / 100) * preset.weights.priority;
   const vectorScore = vectorSimilarity * preset.weights.vector;
+  const lexicalContentBoostScale = getLexicalContentBoostScale(
+    primaryMatches,
+    secondaryMatches,
+    rawCommentMatches,
+  );
   const lexicalContentBoost =
     candidate.lexical_score != null && candidate.lexical_score > 0
       ? clamp01(Math.log1p(candidate.lexical_score) / Math.log1p(30)) *
         preset.weights.vector *
-        0.35
+        lexicalContentBoostScale
       : 0;
+  const exactTitleAnchorBoost = getExactTitleAnchorBoost(rawCommentMatches);
   const lexicalSpecificityAnchor = Math.max(
     primaryMatches.matchedSpecificity,
     secondaryMatches.matchedSpecificity,
@@ -1094,6 +1368,7 @@ function scoreVectorWorldInfoCandidate(
       secondaryExactScore +
       secondaryPartialScore +
       commentExactScore +
+      exactTitleAnchorBoost +
       commentPartialScore +
       focusBoost +
       priorityScore -
@@ -1116,7 +1391,7 @@ function scoreVectorWorldInfoCandidate(
       primaryPartial: primaryPartialScore,
       secondaryExact: secondaryExactScore,
       secondaryPartial: secondaryPartialScore,
-      commentExact: commentExactScore,
+      commentExact: commentExactScore + exactTitleAnchorBoost,
       commentPartial: commentPartialScore,
       focusBoost,
       priority: priorityScore,
@@ -1140,10 +1415,15 @@ export function rankVectorWorldInfoCandidates(
     topK,
   } = input;
   const preset = getWorldInfoVectorPreset(hybridWeightMode);
-  const hitsBeforeThreshold = pooledCandidates.length;
   const specificityState = buildPhraseSpecificityState(eligibleEntries);
   const queryState = buildVectorQueryLexicalState(queryText, specificityState);
-  const scoredCandidates = pooledCandidates.map(({ entry, candidate }) =>
+  const augmentedCandidates = augmentPooledCandidatesWithExactAnchors(
+    eligibleEntries,
+    pooledCandidates,
+    queryState,
+  );
+  const hitsBeforeThreshold = augmentedCandidates.length;
+  const scoredCandidates = augmentedCandidates.map(({ entry, candidate }) =>
     scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset),
   );
   const thresholdPassed =
