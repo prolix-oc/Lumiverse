@@ -141,6 +141,40 @@ export function registerIterationMacros(): void {
     },
   });
 
+  // ---- map: transform each list item and return a delimited list ----
+  registry.registerMacro({
+    builtIn: true,
+    name: "map",
+    category: "Iteration",
+    description:
+      "Transform each item in a delimited list with a scoped body. " +
+      "Usage: {{map::a,b,c::x}}{{upper::{{.x}}}}{{/map}}. Optional args: loop " +
+      "variable name, input delimiter, output delimiter (default ', ').",
+    returnType: "string",
+    delayArgResolution: true,
+    aliases: ["collect"],
+    handler: async (ctx) => {
+      const parsed = await parseIterArgs(ctx);
+      if (!parsed) return "";
+      const { items, varName } = parsed;
+      if (items.length === 0) return "";
+
+      const outputDelimiter = ctx.rawArgs[3] ? await ctx.resolveNodes(ctx.rawArgs[3]) : ", ";
+      const local = ctx.env.variables.local;
+      const saved = snapshotVars(local, loopKeys(varName));
+      const mapped: string[] = [];
+      try {
+        for (let i = 0; i < items.length; i++) {
+          bindLoopVars(local, varName, items[i], i, items.length);
+          mapped.push((await ctx.resolveNodes(ctx.bodyRaw)).trim());
+        }
+      } finally {
+        restoreVars(local, saved);
+      }
+      return mapped.filter((item) => item !== "").join(outputDelimiter);
+    },
+  });
+
   // ---- filter: keep items whose predicate body is truthy ----
   registry.registerMacro({
     builtIn: true,

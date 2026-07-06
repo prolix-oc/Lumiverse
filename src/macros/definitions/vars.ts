@@ -1,4 +1,5 @@
 import { registry } from "../MacroRegistry";
+import type { MacroExecContext } from "../types";
 
 export function registerVariableMacros(): void {
   // ---- Local Variables ----
@@ -126,6 +127,19 @@ export function registerVariableMacros(): void {
       ctx.env.variables.local.delete(key);
       return "";
     },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "let",
+    category: "Variables",
+    description:
+      "Temporarily bind local variables for a scoped body, then restore previous values. " +
+      "Usage: {{let::name::value::other::value}}...{{/let}}.",
+    returnType: "string",
+    delayArgResolution: true,
+    aliases: ["withVar", "scope"],
+    handler: runLetMacro,
   });
 
   // ---- Global Variables ----
@@ -382,4 +396,39 @@ export function registerVariableMacros(): void {
       return "";
     },
   });
+}
+
+async function runLetMacro(ctx: MacroExecContext): Promise<string> {
+  if (!ctx.isScoped) {
+    ctx.warn("{{let}} needs a body: {{let::name::value}}...{{/let}}");
+    return "";
+  }
+
+  const pairs: [string, string][] = [];
+  for (let i = 0; i + 1 < ctx.rawArgs.length; i += 2) {
+    const key = (await ctx.resolveNodes(ctx.rawArgs[i])).trim();
+    if (!key) continue;
+    const value = await ctx.resolveNodes(ctx.rawArgs[i + 1]);
+    pairs.push([key, value]);
+  }
+
+  if (pairs.length === 0) return await ctx.resolveNodes(ctx.bodyRaw);
+
+  const local = ctx.env.variables.local;
+  const saved = new Map<string, string | undefined>();
+  for (const [key] of pairs) {
+    if (!saved.has(key)) saved.set(key, local.has(key) ? local.get(key) : undefined);
+  }
+
+  try {
+    for (const [key, value] of pairs) {
+      local.set(key, value);
+    }
+    return await ctx.resolveNodes(ctx.bodyRaw);
+  } finally {
+    for (const [key, previous] of saved) {
+      if (previous === undefined) local.delete(key);
+      else local.set(key, previous);
+    }
+  }
 }

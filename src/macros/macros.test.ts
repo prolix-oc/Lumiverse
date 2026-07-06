@@ -420,6 +420,21 @@ describe("if / else", () => {
     const env = makeEnv({ globalVars: { mode: "dark" } });
     expect(await ev("{{if $mode}}has mode{{/if}}", env)).toBe("has mode");
   });
+
+  test("if supports elseif / elif chains", async () => {
+    expect(
+      await ev("{{if::false}}A{{elseif::0}}B{{elseif::yes}}C{{else}}D{{/if}}"),
+    ).toBe("C");
+    expect(
+      await ev("{{if::false}}A{{elif::true}}B{{else}}C{{/if}}"),
+    ).toBe("B");
+  });
+
+  test("unless inverts a condition and supports else", async () => {
+    expect(await ev("{{unless::{{isGroupChat}}}}solo{{else}}group{{/unless}}")).toBe("group");
+    expect(await ev("{{unless::0}}hidden{{else}}shown{{/unless}}")).toBe("hidden");
+    expect(await ev("{{unless::true}}hidden{{else}}shown{{/unless}}")).toBe("shown");
+  });
 });
 
 describe("Variables", () => {
@@ -478,6 +493,15 @@ describe("Variables", () => {
     const env = makeEnv();
     await ev("{{setgvar::theme::dark}}", env);
     expect(await ev("{{getgvar::theme}}", env)).toBe("dark");
+  });
+
+  test("let binds scoped local variables and restores previous values", async () => {
+    const env = makeEnv({ localVars: { name: "outer" } });
+    expect(
+      await ev("{{let::name::inner::role::mage}}{{.name}}/{{.role}}{{/let}}|{{.name}}/{{.role}}", env),
+    ).toBe("inner/mage|outer/");
+    expect(env.variables.local.get("name")).toBe("outer");
+    expect(env.variables.local.has("role")).toBe(false);
   });
 });
 
@@ -1037,6 +1061,22 @@ describe("Logic macros", () => {
     expect(env.variables.chat.has("also_bad")).toBe(false);
   });
 
+  test("scoped switch resolves matching case block only", async () => {
+    const env = makeEnv({ localVars: { mode: "dark" } });
+    const result = await ev(
+      "{{switch::{{.mode}}}}{{case::light}}{{setchatvar::bad::1}}Sun{{/case}}{{case::dark}}Moon{{/case}}{{default}}Star{{/default}}{{/switch}}",
+      env,
+    );
+    expect(result).toBe("Moon");
+    expect(env.variables.chat.has("bad")).toBe(false);
+  });
+
+  test("scoped switch resolves scoped default block", async () => {
+    expect(
+      await ev("{{switch::missing}}{{case::hit}}Hit{{/case}}{{default}}Fallback {{char}}{{/default}}{{/switch}}"),
+    ).toBe("Fallback Bob");
+  });
+
   test("default truthy", async () => {
     expect(await ev("{{default::hello::fallback}}")).toBe("hello");
   });
@@ -1099,6 +1139,15 @@ describe("Logic macros", () => {
     const result = await ev("{{or::yes::{{setchatvar::or_ran::1}}later}}", env);
     expect(result).toBe("true");
     expect(env.variables.chat.has("or_ran")).toBe(false);
+  });
+
+  test("predicate helpers cover blank, numeric, regex, and affixes", async () => {
+    expect(await ev("{{empty::}}/{{empty:: }}")).toBe("true/");
+    expect(await ev("{{blank::   }}")).toBe("true");
+    expect(await ev("{{number::-3.5}}/{{number::nan}}")).toBe("true/");
+    expect(await ev("{{integer::42}}/{{integer::4.2}}")).toBe("true/");
+    expect(await ev("{{matches::The Raven::raven::i}}")).toBe("true");
+    expect(await ev("{{startsWith::foobar::foo}}/{{endsWith::foobar::bar}}")).toBe("true/true");
   });
 
   test("not truthy", async () => {
@@ -2027,6 +2076,23 @@ describe("foreach macro", () => {
     expect(await ev("{{foreach::x,y}}{{.item}}{{/foreach}}|{{.item}}", env)).toBe("xy|");
     expect(env.variables.local.has("item")).toBe(false);
     expect(env.variables.local.has("item_index")).toBe(false);
+  });
+});
+
+describe("map macro", () => {
+  test("transforms list items into a canonical list", async () => {
+    expect(await ev("{{map::a,b,c::x}}{{upper::{{.x}}}}{{/map}}")).toBe("A, B, C");
+  });
+
+  test("supports custom input and output delimiters", async () => {
+    expect(await ev("{{map::a|b|c::x::|:: / }}{{.x_number}}={{.x}}{{/map}}")).toBe(
+      "1=a / 2=b / 3=c",
+    );
+  });
+
+  test("restores map loop variables", async () => {
+    const env = makeEnv({ localVars: { x: "outer" } });
+    expect(await ev("{{map::a,b::x}}{{.x}}{{/map}}|{{.x}}", env)).toBe("a, b|outer");
   });
 });
 
