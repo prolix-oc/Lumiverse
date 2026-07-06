@@ -50,4 +50,62 @@ describe("Dynamic macro recursive expansion", () => {
     const result = await evaluate("{{myFunc}}", env, registry);
     expect(result.text).toBe("Hi Alice");
   });
+
+  test("deep finite dynamic macro chains are not capped at 20 levels", async () => {
+    const macros: Record<string, string> = {};
+    for (let i = 0; i < 32; i++) {
+      macros[`m${i}`] = `{{m${i + 1}}}`;
+    }
+    macros.m32 = "{{user}}";
+
+    const result = await evaluate("{{m0}}", makeEnv(macros), registry);
+    expect(result.text).toBe("Alice");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  test("self-recursive dynamic macro expansion is left unresolved with a diagnostic", async () => {
+    const result = await evaluate("{{loop}}", makeEnv({ loop: "{{loop}}" }), registry);
+
+    expect(result.text).toBe("{{loop}}");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: expect.stringContaining("Recursive macro expansion detected"),
+      }),
+    );
+  });
+
+  test("macro resolution budget stops runaway expansion", async () => {
+    const macros: Record<string, string> = {};
+    for (let i = 0; i < 8; i++) {
+      macros[`m${i}`] = `{{m${i + 1}}}`;
+    }
+    macros.m8 = "{{user}}";
+
+    const result = await evaluate("{{m0}}", makeEnv(macros), registry, {
+      maxMacroResolutions: 4,
+    });
+
+    expect(result.text).toBe("");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        message: "Macro resolution budget exceeded (4)",
+      }),
+    );
+  });
+
+  test("budget halt prevents enclosing and later side-effect macros", async () => {
+    const env = makeEnv({ m0: "{{m1}}", m1: "{{user}}" });
+
+    await evaluate(
+      "{{setvar::x::{{m0}}}}{{setvar::after::yes}}",
+      env,
+      registry,
+      { maxMacroResolutions: 3 },
+    );
+
+    expect(env.variables.local.has("x")).toBe(false);
+    expect(env.variables.local.has("after")).toBe(false);
+  });
 });
