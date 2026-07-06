@@ -21,7 +21,7 @@ import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
-import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
+import { patchWorkflow, type ComfyUIPatchValues, type LoraEntry } from "../image-gen/comfyui-workflow-patch";
 import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
 import type { ImageParameterSchemaMap } from "../image-gen/param-schema";
 import { rawGenerate } from "./generate.service";
@@ -33,11 +33,19 @@ import { scheduleLowPriorityTask } from "../utils/low-priority-task";
 
 // Ensure image gen providers are registered
 import "../image-gen/index";
+export type { LoraEntry } from "../image-gen/comfyui-workflow-patch";
 
 const IMAGE_SETTINGS_KEY = "imageGeneration";
 const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
 const OUTLET_MACRO_RE = /\{\{outlet::/i;
+
+export interface LoraPreset {
+  id: string;
+  name: string;
+  loras: LoraEntry[];
+  base_tags?: string;
+}
 
 async function buildRelayImagePreview(dataUrl: string): Promise<string | undefined> {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -70,6 +78,11 @@ interface ImageGenSettings {
   customNegativePrompt?: string;
   activePromptPresetId?: string | null;
   promptPresets?: ImageGenPromptPreset[];
+  loraPresets?: LoraPreset[];
+  activeLoraPresetId?: string | null;
+  bypassCharacterLora?: boolean;
+  bypassActiveLoraPreset?: boolean;
+  loraStrengthScale?: number;
   promptParserConnectionId?: string | null;
   promptParserModel?: string;
   promptParserParameters?: Record<string, any>;
@@ -120,6 +133,11 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   customNegativePrompt: "",
   activePromptPresetId: null,
   promptPresets: [],
+  loraPresets: [],
+  activeLoraPresetId: null,
+  bypassCharacterLora: false,
+  bypassActiveLoraPreset: false,
+  loraStrengthScale: 1,
   promptParserConnectionId: null,
   promptParserModel: "",
   promptParserParameters: {},
@@ -143,6 +161,12 @@ function resolveContextMessageLimit(settings: ImageGenSettings): number {
   const raw = Number(settings.promptContextMessageLimit);
   if (!Number.isFinite(raw) || raw < 1) return DEFAULT_PROMPT_CONTEXT_MESSAGE_LIMIT;
   return Math.floor(raw);
+}
+
+export function resolveActiveLoraPreset(settings: ImageGenSettings): LoraPreset | null {
+  const activeId = settings.activeLoraPresetId;
+  if (!activeId || !Array.isArray(settings.loraPresets)) return null;
+  return settings.loraPresets.find((preset) => preset.id === activeId) ?? null;
 }
 
 export interface SceneData {
@@ -212,6 +236,9 @@ export interface GenerateImageOptions {
   prompt?: string;
   negativePrompt?: string;
   promptPresetId?: string | null;
+  bypassCharacterLora?: boolean;
+  bypassActiveLoraPreset?: boolean;
+  loraStrengthScale?: number;
   outputTarget?: ImageGenOutputTarget;
   /** Existing message to attach the generated image to (output target = attach_to_message). */
   attachToMessageId?: string;
@@ -363,20 +390,42 @@ export async function generateSceneBackground(
       }
     }
 
-    // Resolve the active chat's character LoRA binding (if any) and weave it
-    // into the prompt + provider params. Done before provider-specific work so
-    // every provider that opts in sees the spliced prompt; only Comfy/Swarm
-    // actually consume the workflow/body LoRA params today.
-    const characterLora = resolveCharacterLoraForChat(userId, chatId);
-    if (characterLora?.base_tags) {
-      promptResult.prompt = composeWithBaseTags(characterLora.base_tags, promptResult.prompt);
+    // Resolve ordered LoRA layers before provider-specific work so every
+    // provider sees the same prompt tags; Comfy/Swarm/SD API consume params.
+    const bypassChar = opts?.bypassCharacterLora ?? settings.bypassCharacterLora ?? false;
+    const bypassPreset = opts?.bypassActiveLoraPreset ?? settings.bypassActiveLoraPreset ?? false;
+    const characterLora = bypassChar ? null : resolveCharacterLoraForChat(userId, chatId);
+    const activePreset = bypassPreset ? null : resolveActiveLoraPreset(settings);
+    let combinedLoras: LoraEntry[] = [
+      ...(activePreset?.loras ?? []),
+      ...(characterLora
+        ? [
+            {
+              lora_name: characterLora.lora_name,
+              weight_model: characterLora.weight_model,
+              weight_clip: characterLora.weight_clip,
+            },
+          ]
+        : []),
+    ];
+    const rawScale = opts?.loraStrengthScale ?? settings.loraStrengthScale ?? 1;
+    const scale = Number.isFinite(rawScale) ? Math.min(2, Math.max(0, rawScale)) : 1;
+    if (scale !== 1) {
+      combinedLoras = combinedLoras.map((entry) => ({
+        ...entry,
+        weight_model: Math.max(0, entry.weight_model * scale),
+        weight_clip: Math.max(0, (entry.weight_clip ?? entry.weight_model) * scale),
+      }));
     }
+
+    const tags = [activePreset?.base_tags, characterLora?.base_tags].filter(Boolean).join(", ");
+    if (tags) promptResult.prompt = composeWithBaseTags(tags, promptResult.prompt);
 
     if (!promptResult.prompt.trim()) throw new Error("Image generation prompt is required");
     if (promptResult.negativePrompt) params.negativePrompt = promptResult.negativePrompt;
 
-    if (characterLora) {
-      applyCharacterLoraToParams(connection.provider, params, characterLora);
+    if (combinedLoras.length > 0) {
+      applyLorasToParams(connection.provider, params, combinedLoras);
     }
 
     // For NovelAI: pre-resolve director reference images (orchestration concern)
@@ -414,7 +463,15 @@ export async function generateSceneBackground(
     }
 
     if (connection.provider === "comfyui" || connection.provider === "swarmui") {
-      await applyComfyUIWorkflowConfig(connection, params, promptResult.prompt, promptResult.negativePrompt, characterLora, apiKey ?? undefined);
+      await applyComfyUIWorkflowConfig(
+        connection,
+        params,
+        promptResult.prompt,
+        promptResult.negativePrompt,
+        combinedLoras,
+        !activePreset,
+        apiKey ?? undefined,
+      );
     }
 
     const generationTimeoutSecs = resolveTimeoutSeconds(opts?.generationTimeoutSeconds, settings.generationTimeoutSeconds ?? 300);
@@ -781,12 +838,23 @@ function resolveAbortReason(signal: AbortSignal): Error | null {
   return signal.aborted && signal.reason instanceof Error ? signal.reason : null;
 }
 
+function isResolvedSourceImage(value: unknown): value is { data: string; mimeType?: string } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "data" in value &&
+    typeof value.data === "string" &&
+    (!("mimeType" in value) || typeof value.mimeType === "string")
+  );
+}
+
 async function applyComfyUIWorkflowConfig(
   connection: ImageGenConnectionProfile,
-  params: Record<string, any>,
+  params: Record<string, unknown>,
   prompt: string,
-  negativePrompt?: string,
-  characterLora?: characterLoraSvc.CharacterLoraBinding | null,
+  negativePrompt: string | undefined,
+  loras: LoraEntry[] | undefined,
+  useLegacySingleLora: boolean,
   apiKey?: string,
 ): Promise<void> {
   if (params.workflow && typeof params.workflow === "object") return;
@@ -816,7 +884,7 @@ async function applyComfyUIWorkflowConfig(
 
   const patchValues: ComfyUIPatchValues = {
     positive_prompt: prompt,
-    negative_prompt: negativePrompt || params.negativePrompt,
+    negative_prompt: negativePrompt || stringParam(params.negativePrompt),
     steps: numberParam(params.steps),
     cfg: numberParam(params.cfg),
     sampler_name: stringParam(params.sampler_name),
@@ -827,10 +895,13 @@ async function applyComfyUIWorkflowConfig(
     custom: customValues,
   };
 
-  if (characterLora) {
-    patchValues.lora_name = characterLora.lora_name;
-    patchValues.lora_strength_model = characterLora.weight_model;
-    patchValues.lora_strength_clip = characterLora.weight_clip;
+  if (useLegacySingleLora && loras && loras.length > 0) {
+    const lora = loras[0];
+    patchValues.lora_name = lora.lora_name;
+    patchValues.lora_strength_model = lora.weight_model;
+    patchValues.lora_strength_clip = lora.weight_clip ?? lora.weight_model;
+  } else if (loras && loras.length > 0) {
+    patchValues.loras = loras;
   }
 
   const extraFieldValues = params.comfyui_field_values;
@@ -851,9 +922,9 @@ async function applyComfyUIWorkflowConfig(
     // mapping without a configured source image is a no-op (the workflow keeps
     // its embedded LoadImage default).
     const sourceImage = Array.isArray(params.resolvedSourceImages)
-      ? params.resolvedSourceImages[0]
+      ? params.resolvedSourceImages.find(isResolvedSourceImage)
       : undefined;
-    if (sourceImage?.data && patchValues.init_image === undefined) {
+    if (sourceImage && patchValues.init_image === undefined) {
       const uploaded = await uploadComfyImage(
         target.baseUrl,
         { data: sourceImage.data, mimeType: sourceImage.mimeType },
@@ -891,34 +962,47 @@ function composeWithBaseTags(baseTags: string, prompt: string): string {
 }
 
 /**
- * Wire the per-character LoRA into provider-specific parameter slots.
- * ComfyUI consumes them via patchWorkflow later in the pipeline; SwarmUI
- * gets `loras` + `loraWeights` body params. Other providers ignore the
- * binding (base tags still apply via the prompt prepend).
+ * Wire ordered LoRA layers into provider-specific parameter slots.
  *
- * Honors user-supplied values: if the connection's default_parameters already
- * specify a LoRA (e.g. for a non-character image gen), the character binding
- * is layered on top via comma-joined parameter strings — SwarmUI accepts
- * multi-LoRA via parallel comma-separated lists.
+ * Honors user-supplied values: existing provider params remain first, then the
+ * active preset entries, then the character binding. SwarmUI accepts parallel
+ * comma-separated lists; SD API consumes a JSON array parsed by its provider.
  */
-function applyCharacterLoraToParams(
+function applyLorasToParams(
   provider: string,
-  params: Record<string, any>,
-  binding: characterLoraSvc.CharacterLoraBinding,
+  params: Record<string, unknown>,
+  loras: LoraEntry[],
 ): void {
+  if (loras.length === 0) return;
+
   if (provider === "swarmui") {
     const existingNames = stringParam(params.loras);
     const existingWeights = stringParam(params.loraWeights);
-    params.loras = existingNames ? `${existingNames},${binding.lora_name}` : binding.lora_name;
-    // SwarmUI requires parallel lists; we use weight_model as the SwarmUI
-    // weight (it has a single strength field, not separate model/clip).
-    params.loraWeights = existingWeights
-      ? `${existingWeights},${binding.weight_model}`
-      : String(binding.weight_model);
+    const names = loras.map((entry) => entry.lora_name).join(",");
+    const weights = loras.map((entry) => String(entry.weight_model)).join(",");
+    params.loras = existingNames ? `${existingNames},${names}` : names;
+    params.loraWeights = existingWeights ? `${existingWeights},${weights}` : weights;
     return;
   }
-  // ComfyUI is handled by applyComfyUIWorkflowConfig which reads the binding
-  // directly. Other providers don't have a LoRA story to wire into.
+
+  if (provider === "sdapi") {
+    let existing: unknown[] = [];
+    if (typeof params.lora === "string" && params.lora.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(params.lora);
+        if (Array.isArray(parsed)) existing = parsed;
+      } catch {
+        existing = [];
+      }
+    } else if (Array.isArray(params.lora)) {
+      existing = params.lora;
+    }
+
+    params.lora = JSON.stringify([
+      ...existing,
+      ...loras.map((entry) => ({ path: entry.lora_name, multiplier: entry.weight_model })),
+    ]);
+  }
 }
 
 function numberParam(value: unknown): number | undefined {
@@ -1787,6 +1871,11 @@ const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string"
   promptGenerationTimeoutSeconds: "number",
   generationTimeoutSeconds: "number",
   promptContextMessageLimit: "number",
+  loraPresets: "object",
+  activeLoraPresetId: "string",
+  bypassCharacterLora: "boolean",
+  bypassActiveLoraPreset: "boolean",
+  loraStrengthScale: "number",
 };
 
 const PROMPT_MODES: ImageGenPromptMode[] = ["scene", "custom", "parsed_custom"];
@@ -1849,9 +1938,10 @@ export function exportImageGenConfig(
 
   if (options?.includeSettings !== false) {
     const transferable: Partial<ImageGenSettings> = {};
-    for (const key of Object.keys(TRANSFERABLE_SETTING_TYPES)) {
-      const value = (settings as any)[key];
-      if (value !== undefined) (transferable as any)[key] = value;
+    for (const [key, value] of Object.entries(settings)) {
+      if (key in TRANSFERABLE_SETTING_TYPES && value !== undefined) {
+        Object.assign(transferable, { [key]: value });
+      }
     }
     // The active preset reference only travels alongside the preset itself.
     if (settings.activePromptPresetId && out.presets?.some((p) => p.id === settings.activePromptPresetId)) {
@@ -1961,17 +2051,54 @@ export async function importImageGenConfig(
 
   const next: ImageGenSettings = { ...current, promptPresets: presets };
   let importedSettings = false;
+  let importedLoraPresets = false;
   if (payload.settings && typeof payload.settings === "object" && !Array.isArray(payload.settings)) {
     for (const [key, type] of Object.entries(TRANSFERABLE_SETTING_TYPES)) {
       const value = payload.settings[key];
+      if (key === "activeLoraPresetId") continue;
+      if (key === "loraStrengthScale") {
+        if (value === undefined) continue;
+        const scale =
+          typeof value === "number" && Number.isFinite(value)
+            ? Math.min(2, Math.max(0, value))
+            : 1;
+        next.loraStrengthScale = scale;
+        importedSettings = true;
+        continue;
+      }
       if (value === undefined || value === null) continue;
+      if (key === "loraPresets") {
+        if (!Array.isArray(value)) {
+          errors.push(`Setting "${key}" has an unexpected value and was skipped`);
+          continue;
+        }
+        const loraPresets: LoraPreset[] = [];
+        for (let i = 0; i < value.length; i++) {
+          const preset = sanitizeLoraPresetForImport(value[i], i, errors);
+          if (preset) loraPresets.push(preset);
+        }
+        next.loraPresets = loraPresets;
+        importedSettings = true;
+        importedLoraPresets = true;
+        continue;
+      }
       if (!isTransferableValue(key, type, value)) {
         errors.push(`Setting "${key}" has an unexpected value and was skipped`);
         continue;
       }
-      (next as any)[key] = value;
+      Object.assign(next, { [key]: value });
       importedSettings = true;
     }
+    if ("activeLoraPresetId" in payload.settings || importedLoraPresets) {
+      const activeLoraPresetId = payload.settings.activeLoraPresetId;
+      next.activeLoraPresetId =
+        typeof activeLoraPresetId === "string" &&
+        (next.loraPresets ?? []).some((preset) => preset.id === activeLoraPresetId)
+          ? activeLoraPresetId
+          : null;
+      importedSettings = true;
+    }
+
     const activeId = payload.settings.activePromptPresetId;
     if (typeof activeId === "string" && presets.some((p) => p.id === activeId && (p.kind ?? "main") === "main")) {
       next.activePromptPresetId = activeId;
@@ -2058,7 +2185,7 @@ export async function importImageGenConfig(
 function isTransferableValue(key: string, type: string, value: unknown): boolean {
   if (key === "promptMode") return PROMPT_MODES.includes(value as ImageGenPromptMode);
   if (key === "outputTarget") return OUTPUT_TARGETS.includes(value as ImageGenOutputTarget);
-  if (type === "object") return typeof value === "object" && !Array.isArray(value);
+  if (type === "object") return value !== null && typeof value === "object" && !Array.isArray(value);
   if (type === "number") return typeof value === "number" && Number.isFinite(value);
   return typeof value === type;
 }
@@ -2088,3 +2215,88 @@ function sanitizePresetForImport(
     kind: PRESET_KINDS.includes(entry.kind) ? entry.kind : "main",
   };
 }
+
+function sanitizeLoraPresetForImport(
+  entry: unknown,
+  index: number,
+  errors: string[],
+): LoraPreset | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    errors.push(`LoRA preset ${index}: not an object`);
+    return null;
+  }
+
+  const name = "name" in entry && typeof entry.name === "string" ? entry.name.trim() : "";
+  if (!name) {
+    errors.push(`LoRA preset ${index}: missing name`);
+    return null;
+  }
+
+  const rawLoras = "loras" in entry ? entry.loras : undefined;
+  if (!Array.isArray(rawLoras)) {
+    errors.push(`LoRA preset ${index}: loras must be an array`);
+    return null;
+  }
+
+  const loras: LoraEntry[] = [];
+  for (let i = 0; i < rawLoras.length; i++) {
+    const lora = sanitizeLoraEntryForImport(rawLoras[i], index, i, errors);
+    if (!lora) return null;
+    loras.push(lora);
+  }
+
+  const preset: LoraPreset = {
+    id: "id" in entry && typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID(),
+    name,
+    loras,
+  };
+  if ("base_tags" in entry && typeof entry.base_tags === "string") preset.base_tags = entry.base_tags;
+  return preset;
+}
+
+function sanitizeLoraEntryForImport(
+  entry: unknown,
+  presetIndex: number,
+  loraIndex: number,
+  errors: string[],
+): LoraEntry | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: not an object`);
+    return null;
+  }
+
+  const loraName = "lora_name" in entry && typeof entry.lora_name === "string" ? entry.lora_name.trim() : "";
+  if (!loraName) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: missing lora_name`);
+    return null;
+  }
+
+  const weightModel = coerceLoraImportWeight(
+    "weight_model" in entry ? entry.weight_model : undefined,
+    1,
+  );
+  if (weightModel === null) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: invalid weight_model`);
+    return null;
+  }
+
+  const lora: LoraEntry = { lora_name: loraName, weight_model: weightModel };
+  if ("weight_clip" in entry && entry.weight_clip !== undefined && entry.weight_clip !== null) {
+    const weightClip = coerceLoraImportWeight(entry.weight_clip);
+    if (weightClip === null) {
+      errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: invalid weight_clip`);
+      return null;
+    }
+    lora.weight_clip = weightClip;
+  }
+  return lora;
+}
+
+function coerceLoraImportWeight(value: unknown, fallback?: number): number | null {
+  if (value === undefined || value === null || value === "") {
+    return fallback === undefined ? null : Math.min(2, Math.max(0, fallback));
+  }
+  const weight = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(weight) ? Math.min(2, Math.max(0, weight)) : null;
+}
+

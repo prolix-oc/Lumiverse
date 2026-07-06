@@ -25,6 +25,34 @@ describe("patchWorkflow — LoRA semantics", () => {
     { nodeId: "10", fieldName: "strength_clip", mappedAs: "lora_strength_clip", autoDetected: true },
   ];
 
+  const multiLoraWorkflow = {
+    "10": {
+      class_type: "LoraLoader",
+      inputs: {
+        lora_name: "embedded-a.safetensors",
+        strength_model: 1.0,
+        strength_clip: 0.9,
+      },
+    },
+    "20": {
+      class_type: "LoraLoader",
+      inputs: {
+        lora_name: "embedded-b.safetensors",
+        strength_model: 0.8,
+        strength_clip: 0.7,
+      },
+    },
+  };
+
+  const multiLoraMappings: ComfyUIFieldMapping[] = [
+    { nodeId: "10", fieldName: "lora_name", mappedAs: "lora_name", autoDetected: true },
+    { nodeId: "10", fieldName: "strength_model", mappedAs: "lora_strength_model", autoDetected: true },
+    { nodeId: "10", fieldName: "strength_clip", mappedAs: "lora_strength_clip", autoDetected: true },
+    { nodeId: "20", fieldName: "lora_name", mappedAs: "lora_name", autoDetected: true },
+    { nodeId: "20", fieldName: "strength_model", mappedAs: "lora_strength_model", autoDetected: true },
+    { nodeId: "20", fieldName: "strength_clip", mappedAs: "lora_strength_clip", autoDetected: true },
+  ];
+
   test("writes lora_name/strengths into LoraLoader inputs", () => {
     const patched = patchWorkflow(baseWorkflow, mappings, {
       positive_prompt: "a portrait",
@@ -38,6 +66,96 @@ describe("patchWorkflow — LoRA semantics", () => {
     expect(patched["3"].inputs.text).toBe("a portrait");
   });
 
+  test("writes ordered lora entries into multiple LoraLoader nodes", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {
+      loras: [
+        { lora_name: "first.safetensors", weight_model: 0.45, weight_clip: 0.35 },
+        { lora_name: "second.safetensors", weight_model: 0.75, weight_clip: 0.65 },
+      ],
+    });
+
+    expect(patched["10"].inputs.lora_name).toBe("first.safetensors");
+    expect(patched["10"].inputs.strength_model).toBe(0.45);
+    expect(patched["10"].inputs.strength_clip).toBe(0.35);
+    expect(patched["20"].inputs.lora_name).toBe("second.safetensors");
+    expect(patched["20"].inputs.strength_model).toBe(0.75);
+    expect(patched["20"].inputs.strength_clip).toBe(0.65);
+  });
+
+  test("skips missing mapped LoRA nodes without consuming ordered lora entries", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, [
+      { nodeId: "999", fieldName: "lora_name", mappedAs: "lora_name", autoDetected: true },
+      ...multiLoraMappings,
+    ], {
+      loras: [
+        { lora_name: "first.safetensors", weight_model: 0.45, weight_clip: 0.35 },
+        { lora_name: "second.safetensors", weight_model: 0.75, weight_clip: 0.65 },
+      ],
+    });
+
+    expect(patched["10"].inputs.lora_name).toBe("first.safetensors");
+    expect(patched["10"].inputs.strength_model).toBe(0.45);
+    expect(patched["10"].inputs.strength_clip).toBe(0.35);
+    expect(patched["20"].inputs.lora_name).toBe("second.safetensors");
+    expect(patched["20"].inputs.strength_model).toBe(0.75);
+    expect(patched["20"].inputs.strength_clip).toBe(0.65);
+    expect(patched["999"]).toBeUndefined();
+  });
+
+  test("drops extra lora entries beyond the mapped LoraLoader nodes", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {
+      loras: [
+        { lora_name: "kept-a.safetensors", weight_model: 0.2, weight_clip: 0.25 },
+        { lora_name: "kept-b.safetensors", weight_model: 0.4, weight_clip: 0.45 },
+        { lora_name: "dropped.safetensors", weight_model: 0.9, weight_clip: 0.95 },
+      ],
+    });
+
+    expect(patched["10"].inputs.lora_name).toBe("kept-a.safetensors");
+    expect(patched["10"].inputs.strength_model).toBe(0.2);
+    expect(patched["10"].inputs.strength_clip).toBe(0.25);
+    expect(patched["20"].inputs.lora_name).toBe("kept-b.safetensors");
+    expect(patched["20"].inputs.strength_model).toBe(0.4);
+    expect(patched["20"].inputs.strength_clip).toBe(0.45);
+  });
+
+  test("leaves extra mapped LoRA nodes embedded when fewer lora entries are provided", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {
+      loras: [{ lora_name: "only.safetensors", weight_model: 0.55 }],
+      lora_name: "legacy-should-not-fill.safetensors",
+      lora_strength_model: 0.1,
+      lora_strength_clip: 0.1,
+    });
+
+    expect(patched["10"].inputs.lora_name).toBe("only.safetensors");
+    expect(patched["10"].inputs.strength_model).toBe(0.55);
+    expect(patched["10"].inputs.strength_clip).toBe(0.55);
+    expect(patched["20"].inputs.lora_name).toBe("embedded-b.safetensors");
+    expect(patched["20"].inputs.strength_model).toBe(0.8);
+    expect(patched["20"].inputs.strength_clip).toBe(0.7);
+  });
+
+  test("keeps legacy lora fields applying to every mapped LoraLoader node", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {
+      lora_name: "legacy.safetensors",
+      lora_strength_model: 0.33,
+      lora_strength_clip: 0.22,
+    });
+
+    expect(patched["10"].inputs.lora_name).toBe("legacy.safetensors");
+    expect(patched["10"].inputs.strength_model).toBe(0.33);
+    expect(patched["10"].inputs.strength_clip).toBe(0.22);
+    expect(patched["20"].inputs.lora_name).toBe("legacy.safetensors");
+    expect(patched["20"].inputs.strength_model).toBe(0.33);
+    expect(patched["20"].inputs.strength_clip).toBe(0.22);
+  });
+
+  test("leaves the workflow untouched when no lora values are provided", () => {
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {});
+
+    expect(patched).toEqual(multiLoraWorkflow);
+  });
+
   test("leaves workflow values untouched when LoRA values are absent", () => {
     const patched = patchWorkflow(baseWorkflow, mappings, {
       positive_prompt: "a portrait",
@@ -48,13 +166,15 @@ describe("patchWorkflow — LoRA semantics", () => {
   });
 
   test("does not mutate the original workflow", () => {
-    const before = JSON.parse(JSON.stringify(baseWorkflow));
-    patchWorkflow(baseWorkflow, mappings, {
-      lora_name: "other.safetensors",
-      lora_strength_model: 0.3,
-      lora_strength_clip: 0.3,
+    const before = JSON.parse(JSON.stringify(multiLoraWorkflow));
+    const patched = patchWorkflow(multiLoraWorkflow, multiLoraMappings, {
+      loras: [{ lora_name: "other.safetensors", weight_model: 0.3, weight_clip: 0.3 }],
     });
-    expect(baseWorkflow).toEqual(before);
+
+    expect(multiLoraWorkflow).toEqual(before);
+    expect(patched).not.toBe(multiLoraWorkflow);
+    expect(patched["10"]).not.toBe(multiLoraWorkflow["10"]);
+    expect(patched["10"].inputs).not.toBe(multiLoraWorkflow["10"].inputs);
   });
 
   test("ignores mappings pointing at non-existent nodes without throwing", () => {

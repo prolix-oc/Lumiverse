@@ -14,6 +14,7 @@ import { snapRangeValue } from '@/components/shared/rangeSliderMath'
 import { useTouchActivate } from '@/hooks/useTouchActivate'
 import ModelCombobox from './connection-manager/ModelCombobox'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
+import SearchableSelect from '@/components/shared/SearchableSelect'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
@@ -26,13 +27,59 @@ import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/lib/co
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
-import type { ImageGenPromptPreset } from '@/types/store'
+import type { ImageGenPromptPreset, LoraEntry, LoraPreset } from '@/types/store'
 import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
 const DEFAULT_PROMPT_TIMEOUT_SECONDS = 60
 const DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS = 300
+const LORA_WEIGHT_MIN = 0
+const LORA_WEIGHT_MAX = 1.5
+const LORA_WEIGHT_STEP = 0.05
+const LORA_DEFAULT_WEIGHT = 1
+const LORA_STRENGTH_SCALE_MIN = 0
+const LORA_STRENGTH_SCALE_MAX = 2
+const LORA_STRENGTH_SCALE_STEP = 0.05
+const EMPTY_LORA_PRESETS: LoraPreset[] = []
+
+type DraftLoraEntry = {
+  lora_name: string
+  weight_model: string
+  weight_clip: string
+}
+
+type LoraModelOption = {
+  id: string
+  label: string
+}
+
+type LoraDiscoveryState = 'idle' | 'loading' | 'ready' | 'error'
+
+
+function loraPresetToDraft(preset: LoraPreset | null): DraftLoraEntry[] {
+  return preset?.loras.map((lora) => {
+    const weightModel = Number.isFinite(lora.weight_model) ? String(lora.weight_model) : String(LORA_DEFAULT_WEIGHT)
+    const weightClipFallback = Number.isFinite(lora.weight_model) ? lora.weight_model : LORA_DEFAULT_WEIGHT
+    return {
+      lora_name: lora.lora_name,
+      weight_model: weightModel,
+      weight_clip: lora.weight_clip === undefined ? '' : String(Number.isFinite(lora.weight_clip) ? lora.weight_clip : weightClipFallback),
+    }
+  }) ?? []
+}
+
+function parseDraftLoraWeight(value: string): number | null {
+  if (!value.trim()) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return snapRangeValue(parsed, {
+    min: LORA_WEIGHT_MIN,
+    max: LORA_WEIGHT_MAX,
+    step: LORA_WEIGHT_STEP,
+  })
+}
+
 
 function normalizeTimeoutSeconds(value: string, fallback: number): number {
   const parsed = Number(value)
@@ -397,6 +444,13 @@ export default function ImageGenPanel() {
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
   const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
+  const [loraPresetName, setLoraPresetName] = useState('')
+  const [draftLoras, setDraftLoras] = useState<DraftLoraEntry[]>([])
+  const [draftLoraBaseTags, setDraftLoraBaseTags] = useState('')
+  const [loadedLoraPresetId, setLoadedLoraPresetId] = useState<string | null>(null)
+  const [confirmDeleteLoraPreset, setConfirmDeleteLoraPreset] = useState(false)
+  const [availableLoras, setAvailableLoras] = useState<LoraModelOption[]>([])
+  const [loraDiscoveryState, setLoraDiscoveryState] = useState<LoraDiscoveryState>('idle')
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -433,6 +487,7 @@ export default function ImageGenPanel() {
   const providerName = activeConnection?.provider || ''
   const isComfyUI = providerName === 'comfyui'
 
+  const supportsLoraDiscovery = !!activeConnection && (activeConnection.provider === 'comfyui' || activeConnection.provider === 'swarmui')
   const comfyCustomControls = useMemo(() => {
     if (!isComfyUI || !workflowConfig) return []
     return buildMappedFieldControls(workflowConfig, workflowCapabilities)
@@ -468,6 +523,33 @@ export default function ImageGenPanel() {
   useEffect(() => {
     void refreshActiveComfyWorkflow()
   }, [refreshActiveComfyWorkflow])
+
+  useEffect(() => {
+    if (!supportsLoraDiscovery || !activeConnection) {
+      setAvailableLoras([])
+      setLoraDiscoveryState('idle')
+      return
+    }
+
+    let cancelled = false
+    setLoraDiscoveryState('loading')
+    imageGenConnectionsApi
+      .modelsBySubtype(activeConnection.id, 'loras')
+      .then((res) => {
+        if (cancelled) return
+        setAvailableLoras(res.models.map((model) => ({ id: model.id, label: model.label })))
+        setLoraDiscoveryState('ready')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAvailableLoras([])
+        setLoraDiscoveryState('error')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [supportsLoraDiscovery, activeConnection?.id])
 
   const refreshActiveImageGenConnection = useCallback(async () => {
     if (!activeConnection) return
@@ -573,6 +655,7 @@ export default function ImageGenPanel() {
   const characterPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'character'), [promptPresets])
   const personaPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'persona'), [promptPresets])
   const captioningPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'captioning'), [promptPresets])
+  const loraPresets = imageGeneration.loraPresets ?? EMPTY_LORA_PRESETS
 
   // Load this character's bound preset whenever the active character changes.
   useEffect(() => {
@@ -619,6 +702,11 @@ export default function ImageGenPanel() {
     [loadedPresetId, promptPresets],
   )
 
+  const loadedLoraPreset = useMemo(
+    () => (loadedLoraPresetId ? loraPresets.find((p) => p.id === loadedLoraPresetId) ?? null : null),
+    [loadedLoraPresetId, loraPresets],
+  )
+
   // Re-hydrate the editor textareas whenever the edit target (or its bindings)
   // changes. For main, the editor mirrors the live customPrompt; for
   // character/persona, it mirrors the bound preset (or stays blank).
@@ -650,6 +738,15 @@ export default function ImageGenPanel() {
     // the 'main' target. Re-running on every keystroke would clobber the draft.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editTarget, imageGeneration.activePromptPresetId, characterPresetId, personaPresetId, promptPresets])
+
+  useEffect(() => {
+    const activeId = imageGeneration.activeLoraPresetId || null
+    const preset = activeId ? loraPresets.find((p) => p.id === activeId) ?? null : null
+    setLoadedLoraPresetId(preset?.id ?? null)
+    setDraftLoras(loraPresetToDraft(preset))
+    setDraftLoraBaseTags(preset?.base_tags ?? '')
+    setLoraPresetName('')
+  }, [imageGeneration.activeLoraPresetId, loraPresets])
 
   // Mirror the Loom builder pattern: ship the full backend macro catalog into
   // the expandable editor so users can browse/insert macros that work inside
@@ -865,6 +962,118 @@ export default function ImageGenPanel() {
     setImageGenSettings,
   ])
 
+  const updateDraftLora = useCallback((index: number, patch: Partial<DraftLoraEntry>) => {
+    setDraftLoras((current) => current.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))
+  }, [])
+
+  const addDraftLora = useCallback(() => {
+    setDraftLoras((current) => [...current, { lora_name: '', weight_model: String(LORA_DEFAULT_WEIGHT), weight_clip: '' }])
+  }, [])
+
+  const removeDraftLora = useCallback((index: number) => {
+    setDraftLoras((current) => current.filter((_, i) => i !== index))
+  }, [])
+
+  const pickLoraPreset = useCallback((presetId: string | null) => {
+    if (!presetId) {
+      setLoadedLoraPresetId(null)
+      setDraftLoras([])
+      setDraftLoraBaseTags('')
+      setLoraPresetName('')
+      setImageGenSettings({ activeLoraPresetId: null })
+      return
+    }
+
+    const preset = loraPresets.find((p) => p.id === presetId)
+    if (!preset) return
+
+    setLoadedLoraPresetId(preset.id)
+    setDraftLoras(loraPresetToDraft(preset))
+    setDraftLoraBaseTags(preset.base_tags ?? '')
+    setLoraPresetName('')
+    setImageGenSettings({ activeLoraPresetId: preset.id })
+  }, [loraPresets, setImageGenSettings])
+
+  const saveLoraPreset = useCallback(() => {
+    const loraNames = draftLoras.map((draft) => draft.lora_name.trim())
+    if (!loraNames.some(Boolean)) {
+      toast.error(t('imageGenPanel.pickLoraBeforeSave'))
+      return
+    }
+
+    if (loraNames.some((loraName) => !loraName)) {
+      toast.error(t('imageGenPanel.pickLoraFilenameBeforeSave'))
+      return
+    }
+
+    const nextLoras: LoraEntry[] = []
+
+    for (const [index, draft] of draftLoras.entries()) {
+      const loraName = loraNames[index] ?? ''
+      const weightModel = parseDraftLoraWeight(draft.weight_model)
+      const weightClip = parseDraftLoraWeight(draft.weight_clip)
+      if (weightModel === null || (draft.weight_clip.trim() && weightClip === null)) {
+        toast.error(t('imageGenPanel.loraWeightsMustBeNumbers'))
+        return
+      }
+
+      const entry: LoraEntry = {
+        lora_name: loraName,
+        weight_model: weightModel,
+      }
+      if (draft.weight_clip.trim()) entry.weight_clip = weightClip ?? weightModel
+      nextLoras.push(entry)
+    }
+
+    if (nextLoras.length === 0) {
+      toast.error(t('imageGenPanel.pickLoraBeforeSave'))
+      return
+    }
+
+    const existingId = loadedLoraPresetId
+    const nextPreset: LoraPreset = {
+      id: existingId || uuidv7(),
+      name: loraPresetName.trim() || loadedLoraPreset?.name || t('imageGenPanel.loraPresetsSection'),
+      loras: nextLoras,
+      base_tags: draftLoraBaseTags.trim() || undefined,
+    }
+    const next = existingId
+      ? loraPresets.map((preset) => (preset.id === existingId ? nextPreset : preset))
+      : [...loraPresets, nextPreset]
+
+    setImageGenSettings({
+      loraPresets: next,
+      activeLoraPresetId: nextPreset.id,
+    })
+    setLoadedLoraPresetId(nextPreset.id)
+    setLoraPresetName('')
+    toast.success(t('imageGenPanel.loraPresetSaved'))
+  }, [
+    draftLoraBaseTags,
+    draftLoras,
+    loadedLoraPreset,
+    loadedLoraPresetId,
+    loraPresetName,
+    loraPresets,
+    setImageGenSettings,
+    t,
+  ])
+
+  const deleteLoraPreset = useCallback(() => {
+    if (!loadedLoraPresetId) return
+    setConfirmDeleteLoraPreset(false)
+    const id = loadedLoraPresetId
+    const next = loraPresets.filter((preset) => preset.id !== id)
+    setImageGenSettings({
+      loraPresets: next,
+      activeLoraPresetId: imageGeneration.activeLoraPresetId === id ? null : imageGeneration.activeLoraPresetId ?? null,
+    })
+    setLoadedLoraPresetId(null)
+    setDraftLoras([])
+    setDraftLoraBaseTags('')
+    setLoraPresetName('')
+  }, [imageGeneration.activeLoraPresetId, loadedLoraPresetId, loraPresets, setImageGenSettings])
+
   const handleImportConfigFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -910,6 +1119,9 @@ export default function ImageGenPanel() {
     negativePrompt: string
     promptPresetId: string | null
     outputTarget: 'background' | 'chat_attachment' | 'preview' | 'attach_to_message'
+    bypassCharacterLora?: boolean
+    bypassActiveLoraPreset?: boolean
+    loraStrengthScale?: number
     attachToMessageId?: string
     skipParse?: boolean
   }) => {
@@ -925,6 +1137,9 @@ export default function ImageGenPanel() {
         negativePrompt: input.negativePrompt,
         promptPresetId: input.promptPresetId,
         outputTarget: input.outputTarget,
+        bypassCharacterLora: input.bypassCharacterLora,
+        bypassActiveLoraPreset: input.bypassActiveLoraPreset,
+        loraStrengthScale: input.loraStrengthScale,
         attachToMessageId: input.attachToMessageId,
         skipParse: input.skipParse,
         clientJobId: jobId,
@@ -996,6 +1211,9 @@ export default function ImageGenPanel() {
       negativePrompt: liveNegative,
       promptPresetId,
       outputTarget,
+      bypassCharacterLora: !!imageGeneration.bypassCharacterLora,
+      bypassActiveLoraPreset: !!imageGeneration.bypassActiveLoraPreset,
+      loraStrengthScale: imageGeneration.loraStrengthScale,
       attachToMessageId,
     }
 
@@ -1083,6 +1301,29 @@ export default function ImageGenPanel() {
     { value: '', label: 'No captioning preset' },
     ...captioningPresets.map((p) => ({ value: p.id, label: p.name })),
   ], [captioningPresets])
+
+  const loraPresetOptions = useMemo(() => [
+    { value: '', label: t('imageGenPanel.noActiveLoraPreset') },
+    ...loraPresets.map((preset) => ({ value: preset.id, label: preset.name })),
+  ], [loraPresets, t])
+
+  const loraFilenameOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const manualOptions: { value: string; label: string; sublabel?: string }[] = []
+    const discoveredOptions: { value: string; label: string; sublabel?: string }[] = []
+    for (const lora of availableLoras) {
+      if (seen.has(lora.id)) continue
+      seen.add(lora.id)
+      discoveredOptions.push({ value: lora.id, label: lora.label, sublabel: lora.id })
+    }
+    for (const draft of draftLoras) {
+      const value = draft.lora_name.trim()
+      if (!value || seen.has(value)) continue
+      seen.add(value)
+      manualOptions.push({ value, label: value })
+    }
+    return [...manualOptions, ...discoveredOptions]
+  }, [availableLoras, draftLoras])
 
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
@@ -1333,6 +1574,132 @@ export default function ImageGenPanel() {
               </>
             )}
 
+          </EditorSection>
+
+          <EditorSection title={t('imageGenPanel.loraPresetsSection')} Icon={IconBrush} defaultExpanded={false}>
+            <FormField label={t('imageGenPanel.activeLoraPreset')} hint={t('imageGenPanel.loraPresetHint')}>
+              <Select
+                value={imageGeneration.activeLoraPresetId || ''}
+                onChange={(value) => pickLoraPreset(value || null)}
+                options={loraPresetOptions}
+              />
+            </FormField>
+
+            <div className={styles.loraRows}>
+              {draftLoras.map((row, index) => (
+                <div key={index} className={styles.loraRow}>
+                  <div className={styles.loraRowHeader}>
+                    <span className={styles.loraRowTitle}>{t('imageGenPanel.loraEntry')} {index + 1}</span>
+                    <Button
+                      variant="danger-ghost"
+                      size="icon-sm"
+                      icon={<Trash2 size={14} />}
+                      onClick={() => removeDraftLora(index)}
+                      aria-label={t('imageGenPanel.removeLora')}
+                    />
+                  </div>
+
+                  <FormField label={t('imageGenPanel.loraFilename')}>
+                    <div className={styles.loraFilenameControls}>
+                      {supportsLoraDiscovery && (
+                        <SearchableSelect
+                          value={row.lora_name}
+                          onChange={(value) => updateDraftLora(index, { lora_name: value })}
+                          options={loraFilenameOptions}
+                          placeholder={t('imageGenPanel.loraFilenamePlaceholder')}
+                          searchPlaceholder={t('imageGenPanel.loraFilenamePlaceholder')}
+                          emptyMessage={t('imageGenPanel.noModelsFound')}
+                          portal
+                          minWidth={320}
+                          clearable
+                          disabled={loraDiscoveryState === 'loading'}
+                        />
+                      )}
+                      <TextInput
+                        value={row.lora_name}
+                        onChange={(value) => updateDraftLora(index, { lora_name: value })}
+                        placeholder={t('imageGenPanel.loraFilenamePlaceholder')}
+                      />
+                    </div>
+                  </FormField>
+
+                  <div className={styles.loraWeightGrid}>
+                    <FormField label={t('imageGenPanel.weightModel')}>
+                      <TextInput
+                        type="number"
+                        min={LORA_WEIGHT_MIN}
+                        max={LORA_WEIGHT_MAX}
+                        step={LORA_WEIGHT_STEP}
+                        value={row.weight_model}
+                        onChange={(value) => updateDraftLora(index, { weight_model: value })}
+                        placeholder={String(LORA_DEFAULT_WEIGHT)}
+                      />
+                    </FormField>
+                    <FormField label={t('imageGenPanel.weightClip')}>
+                      <TextInput
+                        type="number"
+                        min={LORA_WEIGHT_MIN}
+                        max={LORA_WEIGHT_MAX}
+                        step={LORA_WEIGHT_STEP}
+                        value={row.weight_clip}
+                        onChange={(value) => updateDraftLora(index, { weight_clip: value })}
+                        placeholder={row.weight_model || String(LORA_DEFAULT_WEIGHT)}
+                      />
+                    </FormField>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Button variant="secondary" size="sm" icon={<Plus size={14} />} onClick={addDraftLora}>
+              {t('imageGenPanel.addLora')}
+            </Button>
+
+            <FormField label={t('imageGenPanel.baseTags')} hint={t('imageGenPanel.baseTagsHint')}>
+              <ExpandableTextarea
+                className={styles.promptTextarea}
+                value={draftLoraBaseTags}
+                onChange={setDraftLoraBaseTags}
+                title={t('imageGenPanel.baseTags')}
+                placeholder={t('imageGenPanel.baseTags')}
+                rows={3}
+                macros={availableMacros}
+                onRefreshMacros={refreshMacros}
+              />
+            </FormField>
+
+            <div className={styles.inlineRow}>
+              <TextInput
+                value={loraPresetName}
+                onChange={setLoraPresetName}
+                placeholder={loadedLoraPreset ? t('imageGenPanel.renamePreset', { name: loadedLoraPreset.name }) : t('imageGenPanel.newLoraPresetName')}
+              />
+              <Button variant="secondary" size="sm" onClick={saveLoraPreset}>
+                {t('imageGenPanel.saveLoraPreset')}
+              </Button>
+              {loadedLoraPresetId && (
+                <Button variant="danger" size="sm" onClick={() => setConfirmDeleteLoraPreset(true)}>
+                  {t('imageGenPanel.deleteLoraPreset')}
+                </Button>
+              )}
+            </div>
+
+            {confirmDeleteLoraPreset && (
+              <ConfirmationModal
+                isOpen={true}
+                title={t('imageGenPanel.deleteLoraPresetConfirmTitle')}
+                message={t('imageGenPanel.deleteLoraPresetConfirmMessage', { name: loadedLoraPreset?.name })}
+                variant="danger"
+                confirmText={t('imageGenPanel.deleteLoraPreset')}
+                onConfirm={deleteLoraPreset}
+                onCancel={() => setConfirmDeleteLoraPreset(false)}
+              />
+            )}
+            {loadedLoraPreset && (
+              <div className={styles.editorTargetBanner}>
+                {t('imageGenPanel.editing')} <strong>{loadedLoraPreset.name}</strong>
+              </div>
+            )}
           </EditorSection>
 
           {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (
@@ -1621,6 +1988,31 @@ export default function ImageGenPanel() {
           )}
 
           <input ref={refInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onRefFiles} />
+
+          <EditorSection title={t('imageGenPanel.loraControls')} Icon={Settings2} defaultExpanded={false}>
+            <ToggleRow
+              checked={!!imageGeneration.bypassCharacterLora}
+              onChange={(checked) => updateTop({ bypassCharacterLora: checked })}
+              label={t('imageGenPanel.bypassCharacterLora')}
+              hint={t('imageGenPanel.bypassCharacterLoraHint')}
+            />
+            <ToggleRow
+              checked={!!imageGeneration.bypassActiveLoraPreset}
+              onChange={(checked) => updateTop({ bypassActiveLoraPreset: checked })}
+              label={t('imageGenPanel.bypassActiveLoraPreset')}
+              hint={t('imageGenPanel.bypassActiveLoraPresetHint')}
+            />
+            <LabeledRangeSlider
+              label={t('imageGenPanel.loraStrengthScale')}
+              hint={t('imageGenPanel.loraStrengthScaleHint')}
+              min={LORA_STRENGTH_SCALE_MIN}
+              max={LORA_STRENGTH_SCALE_MAX}
+              step={LORA_STRENGTH_SCALE_STEP}
+              value={imageGeneration.loraStrengthScale ?? 1}
+              formatValue={(value) => value.toFixed(2).replace(/\.?0+$/, '')}
+              onCommit={(value) => updateTop({ loraStrengthScale: value })}
+            />
+          </EditorSection>
 
           <EditorSection title={t('imageGenPanel.sceneSettings')} Icon={IconBrush}>
             <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharactersPersona')} hint={t('imageGenPanel.includeCharactersPersonaHint')} />

@@ -714,6 +714,11 @@ export interface ImageGenSettings {
   customNegativePrompt?: string
   activePromptPresetId?: string | null
   promptPresets?: ImageGenPromptPreset[]
+  loraPresets?: LoraPreset[]
+  activeLoraPresetId?: string | null
+  bypassCharacterLora?: boolean
+  bypassActiveLoraPreset?: boolean
+  loraStrengthScale?: number
   promptParserConnectionId?: string | null
   promptParserModel?: string
   promptParserParameters?: Record<string, any>
@@ -756,6 +761,19 @@ export interface ImageGenPromptPreset {
   parserParameters?: Record<string, any>
   /** Whether the preset is intended as a main scene preset or a per-character snippet. Legacy entries are treated as 'main'. */
   kind?: ImageGenPresetKind
+}
+
+export interface LoraEntry {
+  lora_name: string
+  weight_model: number
+  weight_clip?: number
+}
+
+export interface LoraPreset {
+  id: string
+  name: string
+  loras: LoraEntry[]
+  base_tags?: string
 }
 
 // ---- Spindle Slice ----

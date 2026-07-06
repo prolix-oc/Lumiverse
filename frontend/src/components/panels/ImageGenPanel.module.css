@@ -88,6 +88,52 @@
   flex: 1;
 }
 
+.loraRows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.loraRow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.loraRowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loraRowTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+
+.loraFilenameControls {
+  display: grid;
+  gap: 8px;
+}
+
+.loraWeightGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .loraWeightGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .error {
   padding: 10px;
   border-radius: 8px;
