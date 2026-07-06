@@ -212,6 +212,8 @@ interface GenerationLifecycle {
   model?: string;
   providerName?: string;
   presetName?: string;
+  /** Resolved preset id */
+  presetId?: string;
   /** Max context from connection parameters (for breakdown display) */
   maxContext?: number;
   /** Council named results (for expression detection and other post-generation hooks) */
@@ -2715,7 +2717,10 @@ export async function startGeneration(
         const presetId = input.preset_id || connection.preset_id;
         if (presetId) {
           const preset = presetsSvc.getPreset(input.userId, presetId);
-          if (preset) lifecycle.presetName = preset.name;
+          if (preset) {
+            lifecycle.presetName = preset.name;
+            lifecycle.presetId = presetId;
+          }
         }
 
         // Final abort checkpoint between assembly completion and runGeneration
@@ -3908,6 +3913,7 @@ async function runGeneration(
               parameters,
               usage: streamUsage,
               presetName: lifecycle.presetName,
+              presetId: lifecycle.presetId,
               tokenizer_name: tokenResult.tokenizer_name,
             };
             if (messageId) {

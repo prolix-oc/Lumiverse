@@ -40,6 +40,30 @@ export function buildSlug(creator: string, name: string): string {
 /** @deprecated Use buildSlug instead */
 export const buildCharacterSlug = buildSlug;
 
+export interface PresetSlugInfo {
+  /** Canonical hub slug */
+  slug: string;
+  creator: string;
+  version?: string;
+}
+
+/**
+ * Resolve a preset's canonical LumiHub slug from its metadata.
+ */
+export function resolvePresetSlug(metadata: Record<string, any> | undefined, name: string): PresetSlugInfo {
+  const md = metadata || {};
+  const storedSlug = typeof md._lumiverse_preset_slug === "string" ? md._lumiverse_preset_slug : null;
+  const creator =
+    typeof md._lumiverse_preset_creator === "string" && md._lumiverse_preset_creator
+      ? md._lumiverse_preset_creator
+      : storedSlug
+        ? storedSlug.split("/")[0]
+        : "unknown";
+  const slug = storedSlug || buildSlug(creator, name);
+  const version = typeof md._lumiverse_preset_version === "string" ? md._lumiverse_preset_version : undefined;
+  return { slug, creator, version };
+}
+
 /**
  * Build the full install manifest for a user.
  * Returns a lightweight array suitable for syncing to LumiHub.
@@ -85,15 +109,7 @@ export function buildInstallManifest(userId: string): ManifestEntry[] {
   for (const pr of presets) {
     const md = pr.metadata || {};
     const source = md._lumiverse_install_source as string | undefined;
-    const storedSlug = typeof md._lumiverse_preset_slug === "string" ? md._lumiverse_preset_slug : null;
-    const creator =
-      typeof md._lumiverse_preset_creator === "string" && md._lumiverse_preset_creator
-        ? md._lumiverse_preset_creator
-        : storedSlug
-          ? storedSlug.split("/")[0]
-          : "unknown";
-    const slug = storedSlug || buildSlug(creator, pr.name);
-    const version = typeof md._lumiverse_preset_version === "string" ? md._lumiverse_preset_version : undefined;
+    const { slug, creator, version } = resolvePresetSlug(md, pr.name);
     entries.push({
       slug,
       type: "preset",

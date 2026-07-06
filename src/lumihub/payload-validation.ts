@@ -114,6 +114,9 @@ export function validateInstallWorldbookPayload(
   if (!isString(raw.worldbookName, 512)) {
     return { ok: false, error: "worldbookName must be a string ≤512 chars" };
   }
+  if (raw.worldbookCreator !== undefined && !isString(raw.worldbookCreator, 256)) {
+    return { ok: false, error: "worldbookCreator must be a string ≤256 chars" };
+  }
 
   if (raw.worldbookData !== undefined) {
     if (!isPlainObject(raw.worldbookData)) {
