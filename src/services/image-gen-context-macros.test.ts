@@ -4,9 +4,11 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { initMacros } from "../macros";
 import * as charactersSvc from "./characters.service";
 import * as chatsSvc from "./chats.service";
+import * as worldBooksSvc from "./world-books.service";
 import * as personasSvc from "./personas.service";
 import * as settingsSvc from "./settings.service";
 import { buildContextMessages, getImageGenSettings } from "./image-gen.service";
+import { setCharacterWorldBookIds } from "../utils/character-world-books";
 
 const USER_ID = "image-gen-context-macros-user";
 
@@ -165,5 +167,71 @@ describe("image-gen parser context macro resolution", () => {
     const assistant = messages.find((message) => message.role === "assistant");
 
     expect(assistant?.content).toBe("The wind blows.");
+  });
+
+  test("resolves world-info outlet macros before building parser context", async () => {
+    const OUTLET_CONTENT = "Secret lore: the amulet glows blue at dusk.";
+    const book = worldBooksSvc.createWorldBook(USER_ID, { name: "Lore Book" });
+    const entry = worldBooksSvc.createEntry(USER_ID, book.id, {
+      key: ["lore"],
+      content: OUTLET_CONTENT,
+      comment: "constant lore outlet",
+      constant: true,
+      outlet_name: "lore",
+    });
+    if (!entry) throw new Error("Failed to create world-book entry");
+
+    const character = charactersSvc.createCharacter(USER_ID, {
+      name: "TestChar",
+      first_mes: `Greetings, traveler. {{outlet::lore}}`,
+      extensions: setCharacterWorldBookIds({}, [book.id]),
+    });
+    const outletChatId = chatsSvc.createChat(USER_ID, { character_id: character.id }).id;
+
+    settingsSvc.putSetting(USER_ID, "imageGeneration", {
+      includeCharacters: false,
+      promptContextMessageLimit: 3,
+    });
+
+    const messages = await buildContextMessages(USER_ID, outletChatId, getImageGenSettings(USER_ID));
+    const assistant = messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe(`Greetings, traveler. ${OUTLET_CONTENT}`);
+  });
+  test("resolves world-info outlet macros in character card fields", async () => {
+    const OUTLET_CONTENT = "Forged of starlight.";
+    const book = worldBooksSvc.createWorldBook(USER_ID, { name: "Card Lore Book" });
+    const entry = worldBooksSvc.createEntry(USER_ID, book.id, {
+      key: ["lore"],
+      content: OUTLET_CONTENT,
+      comment: "constant lore outlet",
+      constant: true,
+      outlet_name: "lore",
+    });
+    if (!entry) throw new Error("Failed to create world-book entry");
+
+    const character = charactersSvc.createCharacter(USER_ID, {
+      name: "TestChar",
+      description: `Wields a relic. {{outlet::lore}}`,
+      scenario: `The {{outlet::lore}} shines.`,
+      extensions: setCharacterWorldBookIds({}, [book.id]),
+    });
+    const cardChatId = chatsSvc.createChat(USER_ID, { character_id: character.id }).id;
+
+    settingsSvc.putSetting(USER_ID, "imageGeneration", {
+      includeCharacters: false,
+      promptContextMessageLimit: 3,
+    });
+
+    const messages = await buildContextMessages(USER_ID, cardChatId, getImageGenSettings(USER_ID));
+    const charInfo = messages.find(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.startsWith("## Character Information"),
+    );
+
+    const content = charInfo?.content as string;
+    expect(content).toContain(`Description: Wields a relic. ${OUTLET_CONTENT}`);
+    expect(content).toContain(`Scenario: The ${OUTLET_CONTENT} shines.`);
   });
 });

@@ -12,6 +12,7 @@ import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
 import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
 import * as characterLoraSvc from "./character-lora.service";
 import { buildMacroEnvForChat } from "./chats.service";
+import { getActivatedWorldInfoEntriesForChat, resolveWorldInfoOutlets } from "./prompt-assembly.service";
 import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros";
 import sharp from "../utils/sharp-config";
 import { eventBus } from "../ws/bus";
@@ -36,6 +37,7 @@ import "../image-gen/index";
 const IMAGE_SETTINGS_KEY = "imageGeneration";
 const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
+const OUTLET_MACRO_RE = /\{\{outlet::/i;
 
 async function buildRelayImagePreview(dataUrl: string): Promise<string | undefined> {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -1227,7 +1229,7 @@ async function parseCustomPrompt(
         role: "system",
         content: CUSTOM_PROMPT_PARSER_SYSTEM,
       },
-      ...await buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings, signal),
       {
         role: "user",
         content: `Parser instructions from the user:\n${input.prompt}\n\nReturn the final image prompt now.`,
@@ -1303,7 +1305,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
         role: "system",
         content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
-      ...await buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings, signal),
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
@@ -1315,7 +1317,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
   return parseSceneJson(response.content || "");
 }
 
-export async function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings): Promise<LlmMessage[]> {
+export async function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings, signal?: AbortSignal): Promise<LlmMessage[]> {
   const includeCharacters = settings.includeCharacters;
   const msgs: LlmMessage[] = [];
   const env = buildMacroEnvForChat(userId, chatId);
@@ -1334,39 +1336,59 @@ export async function buildContextMessages(userId: string, chatId: string, setti
   };
 
   const chat = chatsSvc.getChat(userId, chatId);
-  if (chat) {
-    const char = chat.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
-    if (char) {
-      const description = await resolve(char.description);
-      const scenario = await resolve(char.scenario);
-      const charInfo = [
-        char.name && `Name: ${char.name}`,
-        description && `Description: ${description}`,
-        scenario && `Scenario: ${scenario}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (charInfo) msgs.push({ role: "system", content: `## Character Information\n${charInfo}` });
+  const char = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+  const persona = includeCharacters ? personasSvc.resolvePersonaOrDefault(userId) : null;
+  const recentMessages = chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings));
+
+  // {{outlet::name}} only resolves after world-info activation. Mirror the
+  // display-preprocess path (chats.routes.ts, PR #205) so the parser sees the
+  // same outlet content the user sees. Activation is chat-wide, so populate
+  // the outlet map once before resolving any field.
+  if (env) {
+    const outletCandidates = [
+      char?.description,
+      char?.scenario,
+      persona?.title,
+      persona?.description,
+      ...recentMessages.map((m) => m.content),
+    ];
+    if (outletCandidates.some((s) => s && OUTLET_MACRO_RE.test(s))) {
+      try {
+        const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
+        await resolveWorldInfoOutlets(entries, env, signal);
+      } catch {
+        // Leave outlets unresolved — base macro resolution still runs.
+      }
     }
   }
-  if (includeCharacters) {
-    const persona = personasSvc.resolvePersonaOrDefault(userId);
-    if (persona) {
-      const title = await resolve(persona.title);
-      const description = await resolve(persona.description);
-      const personaInfo = [
-        persona.name && `Name: ${persona.name}`,
-        title && `Title: ${title}`,
-        description && `Description: ${description}`,
-        (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
-          `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
-    }
+
+  if (chat && char) {
+    const description = await resolve(char.description);
+    const scenario = await resolve(char.scenario);
+    const charInfo = [
+      char.name && `Name: ${char.name}`,
+      description && `Description: ${description}`,
+      scenario && `Scenario: ${scenario}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (charInfo) msgs.push({ role: "system", content: `## Character Information\n${charInfo}` });
   }
-  for (const m of chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings))) {
+  if (persona) {
+    const title = await resolve(persona.title);
+    const description = await resolve(persona.description);
+    const personaInfo = [
+      persona.name && `Name: ${persona.name}`,
+      title && `Title: ${title}`,
+      description && `Description: ${description}`,
+      (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
+        `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
+  }
+  for (const m of recentMessages) {
     msgs.push({ role: m.is_user ? "user" : "assistant", content: await resolve(m.content) });
   }
   return msgs;
