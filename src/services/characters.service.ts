@@ -170,7 +170,7 @@ export function listCharacterSummaries(
     return listCharacterSummariesDiscover(userId, pagination, options);
   }
 
-  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
 
   // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
@@ -273,7 +273,7 @@ function listCharacterSummariesDiscover(
     };
   }
 
-  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
 
   let extraJoin = "";
@@ -545,8 +545,9 @@ function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLaye
 }
 
 function rowToCharacter(row: any): Character {
+  const { deleting: _deleting, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
     tags: JSON.parse(row.tags),
@@ -579,13 +580,20 @@ function collectCharacterImageIds(character: Character): Set<string> {
   return ids;
 }
 
-function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): void {
+function unreferencedImageIds(userId: string, ids: Iterable<string>): string[] {
   const candidates = new Set<string>();
   for (const imageId of ids) if (imageId) candidates.add(imageId);
-  if (candidates.size === 0) return;
+  if (candidates.size === 0) return [];
   const referenced = imagesSvc.findReferencedImageIds(userId, candidates);
-  const unreferenced = [...candidates].filter((imageId) => !referenced.has(imageId));
-  imagesSvc.deleteImagesBulk(userId, unreferenced);
+  return [...candidates].filter((imageId) => !referenced.has(imageId));
+}
+
+function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): void {
+  const unreferenced = unreferencedImageIds(userId, ids);
+  if (unreferenced.length === 0) return;
+  void imagesSvc.deleteImagesBulk(userId, unreferenced).catch((err) =>
+    console.error("[characters] image cleanup failed:", err instanceof Error ? err.message : err)
+  );
 }
 
 function listCharacterGalleryImageIds(userId: string, characterId: string): string[] {
@@ -609,8 +617,8 @@ export function listCharactersForManifest(userId: string): Array<{ name: string;
 
 export function listCharacters(userId: string, pagination: PaginationParams): PaginatedResult<Character> {
   return paginatedQuery(
-    "SELECT * FROM characters WHERE user_id = ? ORDER BY updated_at DESC",
-    "SELECT COUNT(*) as count FROM characters WHERE user_id = ?",
+    "SELECT * FROM characters WHERE user_id = ? AND deleting = 0 ORDER BY updated_at DESC",
+    "SELECT COUNT(*) as count FROM characters WHERE user_id = ? AND deleting = 0",
     [userId],
     pagination,
     rowToCharacter
@@ -639,7 +647,7 @@ export function listCharactersDiscover(
   const shuffleValueSql = buildSeededShuffleValueSql(shuffleSeed);
 
   const countRow = db
-    .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ?")
+    .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ? AND deleting = 0")
     .get(userId) as { count: number } | null;
   const total = countRow?.count ?? 0;
 
@@ -654,7 +662,7 @@ export function listCharactersDiscover(
       WHERE user_id = ? AND COALESCE(json_extract(metadata, '$.group'), 0) != 1
       GROUP BY character_id
     ) cs ON cs.character_id = c.id
-    WHERE c.user_id = ?
+    WHERE c.user_id = ? AND c.deleting = 0
     ORDER BY ((${shuffleValueSql}) - (${discoverBoostSql})) ASC,
              ${shuffleKeySql} ASC,
              c.updated_at DESC,
@@ -1053,16 +1061,51 @@ export function setCharacterSourceFilename(userId: string, id: string, sourceFil
 export function deleteCharacter(userId: string, id: string): boolean {
   const existing = getCharacter(userId, id);
   if (!existing) return false;
+  const marked = getDb()
+    .query("UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0")
+    .run(id, userId);
+  if (marked.changes === 0) return true;
+  eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
+  void runCharacterDeletionCascade(userId, id).catch((err) =>
+    console.error(`[characters] deletion cascade failed for ${id}:`, err instanceof Error ? err.message : err)
+  );
+  return true;
+}
+
+async function runCharacterDeletionCascade(userId: string, id: string): Promise<void> {
+  const existing = getCharacter(userId, id);
+  if (!existing) return;
   const imageIds = collectCharacterImageIds(existing);
   for (const imageId of listCharacterGalleryImageIds(userId, id)) imageIds.add(imageId);
+  const plan = imagesSvc.imageDeletePlan(userId, unreferencedImageIds(userId, imageIds));
 
-  const result = getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
-  if (result.changes > 0) {
-    cleanupUnreferencedImageIds(userId, imageIds);
-    if (existing.avatar_path) void filesSvc.deleteAvatar(existing.avatar_path);
+  await imagesSvc.unlinkPaths(plan.paths);
+  if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path).catch(() => {});
+
+  getDb().transaction(() => {
+    imagesSvc.deleteImageRowsOnly(userId, plan.rowIds);
     deleteAutoManagedCharacterWorldBooks(userId, id);
     deleteRegexScriptsByCharacterId(userId, id);
-    eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
+    getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
+  })();
+}
+
+export async function resumePendingCharacterDeletions(): Promise<number> {
+  let rows: Array<{ id: string; user_id: string }>;
+  try {
+    rows = getDb()
+      .query("SELECT id, user_id FROM characters WHERE deleting = 1")
+      .all() as Array<{ id: string; user_id: string }>;
+  } catch {
+    return 0;
   }
-  return result.changes > 0;
+  for (const row of rows) {
+    try {
+      await runCharacterDeletionCascade(row.user_id, row.id);
+    } catch (err) {
+      console.error(`[characters] deletion resume failed for ${row.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  if (rows.length > 0) console.log(`[characters] resumed ${rows.length} interrupted deletion(s)`);
+  return rows.length;
 }

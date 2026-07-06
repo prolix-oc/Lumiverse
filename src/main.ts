@@ -209,6 +209,14 @@ setTimeout(() => {
   });
 }, 0);
 
+setTimeout(() => {
+  import("./services/characters.service").then(({ resumePendingCharacterDeletions }) => {
+    resumePendingCharacterDeletions().catch((err) =>
+      console.warn("[characters] deletion resume failed:", err instanceof Error ? err.message : err)
+    );
+  });
+}, 5_000);
+
 // Pre-warm trusted-host suggestions after the server starts listening so the
 // Operator tab usually hits a warm cache without slowing down boot.
 setTimeout(() => {

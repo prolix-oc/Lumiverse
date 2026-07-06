@@ -6849,20 +6849,22 @@ export class WorkerHost {
   }
 
   private handleImagesDeleteMany(requestId: string, imageIds: string[], userId?: string): void {
-    try {
-      if (!this.hasPermission("images")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      if (!Array.isArray(imageIds)) throw new Error("imageIds must be an array");
+    void (async () => {
+      try {
+        if (!this.hasPermission("images")) {
+          throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
+        }
+        const resolvedUserId = this.resolveEffectiveUserId(userId);
+        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+        this.enforceScopedUser(resolvedUserId);
+        if (!Array.isArray(imageIds)) throw new Error("imageIds must be an array");
 
-      const deleted = imagesSvc.deleteImagesBulk(resolvedUserId, imageIds);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
+        const deleted = await imagesSvc.deleteImagesBulk(resolvedUserId, imageIds);
+        this.postToWorker({ type: "response", requestId, result: deleted });
+      } catch (err: any) {
+        this.postToWorker({ type: "response", requestId, error: err.message });
+      }
+    })();
   }
 
   private tempExtensionForMediaSource(filename?: string, mimeType?: string): string {
