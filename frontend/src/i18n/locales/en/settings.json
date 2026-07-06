@@ -1100,6 +1100,8 @@
     "entitySnapshotsHint": "Include character/location summaries in the prompt",
     "relationshipEdges": "Relationship edges",
     "relationshipEdgesHint": "Include character relationships in the prompt",
+    "arcSummaries": "Arc summaries",
+    "arcSummariesHint": "Include story arc summaries in the prompt",
     "contextTokenBudget": "Context token budget",
     "memoryDecay": "Memory decay",
     "halfLifeTurns": "Half-life (turns)",
