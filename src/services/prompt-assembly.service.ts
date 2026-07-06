@@ -109,6 +109,7 @@ import {
   getGroupCardMode,
   type BookSource,
 } from "./world-info-sources.service";
+import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
 
 export type {
   VectorActivatedEntry,
@@ -2226,6 +2227,9 @@ export async function assemblePrompt(
     // generation type is not in the list
     if (block.injectionTrigger && block.injectionTrigger.length > 0) {
       if (!block.injectionTrigger.includes(ctx.generationType)) continue;
+    }
+    if (!promptBlockMatchesCharacterTags(block.characterTagTrigger, focusedCharacter.tags)) {
+      continue;
     }
     // Marker-pinned WI: emit this block's "before" entries ahead of its own
     // output, and queue its "after" entries for the next-iteration flush.

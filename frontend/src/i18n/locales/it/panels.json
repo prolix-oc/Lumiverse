@@ -2961,6 +2961,11 @@
       "injectionTriggers": "Trigger di iniezione",
       "triggersNone": "Nessun trigger selezionato — il blocco si attiva su tutti i tipi di generazione",
       "triggersActive": "Il blocco si attiva solo su: {{list}}",
+      "characterTagTrigger": "Trigger tag personaggio",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
+      "characterTagTriggerHint": "Il blocco si attiva solo quando almeno un tag del personaggio corrisponde in modo flessibile a una di queste voci. Il confronto ignora maiuscole/minuscole e separatori come spazi, trattini e underscore.",
+      "characterTagTriggerNone": "Nessun vincolo sui tag del personaggio — il blocco può attivarsi per qualsiasi personaggio",
+      "characterTagTriggerActive": "Il blocco si attiva solo per i tag del personaggio che corrispondono a: {{list}}",
       "roles": {
         "system": "Sistema",
         "user": "Utente",

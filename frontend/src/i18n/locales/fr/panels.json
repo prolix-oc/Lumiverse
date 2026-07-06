@@ -2953,6 +2953,11 @@
       "injectionTriggers": "Déclencheurs d'injection",
       "triggersNone": "Aucun déclencheur sélectionné — le bloc se déclenche sur tous les types de génération",
       "triggersActive": "Le bloc se déclenche uniquement sur : {{list}}",
+      "characterTagTrigger": "Déclencheur par tags du personnage",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
+      "characterTagTriggerHint": "Le bloc s'active uniquement si au moins un tag du personnage correspond vaguement à l'une de ces entrées. La casse et les séparateurs comme les espaces, tirets et underscores sont ignorés.",
+      "characterTagTriggerNone": "Aucun filtrage par tag de personnage — le bloc peut s'activer pour n'importe quel personnage",
+      "characterTagTriggerActive": "Le bloc s'active uniquement pour les tags de personnage correspondant à : {{list}}",
       "roles": {
         "system": "Système",
         "user": "Utilisateur",

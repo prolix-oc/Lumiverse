@@ -119,6 +119,7 @@ export interface PromptBlock {
   isLocked: boolean;
   color: string | null;
   injectionTrigger: string[];
+  characterTagTrigger?: string[];
   group: string | null;
   categoryMode?: 'radio' | 'checkbox' | null;
   variables?: PromptVariableDef[];

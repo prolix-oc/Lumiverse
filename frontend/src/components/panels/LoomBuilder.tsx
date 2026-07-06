@@ -67,6 +67,7 @@ import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
 import { computeGroups, createBlock, createMarkerBlock } from '@/lib/loom/service'
+import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
   PROMPT_TEMPLATES,
   PROVIDER_DISPLAY_NAMES,
@@ -386,6 +387,8 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
   const [sealed, setSealed] = useState(block.sealed === true)
   const [sealedKey, setSealedKey] = useState(typeof block.sealedKey === 'string' ? block.sealedKey : '')
   const [injectionTrigger, setInjectionTrigger] = useState<string[]>(block.injectionTrigger || [])
+  const [characterTagTrigger, setCharacterTagTrigger] = useState<string[]>(sanitizeCharacterTagTrigger(block.characterTagTrigger))
+  const [characterTagDraft, setCharacterTagDraft] = useState('')
   const [categoryMode, setCategoryMode] = useState<PromptBlock['categoryMode']>(block.categoryMode ?? null)
   const [variables, setVariables] = useState<PromptVariableDef[]>(
     Array.isArray(block.variables) ? block.variables : [],
@@ -458,11 +461,13 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
     const cleanedVariables = variables.filter((v) => v && v.name?.trim().length > 0)
     const cleanSealedKey = sanitizeSealedBlockKey(sealedKey || block.sealedKey || block.id)
     const shouldSeal = isInstalledLumiHubSealed || (sealed && !!cleanSealedKey)
+    const cleanedCharacterTagTrigger = sanitizeCharacterTagTrigger(characterTagTrigger)
     onSave({
       name, role, content,
       position: isAppend ? 'pre_history' : position,
       depth: (position === 'in_history' || isAppend) ? depth : 0,
       isLocked, injectionTrigger,
+      characterTagTrigger: cleanedCharacterTagTrigger.length > 0 ? cleanedCharacterTagTrigger : undefined,
       sealed: shouldSeal ? true : undefined,
       sealedKey: shouldSeal ? cleanSealedKey : undefined,
       sealedSource: isInstalledLumiHubSealed ? block.sealedSource : undefined,
@@ -477,6 +482,17 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
   const toggleTrigger = (value: string) => {
     setInjectionTrigger(prev => prev.includes(value) ? prev.filter(v => v !== value) : [...prev, value])
   }
+
+  const commitCharacterTagDraft = useCallback(() => {
+    const parsed = splitCharacterTagTriggerInput(characterTagDraft)
+    if (parsed.length === 0) return
+    setCharacterTagTrigger((prev) => sanitizeCharacterTagTrigger([...prev, ...parsed]))
+    setCharacterTagDraft('')
+  }, [characterTagDraft])
+
+  const removeCharacterTagTrigger = useCallback((value: string) => {
+    setCharacterTagTrigger((prev) => prev.filter((tag) => tag !== value))
+  }, [])
 
   const insertMacroInto = useCallback((syntax: string, taRef: React.RefObject<HTMLTextAreaElement | null>) => {
     const ta = taRef.current
@@ -701,6 +717,53 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
                 ? t('blockEditor.triggersNone')
                 : t('blockEditor.triggersActive', { list: injectionTrigger.map(injectionTriggerLabel).join(', ') })}
             </span>
+          </div>
+
+          <div className={s.formGroup}>
+            <label className={s.label}>{t('blockEditor.characterTagTrigger')}</label>
+            <div className={s.tagTriggerField}>
+              {characterTagTrigger.map((tag) => (
+                <span key={tag} className={s.tagTriggerChip}>
+                  {tag}
+                  <button
+                    type="button"
+                    className={s.tagTriggerChipRemove}
+                    onClick={() => removeCharacterTagTrigger(tag)}
+                    title={tc('actions.delete')}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              <div className={s.tagTriggerDraftRow}>
+                <input
+                  className={s.tagTriggerDraftInput}
+                  value={characterTagDraft}
+                  onChange={(e) => setCharacterTagDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault()
+                      commitCharacterTagDraft()
+                    }
+                  }}
+                  placeholder={t('blockEditor.characterTagTriggerPlaceholder')}
+                />
+                <button
+                  type="button"
+                  className={s.tagTriggerDraftAdd}
+                  onClick={commitCharacterTagDraft}
+                  disabled={!characterTagDraft.trim()}
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+            </div>
+            <span className={s.settingsHint}>
+              {characterTagTrigger.length === 0
+                ? t('blockEditor.characterTagTriggerNone')
+                : t('blockEditor.characterTagTriggerActive', { list: characterTagTrigger.join(', ') })}
+            </span>
+            <span className={s.settingsHint}>{t('blockEditor.characterTagTriggerHint')}</span>
           </div>
 
           <VariablesEditor variables={variables} onChange={setVariables} />

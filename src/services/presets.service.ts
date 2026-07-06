@@ -6,6 +6,7 @@ import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
+import { sanitizePromptBlockCharacterTagTrigger } from "../utils/prompt-block-character-tags";
 import * as settingsSvc from "./settings.service";
 
 /**
@@ -388,6 +389,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
   const position = input.position === "pre_history" || input.position === "post_history" || input.position === "in_history"
     ? input.position
     : "pre_history";
+  const characterTagTrigger = sanitizePromptBlockCharacterTagTrigger(input.characterTagTrigger);
   return {
     id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
     name: typeof input.name === "string" && input.name.trim() ? input.name : "New Chat",
@@ -400,6 +402,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
     isLocked: input.isLocked !== undefined ? !!input.isLocked : false,
     color: typeof input.color === "string" ? input.color : null,
     injectionTrigger: Array.isArray(input.injectionTrigger) ? input.injectionTrigger.filter((v): v is string => typeof v === "string") : [],
+    ...(characterTagTrigger.length > 0 ? { characterTagTrigger } : {}),
     group: typeof input.group === "string" ? input.group : null,
     categoryMode: marker === "category" && (input.categoryMode === "radio" || input.categoryMode === "checkbox")
       ? input.categoryMode

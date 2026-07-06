@@ -3100,6 +3100,11 @@
       "injectionTriggers": "Injection Triggers",
       "triggersNone": "No triggers selected — block fires on all generation types",
       "triggersActive": "Block only fires on: {{list}}",
+      "characterTagTrigger": "Character Tag Trigger",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
+      "characterTagTriggerHint": "Block only activates when at least one character tag loosely matches one of these entries. Matching ignores case and separators like spaces, dashes, and underscores.",
+      "characterTagTriggerNone": "No character tag gating — block can activate for any character",
+      "characterTagTriggerActive": "Block only activates for character tags matching: {{list}}",
       "roles": {
         "system": "System",
         "user": "User",

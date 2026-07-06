@@ -2953,6 +2953,11 @@
       "injectionTriggers": "注入觸發器",
       "triggersNone": "未選擇觸發器 — 塊在所有生成類型下都會觸發",
       "triggersActive": "塊僅在以下情況觸發：{{list}}",
+      "characterTagTrigger": "角色標籤觸發器",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
+      "characterTagTriggerHint": "只有當至少一個角色標籤與這些項目中的任意一個寬鬆匹配時，此塊才會啟用。比對會忽略大小寫，以及空格、連字號、底線等分隔符。",
+      "characterTagTriggerNone": "沒有角色標籤限制 — 此塊可對任何角色啟用",
+      "characterTagTriggerActive": "此塊僅會為符合以下內容的角色標籤啟用：{{list}}",
       "roles": {
         "system": "系統",
         "user": "用戶",

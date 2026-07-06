@@ -1707,6 +1707,94 @@
   accent-color: var(--lumiverse-primary);
 }
 
+.tagTriggerField {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+}
+
+.tagTriggerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary);
+  border: 1px solid var(--lumiverse-primary-020);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1;
+}
+
+.tagTriggerChipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tagTriggerChipRemove:hover {
+  background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
+}
+
+.tagTriggerDraftRow {
+  flex: 1 1 220px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tagTriggerDraftInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+  padding: 4px 0;
+}
+
+.tagTriggerDraftInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.tagTriggerDraftAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
+}
+
+.tagTriggerDraftAdd:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+}
+
+.tagTriggerDraftAdd:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ============================================================================
    MACRO PREVIEW PANEL
    ============================================================================ */

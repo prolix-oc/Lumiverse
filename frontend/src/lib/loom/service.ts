@@ -8,6 +8,7 @@ import type {
   MacroGroup,
   CategoryGroup,
 } from './types'
+import { sanitizeCharacterTagTrigger } from './characterTagTrigger'
 import { generateUUID } from '@/lib/uuid'
 import {
   MARKER_NAMES,
@@ -44,6 +45,7 @@ export function createBlock(overrides: Partial<PromptBlock> = {}): PromptBlock {
     isLocked: false,
     color: null,
     injectionTrigger: [],
+    characterTagTrigger: [],
     group: null,
     categoryMode: null,
     ...overrides,
@@ -86,6 +88,7 @@ function migratePreset(preset: LoomPreset): LoomPreset {
       if (!Array.isArray(block.injectionTrigger)) {
         block.injectionTrigger = []
       }
+      block.characterTagTrigger = sanitizeCharacterTagTrigger(block.characterTagTrigger)
       block.categoryMode = block.marker === 'category'
         ? coerceCategoryMode(block.categoryMode)
         : null
@@ -658,6 +661,8 @@ interface STPrompt {
   content?: string
   role?: string
   enabled?: boolean
+  injection_trigger?: string[]
+  lumiverse_character_tag_trigger?: string[]
   system_prompt?: boolean
   marker?: boolean
   injection_position?: number
@@ -691,6 +696,8 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
   if (markerType) {
     const block = createMarkerBlock(markerType, p.name || undefined)
     block.enabled = enabled
+    block.injectionTrigger = Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : []
+    block.characterTagTrigger = sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger)
     if (CONTENT_BEARING_MARKERS.has(markerType) && p.content) {
       block.content = p.content
     }
@@ -725,6 +732,8 @@ function convertSTPromptToBlock(p: STPrompt, enabled: boolean): PromptBlock {
     content: p.content || '',
     role: (p.role as PromptBlock['role']) || 'system',
     enabled,
+    injectionTrigger: Array.isArray(p.injection_trigger) ? p.injection_trigger.filter((value): value is string => typeof value === 'string') : [],
+    characterTagTrigger: sanitizeCharacterTagTrigger(p.lumiverse_character_tag_trigger),
     position,
     depth,
     marker: isCategory ? 'category' : null,
@@ -906,6 +915,9 @@ export function exportToSTPreset(loom: LoomPreset): Record<string, any> {
     // Include injection_trigger for non-marker prompts (maps 1:1 with ST)
     if (!isWellKnown) {
       stPrompt.injection_trigger = block.injectionTrigger ?? []
+    }
+    if (block.characterTagTrigger?.length) {
+      stPrompt.lumiverse_character_tag_trigger = block.characterTagTrigger
     }
 
     prompts.push(stPrompt)

@@ -13,6 +13,7 @@ import MessageCard from './MessageCard'
 import GroupChatProgressBar from './GroupChatProgressBar'
 import GroupChatMemberBar from './GroupChatMemberBar'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
+import { shouldPinMessageListTail } from './messageListPinning'
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT } from './collapsibleLayout'
 import type { Message } from '@/types/api'
 import type { OOCStyleType } from '@/types/store'
@@ -160,6 +161,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const bottomRef = useRef<HTMLDivElement>(null)
   useScrollGate(scrollRef)
   const isPinnedRef = useRef(true)
+  const userUnpinnedRef = useRef(false)
   const isProgrammaticScrollRef = useRef(false)
   // scrollTop recorded at the moment of a programmatic write. A scroll event
   // is only swallowed as programmatic when the position matches — a bare
@@ -204,10 +206,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   // This replaces CSS padding-bottom so isAtEnd/scrollToEnd/followOnAppend
   // all land at the true bottom of the list.
   const [inputSafeZone, setInputSafeZone] = useState(100)
+  const lastInputSafeZoneRef = useRef(100)
   const [editableFocusInList, setEditableFocusInList] = useState(false)
   const recentCollapsibleToggleMessageIdRef = useRef<string | null>(null)
   const recentCollapsibleToggleUntilRef = useRef(0)
   const recentCollapsibleToggleTimerRef = useRef<number | null>(null)
+  const keyboardRepinTimersRef = useRef<number[]>([])
+  const keyboardRepinSuppressedUntilRef = useRef(0)
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
     getTagInterceptorRegistryVersion,
@@ -236,6 +241,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const el = scrollRef.current
     const parent = el?.parentElement
     if (!el || !parent) return
+    const root = document.documentElement
 
     const updateSafeZone = () => {
       const raw = getComputedStyle(parent).getPropertyValue('--lcs-input-safe-zone')
@@ -247,13 +253,20 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     const mo = new MutationObserver(updateSafeZone)
     mo.observe(parent, { attributes: true, attributeFilter: ['style'] })
+    const rootObserver = new MutationObserver(updateSafeZone)
+    rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
 
     const vv = window.visualViewport
+    window.addEventListener('resize', updateSafeZone)
     vv?.addEventListener('resize', updateSafeZone)
+    vv?.addEventListener('scroll', updateSafeZone)
 
     return () => {
       mo.disconnect()
+      rootObserver.disconnect()
+      window.removeEventListener('resize', updateSafeZone)
       vv?.removeEventListener('resize', updateSafeZone)
+      vv?.removeEventListener('scroll', updateSafeZone)
     }
   }, [])
 
@@ -266,6 +279,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     averageMeasuredHeightRef.current = null
     initialBottomPinnedChatRef.current = null
     initialScrollStartedAtRef.current = 0
+    userUnpinnedRef.current = false
     setEditableFocusInList(false)
     recentCollapsibleToggleMessageIdRef.current = null
     recentCollapsibleToggleUntilRef.current = 0
@@ -425,20 +439,6 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     warmMobileRange(1500)
   }, [interceptorRegistryVersion, warmMobileRange])
 
-  useEffect(() => {
-    return () => {
-      if (rangeWarmTimerRef.current != null) {
-        window.clearTimeout(rangeWarmTimerRef.current)
-      }
-      if (initialWarmTimerRef.current != null) {
-        window.clearTimeout(initialWarmTimerRef.current)
-      }
-      if (initialScrollRafRef.current != null) {
-        cancelAnimationFrame(initialScrollRafRef.current)
-      }
-    }
-  }, [])
-
   const recordScrollPosition = useCallback(() => {
     const latest = scrollRef.current
     if (!latest) return
@@ -454,6 +454,46 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       initialScrollRafRef.current = null
     }
   }, [chatId])
+
+  const clearKeyboardRepinTimers = useCallback(() => {
+    while (keyboardRepinTimersRef.current.length > 0) {
+      const timer = keyboardRepinTimersRef.current.shift()
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [])
+
+  const suppressKeyboardRepin = useCallback((durationMs = 900) => {
+    keyboardRepinSuppressedUntilRef.current = Math.max(
+      keyboardRepinSuppressedUntilRef.current,
+      performance.now() + durationMs,
+    )
+    clearKeyboardRepinTimers()
+  }, [clearKeyboardRepinTimers])
+
+  const markUserUnpinned = useCallback(() => {
+    userUnpinnedRef.current = true
+    isPinnedRef.current = false
+  }, [])
+
+  const markPinned = useCallback(() => {
+    userUnpinnedRef.current = false
+    isPinnedRef.current = true
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (rangeWarmTimerRef.current != null) {
+        window.clearTimeout(rangeWarmTimerRef.current)
+      }
+      if (initialWarmTimerRef.current != null) {
+        window.clearTimeout(initialWarmTimerRef.current)
+      }
+      if (initialScrollRafRef.current != null) {
+        cancelAnimationFrame(initialScrollRafRef.current)
+      }
+      clearKeyboardRepinTimers()
+    }
+  }, [clearKeyboardRepinTimers])
 
   // While the user is typing inside the list (message edit textarea, an
   // extension-mounted input), the browser owns caret reveal. Treat that focus
@@ -475,7 +515,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (!hasFocus) return
 
       cancelInitialScrollToEnd()
-      isPinnedRef.current = false
+      markUserUnpinned()
       suppressNextPinUpdateRef.current = false
       recordScrollPosition()
     }
@@ -498,7 +538,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       el.removeEventListener('focusin', handleFocusIn)
       el.removeEventListener('focusout', handleFocusOut)
     }
-  }, [cancelInitialScrollToEnd, hasInListEditableFocus, recordScrollPosition])
+  }, [cancelInitialScrollToEnd, hasInListEditableFocus, markUserUnpinned, recordScrollPosition])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -693,7 +733,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         return
       }
 
-      isPinnedRef.current = true
+      markPinned()
       instance.scrollToEnd({ behavior: 'auto' })
       recordScrollPosition()
 
@@ -701,7 +741,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         scheduleInitialScrollToEnd(instance)
       }
     })
-  }, [chatId, hasRows, recordScrollPosition, virtualListItems.length])
+  }, [chatId, hasRows, markPinned, recordScrollPosition, virtualListItems.length])
 
   const rowVirtualizer = useVirtualizer({
     count: virtualListItems.length,
@@ -886,6 +926,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (hasInListEditableFocus()) return
     if (rowVirtualizer.getTotalSize() <= el.clientHeight) return
     if (rowVirtualizer.isAtEnd(SCROLL_END_THRESHOLD)) return
+    markPinned()
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
     rowVirtualizer.scrollToEnd({ behavior: 'auto' })
@@ -895,7 +936,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       lastScrollTopRef.current = latest.scrollTop
       lastScrollHeightRef.current = latest.scrollHeight
     })
-  }, [hasInListEditableFocus, rowVirtualizer])
+  }, [hasInListEditableFocus, markPinned, rowVirtualizer])
 
   if (isStreamingRef.current && !isStreaming) {
     const el = scrollRef.current
@@ -915,13 +956,13 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (!el || virtualListItems.length === 0) return
     if (rowVirtualizer.getTotalSize() <= el.clientHeight) return
 
-    isPinnedRef.current = true
+    markPinned()
     // Smooth scroll emits a stream of events with no single target
     // position — consume the first one unconditionally (null target).
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
     rowVirtualizer.scrollToEnd({ behavior })
-  }, [rowVirtualizer, virtualListItems.length])
+  }, [markPinned, rowVirtualizer, virtualListItems.length])
 
   // The route changes before the async tail request resolves, so wait until
   // this chat's first loaded rows are present before asking TanStack to land at
@@ -936,6 +977,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   }, [chatId, hasRows, rowVirtualizer, scheduleInitialScrollToEnd, virtualListItems.length])
 
   const BOTTOM_REPIN_EPSILON = SCROLL_END_THRESHOLD
+  const EXPLICIT_BOTTOM_REPIN_EPSILON = 2
 
   const recoverTailVoid = useCallback(() => {
     if (!isPinnedRef.current) return false
@@ -955,28 +997,40 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     const rowRect = lastRow.getBoundingClientRect()
     const scrollRect = el.getBoundingClientRect()
     const actualContentBottom = el.scrollTop + ((rowRect.bottom - scrollRect.top) / getUiScale())
+    // The chat tail intentionally reserves virtual padding for the floating
+    // input / keyboard safe zone. Treat that padding as real tail space here;
+    // otherwise the "void recovery" path mistakes the keyboard gap for a
+    // broken layout and yanks the list back behind the input bar.
+    const paddedContentBottom = actualContentBottom + inputSafeZone
     const viewportBottom = el.scrollTop + el.clientHeight
     const voidThreshold = Math.max(180, el.clientHeight * 0.55)
 
-    if (viewportBottom <= actualContentBottom + voidThreshold) return false
+    if (viewportBottom <= paddedContentBottom + voidThreshold) return false
 
     const visibleRows = el.querySelectorAll<HTMLElement>('[data-virtual-index]')
     for (const row of visibleRows) {
       rowVirtualizer.measureElement(row)
     }
 
-    const nextScrollTop = Math.max(0, actualContentBottom - el.clientHeight)
+    const nextScrollTop = Math.max(0, paddedContentBottom - el.clientHeight)
     el.scrollTop = nextScrollTop
     markProgrammaticScroll(el)
     lastScrollTopRef.current = el.scrollTop
     lastScrollHeightRef.current = el.scrollHeight
-    isPinnedRef.current = true
+    markPinned()
     return true
-  }, [hasInListEditableFocus, markProgrammaticScroll, rowVirtualizer, virtualListItems.length])
+  }, [hasInListEditableFocus, inputSafeZone, markPinned, markProgrammaticScroll, rowVirtualizer, virtualListItems.length])
 
   const updatePinState = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
     const distance = scrollHeight - scrollTop - clientHeight
-    isPinnedRef.current = distance <= BOTTOM_REPIN_EPSILON
+    const shouldPin = shouldPinMessageListTail({
+      distanceFromEnd: distance,
+      userHasUnpinned: userUnpinnedRef.current,
+      bottomRepinEpsilon: BOTTOM_REPIN_EPSILON,
+      explicitBottomRepinEpsilon: EXPLICIT_BOTTOM_REPIN_EPSILON,
+    })
+    if (shouldPin) markPinned()
+    else isPinnedRef.current = false
   }
 
   // User scroll intent owns pinning: any upward scroll disables auto-follow,
@@ -1006,8 +1060,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
 
     if (deltaTop < 0) {
+      suppressKeyboardRepin(1200)
       cancelInitialScrollToEnd()
-      isPinnedRef.current = false
+      markUserUnpinned()
       suppressNextPinUpdateRef.current = false
     } else if (!suppressNextPinUpdateRef.current) {
       updatePinState(el.scrollTop, el.scrollHeight, el.clientHeight)
@@ -1026,30 +1081,33 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       topLoadArmedRef.current = false
       loadMore()
     }
-  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, recoverTailVoid])
+  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, markUserUnpinned, recoverTailVoid, suppressKeyboardRepin])
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    suppressKeyboardRepin(1000)
     if (event.deltaY < -30) {
       cancelInitialScrollToEnd()
-      isPinnedRef.current = false
+      markUserUnpinned()
       suppressNextPinUpdateRef.current = true
     }
-  }, [cancelInitialScrollToEnd])
+  }, [cancelInitialScrollToEnd, markUserUnpinned, suppressKeyboardRepin])
 
   const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    suppressKeyboardRepin(1000)
     touchYRef.current = event.touches[0]?.clientY ?? null
-  }, [])
+  }, [suppressKeyboardRepin])
 
   const handleTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const previousY = touchYRef.current
     const nextY = event.touches[0]?.clientY ?? null
     if (previousY != null && nextY != null && nextY > previousY + 10) {
+      suppressKeyboardRepin(1200)
       cancelInitialScrollToEnd()
-      isPinnedRef.current = false
+      markUserUnpinned()
       suppressNextPinUpdateRef.current = true
     }
     touchYRef.current = nextY
-  }, [cancelInitialScrollToEnd])
+  }, [cancelInitialScrollToEnd, markUserUnpinned, suppressKeyboardRepin])
 
   const handleTouchEnd = useCallback(() => {
     touchYRef.current = null
@@ -1089,50 +1147,39 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     }
   }, [virtualItems, justPrependedRef, hasMore, isCoarsePointer, loadingOlder, loadMore, warmMobileRange])
 
-  // Fallback re-pin during iOS keyboard animation. The safe-zone inset is
-  // now passed to TanStack as paddingEnd, so normal safe-zone growth keeps
-  // an end-pinned viewport pinned automatically. visualViewport resize/scroll
-  // events during the keyboard animation (~250-350ms) can still land
-  // mid-transition, so we nudge the viewport back to the bottom a few times
-  // once the keyboard and safe-zone have settled. Skipped while streaming —
-  // the unified scroll guard already handles content growth.
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
+  // iOS standalone PWAs keep the list height fixed while the keyboard grows
+  // only the bottom safe zone. Re-pin from actual safe-zone changes rather
+  // than raw visualViewport events, and cancel the settle nudges as soon as
+  // the user touches the list so the keyboard animation cannot reclaim it.
+  useLayoutEffect(() => {
+    const previousSafeZone = lastInputSafeZoneRef.current
+    lastInputSafeZoneRef.current = inputSafeZone
 
-    const settleTimers: number[] = []
-    const clearSettleTimers = () => {
-      while (settleTimers.length) {
-        window.clearTimeout(settleTimers.shift())
-      }
-    }
+    if (previousSafeZone === inputSafeZone) return
+    if (!document.documentElement.hasAttribute('data-ios-pwa')) return
+    if (isStreamingRef.current) return
+    if (!isPinnedRef.current) return
+    if (hasInListEditableFocus()) return
+    if (performance.now() < keyboardRepinSuppressedUntilRef.current) return
 
     const pinToBottom = () => {
       if (!isPinnedRef.current) return
+      if (performance.now() < keyboardRepinSuppressedUntilRef.current) return
       const latest = scrollRef.current
       if (!latest) return
       pinToBottomIfNeeded(latest)
     }
 
-    const repinIfAnchored = () => {
-      if (isStreamingRef.current) return
-      if (!isPinnedRef.current) return
-      requestAnimationFrame(pinToBottom)
-      clearSettleTimers()
-      settleTimers.push(window.setTimeout(pinToBottom, 180))
-      settleTimers.push(window.setTimeout(pinToBottom, 420))
-    }
-
-    const vv = window.visualViewport
-    vv?.addEventListener('resize', repinIfAnchored)
-    vv?.addEventListener('scroll', repinIfAnchored)
-
-    return () => {
-      vv?.removeEventListener('resize', repinIfAnchored)
-      vv?.removeEventListener('scroll', repinIfAnchored)
-      clearSettleTimers()
-    }
-  }, [pinToBottomIfNeeded])
+    requestAnimationFrame(pinToBottom)
+    clearKeyboardRepinTimers()
+    keyboardRepinTimersRef.current.push(window.setTimeout(pinToBottom, 180))
+    keyboardRepinTimersRef.current.push(window.setTimeout(pinToBottom, 420))
+  }, [
+    clearKeyboardRepinTimers,
+    hasInListEditableFocus,
+    inputSafeZone,
+    pinToBottomIfNeeded,
+  ])
 
   useEffect(() => {
     const handleScrollToBottom = () => scrollToHistoryBottom('smooth')

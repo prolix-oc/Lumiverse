@@ -1029,10 +1029,11 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (!hideForMobileEdit) return
     const parent = containerRef.current?.parentElement
     if (!parent) return
+    const root = document.documentElement
     let syncRaf = 0
 
     const syncHiddenEditSafeZone = () => {
-      const rootStyle = getComputedStyle(document.documentElement)
+      const rootStyle = getComputedStyle(root)
       const keyboardInset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
       parent.style.setProperty('--lcs-input-safe-zone', `${Math.max(16, Math.round(16 + keyboardInset))}px`)
     }
@@ -1045,12 +1046,16 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       })
     }
 
+    const rootObserver = new MutationObserver(scheduleHiddenEditSafeZoneSync)
+    rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
+
     syncHiddenEditSafeZone()
     window.addEventListener('resize', scheduleHiddenEditSafeZoneSync)
     window.visualViewport?.addEventListener('resize', scheduleHiddenEditSafeZoneSync)
     window.visualViewport?.addEventListener('scroll', scheduleHiddenEditSafeZoneSync)
 
     return () => {
+      rootObserver.disconnect()
       if (syncRaf) cancelAnimationFrame(syncRaf)
       window.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
       window.visualViewport?.removeEventListener('resize', scheduleHiddenEditSafeZoneSync)
@@ -1060,10 +1065,12 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
   // ResizeObserver — set --lcs-input-safe-zone on parent so scroll padding stays in sync
   useLayoutEffect(() => {
+    if (hideForMobileEdit) return
     const el = containerRef.current
     if (!el) return
     const parent = el.parentElement
     if (!parent) return
+    const root = document.documentElement
     const isIOSPwa = document.documentElement.hasAttribute('data-ios-pwa')
 
     const update = () => {
@@ -1075,7 +1082,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       // variable is set synchronously by JS and always reflects the final value.
       let bottomOffset: number
       if (isIOSPwa) {
-        const rootStyle = getComputedStyle(document.documentElement)
+        const rootStyle = getComputedStyle(root)
         bottomOffset = parseFloat(rootStyle.getPropertyValue('--app-keyboard-inset-bottom')) || 0
       } else {
         bottomOffset = parseFloat(getComputedStyle(el).bottom) || 12
@@ -1089,15 +1096,18 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
     // On iOS PWA, the virtual keyboard changes `bottom` via CSS variable but
     // doesn't change the element's size — ResizeObserver alone won't catch it.
-    // WebKit can report keyboard geometry via resize and/or scroll, so listen
-    // to both to keep the message-list safe-zone aligned with the input bar.
+    // Mirror root style writes as well because some focus transitions only
+    // update --app-keyboard-inset-bottom after our own JS sync path.
     let vpFrame = 0
     const onViewportResize = () => {
       // Run after main.tsx's syncViewportVars (also uses requestAnimationFrame)
       cancelAnimationFrame(vpFrame)
       vpFrame = requestAnimationFrame(update)
     }
+    const rootObserver = new MutationObserver(onViewportResize)
     if (isIOSPwa) {
+      rootObserver.observe(root, { attributes: true, attributeFilter: ['style'] })
+      window.addEventListener('resize', onViewportResize)
       window.visualViewport?.addEventListener('resize', onViewportResize)
       window.visualViewport?.addEventListener('scroll', onViewportResize)
     }
@@ -1106,11 +1116,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       ro.disconnect()
       cancelAnimationFrame(vpFrame)
       if (isIOSPwa) {
+        rootObserver.disconnect()
+        window.removeEventListener('resize', onViewportResize)
         window.visualViewport?.removeEventListener('resize', onViewportResize)
         window.visualViewport?.removeEventListener('scroll', onViewportResize)
       }
     }
-  }, [])
+  }, [hideForMobileEdit])
 
   // Document-level Escape to stop generation
   useEffect(() => {

@@ -2953,6 +2953,11 @@
       "injectionTriggers": "インジェクション トリガー",
       "triggersNone": "トリガーが選択されていません — すべての生成タイプでブロックが起動します",
       "triggersActive": "ブロックは次の場合にのみ起動します: {{list}}",
+      "characterTagTrigger": "キャラクタータグ トリガー",
+      "characterTagTriggerPlaceholder": "anthro, demihuman, furry",
+      "characterTagTriggerHint": "少なくとも1つのキャラクタータグがこれらの項目のいずれかに緩く一致する場合にのみ、このブロックは有効になります。大文字小文字と、空白・ハイフン・アンダースコアなどの区切りは無視されます。",
+      "characterTagTriggerNone": "キャラクタータグによる制限なし — このブロックはどのキャラクターでも有効化できます",
+      "characterTagTriggerActive": "このブロックは次のキャラクタータグに一致する場合のみ有効になります: {{list}}",
       "roles": {
         "system": "システム",
         "user": "ユーザー",

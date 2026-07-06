@@ -5,6 +5,7 @@ import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
+import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { rememberRegistration } from './lib/swUpdater'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
@@ -64,6 +65,11 @@ const hasVirtualKeyboard = navigator.maxTouchPoints > 0
 // anything below this floor as an iOS viewport glitch (the stuck ~24px
 // residual), not a keyboard — prevents the input bar floating by a sliver.
 const KEYBOARD_MIN_INSET = 80
+// Hardware-keyboard focus on iPadOS can still show the compact input assistant
+// / autocomplete pill. It's much smaller than a soft keyboard, but still
+// occludes the bottom controls enough to trigger scroll bounce if ignored.
+const IOS_PWA_ACCESSORY_MIN_INSET = 44
+const isIOSStandalonePwa = (window.navigator as any).standalone === true && navigator.maxTouchPoints > 0
 
 function isEditableElement(el: EventTarget | Element | null): boolean {
   return (
@@ -109,12 +115,20 @@ function syncViewportVars() {
   if (isPortrait) basePortrait = base
   else baseLandscape = base
 
-  let keyboardInsetBottom = Math.max(0, Math.round(base - height - offsetTop))
-  // Focus gate + dead-zone. Only honour an inset when the keyboard is genuinely
-  // up (an editable element is focused) AND it clears the real-keyboard floor.
-  // This is what neutralises the iOS 26/27 bug: a stuck residual offset can no
-  // longer lift the bar once focus is gone.
-  if (!keyboardActive || keyboardInsetBottom < KEYBOARD_MIN_INSET) keyboardInsetBottom = 0
+  // In standalone iOS PWAs we explicitly cancel WebKit's visual-viewport pan
+  // (see the scrollTo(0, 0) handler below), so offsetTop is no longer layout
+  // we want to preserve. Measure bottom occlusion from the viewport shrink
+  // alone there; subtracting offsetTop collapses the real keyboard/pill inset
+  // back toward zero and leaves the input/list fighting scroll bounce.
+  const keyboardInsetBottom = computeViewportKeyboardInset({
+    fullHeight: base,
+    viewportHeight: height,
+    offsetTop,
+    keyboardActive,
+    ignoreOffsetTop: isIOSStandalonePwa,
+    keyboardMinInset: KEYBOARD_MIN_INSET,
+    accessoryMinInset: isIOSStandalonePwa ? IOS_PWA_ACCESSORY_MIN_INSET : KEYBOARD_MIN_INSET,
+  })
 
   root.style.setProperty('--app-viewport-width', `${width}px`)
   root.style.setProperty('--app-viewport-height', `${height}px`)
