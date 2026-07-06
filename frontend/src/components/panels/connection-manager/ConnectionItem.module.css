@@ -42,12 +42,16 @@
   transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
 }
 
-.dragHandle:hover {
-  background: var(--lumiverse-primary-015);
-  color: var(--lumiverse-text);
+@media (hover: hover) {
+  .dragHandle:hover {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+  }
 }
 
 .dragHandle:active {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
   cursor: grabbing;
 }
 
@@ -281,4 +285,10 @@
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Hide credits/usage sections that aren't active, but keep them in DOM
+   so the card maintains a consistent height during drag operations. */
+.creditsHidden {
+  display: none;
 }

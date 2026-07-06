@@ -14,6 +14,7 @@ import {
 import { formatAnthropicPromptCachingSummary } from '@/lib/anthropic-prompt-caching'
 import { formatNanoGptCachingSummary } from '@/lib/nanogpt-prompt-caching'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
+import { useDragHandleBlur } from './useDragHandleBlur'
 import type { ConnectionProfile, ProviderInfo, CreateConnectionProfileInput, NanoGptSubscriptionUsage } from '@/types/api'
 import ConnectionForm from './ConnectionForm'
 import { Spinner } from '@/components/shared/Spinner'
@@ -92,15 +93,27 @@ export default function ConnectionItem({
   const showNanoGptUsage = isNanoGpt && isActive && profile.has_api_key && !editing
   const unknownReset = t('connectionItem.unknown')
 
-  // Fetch credits when this is the active OpenRouter connection
+  // Fetch credits when this is the active OpenRouter connection.
+  // Preserve existing data when showCredits flickers false during drag
+  // re-renders — clearing then refetching causes a visible flash.
+  const creditsFetchedRef = useRef(false)
   useEffect(() => {
-    if (!showCredits) { setCredits(null); return }
+    if (!showCredits) {
+      if (!creditsFetchedRef.current) setCredits(null)
+      return
+    }
+    if (credits) return
+    creditsFetchedRef.current = true
     setCreditsLoading(true)
     openrouterApi.credits(profile.id)
       .then(setCredits)
       .catch(() => setCredits(null))
       .finally(() => setCreditsLoading(false))
-  }, [showCredits, profile.id])
+  }, [showCredits, profile.id, credits])
+
+  useEffect(() => {
+    if (!showCredits) creditsFetchedRef.current = false
+  }, [showCredits])
 
   const refreshCredits = useCallback(() => {
     if (!showCredits) return
@@ -111,14 +124,24 @@ export default function ConnectionItem({
       .finally(() => setCreditsLoading(false))
   }, [showCredits, profile.id])
 
+  const nanoGptFetchedRef = useRef(false)
   useEffect(() => {
-    if (!showNanoGptUsage) { setNanoGptUsage(null); return }
+    if (!showNanoGptUsage) {
+      if (!nanoGptFetchedRef.current) setNanoGptUsage(null)
+      return
+    }
+    if (nanoGptUsage) return
+    nanoGptFetchedRef.current = true
     setNanoGptUsageLoading(true)
     connectionsApi.nanogptUsage(profile.id)
       .then(setNanoGptUsage)
       .catch(() => setNanoGptUsage(null))
       .finally(() => setNanoGptUsageLoading(false))
-  }, [showNanoGptUsage, profile.id])
+  }, [showNanoGptUsage, profile.id, nanoGptUsage])
+
+  useEffect(() => {
+    if (!showNanoGptUsage) nanoGptFetchedRef.current = false
+  }, [showNanoGptUsage])
 
   const refreshNanoGptUsage = useCallback(() => {
     if (!showNanoGptUsage) return
@@ -263,6 +286,8 @@ export default function ConnectionItem({
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
 
+  const handleRef = useDragHandleBlur(isDragging)
+
   return (
     <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging, isActive && styles.itemActive)}>
       {editing ? (
@@ -276,6 +301,7 @@ export default function ConnectionItem({
         <>
           <div className={styles.itemRow}>
             <button
+              ref={handleRef}
               type="button"
               className={styles.dragHandle}
               aria-label={t('connectionItem.dragToReorder')}
@@ -368,8 +394,8 @@ export default function ConnectionItem({
               {testResult.message}
             </div>
           )}
-          {showCredits && credits && (
-            <div key="credits" className={clsx(styles.creditsBar, !creditsAnimatedRef.current && styles.creditsBarAnimateIn)}>
+          {isOpenRouter && profile.has_api_key && (
+            <div key="credits" className={clsx(styles.creditsBar, !creditsAnimatedRef.current && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
               <div className={styles.creditCell}>
                 <span className={styles.creditLabel}>{t('connectionItem.remaining')}</span>
                 <span className={styles.creditValue}>
@@ -393,8 +419,9 @@ export default function ConnectionItem({
               </button>
             </div>
           )}
-          {showNanoGptUsage && nanoGptUsage && (nanoGptUsageRows.length > 0 || nanoGptSubscriptionInactive) && (
-            nanoGptUsageRows.length > 0
+          {isNanoGpt && profile.has_api_key && (
+            <div className={clsx(!(showNanoGptUsage && nanoGptUsage && (nanoGptUsageRows.length > 0 || nanoGptSubscriptionInactive)) && styles.creditsHidden)}>
+              {nanoGptUsageRows.length > 0
               ? nanoGptUsageRows.map(({ key, label, window: win }, idx) => (
                 <div key={key} className={clsx(styles.creditsBar, styles.nanoGptUsageBar, idx === 0 && !nanoGptAnimatedRef.current && styles.creditsBarAnimateIn)}>
                   <div className={styles.creditCell}>
@@ -430,7 +457,8 @@ export default function ConnectionItem({
                     {nanoGptUsageLoading ? <Spinner size={10} /> : <RefreshCw size={10} />}
                   </button>
                 </div>
-              )
+              )}
+            </div>
           )}
         </>
       )}
