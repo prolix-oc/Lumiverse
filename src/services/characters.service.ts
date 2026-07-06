@@ -580,7 +580,12 @@ function collectCharacterImageIds(character: Character): Set<string> {
 }
 
 function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): void {
-  for (const imageId of ids) imagesSvc.deleteImageIfUnreferenced(userId, imageId);
+  const candidates = new Set<string>();
+  for (const imageId of ids) if (imageId) candidates.add(imageId);
+  if (candidates.size === 0) return;
+  const referenced = imagesSvc.findReferencedImageIds(userId, candidates);
+  const unreferenced = [...candidates].filter((imageId) => !referenced.has(imageId));
+  imagesSvc.deleteImagesBulk(userId, unreferenced);
 }
 
 function listCharacterGalleryImageIds(userId: string, characterId: string): string[] {

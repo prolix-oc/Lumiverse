@@ -472,6 +472,7 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "images_delete"; requestId: string; imageId: string; userId?: string }
+  | { type: "images_delete_many"; requestId: string; imageIds: string[]; userId?: string }
   | { type: "media_audio_convert"; requestId: string; input: mediaSvc.MediaConvertAudioRequestDTO }
   | { type: "media_video_convert"; requestId: string; input: mediaSvc.MediaConvertVideoRequestDTO }
   | { type: "media_video_transcode"; requestId: string; input: mediaSvc.MediaTranscodeVideoRequestDTO }
@@ -2878,6 +2879,9 @@ export class WorkerHost {
         break;
       case "images_delete":
         this.handleImagesDelete(msg.requestId, msg.imageId, msg.userId);
+        break;
+      case "images_delete_many":
+        this.handleImagesDeleteMany(msg.requestId, msg.imageIds, msg.userId);
         break;
       case "media_audio_convert":
         this.handleMediaAudioConvert(msg.requestId, msg.input);
@@ -6838,6 +6842,23 @@ export class WorkerHost {
       this.enforceScopedUser(resolvedUserId);
 
       const deleted = imagesSvc.deleteImage(resolvedUserId, imageId);
+      this.postToWorker({ type: "response", requestId, result: deleted });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private handleImagesDeleteMany(requestId: string, imageIds: string[], userId?: string): void {
+    try {
+      if (!this.hasPermission("images")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
+      }
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
+      this.enforceScopedUser(resolvedUserId);
+      if (!Array.isArray(imageIds)) throw new Error("imageIds must be an array");
+
+      const deleted = imagesSvc.deleteImagesBulk(resolvedUserId, imageIds);
       this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });

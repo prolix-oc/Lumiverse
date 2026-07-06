@@ -1971,6 +1971,17 @@ const spindleApi: RuntimeSpindleAPI = {
       const result = await request({ type: "images_delete", requestId, imageId, userId });
       return result as boolean;
     },
+    async deleteMany(imageIds: string[], options?: { userId?: string }): Promise<number> {
+      assertMutationAllowed("spindle.images.deleteMany()");
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "images_delete_many",
+        requestId,
+        imageIds,
+        userId: options?.userId,
+      });
+      return result as number;
+    },
   },
 
   media: {
