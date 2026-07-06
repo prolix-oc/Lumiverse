@@ -394,7 +394,7 @@ export default function ConnectionItem({
               {testResult.message}
             </div>
           )}
-          {isOpenRouter && profile.has_api_key && (
+          {isOpenRouter && profile.has_api_key && credits && (
             <div key="credits" className={clsx(styles.creditsBar, !creditsAnimatedRef.current && styles.creditsBarAnimateIn, !(showCredits && credits) && styles.creditsHidden)}>
               <div className={styles.creditCell}>
                 <span className={styles.creditLabel}>{t('connectionItem.remaining')}</span>

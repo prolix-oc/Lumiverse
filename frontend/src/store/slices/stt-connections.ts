@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { SttConnectionsSlice } from '@/types/store'
 import type { SttConnectionProfile } from '@/types/api'
+import { normalizeConnectionsOrder } from './connections-order-merge'
 
 export const createSttConnectionsSlice: StateCreator<SttConnectionsSlice> = (set) => ({
   sttProfiles: [],
@@ -10,10 +11,11 @@ export const createSttConnectionsSlice: StateCreator<SttConnectionsSlice> = (set
 
   addSttProfile: (profile) =>
     set((state) => {
-      const order = (state as any).connectionsOrder.stt as string[]
+      const connectionsOrder = normalizeConnectionsOrder((state as any).connectionsOrder)
+      const order = connectionsOrder.stt
       return {
         sttProfiles: [...state.sttProfiles, profile],
-        connectionsOrder: { ...(state as any).connectionsOrder, stt: [...order, profile.id] },
+        connectionsOrder: { ...connectionsOrder, stt: [...order, profile.id] },
       }
     }),
 

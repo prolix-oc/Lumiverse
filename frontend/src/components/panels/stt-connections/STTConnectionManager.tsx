@@ -20,6 +20,7 @@ import STTConnectionItem from './STTConnectionItem'
 import type { SttConnectionProfile, CreateSttConnectionInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
 import { useConnectionSensors, useVerticalSortModifier } from '../connection-manager/useConnectionDragAndDrop'
+import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 
 export default function STTConnectionManager() {
   const { t } = useTranslation('panels')
@@ -126,8 +127,9 @@ export default function STTConnectionManager() {
     try {
       await sttConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
-      const nextOrder = (connectionsOrder?.stt ?? []).filter((id) => id !== deleteTarget.id)
-      setSetting('connectionsOrder', { ...connectionsOrder, stt: nextOrder })
+      const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
+      const nextOrder = normalizedOrder.stt.filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...normalizedOrder, stt: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[STTConnectionManager] Failed to delete:', err)
@@ -142,7 +144,7 @@ export default function STTConnectionManager() {
     if (oldIndex < 0 || newIndex < 0) return
     const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
     applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...connectionsOrder, stt: newOrder })
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), stt: newOrder })
   }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {

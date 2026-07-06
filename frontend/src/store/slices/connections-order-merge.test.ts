@@ -1,7 +1,33 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test'
-import { reorderProfiles, deriveReorderArgs } from './connections-order-merge'
+import { normalizeConnectionsOrder, reorderProfiles, deriveReorderArgs } from './connections-order-merge'
+
+describe('normalizeConnectionsOrder', () => {
+  test('fills missing connection types with empty arrays', () => {
+    expect(normalizeConnectionsOrder({ llm: ['a'] })).toEqual({
+      llm: ['a'],
+      imageGen: [],
+      stt: [],
+      tts: [],
+    })
+  })
+
+  test('drops malformed and duplicate ids from legacy persisted values', () => {
+    const out = normalizeConnectionsOrder({
+      llm: ['a', 'a', '', 'b'],
+      imageGen: null,
+      stt: ['voice', 42],
+      tts: 'not-an-array',
+    } as any)
+    expect(out).toEqual({
+      llm: ['a', 'b'],
+      imageGen: [],
+      stt: ['voice'],
+      tts: [],
+    })
+  })
+})
 
 describe('reorderProfiles', () => {
   test('reorders by id, drops unknown ids, and appends missing', () => {
@@ -19,6 +45,12 @@ describe('reorderProfiles', () => {
   test('returns the original slice when orderedIds is undefined', () => {
     const slice = [{ id: 'a' }, { id: 'b' }]
     const out = reorderProfiles(slice, undefined)
+    expect(out.map((p) => p.id)).toEqual(['a', 'b'])
+  })
+
+  test('returns the original slice when orderedIds is malformed', () => {
+    const slice = [{ id: 'a' }, { id: 'b' }]
+    const out = reorderProfiles(slice, null)
     expect(out.map((p) => p.id)).toEqual(['a', 'b'])
   })
 

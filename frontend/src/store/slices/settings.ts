@@ -5,7 +5,11 @@ import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
-import { deriveReorderArgs, type ConnectionsOrder } from './connections-order-merge'
+import {
+  deriveReorderArgs,
+  normalizeConnectionsOrder,
+  type ConnectionsOrder,
+} from './connections-order-merge'
 
 /** Default reasoning settings — used as initial state and for restore-on-unbind. */
 export const REASONING_DEFAULTS: ReasoningSettings = {
@@ -375,7 +379,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     narrationVoice: null,
   },
 
-  connectionsOrder: { llm: [], imageGen: [], stt: [], tts: [] },
+  connectionsOrder: normalizeConnectionsOrder(),
 
   hydrateStartupSettings: (settings: StartupSettings) => {
     const patch: Record<string, any> = { settingsLoaded: true }
@@ -401,7 +405,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       patch.drawerSettings = { ...get().drawerSettings, ...settings.drawerSettings }
     }
     if (settings.connectionsOrder && typeof settings.connectionsOrder === 'object') {
-      patch.connectionsOrder = { llm: [], imageGen: [], stt: [], tts: [], ...settings.connectionsOrder }
+      patch.connectionsOrder = normalizeConnectionsOrder(settings.connectionsOrder)
     }
 
     set(patch as any)
@@ -665,6 +669,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (pendingKeys?.filterTab === 'all') {
         pendingKeys.filterTab = 'characters'
         migratedCharacterFilterTab = true
+      }
+      if (patch.connectionsOrder) {
+        patch.connectionsOrder = normalizeConnectionsOrder(patch.connectionsOrder)
       }
 
       if (patch.imageGeneration) {

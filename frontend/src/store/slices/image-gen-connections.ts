@@ -3,6 +3,7 @@ import type { AppStore, ImageGenConnectionsSlice } from '@/types/store'
 import type { ImageGenConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 import { clearDirtyKey } from './settings'
+import { normalizeConnectionsOrder } from './connections-order-merge'
 
 function resolveActiveConnectionId(
   profiles: AppStore['imageGenProfiles'],
@@ -56,12 +57,13 @@ export const createImageGenConnectionsSlice: StateCreator<AppStore, [], [], Imag
         : { ...state.imageGeneration, activeImageGenConnectionId }
 
       if (imageGeneration !== state.imageGeneration) persistImageGeneration(imageGeneration)
-      const order = state.connectionsOrder.imageGen
+      const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
+      const order = connectionsOrder.imageGen
       return {
         imageGenProfiles,
         activeImageGenConnectionId,
         imageGeneration,
-        connectionsOrder: { ...state.connectionsOrder, imageGen: [...order, profile.id] },
+        connectionsOrder: { ...connectionsOrder, imageGen: [...order, profile.id] },
       }
     }),
 

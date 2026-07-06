@@ -20,6 +20,7 @@ import ImageGenConnectionItem from './ImageGenConnectionItem'
 import type { ImageGenConnectionProfile, CreateImageGenConnectionInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
 import { useConnectionSensors, useVerticalSortModifier } from '../connection-manager/useConnectionDragAndDrop'
+import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 
 export default function ImageGenConnectionManager() {
   const { t } = useTranslation('panels')
@@ -147,8 +148,9 @@ export default function ImageGenConnectionManager() {
     try {
       await imageGenConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
-      const nextOrder = (connectionsOrder?.imageGen ?? []).filter((id) => id !== deleteTarget.id)
-      setSetting('connectionsOrder', { ...connectionsOrder, imageGen: nextOrder })
+      const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
+      const nextOrder = normalizedOrder.imageGen.filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...normalizedOrder, imageGen: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[ImageGenConnectionManager] Failed to delete:', err)
@@ -163,7 +165,7 @@ export default function ImageGenConnectionManager() {
     if (oldIndex < 0 || newIndex < 0) return
     const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
     applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...connectionsOrder, imageGen: newOrder })
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), imageGen: newOrder })
   }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {

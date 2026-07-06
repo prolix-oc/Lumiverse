@@ -1,12 +1,28 @@
-export type ConnectionsOrder = Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
-
 export type ProfileType = 'llm' | 'imageGen' | 'stt' | 'tts'
+
+export type ConnectionsOrder = Partial<Record<ProfileType, string[]>>
+export type CompleteConnectionsOrder = Record<ProfileType, string[]>
 
 export interface OrderableProfile {
   id: string
 }
 
 export type OrderedProfiles<T extends OrderableProfile> = T[]
+
+const PROFILE_TYPES: readonly ProfileType[] = ['llm', 'imageGen', 'stt', 'tts']
+
+export function normalizeConnectionsOrder(order?: ConnectionsOrder | null): CompleteConnectionsOrder {
+  const normalized: CompleteConnectionsOrder = { llm: [], imageGen: [], stt: [], tts: [] }
+  if (!order || typeof order !== 'object') return normalized
+
+  for (const type of PROFILE_TYPES) {
+    const ids = order[type]
+    if (!Array.isArray(ids)) continue
+    normalized[type] = [...new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0))]
+  }
+
+  return normalized
+}
 
 /**
  * Reorder a single slice of profiles to match a persisted order.
@@ -21,9 +37,9 @@ export type OrderedProfiles<T extends OrderableProfile> = T[]
  */
 export function reorderProfiles<T extends OrderableProfile>(
   slice: readonly T[],
-  orderedIds: string[] | undefined,
+  orderedIds: readonly string[] | null | undefined,
 ): T[] {
-  if (!orderedIds) return [...slice]
+  if (!Array.isArray(orderedIds)) return [...slice]
   const byId = new Map(slice.map((p) => [p.id, p]))
   const seen = new Set<string>()
   const reordered: T[] = []
@@ -50,11 +66,11 @@ export function deriveReorderArgs(
   slices: Partial<Record<ProfileType, readonly { id: string }[]>>,
 ): Partial<Record<ProfileType, string[] | undefined>> {
   const out: Partial<Record<ProfileType, string[] | undefined>> = {}
-  for (const type of ['llm', 'imageGen', 'stt', 'tts'] as const) {
+  for (const type of PROFILE_TYPES) {
     const slice = slices[type]
     if (!slice) continue
     const orderedIds = order[type]
-    if (!orderedIds) continue
+    if (!Array.isArray(orderedIds)) continue
     const reordered = reorderProfiles(slice as readonly { id: string }[], orderedIds)
     out[type] = reordered.map((p) => p.id)
   }

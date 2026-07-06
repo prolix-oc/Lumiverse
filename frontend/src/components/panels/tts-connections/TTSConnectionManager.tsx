@@ -20,6 +20,7 @@ import TTSConnectionItem from './TTSConnectionItem'
 import type { TtsConnectionProfile, CreateTtsConnectionInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
 import { useConnectionSensors, useVerticalSortModifier } from '../connection-manager/useConnectionDragAndDrop'
+import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 
 export default function TTSConnectionManager() {
   const { t } = useTranslation('panels')
@@ -129,8 +130,9 @@ export default function TTSConnectionManager() {
     try {
       await ttsConnectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
-      const nextOrder = (connectionsOrder?.tts ?? []).filter((id) => id !== deleteTarget.id)
-      setSetting('connectionsOrder', { ...connectionsOrder, tts: nextOrder })
+      const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
+      const nextOrder = normalizedOrder.tts.filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...normalizedOrder, tts: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[TTSConnectionManager] Failed to delete:', err)
@@ -145,7 +147,7 @@ export default function TTSConnectionManager() {
     if (oldIndex < 0 || newIndex < 0) return
     const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
     applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...connectionsOrder, tts: newOrder })
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), tts: newOrder })
   }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {

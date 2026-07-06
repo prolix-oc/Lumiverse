@@ -10,6 +10,7 @@ import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ConnectionForm from './connection-manager/ConnectionForm'
 import ConnectionItem from './connection-manager/ConnectionItem'
 import { useConnectionSensors, useVerticalSortModifier } from './connection-manager/useConnectionDragAndDrop'
+import { normalizeConnectionsOrder } from '@/store/slices/connections-order-merge'
 import type { ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import styles from './ConnectionManager.module.css'
 
@@ -161,8 +162,9 @@ export default function ConnectionManager() {
     try {
       await connectionsApi.delete(deleteTarget.id)
       removeProfile(deleteTarget.id)
-      const nextOrder = (connectionsOrder?.llm ?? []).filter((id) => id !== deleteTarget.id)
-      setSetting('connectionsOrder', { ...connectionsOrder, llm: nextOrder })
+      const normalizedOrder = normalizeConnectionsOrder(connectionsOrder)
+      const nextOrder = normalizedOrder.llm.filter((id) => id !== deleteTarget.id)
+      setSetting('connectionsOrder', { ...normalizedOrder, llm: nextOrder })
       setDeleteTarget(null)
     } catch (err) {
       console.error('[ConnectionManager] Failed to delete:', err)
@@ -178,7 +180,7 @@ export default function ConnectionManager() {
     if (oldIndex < 0 || newIndex < 0) return
     const newOrder = arrayMove(orderedIds, oldIndex, newIndex)
     applyProfileOrder(newOrder)
-    setSetting('connectionsOrder', { ...connectionsOrder, llm: newOrder })
+    setSetting('connectionsOrder', { ...normalizeConnectionsOrder(connectionsOrder), llm: newOrder })
   }, [orderedIds, connectionsOrder, applyProfileOrder, setSetting])
 
   if (loading) {
