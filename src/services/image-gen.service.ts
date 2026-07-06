@@ -35,6 +35,7 @@ import "../image-gen/index";
 
 const IMAGE_SETTINGS_KEY = "imageGeneration";
 const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
+const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
 
 async function buildRelayImagePreview(dataUrl: string): Promise<string | undefined> {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -1226,7 +1227,7 @@ async function parseCustomPrompt(
         role: "system",
         content: CUSTOM_PROMPT_PARSER_SYSTEM,
       },
-      ...buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings),
       {
         role: "user",
         content: `Parser instructions from the user:\n${input.prompt}\n\nReturn the final image prompt now.`,
@@ -1302,7 +1303,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
         role: "system",
         content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
-      ...buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings),
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
@@ -1314,17 +1315,34 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
   return parseSceneJson(response.content || "");
 }
 
-function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings): LlmMessage[] {
+export async function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings): Promise<LlmMessage[]> {
   const includeCharacters = settings.includeCharacters;
   const msgs: LlmMessage[] = [];
+  const env = buildMacroEnvForChat(userId, chatId);
+
+  // Resolve base macros ({{user}}/{{char}}/vars, etc.) in any text sent to the
+  // image-gen prompt parser. Mirrors resolvePromptPreset's best-effort path:
+  // macros are a convenience, so a resolution failure must never block a
+  // generation — the raw text is returned instead.
+  const resolve = async (text: string | undefined | null): Promise<string> => {
+    if (!text || !env || !HAS_MACRO_RE.test(text)) return text ?? "";
+    try {
+      return (await evaluateMacros(text, env, macroRegistry)).text;
+    } catch {
+      return text;
+    }
+  };
+
   const chat = chatsSvc.getChat(userId, chatId);
   if (chat) {
     const char = chat.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
     if (char) {
+      const description = await resolve(char.description);
+      const scenario = await resolve(char.scenario);
       const charInfo = [
         char.name && `Name: ${char.name}`,
-        char.description && `Description: ${char.description}`,
-        char.scenario && `Scenario: ${char.scenario}`,
+        description && `Description: ${description}`,
+        scenario && `Scenario: ${scenario}`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -1334,10 +1352,12 @@ function buildContextMessages(userId: string, chatId: string, settings: ImageGen
   if (includeCharacters) {
     const persona = personasSvc.resolvePersonaOrDefault(userId);
     if (persona) {
+      const title = await resolve(persona.title);
+      const description = await resolve(persona.description);
       const personaInfo = [
         persona.name && `Name: ${persona.name}`,
-        persona.title && `Title: ${persona.title}`,
-        persona.description && `Description: ${persona.description}`,
+        title && `Title: ${title}`,
+        description && `Description: ${description}`,
         (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
           `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
       ]
@@ -1347,7 +1367,7 @@ function buildContextMessages(userId: string, chatId: string, settings: ImageGen
     }
   }
   for (const m of chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings))) {
-    msgs.push({ role: m.is_user ? "user" : "assistant", content: m.content });
+    msgs.push({ role: m.is_user ? "user" : "assistant", content: await resolve(m.content) });
   }
   return msgs;
 }
