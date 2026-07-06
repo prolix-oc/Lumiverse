@@ -69,6 +69,9 @@ const generated = await spindle.images.uploadFromDataUrl(dataUrl, {
 
 // Delete an asset
 await spindle.images.delete(uploaded.id)
+
+// Bulk delete by ID
+const deletedCount = await spindle.images.deleteMany(imageIds)
 ```
 
 ## Methods
@@ -80,7 +83,8 @@ await spindle.images.delete(uploaded.id)
 | `upload(input)` | `Promise<ImageDTO>` | Upload raw image or video bytes. The host automatically tags the stored asset with the current extension identifier. |
 | `uploadMany(items, options?)` | `Promise<Array<{ id?: string; error?: string }>>` | Batch upload multiple assets in a single IPC call. Per-item failures captured as `{error}` rather than throwing. Options: `{ userId?, concurrency? }` (concurrency capped at 32, default 16). |
 | `uploadFromDataUrl(dataUrl, options?)` | `Promise<ImageDTO>` | Upload a base64 image data URL. The host automatically tags the stored asset with the current extension identifier. |
-| `delete(imageId)` | `Promise<boolean>` | Delete an asset by ID. Returns `true` when deleted. |
+| `delete(imageId)` | `Promise<boolean>` | Delete an asset by ID. Returns `true` when deleted. Emits `IMAGE_DELETED`. |
+| `deleteMany(imageIds, options?)` | `Promise<number>` | Bulk delete by ID. Returns the number of assets deleted (missing IDs are skipped). Does not emit per-image `IMAGE_DELETED` events. Options: `{ userId? }`. |
 
 ## ImageListOptionsDTO
 
