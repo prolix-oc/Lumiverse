@@ -523,7 +523,7 @@ function hasStrongSingleTokenPartialSignal(
 ): boolean {
   const signal = queryState.queryTokenSignals.get(token);
   if (!signal) return false;
-  if (signal.hasUppercaseForm) return true;
+  if (signal.hasUppercaseForm && token.length >= 3) return true;
 
   const nameSpecificityFloor = kind === "comment" ? 0.34 : 0.3;
   if (signal.hasNameLikeForm && specificity >= nameSpecificityFloor) {
@@ -731,7 +731,9 @@ function buildQueryTokenSignals(
     };
     const isUppercaseForm =
       /[A-Z]/.test(rawToken) && rawToken === rawToken.toUpperCase();
-    const isNameLikeForm = isUppercaseForm || /^[A-Z][a-z0-9]+$/.test(rawToken);
+    const isNameLikeForm =
+      /^[A-Z][a-z0-9]+$/.test(rawToken) ||
+      (isUppercaseForm && normalizedToken.length >= 3);
 
     queryTokenSignals.set(normalizedToken, {
       count: previous.count + 1,
@@ -759,7 +761,7 @@ function buildFocusTokenSet(
       const specificity = getTokenSpecificity(specificityState, token);
       const repeated = signal.count >= 2 && token.length >= 4;
       const named = signal.hasNameLikeForm && token.length >= 3;
-      const uppercase = signal.hasUppercaseForm && token.length >= 2;
+      const uppercase = signal.hasUppercaseForm && token.length >= 3;
       const verySpecificLongToken = token.length >= 8 && specificity >= 0.48;
 
       if (uppercase) return true;
@@ -1173,6 +1175,48 @@ function getLexicalContentBoostScale(
   return 0.18;
 }
 
+function getActiveTitleTokenBoost(
+  comment: string,
+  queryState: VectorQueryLexicalState,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+  isFtsOnly: boolean,
+  commentMultiplier: number,
+): number {
+  if (
+    !comment ||
+    commentMultiplier < 0.8 ||
+    rawCommentMatches.exactScore > 0 ||
+    rawCommentMatches.partialScore <= 0
+  ) {
+    return 0;
+  }
+
+  const titleTokens = Array.from(new Set(tokenizeLexicalText(comment)));
+  if (titleTokens.length < 2) return 0;
+
+  let bestBoost = 0;
+  for (const token of titleTokens) {
+    if (!queryState.tokenSet.has(token)) continue;
+
+    const signal = queryState.queryTokenSignals.get(token);
+    if (!signal) continue;
+
+    const specificity = getTokenSpecificity(queryState.specificityState, token);
+    const acronymMention = signal.hasUppercaseForm && token.length >= 3;
+    const nameMention = signal.hasNameLikeForm;
+    const repeatedDistinctMention =
+      signal.count >= 2 && token.length >= 4 && specificity >= 0.45;
+    if (!acronymMention && !nameMention && !repeatedDistinctMention) continue;
+
+    const repetitionBoost = clamp01((signal.count - 1) / 4) * 0.035;
+    const rawBoost = 0.035 + specificity * 0.045 + repetitionBoost;
+    bestBoost = Math.max(bestBoost, rawBoost);
+  }
+
+  if (bestBoost <= 0) return 0;
+  return Math.min(isFtsOnly ? 0.13 : 0.075, bestBoost + (isFtsOnly ? 0.065 : 0));
+}
+
 function scoreVectorWorldInfoCandidate(
   entry: WorldBookEntryModel,
   candidate: WorldBookSearchCandidate,
@@ -1223,6 +1267,13 @@ function scoreVectorWorldInfoCandidate(
   const matchedComment = rawCommentMatches.matchedValues[0] ?? null;
 
   const isFtsOnly = !Number.isFinite(candidate.distance);
+  const activeTitleTokenBoost = getActiveTitleTokenBoost(
+    comment,
+    queryState,
+    rawCommentMatches,
+    isFtsOnly,
+    commentMultiplier,
+  );
   const vectorSimilarity = distanceToSimilarity(
     isFtsOnly ? 2 : candidate.distance,
   );
@@ -1231,7 +1282,8 @@ function scoreVectorWorldInfoCandidate(
   const secondaryExactScore = secondaryMatches.exactScore;
   const secondaryPartialScore = secondaryMatches.partialScore;
   const commentExactScore = commentMatches.exactScore;
-  const commentPartialScore = commentMatches.partialScore;
+  const commentPartialScore =
+    commentMatches.partialScore + activeTitleTokenBoost;
   const focusOverlap = getEntryFocusOverlap(entry, queryState);
   const focusBoost = focusOverlap.score * 0.05;
   const priorityScore =
