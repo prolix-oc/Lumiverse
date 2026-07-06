@@ -28,9 +28,16 @@ interface PhraseSpecificityState {
   tokenDocFrequency: Map<string, number>;
 }
 
+interface QueryTokenSignal {
+  count: number;
+  hasNameLikeForm: boolean;
+  hasUppercaseForm: boolean;
+}
+
 interface VectorQueryLexicalState {
   normalizedText: string;
   tokenSet: Set<string>;
+  queryTokenSignals: Map<string, QueryTokenSignal>;
   focusTokenSet: Set<string>;
   specificityState: PhraseSpecificityState;
 }
@@ -508,6 +515,34 @@ function getPartialMatchThreshold(
   return tokenCount === 2 ? 0.75 : 0.6;
 }
 
+function hasStrongSingleTokenPartialSignal(
+  token: string,
+  queryState: VectorQueryLexicalState,
+  specificity: number,
+  kind: "key" | "comment",
+): boolean {
+  const signal = queryState.queryTokenSignals.get(token);
+  if (!signal) return false;
+  if (signal.hasUppercaseForm) return true;
+
+  const nameSpecificityFloor = kind === "comment" ? 0.34 : 0.3;
+  if (signal.hasNameLikeForm && specificity >= nameSpecificityFloor) {
+    return true;
+  }
+
+  const repeatedSpecificityFloor = kind === "comment" ? 0.48 : 0.42;
+  if (
+    signal.count >= 2 &&
+    token.length >= 4 &&
+    specificity >= repeatedSpecificityFloor
+  ) {
+    return true;
+  }
+
+  const longTokenSpecificityFloor = kind === "comment" ? 0.78 : 0.7;
+  return token.length >= 8 && specificity >= longTokenSpecificityFloor;
+}
+
 function getRareTokenPartialScore(
   value: string,
   queryState: VectorQueryLexicalState,
@@ -517,11 +552,31 @@ function getRareTokenPartialScore(
   const tokens = Array.from(new Set(tokenizeLexicalText(value)));
   if (tokens.length < 2) return 0;
 
-  const matchedTokenSpecificities = tokens
+  const matchedTokens = tokens
     .filter((token) => queryState.tokenSet.has(token))
-    .map((token) => getTokenSpecificity(queryState.specificityState, token));
-  if (matchedTokenSpecificities.length === 0) return 0;
+    .map((token) => ({
+      token,
+      specificity: getTokenSpecificity(queryState.specificityState, token),
+    }));
+  if (matchedTokens.length === 0) return 0;
 
+  if (matchedTokens.length === 1) {
+    const matchedToken = matchedTokens[0];
+    if (
+      !hasStrongSingleTokenPartialSignal(
+        matchedToken.token,
+        queryState,
+        matchedToken.specificity,
+        kind,
+      )
+    ) {
+      return 0;
+    }
+  }
+
+  const matchedTokenSpecificities = matchedTokens.map(
+    (token) => token.specificity,
+  );
   const bestTokenSpecificity = Math.max(...matchedTokenSpecificities);
   const minimumSpecificity = kind === "comment" ? 0.42 : 0.34;
   if (bestTokenSpecificity < minimumSpecificity) return 0;
@@ -654,14 +709,10 @@ function estimateReferenceEntryPenalty(
   );
 }
 
-function buildFocusTokenSet(
+function buildQueryTokenSignals(
   queryText: string,
-  specificityState: PhraseSpecificityState,
-): Set<string> {
-  const queryTokenSignals = new Map<
-    string,
-    { count: number; hasNameLikeForm: boolean; hasUppercaseForm: boolean }
-  >();
+): Map<string, QueryTokenSignal> {
+  const queryTokenSignals = new Map<string, QueryTokenSignal>();
   for (const match of queryText.matchAll(/\b[A-Za-z0-9]+\b/g)) {
     const rawToken = match[0];
     const normalizedToken = normalizeLexicalText(rawToken);
@@ -689,6 +740,14 @@ function buildFocusTokenSet(
     });
   }
 
+  return queryTokenSignals;
+}
+
+function buildFocusTokenSet(
+  queryText: string,
+  specificityState: PhraseSpecificityState,
+  queryTokenSignals: Map<string, QueryTokenSignal>,
+): Set<string> {
   const tokens = tokenizeLexicalText(queryText);
   return new Set(
     tokens.filter((token) => {
@@ -937,10 +996,16 @@ function buildVectorQueryLexicalState(
   queryText: string,
   specificityState: PhraseSpecificityState,
 ): VectorQueryLexicalState {
+  const queryTokenSignals = buildQueryTokenSignals(queryText);
   return {
     normalizedText: normalizeLexicalText(queryText),
     tokenSet: new Set(tokenizeLexicalText(queryText)),
-    focusTokenSet: buildFocusTokenSet(queryText, specificityState),
+    queryTokenSignals,
+    focusTokenSet: buildFocusTokenSet(
+      queryText,
+      specificityState,
+      queryTokenSignals,
+    ),
     specificityState,
   };
 }
@@ -1081,6 +1146,33 @@ function augmentPooledCandidatesWithExactAnchors(
   return Array.from(byEntryId.values());
 }
 
+function getExactTitleAnchorBoost(
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  if (rawCommentMatches.exactScore <= 0) return 0;
+  return 0.08 + clamp01(rawCommentMatches.matchedSpecificity) * 0.08;
+}
+
+function getLexicalContentBoostScale(
+  primaryMatches: ReturnType<typeof scorePhraseMatches>,
+  secondaryMatches: ReturnType<typeof scorePhraseMatches>,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  const hasExactAnchor =
+    primaryMatches.exactScore > 0 ||
+    secondaryMatches.exactScore > 0 ||
+    rawCommentMatches.exactScore > 0;
+  if (hasExactAnchor) return 0.3;
+
+  const hasPartialAnchor =
+    primaryMatches.partialScore > 0 ||
+    secondaryMatches.partialScore > 0 ||
+    rawCommentMatches.partialScore > 0;
+  if (hasPartialAnchor) return 0.22;
+
+  return 0.18;
+}
+
 function scoreVectorWorldInfoCandidate(
   entry: WorldBookEntryModel,
   candidate: WorldBookSearchCandidate,
@@ -1145,12 +1237,18 @@ function scoreVectorWorldInfoCandidate(
   const priorityScore =
     clamp01((entry.priority || 0) / 100) * preset.weights.priority;
   const vectorScore = vectorSimilarity * preset.weights.vector;
+  const lexicalContentBoostScale = getLexicalContentBoostScale(
+    primaryMatches,
+    secondaryMatches,
+    rawCommentMatches,
+  );
   const lexicalContentBoost =
     candidate.lexical_score != null && candidate.lexical_score > 0
       ? clamp01(Math.log1p(candidate.lexical_score) / Math.log1p(30)) *
         preset.weights.vector *
-        0.35
+        lexicalContentBoostScale
       : 0;
+  const exactTitleAnchorBoost = getExactTitleAnchorBoost(rawCommentMatches);
   const lexicalSpecificityAnchor = Math.max(
     primaryMatches.matchedSpecificity,
     secondaryMatches.matchedSpecificity,
@@ -1218,6 +1316,7 @@ function scoreVectorWorldInfoCandidate(
       secondaryExactScore +
       secondaryPartialScore +
       commentExactScore +
+      exactTitleAnchorBoost +
       commentPartialScore +
       focusBoost +
       priorityScore -
@@ -1240,7 +1339,7 @@ function scoreVectorWorldInfoCandidate(
       primaryPartial: primaryPartialScore,
       secondaryExact: secondaryExactScore,
       secondaryPartial: secondaryPartialScore,
-      commentExact: commentExactScore,
+      commentExact: commentExactScore + exactTitleAnchorBoost,
       commentPartial: commentPartialScore,
       focusBoost,
       priority: priorityScore,
