@@ -470,7 +470,7 @@ export function createRoom(
   })();
 
   // Mark the chat so the normal chat-open path can detect a room cheaply.
-  chatsSvc.mergeChatMetadata(hostUserId, chatId, { multiplayer_room_id: id });
+  chatsSvc.mergeChatMetadata(hostUserId, chatId, { multiplayer_room_id: id }, { touchUpdatedAt: false });
   invalidateChatRoute(chatId);
 
   const room = getRoom(id)!;
@@ -580,7 +580,7 @@ export function closeRoom(hostUserId: string, roomId: string): boolean {
   getDb()
     .query("UPDATE multiplayer_rooms SET status = 'closed', freeform_deadline = NULL, updated_at = ? WHERE id = ?")
     .run(Math.floor(Date.now() / 1000), roomId);
-  chatsSvc.mergeChatMetadata(hostUserId, room.chat_id, { multiplayer_room_id: undefined });
+  chatsSvc.mergeChatMetadata(hostUserId, room.chat_id, { multiplayer_room_id: undefined }, { touchUpdatedAt: false });
   invalidateChatRoute(room.chat_id);
 
   eventBus.publishToRoom(roomId, EventType.ROOM_STATUS, {

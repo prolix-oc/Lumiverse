@@ -19,6 +19,7 @@ import {
 import { imagesApi } from '@/api/images'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
+import { resolveMultiplayerMessageAuthor } from '@/lib/multiplayerMessageAuthor'
 
 /**
  * Strip thinking/reasoning tags from content and extract the thoughts.
@@ -429,28 +430,23 @@ export function useMessageCard(message: Message, chatId: string) {
     }
   }, [message.is_user, message.swipes, openModal, doDeleteMessage, doDeleteSwipe, tc])
 
-  // Multiplayer: peer-authored messages carry author attribution in extra.mp.
-  // Render the peer's persona name + broadcast WebP avatar instead of the
-  // host's persona. Guarded by extra.mp, so normal messages are unaffected.
-  // Multiplayer author resolution. The WebP data-URL avatar lives once in the
-  // participants slice (not on every message). Resolve the author participant
-  // by stamped id (peer messages) or, for the host's own messages — which have
-  // no extra.mp — by matching the persona name. Non-reactive read on purpose:
-  // avoids re-rendering every card on typing/presence churn.
+  // Multiplayer author resolution. Peer-authored messages persist a stamped
+  // snapshot in `extra.mp`; that saved row is authoritative for historical
+  // rendering and must not be rewritten by later peer persona/avatar changes.
+  // Unstamped room messages (the host's own local-account turns) still fall
+  // back to the live roster because no per-message snapshot exists for them.
+  // Non-reactive read on purpose: avoids re-rendering every card on
+  // typing/presence churn.
   const mpStore = useStore.getState()
-  const mpStamp = isUser && message.extra?.mp && typeof message.extra.mp === 'object'
-    ? (message.extra.mp as { participantId?: string; displayName?: string; personaName?: string; avatarUrl?: string | null })
-    : null
-  const mpParticipant = mpStore.mpRoomId && isUser
-    ? mpStamp?.participantId
-      ? mpStore.mpParticipants.find((p) => p.id === mpStamp.participantId)
-      : mpStore.mpParticipants.find((p) => !!p.persona?.name && p.persona.name === (message.name || '').trim())
-    : undefined
-  const isMpAuthor = !!mpStamp || !!mpParticipant
-  const mpAvatarData = mpParticipant?.persona?.avatarUrl || mpStamp?.avatarUrl || ''
-  const mpDisplayName = isMpAuthor
-    ? (mpParticipant?.persona?.name || mpStamp?.personaName || mpStamp?.displayName || displayName)
-    : displayName
+  const mpAuthor = resolveMultiplayerMessageAuthor({
+    message,
+    roomId: mpStore.mpRoomId,
+    participants: mpStore.mpParticipants,
+    fallbackDisplayName: displayName,
+  })
+  const isMpAuthor = !!mpAuthor
+  const mpAvatarData = mpAuthor?.avatarUrl || ''
+  const mpDisplayName = mpAuthor?.displayName || displayName
   const mpAvatarUrl = isMpAuthor ? (mpAvatarData || null) : avatarUrl
   const mpFullAvatarUrl = isMpAuthor ? (mpAvatarData || null) : fullAvatarUrl
   const mpAvatar: typeof avatar = isMpAuthor

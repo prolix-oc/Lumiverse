@@ -75,6 +75,43 @@ describe("multiplayer turn engine", () => {
     expect(mp.getRoomByChatId(result.chatId)).not.toBeNull();
   });
 
+  test("closing a room does not reorder that character's recent chats", () => {
+    const realDateNow = Date.now;
+    try {
+      const character = charactersSvc.createCharacter(HOST, { name: "Bot" });
+      const source = chatsSvc.createChat(HOST, { character_id: character.id, name: "Source chat" });
+      chatsSvc.createMessage(source.id, { is_user: true, name: "U", content: "hello" }, HOST);
+      const newerSolo = chatsSvc.createChat(HOST, { character_id: character.id, name: "Newer solo" });
+
+      getDb().query("UPDATE chats SET created_at = ?, updated_at = ? WHERE id = ?").run(100, 100, source.id);
+      getDb().query("UPDATE chats SET created_at = ?, updated_at = ? WHERE id = ?").run(300, 300, newerSolo.id);
+
+      Date.now = () => 200_000;
+      const created = mp.forkAndCreateRoom(HOST, source.id, { turnStrategy: "round_robin" });
+      if ("error" in created) throw new Error(`fork failed: ${created.error}`);
+
+      expect(chatsSvc.listRecentChatsGrouped(HOST, { limit: 10, offset: 0 }).data[0]?.latest_chat_id).toBe(newerSolo.id);
+      expect(chatsSvc.listChatSummaries(HOST, character.id).map((chat) => chat.id)).toEqual([
+        newerSolo.id,
+        created.chatId,
+        source.id,
+      ]);
+
+      Date.now = () => 400_000;
+      expect(mp.closeRoom(HOST, created.room.id)).toBe(true);
+
+      expect(chatsSvc.getChat(HOST, created.chatId)?.updated_at).toBe(200);
+      expect(chatsSvc.listRecentChatsGrouped(HOST, { limit: 10, offset: 0 }).data[0]?.latest_chat_id).toBe(newerSolo.id);
+      expect(chatsSvc.listChatSummaries(HOST, character.id).map((chat) => chat.id)).toEqual([
+        newerSolo.id,
+        created.chatId,
+        source.id,
+      ]);
+    } finally {
+      Date.now = realDateNow;
+    }
+  });
+
   test("ensureJoinedRoomChat records a joined room in the peer's own history", () => {
     const PEER = "peer-user";
     const hostChatId = crypto.randomUUID();

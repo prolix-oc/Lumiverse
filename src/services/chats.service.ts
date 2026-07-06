@@ -1139,7 +1139,12 @@ function diffLeafBagInto(out: string[], prev: unknown, next: unknown, prefix: st
   }
 }
 
-export function updateChat(userId: string, id: string, input: UpdateChatInput): Chat | null {
+export function updateChat(
+  userId: string,
+  id: string,
+  input: UpdateChatInput,
+  opts: { touchUpdatedAt?: boolean } = {},
+): Chat | null {
   const existing = getChat(userId, id);
   if (!existing) return null;
 
@@ -1151,9 +1156,11 @@ export function updateChat(userId: string, id: string, input: UpdateChatInput): 
 
   if (fields.length === 0) return existing;
 
-  const now = Math.floor(Date.now() / 1000);
-  fields.push("updated_at = ?");
-  values.push(now);
+  if (opts.touchUpdatedAt !== false) {
+    const now = Math.floor(Date.now() / 1000);
+    fields.push("updated_at = ?");
+    values.push(now);
+  }
   values.push(id);
   values.push(userId);
 
@@ -1196,6 +1203,7 @@ export function mergeChatMetadata(
   userId: string,
   id: string,
   partial: Record<string, any>,
+  opts: { touchUpdatedAt?: boolean } = {},
 ): Chat | null {
   const existing = getChat(userId, id);
   if (!existing) return null;
@@ -1204,7 +1212,7 @@ export function mergeChatMetadata(
     if (value === undefined) delete merged[key];
     else merged[key] = value;
   }
-  return updateChat(userId, id, { metadata: merged });
+  return updateChat(userId, id, { metadata: merged }, opts);
 }
 
 // ---- Group chat muting ----
