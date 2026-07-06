@@ -4,11 +4,22 @@ import { parsePagination } from "../services/pagination";
 import { parseRangeHeader } from "./http-range";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import { safeFetch, SSRFError } from "../utils/safe-fetch";
+import {
+  detectImageContentType,
+  isSupportedProxyImageContentType,
+  normalizeImageContentType,
+  validateImageMagicBytes,
+} from "../utils/image-signature";
+import { extractRemoteImageUrlFromHtml } from "../utils/remote-image-page";
 
 const app = new Hono();
 
 const MAX_IMAGE_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 const MAX_WALLPAPER_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB
+const REMOTE_IMAGE_PROXY_MAX_BYTES = 25 * 1024 * 1024; // 25 MB
+const REMOTE_IMAGE_PROXY_MAX_HTML_BYTES = 1 * 1024 * 1024; // 1 MB
+const REMOTE_IMAGE_PROXY_MAX_RESOLUTION_DEPTH = 1;
 type WallpaperVideoCodec = "h264" | "hevc";
 type WallpaperUploadProgressId = string;
 
@@ -39,6 +50,96 @@ function resolveImageContentType(filepath: string, fallbackMimeType: string): st
   if (filepath.endsWith(".webm")) return "video/webm";
   if (filepath.endsWith(".mov")) return "video/quicktime";
   return fallbackMimeType || null;
+}
+
+async function readResponseBodyBinaryCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!response.body) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch {}
+      throw new Error(`Remote image exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+async function readResponseBodyTextCapped(response: Response, maxBytes: number): Promise<string> {
+  const bytes = await readResponseBodyBinaryCapped(response, maxBytes);
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  return contentType === "text/html" || contentType === "application/xhtml+xml";
+}
+
+async function fetchRemoteImageAsset(
+  rawUrl: string,
+  depth = 0,
+): Promise<{ data: Uint8Array; contentType: string }> {
+  const response = await safeFetch(rawUrl, {
+    maxBytes: REMOTE_IMAGE_PROXY_MAX_BYTES,
+    timeoutMs: 30_000,
+  });
+
+  if (!response.ok) {
+    const err = new Error(`Remote image request failed with status ${response.status}`);
+    (err as Error & { statusCode?: number }).statusCode = response.status;
+    throw err;
+  }
+
+  const declaredContentType = normalizeImageContentType(response.headers.get("content-type"));
+
+  if (isHtmlContentType(declaredContentType)) {
+    if (depth >= REMOTE_IMAGE_PROXY_MAX_RESOLUTION_DEPTH) {
+      throw new Error("Remote image page did not resolve to a raster asset");
+    }
+
+    const html = await readResponseBodyTextCapped(response, REMOTE_IMAGE_PROXY_MAX_HTML_BYTES);
+    const resolvedImageUrl = extractRemoteImageUrlFromHtml(rawUrl, html);
+    if (!resolvedImageUrl) {
+      throw new Error("Remote image page did not expose a usable image");
+    }
+    if (resolvedImageUrl === rawUrl) {
+      throw new Error("Remote image page resolved back to itself");
+    }
+
+    return fetchRemoteImageAsset(resolvedImageUrl, depth + 1);
+  }
+
+  const binary = await readResponseBodyBinaryCapped(response, REMOTE_IMAGE_PROXY_MAX_BYTES);
+  const inferredContentType = detectImageContentType(binary);
+  const effectiveContentType = isSupportedProxyImageContentType(declaredContentType)
+    ? (validateImageMagicBytes(binary, declaredContentType) ? declaredContentType : inferredContentType)
+    : inferredContentType;
+
+  if (!effectiveContentType || !isSupportedProxyImageContentType(effectiveContentType)) {
+    throw new Error("Unsupported remote image content type");
+  }
+  if (!validateImageMagicBytes(binary, effectiveContentType)) {
+    throw new Error("Remote image bytes do not match the declared content type");
+  }
+
+  return {
+    data: binary,
+    contentType: effectiveContentType,
+  };
 }
 
 app.get("/wallpapers", (c) => {
@@ -115,6 +216,51 @@ app.post("/", async (c) => {
 
   const image = await svc.uploadImage(userId, file, { strip_audio: stripAudio });
   return c.json(image, 201);
+});
+
+app.get("/remote", async (c) => {
+  const rawUrl = c.req.query("url");
+  if (!rawUrl) return c.json({ error: "url is required" }, 400);
+
+  let remoteUrl: URL;
+  try {
+    remoteUrl = new URL(rawUrl);
+  } catch {
+    return c.json({ error: "Invalid remote image URL" }, 400);
+  }
+
+  if (remoteUrl.protocol !== "http:" && remoteUrl.protocol !== "https:") {
+    return c.json({ error: "Only http:// and https:// remote image URLs are allowed" }, 400);
+  }
+  if (remoteUrl.username || remoteUrl.password) {
+    return c.json({ error: "Remote image URLs cannot include credentials" }, 400);
+  }
+
+  try {
+    const asset = await fetchRemoteImageAsset(remoteUrl.toString());
+
+    return new Response(asset.data, {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, max-age=3600, no-transform",
+        "Content-Length": String(asset.data.byteLength),
+        "Content-Type": asset.contentType,
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  } catch (err: any) {
+    const message = err?.message || "Remote image proxy failed";
+    const statusCode = typeof err?.statusCode === "number" ? err.statusCode : 0;
+    const status = err instanceof SSRFError
+      ? 400
+      : statusCode === 404
+        ? 404
+        : message.includes("Unsupported remote image content type") || message.includes("did not expose a usable image")
+          ? 415
+          : 502;
+    return c.json({ error: message }, status);
+  }
 });
 
 app.get("/:id", async (c) => {

@@ -144,6 +144,24 @@ describe('richHtmlSanitizer inline SVG support', () => {
     expect(anchors[1]?.hasAttribute('href')).toBe(false)
   })
 
+  test('proxies third-party raster images through the same-origin remote image endpoint', () => {
+    const root = parseFragment(
+      sanitizeHtmlIsland('<div><img src="https://media.tenor.com/demo/tenor.gif" alt="demo"></div>'),
+    )
+
+    expect(root.querySelector('img')?.getAttribute('src')).toBe(
+      '/api/v1/images/remote?url=https%3A%2F%2Fmedia.tenor.com%2Fdemo%2Ftenor.gif',
+    )
+  })
+
+  test('keeps same-origin image URLs direct', () => {
+    const root = parseFragment(
+      sanitizeHtmlIsland('<div><img src="/api/v1/images/local-id" alt="local"></div>'),
+    )
+
+    expect(root.querySelector('img')?.getAttribute('src')).toBe('/api/v1/images/local-id')
+  })
+
   test('keeps island style blocks while sanitizing inline svg content', () => {
     const root = parseFragment(
       sanitizeHtmlIsland(

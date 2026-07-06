@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { isSafeBrowserNavigationTarget } from '@/lib/navigationSafety'
+import { imagesApi } from '@/api/images'
 
 const BASE_FORBID_TAGS = ['script', 'iframe', 'frame', 'object', 'embed', 'meta', 'base', 'link', 'math']
 const BASE_FORBID_ATTR = ['srcdoc', 'formaction']
@@ -88,6 +89,33 @@ function isAllowedImageSrc(src: string): boolean {
     return url.protocol === 'http:' || url.protocol === 'https:'
   } catch {
     return false
+  }
+}
+
+function getKnownAppOrigins(): Set<string> {
+  const origins = new Set<string>()
+  if (typeof window !== 'undefined' && window.location?.origin) origins.add(window.location.origin)
+
+  try {
+    const baseOrigin = new URL(imagesApi.url('origin-probe'), typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin
+    origins.add(baseOrigin)
+  } catch {}
+
+  return origins
+}
+
+function maybeProxyRemoteImageSrc(src: string): string {
+  const trimmed = src.trim()
+  if (!trimmed) return trimmed
+
+  try {
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+    const url = new URL(trimmed, baseOrigin)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return trimmed
+    if (getKnownAppOrigins().has(url.origin)) return trimmed
+    return imagesApi.remoteUrl(url.toString())
+  } catch {
+    return trimmed
   }
 }
 
@@ -268,6 +296,8 @@ function sanitizeHtml(html: string, options: SanitizeHtmlOptions): string {
       img.remove()
       continue
     }
+
+    img.setAttribute('src', maybeProxyRemoteImageSrc(src))
 
     // Responsive srcsets are harder to constrain safely than a single image URL.
     img.removeAttribute('srcset')

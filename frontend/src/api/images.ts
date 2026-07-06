@@ -25,6 +25,10 @@ interface ImageUrlOptions {
   codec?: 'h264' | 'hevc'
 }
 
+function joinApiPath(path: string): string {
+  return `${BASE_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
 export const imagesApi = {
   get(id: string) {
     return get<Image>(`/images/${id}`)
@@ -89,6 +93,11 @@ export const imagesApi = {
   /** Large tier (~700px) — portrait panel, editor preview */
   largeUrl(id: string) {
     return `${BASE_URL}/images/${id}?size=lg`
+  },
+
+  /** Same-origin proxy for third-party raster images used in rich HTML. */
+  remoteUrl(url: string) {
+    return `${joinApiPath('/images/remote')}?url=${encodeURIComponent(url)}`
   },
 
   rebuildThumbnails(options?: {
