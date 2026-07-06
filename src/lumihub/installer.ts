@@ -547,11 +547,18 @@ export async function installWorldbook(
     try {
       const wb = wbSvc.getWorldBook(userId, result.worldBook.id);
       if (wb) {
+        // Prefer the explicit creator sent by LumiHub so the manifest/stats slug
+        const sourceCreator =
+          (typeof payload.worldbookCreator === "string" && payload.worldbookCreator.trim())
+            ? payload.worldbookCreator.trim()
+            : payload.worldbookName.includes("/")
+              ? payload.worldbookName.split("/")[0]
+              : "unknown";
         wbSvc.updateWorldBook(userId, result.worldBook.id, {
           metadata: {
             ...wb.metadata,
             _lumiverse_install_source: payload.source,
-            source_creator: payload.worldbookName.includes("/") ? payload.worldbookName.split("/")[0] : "unknown",
+            source_creator: sourceCreator,
           },
         });
       }
