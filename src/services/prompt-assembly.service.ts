@@ -99,7 +99,7 @@ import * as regexScriptsSvc from "./regex-scripts.service";
 import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 import { rankVectorWorldInfoCandidatesInWorker } from "./world-info-vector-ranking-worker-host";
 import {
-  getWorldInfoVectorCandidateMultiplier,
+  getWorldInfoVectorCandidateRecallLimit,
   type VectorActivatedEntry,
   type VectorRetrievalTraceEntry,
   type VectorWorldInfoRetrievalResult,
@@ -4174,12 +4174,10 @@ export async function collectVectorActivatedWorldInfoDetailed(
     }
 
     const byId = new Map(eligibleEntries.map((entry) => [entry.id, entry]));
-    const candidateLimit = Math.min(
-      100,
-      Math.max(
-        topK * getWorldInfoVectorCandidateMultiplier(cfg.hybrid_weight_mode),
-        topK,
-      ),
+    const candidateLimit = getWorldInfoVectorCandidateRecallLimit(
+      cfg.hybrid_weight_mode,
+      topK,
+      eligibleEntries.length,
     );
     const candidates = new Map<
       string,

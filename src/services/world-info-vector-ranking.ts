@@ -957,6 +957,130 @@ export function getWorldInfoVectorCandidateMultiplier(
   return getWorldInfoVectorPreset(mode).candidateMultiplier;
 }
 
+export function getWorldInfoVectorCandidateRecallLimit(
+  mode: HybridWeightMode,
+  topK: number,
+  eligibleCount: number,
+): number {
+  const normalizedTopK = Math.max(
+    1,
+    Number.isFinite(topK) ? Math.floor(topK) : 1,
+  );
+  const expandedLimit = Math.max(
+    normalizedTopK * getWorldInfoVectorCandidateMultiplier(mode),
+    normalizedTopK,
+  );
+  const normalizedEligibleCount = Math.max(
+    0,
+    Number.isFinite(eligibleCount) ? Math.floor(eligibleCount) : 0,
+  );
+
+  if (normalizedEligibleCount === 0) return expandedLimit;
+  return Math.max(1, Math.min(normalizedEligibleCount, expandedLimit));
+}
+
+const EXACT_ANCHOR_LEXICAL_SCORE = 30;
+
+function buildSearchTextPreview(entry: WorldBookEntryModel): string {
+  const sections: string[] = [];
+  const comment = (entry.comment || "").trim();
+  const primaryKeys = dedupeStringsCaseInsensitive(entry.key || []);
+  const secondaryKeys = dedupeStringsCaseInsensitive(entry.keysecondary || []);
+  const content = (entry.content || "").trim();
+
+  if (comment) sections.push(`Entry title: ${comment}`);
+  if (primaryKeys.length > 0)
+    sections.push(`Primary keys: ${primaryKeys.join(", ")}`);
+  if (secondaryKeys.length > 0)
+    sections.push(`Secondary keys: ${secondaryKeys.join(", ")}`);
+  if (content) sections.push(`Content:\n${content}`);
+
+  return sections.join("\n\n");
+}
+
+function buildExactAnchorCandidate(
+  entry: WorldBookEntryModel,
+  queryState: VectorQueryLexicalState,
+): WorldBookSearchCandidate | null {
+  const anchors = [
+    ...(entry.key || []),
+    ...(entry.keysecondary || []),
+    entry.comment || "",
+  ];
+  if (
+    !anchors.some((anchor) =>
+      hasExactPhraseMatch(queryState.normalizedText, anchor),
+    )
+  ) {
+    return null;
+  }
+  const searchTextPreview = buildSearchTextPreview(entry);
+
+  return {
+    entry_id: entry.id,
+    distance: Number.POSITIVE_INFINITY,
+    lexical_score: EXACT_ANCHOR_LEXICAL_SCORE,
+    content: entry.content || "",
+    searchTextPreview,
+    metadata: {
+      comment: entry.comment,
+      key: entry.key,
+      keysecondary: entry.keysecondary,
+      world_book_id: entry.world_book_id,
+      search_text: searchTextPreview,
+    },
+  };
+}
+
+function augmentPooledCandidatesWithExactAnchors(
+  eligibleEntries: WorldBookEntryModel[],
+  pooledCandidates: VectorCandidatePoolEntry[],
+  queryState: VectorQueryLexicalState,
+): VectorCandidatePoolEntry[] {
+  const byEntryId = new Map<string, VectorCandidatePoolEntry>();
+  for (const item of pooledCandidates) {
+    byEntryId.set(item.entry.id, item);
+  }
+
+  for (const entry of eligibleEntries) {
+    const exactCandidate = buildExactAnchorCandidate(entry, queryState);
+    if (!exactCandidate) continue;
+
+    const existing = byEntryId.get(entry.id);
+    if (!existing) {
+      byEntryId.set(entry.id, { entry, candidate: exactCandidate });
+      continue;
+    }
+
+    const lexical_score =
+      existing.candidate.lexical_score == null
+        ? exactCandidate.lexical_score
+        : Math.max(
+            existing.candidate.lexical_score,
+            exactCandidate.lexical_score,
+          );
+    byEntryId.set(entry.id, {
+      entry,
+      candidate: {
+        ...existing.candidate,
+        lexical_score,
+        content: existing.candidate.content || exactCandidate.content,
+        searchTextPreview:
+          existing.candidate.searchTextPreview || exactCandidate.searchTextPreview,
+        metadata: {
+          ...exactCandidate.metadata,
+          ...existing.candidate.metadata,
+          search_text:
+            existing.candidate.metadata.search_text ||
+            exactCandidate.metadata.search_text,
+        },
+      },
+    });
+  }
+
+  return Array.from(byEntryId.values());
+}
+
 function scoreVectorWorldInfoCandidate(
   entry: WorldBookEntryModel,
   candidate: WorldBookSearchCandidate,
@@ -1140,10 +1264,15 @@ export function rankVectorWorldInfoCandidates(
     topK,
   } = input;
   const preset = getWorldInfoVectorPreset(hybridWeightMode);
-  const hitsBeforeThreshold = pooledCandidates.length;
   const specificityState = buildPhraseSpecificityState(eligibleEntries);
   const queryState = buildVectorQueryLexicalState(queryText, specificityState);
-  const scoredCandidates = pooledCandidates.map(({ entry, candidate }) =>
+  const augmentedCandidates = augmentPooledCandidatesWithExactAnchors(
+    eligibleEntries,
+    pooledCandidates,
+    queryState,
+  );
+  const hitsBeforeThreshold = augmentedCandidates.length;
+  const scoredCandidates = augmentedCandidates.map(({ entry, candidate }) =>
     scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset),
   );
   const thresholdPassed =

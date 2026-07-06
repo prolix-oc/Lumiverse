@@ -2675,7 +2675,10 @@ export async function searchWorldBookEntriesHybridWithVector(
 
   const trimmedQuery = queryText.trim();
   const filter = ownerScope(userId, "world_book_entry", worldBookId);
-  const finalLimit = Math.max(1, Math.min(requestedLimit, 100));
+  const finalLimit = Math.max(
+    1,
+    Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : 8,
+  );
   // Some callers (notably prompt assembly) already expand topK to a wider
   // candidate pool before calling this helper. Allow them to opt out of a
   // second 3x expansion so providers like Milvus do not multiply candidates at
