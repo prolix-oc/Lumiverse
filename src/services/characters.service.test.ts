@@ -16,7 +16,8 @@ function initCharactersTestDb(): void {
     image_id TEXT,
     alternate_greetings TEXT NOT NULL DEFAULT '[]',
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    deleting INTEGER NOT NULL DEFAULT 0
   )`);
 
   db.run(`CREATE TABLE chats (

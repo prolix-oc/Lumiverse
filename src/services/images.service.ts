@@ -5,6 +5,7 @@ import { EventType } from "../ws/events";
 import { env } from "../env";
 import type { Image } from "../types/image";
 import { mkdirSync, existsSync, unlinkSync } from "fs";
+import { unlink } from "fs/promises";
 import { join, extname } from "path";
 import {
   extractVideoPosterBuffer,
@@ -974,34 +975,101 @@ export async function rebuildAllThumbnails(
   return progress;
 }
 
-export function deleteImage(userId: string, id: string): boolean {
-  const image = getImage(userId, id);
-  if (!image) return false;
-
-  const dir = getImagesDir();
-
-  // Remove original file
-  const filepath = join(dir, image.filename);
-  if (existsSync(filepath)) unlinkSync(filepath);
-
-  for (const codec of ["h264", "hevc"] as const) {
-    const variantPath = videoVariantPath(dir, image.id, codec);
-    if (existsSync(variantPath)) unlinkSync(variantPath);
-  }
-
-  // Remove all thumbnail tiers
+function imageFilePaths(dir: string, id: string, filename: string): string[] {
+  const paths = [join(dir, filename)];
+  for (const codec of ["h264", "hevc"] as const) paths.push(videoVariantPath(dir, id, codec));
   for (const tier of ["sm", "lg"] as const) {
     for (const suffix of [thumbSuffix(tier), legacyThumbSuffix(tier)]) {
-      const p = join(dir, `${image.id}${suffix}`);
-      if (existsSync(p)) unlinkSync(p);
+      paths.push(join(dir, `${id}${suffix}`));
     }
   }
+  return paths;
+}
 
+export async function unlinkPaths(paths: readonly string[]): Promise<void> {
+  for (const p of paths) {
+    try {
+      await unlink(p);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.error(`[images] unlink failed ${p}: ${err?.message ?? err}`);
+      }
+    }
+  }
+}
+
+function unlinkPathsSync(paths: readonly string[]): void {
+  for (const p of paths) {
+    try {
+      unlinkSync(p);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.error(`[images] unlink failed ${p}: ${err?.message ?? err}`);
+      }
+    }
+  }
+}
+
+export function deleteImage(userId: string, id: string): boolean {
+  const row = getDb()
+    .query("SELECT id, filename FROM images WHERE user_id = ? AND id = ?")
+    .get(userId, id) as { id: string; filename: string } | undefined;
+  if (!row) return false;
+  unlinkPathsSync(imageFilePaths(getImagesDir(), row.id, row.filename));
   const result = getDb().query("DELETE FROM images WHERE id = ? AND user_id = ?").run(id, userId);
   if (result.changes > 0) {
     eventBus.emit(EventType.IMAGE_DELETED, { id }, userId);
   }
   return result.changes > 0;
+}
+
+export function imageDeletePlan(
+  userId: string,
+  ids: Iterable<string>,
+): { rowIds: string[]; paths: string[] } {
+  const idList = [...new Set(ids)].filter((id) => typeof id === "string" && id.length > 0);
+  const dir = getImagesDir();
+  const rowIds: string[] = [];
+  const paths: string[] = [];
+  for (let i = 0; i < idList.length; i += IN_CHUNK) {
+    const chunk = idList.slice(i, i + IN_CHUNK);
+    const marks = chunk.map(() => "?").join(",");
+    const rows = getDb()
+      .query(`SELECT id, filename FROM images WHERE user_id = ? AND id IN (${marks})`)
+      .all(userId, ...chunk) as Array<{ id: string; filename: string }>;
+    for (const row of rows) {
+      rowIds.push(row.id);
+      paths.push(...imageFilePaths(dir, row.id, row.filename));
+    }
+  }
+  return { rowIds, paths };
+}
+
+export function deleteImageRowsOnly(userId: string, rowIds: readonly string[]): number {
+  let deleted = 0;
+  for (let i = 0; i < rowIds.length; i += IN_CHUNK) {
+    const chunk = rowIds.slice(i, i + IN_CHUNK);
+    const marks = chunk.map(() => "?").join(",");
+    deleted += getDb()
+      .query(`DELETE FROM images WHERE user_id = ? AND id IN (${marks})`)
+      .run(userId, ...chunk).changes;
+  }
+  return deleted;
+}
+
+export async function deleteImagesBulk(
+  userId: string,
+  ids: Iterable<string>,
+  options?: { emitEvents?: boolean },
+): Promise<number> {
+  const plan = imageDeletePlan(userId, ids);
+  if (plan.rowIds.length === 0) return 0;
+  await unlinkPaths(plan.paths);
+  const deleted = getDb().transaction(() => deleteImageRowsOnly(userId, plan.rowIds))();
+  if (options?.emitEvents) {
+    for (const rowId of plan.rowIds) eventBus.emit(EventType.IMAGE_DELETED, { id: rowId }, userId);
+  }
+  return deleted;
 }
 
 function clearWallpaperAssignments(userId: string, imageId: string): void {
@@ -1056,7 +1124,7 @@ export function isImageReferenced(userId: string, id: string): boolean {
     ) ||
     hasImageReference(
       `SELECT 1 AS found FROM characters
-       WHERE user_id = ? AND (
+       WHERE user_id = ? AND deleting = 0 AND (
          image_id = ? OR extensions LIKE ? OR description LIKE ? OR personality LIKE ? OR scenario LIKE ?
          OR first_mes LIKE ? OR mes_example LIKE ? OR creator_notes LIKE ? OR system_prompt LIKE ?
          OR post_history_instructions LIKE ? OR alternate_greetings LIKE ?
@@ -1091,4 +1159,115 @@ export function isImageReferenced(userId: string, id: string): boolean {
 export function deleteImageIfUnreferenced(userId: string, id: string): boolean {
   if (isImageReferenced(userId, id)) return false;
   return deleteImage(userId, id);
+}
+
+const BULK_UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const IN_CHUNK = 400;
+const MESSAGES_PAGE = 2000;
+const BULK_SCAN_MIN_CANDIDATES = 8;
+
+function bulkRows(sql: string, params: any[]): any[] {
+  try {
+    return getDb().query(sql).all(...params) as any[];
+  } catch (err: any) {
+    if (/no such (table|column)/i.test(String(err?.message ?? err))) return [];
+    throw err;
+  }
+}
+
+
+export function findReferencedImageIds(userId: string, candidates: ReadonlySet<string>): Set<string> {
+  if (candidates.size < BULK_SCAN_MIN_CANDIDATES) {
+    const referenced = new Set<string>();
+    for (const id of candidates) {
+      if (isImageReferenced(userId, id)) referenced.add(id);
+    }
+    return referenced;
+  }
+  const byLower = new Map<string, string>();
+  for (const id of candidates) byLower.set(id.toLowerCase(), id);
+  const referenced = new Set<string>();
+  const done = () => referenced.size >= candidates.size;
+
+  const scanText = (text: unknown): void => {
+    if (typeof text !== "string" || text.length === 0) return;
+    BULK_UUID_RE.lastIndex = 0;
+    for (const m of text.matchAll(BULK_UUID_RE)) {
+      const orig = byLower.get(m[0].toLowerCase());
+      if (orig !== undefined) referenced.add(orig);
+    }
+  };
+  const markHit = (hit: unknown): void => {
+    if (typeof hit !== "string") return;
+    const orig = byLower.get(hit.toLowerCase());
+    if (orig !== undefined) referenced.add(orig);
+  };
+
+  try {
+    const ids = [...byLower.keys()];
+    const exactColumnQueries: ReadonlyArray<{ sql: (marks: string) => string; head: any[] }> = [
+      {
+        sql: (m) => `SELECT id AS hit FROM images WHERE user_id = ? AND owner_extension_identifier = ? AND id IN (${m})`,
+        head: [userId, WALLPAPER_LIBRARY_OWNER],
+      },
+      { sql: (m) => `SELECT image_id AS hit FROM character_gallery WHERE user_id = ? AND image_id IN (${m})`, head: [userId] },
+      { sql: (m) => `SELECT image_id AS hit FROM characters WHERE user_id = ? AND deleting = 0 AND image_id IN (${m})`, head: [userId] },
+      { sql: (m) => `SELECT image_id AS hit FROM personas WHERE user_id = ? AND image_id IN (${m})`, head: [userId] },
+      { sql: (m) => `SELECT image_id AS hit FROM theme_assets WHERE user_id = ? AND image_id IN (${m})`, head: [userId] },
+    ];
+    for (let i = 0; i < ids.length && !done(); i += IN_CHUNK) {
+      const chunk = ids.slice(i, i + IN_CHUNK);
+      const marks = chunk.map(() => "?").join(",");
+      for (const q of exactColumnQueries) {
+        for (const row of bulkRows(q.sql(marks), [...q.head, ...chunk])) markHit(row.hit);
+      }
+    }
+
+    if (!done()) {
+      for (const row of bulkRows("SELECT value FROM settings WHERE user_id = ?", [userId])) scanText(row.value);
+    }
+    if (!done()) {
+      for (const row of bulkRows("SELECT metadata FROM chats WHERE user_id = ?", [userId])) scanText(row.metadata);
+    }
+    if (!done()) {
+      for (const row of bulkRows("SELECT metadata FROM personas WHERE user_id = ?", [userId])) scanText(row.metadata);
+    }
+    if (!done()) {
+      const rows = bulkRows(
+        `SELECT extensions, description, personality, scenario, first_mes, mes_example,
+                creator_notes, system_prompt, post_history_instructions, alternate_greetings
+         FROM characters WHERE user_id = ? AND deleting = 0`,
+        [userId],
+      );
+      for (const row of rows) {
+        for (const v of Object.values(row)) scanText(v);
+        if (done()) break;
+      }
+    }
+
+    if (!done()) {
+      let lastRowId = -1;
+      while (!done()) {
+        const rows = bulkRows(
+          `SELECT m.rowid AS rid, m.extra, m.swipes, m.content
+           FROM messages m JOIN chats c ON c.id = m.chat_id
+           WHERE c.user_id = ? AND m.rowid > ?
+           ORDER BY m.rowid LIMIT ${MESSAGES_PAGE}`,
+          [userId, lastRowId],
+        );
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          scanText(row.extra);
+          scanText(row.swipes);
+          scanText(row.content);
+        }
+        lastRowId = rows[rows.length - 1].rid;
+        if (rows.length < MESSAGES_PAGE) break;
+      }
+    }
+  } catch (err) {
+    console.error(`[images] findReferencedImageIds failed, failing closed (no deletions): ${err instanceof Error ? err.message : String(err)}`);
+    return new Set(candidates);
+  }
+  return referenced;
 }
