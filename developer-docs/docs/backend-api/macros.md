@@ -2,6 +2,24 @@
 
 Register custom macros that users can use in their prompts and preset blocks with `{{macro_name}}` syntax.
 
+Built-in macro resolution supports scoped blocks and control flow:
+
+```txt
+{{if::condition}}...{{elseif::other}}...{{else}}...{{/if}}
+{{unless::condition}}...{{else}}...{{/unless}}
+
+{{switch::value}}
+{{case::a}}A branch{{/case}}
+{{case::b::c}}B/C branch{{/case}}
+{{default}}Fallback{{/default}}
+{{/switch}}
+
+{{let::name::value}}temporary local vars{{/let}}
+{{map::a,b,c::x}}{{upper::{{.x}}}}{{/map}}
+```
+
+Only selected conditional/switch branches are resolved, so side-effect macros in unselected branches do not run.
+
 ## Push Model (recommended)
 
 The push model lets your extension proactively send the latest macro value to the host. During prompt assembly the host returns the cached value instantly — no RPC roundtrip to the worker, no risk of stalling generation.
@@ -77,6 +95,9 @@ This is primarily useful when your macro has separate display-only and state-mut
     **Needs the flag:** time based output (`Date.now()`, `new Date()`), random output (`Math.random()`), stateful side effects (read then write to a var, mutable internal counters), or external calls (HTTP, files, anything outside the env).
     **Doesn't need the flag (auto invalidates):** variable reads via `.get(key)` / `.has(key)` (the fingerprint records the dependency and the cache invalidates when that var changes), static fields on `env` (character, persona, scenario), and computed-from-tracked-inputs handlers (math, conditionals, string ops) where args evaluate through the same fingerprint mechanism so dependencies propagate.
     Rule of thumb: if the handler only touches `ctx.args` and `env.variables.<scope>.get(...)`, leave the flag off. If it reaches for `Date`, `Math.random`, or mutates state, set it.
+
+!!! note "Resolution limits"
+    Macro resolution is guarded by a work budget rather than a fixed shallow nesting-depth cap. Deep finite macro chains can resolve beyond 1000 levels, but recursive/explosive expansion is halted with diagnostics. List-style generators and iteration helpers still cap generated/iterated item counts at 1000.
 
 ## Methods
 

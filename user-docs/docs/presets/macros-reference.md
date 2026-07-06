@@ -124,7 +124,7 @@ Utility macros for text manipulation and flow control.
 {{/if}}
 ```
 
-The condition can be any value — it's truthy unless it's empty, `"0"`, `"false"`, `"null"`, or `"undefined"`.
+The condition can be any value — it's truthy unless it's empty, `"0"`, `"false"`, `"null"`, `"undefined"`, `"no"`, or `"off"` (case-insensitive for the named falsy values).
 
 Only the selected branch is resolved. Side-effect macros in the unselected branch do not run.
 
@@ -142,6 +142,30 @@ Only the selected branch is resolved. Side-effect macros in the unselected branc
 {{if::{{.score}} == 100}}perfect!{{/if}}
 ```
 
+**Else-if chains** — use `{{elseif}}` or `{{elif}}` to avoid deeply nested `if` blocks:
+
+```
+{{if::{{groupCardMode}} == solo}}
+Solo chat rules.
+{{elseif::{{groupCardMode}} == swap}}
+Focused group-member rules.
+{{elseif::{{groupCardMode}} == merge_ignore_muted}}
+Merged non-muted group rules.
+{{else}}
+Merged group rules.
+{{/if}}
+```
+
+**Unless** — invert a condition at the block level:
+
+```
+{{unless::{{isGroupChat}}}}
+Only include this in solo chats.
+{{else}}
+Only include this in group chats.
+{{/unless}}
+```
+
 **Variable shorthand** — `.var`, `$var`, and `@var` resolve automatically in conditions:
 
 ```
@@ -150,6 +174,9 @@ Only the selected branch is resolved. Side-effect macros in the unselected branc
 {{if !.gameOver}}still playing{{/if}}
 {{if @hp > 0}}still alive{{/if}}
 ```
+
+!!! note "Resolution limits"
+    Macro resolution is guarded by a work budget rather than a shallow nesting-depth cap. Deep finite macro chains can resolve beyond 1000 levels, but runaway recursion or explosive expansion is stopped with diagnostics. Individual generators such as `{{repeat}}`, `{{range}}`, and iteration macros still cap item counts at 1000 to keep prompt assembly bounded.
 
 ---
 
@@ -243,6 +270,33 @@ Keep only the list items whose body — an `{{if}}`-style condition — is truth
 ```
 {{filter::1,2,3,4::n}}{{gt::{{.n}}::2}}{{/filter}}                  — "3, 4"
 {{filter::{{players}}::p}}{{ne::{{.p}}::{{hostName}}}}{{/filter}}    — everyone but the host
+```
+
+### `{{map}}` / `{{collect}}`
+
+Transform each item in a list and return the transformed values as a delimited list. It uses the same loop bindings and hygiene as `{{foreach}}`.
+
+```
+{{map::a,b,c::x}}{{upper::{{.x}}}}{{/map}}          — "A, B, C"
+```
+
+Arguments:
+
+| Position | Meaning | Default |
+|----------|---------|---------|
+| 1 | Input list | Required |
+| 2 | Loop variable name | `item` |
+| 3 | Input delimiter | `,` |
+| 4 | Output delimiter | `, ` |
+
+```
+{{map::Alice|Bob|Cara::name::|:: / }}{{.name_number}}={{.name}}{{/map}}
+```
+
+produces:
+
+```
+1=Alice / 2=Bob / 3=Cara
 ```
 
 ### `{{some}}` / `{{every}}`
@@ -599,6 +653,27 @@ Composable boolean logic and multi-branch conditionals.
 | `{{switch::value::c1::r1::c2::r2::default}}` | — | Matching result, or default | Value, then case/result pairs, optional default |
 | `{{default::value::fallback}}` | `{{fallback}}`, `{{coalesce}}` | First truthy value | Primary value, fallback |
 
+`{{switch}}` also has a scoped block form for larger branches:
+
+```
+{{switch::{{groupCardMode}}}}
+{{case::solo}}
+Solo chat instructions.
+{{/case}}
+{{case::swap}}
+Focused group-member instructions.
+{{/case}}
+{{case::merge::merge_ignore_muted}}
+Merged group instructions.
+{{/case}}
+{{default}}
+Fallback instructions.
+{{/default}}
+{{/switch}}
+```
+
+Only the matching `{{case}}` body, or the `{{default}}` body, is resolved.
+
 ### Boolean Operators
 
 | Macro | Returns | Args |
@@ -618,6 +693,18 @@ Composable boolean logic and multi-branch conditionals.
 | `{{gte::a::b}}` | `"true"` if a >= b |
 | `{{lte::a::b}}` | `"true"` if a <= b |
 
+### Predicate Helpers
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{empty::value}}` | `{{isEmpty}}` | `"true"` when the value is exactly empty |
+| `{{blank::value}}` | `{{isBlank}}` | `"true"` when the value is empty or whitespace-only |
+| `{{number::value}}` | `{{isNumber}}`, `{{numeric}}` | `"true"` for finite numbers |
+| `{{integer::value}}` | `{{isInteger}}`, `{{int}}` | `"true"` for integer strings |
+| `{{matches::text::pattern::flags}}` | — | `"true"` when `text` matches a regex pattern |
+| `{{startsWith::text::prefix}}` | `{{starts_with}}` | `"true"` when `text` starts with `prefix` |
+| `{{endsWith::text::suffix}}` | `{{ends_with}}` | `"true"` when `text` ends with `suffix` |
+
 **Examples:**
 
 ```
@@ -631,6 +718,14 @@ Composable boolean logic and multi-branch conditionals.
 
 {{if::{{gt::{{messageCount}}::50}}}}
   This is a long conversation.
+{{/if}}
+
+{{if::{{blank::{{.optional_note}}}}}}
+  No note was provided.
+{{/if}}
+
+{{if::{{matches::{{lastUserMessage}}::\\bhelp\\b::i}}}}
+  The user asked for help.
 {{/if}}
 ```
 
@@ -739,10 +834,21 @@ Local variables live for the duration of a single evaluation pass. They are usef
 | `{{decvar::key}}` | Decrement by 1 (returns new value) | Variable name |
 | `{{hasvar::key}}` | Check if variable exists (`"true"` / `"false"`) | Variable name |
 | `{{deletevar::key}}` | Delete a variable | Variable name |
+| `{{let::key::value}}...{{/let}}` | Temporarily bind local variables for the scoped body, then restore previous values | Pairs of name/value arguments |
 
-Aliases: `{{varexists}}` for `{{hasvar}}`, `{{flushvar}}` for `{{deletevar}}`
+Aliases: `{{varexists}}` for `{{hasvar}}`, `{{flushvar}}` for `{{deletevar}}`, `{{withVar}}` / `{{scope}}` for `{{let}}`
 
 **Shorthand:** `.` prefix — `{{.myVar}}`, `{{.score = 100}}`, `{{.counter++}}`
+
+**Scoped temporary variables:**
+
+```
+{{let::speaker::{{char}}::tone::quiet}}
+Write {{.speaker}} with a {{.tone}} voice.
+{{/let}}
+```
+
+`{{let}}` is hygienic: if a local variable already existed, its previous value is restored after the block; if it did not exist, it is removed after the block.
 
 ### Chat-Persisted Variables
 
