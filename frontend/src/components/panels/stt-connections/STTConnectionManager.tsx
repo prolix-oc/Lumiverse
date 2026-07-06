@@ -1,23 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   DndContext,
-  DragOverlay,
   closestCenter,
-  MouseSensor,
-  TouchSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
   type DragEndEvent,
-  type DragStartEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext,
   verticalListSortingStrategy,
   arrayMove,
-  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { listAllConnections } from '@/api/listAllConnections'
@@ -27,6 +19,7 @@ import STTConnectionForm from './STTConnectionForm'
 import STTConnectionItem from './STTConnectionItem'
 import type { SttConnectionProfile, CreateSttConnectionInput } from '@/types/api'
 import styles from '../ConnectionManager.module.css'
+import { useConnectionSensors, useVerticalSortModifier } from '../connection-manager/useConnectionDragAndDrop'
 
 export default function STTConnectionManager() {
   const { t } = useTranslation('panels')
@@ -41,10 +34,9 @@ export default function STTConnectionManager() {
   const setSetting = useStore((s) => s.setSetting)
   const connectionsOrder = useStore((s) => s.connectionsOrder)
 
-  const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
-  const touchSensor = useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
-  const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
+  const sensors = useConnectionSensors()
+  const listRef = useRef<HTMLDivElement>(null)
+  const restrictToVerticalAndBounds = useVerticalSortModifier(listRef)
 
   const orderedProfiles = useMemo(() => {
     const sttOrder = connectionsOrder?.stt ?? []
@@ -61,9 +53,6 @@ export default function STTConnectionManager() {
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SttConnectionProfile | null>(null)
-  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
-
-  const activeProfile = orderedProfiles.find((p) => p.id === dragActiveId) ?? null
 
   useEffect(() => {
     let cancelled = false
@@ -145,11 +134,7 @@ export default function STTConnectionManager() {
     }
   }, [deleteTarget, removeProfile, connectionsOrder, setSetting])
 
-  const handleDragStart = useCallback(({ active }: DragStartEvent) => setDragActiveId(String(active.id)), [])
-  const handleDragCancel = useCallback(() => setDragActiveId(null), [])
-
   const handleDragEnd = useCallback((event: DragEndEvent) => {
-    setDragActiveId(null)
     const { active, over } = event
     if (!over || active.id === over.id) return
     const oldIndex = orderedIds.indexOf(String(active.id))
@@ -181,9 +166,9 @@ export default function STTConnectionManager() {
         />
       )}
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragCancel={handleDragCancel} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAndBounds]} onDragEnd={handleDragEnd}>
         <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-          <div className={styles.list}>
+          <div ref={listRef} className={styles.list}>
             {orderedProfiles.map((profile) => (
               <STTConnectionItem
                 key={profile.id}
@@ -199,19 +184,6 @@ export default function STTConnectionManager() {
             )}
           </div>
         </SortableContext>
-        <DragOverlay dropAnimation={null}>
-          {activeProfile && (
-            <div className={styles.itemDraggingOverlay}>
-              <STTConnectionItem
-                profile={activeProfile}
-                providers={providers}
-                onUpdate={handleUpdate}
-                onDuplicate={() => handleDuplicate(activeProfile.id)}
-                onDelete={() => setDeleteTarget(activeProfile)}
-              />
-            </div>
-          )}
-        </DragOverlay>
       </DndContext>
 
       {deleteTarget && (

@@ -1,28 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus, Shuffle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  DndContext,
-  closestCenter,
-  MouseSensor,
-  TouchSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from '@dnd-kit/core'
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-  arrayMove,
-  sortableKeyboardCoordinates,
-} from '@dnd-kit/sortable'
+import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { connectionsApi } from '@/api/connections'
 import { listAllConnections } from '@/api/listAllConnections'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ConnectionForm from './connection-manager/ConnectionForm'
 import ConnectionItem from './connection-manager/ConnectionItem'
+import { useConnectionSensors, useVerticalSortModifier } from './connection-manager/useConnectionDragAndDrop'
 import type { ConnectionProfile, CreateConnectionProfileInput } from '@/types/api'
 import styles from './ConnectionManager.module.css'
 
@@ -52,10 +39,9 @@ export default function ConnectionManager() {
   const setSetting = useStore((s) => s.setSetting)
   const connectionsOrder = useStore((s) => s.connectionsOrder)
 
-  const mouseSensor = useSensor(MouseSensor, { activationConstraint: { distance: 4 } })
-  const touchSensor = useSensor(TouchSensor, { activationConstraint: { distance: 8 } })
-  const keyboardSensor = useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  const sensors = useSensors(mouseSensor, touchSensor, keyboardSensor)
+  const sensors = useConnectionSensors()
+  const listRef = useRef<HTMLDivElement>(null)
+  const restrictToVerticalAndBounds = useVerticalSortModifier(listRef)
 
   const orderedProfiles = useMemo(() => {
     const llmOrder = connectionsOrder?.llm ?? []
@@ -235,9 +221,9 @@ export default function ConnectionManager() {
         />
       )}
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAndBounds]} onDragEnd={handleDragEnd}>
         <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-          <div className={styles.list}>
+          <div ref={listRef} className={styles.list}>
             {orderedProfiles.map((profile) => (
               <ConnectionItem
                 key={profile.id}

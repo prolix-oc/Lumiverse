@@ -8,6 +8,7 @@ import type { SttConnectionProfile, SttProviderInfo, CreateSttConnectionInput } 
 import STTConnectionForm from './STTConnectionForm'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
+import { useDragHandleBlur } from '../connection-manager/useDragHandleBlur'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import styles from '../connection-manager/ConnectionItem.module.css'
 import clsx from 'clsx'
@@ -61,6 +62,8 @@ export default function STTConnectionItem({
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: profile.id })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
 
+  const handleRef = useDragHandleBlur(isDragging)
+
   return (
     <div ref={setNodeRef} style={style} className={clsx(styles.item, isDragging && styles.itemDragging)}>
       {editing ? (
@@ -74,6 +77,7 @@ export default function STTConnectionItem({
         <>
           <div className={styles.itemRow}>
             <button
+              ref={handleRef}
               type="button"
               className={styles.dragHandle}
               aria-label={t('connectionItem.dragToReorder')}
