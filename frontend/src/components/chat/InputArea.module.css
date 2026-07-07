@@ -65,6 +65,7 @@
   content: '';
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   pointer-events: none;
   background:
     radial-gradient(120% 85% at 50% -30%, color-mix(in srgb, var(--lumiverse-primary-020) 45%, transparent), transparent 58%),
@@ -76,6 +77,7 @@
   content: '';
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   pointer-events: none;
   background-image:
     radial-gradient(color-mix(in srgb, var(--lumiverse-text) 8%, transparent) 0.7px, transparent 0.7px),
