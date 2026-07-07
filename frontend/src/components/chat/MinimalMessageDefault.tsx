@@ -319,7 +319,7 @@ export default function MinimalMessageDefault({
     <div
       ref={cardRef}
       data-component="MinimalMessage"
-      data-part={isUser ? 'user' : 'character'}
+      data-part={isUser ? 'user' : isActivelyStreaming ? 'streaming' : 'character'}
       className={clsx(
         styles.card,
         isUser ? styles.user : styles.character,

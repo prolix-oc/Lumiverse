@@ -80,10 +80,10 @@
   animation: pulse-glow 3s ease-in-out infinite;
 }
 
-:global([data-component='ChatView'][data-streaming]) .socialCard,
-:global([data-component='ChatView'][data-streaming]) .socialCard::before,
-:global([data-component='ChatView'][data-streaming]) .socialCard::after,
-:global([data-component='ChatView'][data-streaming]) .socialAvatarContainer {
+:global([data-part='streaming']) .socialCard,
+:global([data-part='streaming']) .socialCard::before,
+:global([data-part='streaming']) .socialCard::after,
+:global([data-part='streaming']) .socialAvatarContainer {
   animation: none !important;
 }
 
