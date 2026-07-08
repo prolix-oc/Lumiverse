@@ -257,6 +257,7 @@ export interface UISlice {
   setDrawerTab: (tab: string) => void
   openSettings: (view?: string, target?: { extensionId?: string }) => void
   closeSettings: () => void
+  clearSettingsScrollTarget: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
   closeCommandPalette: () => void

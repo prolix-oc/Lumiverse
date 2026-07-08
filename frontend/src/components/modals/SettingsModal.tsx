@@ -122,8 +122,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   }, [scrollTarget])
 
   useEffect(() => {
-    const extensionId = settingsScrollTarget?.extensionId
-    if (!extensionId) return
+    const target = settingsScrollTarget
+    if (!target) return
 
     if (activeView !== 'extensions') {
       setActiveView('extensions')
@@ -132,10 +132,12 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
     let frame = 0
     let attempts = 0
-    const selector = [
-      `[data-spindle-extension-root="${CSS.escape(extensionId)}"]`,
-      '[data-spindle-mount-point="settings_extensions"]',
-    ].join('')
+    const selector = target.extensionId
+      ? [
+          `[data-spindle-extension-root="${CSS.escape(target.extensionId)}"]`,
+          '[data-spindle-mount-point="settings_extensions"]',
+        ].join('')
+      : '[data-spindle-mount-point="settings_extensions"]'
     const scrollToExtension = () => {
       const container = contentRef.current
       const el = container?.querySelector<HTMLElement>(selector)
@@ -143,6 +145,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         el.scrollIntoView({ block: 'start', behavior: 'smooth' })
         el.classList.add(styles.sectionFlash)
         window.setTimeout(() => el.classList.remove(styles.sectionFlash), 1400)
+        // One-shot: clear the directive so a subsequent sidebar click
+        // (activeView change) does not retrigger this effect and snap back.
+        useStore.getState().clearSettingsScrollTarget()
         return
       }
       if (++attempts < 20) frame = requestAnimationFrame(scrollToExtension)

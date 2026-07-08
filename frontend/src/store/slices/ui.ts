@@ -39,6 +39,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
       settingsScrollTarget: target ? { ...target, nonce: ++settingsScrollCounter } : null,
     }),
   closeSettings: () => set({ settingsModalOpen: false }),
+  clearSettingsScrollTarget: () => set({ settingsScrollTarget: null }),
 
   openCommandPalette: () => set({ commandPaletteOpen: true }),
   closeCommandPalette: () => set({ commandPaletteOpen: false }),
