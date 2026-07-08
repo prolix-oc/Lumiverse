@@ -5697,6 +5697,7 @@ export class WorkerHost {
         body: options.body,
         timeoutMs: CORS_PROXY_TIMEOUT_MS,
         maxBytes: CORS_PROXY_MAX_BODY_BYTES,
+        allowPrivate: true,
       });
 
       // Reject obvious oversize responses up-front; for unknown lengths we
