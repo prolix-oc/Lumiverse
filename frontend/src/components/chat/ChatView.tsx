@@ -827,7 +827,7 @@ export default function ChatView() {
     return () => root.removeAttribute('data-chat-bg')
   }, [hasAnyBackground])
 
-  // Sync bubble opt-out attributes so CSS can suppress effects.
+  // Sync chat style opt-out attributes so message CSS can suppress effects.
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)

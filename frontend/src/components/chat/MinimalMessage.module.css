@@ -64,6 +64,18 @@
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.04);
 }
 
+/* Reuse the Bubble-mode opt-out attribute so the shared chat hover/tap
+   highlight setting also keeps Minimal rows at their base fill. */
+:global([data-no-bubble-hover]) .card:hover {
+  background: var(--lcs-glass-bg);
+  border-color: var(--lcs-glass-border);
+  box-shadow: none;
+}
+
+:global([data-glass][data-no-bubble-hover]) .card:hover {
+  box-shadow: none;
+}
+
 /* Hidden draft message — dimmed, darkened, dashed border */
 .hidden {
   opacity: 0.4;

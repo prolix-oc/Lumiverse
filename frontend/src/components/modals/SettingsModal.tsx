@@ -817,12 +817,21 @@ function ChatSettings() {
       </div>
 
       {displayMode === 'minimal' && (
-        <Toggle.Checkbox
-          checked={minimalUseFullAvatar}
-          onChange={(checked) => setSetting('minimalUseFullAvatar', checked)}
-          label={t('chat.minimalFullAvatar')}
-          hint={t('chat.minimalFullAvatarHint')}
-        />
+        <>
+          <Toggle.Checkbox
+            checked={minimalUseFullAvatar}
+            onChange={(checked) => setSetting('minimalUseFullAvatar', checked)}
+            label={t('chat.minimalFullAvatar')}
+            hint={t('chat.minimalFullAvatarHint')}
+          />
+
+          <Toggle.Checkbox
+            checked={!bubbleDisableHover}
+            onChange={(checked) => setSetting('bubbleDisableHover', !checked)}
+            label={t('chat.bubbleHoverHighlight')}
+            hint={t('chat.bubbleHoverHighlightHint')}
+          />
+        </>
       )}
 
       {displayMode === 'bubble' && (
