@@ -22,6 +22,7 @@ interface WallpaperLayerProps {
 export default function WallpaperLayer({ wallpaper, settings, hidden = false, fixed = false, fadeInOnMount = false, videoRef, onVisualReady }: WallpaperLayerProps) {
   const [fadeReady, setFadeReady] = useState(!fadeInOnMount)
   const revealRef = useRef(() => setFadeReady(true))
+  const onVisualReadyRef = useRef(onVisualReady)
   const ownedVideoRef = useRef<HTMLVideoElement>(null)
   const activeVideoRef = videoRef ?? ownedVideoRef
 
@@ -31,6 +32,10 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
     : null
   const wallpaperKey = wallpaper ? `${wallpaper.type}:${wallpaper.image_id}` : 'none'
   const { src: cachedVideoSrc, fromCache } = useWallpaperVideoSource(rawVideoUrl)
+
+  useEffect(() => {
+    onVisualReadyRef.current = onVisualReady
+  }, [onVisualReady])
 
   useEffect(() => {
     if (!fadeInOnMount || !wallpaper?.image_id) {
@@ -52,7 +57,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
       if (raf) window.cancelAnimationFrame(raf)
       raf = window.requestAnimationFrame(() => {
         setFadeReady(true)
-        onVisualReady?.(wallpaperKey)
+        onVisualReadyRef.current?.(wallpaperKey)
       })
     }
     revealRef.current = reveal
@@ -69,7 +74,7 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
       window.clearTimeout(fallback)
       if (raf) window.cancelAnimationFrame(raf)
     }
-  }, [fadeInOnMount, onVisualReady, rawImageUrl, wallpaper?.image_id, wallpaper?.type, wallpaperKey])
+  }, [fadeInOnMount, rawImageUrl, wallpaper?.image_id, wallpaper?.type, wallpaperKey])
 
   useEffect(() => {
     if (wallpaper?.type !== 'video') return

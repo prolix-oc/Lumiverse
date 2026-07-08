@@ -806,14 +806,14 @@ export default function ChatView() {
     }
   }, [])
 
-  const handleWallpaperVisualReady = (wallpaperKey: string) => {
+  const handleWallpaperVisualReady = useCallback((wallpaperKey: string) => {
     if (pendingWallpaperReadyKeyRef.current !== wallpaperKey) return
     pendingWallpaperReadyKeyRef.current = null
     wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
     wallpaperTransitionTimeouts.current = []
     const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
     wallpaperTransitionTimeouts.current.push(revealTimer)
-  }
+  }, [])
 
   // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
   // when the background is a solid color (blur on solid = pure GPU waste).
