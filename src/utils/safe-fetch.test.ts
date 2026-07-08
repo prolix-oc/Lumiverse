@@ -13,6 +13,14 @@ describe("validateHost loopback allowance", () => {
     await expect(validateHost("service.localhost", { allowLoopback: true })).resolves.toBeUndefined();
   });
 
+  test("treats loopback as private when private ranges are enabled", async () => {
+    await expect(validateHost("localhost", { allowPrivate: true })).resolves.toBeUndefined();
+    await expect(validateHost("localhost.", { allowPrivate: true })).resolves.toBeUndefined();
+    await expect(validateHost("service.localhost", { allowPrivate: true })).resolves.toBeUndefined();
+    await expect(validateHost("127.0.0.1", { allowPrivate: true })).resolves.toBeUndefined();
+    await expect(validateHost("::1", { allowPrivate: true })).resolves.toBeUndefined();
+  });
+
   test("keeps loopback blocked by default", async () => {
     await expect(validateHost("127.0.0.1")).rejects.toBeInstanceOf(SSRFError);
     await expect(validateHost("localhost")).rejects.toBeInstanceOf(SSRFError);
