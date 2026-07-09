@@ -1968,6 +1968,8 @@ export async function assemblePrompt(
   let databankResult = databankSvc.getCachedDatabankResult(
     ctx.userId,
     ctx.chatId,
+    activeDatabankIds,
+    databankQueryPreview,
     databankSettings.retrievalTopK,
   );
   let databankRetrievalState: DatabankStats["retrievalState"] =

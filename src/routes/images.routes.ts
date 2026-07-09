@@ -239,7 +239,10 @@ app.get("/remote", async (c) => {
   try {
     const asset = await fetchRemoteImageAsset(remoteUrl.toString());
 
-    return new Response(asset.data, {
+    const body = new ArrayBuffer(asset.data.byteLength);
+    new Uint8Array(body).set(asset.data);
+
+    return new Response(body, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=3600, no-transform",

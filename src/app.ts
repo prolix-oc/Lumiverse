@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
 import { bodyLimit } from "hono/body-limit";
@@ -285,7 +285,7 @@ app.use("*", async (c, next) => {
 // a LAN IP instead of localhost. Respect X-Forwarded-Proto/Host from reverse
 // proxies (Cloudflare, nginx, HuggingFace Spaces) so BetterAuth generates
 // https:// callback URLs when served behind TLS termination.
-app.on(["POST", "GET"], "/api/auth/*", (c) => {
+const betterAuthHandler: Handler = (c) => {
   if (c.req.path === "/api/auth/sign-up/email") {
     return c.json({ error: "Not found" }, 404);
   }
@@ -297,7 +297,9 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => {
     return auth.handler(new Request(rewritten.toString(), c.req.raw));
   }
   return auth.handler(c.req.raw);
-});
+};
+app.get("/api/auth/*", betterAuthHandler);
+app.post("/api/auth/*", betterAuthHandler);
 
 // OAuth callback route — unauthenticated, before auth middleware
 app.route("/api/spindle-oauth", spindleOAuthRoutes);

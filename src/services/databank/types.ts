@@ -128,7 +128,8 @@ export interface DatabankSearchResult {
   databankId: string;
   documentName: string;
   content: string;
-  score: number;
+  /** Cosine similarity for vector-backed hits; null for lexical-only hits. */
+  score: number | null;
   metadata: Record<string, unknown>;
 }
 

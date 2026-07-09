@@ -356,6 +356,7 @@ type RuntimeWorkerToHost =
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
   | { type: "images_upload_from_data_url"; requestId: string; dataUrl: string; originalFilename?: string; userId?: string }
   | { type: "images_delete"; requestId: string; imageId: string; userId?: string }
+  | { type: "images_delete_many"; requestId: string; imageIds: string[]; userId?: string }
   | { type: "media_audio_convert"; requestId: string; input: MediaConvertAudioRequestDTO }
   | { type: "media_video_convert"; requestId: string; input: MediaConvertVideoRequestDTO }
   | { type: "media_video_transcode"; requestId: string; input: MediaTranscodeVideoRequestDTO }

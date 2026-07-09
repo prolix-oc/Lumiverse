@@ -726,7 +726,7 @@ export default function DryRunModal() {
                                 {t('databank.chunkLine', {
                                   index: i + 1,
                                   document: chunk.documentName,
-                                  score: chunk.score.toFixed(4),
+                                  score: chunk.score != null ? chunk.score.toFixed(4) : 'n/a',
                                   tokens: chunk.tokenEstimate,
                                 })}
                               </span>

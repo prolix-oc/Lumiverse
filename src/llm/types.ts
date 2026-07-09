@@ -370,7 +370,7 @@ export interface DatabankStats {
     | "skipped_no_active_banks"
     | "skipped_embeddings_disabled";
   retrievedChunks: Array<{
-    score: number;
+    score: number | null;
     tokenEstimate: number;
     documentName: string;
     databankId: string;

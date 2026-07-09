@@ -1122,6 +1122,8 @@ function augmentPooledCandidatesWithExactAnchors(
     const lexical_score =
       existing.candidate.lexical_score == null
         ? exactCandidate.lexical_score
+        : exactCandidate.lexical_score == null
+          ? existing.candidate.lexical_score
         : Math.max(
             existing.candidate.lexical_score,
             exactCandidate.lexical_score,

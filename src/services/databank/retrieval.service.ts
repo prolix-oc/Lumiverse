@@ -20,8 +20,14 @@ interface CachedResult {
 
 const resultCache = new Map<string, CachedResult>();
 
-function cacheKey(userId: string, chatId: string, limit: number): string {
-  return `${userId}:${chatId}:${limit}`;
+export function databankCacheKey(
+  userId: string,
+  chatId: string,
+  databankIds: string[],
+  queryText: string,
+  limit: number,
+): string {
+  return JSON.stringify([userId, chatId, limit, [...databankIds].sort(), queryText]);
 }
 
 /**
@@ -30,8 +36,14 @@ function cacheKey(userId: string, chatId: string, limit: number): string {
  * any future test fixture re-using chat ids) can never serve another user's
  * results from the in-memory cache.
  */
-export function getCachedDatabankResult(userId: string, chatId: string, limit: number): DatabankRetrievalResult | null {
-  const key = cacheKey(userId, chatId, limit);
+export function getCachedDatabankResult(
+  userId: string,
+  chatId: string,
+  databankIds: string[],
+  queryText: string,
+  limit: number,
+): DatabankRetrievalResult | null {
+  const key = databankCacheKey(userId, chatId, databankIds, queryText, limit);
   const cached = resultCache.get(key);
   if (!cached) return null;
   if (Date.now() - cached.cachedAt > CACHE_TTL_MS) {
@@ -42,7 +54,7 @@ export function getCachedDatabankResult(userId: string, chatId: string, limit: n
 }
 
 export function clearCache(userId: string, chatId: string): void {
-  const prefix = `${userId}:${chatId}:`;
+  const prefix = JSON.stringify([userId, chatId]).slice(0, -1) + ",";
   for (const key of resultCache.keys()) {
     if (key.startsWith(prefix)) resultCache.delete(key);
   }
@@ -112,7 +124,10 @@ export async function searchDatabanks(
     // A truncated or abort-interrupted result shouldn't poison the next
     // generation's warm cache.
     if (!signal?.aborted) {
-      resultCache.set(cacheKey(userId, chatId, limit), { result, cachedAt: Date.now() });
+      resultCache.set(
+        databankCacheKey(userId, chatId, databankIds, queryText, limit),
+        { result, cachedAt: Date.now() },
+      );
     }
 
     return result;

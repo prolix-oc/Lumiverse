@@ -3901,7 +3901,7 @@ export async function searchDatabankChunks(
   requestedLimit = 4,
   queryText?: string,
   signal?: AbortSignal,
-): Promise<Array<{ chunk_id: string; score: number; content: string; metadata: any }>> {
+): Promise<Array<{ chunk_id: string; score: number | null; content: string; metadata: any }>> {
   if (databankIds.length === 0) return [];
   if (signal?.aborted) return [];
 
@@ -3960,16 +3960,24 @@ export async function searchDatabankChunks(
 
   if (signal?.aborted) return [];
 
-  const results: Array<{ chunk_id: string; score: number; content: string; metadata: any }> = [];
+  return mapDatabankSearchHits(hits, requestedLimit);
+}
 
-  for (const hit of hits) {
+export function mapDatabankSearchHits(
+  hits: VectorHit[],
+  requestedLimit: number,
+): Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> {
+  const results: Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> = [];
+
+  for (const hit of hits.slice(0, requestedLimit)) {
     let meta: any = {};
     try { meta = JSON.parse(hit.metadata_json || "{}"); } catch { /* empty */ }
 
-    // Historical contract: score = max(0, 1 - distance). A lexical-only hit had
-    // no `_distance` (distance treated as 0 → score 1).
-    const distance = hit.similarity == null ? 0 : distanceFromSimilarity(hit.similarity);
-    const score = Math.max(0, 1 - distance);
+    // Preserve the provider/fusion order. Re-sorting by vector similarity here
+    // discards RRF/native-hybrid ranking and makes lexical-only hits dominate.
+    // A lexical-only hit has no meaningful cosine score, so expose null rather
+    // than presenting it as a perfect 1.000 match.
+    const score = hit.similarity == null ? null : Math.max(0, hit.similarity);
 
     results.push({
       chunk_id: String(hit.source_id),
@@ -3979,7 +3987,5 @@ export async function searchDatabankChunks(
     });
   }
 
-  // Sort by score descending and take top N
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, requestedLimit);
+  return results;
 }
