@@ -427,7 +427,7 @@ export type SavedThemeInput =
   | Omit<SavedThemeConfigEntry, 'id' | 'createdAt'>
   | Omit<SavedThemePackEntry, 'id' | 'createdAt'>
 
-export type WorldBookEntrySortBy = 'custom' | 'priority' | 'created' | 'updated' | 'name'
+export type WorldBookEntrySortBy = 'custom' | 'order' | 'priority' | 'created' | 'updated' | 'name'
 export type WorldBookEntrySortDir = 'asc' | 'desc'
 export type WorldBookEntryPageSize = 50 | 100 | 200 | 'all'
 export type WorldBookListSortDir = 'asc' | 'desc'

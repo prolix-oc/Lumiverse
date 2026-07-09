@@ -33,6 +33,7 @@ export function useWorldBookEntryLabels() {
 
     const sortOptions: { value: WorldBookEntrySortBy; label: string }[] = [
       { value: 'custom', label: t('entrySort.custom') },
+      { value: 'order', label: t('entrySort.order') },
       { value: 'priority', label: t('entrySort.priority') },
       { value: 'name', label: t('entrySort.name') },
       { value: 'created', label: t('entrySort.created') },
