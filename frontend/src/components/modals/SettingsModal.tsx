@@ -76,6 +76,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   const contentRef = useRef<HTMLDivElement>(null)
   const navNonce = useRef(0)
+  const handledScrollTargetNonce = useRef<number | null>(null)
   const [scrollTarget, setScrollTarget] = useState<{ anchorId: string | null; nonce: number } | null>(null)
 
   useEffect(() => {
@@ -123,12 +124,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
   useEffect(() => {
     const extensionId = settingsScrollTarget?.extensionId
-    if (!extensionId) return
+    const targetNonce = settingsScrollTarget?.nonce
+    if (!extensionId || targetNonce == null || handledScrollTargetNonce.current === targetNonce) return
 
     if (activeView !== 'extensions') {
       setActiveView('extensions')
       return
     }
+
+    handledScrollTargetNonce.current = targetNonce
 
     let frame = 0
     let attempts = 0
