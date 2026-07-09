@@ -5,9 +5,11 @@ import {
   useMemo,
   useCallback,
   useLayoutEffect,
+  forwardRef,
   type ChangeEvent,
   type CompositionEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type Ref,
   type ReactNode,
   type SyntheticEvent,
 } from 'react'
@@ -528,18 +530,7 @@ export default function ExpandedTextEditor({
  * Drop-in wrapper: renders the original textarea with an expand button overlay.
  * When expanded, opens a full-screen ExpandedTextEditor modal.
  */
-export function ExpandableTextarea({
-  value,
-  onChange,
-  title,
-  placeholder,
-  className,
-  rows,
-  spellCheck,
-  macros,
-  onRefreshMacros,
-  markdownOnly,
-}: {
+interface ExpandableTextareaProps {
   value: string
   onChange: (value: string) => void
   title: string
@@ -551,11 +542,38 @@ export function ExpandableTextarea({
   onRefreshMacros?: () => void
   /** Forwarded to the full-screen editor. See ExpandedTextEditor.markdownOnly. */
   markdownOnly?: boolean
-}) {
+}
+
+function assignTextareaRef(ref: Ref<HTMLTextAreaElement> | undefined, node: HTMLTextAreaElement | null) {
+  if (!ref) return
+  if (typeof ref === 'function') {
+    ref(node)
+    return
+  }
+  ref.current = node
+}
+
+export const ExpandableTextarea = forwardRef<HTMLTextAreaElement, ExpandableTextareaProps>(function ExpandableTextarea({
+  value,
+  onChange,
+  title,
+  placeholder,
+  className,
+  rows,
+  spellCheck,
+  macros,
+  onRefreshMacros,
+  markdownOnly,
+}, forwardedRef) {
   const { t } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
   const [expanded, setExpanded] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const cursorPosRef = useRef<number | null>(null)
+
+  const setTextareaRef = useCallback((node: HTMLTextAreaElement | null) => {
+    textareaRef.current = node
+    assignTextareaRef(forwardedRef, node)
+  }, [forwardedRef])
 
   // Track cursor position continuously so it's correct even after
   // the expand button steals focus via mousedown before click fires
@@ -575,7 +593,7 @@ export function ExpandableTextarea({
   return (
     <div className={s.textareaWrapper}>
       <textarea
-        ref={textareaRef}
+        ref={setTextareaRef}
         className={className}
         value={value}
         onChange={handleTextareaChange}
@@ -607,4 +625,4 @@ export function ExpandableTextarea({
       )}
     </div>
   )
-}
+})

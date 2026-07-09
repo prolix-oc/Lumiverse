@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
+import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { Toggle } from '@/components/shared/Toggle'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
@@ -319,12 +320,14 @@ export default function RegexEditorModal() {
                   ))}
                 </div>
               </div>
-              <textarea
+              <ExpandableTextarea
                 className={styles.monoInput}
                 value={findRegex}
-                onChange={(e) => setFindRegex(e.target.value)}
+                onChange={setFindRegex}
+                title={tr('pattern')}
                 placeholder={tr('regexPlaceholder')}
                 rows={2}
+                spellCheck={false}
               />
             </div>
             <div className={styles.field}>
@@ -355,13 +358,15 @@ export default function RegexEditorModal() {
                   </button>
                 ))}
               </div>
-              <textarea
+              <ExpandableTextarea
                 ref={replaceRef}
                 className={styles.monoInput}
                 value={replaceString}
-                onChange={(e) => setReplaceString(e.target.value)}
+                onChange={setReplaceString}
+                title={tr('replaceWith')}
                 placeholder={tr('replacePlaceholder')}
                 rows={2}
+                spellCheck={false}
               />
             </div>
           </div>

@@ -22,6 +22,7 @@ import {
 } from '@dnd-kit/sortable'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { Button } from '@/components/shared/FormComponents'
+import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { useStore } from '@/store'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
@@ -889,11 +890,14 @@ function ScriptRow({
               Find
               <span className={styles.fieldHint}>{t('regexPanel.findHint')}</span>
             </label>
-            <input
-              className={styles.fieldInputMono}
+            <ExpandableTextarea
+              className={styles.fieldTextarea}
               value={draft.find_regex}
-              onChange={(e) => queueDraftUpdate({ find_regex: e.target.value })}
+              onChange={(value) => queueDraftUpdate({ find_regex: value })}
+              title="Find"
               placeholder={t('regexPanel.findPlaceholder')}
+              rows={2}
+              spellCheck={false}
             />
           </div>
           <div className={styles.field}>
@@ -928,13 +932,15 @@ function ScriptRow({
                 </button>
               ))}
             </div>
-            <textarea
+            <ExpandableTextarea
               ref={replaceRef}
               className={styles.fieldTextarea}
               value={draft.replace_string}
-              onChange={(e) => queueDraftUpdate({ replace_string: e.target.value })}
+              onChange={(value) => queueDraftUpdate({ replace_string: value })}
+              title={t('regexPanel.replaceWith')}
               placeholder={t('regexPanel.replacePlaceholder')}
               rows={2}
+              spellCheck={false}
             />
           </div>
           <div className={styles.fieldRow}>

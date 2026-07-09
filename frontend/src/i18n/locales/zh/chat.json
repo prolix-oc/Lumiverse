@@ -99,6 +99,11 @@
     "noConnections": "暂无可用连接。",
     "groupSettings": "群组设置",
     "chatSettings": "聊天设置",
+    "promptVariables": "提示词变量",
+    "promptVariablesFor": "更改 {{name}} 的取值",
+    "promptVariablesActivePreset": "更改当前所选预设的取值",
+    "promptVariablesSelectPreset": "选择预设后即可更改提示词变量",
+    "loadingPromptVariables": "正在加载提示词变量...",
     "convertToGroupChat": "转为群聊",
     "newGroupChat": "新建群聊",
     "authorsNote": "作者附注",
@@ -201,7 +206,10 @@
     "failedRecompileMemories": "重新编译记忆失败",
     "chatDocuments": "聊天文档",
     "chatDocumentsNamed": "{{name}} 聊天",
-    "failedSaveChatPersona": "无法保存此聊天的人设"
+    "failedSaveChatPersona": "无法保存此聊天的人设",
+    "noPresetForPromptVariables": "请先选择预设，再更改提示词变量",
+    "failedLoadPromptVariables": "加载提示词变量失败",
+    "failedSavePromptVariables": "保存提示词变量失败"
   },
   "addGroupMember": {
     "title": "添加群组成员",

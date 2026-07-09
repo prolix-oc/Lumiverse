@@ -238,11 +238,6 @@
   border-color: var(--lumiverse-primary);
 }
 
-.fieldInputMono {
-  composes: fieldInput;
-  font-family: var(--lumiverse-mono, monospace);
-}
-
 .fieldTextarea {
   padding: 6px 8px;
   font-size: calc(12px * var(--lumiverse-font-scale, 1));

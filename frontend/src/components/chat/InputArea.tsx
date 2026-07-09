@@ -1,11 +1,12 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
 import { messagesApi, chatsApi } from '@/api/chats'
+import { presetsApi } from '@/api/presets'
 import { charactersApi } from '@/api/characters'
 import { generateApi } from '@/api/generate'
 import { memoryCortexApi } from '@/api/memory-cortex'
@@ -17,6 +18,7 @@ import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avat
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
+import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -27,7 +29,9 @@ import {
 import { useDeviceFrameRadius } from '@/hooks/useDeviceFrameRadius'
 import useIsMobile from '@/hooks/useIsMobile'
 import type { MessageAttachment, PersonaAddon, GlobalAddon, AttachedGlobalAddon } from '@/types/api'
+import type { LoomPreset, PromptVariableValues } from '@/lib/loom/types'
 import AuthorsNotePanel from './AuthorsNotePanel'
+import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import ProviderIcon from '@/components/shared/ProviderIcon'
 import { databankApi } from '@/api/databank'
 import { resolveMacros } from '@/api/macros'
@@ -213,6 +217,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }>>([])
   const [characterName, setCharacterName] = useState('')
   const [impersonationPresetId, setImpersonationPresetId] = useState<string | null>(null)
+  const [promptVariablesModalOpen, setPromptVariablesModalOpen] = useState(false)
+  const [promptVariablesPreset, setPromptVariablesPreset] = useState<LoomPreset | null>(null)
+  const [promptVariablesLoading, setPromptVariablesLoading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<(MessageAttachment & { previewUrl?: string })[]>([])
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
@@ -276,6 +283,8 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const activePersonaId = useStore((s) => s.activePersonaId)
   const setActivePersona = useStore((s) => s.setActivePersona)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
+  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const loomRegistry = useStore((s) => s.loomRegistry)
   const regenFeedback = useStore((s) => s.regenFeedback)
   const retainCouncilForRegens = useStore((s) => s.councilSettings.toolsSettings.retainResultsForRegens)
   const guidedGenerations = useStore((s) => s.guidedGenerations)
@@ -921,6 +930,44 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const activeGuides = guidedGenerations.filter((g) => g.enabled)
   const activeGuideCount = activeGuides.length
   const activeQuickReplySets = quickReplySets.filter((s) => s.enabled)
+  const activeLoomPresetName = activeLoomPresetId ? loomRegistry[activeLoomPresetId]?.name ?? null : null
+
+  const openPromptVariablesModal = useCallback(async () => {
+    if (!activeLoomPresetId) {
+      toast.info(t('toast.noPresetForPromptVariables'))
+      return
+    }
+    if (promptVariablesLoading) return
+    setOpenPopover(null)
+    setPromptVariablesLoading(true)
+    try {
+      const preset = await presetsApi.get(activeLoomPresetId)
+      setPromptVariablesPreset(unmarshalPreset(preset))
+      setPromptVariablesModalOpen(true)
+    } catch (err) {
+      console.error('[InputArea] Failed to load prompt variables preset:', err)
+      toast.error(t('toast.failedLoadPromptVariables'))
+    } finally {
+      setPromptVariablesLoading(false)
+    }
+  }, [activeLoomPresetId, promptVariablesLoading, t])
+
+  const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
+    if (!promptVariablesPreset) return
+    const updated: LoomPreset = {
+      ...promptVariablesPreset,
+      promptVariables: values,
+      updatedAt: Date.now(),
+    }
+    try {
+      const saved = await presetsApi.update(updated.id, marshalUpdate(updated))
+      setPromptVariablesPreset(unmarshalPreset(saved))
+    } catch (err) {
+      console.warn('[InputArea] Failed to save prompt variable values:', err)
+      toast.error(t('toast.failedSavePromptVariables'))
+      throw err
+    }
+  }, [promptVariablesPreset, t])
 
   const consumeOneshotGuides = useCallback(() => {
     const next = guidedGenerations.map((g) =>
@@ -945,6 +992,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }, 250)
     return () => clearTimeout(timer)
   }, [openPopover, renderPopover])
+
+  useEffect(() => {
+    if (!promptVariablesPreset) return
+    if (promptVariablesPreset.id === activeLoomPresetId) return
+    setPromptVariablesModalOpen(false)
+    setPromptVariablesPreset(null)
+  }, [activeLoomPresetId, promptVariablesPreset])
 
   // Databank # autocomplete — search when hash query changes
   useEffect(() => {
@@ -2429,6 +2483,16 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         onClose={() => setAuthorsNoteOpen(false)}
       />
 
+      {promptVariablesPreset && (
+        <PromptVariablesModal
+          isOpen={promptVariablesModalOpen}
+          blocks={promptVariablesPreset.blocks}
+          values={promptVariablesPreset.promptVariables ?? {}}
+          onSave={savePromptVariableValues}
+          onClose={() => setPromptVariablesModalOpen(false)}
+        />
+      )}
+
       {/* Action bar */}
       <div data-spindle-mount="chat_toolbar">
         <div className={styles.actionBar}>
@@ -2768,6 +2832,28 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                 <span className={styles.personaMain}>
                   <Settings2 size={14} />
                   <span>{isGroupChat ? t('quickMenu.groupSettings') : t('quickMenu.chatSettings')}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={styles.popRowBtn}
+                onClick={() => void openPromptVariablesModal()}
+                disabled={!activeLoomPresetId || promptVariablesLoading}
+                style={!activeLoomPresetId || promptVariablesLoading ? { opacity: 0.5 } : undefined}
+                title={!activeLoomPresetId ? t('quickMenu.promptVariablesSelectPreset') : undefined}
+              >
+                <span className={styles.personaMain}>
+                  <Sliders size={14} />
+                  <span className={styles.personaNameGroup}>
+                    <span>{t('quickMenu.promptVariables')}</span>
+                    <span className={styles.personaTitle}>
+                      {promptVariablesLoading
+                        ? t('quickMenu.loadingPromptVariables')
+                        : activeLoomPresetName
+                          ? t('quickMenu.promptVariablesFor', { name: activeLoomPresetName })
+                          : t('quickMenu.promptVariablesActivePreset')}
+                    </span>
+                  </span>
                 </span>
               </button>
               {!isGroupChat && activeCharacterId && (

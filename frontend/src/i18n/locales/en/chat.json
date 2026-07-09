@@ -102,6 +102,11 @@
     "noConnections": "No connections available.",
     "groupSettings": "Group Settings",
     "chatSettings": "Chat Settings",
+    "promptVariables": "Prompt Variables",
+    "promptVariablesFor": "Change values for {{name}}",
+    "promptVariablesActivePreset": "Change values for selected preset",
+    "promptVariablesSelectPreset": "Select a preset to change prompt variables",
+    "loadingPromptVariables": "Loading prompt variables...",
     "convertToGroupChat": "Convert to Group Chat",
     "newGroupChat": "New Group Chat",
     "authorsNote": "Author's Note",
@@ -204,7 +209,10 @@
     "failedRecompileMemories": "Failed to recompile memories",
     "chatDocuments": "Chat Documents",
     "chatDocumentsNamed": "{{name}} Chat",
-    "failedSaveChatPersona": "Failed to save persona for this chat"
+    "failedSaveChatPersona": "Failed to save persona for this chat",
+    "noPresetForPromptVariables": "Select a preset before changing prompt variables",
+    "failedLoadPromptVariables": "Failed to load prompt variables",
+    "failedSavePromptVariables": "Failed to save prompt variables"
   },
   "addGroupMember": {
     "title": "Add Group Member",
