@@ -1,6 +1,7 @@
 .modal {
   max-height: calc(88vh / var(--lumiverse-ui-scale, 1));
   min-height: 0;
+  width: min(100%, 720px);
 }
 
 .header {
@@ -22,6 +23,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
@@ -541,6 +543,16 @@
   .body {
     padding: 14px;
     gap: 14px;
+  }
+
+  .placementGrid {
+    gap: 6px;
+  }
+
+  .placementChip,
+  .segmentedBtn {
+    padding-top: 7px;
+    padding-bottom: 7px;
   }
 
   .identityRow,

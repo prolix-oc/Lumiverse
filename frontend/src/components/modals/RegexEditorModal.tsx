@@ -230,7 +230,7 @@ export default function RegexEditorModal() {
     <ModalShell
       isOpen={true}
       onClose={closeModal}
-      maxWidth={720}
+      maxWidth="min(720px, calc(var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) - 40px))"
       maxHeight="calc(88vh / var(--lumiverse-ui-scale, 1))"
       zIndex={10001}
       className={styles.modal}
