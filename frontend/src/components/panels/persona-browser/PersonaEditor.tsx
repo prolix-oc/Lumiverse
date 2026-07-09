@@ -604,6 +604,7 @@ export default function PersonaEditor({
             clearable
             clearLabel={t('personaEditor.noLorebook')}
             className={styles.lorebookSelectWrapper}
+            portal
           />
           <Button
             size="icon-sm" variant="ghost"
