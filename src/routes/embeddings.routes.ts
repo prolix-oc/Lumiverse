@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { requireOwnerStrict } from "../auth/middleware";
 import { getDb } from "../db/connection";
 import * as embeddingsSvc from "../services/embeddings.service";
 import * as worldBooksSvc from "../services/world-books.service";
@@ -174,7 +175,7 @@ app.put("/chat-memory-settings", async (c) => {
   return c.json(updated);
 });
 
-app.post("/force-reset", async (c) => {
+app.post("/force-reset", requireOwnerStrict, async (c) => {
   try {
     const result = await embeddingsSvc.forceResetLanceDB();
     return c.json({ success: true, ...result });
@@ -183,7 +184,7 @@ app.post("/force-reset", async (c) => {
   }
 });
 
-app.post("/optimize", async (c) => {
+app.post("/optimize", requireOwnerStrict, async (c) => {
   try {
     const store = await getActiveVectorStore();
     await store.optimize(["embeddings", "embeddings_world_books"]);
@@ -193,7 +194,7 @@ app.post("/optimize", async (c) => {
   }
 });
 
-app.get("/health", async (c) => {
+app.get("/health", requireOwnerStrict, async (c) => {
   try {
     const store = await getActiveVectorStore();
     const collections: CollectionName[] = ["embeddings", "embeddings_world_books"];
@@ -227,7 +228,7 @@ function combineVectorHealth(tables: Record<CollectionName, TableHealth>) {
 
 // --- Vector Store (database backend) configuration — owner-gated, global ---
 
-app.get("/vector-store/config", async (c) => {
+app.get("/vector-store/config", requireOwnerStrict, async (c) => {
   try {
     return c.json(await vectorStoreCfg.getVectorStoreConfigForApi());
   } catch (err: any) {
@@ -235,7 +236,7 @@ app.get("/vector-store/config", async (c) => {
   }
 });
 
-app.put("/vector-store/config", async (c) => {
+app.put("/vector-store/config", requireOwnerStrict, async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json().catch(() => ({}));
   try {
@@ -249,13 +250,14 @@ app.put("/vector-store/config", async (c) => {
   }
 });
 
-app.post("/vector-store/test", async (c) => {
+app.post("/vector-store/test", requireOwnerStrict, async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json().catch(() => ({}));
-  const result = await vectorStoreCfg.testVectorStoreConnection(body);
+  const result = await vectorStoreCfg.testVectorStoreConnection(userId, body);
   return c.json(result, result.ok ? 200 : 400);
 });
 
-app.post("/vector-store/switch", async (c) => {
+app.post("/vector-store/switch", requireOwnerStrict, async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json().catch(() => ({}));
   try {
