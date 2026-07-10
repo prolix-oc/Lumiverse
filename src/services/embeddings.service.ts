@@ -2206,9 +2206,7 @@ export async function testEmbeddingConfig(
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
-  await withWorldBookEntryVectorCommitLocks(userId, [entryId], async () => {
-    await deleteWorldBookEntryRowsUnlocked(userId, [entryId]);
-  });
+  await deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, [entryId], () => {});
 }
 
 const worldBookEntryVectorCommitTails = new Map<string, Promise<void>>();
@@ -2255,6 +2253,56 @@ async function deleteWorldBookEntryRowsUnlocked(userId: string, entryIds: string
     eq("source_type", "world_book_entry"),
     inSet("source_id", entryIds),
   ]));
+}
+
+async function deleteWorldBookRowsUnlocked(userId: string, worldBookIds: string[]): Promise<void> {
+  if (worldBookIds.length === 0) return;
+  await deleteStoreRows("embeddings_world_books", andFilter([
+    eq("user_id", userId),
+    eq("source_type", "world_book_entry"),
+    inSet("owner_id", worldBookIds),
+  ]));
+}
+
+async function coordinateWorldBookVectorAndSourceDelete<T>(
+  userId: string,
+  lockEntryIds: string[],
+  deleteVectors: () => Promise<void>,
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  return withWorldBookEntryVectorCommitLocks(userId, lockEntryIds, async () => {
+    await deleteVectors();
+    return await deleteSource();
+  });
+}
+
+export async function deleteWorldBookEntryEmbeddingsBeforeSourceDelete<T>(
+  userId: string,
+  entryIds: string[],
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  const uniqueEntryIds = Array.from(new Set(entryIds));
+  return coordinateWorldBookVectorAndSourceDelete(
+    userId,
+    uniqueEntryIds,
+    () => deleteWorldBookEntryRowsUnlocked(userId, uniqueEntryIds),
+    deleteSource,
+  );
+}
+
+export async function deleteWorldBookEmbeddingsBeforeSourceDelete<T>(
+  userId: string,
+  worldBookIds: string[],
+  lockEntryIds: string[],
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  const uniqueWorldBookIds = Array.from(new Set(worldBookIds));
+  return coordinateWorldBookVectorAndSourceDelete(
+    userId,
+    Array.from(new Set(lockEntryIds)),
+    () => deleteWorldBookRowsUnlocked(userId, uniqueWorldBookIds),
+    deleteSource,
+  );
 }
 
 function getDesiredWorldBookVectorStatus(entry: WorldBookEntry): WorldBookVectorIndexStatus {
@@ -2520,6 +2568,7 @@ async function commitWorldBookVectorWritesIfCurrent(
 
 export const __test__ = {
   commitWorldBookVectorWritesIfCurrent,
+  coordinateWorldBookVectorAndSourceDelete,
   updateWorldBookEntriesVectorStateIfCurrent,
   withWorldBookEntryVectorCommitLocks,
 };

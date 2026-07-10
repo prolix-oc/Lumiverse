@@ -7425,7 +7425,7 @@ export class WorkerHost {
     }
   }
 
-  private handleWorldBooksDelete(requestId: string, worldBookId: string, userId?: string): void {
+  private async handleWorldBooksDelete(requestId: string, worldBookId: string, userId?: string): Promise<void> {
     try {
       if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
@@ -7434,7 +7434,7 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const deleted = worldBooksSvc.deleteWorldBook(resolvedUserId, worldBookId);
+      const deleted = await worldBooksSvc.deleteWorldBook(resolvedUserId, worldBookId);
       this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
@@ -7525,7 +7525,7 @@ export class WorkerHost {
     }
   }
 
-  private handleWorldBookEntriesDelete(requestId: string, entryId: string, userId?: string): void {
+  private async handleWorldBookEntriesDelete(requestId: string, entryId: string, userId?: string): Promise<void> {
     try {
       if (!this.hasPermission("world_books")) {
         throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
@@ -7534,7 +7534,7 @@ export class WorkerHost {
       if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
       this.enforceScopedUser(resolvedUserId);
 
-      const deleted = worldBooksSvc.deleteEntry(resolvedUserId, entryId);
+      const deleted = await worldBooksSvc.deleteEntry(resolvedUserId, entryId);
       this.postToWorker({ type: "response", requestId, result: deleted });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
