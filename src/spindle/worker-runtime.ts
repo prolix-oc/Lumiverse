@@ -63,6 +63,7 @@ import type {
   CortexResultDTO,
   CortexUsageStatsDTO,
   LinkedCortexResultDTO,
+  AssemblyBreakdownEntryDTO,
   MemoryConsolidationDTO,
   MemoryCortexConfigDTO,
   MemoryEntityDTO,
@@ -124,7 +125,7 @@ type AssembleRequest = {
 
 type AssembleResult = {
   messages: LlmMessageDTO[];
-  breakdown: Array<Record<string, unknown>>;
+  breakdown: AssemblyBreakdownEntryDTO[];
 };
 
 type FrontendProcessState =
