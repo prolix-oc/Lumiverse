@@ -1081,10 +1081,10 @@ async function runCharacterDeletionCascade(userId: string, id: string): Promise<
 
   await imagesSvc.unlinkPaths(plan.paths);
   if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path).catch(() => {});
+  await deleteAutoManagedCharacterWorldBooks(userId, id);
 
   getDb().transaction(() => {
     imagesSvc.deleteImageRowsOnly(userId, plan.rowIds);
-    deleteAutoManagedCharacterWorldBooks(userId, id);
     deleteRegexScriptsByCharacterId(userId, id);
     getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
   })();

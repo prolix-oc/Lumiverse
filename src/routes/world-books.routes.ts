@@ -449,7 +449,7 @@ app.post("/bulk-delete", async (c) => {
   const ids = body ? parseBulkWorldBookIds(body.ids) : null;
   if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
 
-  const result = svc.bulkDeleteWorldBooks(userId, ids);
+  const result = await svc.bulkDeleteWorldBooks(userId, ids);
   return c.json({ deleted: result.deleted });
 });
 
@@ -492,9 +492,9 @@ app.put("/:id", async (c) => {
   return c.json(book);
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteWorldBook(userId, c.req.param("id"))) return c.json({ error: "Not found" }, 404);
+  if (!(await svc.deleteWorldBook(userId, c.req.param("id")))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 
@@ -1006,7 +1006,7 @@ app.post("/:id/entries/bulk", async (c) => {
     return c.json({ error: "entry_ids is required" }, 400);
   }
   try {
-    const result = svc.bulkOperateEntries(userId, bookId, body);
+    const result = await svc.bulkOperateEntries(userId, bookId, body);
     if (!result) return c.json({ error: "World book not found" }, 404);
     return c.json(result);
   } catch (err: any) {
@@ -1035,9 +1035,9 @@ app.post("/:id/entries/:eid/duplicate", async (c) => {
   return c.json(duplicated, 201);
 });
 
-app.delete("/:id/entries/:eid", (c) => {
+app.delete("/:id/entries/:eid", async (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteEntry(userId, c.req.param("eid"))) return c.json({ error: "Not found" }, 404);
+  if (!(await svc.deleteEntry(userId, c.req.param("eid")))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 

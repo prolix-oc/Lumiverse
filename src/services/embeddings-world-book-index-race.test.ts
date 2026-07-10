@@ -129,6 +129,57 @@ beforeEach(() => {
 afterEach(() => closeDatabase());
 
 describe("world-book vector commit races", () => {
+  test("keeps the source when vector cleanup fails", async () => {
+    let sourceDeleteCalled = false;
+    await expect(__test__.coordinateWorldBookVectorAndSourceDelete(
+      "user",
+      ["entry-1"],
+      async () => { throw new Error("vector store unavailable"); },
+      () => {
+        sourceDeleteCalled = true;
+        getDb().query("DELETE FROM world_book_entries WHERE id = 'entry-1'").run();
+      },
+    )).rejects.toThrow("vector store unavailable");
+
+    expect(sourceDeleteCalled).toBe(false);
+    expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).not.toBeNull();
+  });
+
+  test("holds the entry gate through source deletion", async () => {
+    const events: string[] = [];
+    let releaseVectorDelete!: () => void;
+    let vectorDeleteStarted!: () => void;
+    const started = new Promise<void>((resolve) => { vectorDeleteStarted = resolve; });
+    const blocked = new Promise<void>((resolve) => { releaseVectorDelete = resolve; });
+
+    const deletion = __test__.coordinateWorldBookVectorAndSourceDelete(
+      "user",
+      ["entry-1"],
+      async () => {
+        events.push("vector-delete");
+        vectorDeleteStarted();
+        await blocked;
+      },
+      () => {
+        events.push("source-delete");
+        getDb().query("DELETE FROM world_book_entries WHERE id = 'entry-1'").run();
+      },
+    );
+    await started;
+
+    const competingCommit = __test__.withWorldBookEntryVectorCommitLocks("user", ["entry-1"], async () => {
+      events.push("competing-commit");
+      expect(getDb().query("SELECT 1 FROM world_book_entries WHERE id = 'entry-1'").get()).toBeNull();
+    });
+    await Promise.resolve();
+    expect(events).toEqual(["vector-delete"]);
+
+    releaseVectorDelete();
+    await deletion;
+    await competingCommit;
+    expect(events).toEqual(["vector-delete", "source-delete", "competing-commit"]);
+  });
+
   test("compare-and-set rejects an edit after final snapshot validation", async () => {
     const vectors = new Map<string, VectorRow[]>();
     let filterCalls = 0;
