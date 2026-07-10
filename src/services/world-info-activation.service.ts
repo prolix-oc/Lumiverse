@@ -123,6 +123,8 @@ export interface FinalizedWorldInfoEntries {
 export interface FinalizeWorldInfoOptions {
   skipGroupLogic?: boolean;
   preserveOrder?: boolean;
+  /** Internal competition priorities used only for budget ordering. */
+  budgetPriorityById?: ReadonlyMap<string, number>;
 }
 
 // ─── Activation cache (short-TTL for rapid dry-run optimization) ───
@@ -353,12 +355,14 @@ export function finalizeActivatedWorldInfoEntries(
 
   const afterGroups = options.skipGroupLogic
     ? [...entries]
-    : applyGroupLogic([...entries]);
+    : applyWorldInfoGroupLogic([...entries]);
   const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
 
   if (!options.preserveOrder) {
     insertableEntries.sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
+      const aPriority = options.budgetPriorityById?.get(a.id) ?? a.priority;
+      const bPriority = options.budgetPriorityById?.get(b.id) ?? b.priority;
+      if (bPriority !== aPriority) return bPriority - aPriority;
       return a.order_value - b.order_value;
     });
   }
@@ -602,7 +606,7 @@ function joinMessageContents(messages: Message[]): string {
  * - group_override: highest priority entry wins
  * - Otherwise: weighted random selection by group_weight
  */
-function applyGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
+export function applyWorldInfoGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
   const grouped = new Map<string, WorldBookEntry[]>();
   const ungrouped: WorldBookEntry[] = [];
 

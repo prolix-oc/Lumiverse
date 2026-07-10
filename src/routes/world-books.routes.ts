@@ -11,15 +11,12 @@ import {
   collectVectorActivatedWorldInfoDetailed,
   getWorldInfoVectorQueryPreview,
   mergeActivatedWorldInfoEntries,
-  applyVectorPriorityBoost,
 } from "../services/prompt-assembly.service";
 import {
   collectWorldInfoSources,
   resolveWorldInfoCharacters,
-  type BookSource,
 } from "../services/world-info-sources.service";
-import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
-import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
+import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import type { WorldBookEntry } from "../types/world-book";
 import { makeAssistantCharacter } from "../types/character";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
@@ -90,11 +87,6 @@ function buildRerankLead(options: {
     return `It ranked #${options.rerankRank} after reranking${metricText}.`;
   }
   return `This candidate was pulled from vector search${metricText}.`;
-}
-
-function getWorldInfoGroupKey(entry: WorldBookEntry): string | null {
-  const groupName = typeof entry.group_name === "string" ? entry.group_name.trim() : "";
-  return groupName ? groupName.toLowerCase() : null;
 }
 
 function buildDiagnosticVectorOutcome(
@@ -203,142 +195,60 @@ function buildDiagnosticVectorOutcome(
 }
 
 function traceDiagnosticVectorHitOutcomes(
-  keywordEntries: WorldBookEntry[],
   vectorEntries: VectorHitEntry[],
+  dispositions: ReturnType<typeof mergeActivatedWorldInfoEntries>["vectorDispositions"],
   settingsInput?: Partial<WorldInfoSettings>,
-  bookSourceMap?: Map<string, BookSource>,
 ): Map<string, DiagnosticVectorHitOutcome> {
-  const settings = normalizeWorldInfoSettings(settingsInput);
-  const mergedEntries: WorldBookEntry[] = [];
-  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
-  const seen = new Set<string>();
-  const occupiedGroups = new Map<string, { entry: WorldBookEntry; source: "keyword" | "vector" }>();
   const outcomes = new Map<string, DiagnosticVectorHitOutcome>();
-  const maxActivatedTarget = settings.maxActivatedEntries > 0
-    ? settings.maxActivatedEntries
-    : Number.POSITIVE_INFINITY;
-
-  for (const entry of keywordEntries) {
-    if (seen.has(entry.id)) continue;
-    mergedEntries.push(entry);
-    seen.add(entry.id);
-    sources.set(entry.id, { source: "keyword" });
-    const groupKey = getWorldInfoGroupKey(entry);
-    if (groupKey) occupiedGroups.set(groupKey, { entry, source: "keyword" });
-  }
-
-  let finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings, {
-    skipGroupLogic: true,
-    preserveOrder: true,
-  });
 
   for (const item of vectorEntries) {
-    if (seen.has(item.entry.id)) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("already_keyword", {
-        entry: item.entry,
-        rerankRank: item.rerankRank,
-        finalScore: item.finalScore,
-        distance: item.distance,
-      }));
-      continue;
-    }
-
-    if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_min_priority", {
-        entry: item.entry,
-        minPriority: settings.minPriority,
-        rerankRank: item.rerankRank,
-        finalScore: item.finalScore,
-        distance: item.distance,
-      }));
-      continue;
-    }
-
-    const groupKey = getWorldInfoGroupKey(item.entry);
-    if (groupKey) {
-      const occupied = occupiedGroups.get(groupKey);
-      if (occupied) {
-        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_group", {
-          entry: item.entry,
-          conflictingEntry: occupied.entry,
-          conflictingSource: occupied.source,
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        }));
-        continue;
-      }
-    }
-
-    // Mirror prompt-assembly's merge: when the cap is full, apply a bounded
-    // score-derived priority boost to vector entries so they can compete on
-    // retrieval relevance instead of losing the order_value tiebreaker. See
-    // `applyVectorPriorityBoost` in prompt-assembly.service.ts.
-    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
-    const nextMergedEntries = [...mergedEntries, item.entry];
-    const finalizeInput = budgetFull
-      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
-      : nextMergedEntries;
-    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
-      skipGroupLogic: true,
-      preserveOrder: !budgetFull,
-    });
-    const nextFinalized = budgetFull
-      ? {
-          ...rawNextFinalized,
-          activatedEntries: rawNextFinalized.activatedEntries
-            .map((e) => nextMergedEntries.find((orig) => orig.id === e.id))
-            .filter((e): e is WorldBookEntry => !!e),
-        }
-      : rawNextFinalized;
-    const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
-    const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
-
-    if (!itemSurvived) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
-        budgetFull
-          ? "blocked_by_max_entries"
-          : settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
-        {
-          maxActivatedEntries: settings.maxActivatedEntries,
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        },
-      ));
-      continue;
-    }
-    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
-        settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
-        {
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        },
-      ));
-      continue;
-    }
-
-    mergedEntries.push(item.entry);
-    seen.add(item.entry.id);
-    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
-    if (groupKey) occupiedGroups.set(groupKey, { entry: item.entry, source: "vector" });
-    finalized = nextFinalized;
-    outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("injected_vector", {
+    const disposition = dispositions.get(item.entry.id);
+    const common = {
+      entry: item.entry,
       rerankRank: item.rerankRank,
       finalScore: item.finalScore,
       distance: item.distance,
-    }));
-  }
-
-  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
-  for (const removed of dedupResult.removed) {
-    if (!outcomes.has(removed.removedEntryId)) continue;
-    outcomes.set(removed.removedEntryId, buildDiagnosticVectorOutcome("deduplicated", {
-      keptEntryComment: removed.keptEntryComment,
-      dedupTier: removed.tier,
-    }));
+    };
+    switch (disposition?.code) {
+      case "activated":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("injected_vector", common));
+        break;
+      case "already_keyword":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("already_keyword", common));
+        break;
+      case "blocked_by_min_priority":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_min_priority", {
+          ...common,
+          minPriority: settingsInput?.minPriority,
+        }));
+        break;
+      case "blocked_by_group":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_group", {
+          ...common,
+          conflictingEntry: disposition.conflictingEntry,
+          conflictingSource: disposition.conflictingSource,
+        }));
+        break;
+      case "blocked_by_max_entries":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_max_entries", {
+          ...common,
+          maxActivatedEntries: settingsInput?.maxActivatedEntries,
+        }));
+        break;
+      case "blocked_by_token_budget":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_token_budget", common));
+        break;
+      case "deduplicated":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("deduplicated", {
+          ...common,
+          keptEntryComment: disposition.dedupRecord?.keptEntryComment,
+          dedupTier: disposition.dedupRecord?.tier,
+        }));
+        break;
+      default:
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_during_final_assembly", common));
+        break;
+    }
   }
 
   return outcomes;
@@ -638,10 +548,9 @@ app.post("/:id/diagnostics", async (c) => {
     wiSources.bookSourceMap,
   );
   const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
-    wiResult.activatedEntries,
     vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),
+    mergedWorldInfo.vectorDispositions,
     worldInfoSettings,
-    wiSources.bookSourceMap,
   );
   const selectedCandidateTrace = vectorDetail.candidateTrace.filter((item) => item.entry.world_book_id === bookId);
   const selectedVectorEntries = vectorDetail.entries.filter((item) => item.entry.world_book_id === bookId);
