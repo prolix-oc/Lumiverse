@@ -76,14 +76,46 @@ export function subscribeActiveMessage(cb: () => void): () => void {
   return () => { activeListeners.delete(cb) }
 }
 
-function ensureContext(): AudioContext {
-  if (!ctx) {
-    ctx = new AudioContext()
-    gainNode = ctx.createGain()
-    gainNode.gain.value = volume
-    gainNode.connect(ctx.destination)
+/**
+ * Returns the browser's Web Audio constructor, including Safari's legacy
+ * prefixed implementation. Some embedded/older browsers expose neither.
+ */
+function getAudioContextConstructor(): typeof AudioContext | null {
+  if (typeof window === 'undefined') return null
+  const audioWindow = window as Window & { webkitAudioContext?: typeof AudioContext }
+  return typeof AudioContext === 'undefined'
+    ? audioWindow.webkitAudioContext || null
+    : AudioContext
+}
+
+function ensureContext(): AudioContext | null {
+  if (ctx) return ctx
+
+  const AudioContextClass = getAudioContextConstructor()
+  if (!AudioContextClass) return null
+
+  try {
+    const nextContext = new AudioContextClass()
+    const nextGainNode = nextContext.createGain()
+    nextGainNode.gain.value = volume
+    nextGainNode.connect(nextContext.destination)
+    ctx = nextContext
+    gainNode = nextGainNode
+  } catch {
+    // Web Audio is optional. In particular, this must not make a Send click
+    // fail in an embedded browser where AudioContext is unavailable.
+    return null
   }
+
   return ctx
+}
+
+function requireContext(): AudioContext {
+  const context = ensureContext()
+  if (!context) {
+    throw new Error('Web Audio API is not supported in this browser')
+  }
+  return context
 }
 
 /** Tracks whether we've successfully pushed any audio through the context yet. */
@@ -101,6 +133,7 @@ let hasPlayedSilentUnlock = false
  */
 export function unlockTTSAudio(): void {
   const c = ensureContext()
+  if (!c) return
   if (c.state === 'suspended') {
     c.resume().catch(() => {})
   }
@@ -182,7 +215,7 @@ export function setTTSSpeed(s: number): void {
  */
 function drainQueue(): void {
   if (paused) return
-  const c = ensureContext()
+  const c = requireContext()
   while (queue.length > 0) {
     const buffer = queue.shift()!
     const source = c.createBufferSource()
@@ -228,7 +261,7 @@ let pendingProducers = 0
  * Internal: decode an ArrayBuffer to an AudioBuffer.
  */
 async function decodeArrayBuffer(audioData: ArrayBuffer): Promise<AudioBuffer> {
-  const c = ensureContext()
+  const c = requireContext()
   // decodeAudioData detaches the input on some browsers — slice() gives it a
   // private copy so callers can keep their original ArrayBuffer.
   return await c.decodeAudioData(audioData.slice(0))
