@@ -486,7 +486,7 @@ function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookE
       console.warn("[embeddings] Failed to remove world book entry vectors:", err);
     } finally {
       if (requeue && isWorldBookEntryVectorEligible(entry)) {
-        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
       }
     }
   })();
