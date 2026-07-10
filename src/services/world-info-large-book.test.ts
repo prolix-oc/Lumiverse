@@ -486,6 +486,69 @@ describe("mergeActivatedWorldInfoEntries — priority/order tie-breaking", () =>
   });
 });
 
+describe("mergeActivatedWorldInfoEntries — unified finalization", () => {
+  test("content deduplication cannot undo a score-boosted vector winner", () => {
+    const keywordA = makeEntry({ id: "keyword-a", order_value: 1, content: "keyword a" });
+    const keywordB = makeEntry({ id: "keyword-b", order_value: 2, content: "duplicate lore" });
+    const keywordDuplicate = makeEntry({ id: "keyword-dupe", order_value: 3, content: "duplicate lore" });
+    const vector = makeEntry({ id: "vector-winner", order_value: 1000, content: "vector lore", priority: 10 });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [keywordA, keywordB, keywordDuplicate],
+      [asVectorCandidate(vector, 1)],
+      { maxActivatedEntries: 2 },
+    );
+
+    expect(result.deduplicated).toBe(1);
+    expect(result.activatedEntries.map((entry) => entry.id)).toContain("vector-winner");
+    expect(result.vectorDispositions.get("vector-winner")?.code).toBe("activated");
+  });
+
+  test("vector relevance competes under a token-only budget without mutating priority", () => {
+    const keyword = makeEntry({ id: "token-keyword", order_value: 1, content: "k".repeat(160), priority: 10 });
+    const vector = makeEntry({ id: "token-vector", order_value: 1000, content: "v".repeat(160), priority: 10 });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [keyword],
+      [asVectorCandidate(vector, 1)],
+      { maxTokenBudget: 40 },
+    );
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["token-vector"]);
+    expect(result.activatedEntries[0]?.priority).toBe(10);
+    expect(result.vectorDispositions.get("token-vector")?.code).toBe("activated");
+  });
+
+  test("group overrides apply across keyword and vector sources", () => {
+    const keyword = makeEntry({ id: "group-keyword", group_name: "shared", priority: 50 });
+    const vector = makeEntry({
+      id: "group-vector",
+      group_name: "shared",
+      group_override: true,
+      priority: 5,
+    });
+
+    const result = mergeActivatedWorldInfoEntries([keyword], [asVectorCandidate(vector, 1)]);
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["group-vector"]);
+    expect(result.vectorDispositions.get("group-vector")?.code).toBe("activated");
+  });
+
+  test("group weights apply across keyword and vector sources", () => {
+    const keyword = makeEntry({ id: "weighted-keyword", group_name: "weighted", group_weight: 1 });
+    const vector = makeEntry({ id: "weighted-vector", group_name: "weighted", group_weight: 100 });
+    const originalRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+      const result = mergeActivatedWorldInfoEntries([keyword], [asVectorCandidate(vector, 1)]);
+      expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["weighted-vector"]);
+      expect(result.vectorDispositions.get("weighted-vector")?.code).toBe("activated");
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Scenario 3: replay against the real 9239-entry user file
 // ---------------------------------------------------------------------------

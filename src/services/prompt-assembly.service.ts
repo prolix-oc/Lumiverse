@@ -44,6 +44,7 @@ import {
 import type { MacroEnv } from "../macros";
 import {
   activateWorldInfo,
+  applyWorldInfoGroupLogic,
   finalizeActivatedWorldInfoEntries,
   type WiState,
   type WorldInfoSettings,
@@ -3567,6 +3568,7 @@ export interface MergedWorldInfoEntriesResult {
   evictedByBudget: number;
   deduplicated: number;
   deduplicationDetails: import("./world-info-dedup.service").DedupRemovalRecord[];
+  vectorDispositions: Map<string, WorldInfoVectorMergeDisposition>;
   mergeDurationMs?: number;
 }
 
@@ -3688,47 +3690,145 @@ export function vectorPriorityBoost(finalScore: number | undefined): number {
   return Math.max(0, Math.min(VECTOR_PRIORITY_BOOST_MAX, raw));
 }
 
-/**
- * Returns a shallow-cloned array where vector-sourced entries have their
- * priority increased by a bounded, score-derived boost. Used only when the
- * entry-count budget is full so vectors can compete on their retrieval
- * score rather than losing to equal-priority keyword entries on the
- * order_value tiebreaker. Originals are never mutated.
- */
-export function applyVectorPriorityBoost<
-  T extends { id: string; priority: number },
->(
-  entries: T[],
-  sources: Map<string, { source: "keyword" | "vector"; score?: number }>,
-  candidate?: { entry: { id: string }; finalScore: number },
-): T[] {
-  return entries.map((entry) => {
-    const src =
-      candidate && entry.id === candidate.entry.id
-        ? { source: "vector" as const, score: candidate.finalScore }
-        : sources.get(entry.id);
-    if (!src || src.source !== "vector") return entry;
-    const boost = vectorPriorityBoost(src.score);
-    if (boost === 0) return entry;
-    return { ...entry, priority: entry.priority + boost };
-  });
+export type WorldInfoVectorMergeDispositionCode =
+  | "already_keyword"
+  | "blocked_by_min_priority"
+  | "blocked_by_group"
+  | "blocked_by_max_entries"
+  | "blocked_by_token_budget"
+  | "deduplicated"
+  | "activated";
+
+export interface WorldInfoVectorMergeDisposition {
+  code: WorldInfoVectorMergeDispositionCode;
+  conflictingEntry?: WorldBookEntryModel;
+  conflictingSource?: "keyword" | "vector";
+  dedupRecord?: import("./world-info-dedup.service").DedupRemovalRecord;
 }
 
-/**
- * `finalizeActivatedWorldInfoEntries` receives priority-boosted clones when
- * `applyVectorPriorityBoost` was used; rebuild its `activatedEntries` from
- * the original (unboosted) entries so downstream consumers read the user's
- * configured priority, not the internal competition value.
- */
-function remapFinalizedToOriginalEntries(
-  finalized: FinalizedWorldInfoEntries,
-  originals: WorldBookEntryModel[],
-): FinalizedWorldInfoEntries {
-  const byId = new Map(originals.map((e) => [e.id, e]));
-  const activatedEntries = finalized.activatedEntries
-    .map((e) => byId.get(e.id))
-    .filter((e): e is WorldBookEntryModel => !!e);
-  return { ...finalized, activatedEntries };
+export interface WorldInfoMergeSelection {
+  finalized: FinalizedWorldInfoEntries;
+  sources: Map<string, { source: "keyword" | "vector"; score?: number }>;
+  dedupResult: ReturnType<typeof deduplicateWorldInfoEntries>;
+  dispositions: Map<string, WorldInfoVectorMergeDisposition>;
+}
+
+export function selectMergedWorldInfoEntries(
+  keywordEntries: WorldBookEntryModel[],
+  vectorEntries: VectorActivatedEntry[],
+  settingsInput?: Partial<WorldInfoSettings>,
+  bookSourceMap?: Map<string, BookSource>,
+): WorldInfoMergeSelection {
+  const settings = normalizeWorldInfoSettings(settingsInput);
+  const mergedEntries: WorldBookEntryModel[] = [];
+  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
+  const dispositions = new Map<string, WorldInfoVectorMergeDisposition>();
+  const seen = new Set<string>();
+  const vectorEntryIds = new Set(vectorEntries.map((item) => item.entry.id));
+
+  for (const entry of keywordEntries) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    mergedEntries.push(entry);
+    sources.set(entry.id, { source: "keyword" });
+  }
+
+  for (const item of vectorEntries) {
+    if (seen.has(item.entry.id)) {
+      if (sources.get(item.entry.id)?.source === "keyword") {
+        dispositions.set(item.entry.id, { code: "already_keyword" });
+      }
+      continue;
+    }
+    if (
+      settings.minPriority > 0 &&
+      item.entry.priority < settings.minPriority &&
+      !item.entry.constant
+    ) {
+      dispositions.set(item.entry.id, { code: "blocked_by_min_priority" });
+      continue;
+    }
+    seen.add(item.entry.id);
+    mergedEntries.push(item.entry);
+    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
+  }
+
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
+  for (const removed of dedupResult.removed) {
+    sources.delete(removed.removedEntryId);
+    if (vectorEntryIds.has(removed.removedEntryId)) {
+      dispositions.set(removed.removedEntryId, {
+        code: "deduplicated",
+        dedupRecord: removed,
+      });
+    }
+  }
+
+  // Group selection uses configured priorities and weights. Retrieval-score
+  // boosts are intentionally introduced only after this step.
+  const groupSelected = applyWorldInfoGroupLogic(dedupResult.entries);
+  const groupSelectedIds = new Set(groupSelected.map((entry) => entry.id));
+  for (const item of vectorEntries) {
+    if (dispositions.has(item.entry.id) || groupSelectedIds.has(item.entry.id)) continue;
+    const conflictingEntry = groupSelected.find(
+      (entry) => entry.group_name && entry.group_name === item.entry.group_name,
+    );
+    dispositions.set(item.entry.id, {
+      code: "blocked_by_group",
+      conflictingEntry,
+      conflictingSource: conflictingEntry
+        ? sources.get(conflictingEntry.id)?.source
+        : undefined,
+    });
+  }
+
+  const hasBudget = settings.maxActivatedEntries > 0 || settings.maxTokenBudget > 0;
+  const budgetPriorityById = new Map<string, number>();
+  if (hasBudget) {
+    for (const entry of groupSelected) {
+      const source = sources.get(entry.id);
+      budgetPriorityById.set(
+        entry.id,
+        entry.priority + (source?.source === "vector" ? vectorPriorityBoost(source.score) : 0),
+      );
+    }
+  }
+
+  const competitionOrder = [...groupSelected].sort((a, b) => {
+    const aPriority = budgetPriorityById.get(a.id) ?? a.priority;
+    const bPriority = budgetPriorityById.get(b.id) ?? b.priority;
+    if (bPriority !== aPriority) return bPriority - aPriority;
+    return a.order_value - b.order_value;
+  });
+  let entryCapSurvivorIds = new Set(competitionOrder.map((entry) => entry.id));
+  if (settings.maxActivatedEntries > 0 && competitionOrder.length > settings.maxActivatedEntries) {
+    const constants = competitionOrder.filter((entry) => entry.constant);
+    const nonConstants = competitionOrder.filter((entry) => !entry.constant);
+    const remaining = Math.max(0, settings.maxActivatedEntries - constants.length);
+    entryCapSurvivorIds = new Set([
+      ...constants,
+      ...nonConstants.slice(0, remaining),
+    ].map((entry) => entry.id));
+  }
+
+  const finalized = finalizeActivatedWorldInfoEntries(groupSelected, settings, {
+    skipGroupLogic: true,
+    preserveOrder: !hasBudget,
+    budgetPriorityById,
+  });
+  const activatedIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
+  for (const item of vectorEntries) {
+    if (dispositions.has(item.entry.id)) continue;
+    if (activatedIds.has(item.entry.id)) {
+      dispositions.set(item.entry.id, { code: "activated" });
+    } else if (!entryCapSurvivorIds.has(item.entry.id)) {
+      dispositions.set(item.entry.id, { code: "blocked_by_max_entries" });
+    } else {
+      dispositions.set(item.entry.id, { code: "blocked_by_token_budget" });
+    }
+  }
+
+  return { finalized, sources, dedupResult, dispositions };
 }
 
 export function mergeActivatedWorldInfoEntries(
@@ -3738,155 +3838,27 @@ export function mergeActivatedWorldInfoEntries(
   bookSourceMap?: Map<string, BookSource>,
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
-  const settings = normalizeWorldInfoSettings(settingsInput);
-  const mergedEntries: WorldBookEntryModel[] = [];
-  const sources = new Map<
-    string,
-    { source: "keyword" | "vector"; score?: number }
-  >();
-  const seen = new Set<string>();
-  const occupiedGroups = new Set<string>();
-  const maxActivatedTarget =
-    settings.maxActivatedEntries > 0
-      ? settings.maxActivatedEntries
-      : Number.POSITIVE_INFINITY;
-  const getGroupKey = (entry: WorldBookEntryModel): string | null => {
-    const groupName =
-      typeof entry.group_name === "string" ? entry.group_name.trim() : "";
-    return groupName ? groupName.toLowerCase() : null;
-  };
-
-  for (const entry of keywordEntries) {
-    if (seen.has(entry.id)) continue;
-    seen.add(entry.id);
-    mergedEntries.push(entry);
-    sources.set(entry.id, { source: "keyword" });
-    const groupKey = getGroupKey(entry);
-    if (groupKey) occupiedGroups.add(groupKey);
-  }
-
-  let finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings, {
-    skipGroupLogic: true,
-    preserveOrder: true,
-  });
-
-  let vectorSkippedBudget = 0;
-  let vectorSkippedMinPriority = 0;
-  let vectorSkippedGroup = 0;
-  let vectorSkippedDedup = 0;
-  let vectorSkippedBudgetSim = 0;
-
-  for (const item of vectorEntries) {
-    if (seen.has(item.entry.id)) {
-      vectorSkippedDedup++;
-      continue;
-    }
-    if (
-      settings.minPriority > 0 &&
-      item.entry.priority < settings.minPriority &&
-      !item.entry.constant
-    ) {
-      vectorSkippedMinPriority++;
-      continue;
-    }
-
-    const groupKey = getGroupKey(item.entry);
-    if (groupKey && occupiedGroups.has(groupKey)) {
-      vectorSkippedGroup++;
-      continue;
-    }
-
-    // When the entry-count budget is already full from keyword entries, use
-    // priority ordering so higher-priority vector entries can displace
-    // lower-priority keyword entries instead of being blanket-rejected.
-    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
-    const nextMergedEntries = [...mergedEntries, item.entry];
-    // When budget is full and priorities tie, order_value-ascending alone
-    // decides — and vector candidates (drawn from big books with large
-    // order_values) always lose. Apply a score-derived priority boost to
-    // vector entries so genuinely relevant hits can displace equal-priority
-    // keyword entries. The boost is bounded so it never overrides a
-    // meaningful user-set priority gap. We clone the entries for the
-    // finalize call and map back to originals afterwards so downstream
-    // consumers still see the user's configured priority.
-    const finalizeInput = budgetFull
-      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
-      : nextMergedEntries;
-    const rawNextFinalized = finalizeActivatedWorldInfoEntries(
-      finalizeInput,
-      settings,
-      {
-        skipGroupLogic: true,
-        preserveOrder: !budgetFull,
-      },
-    );
-    const nextFinalized = budgetFull
-      ? remapFinalizedToOriginalEntries(rawNextFinalized, nextMergedEntries)
-      : rawNextFinalized;
-    const itemSurvived = nextFinalized.activatedEntries.some(
-      (entry) => entry.id === item.entry.id,
-    );
-    const grewActivationSet =
-      nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
-
-    if (!itemSurvived) {
-      if (budgetFull) vectorSkippedBudget++;
-      else vectorSkippedBudgetSim++;
-      continue;
-    }
-    // When budget has room, require growth to avoid unnecessary displacement
-    // from token budget enforcement. When budget is full, displacement is
-    // expected — priority ordering ensures only deserving entries win.
-    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
-      vectorSkippedBudgetSim++;
-      continue;
-    }
-
-    mergedEntries.push(item.entry);
-    seen.add(item.entry.id);
-    if (groupKey) occupiedGroups.add(groupKey);
-    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
-    finalized = nextFinalized;
-  }
+  const selection = selectMergedWorldInfoEntries(
+    keywordEntries,
+    vectorEntries,
+    settingsInput,
+    bookSourceMap,
+  );
+  const { finalized, sources, dedupResult, dispositions } = selection;
 
   if (vectorEntries.length > 0) {
-    const accepted =
-      vectorEntries.length -
-      vectorSkippedBudget -
-      vectorSkippedMinPriority -
-      vectorSkippedGroup -
-      vectorSkippedDedup -
-      vectorSkippedBudgetSim;
+    const count = (code: WorldInfoVectorMergeDispositionCode) =>
+      Array.from(dispositions.values()).filter((item) => item.code === code).length;
+    const accepted = count("activated");
     console.log(
       "[WI merge] vector candidates=%d → accepted=%d, skipped: dedup=%d, minPriority=%d, group=%d, budgetCap=%d, budgetSim=%d",
       vectorEntries.length,
       accepted,
-      vectorSkippedDedup,
-      vectorSkippedMinPriority,
-      vectorSkippedGroup,
-      vectorSkippedBudget,
-      vectorSkippedBudgetSim,
-    );
-  }
-
-  // Content-level deduplication: remove exact, near-exact, and fuzzy
-  // duplicate content across entries from different books/sources.
-  const dedupResult = deduplicateWorldInfoEntries(
-    mergedEntries,
-    sources,
-    bookSourceMap,
-  );
-  for (const r of dedupResult.removed) sources.delete(r.removedEntryId);
-
-  // Re-finalize with deduplicated set so budget is recalculated
-  if (dedupResult.removed.length > 0) {
-    finalized = finalizeActivatedWorldInfoEntries(
-      dedupResult.entries,
-      settings,
-      {
-        skipGroupLogic: true,
-        preserveOrder: true,
-      },
+      count("already_keyword") + count("deduplicated"),
+      count("blocked_by_min_priority"),
+      count("blocked_by_group"),
+      count("blocked_by_max_entries"),
+      count("blocked_by_token_budget"),
     );
   }
 
@@ -3922,6 +3894,7 @@ export function mergeActivatedWorldInfoEntries(
     evictedByBudget: finalized.evictedByBudget,
     deduplicated: dedupResult.removed.length,
     deduplicationDetails: dedupResult.removed,
+    vectorDispositions: dispositions,
     mergeDurationMs: performance.now() - mergeStartedAt,
   };
 }

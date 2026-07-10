@@ -98,7 +98,7 @@ export class QdrantStore implements VectorStore {
     await this.ensureCollection(collection, rows[0].vector.length);
     for (let i = 0; i < rows.length; i += 128) {
       const batch = rows.slice(i, i + 128);
-      await this.request(`/collections/${encodeURIComponent(this.collectionName(collection))}/points?wait=${this.tuningProfile === "bulk_reindex" ? "false" : "true"}`, {
+      const response = await this.request(`/collections/${encodeURIComponent(this.collectionName(collection))}/points?wait=true`, {
         method: "PUT",
         body: {
           points: batch.map((row) => ({
@@ -108,6 +108,12 @@ export class QdrantStore implements VectorStore {
           })),
         },
       });
+      const updateStatus = response?.result?.status;
+      if (updateStatus !== "completed") {
+        throw new Error(
+          `Qdrant upsert did not complete for ${this.collectionName(collection)} (status=${String(updateStatus ?? "missing")})`,
+        );
+      }
     }
   }
 

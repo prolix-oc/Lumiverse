@@ -38,6 +38,7 @@ import {
 } from "./world-book-vector-state";
 import { getActiveVectorStore } from "./vector-store";
 import {
+  MAX_SOURCE_FILTER_IDS,
   andFilter,
   cosineSimilarity,
   distanceFromSimilarity,
@@ -45,6 +46,7 @@ import {
   idsIn,
   inSet,
   mmrSelect,
+  notInSet,
   ownerScope,
   ownersScope,
   reciprocalRankFusion,
@@ -2567,6 +2569,9 @@ async function commitWorldBookVectorWritesIfCurrent(
 }
 
 export const __test__ = {
+  collectWorldBookHitsByUniqueSource,
+  collapseWorldBookHitsBySource,
+  worldBookSourceExclusionFilters,
   commitWorldBookVectorWritesIfCurrent,
   coordinateWorldBookVectorAndSourceDelete,
   updateWorldBookEntriesVectorStateIfCurrent,
@@ -2892,6 +2897,65 @@ export async function searchWorldBookEntries(
   }));
 }
 
+function worldBookSourceExclusionFilters(sourceIds: Set<string>): VectorFilter[] {
+  const ids = Array.from(sourceIds);
+  const filters: VectorFilter[] = [];
+  for (let i = 0; i < ids.length; i += MAX_SOURCE_FILTER_IDS) {
+    filters.push(notInSet("source_id", ids.slice(i, i + MAX_SOURCE_FILTER_IDS)));
+  }
+  return filters;
+}
+
+async function collectWorldBookHitsByUniqueSource(
+  baseFilter: VectorFilter,
+  targetLimit: number,
+  search: (filter: VectorFilter) => Promise<VectorHit[]>,
+  signal?: AbortSignal,
+): Promise<VectorHit[]> {
+  const hits: VectorHit[] = [];
+  const seenSourceIds = new Set<string>();
+
+  while (seenSourceIds.size < targetLimit && !signal?.aborted) {
+    const filter = andFilter([
+      baseFilter,
+      ...worldBookSourceExclusionFilters(seenSourceIds),
+    ]);
+    const batch = await search(filter);
+    if (batch.length === 0 || signal?.aborted) break;
+
+    let addedSource = false;
+    for (const hit of batch) {
+      const sourceId = String(hit.source_id || "");
+      if (!sourceId || seenSourceIds.has(sourceId)) continue;
+      seenSourceIds.add(sourceId);
+      addedSource = true;
+    }
+    hits.push(...batch);
+
+    // A provider that ignores the exclusion filter would otherwise loop
+    // forever on the same entry's chunks.
+    if (!addedSource) break;
+  }
+
+  return hits;
+}
+
+function collapseWorldBookHitsBySource(
+  hits: VectorHit[],
+  score: "similarity" | "lexicalScore",
+): VectorHit[] {
+  const strongest = new Map<string, VectorHit>();
+  for (const hit of hits) {
+    const sourceId = String(hit.source_id || "");
+    if (!sourceId) continue;
+    const existing = strongest.get(sourceId);
+    const value = hit[score] ?? Number.NEGATIVE_INFINITY;
+    const existingValue = existing?.[score] ?? Number.NEGATIVE_INFINITY;
+    if (!existing || value > existingValue) strongest.set(sourceId, hit);
+  }
+  return Array.from(strongest.values());
+}
+
 /**
  * Search world book entries using a pre-computed vector and optional query text,
  * returning enough metadata to rerank candidates deterministically.
@@ -2926,49 +2990,64 @@ export async function searchWorldBookEntriesHybridWithVector(
   const store = await getActiveVectorStore();
   const nativeHybridSearch = store.hybridSearch?.bind(store);
   const canUseNativeHybrid = !!nativeHybridSearch && !!trimmedQuery && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical;
-  let vectorRows = canUseNativeHybrid
-    ? await nativeHybridSearch({
-      collection: "embeddings_world_books",
-      vector,
-      queryText: trimmedQuery,
-      filter,
-      limit: candidateLimit,
-      withVector: false,
-      refine: true,
-      signal,
-    })
-    : await store.vectorSearch({
-      collection: "embeddings_world_books",
-      vector,
-      filter,
-      limit: candidateLimit,
-      withVector: false,
-      refine: true,
-      signal,
-    });
-
-  if (vectorRows.length === 0 && canUseNativeHybrid && !signal?.aborted) {
-    try {
-      const denseFallbackRows = await store.vectorSearch({
+  let vectorRows = await collectWorldBookHitsByUniqueSource(
+    filter,
+    candidateLimit,
+    (searchFilter) => canUseNativeHybrid
+      ? nativeHybridSearch({
         collection: "embeddings_world_books",
         vector,
-        filter,
+        queryText: trimmedQuery,
+        filter: searchFilter,
         limit: candidateLimit,
         withVector: false,
         refine: true,
         signal,
-      });
+      })
+      : store.vectorSearch({
+        collection: "embeddings_world_books",
+        vector,
+        filter: searchFilter,
+        limit: candidateLimit,
+        withVector: false,
+        refine: true,
+        signal,
+      }),
+    signal,
+  );
+
+  if (vectorRows.length === 0 && canUseNativeHybrid && !signal?.aborted) {
+    try {
+      const denseFallbackRows = await collectWorldBookHitsByUniqueSource(
+        filter,
+        candidateLimit,
+        (searchFilter) => store.vectorSearch({
+          collection: "embeddings_world_books",
+          vector,
+          filter: searchFilter,
+          limit: candidateLimit,
+          withVector: false,
+          refine: true,
+          signal,
+        }),
+        signal,
+      );
       if (denseFallbackRows.length > 0) {
         let recoveredRows = denseFallbackRows;
         if (trimmedQuery && store.capabilities.nativeLexical) {
-          const lexicalRows = await store.lexicalSearch({
-            collection: "embeddings_world_books",
-            queryText: trimmedQuery,
+          const lexicalRows = await collectWorldBookHitsByUniqueSource(
             filter,
-            limit: candidateLimit,
-            withVector: false,
+            candidateLimit,
+            (searchFilter) => store.lexicalSearch({
+              collection: "embeddings_world_books",
+              queryText: trimmedQuery,
+              filter: searchFilter,
+              limit: candidateLimit,
+              withVector: false,
+              signal,
+            }),
             signal,
-          }).catch((err) => {
+          ).catch((err) => {
             console.warn(
               "[embeddings] WI lexical fallback failed after native hybrid miss for book=%s in provider=%s: %s",
               worldBookId.slice(0, 8),
@@ -2977,7 +3056,10 @@ export async function searchWorldBookEntriesHybridWithVector(
             );
             return [] as VectorHit[];
           });
-          recoveredRows = reciprocalRankFusion(denseFallbackRows, lexicalRows).slice(0, candidateLimit);
+          recoveredRows = reciprocalRankFusion(
+            collapseWorldBookHitsBySource(denseFallbackRows, "similarity"),
+            collapseWorldBookHitsBySource(lexicalRows, "lexicalScore"),
+          ).slice(0, candidateLimit);
         }
         vectorRows = recoveredRows;
         console.warn(
@@ -3050,14 +3132,19 @@ export async function searchWorldBookEntriesHybridWithVector(
 
   if (!canUseNativeHybrid && trimmedQuery && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical && !signal?.aborted) {
     try {
-      const lexicalRows = await store.lexicalSearch({
-        collection: "embeddings_world_books",
-        queryText: trimmedQuery,
+      const lexicalRows = await collectWorldBookHitsByUniqueSource(
         filter,
-        limit: candidateLimit,
-        withVector: false,
+        candidateLimit,
+        (searchFilter) => store.lexicalSearch({
+          collection: "embeddings_world_books",
+          queryText: trimmedQuery,
+          filter: searchFilter,
+          limit: candidateLimit,
+          withVector: false,
+          signal,
+        }),
         signal,
-      });
+      );
 
       for (const row of lexicalRows) {
         const entryId = String(row.source_id);
@@ -3127,7 +3214,7 @@ async function recoverWorldBookScopedRowsFromStore(
     scanLimit,
   ).catch(() => [] as VectorRow[]);
 
-  const denseHits = storedRows
+  const denseHits = collapseWorldBookHitsBySource(storedRows
     .filter((row) => row.vector.length === queryVector.length && row.vector.length > 0)
     .map((row) => ({
       id: row.id,
@@ -3137,7 +3224,7 @@ async function recoverWorldBookScopedRowsFromStore(
       similarity: cosineSimilarity(queryVector, row.vector),
       lexicalScore: null,
       vector: null,
-    } satisfies VectorHit))
+    } satisfies VectorHit)), "similarity")
     .sort((a, b) => (b.similarity ?? Number.NEGATIVE_INFINITY) - (a.similarity ?? Number.NEGATIVE_INFINITY))
     .slice(0, limit);
 
@@ -3149,17 +3236,25 @@ async function recoverWorldBookScopedRowsFromStore(
     };
   }
 
-  const lexicalHits = await store.lexicalSearch({
-    collection: "embeddings_world_books",
-    queryText,
+  const lexicalHits = await collectWorldBookHitsByUniqueSource(
     filter,
     limit,
-    withVector: false,
+    (searchFilter) => store.lexicalSearch({
+      collection: "embeddings_world_books",
+      queryText,
+      filter: searchFilter,
+      limit,
+      withVector: false,
+      signal,
+    }),
     signal,
-  }).catch(() => [] as VectorHit[]);
+  ).catch(() => [] as VectorHit[]);
 
   return {
-    hits: reciprocalRankFusion(denseHits, lexicalHits).slice(0, limit),
+    hits: reciprocalRankFusion(
+      denseHits,
+      collapseWorldBookHitsBySource(lexicalHits, "lexicalScore"),
+    ).slice(0, limit),
     scopedRowCount,
     truncated: scopedRowCount > scanLimit,
   };
