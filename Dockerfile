@@ -105,8 +105,6 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD bun -e "fetch('http://localhost:' + (Bun.env.PORT || '7860')).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-# Run as non-root
-USER bun
-
-# Direct entry point — no interactive runner, logs go to stdout/stderr
-CMD ["bun", "run", "src/index.ts"]
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
