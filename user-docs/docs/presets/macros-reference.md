@@ -520,6 +520,7 @@ Macros for the current chat state.
 | `{{lastMessage}}` | `{{last_message}}` | Content of the most recent message |
 | `{{lastMessageId}}` | `{{last_message_id}}` | Index of the last message |
 | `{{lastUserMessage}}` | `{{last_user_message}}` | Content of the last message from you |
+| `{{userInput}}` | `{{user_input}}` | Exact input-bar draft captured when the generation began; empty for generations not started from the input bar |
 | `{{lastCharMessage}}` | `{{last_char_message}}`, `{{lastBotMessage}}` | Content of the last character message |
 | `{{lastMessageName}}` | — | Name of whoever sent the last message |
 | `{{messageCount}}` | `{{message_count}}`, `{{messagecount}}` | Total message count in the chat |

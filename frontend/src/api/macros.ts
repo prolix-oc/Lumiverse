@@ -8,6 +8,8 @@ export interface MacroResolveRequest {
   character_id?: string
   persona_id?: string
   connection_id?: string
+  /** Exact input-bar draft text available to {{userInput}} during preview. */
+  user_input?: string
   dynamic_macros?: Record<string, string>
   prompt_blocks?: PromptBlock[]
   prompt_variables?: PromptVariableValues
@@ -44,6 +46,8 @@ export interface MacroBatchResolveRequest {
   character_id?: string
   persona_id?: string
   connection_id?: string
+  /** Exact input-bar draft text available to {{userInput}} during preview. */
+  user_input?: string
   prompt_blocks?: PromptBlock[]
   prompt_variables?: PromptVariableValues
 }

@@ -933,6 +933,7 @@ export function useWebSocket() {
                     persona_addon_states: queue.opts.persona_addon_states,
                     preset_id: queue.opts.preset_id,
                     force_preset_id: queue.opts.force_preset_id,
+                    user_input: queue.opts.user_input,
                     target_character_id: nextId,
                     generation_type: 'normal',
                   }).then((res) => {

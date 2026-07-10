@@ -23,6 +23,8 @@ export interface GenerateRequest {
   impersonate_mode?: ImpersonateMode
   /** For impersonate: free-form text from the input box, appended to the impersonation prompt. */
   impersonate_input?: string
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  user_input?: string
   /** For impersonate: stream to input box instead of creating a message. */
   impersonate_draft?: boolean
   target_character_id?: string

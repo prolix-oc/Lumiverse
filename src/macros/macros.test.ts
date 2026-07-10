@@ -19,6 +19,7 @@ function makeEnv(opts: {
   lastMessageTime?: number;
   worldInfoOutlets?: Record<string, string>;
   rejectedSwipe?: string;
+  userInput?: string;
   multiplayer?: {
     playerCount: number;
     playerNames: string[];
@@ -101,6 +102,7 @@ function makeEnv(opts: {
       lastMessageTime: opts.lastMessageTime,
       characterTags: opts.characterTags ?? ["fantasy", "warrior", "male"],
       worldInfoOutlets: opts.worldInfoOutlets ?? {},
+      userInput: opts.userInput ?? "",
       ...(opts.multiplayer ? { multiplayer: opts.multiplayer } : {}),
     },
   };
@@ -149,6 +151,13 @@ describe("Chat transcript examples", () => {
 // ===========================================================================
 
 describe("Core primitives", () => {
+  test("userInput returns the input-bar draft snapshot", async () => {
+    expect(
+      await ev("{{userInput}}", makeEnv({ userInput: "Draft text\nwith spacing" })),
+    ).toBe("Draft text\nwith spacing");
+    expect(await ev("{{user_input}}", makeEnv())).toBe("");
+  });
+
   test("space", async () => {
     expect(await ev("a{{space}}b")).toBe("a b");
   });

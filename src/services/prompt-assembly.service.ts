@@ -1242,6 +1242,7 @@ export async function assemblePrompt(
       chat,
       connection,
       ctx.userId,
+      ctx.userInput,
       ctx.signal,
     );
   }
@@ -1744,6 +1745,7 @@ export async function assemblePrompt(
     commit: ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
+    userInput: ctx.userInput,
     groupCharacterNames,
     groupNotMutedNames,
     targetCharacterId: ctx.targetCharacterId,
@@ -6090,6 +6092,7 @@ async function legacyAssembly(
   chat?: Chat | null,
   connection?: ConnectionProfile | null,
   userId?: string,
+  userInput?: string,
   signal?: AbortSignal,
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
@@ -6142,6 +6145,7 @@ async function legacyAssembly(
       messages,
       generationType,
       connection: connection ?? null,
+      userInput,
       groupCharacterNames: groupNames,
       groupNotMutedNames: legacyNotMuted,
       targetCharacterName: isGroup

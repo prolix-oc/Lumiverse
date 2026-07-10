@@ -32,6 +32,8 @@ export interface BuildEnvContext {
   signal?: AbortSignal;
   /** Content of the regenerate/swipe target before the new swipe was staged. */
   rejectedSwipe?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
 }
 
 export function resolvePersonaPronouns(persona: Persona | null): {
@@ -147,6 +149,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       lastMessageTime: lastMsg && typeof lastMsg.send_date === "number"
         ? lastMsg.send_date * 1000
         : undefined,
+      userInput: ctx.userInput ?? "",
     },
   };
 }

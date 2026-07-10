@@ -3,6 +3,17 @@ import { registry } from "../MacroRegistry";
 export function registerStateMacros(): void {
   registry.registerMacro({
     builtIn: true,
+    name: "userInput",
+    category: "State",
+    description: "Exact draft text from the input bar when this generation started",
+    returnType: "string",
+    aliases: ["user_input"],
+    handler: (ctx) =>
+      typeof ctx.env.extra.userInput === "string" ? ctx.env.extra.userInput : "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
     terminal: true,
     name: "model",
     category: "State",

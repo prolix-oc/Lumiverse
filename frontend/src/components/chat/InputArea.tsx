@@ -1522,6 +1522,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
+        user_input: text || undefined,
       }
 
       // Parse @mentions in the user's message (group chats only). Each mention
@@ -1576,6 +1577,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
             persona_addon_states: genOpts.persona_addon_states,
             preset_id: genOpts.preset_id,
             force_preset_id: genOpts.force_preset_id,
+            user_input: genOpts.user_input,
           },
         })
       } else {
@@ -1790,7 +1792,8 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
-    const impersonateInput = text.trim()
+    const inputDraft = text
+    const impersonateInput = inputDraft.trim()
     beginStreaming(undefined, 'impersonate_draft')
     // Stash the input so the user can restore it after the run, and clear the box.
     if (impersonateInput) {
@@ -1812,6 +1815,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
+        user_input: inputDraft || undefined,
         impersonate_draft: true,
       })
       if (generationNonceRef.current !== nonce) return
@@ -1941,6 +1945,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        user_input: text || undefined,
         target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })
       openModal('dryRun', result)
@@ -1951,7 +1956,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setDryRunning(false)
     }
-  }, [chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat])
+  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -1968,6 +1973,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         character_id: focusedPreviewCharacterId || undefined,
         persona_id: activePersonaId || undefined,
         connection_id: activeProfileId || undefined,
+        user_input: text,
       })
       if (res.text === text) {
         toast.info(t('toast.noMacrosFound'))

@@ -156,6 +156,8 @@ interface GenerateInput {
   impersonate_mode?: ImpersonateMode;
   /** For impersonate: free-form text from the user's input box, appended to the impersonation prompt. */
   impersonate_input?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  user_input?: string;
   /** For impersonate: stream tokens to the frontend but do NOT create a message. The user edits and sends manually. */
   impersonate_draft?: boolean;
   target_character_id?: string;
@@ -1218,6 +1220,7 @@ async function runPromptPipeline(opts: {
   generationType: string;
   impersonateMode?: ImpersonateMode;
   impersonateInput?: string;
+  userInput?: string;
   inputMessages?: LlmMessage[];
   inputParameters?: GenerationParameters;
   excludeMessageId?: string;
@@ -1288,6 +1291,7 @@ async function runPromptPipeline(opts: {
       generationType: opts.generationType as GenerationType,
       impersonateMode: opts.impersonateMode,
       impersonateInput: opts.impersonateInput,
+      userInput: opts.userInput,
       excludeMessageId: opts.excludeMessageId,
       rejectedSwipe: opts.rejectedSwipe,
       targetCharacterId: opts.targetCharacterId,
@@ -2591,6 +2595,7 @@ export async function startGeneration(
                 : undefined,
             impersonateInput:
               genType === "impersonate" ? input.impersonate_input : undefined,
+            userInput: input.user_input,
             inputMessages: input.messages,
             inputParameters: input.parameters,
             excludeMessageId,
@@ -2904,6 +2909,7 @@ export async function dryRunGeneration(
         : undefined,
     impersonateInput:
       genType === "impersonate" ? input.impersonate_input : undefined,
+    userInput: input.user_input,
     inputMessages: input.messages,
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,

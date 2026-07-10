@@ -35,6 +35,7 @@ app.post("/resolve", async (c) => {
     character_id?: string;
     persona_id?: string;
     connection_id?: string;
+    user_input?: string;
     dynamic_macros?: Record<string, string>;
     prompt_blocks?: PromptBlock[];
     prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
@@ -78,6 +79,7 @@ app.post("/resolve-batch", async (c) => {
     character_id?: string;
     persona_id?: string;
     connection_id?: string;
+    user_input?: string;
     dynamic_macros?: Record<string, string>;
     prompt_blocks?: PromptBlock[];
     prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
@@ -156,6 +158,7 @@ async function buildEnvFromIds(userId: string, body: {
   character_id?: string;
   persona_id?: string;
   connection_id?: string;
+  user_input?: string;
   dynamic_macros?: Record<string, string>;
 }): Promise<MacroEnv> {
   // Try to load from chat context first
@@ -205,6 +208,7 @@ async function buildEnvFromIds(userId: string, body: {
           generationType: "normal",
           connection,
           dynamicMacros: body.dynamic_macros,
+          userInput: body.user_input,
           groupCharacterNames,
           targetCharacterId,
           targetCharacterName: isGroup ? getEffectiveCharacterName(character) : undefined,
@@ -245,6 +249,7 @@ async function buildEnvFromIds(userId: string, body: {
         generationType: "normal",
         connection,
         dynamicMacros: body.dynamic_macros,
+        userInput: body.user_input,
       });
       populateLumiaLoomContext(env, userId, chat);
       return env;
@@ -283,7 +288,7 @@ async function buildEnvFromIds(userId: string, body: {
     },
     variables: { local: new Map(), global: new Map(), chat: new Map() },
     dynamicMacros: body.dynamic_macros || {},
-    extra: {},
+    extra: { userInput: body.user_input ?? "" },
   };
 }
 

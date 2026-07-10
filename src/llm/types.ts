@@ -263,6 +263,8 @@ export interface AssemblyContext {
   impersonateMode?: ImpersonateMode;
   /** For impersonate: free-form user text from the input box, appended to the impersonation prompt. */
   impersonateInput?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
   /** For regenerate: exclude this message from chat history (it has a blank swipe). */
   excludeMessageId?: string;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
