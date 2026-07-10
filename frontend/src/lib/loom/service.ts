@@ -83,6 +83,7 @@ function migratePreset(preset: LoomPreset): LoomPreset {
     ? preset.presetVersion.trim()
     : null
   preset.lumihubMeta = isRecord(preset.lumihubMeta) ? preset.lumihubMeta : null
+  preset.passthroughMetadata = isRecord(preset.passthroughMetadata) ? preset.passthroughMetadata : {}
   if (Array.isArray(preset.blocks)) {
     for (const block of preset.blocks) {
       if (!Array.isArray(block.injectionTrigger)) {
@@ -117,6 +118,17 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 /** Version key is surfaced separately as `presetVersion`; the rest of the bag round-trips verbatim. */
 const LUMIHUB_VERSION_META_KEY = '_lumiverse_preset_version'
+const LOOM_OWNED_META_KEYS = new Set([
+  'source',
+  'modelProfiles',
+  'schemaVersion',
+  'description',
+  'coverUrl',
+  'cover_url',
+  'isDefault',
+  'lastProfileKey',
+  'promptVariables',
+])
 
 /**
  * Pull the LumiHub provenance bag (install source, hub id, slug, creator) out of a stored
@@ -133,6 +145,15 @@ function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> 
     }
   }
   return Object.keys(bag).length > 0 ? bag : null
+}
+
+function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
+  const bag: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(meta)) {
+    if (LOOM_OWNED_META_KEYS.has(key) || key.startsWith('_lumiverse_')) continue
+    bag[key] = value
+  }
+  return bag
 }
 
 function hasLegacyPromptOrderShape(promptOrder: unknown): boolean {
@@ -309,6 +330,7 @@ export function marshalPreset(loom: LoomPreset): CreatePresetInput {
       advancedSettings: loom.advancedSettings,
     },
     metadata: {
+      ...extractPassthroughMetadata(loom.passthroughMetadata ?? {}),
       source: loom.source,
       modelProfiles: loom.modelProfiles,
       schemaVersion: loom.schemaVersion,
@@ -336,6 +358,7 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     coverUrl: typeof meta.coverUrl === 'string' ? meta.coverUrl : (typeof meta.cover_url === 'string' ? meta.cover_url : null),
     presetVersion: typeof meta._lumiverse_preset_version === 'string' ? meta._lumiverse_preset_version : null,
     lumihubMeta: extractLumihubMeta(meta),
+    passthroughMetadata: extractPassthroughMetadata(meta),
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
@@ -372,6 +395,7 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
       advancedSettings: loom.advancedSettings,
     },
     metadata: {
+      ...extractPassthroughMetadata(loom.passthroughMetadata ?? {}),
       source: loom.source,
       modelProfiles: loom.modelProfiles,
       schemaVersion: loom.schemaVersion,
@@ -828,6 +852,7 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     coverUrl: null,
     presetVersion: null,
     lumihubMeta: null,
+    passthroughMetadata: {},
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
@@ -1000,6 +1025,7 @@ export function createNewLoomPreset(name: string, description = ''): LoomPreset 
     coverUrl: null,
     presetVersion: null,
     lumihubMeta: null,
+    passthroughMetadata: {},
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,

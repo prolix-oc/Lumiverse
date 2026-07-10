@@ -6,6 +6,7 @@ import type {
   SpindleMountPoint,
 } from 'lumiverse-spindle-types'
 import type { SpindleCharacterEditorUI } from './character-editor-types'
+import type { SpindlePresetEditorUI } from './preset-editor-types'
 import type { SpindleTabMobilityUI, TabLocation } from './tab-mobility-types'
 import { createDOMHelper } from './dom-helper'
 import { registerTagInterceptor, unregisterTagInterceptorsByExtension } from './message-interceptors'
@@ -15,6 +16,7 @@ import { removeMessageWidgetsByExtension, upsertMessageWidget, removeMessageWidg
 import {
   createDrawerTabHandle,
   createCharacterEditorTabHandle,
+  createPresetEditorTabHandle,
   createFloatWidgetHandle,
   createDockPanelHandle,
   createAppMountHandle,
@@ -30,6 +32,12 @@ import {
   updateCharacterEditorExtensions,
   flushCharacterEditorExtensions,
 } from './character-editor-helper'
+import {
+  getPresetEditorState,
+  subscribePresetEditorState,
+  updatePresetEditorDraft,
+  flushPresetEditorDraft,
+} from './preset-editor-helper'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
@@ -97,7 +105,7 @@ interface ActiveFrontendProcess {
 type FrontendExtensionContext = Omit<SpindleFrontendContext, 'ui' | 'messages'> & {
   ready(): void
   deferReady(): void
-  ui: SpindleTabMobilityUI & SpindleCharacterEditorUI & {
+  ui: SpindleTabMobilityUI & SpindleCharacterEditorUI & SpindlePresetEditorUI & {
     events: FrontendUIEventsHelper
   }
   processes: {
@@ -497,6 +505,13 @@ async function doLoadFrontendExtension(
           }
           return createCharacterEditorTabHandle(extensionId, options)
         },
+        registerPresetEditorTab(options) {
+          const granted = cachedGrantedPermissions
+          if (!granted.includes('presets')) {
+            throw new Error('PERMISSION_DENIED:presets — registerPresetEditorTab requires the presets permission')
+          }
+          return createPresetEditorTabHandle(extensionId, options)
+        },
         createFloatWidget(options) {
           const granted = cachedGrantedPermissions
           if (!granted.includes('ui_panels')) {
@@ -577,6 +592,36 @@ async function doLoadFrontendExtension(
               throw new Error('PERMISSION_DENIED:characters — characterEditor.flush requires the characters permission')
             }
             return flushCharacterEditorExtensions()
+          },
+        },
+        presetEditor: {
+          getState() {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('presets')) {
+              throw new Error('PERMISSION_DENIED:presets — presetEditor.getState requires the presets permission')
+            }
+            return getPresetEditorState()
+          },
+          onChange(handler) {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('presets')) {
+              throw new Error('PERMISSION_DENIED:presets — presetEditor.onChange requires the presets permission')
+            }
+            return subscribePresetEditorState(handler)
+          },
+          updatePreset(mutator, options) {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('presets')) {
+              throw new Error('PERMISSION_DENIED:presets — presetEditor.updatePreset requires the presets permission')
+            }
+            updatePresetEditorDraft(mutator, options?.immediate === true)
+          },
+          flush() {
+            const granted = cachedGrantedPermissions
+            if (!granted.includes('presets')) {
+              throw new Error('PERMISSION_DENIED:presets — presetEditor.flush requires the presets permission')
+            }
+            return flushPresetEditorDraft()
           },
         },
         showContextMenu(options: {

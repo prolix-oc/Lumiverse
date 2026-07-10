@@ -247,6 +247,12 @@ export interface AssemblyContext {
   chatId: string;
   connectionId?: string;
   presetId?: string;
+  /** Internal transient preset used by assembly-only callers. Never persisted. */
+  presetOverride?: import("../types/preset").Preset;
+  /** Skip per-chat/character/connection preset-profile block overrides. */
+  skipPresetProfileBinding?: boolean;
+  /** Whether macro handlers may commit side effects. Defaults to true. */
+  macroCommit?: boolean;
   /** When true, bypass preset-profile preset selection and use presetId directly. */
   forcePresetId?: boolean;
   generationType: GenerationType;

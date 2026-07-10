@@ -112,6 +112,21 @@ type PromptBlockCategoryGroup = {
   children: PromptBlock[];
 };
 
+type AssembleRequest = {
+  blocks: PromptBlock[];
+  chatId: string;
+  connectionId?: string;
+  personaId?: string;
+  generationType?: string;
+  promptVariables?: Record<string, Record<string, string | number | string[]>>;
+  signal?: AbortSignal;
+};
+
+type AssembleResult = {
+  messages: LlmMessageDTO[];
+  breakdown: Array<Record<string, unknown>>;
+};
+
 type FrontendProcessState =
   | "starting"
   | "running"
@@ -240,6 +255,12 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | {
+      type: "assemble_prompt";
+      requestId: string;
+      input: Omit<AssembleRequest, "signal">;
+      userId?: string;
+    }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -501,11 +522,11 @@ type RuntimeHostToWorker =
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
 
 // `presets` is replaced wholesale (not intersected) because the local
-// PromptBlock type adds variants (select, switch, multiselect) that the
-// published PromptBlockDTO doesn't carry. Intersection would require the
-// implementation to satisfy both shapes — which is impossible since the
-// local type is strictly broader.
+// PromptBlock type also carries host-only sealed-block provenance. Keeping the
+// runtime CRUD surface on the native type avoids narrowing data returned by
+// newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+  assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -953,6 +974,34 @@ function requestGeneration(input: any): Promise<unknown> {
   });
 }
 
+/** Assembly uses the generation cancellation channel but never invokes a provider. */
+function requestAssembly(input: AssembleRequest, userId?: string): Promise<AssembleResult> {
+  const signal = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError((signal.reason as any)?.message ?? "Assembly aborted"));
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => post({ type: "cancel_generation", requestId });
+    pendingResponses.set(requestId, {
+      resolve: (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value as AssembleResult);
+      },
+      reject: (reason) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(reason);
+      },
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    post({ type: "assemble_prompt", requestId, input: payload, userId });
+  });
+}
+
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
  * that yields `StreamChunkDTO` values as the host forwards them. The
@@ -1117,6 +1166,10 @@ const spindleApi: RuntimeSpindleAPI = {
     assertMutationAllowed("spindle.registerInterceptor()");
     interceptHandler = handler;
     post({ type: "register_interceptor", priority });
+  },
+
+  assemble(input, userId?: string) {
+    return requestAssembly(input, userId);
   },
 
   registerTool(tool): void {

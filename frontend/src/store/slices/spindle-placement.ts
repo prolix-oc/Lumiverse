@@ -8,6 +8,7 @@ import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
 const PLACEMENT_LIMITS = {
   drawerTabs: { perExtension: 4, global: 8 },
   characterEditorTabs: { perExtension: 4, global: 8 },
+  presetEditorTabs: { perExtension: 4, global: 8 },
   floatWidgets: { perExtension: 2, global: 8 },
   dockPanels: { perExtensionPerEdge: 1, globalPerEdge: 2 },
   appMounts: { perExtension: 1, global: 4 },
@@ -35,6 +36,13 @@ export interface DrawerTabState {
 }
 
 export interface CharacterEditorTabState {
+  id: string
+  extensionId: string
+  title: string
+  root: HTMLElement
+}
+
+export interface PresetEditorTabState {
   id: string
   extensionId: string
   title: string
@@ -131,6 +139,7 @@ function saveHiddenPlacements(ids: string[]) {
 export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = (set, get) => ({
   drawerTabs: [],
   characterEditorTabs: [],
+  presetEditorTabs: [],
   floatWidgets: [],
   dockPanels: [],
   appMounts: [],
@@ -195,6 +204,30 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
       characterEditorTabs: state.characterEditorTabs.map((t) =>
         t.id === tabId ? { ...t, ...updates } : t
       ),
+    }))
+  },
+
+  // ── Preset Editor Tabs ──
+
+  registerPresetEditorTab: (tab: PresetEditorTabState) => {
+    const state = get()
+    const extCount = state.presetEditorTabs.filter((t) => t.extensionId === tab.extensionId).length
+    if (extCount >= PLACEMENT_LIMITS.presetEditorTabs.perExtension) {
+      throw new Error(`Preset editor tab limit reached (max ${PLACEMENT_LIMITS.presetEditorTabs.perExtension} per extension)`)
+    }
+    if (state.presetEditorTabs.length >= PLACEMENT_LIMITS.presetEditorTabs.global) {
+      throw new Error(`Global preset editor tab limit reached (max ${PLACEMENT_LIMITS.presetEditorTabs.global})`)
+    }
+    set({ presetEditorTabs: [...state.presetEditorTabs, tab] })
+  },
+
+  unregisterPresetEditorTab: (tabId: string) => {
+    set((state) => ({ presetEditorTabs: state.presetEditorTabs.filter((t) => t.id !== tabId) }))
+  },
+
+  updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => {
+    set((state) => ({
+      presetEditorTabs: state.presetEditorTabs.map((t) => t.id === tabId ? { ...t, ...updates } : t),
     }))
   },
 
@@ -337,6 +370,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     set((state) => ({
       drawerTabs: state.drawerTabs.filter((t) => t.extensionId !== extensionId),
       characterEditorTabs: state.characterEditorTabs.filter((t) => t.extensionId !== extensionId),
+      presetEditorTabs: state.presetEditorTabs.filter((t) => t.extensionId !== extensionId),
       floatWidgets: state.floatWidgets.filter((w) => w.extensionId !== extensionId),
       dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
       appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),

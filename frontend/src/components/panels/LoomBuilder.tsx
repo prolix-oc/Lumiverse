@@ -90,6 +90,9 @@ import { Toggle } from '@/components/shared/Toggle'
 import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
+import SpindlePresetEditorTabContent from '@/components/spindle/SpindlePresetEditorTabContent'
+import { applyPresetEditorDraft, toPresetEditorDraft } from '@/lib/spindle/preset-editor-adapter'
+import { setPresetEditorController, syncPresetEditorState } from '@/lib/spindle/preset-editor-helper'
 import s from './LoomBuilder.module.css'
 
 function useLb() {
@@ -1515,6 +1518,8 @@ export default function LoomBuilder({
     saveCompletionSettings,
     saveAdvancedSettings,
     savePromptVariableValues,
+    updatePresetDraft,
+    flushPresetDraft,
     importFromFile,
     importFromST,
     exportInternal,
@@ -1522,6 +1527,7 @@ export default function LoomBuilder({
   } = useLoomBuilder()
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
+  const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
   const addToast = __contextMeterStore((s) => s.addToast)
   const activePresetRef = useRef(activePreset)
   const suppressNextProfileApplyRef = useRef<string | null>(null)
@@ -1616,6 +1622,7 @@ export default function LoomBuilder({
   ])
 
   const [view, setView] = useState<'list' | 'edit'>('list')
+  const [activePresetEditorTab, setActivePresetEditorTab] = useState('preset')
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
@@ -1629,6 +1636,52 @@ export default function LoomBuilder({
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
   const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<string | null>(null)
   const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<string | null>(null)
+
+  const activePresetEditorTabRef = useRef(activePresetEditorTab)
+  const updatePresetDraftRef = useRef(updatePresetDraft)
+  const flushPresetDraftRef = useRef(flushPresetDraft)
+
+  useEffect(() => { activePresetEditorTabRef.current = activePresetEditorTab }, [activePresetEditorTab])
+  useEffect(() => { updatePresetDraftRef.current = updatePresetDraft }, [updatePresetDraft])
+  useEffect(() => { flushPresetDraftRef.current = flushPresetDraft }, [flushPresetDraft])
+
+  useEffect(() => {
+    setPresetEditorController({
+      getState: () => ({
+        open: true,
+        presetId: activePresetRef.current?.id ?? null,
+        activeTabId: activePresetEditorTabRef.current,
+        preset: activePresetRef.current ? toPresetEditorDraft(activePresetRef.current) : null,
+      }),
+      setActiveTab: (tabId) => {
+        setView('list')
+        setEditingBlock(null)
+        setActivePresetEditorTab(tabId)
+      },
+      updatePreset: (mutator, immediate) => {
+        updatePresetDraftRef.current((current) => (
+          applyPresetEditorDraft(current, mutator(toPresetEditorDraft(current)))
+        ), immediate)
+      },
+      flush: () => flushPresetDraftRef.current(),
+    })
+    return () => { setPresetEditorController(null) }
+  }, [])
+
+  useEffect(() => {
+    syncPresetEditorState({
+      open: true,
+      presetId: activePreset?.id ?? null,
+      activeTabId: activePresetEditorTab,
+      preset: activePreset ? toPresetEditorDraft(activePreset) : null,
+    })
+  }, [activePreset, activePresetEditorTab])
+
+  useEffect(() => {
+    if (activePresetEditorTab === 'preset') return
+    if (presetEditorTabs.some((tab) => tab.id === activePresetEditorTab)) return
+    setActivePresetEditorTab('preset')
+  }, [activePresetEditorTab, presetEditorTabs])
 
   const configurableVariableCount = useMemo(() => {
     return (activePreset?.blocks ?? []).reduce((count, b) => {
@@ -1997,7 +2050,7 @@ export default function LoomBuilder({
   }, [importFromFile, importFromST])
 
   // Edit view
-  if (view === 'edit' && editingBlock) {
+  if (activePresetEditorTab === 'preset' && view === 'edit' && editingBlock) {
     return (
       <BlockEditor
         block={editingBlock}
@@ -2073,6 +2126,43 @@ export default function LoomBuilder({
             </div>
           )}
         </div>
+
+        {presetEditorTabs.length > 0 && (
+          <div className={s.extensionTabBar} role="tablist" aria-label="Preset editor tabs">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activePresetEditorTab === 'preset'}
+              className={clsx(s.extensionTab, activePresetEditorTab === 'preset' && s.extensionTabActive)}
+              onClick={() => setActivePresetEditorTab('preset')}
+            >
+              Preset
+            </button>
+            {presetEditorTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activePresetEditorTab === tab.id}
+                className={clsx(s.extensionTab, activePresetEditorTab === tab.id && s.extensionTabActive)}
+                onClick={() => setActivePresetEditorTab(tab.id)}
+              >
+                {tab.title}
+              </button>
+            ))}
+          </div>
+        )}
+
+      {activePresetEditorTab !== 'preset' && (() => {
+        const tab = presetEditorTabs.find((entry) => entry.id === activePresetEditorTab)
+        return tab ? (
+          <div className={s.extensionTabContent} role="tabpanel">
+            <SpindlePresetEditorTabContent tab={tab} />
+          </div>
+        ) : null
+      })()}
+
+      <div style={{ display: activePresetEditorTab === 'preset' ? 'contents' : 'none' }}>
 
       {activePreset && <PresetCoverHeader preset={activePreset} />}
 
@@ -2423,6 +2513,7 @@ export default function LoomBuilder({
           </div>
         </div>
       )}
+      </div>
 
       {/* Hidden file input for import */}
       <input ref={fileInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleFileSelect} />

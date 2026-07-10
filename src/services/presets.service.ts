@@ -411,7 +411,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
   };
 }
 
-function normalizePromptBlocks(blocks: PromptBlock[]): PromptBlock[] {
+export function normalizePromptBlocks(blocks: PromptBlock[]): PromptBlock[] {
   return blocks.map((block) => normalizePromptBlock(block));
 }
 

@@ -100,6 +100,19 @@ describe('moveTabTo / clearPendingActiveTabReset', () => {
   })
 })
 
+describe('preset editor placements', () => {
+  test('registers, updates, and removes extension preset tabs', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorTab({ id: 'tab-1', extensionId: 'ext-1', title: 'Agent Mode', root })
+    expect(slice.state.presetEditorTabs).toHaveLength(1)
+    slice.state.updatePresetEditorTab('tab-1', { title: 'Agents' })
+    expect(slice.state.presetEditorTabs[0].title).toBe('Agents')
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorTabs).toHaveLength(0)
+  })
+})
+
 describe('hideAllPlacements / showAllPlacements', () => {
   let slice: ReturnType<typeof makeSlice>
   beforeEach(() => {

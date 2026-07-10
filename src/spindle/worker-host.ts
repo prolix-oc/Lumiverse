@@ -107,6 +107,7 @@ import * as imagesSvc from "../services/images.service";
 import * as audioSvc from "../services/audio.service";
 import * as mediaSvc from "../services/media.service";
 import { spawnAsync } from "./spawn-async";
+import { assembleSpindleBlocks, type SpindleAssembleInput } from "./assembly";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
 import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
@@ -333,6 +334,12 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | {
+      type: "assemble_prompt";
+      requestId: string;
+      input: SpindleAssembleInput;
+      userId?: string;
+    }
   | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_unregister"; endpoint: string }
@@ -935,7 +942,7 @@ export class WorkerHost {
     { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
   >();
   /**
-   * AbortControllers for in-flight `request_generation` calls, keyed by the
+   * AbortControllers for in-flight generation and assembly calls, keyed by the
    * worker-supplied `requestId`. The worker posts `cancel_generation` with the
    * same id when an extension's `AbortSignal` fires; the host calls
    * `controller.abort()` to tear down the upstream LLM request.
@@ -2197,6 +2204,9 @@ export class WorkerHost {
       // ─── Dry Run (gated: "generation") ───────────────────────────────
       case "generate_dry_run":
         this.handleGenerateDryRun(msg.requestId, msg.input, msg.userId);
+        break;
+      case "assemble_prompt":
+        this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
         break;
       case "storage_read":
         this.handleStorageRead(msg.requestId, msg.path);
@@ -8540,6 +8550,49 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private async handleAssemblePrompt(
+    requestId: string,
+    input: SpindleAssembleInput,
+    userId?: string,
+  ): Promise<void> {
+    if (!this.hasPermission("generation")) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: `${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`,
+      });
+      return;
+    }
+
+    const resolvedUserId = this.resolveEffectiveUserId(userId);
+    if (!resolvedUserId) {
+      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
+      return;
+    }
+    this.enforceScopedUser(resolvedUserId);
+
+    const abortController = new AbortController();
+    this.generationAbortControllers.set(requestId, abortController);
+    try {
+      const result = await assembleSpindleBlocks(
+        resolvedUserId,
+        this.manifest.identifier,
+        input,
+        abortController.signal,
+      );
+      this.postToWorker({ type: "response", requestId, result });
+    } catch (err: any) {
+      const aborted = abortController.signal.aborted || err?.name === "AbortError";
+      this.postToWorker({
+        type: "response",
+        requestId,
+        error: aborted ? "AbortError: Assembly aborted" : err?.message ?? String(err),
+      });
+    } finally {
+      this.generationAbortControllers.delete(requestId);
     }
   }
 

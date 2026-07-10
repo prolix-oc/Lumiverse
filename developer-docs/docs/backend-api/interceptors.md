@@ -163,6 +163,10 @@ The `context` parameter is an object containing metadata about the current gener
 
 The context is read-only for informational purposes. To influence the generation, return modified messages or parameters.
 
+`"quiet"` can describe a host generation route, but calls made through
+`spindle.generate.quiet()` are direct provider calls and do **not** re-enter
+this interceptor chain. The same is true for extension `raw` and `batch` calls.
+
 ## Timeout
 
 Interceptors run inside a wall-clock budget. When the budget is exceeded, the interceptor is skipped and the pre-interceptor messages are passed through unchanged — the generation still proceeds.

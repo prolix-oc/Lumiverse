@@ -14,6 +14,10 @@ import type {
   SpindleCharacterEditorTabOptions,
   SpindleCharacterEditorTabHandle,
 } from './character-editor-types'
+import type {
+  SpindlePresetEditorTabOptions,
+  SpindlePresetEditorTabHandle,
+} from './preset-editor-types'
 import { useStore } from '@/store'
 import type { TabLocation } from './tab-mobility-types'
 import { isTabDispatchable } from './tab-dispatch'
@@ -22,6 +26,11 @@ import {
   subscribeCharacterEditorState,
   setCharacterEditorActiveTab,
 } from './character-editor-helper'
+import {
+  getPresetEditorState,
+  subscribePresetEditorState,
+  setPresetEditorActiveTab,
+} from './preset-editor-helper'
 
 let placementCounter = 0
 function nextId(extensionId: string, kind: string): string {
@@ -150,6 +159,52 @@ export function createCharacterEditorTabHandle(
     destroy() {
       unsubscribeState()
       getStore().unregisterCharacterEditorTab(tabId)
+      activateHandlers.clear()
+    },
+    onActivate(handler: () => void): () => void {
+      activateHandlers.add(handler)
+      return () => { activateHandlers.delete(handler) }
+    },
+  }
+}
+
+// ── Preset Editor Tab ──
+
+export function createPresetEditorTabHandle(
+  extensionId: string,
+  options: SpindlePresetEditorTabOptions,
+): SpindlePresetEditorTabHandle {
+  const tabId = nextId(extensionId, `preset-editor-tab:${options.id}`)
+  const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
+  root.setAttribute('data-spindle-preset-editor-tab', tabId)
+
+  const activateHandlers = new Set<() => void>()
+  let wasActive = getPresetEditorState().open && getPresetEditorState().activeTabId === tabId
+  const unsubscribeState = subscribePresetEditorState((state) => {
+    const isActive = state.open && state.activeTabId === tabId
+    if (isActive && !wasActive) {
+      for (const handler of activateHandlers) {
+        try { handler() } catch { /* no-op */ }
+      }
+    }
+    wasActive = isActive
+  })
+
+  getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
+
+  return {
+    root,
+    tabId,
+    setTitle(title: string) {
+      getStore().updatePresetEditorTab(tabId, { title })
+    },
+    activate() {
+      setPresetEditorActiveTab(tabId)
+    },
+    destroy() {
+      unsubscribeState()
+      getStore().unregisterPresetEditorTab(tabId)
       activateHandlers.clear()
     },
     onActivate(handler: () => void): () => void {
@@ -476,6 +531,10 @@ export function destroyAllPlacementsForExtension(extensionId: string) {
   }
 
   for (const tab of store.characterEditorTabs.filter((t) => t.extensionId === extensionId)) {
+    try { tab.root.remove() } catch { /* no-op */ }
+  }
+
+  for (const tab of store.presetEditorTabs.filter((t) => t.extensionId === extensionId)) {
     try { tab.root.remove() } catch { /* no-op */ }
   }
 

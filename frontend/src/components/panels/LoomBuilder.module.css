@@ -50,6 +50,44 @@
   flex-wrap: wrap;
 }
 
+.extensionTabBar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--lumiverse-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.extensionTab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.extensionTab:hover {
+  color: var(--lumiverse-text);
+}
+
+.extensionTabActive {
+  color: var(--lumiverse-primary);
+  border-bottom-color: var(--lumiverse-primary);
+}
+
+.extensionTabContent {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
 .searchToggle {
   flex-shrink: 0;
 }

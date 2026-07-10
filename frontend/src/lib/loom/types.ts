@@ -170,6 +170,8 @@ export interface LoomPreset {
   presetVersion: string | null
   /** LumiHub provenance metadata (install source, hub id, slug, creator) preserved verbatim across edits. Null when not LumiHub-sourced. */
   lumihubMeta: Record<string, unknown> | null
+  /** Metadata not owned by Loom itself, preserved verbatim for extensions and forward compatibility. */
+  passthroughMetadata: Record<string, unknown>
   schemaVersion: number
   createdAt: number
   updatedAt: number

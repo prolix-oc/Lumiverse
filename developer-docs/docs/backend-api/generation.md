@@ -32,6 +32,9 @@ const result = await spindle.generate.quiet({
 })
 ```
 
+`raw`, `quiet`, and `batch` are direct provider helpers. They do not run prompt
+assembly, context handlers, or the pre-generation `registerInterceptor` chain.
+
 ## `spindle.generate.batch(input)`
 
 Run multiple generation requests.
@@ -348,6 +351,46 @@ A discriminated union with three variants:
     Batch is just a wrapper around N raw calls. If you want parallel streamed responses, run `Promise.all([rawStream(a), rawStream(b)])` and consume each iterator however you like.
 
 ---
+
+## Assembly-only block graphs
+
+`spindle.assemble()` runs native Loom assembly for an extension-supplied block
+graph without calling an LLM and without entering the context-handler or
+pre-generation interceptor pipelines. It is safe to call from inside a
+`registerInterceptor` handler.
+
+```ts
+const assembled = await spindle.assemble({
+  chatId,
+  blocks: thread.blocks,
+  connectionId: thread.connectionId,
+  promptVariables: thread.promptVariables,
+})
+
+const result = await spindle.generate.quiet({
+  messages: assembled.messages,
+  connection_id: thread.connectionId,
+})
+```
+
+Assembly uses the supplied chat for history, character/persona macros, attached
+world info, memories, and marker placement. The supplied blocks replace the
+saved preset's block graph and are not persisted. Preset-profile block overrides
+are not applied. Macro resolution is non-committing.
+
+| Field | Type | Description |
+|---|---|---|
+| `blocks` | `PromptBlockDTO[]` | **Required.** Arbitrary Loom block graph (maximum 256 blocks / 1 MB encoded). |
+| `chatId` | `string` | **Required.** Chat supplying native assembly context. |
+| `connectionId` | `string` | Optional connection-aware macro context. |
+| `personaId` | `string` | Optional persona override. |
+| `generationType` | `string` | Optional injection-trigger context; defaults to `"normal"`. |
+| `promptVariables` | `PromptVariableValuesDTO` | Optional values keyed by block id and variable name. |
+| `signal` | `AbortSignal` | Optional cancellation signal. |
+
+The result contains the assembled `messages` and native `breakdown`. This API
+requires the `generation` permission because the result may contain chat,
+persona, memory, and world-info content.
 
 ## Dry Run (Prompt Assembly)
 

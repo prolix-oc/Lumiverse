@@ -1179,10 +1179,12 @@ export async function assemblePrompt(
   // preset selection for the active chat/character context. No-preset temp
   // chats opt out entirely — no preset blocks or parameters, no bindings, no
   // fallback — so assembly drops to the raw legacy message mapping below.
-  const noPreset = isNoPresetChatMetadata(chat.metadata);
+  const noPreset = isNoPresetChatMetadata(chat.metadata) && !ctx.presetOverride;
   const requestedPresetId = noPreset ? null : ctx.presetId || connection?.preset_id || null;
   const resolvedProfile =
-    noPreset
+    ctx.presetOverride || ctx.skipPresetProfileBinding
+      ? { preset_id: ctx.presetOverride?.id ?? requestedPresetId, binding: null, source: "none" as const }
+      : noPreset
       ? { preset_id: null, binding: null, source: "none" as const }
       : ctx.forcePresetId && ctx.presetId
         ? { preset_id: ctx.presetId, binding: null, source: "none" as const }
@@ -1195,9 +1197,11 @@ export async function assemblePrompt(
           );
   const resolvedPresetId = resolvedProfile.preset_id;
 
-  let preset: Preset | null = null;
+  let preset: Preset | null = ctx.presetOverride ?? null;
   const prefetchedPreset = noPreset ? null : pf?.preset !== undefined ? pf.preset : null;
-  if (resolvedPresetId) {
+  if (ctx.presetOverride) {
+    preset = ctx.presetOverride;
+  } else if (resolvedPresetId) {
     preset =
       prefetchedPreset?.id === resolvedPresetId
         ? prefetchedPreset
@@ -1737,6 +1741,7 @@ export async function assemblePrompt(
     chat,
     messages,
     generationType: ctx.generationType,
+    commit: ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
     groupCharacterNames,

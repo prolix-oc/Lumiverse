@@ -168,6 +168,47 @@ This helper exposes the current editor snapshot and a safe way to mutate the dra
 - `updateExtensions()` and `setExtensions()` write into the editor's draft, not straight to the database. Pass `{ immediate: true }` or call `flush()` when you want to commit right away.
 - If the editor is closed, the helper throws `CHARACTER_EDITOR_CLOSED` for mutation calls.
 
+## Preset Editor Tabs (requires `presets`)
+
+Register a tab inside the native Loom preset editor. Max 4 per extension, 8
+global. The helper exposes the latest in-memory draft so extension edits share
+the editor's serialized save queue instead of racing direct preset API writes.
+
+```ts
+const tab = ctx.ui.registerPresetEditorTab({
+  id: 'agent-mode',
+  title: 'Agent Mode',
+})
+
+const render = () => {
+  const { preset } = ctx.ui.presetEditor.getState()
+  tab.root.textContent = preset
+    ? JSON.stringify(preset.metadata.agentic_preset_composer ?? {}, null, 2)
+    : 'Select a preset'
+}
+
+ctx.ui.presetEditor.onChange(render)
+render()
+
+ctx.ui.presetEditor.updatePreset((preset) => ({
+  ...preset,
+  metadata: {
+    ...preset.metadata,
+    agentic_preset_composer: graph,
+  },
+}), { immediate: true })
+```
+
+`getState()` returns `{ open, presetId, activeTabId, preset }`. The `preset`
+draft contains `id`, `name`, `blocks`, `parameters`, `prompts`, `metadata`, and
+timestamps. Snapshots are structured clones. `updatePreset(mutator, options?)`
+atomically derives the next draft; changing its `id` is rejected. `flush()`
+persists and awaits all queued preset writes.
+
+Unknown preset metadata is preserved across native edits, duplication, and
+internal Loom export/import. Loom-owned fields remain authoritative if a
+passthrough metadata bag contains a colliding key.
+
 ## Float Widgets (requires `ui_panels`)
 
 Create a small draggable widget overlaying the UI. Max 2 per extension, 8 global.
@@ -648,6 +689,7 @@ resetBtn.addEventListener('click', async () => {
 |---|---|---|
 | Drawer Tab | 4 | 8 |
 | Character Editor Tab | 4 | 8 |
+| Preset Editor Tab | 4 | 8 |
 | Float Widget | 2 | 8 |
 | Dock Panel | 1 per edge | 2 per edge |
 | App Mount | 1 | 4 |
