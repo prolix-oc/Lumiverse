@@ -101,9 +101,6 @@ ENV TRUST_ANY_ORIGIN=true
 
 EXPOSE 7860
 
-# Persist database, encryption identity, avatars, images, extensions
-VOLUME /app/data
-
 # Health check — hit the root (serves frontend) to verify the server is alive
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD bun -e "fetch('http://localhost:' + (Bun.env.PORT || '7860')).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
