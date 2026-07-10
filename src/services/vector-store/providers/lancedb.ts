@@ -1830,6 +1830,7 @@ export class LanceDbStore implements VectorStore {
       const q = table
         .query()
         .nearestTo(opts.vector)
+        .distanceType("cosine")
         .where(where)
         .select(columns)
         .limit(opts.limit) as any;

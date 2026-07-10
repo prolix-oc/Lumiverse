@@ -2206,21 +2206,55 @@ export async function testEmbeddingConfig(
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
-  await deleteWorldBookEntryRows(userId, [entryId]);
+  await withWorldBookEntryVectorCommitLocks(userId, [entryId], async () => {
+    await deleteWorldBookEntryRowsUnlocked(userId, [entryId]);
+  });
 }
 
-async function deleteWorldBookEntryRows(userId: string, entryIds: string[]): Promise<void> {
+const worldBookEntryVectorCommitTails = new Map<string, Promise<void>>();
+
+async function acquireWorldBookEntryVectorCommitLock(key: string): Promise<() => void> {
+  const previous = worldBookEntryVectorCommitTails.get(key) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const tail = previous.then(() => current, () => current);
+  worldBookEntryVectorCommitTails.set(key, tail);
+  await previous.catch(() => {});
+
+  return () => {
+    releaseCurrent();
+    if (worldBookEntryVectorCommitTails.get(key) === tail) {
+      worldBookEntryVectorCommitTails.delete(key);
+    }
+  };
+}
+
+async function withWorldBookEntryVectorCommitLocks<T>(
+  userId: string,
+  entryIds: string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = Array.from(new Set(entryIds.map((entryId) => JSON.stringify([userId, entryId])))).sort();
+  const releases: Array<() => void> = [];
+  try {
+    for (const key of keys) {
+      releases.push(await acquireWorldBookEntryVectorCommitLock(key));
+    }
+    return await fn();
+  } finally {
+    for (let i = releases.length - 1; i >= 0; i--) releases[i]();
+  }
+}
+
+async function deleteWorldBookEntryRowsUnlocked(userId: string, entryIds: string[]): Promise<void> {
   if (entryIds.length === 0) return;
   await deleteStoreRows("embeddings_world_books", andFilter([
     eq("user_id", userId),
     eq("source_type", "world_book_entry"),
     inSet("source_id", entryIds),
   ]));
-}
-
-async function deleteWorldBookEntryEmbeddingsBatch(userId: string, entryIds: string[]): Promise<void> {
-  if (entryIds.length === 0) return;
-  await deleteWorldBookEntryRows(userId, entryIds);
 }
 
 function getDesiredWorldBookVectorStatus(entry: WorldBookEntry): WorldBookVectorIndexStatus {
@@ -2359,6 +2393,137 @@ async function filterCurrentWorldBookEntriesForWrite(
   });
 }
 
+function updateWorldBookEntriesVectorStateIfCurrent(
+  userId: string,
+  entries: WorldBookEntry[],
+  status: WorldBookVectorIndexStatus,
+  indexedAt: number | null,
+  error: string | null,
+): string[] {
+  if (entries.length === 0) return [];
+  const db = getDb();
+  const updatedIds: string[] = [];
+  const stmt = db.query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?
+     WHERE id = ?
+       AND world_book_id = ?
+       AND content = ?
+       AND comment = ?
+       AND key = ?
+       AND keysecondary = ?
+       AND vectorized = ?
+       AND disabled = ?
+       AND updated_at = ?
+       AND world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
+  );
+  const apply = db.transaction(() => {
+    for (const entry of entries) {
+      const result = stmt.run(
+        status,
+        indexedAt,
+        error,
+        entry.id,
+        entry.world_book_id,
+        String(entry.content || ""),
+        String(entry.comment || ""),
+        JSON.stringify(Array.isArray(entry.key) ? entry.key : []),
+        JSON.stringify(Array.isArray(entry.keysecondary) ? entry.keysecondary : []),
+        entry.vectorized ? 1 : 0,
+        entry.disabled ? 1 : 0,
+        Number(entry.updated_at ?? 0),
+        userId,
+      );
+      if (result.changes > 0) updatedIds.push(entry.id);
+    }
+  });
+  apply();
+  return updatedIds;
+}
+
+interface WorldBookVectorCommitWrite {
+  entry: WorldBookEntry;
+  rows: EmbeddingRow[];
+}
+
+interface WorldBookVectorCommitDependencies {
+  filterCurrent: (
+    userId: string,
+    entries: WorldBookEntry[],
+    settingsFingerprint: string,
+    configFingerprint: string,
+  ) => Promise<WorldBookEntry[]>;
+  deleteRows: (userId: string, entryIds: string[]) => Promise<void>;
+  upsertRows: (rows: EmbeddingRow[]) => Promise<void>;
+  markIndexedIfCurrent: (userId: string, entries: WorldBookEntry[], indexedAt: number) => Promise<string[]> | string[];
+}
+
+interface WorldBookVectorCommitResult {
+  indexedIds: string[];
+  staleIds: string[];
+}
+
+const defaultWorldBookVectorCommitDependencies: WorldBookVectorCommitDependencies = {
+  filterCurrent: filterCurrentWorldBookEntriesForWrite,
+  deleteRows: deleteWorldBookEntryRowsUnlocked,
+  upsertRows: (rows) => upsertStoreRows("embeddings_world_books", rows),
+  markIndexedIfCurrent: (userId, entries, indexedAt) =>
+    updateWorldBookEntriesVectorStateIfCurrent(userId, entries, "indexed", indexedAt, null),
+};
+
+async function commitWorldBookVectorWritesIfCurrent(
+  userId: string,
+  writes: WorldBookVectorCommitWrite[],
+  settingsFingerprint: string,
+  configFingerprint: string,
+  indexedAt: number,
+  dependencies: WorldBookVectorCommitDependencies = defaultWorldBookVectorCommitDependencies,
+): Promise<WorldBookVectorCommitResult> {
+  const writesByEntryId = new Map(writes.map((write) => [write.entry.id, write] as const));
+  const requestedIds = Array.from(writesByEntryId.keys());
+  if (requestedIds.length === 0) return { indexedIds: [], staleIds: [] };
+
+  return withWorldBookEntryVectorCommitLocks(userId, requestedIds, async () => {
+    const requestedEntries = Array.from(writesByEntryId.values()).map((write) => write.entry);
+    const stableBeforeWrite = await dependencies.filterCurrent(
+      userId,
+      requestedEntries,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    const stableBeforeIds = new Set(stableBeforeWrite.map((entry) => entry.id));
+    const staleIds = requestedIds.filter((entryId) => !stableBeforeIds.has(entryId));
+    if (stableBeforeWrite.length === 0) return { indexedIds: [], staleIds };
+
+    const rows = stableBeforeWrite.flatMap((entry) => writesByEntryId.get(entry.id)?.rows ?? []);
+    const writtenIds = stableBeforeWrite.map((entry) => entry.id);
+    await dependencies.deleteRows(userId, writtenIds);
+    await dependencies.upsertRows(rows);
+
+    const stableAfterWrite = await dependencies.filterCurrent(
+      userId,
+      stableBeforeWrite,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    const indexedIds = await dependencies.markIndexedIfCurrent(userId, stableAfterWrite, indexedAt);
+    const indexedIdSet = new Set(indexedIds);
+    const staleAfterWrite = writtenIds.filter((entryId) => !indexedIdSet.has(entryId));
+    if (staleAfterWrite.length > 0) {
+      await dependencies.deleteRows(userId, staleAfterWrite);
+      staleIds.push(...staleAfterWrite);
+    }
+
+    return { indexedIds, staleIds: Array.from(new Set(staleIds)) };
+  });
+}
+
+export const __test__ = {
+  commitWorldBookVectorWritesIfCurrent,
+  updateWorldBookEntriesVectorStateIfCurrent,
+  withWorldBookEntryVectorCommitLocks,
+};
+
 export async function markWorldBookEntriesVectorErrorIfCurrent(
   userId: string,
   entries: WorldBookEntry[],
@@ -2366,16 +2531,23 @@ export async function markWorldBookEntriesVectorErrorIfCurrent(
   settingsFingerprint: string,
   configFingerprint: string,
 ): Promise<number> {
-  const stableEntries = await filterCurrentWorldBookEntriesForWrite(userId, entries, settingsFingerprint, configFingerprint);
-  if (stableEntries.length === 0) return 0;
-  const stableIds = stableEntries.map((entry) => entry.id);
-  try {
-    await deleteWorldBookEntryEmbeddingsBatch(userId, stableIds);
-  } catch (err) {
-    console.warn("[embeddings] Failed to delete stale world-book vectors while marking error:", err);
-  }
-  updateWorldBookEntriesVectorState(stableIds, "error", null, error);
-  return stableIds.length;
+  return withWorldBookEntryVectorCommitLocks(userId, entries.map((entry) => entry.id), async () => {
+    const stableEntries = await filterCurrentWorldBookEntriesForWrite(userId, entries, settingsFingerprint, configFingerprint);
+    if (stableEntries.length === 0) return 0;
+    const stableIds = stableEntries.map((entry) => entry.id);
+    try {
+      await deleteWorldBookEntryRowsUnlocked(userId, stableIds);
+    } catch (err) {
+      console.warn("[embeddings] Failed to delete stale world-book vectors while marking error:", err);
+    }
+    const currentAfterDelete = await filterCurrentWorldBookEntriesForWrite(
+      userId,
+      stableEntries,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    return updateWorldBookEntriesVectorStateIfCurrent(userId, currentAfterDelete, "error", null, error).length;
+  });
 }
 
 export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBookEntry): Promise<void> {
@@ -2409,11 +2581,17 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
       return;
     }
     const rows = buildWorldBookEmbeddingRows(userId, stableEntry, chunks, vectors, now);
-
-    await deleteWorldBookEntryRows(userId, [stableEntry.id]);
-    await upsertStoreRows("embeddings_world_books", rows);
-
-    updateWorldBookEntryVectorState(stableEntry.id, "indexed", now, null);
+    const commit = await commitWorldBookVectorWritesIfCurrent(
+      userId,
+      [{ entry: stableEntry, rows }],
+      settingsFingerprint,
+      configFingerprint,
+      now,
+    );
+    if (commit.indexedIds.length === 0) {
+      console.info("[embeddings] Discarded stale world-book vector commit for entry=%s", entry.id.slice(0, 8));
+      return;
+    }
     await scheduleStoreOptimize("world_book");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Vector indexing failed";
@@ -2570,22 +2748,31 @@ export async function reindexWorldBookEntries(
         );
       }
 
-      const rows: EmbeddingRow[] = [];
-      for (const group of stableGroups) {
-        rows.push(...buildWorldBookEmbeddingRows(
+      const writes = stableGroups.map((group) => ({
+        entry: group.entry,
+        rows: buildWorldBookEmbeddingRows(
           userId,
           group.entry,
           group.chunks,
           vectorSlices.get(group.entry.id) ?? [],
           now,
-        ));
+        ),
+      }));
+      const commit = await commitWorldBookVectorWritesIfCurrent(
+        userId,
+        writes,
+        settingsFingerprint,
+        configFingerprint,
+        now,
+      );
+      if (commit.staleIds.length > 0) {
+        console.info(
+          "[embeddings] Discarded %d stale world-book vector commit%s after write validation",
+          commit.staleIds.length,
+          commit.staleIds.length === 1 ? "" : "s",
+        );
       }
-
-      await deleteWorldBookEntryRows(userId, stableGroups.map((group) => group.entry.id));
-      await upsertStoreRows("embeddings_world_books", rows);
-
-      updateWorldBookEntriesVectorState(stableGroups.map((group) => group.entry.id), "indexed", now, null);
-      progress.indexed += stableGroups.length;
+      progress.indexed += commit.indexedIds.length;
       progress.current += groups.length;
       emitProgress();
     } catch (err) {
