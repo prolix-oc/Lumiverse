@@ -1591,6 +1591,7 @@
     "breakdown": {
       "vectorSimilarity": "ベクター",
       "lexicalContentBoost": "FTS コンテンツ",
+      "supportingContextBoost": "補足コンテキスト",
       "primaryExact": "プライマリ正確",
       "primaryPartial": "プライマリ部分",
       "secondaryExact": "エイリアス正確",

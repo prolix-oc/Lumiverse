@@ -33,6 +33,7 @@ function getDiagnosticBreakdownLabels(t: TFunction<'panels'>): Array<{
   return [
     { key: 'vectorSimilarity', label: t('worldBookDiagnostics.breakdown.vectorSimilarity') },
     { key: 'lexicalContentBoost', label: t('worldBookDiagnostics.breakdown.lexicalContentBoost') },
+    { key: 'supportingContextBoost', label: t('worldBookDiagnostics.breakdown.supportingContextBoost') },
     { key: 'primaryExact', label: t('worldBookDiagnostics.breakdown.primaryExact') },
     { key: 'primaryPartial', label: t('worldBookDiagnostics.breakdown.primaryPartial') },
     { key: 'secondaryExact', label: t('worldBookDiagnostics.breakdown.secondaryExact') },
