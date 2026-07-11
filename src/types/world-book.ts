@@ -140,6 +140,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;
@@ -181,6 +182,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;

@@ -132,6 +132,7 @@ function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActiv
       commentExact: 0,
       commentPartial: 0,
       focusBoost: 0,
+      supportingContextBoost: 0,
       priority: 0,
       broadPenalty: 0,
       focusMissPenalty: 0,

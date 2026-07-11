@@ -65,6 +65,10 @@ interface MentionOwnershipState {
   exactValuesByEntryId: Map<string, Set<string>>;
   partialTokensByEntryId: Map<string, Set<string>>;
   focusTokensByEntryId: Map<string, Set<string>>;
+  supportingAnchors: Array<{
+    entryId: string;
+    value: string;
+  }>;
 }
 
 export interface VectorScoreBreakdown {
@@ -77,6 +81,7 @@ export interface VectorScoreBreakdown {
   commentExact: number;
   commentPartial: number;
   focusBoost: number;
+  supportingContextBoost: number;
   priority: number;
   broadPenalty: number;
   focusMissPenalty: number;
@@ -1382,6 +1387,20 @@ function buildMentionOwnershipState(
   const exactValuesByEntryId = new Map<string, Set<string>>();
   const partialTokensByEntryId = new Map<string, Set<string>>();
   const focusTokensByEntryId = new Map<string, Set<string>>();
+  const supportingAnchors = records
+    .filter((record) => hasExactPhraseMatch(normalizedQuery, record.value))
+    .map((record) => ({
+      entryId: record.entry.id,
+      value: record.normalizedValue,
+    }))
+    .filter(
+      (anchor, index, anchors) =>
+        anchors.findIndex(
+          (candidate) =>
+            candidate.entryId === anchor.entryId &&
+            candidate.value === anchor.value,
+        ) === index,
+    );
 
   const resolve = (
     start: number,
@@ -1509,7 +1528,30 @@ function buildMentionOwnershipState(
     exactValuesByEntryId,
     partialTokensByEntryId,
     focusTokensByEntryId,
+    supportingAnchors,
   };
+}
+
+function getSupportingContextBoost(
+  entry: WorldBookEntryModel,
+  queryState: VectorQueryLexicalState,
+  hasMentionBonus: boolean,
+): number {
+  if (hasMentionBonus || !queryState.mentionOwnership) return 0;
+  const normalizedContent = normalizeLexicalText(entry.content || "");
+  if (!normalizedContent) return 0;
+
+  const supportedSubjects = new Set<string>();
+  for (const anchor of queryState.mentionOwnership.supportingAnchors) {
+    if (anchor.entryId === entry.id) continue;
+    if (` ${normalizedContent} `.includes(` ${anchor.value} `)) {
+      supportedSubjects.add(anchor.entryId);
+    }
+  }
+  if (supportedSubjects.size < 3) return 0;
+  const contentTokenCount = tokenizeLexicalText(entry.content || "").length;
+  const compactness = clamp01(240 / Math.max(240, contentTokenCount));
+  return Math.min(0.1, (supportedSubjects.size - 2) * 0.025) * compactness;
 }
 
 function getExactTitleAnchorBoost(
@@ -1682,6 +1724,11 @@ function scoreVectorWorldInfoCandidate(
     secondaryPartialScore +
     commentExactScore +
     commentPartialScore;
+  const supportingContextBoost = getSupportingContextBoost(
+    entry,
+    queryState,
+    lexicalSignalStrength > 0 || focusBoost > 0,
+  );
   const effectiveDistance = isFtsOnly ? 2 : candidate.distance;
   const ftsWeaknessReduction =
     isFtsOnly && lexicalContentBoost > 0
@@ -1734,6 +1781,7 @@ function scoreVectorWorldInfoCandidate(
       exactTitleAnchorBoost +
       commentPartialScore +
       focusBoost +
+      supportingContextBoost +
       priorityScore -
       broadPenalty,
   );
@@ -1757,6 +1805,7 @@ function scoreVectorWorldInfoCandidate(
       commentExact: commentExactScore + exactTitleAnchorBoost,
       commentPartial: commentPartialScore,
       focusBoost,
+      supportingContextBoost,
       priority: priorityScore,
       broadPenalty,
       focusMissPenalty,
