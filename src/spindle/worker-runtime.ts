@@ -94,6 +94,7 @@ import {
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
+import type { LumiaDlcCatalog } from "../types/pack";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -256,12 +257,14 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
   | {
       type: "assemble_prompt";
       requestId: string;
       input: Omit<AssembleRequest, "signal">;
       userId?: string;
     }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -527,7 +530,17 @@ type RuntimeHostToWorker =
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+  /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
+  dlc: {
+    getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
+  };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  contracts: Readonly<Record<string, number>>;
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number }
+  ): void;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -3094,6 +3107,14 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  dlc: {
+    async getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "dlc_get_catalog", requestId, userId: options?.userId });
+      return result as LumiaDlcCatalog;
+    },
+  },
+
   permissions: {
     async getGranted(): Promise<string[]> {
       const scope = sharedRpcPermissionScope.getStore();
@@ -3314,10 +3335,16 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  registerContextHandler(handler, priority?): void {
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number },
+  ): void {
     assertMutationAllowed("spindle.registerContextHandler()");
     contextHandlerFn = handler;
-    post({ type: "register_context_handler", priority });
+    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs });
   },
 
   registerMessageContentProcessor(handler, priority?): void {
@@ -3889,6 +3916,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             context: msg.context,
           });
         }
+      } else {
+        post({
+          type: "context_handler_result",
+          requestId: msg.requestId,
+          context: msg.context,
+        });
       }
       break;
     }

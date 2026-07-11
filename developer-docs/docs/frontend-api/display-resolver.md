@@ -86,6 +86,12 @@ The method-specific arguments alongside `context` are: `content` for `resolveBod
 
 `resolveTemplates` returns the same information keyed per template: `resolved` (`Record<key, string>`), and optional `touchedVars` (`Record<key, string[]>`) and `cacheable` (`Record<key, boolean>`).
 
+## Regex waits for your resolver
+
+For chats you own, the host does not run display regex scripts against content your `resolveBody` has not processed yet: the regex pass waits until your result settles, then runs on it.
+
+Returning `null` (or throwing) from `resolveBody` shows the raw content for that render without caching it as resolved, so later renders retry.
+
 ## Caching and invalidation
 
 The host caches your results so it does not call you on every render, using `touchedVars` as the dependency key. When a variable changes, only cached entries that listed it are dropped. Mark a result `cacheable: false` if it depends on something that is not a variable (time, randomness).

@@ -13,6 +13,22 @@ export interface Pack {
   updated_at: number;
 }
 
+/**
+ * Safe pack metadata exposed to extensions through the read-only DLC catalog.
+ * User ownership and arbitrary `extras` are intentionally not included.
+ */
+export interface LumiaDlcPack {
+  id: string;
+  name: string;
+  author: string;
+  cover_url: string | null;
+  version: string;
+  is_custom: boolean;
+  source_url: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface CreatePackInput {
   name: string;
   author?: string;
@@ -99,6 +115,16 @@ export interface LoomTool {
   sort_order: number;
   created_at: number;
   updated_at: number;
+}
+
+/** Read-only Lumia DLC catalog available to an extension for one user. */
+export interface LumiaDlcCatalog {
+  packs: LumiaDlcPack[];
+  lumiaItems: LumiaItem[];
+  narrativeStyles: LoomItem[];
+  utilities: LoomItem[];
+  retrofits: LoomItem[];
+  tools: LoomTool[];
 }
 
 export interface CreateLoomToolInput {

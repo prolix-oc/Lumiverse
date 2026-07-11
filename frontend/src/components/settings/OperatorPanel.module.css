@@ -384,6 +384,116 @@
   font-style: italic;
 }
 
+/* ── SMART Disk Health ──────────────────────────────────────────────────── */
+
+.smartAvailability {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.smartAvailabilityDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.smartDriveList {
+  display: grid;
+  gap: 10px;
+}
+
+.smartDrive {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.smartDriveHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.smartDriveName {
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.smartBadge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.smartOk {
+  background: rgba(76, 175, 80, 0.14);
+  color: #66bb6a;
+}
+
+.smartWarning {
+  background: rgba(255, 183, 77, 0.16);
+  color: #ffb74d;
+}
+
+.smartFailing {
+  background: rgba(239, 83, 80, 0.16);
+  color: #ef5350;
+}
+
+.smartUnavailable {
+  background: rgba(158, 158, 158, 0.14);
+  color: var(--lumiverse-text-dim);
+}
+
+.smartAvailabilityDot.smartOk,
+.smartAvailabilityDot.smartUnavailable {
+  padding: 0;
+}
+
+.smartMetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.smartMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.smartMetric > span {
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.smartMetric > strong {
+  overflow: hidden;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Reconnect / Shutdown Banners ────────────────────────────────────────── */
 
 .reconnectBanner {

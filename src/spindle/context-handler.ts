@@ -5,6 +5,8 @@ export interface ContextHandler {
   extensionName?: string;
   userId?: string | null;
   priority: number; // lower = runs first
+  /** Wall-clock budget for each invocation. Defaults to 10s. */
+  timeoutMs?: number;
   handler: (context: unknown) => Promise<unknown>;
 }
 
@@ -58,6 +60,7 @@ class ContextHandlerChain {
         extensionName: handler.extensionName,
       });
 
+      const timeoutMs = handler.timeoutMs ?? 10_000;
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let abortHandler: (() => void) | undefined;
       try {
@@ -68,10 +71,10 @@ class ContextHandlerChain {
               () =>
                 reject(
                   new Error(
-                    `Context handler from ${handler.extensionId} timed out (10s)`
+                    `Context handler from ${handler.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`
                   )
                 ),
-              10_000,
+              timeoutMs,
             );
             if (signal) {
               abortHandler = () =>

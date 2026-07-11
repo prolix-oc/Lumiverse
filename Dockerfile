@@ -63,6 +63,7 @@ RUN echo "ca-refresh: ${CA_REFRESH}" \
     && apt-get install --no-install-recommends --no-install-suggests -y \
          git \
          ca-certificates \
+         smartmontools \
     && update-ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

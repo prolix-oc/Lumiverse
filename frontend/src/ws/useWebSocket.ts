@@ -53,6 +53,7 @@ import type {
   RoomTurnChangedPayload,
   RoomTurnSkippedPayload,
   RoomPresencePayload,
+  SystemSmartAlertPayload,
 } from '@/types/ws-events'
 import type { Message } from '@/types/api'
 import type { ChatHeadStatus } from '@/types/store'
@@ -227,6 +228,10 @@ const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
 // backend fires every 5 min while the disk stays over threshold. Module
 // scope (not state) — survives WS reconnects, resets only on full page load.
 let diskWarningShown = false
+// SMART alerts are re-emitted by each scheduled health check so an operator
+// who connects later can still receive one. Avoid repeatedly interrupting an
+// already-connected browser; reset only after a full page load.
+let smartWarningShown = false
 
 interface VarChangeSummary {
   bagWideVarChange: boolean
@@ -997,6 +1002,9 @@ export function useWebSocket() {
                   prompt: ig.customPrompt,
                   negativePrompt: ig.customNegativePrompt,
                   promptPresetId: ig.activePromptPresetId ?? null,
+                  bypassCharacterLora: !!ig.bypassCharacterLora,
+                  bypassActiveLoraPreset: !!ig.bypassActiveLoraPreset,
+                  loraStrengthScale: ig.loraStrengthScale,
                   promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
                   generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
@@ -1468,6 +1476,28 @@ export function useWebSocket() {
         toast.warning(
           `The disk hosting Lumiverse is ${pct}% full with ${free} free remaining. Free up space to avoid crashes — writes to memory-mapped files may fault if the disk fills.`,
           { title: 'Storage almost full', duration: 30_000 },
+        )
+      }),
+
+      wsClient.on(EventType.SYSTEM_SMART_ALERT, (payload: SystemSmartAlertPayload) => {
+        // The backend re-emits on later scheduled checks while the condition
+        // persists so an operator who connects after startup can still see it.
+        // A page should surface this once, not every six-hour SMART poll.
+        if (smartWarningShown || payload.drives.length === 0) return
+        smartWarningShown = true
+
+        const affected = payload.drives.slice(0, 3).map((drive) => {
+          const label = drive.model ? `${drive.model} (${drive.device})` : drive.device
+          const conditions = drive.conditions.slice(0, 2).map((condition) => condition.message).join('; ')
+          return conditions ? `${label}: ${conditions}` : label
+        })
+        const more = payload.drives.length > affected.length ? ` (+${payload.drives.length - affected.length} more)` : ''
+        const hasFailure = payload.drives.some((drive) => drive.status === 'failing'
+          || drive.conditions.some((condition) => condition.severity === 'failing'))
+        const toastFn = hasFailure ? toast.error : toast.warning
+        toastFn(
+          `${affected.join(' · ')}${more}. Open Settings → Operator → Disk Health for details.`,
+          { title: hasFailure ? 'Disk health failure' : 'Disk health warning', duration: 30_000 },
         )
       }),
 

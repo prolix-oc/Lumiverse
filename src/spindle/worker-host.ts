@@ -334,12 +334,14 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
   | {
       type: "assemble_prompt";
       requestId: string;
       input: SpindleAssembleInput;
       userId?: string;
     }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
   | { type: "rpc_pool_sync"; endpoint: string; value: unknown; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_register_handler"; endpoint: string; policy?: SharedRpcEndpointPolicy }
   | { type: "rpc_pool_unregister"; endpoint: string }
@@ -2363,7 +2365,7 @@ export class WorkerHost {
         this.handleCorsRequest(msg.requestId, msg.url, msg.options);
         break;
       case "register_context_handler":
-        this.handleRegisterContextHandler(msg.priority);
+        this.handleRegisterContextHandler(msg.priority, (msg as { timeoutMs?: number }).timeoutMs);
         break;
       case "context_handler_result":
         this.resolveRequest(msg.requestId, msg.context);
@@ -2958,6 +2960,10 @@ export class WorkerHost {
         break;
       case "council_get_available_lumia_items":
         this.handleCouncilGetAvailableLumiaItems(msg.requestId, msg.userId);
+        break;
+      // ─── Lumia DLC (free tier, read-only) ───────────────────────────
+      case "dlc_get_catalog":
+        this.handleDlcGetCatalog(msg.requestId, msg.userId);
         break;
       // ─── Toast (free tier) ────────────────────────────────────────────
       case "toast_show":
@@ -5781,7 +5787,7 @@ export class WorkerHost {
 
   // ─── Context handler ─────────────────────────────────────────────────
 
-  private handleRegisterContextHandler(priority?: number): void {
+  private handleRegisterContextHandler(priority?: number, timeoutMs?: number): void {
     if (
       !this.hasPermission("context_handler")
     ) {
@@ -5796,12 +5802,17 @@ export class WorkerHost {
       return;
     }
 
+    const budgetMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.min(Math.max(timeoutMs, 1_000), 120_000)
+      : 10_000;
+
     this.contextHandlerUnregister?.();
     this.contextHandlerUnregister = contextHandlerChain.register({
       extensionId: this.extensionId,
       extensionName: this.manifest.name || this.manifest.identifier,
       userId: this.getScopedUserId(),
       priority: priority ?? 100,
+      timeoutMs: budgetMs,
       handler: async (context) => {
         const requestId = crypto.randomUUID();
 
@@ -5819,7 +5830,7 @@ export class WorkerHost {
                 `Context handler timeout from ${this.manifest.identifier}`
               )
             );
-          }, 10_000);
+          }, budgetMs);
 
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
@@ -11524,6 +11535,16 @@ export class WorkerHost {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       const items = packsSvc.getAllLumiaItems(resolvedUserId);
       this.postToWorker({ type: "response", requestId, result: items });
+    } catch (err) {
+      this.postToWorker({ type: "response", requestId, error: String(err) });
+    }
+  }
+
+  private handleDlcGetCatalog(requestId: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      const catalog = packsSvc.getLumiaDlcCatalog(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: catalog });
     } catch (err) {
       this.postToWorker({ type: "response", requestId, error: String(err) });
     }

@@ -170,6 +170,7 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = 'SYSTEM_DISK_LOW',
+  SYSTEM_SMART_ALERT = 'SYSTEM_SMART_ALERT',
 }
 
 export interface SystemDiskLowPayload {
@@ -181,6 +182,19 @@ export interface SystemDiskLowPayload {
   /** 0..1, the threshold that was crossed */
   thresholdPercent: number
   thresholdFreeBytes: number
+}
+
+export interface SystemSmartAlertPayload {
+  checkedAt: string
+  drives: Array<{
+    device: string
+    model: string | null
+    status: 'warning' | 'failing'
+    conditions: Array<{
+      severity: 'warning' | 'failing'
+      message: string
+    }>
+  }>
 }
 
 export interface WallpaperUploadProgressPayload {
