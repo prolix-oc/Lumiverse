@@ -868,6 +868,10 @@ export interface WorldBookDiagnostics {
   };
   vector_summary: WorldBookVectorSummary;
   query_preview: string;
+  lexical_query_previews: Array<{
+    kind: 'anchors' | 'mixed' | 'topical';
+    text: string;
+  }>;
   eligible_entries: number;
   retrieval: {
     top_k: number;

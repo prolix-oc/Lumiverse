@@ -135,6 +135,7 @@ function retrievalResult(): VectorWorldInfoRetrievalResult {
     }],
     candidateTrace: [],
     queryPreview: "where is alpha",
+    lexicalQueryPreviews: [],
     eligibleCount: 1,
     hitsBeforeThreshold: 1,
     hitsAfterThreshold: 1,

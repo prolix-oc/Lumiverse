@@ -549,6 +549,14 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
       'QUERY PREVIEW',
       diagnostics.query_preview || '(empty)',
       '',
+      'LEXICAL QUERY PREVIEWS',
+      ...(diagnostics.lexical_query_previews.length > 0
+        ? diagnostics.lexical_query_previews.flatMap((batch, index) => [
+          `Batch ${index + 1} (${batch.kind})`,
+          batch.text,
+          '',
+        ])
+        : ['(none)', '']),
       'BLOCKERS / NOTES',
     ]
 
@@ -933,6 +941,13 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                     <div className={styles.queryBlock}>
                       {diagnostics.query_preview || t('worldBookDiagnostics.sections.noQuery')}
                     </div>
+                    {diagnostics.lexical_query_previews.map((batch, index) => (
+                      <div className={styles.queryBlock} key={`lexical-query-${index}`}>
+                        <strong>FTS batch {index + 1} ({batch.kind})</strong>
+                        {'\n'}
+                        {batch.text}
+                      </div>
+                    ))}
                   </section>
 
                   <section className={styles.sectionCard}>
