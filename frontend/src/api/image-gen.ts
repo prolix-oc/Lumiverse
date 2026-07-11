@@ -114,6 +114,9 @@ export const imageGenApi = {
     negativePrompt?: string
     promptPresetId?: string | null
     outputTarget?: ImageGenOutputTarget
+    bypassCharacterLora?: boolean
+    bypassActiveLoraPreset?: boolean
+    loraStrengthScale?: number
     attachToMessageId?: string
     skipParse?: boolean
     clientJobId?: string

@@ -997,6 +997,9 @@ export function useWebSocket() {
                   prompt: ig.customPrompt,
                   negativePrompt: ig.customNegativePrompt,
                   promptPresetId: ig.activePromptPresetId ?? null,
+                  bypassCharacterLora: !!ig.bypassCharacterLora,
+                  bypassActiveLoraPreset: !!ig.bypassActiveLoraPreset,
+                  loraStrengthScale: ig.loraStrengthScale,
                   promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
                   generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
