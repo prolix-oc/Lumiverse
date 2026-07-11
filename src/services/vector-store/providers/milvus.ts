@@ -1,6 +1,12 @@
 import { connect as connectTcp } from "node:net";
 import type { MilvusConnectionConfig, MilvusHybridSearchConfig, VectorStoreTuningProfile } from "../../vector-store-config.service";
-import { adaptiveStorageBatch, isRetryableStorageError } from "../addressing";
+import {
+  adaptiveStorageBatch,
+  andFilter,
+  cosineSimilarity,
+  inSet,
+  isRetryableStorageError,
+} from "../addressing";
 import { milvusCapabilities } from "../capabilities";
 import type {
   CollectionName,
@@ -334,13 +340,57 @@ export class MilvusStore implements VectorStore {
         ],
         rerank: { strategy: "rrf", params: { k: 60 } },
         limit: requestedLimit,
-        output_fields: opts.withVector ? [...OUTPUT_FIELDS, "vector"] : OUTPUT_FIELDS,
+        // Milvus returns the fused RRF score as `score`. Pull dense vectors
+        // back so the provider contract can still expose real cosine
+        // similarity instead of mislabeling that rank-derived score.
+        output_fields: [...OUTPUT_FIELDS, "vector"],
       });
       if (opts.signal?.aborted) return [];
       const results = Array.isArray(res?.results) ? res.results : [];
-      const hits = results
-        .map((row: any) => milvusSearchRowToHit(row, opts.withVector))
-        .filter((hit: VectorHit | null): hit is VectorHit => hit != null);
+      let hits: VectorHit[] = results
+        .map((row: any) => milvusSearchRowToHit(row, true))
+        .filter((hit: VectorHit | null): hit is VectorHit => hit != null)
+        .map((hit: VectorHit): VectorHit => {
+          const vector = hit.vector;
+          const hasValidVector = !!vector && vector.length === opts.vector.length;
+          return {
+            ...hit,
+            similarity: hasValidVector ? cosineSimilarity(opts.vector, vector) : null,
+            lexicalScore: null,
+            vector: opts.withVector ? vector : null,
+          };
+        });
+
+      const unresolvedIds = hits
+        .filter((hit: VectorHit) => hit.similarity == null && hit.id)
+        .map((hit: VectorHit) => hit.id);
+      if (unresolvedIds.length > 0 && !opts.signal?.aborted) {
+        try {
+          const rescored = await this.vectorSearch({
+            ...opts,
+            filter: andFilter([opts.filter, inSet("id", unresolvedIds)]),
+            limit: unresolvedIds.length,
+          });
+          const rescoredById = new Map(rescored.map((hit: VectorHit) => [hit.id, hit]));
+          hits = hits.map((hit: VectorHit): VectorHit => {
+            const denseHit = rescoredById.get(hit.id);
+            if (!denseHit) return hit;
+            return {
+              ...hit,
+              similarity: denseHit.similarity,
+              vector: opts.withVector ? denseHit.vector : null,
+            };
+          });
+        } catch (err) {
+          if (opts.signal?.aborted) return [];
+          console.warn(
+            "[vector-store] Milvus could not dense-rescore %d native hybrid hit(s); leaving their cosine similarity unknown: %s",
+            unresolvedIds.length,
+            describeMilvusError(err),
+          );
+        }
+      }
+      if (opts.signal?.aborted) return [];
       if (hits.length > 0) return hits;
 
       const fusedHits = await this.appSideHybridSearch(opts);

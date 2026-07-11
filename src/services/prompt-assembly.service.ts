@@ -79,7 +79,14 @@ import * as worldBooksSvc from "./world-books.service";
 import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
-import { loadWorldBookVectorSettings } from "./world-book-vector-settings.service";
+import {
+  loadWorldBookVectorSettings,
+  type WorldBookVectorSettings,
+} from "./world-book-vector-settings.service";
+import {
+  getResolvedVectorStoreConfig,
+  type VectorStoreConfig,
+} from "./vector-store-config.service";
 import { isWorldBookEntryVectorSearchReady } from "./world-book-vector-state";
 import * as imagesSvc from "./images.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
@@ -3954,6 +3961,66 @@ interface CachedVectorWiResult {
 
 const vectorWiCache = new Map<string, CachedVectorWiResult>();
 
+interface VectorWiCacheFingerprintInput {
+  userId: string;
+  chatId: string;
+  worldBookIds: string[];
+  entries: WorldBookEntryModel[];
+  queryText: string;
+  embeddingConfig: embeddingsSvc.EmbeddingConfigWithStatus;
+  worldBookVectorSettings: WorldBookVectorSettings;
+  vectorStoreConfig: VectorStoreConfig;
+}
+
+function stableVectorWiCacheValue(value: unknown): string {
+  if (value === undefined) return "u;";
+  if (value === null) return "l;";
+  if (typeof value === "string") return `s${value.length}:${value};`;
+  if (typeof value === "number") {
+    return `n${Number.isFinite(value) ? value : String(value)};`;
+  }
+  if (typeof value === "boolean") return value ? "b1;" : "b0;";
+  if (Array.isArray(value)) {
+    return `a${value.length}[${value.map(stableVectorWiCacheValue).join("")}]`;
+  }
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    const keys = Object.keys(object).sort();
+    return `o${keys.length}{${keys
+      .map((key) => `${stableVectorWiCacheValue(key)}${stableVectorWiCacheValue(object[key])}`)
+      .join("")}}`;
+  }
+  return `${typeof value}:${String(value)};`;
+}
+
+function buildVectorWiCacheFingerprint(input: VectorWiCacheFingerprintInput): string {
+  const snapshot = {
+    userId: input.userId,
+    chatId: input.chatId,
+    worldBookIds: [...input.worldBookIds].sort(),
+    queryText: input.queryText,
+    embeddingConfig: input.embeddingConfig,
+    worldBookVectorSettings: input.worldBookVectorSettings,
+    vectorStoreConfig: input.vectorStoreConfig,
+    worldBookVectorWriteFingerprint:
+      embeddingsSvc.getWorldBookVectorWriteFingerprint(input.embeddingConfig),
+  };
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(stableVectorWiCacheValue(snapshot));
+  for (const entry of [...input.entries].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  )) {
+    hasher.update(stableVectorWiCacheValue(entry));
+  }
+  return hasher.digest("hex");
+}
+
+function cloneVectorWiResult(
+  result: VectorWorldInfoRetrievalResult,
+): VectorWorldInfoRetrievalResult {
+  return structuredClone(result);
+}
+
 function pruneVectorWiCache(now = Date.now()): void {
   for (const [key, cached] of vectorWiCache) {
     if (now - cached.cachedAt > VECTOR_WI_CACHE_TTL_MS) {
@@ -3977,7 +4044,7 @@ function getCachedVectorWiResult(
     vectorWiCache.delete(cacheKey);
     return null;
   }
-  return cached.result;
+  return cloneVectorWiResult(cached.result);
 }
 
 function setCachedVectorWiResult(
@@ -3985,8 +4052,18 @@ function setCachedVectorWiResult(
   result: VectorWorldInfoRetrievalResult,
 ): void {
   pruneVectorWiCache();
-  vectorWiCache.set(cacheKey, { result, cachedAt: Date.now() });
+  vectorWiCache.set(cacheKey, {
+    result: cloneVectorWiResult(result),
+    cachedAt: Date.now(),
+  });
 }
+
+export const __vectorWiCacheTest = {
+  buildFingerprint: buildVectorWiCacheFingerprint,
+  clear: () => vectorWiCache.clear(),
+  get: getCachedVectorWiResult,
+  set: setCachedVectorWiResult,
+};
 
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
@@ -4043,21 +4120,19 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const queryBuildMs = performance.now() - queryBuildStartedAt;
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
 
-  // Check short-TTL cache for rapid dry-run reuse.
-  const cacheConfigSig = [
-    cfg.enabled ? 1 : 0,
-    cfg.vectorize_world_books ? 1 : 0,
-    cfg.dimensions ?? 0,
-    topK,
-    cfg.hybrid_weight_mode,
-    cfg.similarity_threshold,
-    cfg.rerank_cutoff,
-  ].join(":");
-  const cacheKey = `${userId}:${chatId}:${worldBookIds.join(",")}:${eligibleEntries
-    .map((e) => `${e.id}:${e.content?.length ?? 0}`)
-    .join(
-      ",",
-    )}:${queryText}:${cacheConfigSig}`;
+  // Check short-TTL cache for rapid dry-run reuse. Hash the complete retrieval
+  // snapshot so same-length lore edits, activation fields, index commits, and
+  // provider/config changes cannot reuse stale candidates.
+  const cacheKey = buildVectorWiCacheFingerprint({
+    userId,
+    chatId,
+    worldBookIds,
+    entries,
+    queryText,
+    embeddingConfig: cfg,
+    worldBookVectorSettings,
+    vectorStoreConfig: getResolvedVectorStoreConfig(),
+  });
   const cached = getCachedVectorWiResult(cacheKey);
   if (cached) {
     console.debug("[prompt-assembly] Vector WI cache hit for chat %s", chatId);
