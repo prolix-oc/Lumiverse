@@ -188,4 +188,59 @@ describe("per-mention canonical ownership", () => {
     );
     expect(weakestRelevant).toBeGreaterThan(strongestAssociative);
   });
+
+  test("promotes unanchored lore that connects at least three explicit subjects", () => {
+    const arden = makeEntry({ comment: "Arden Vale" });
+    const mira = makeEntry({ comment: "Mira Sol" });
+    const tovin = makeEntry({ comment: "Tovin Reed" });
+    const supporting = makeEntry({
+      comment: "Council Origins",
+      content: "Arden Vale, Mira Sol, and Tovin Reed founded the council before their ideological split.",
+    });
+    const marginal = makeEntry({
+      comment: "Bridge Officer",
+      content: "A bridge officer maintains routine consoles during transit and reports status.",
+    });
+    const twoSubjectAssociation = makeEntry({
+      comment: "Vale Residence",
+      content: "Arden Vale once visited the residence with Mira Sol.",
+    });
+    const longBiography = makeEntry({
+      comment: "Distant Biographer",
+      content: `Arden Vale, Mira Sol, and Tovin Reed are mentioned in passing. ${"unrelated biography detail ".repeat(220)}`,
+    });
+    const entries = [arden, mira, tovin, supporting, marginal, twoSubjectAssociation, longBiography];
+    const result = rankVectorWorldInfoCandidates({
+      eligibleEntries: entries,
+      pooledCandidates: [
+        candidate(arden, 0.4, 30, 0.7),
+        candidate(mira, 0.41, 30, 0.7),
+        candidate(tovin, 0.42, 30, 0.7),
+        candidate(supporting, 0.51, 20, 0.58),
+        candidate(marginal, 0.49, 21, 0.58),
+        candidate(twoSubjectAssociation, 0.48, 22, 0.58),
+        candidate(longBiography, 0.47, 23, 0.58),
+      ],
+      queryText: "Arden Vale told Mira Sol and Tovin Reed how they founded the council before splitting apart.",
+      hybridWeightMode: "balanced",
+      similarityThreshold: 0,
+      rerankCutoff: 0,
+      topK: 20,
+    });
+    const byName = new Map(result.shortlistedEntries.map((item) => [item.entry.comment, item]));
+
+    expect(byName.get("Council Origins")!.scoreBreakdown.supportingContextBoost).toBe(0.025);
+    expect(byName.get("Bridge Officer")!.scoreBreakdown.supportingContextBoost).toBe(0);
+    expect(byName.get("Vale Residence")!.scoreBreakdown.supportingContextBoost).toBe(0);
+    expect(byName.get("Distant Biographer")!.scoreBreakdown.supportingContextBoost).toBeLessThan(0.01);
+    expect(byName.get("Council Origins")!.finalScore).toBeGreaterThan(
+      byName.get("Bridge Officer")!.finalScore,
+    );
+    expect(byName.get("Council Origins")!.finalScore).toBeGreaterThan(
+      byName.get("Vale Residence")!.finalScore,
+    );
+    expect(byName.get("Council Origins")!.finalScore).toBeGreaterThan(
+      byName.get("Distant Biographer")!.finalScore,
+    );
+  });
 });

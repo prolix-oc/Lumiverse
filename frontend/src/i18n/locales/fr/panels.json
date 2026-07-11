@@ -1591,6 +1591,7 @@
     "breakdown": {
       "vectorSimilarity": "Vecteur",
       "lexicalContentBoost": "Contenu FTS",
+      "supportingContextBoost": "Contexte complémentaire",
       "primaryExact": "Primaire exact",
       "primaryPartial": "Primaire partiel",
       "secondaryExact": "Alias ​​exact",

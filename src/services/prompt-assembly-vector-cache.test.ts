@@ -127,6 +127,7 @@ function retrievalResult(): VectorWorldInfoRetrievalResult {
         commentExact: 0,
         commentPartial: 0,
         focusBoost: 0,
+        supportingContextBoost: 0,
         priority: 0,
         broadPenalty: 0,
         focusMissPenalty: 0,

@@ -1591,6 +1591,7 @@
     "breakdown": {
       "vectorSimilarity": "向量",
       "lexicalContentBoost": "FTS 内容",
+      "supportingContextBoost": "补充上下文",
       "primaryExact": "主键精确",
       "primaryPartial": "主键部分",
       "secondaryExact": "别名精确",
