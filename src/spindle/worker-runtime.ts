@@ -264,6 +264,7 @@ type RuntimeWorkerToHost =
       input: Omit<AssembleRequest, "signal">;
       userId?: string;
     }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -534,6 +535,12 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
     getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
   };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  contracts: Readonly<Record<string, number>>;
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number }
+  ): void;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -3328,10 +3335,16 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  registerContextHandler(handler, priority?): void {
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number },
+  ): void {
     assertMutationAllowed("spindle.registerContextHandler()");
     contextHandlerFn = handler;
-    post({ type: "register_context_handler", priority });
+    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs });
   },
 
   registerMessageContentProcessor(handler, priority?): void {
@@ -3903,6 +3916,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             context: msg.context,
           });
         }
+      } else {
+        post({
+          type: "context_handler_result",
+          requestId: msg.requestId,
+          context: msg.context,
+        });
       }
       break;
     }
