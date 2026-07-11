@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -11,6 +11,7 @@ import {
   WALLPAPER_LIBRARY_OWNER,
   deleteImage,
   deleteImageIfUnreferenced,
+  deleteImagesBulk,
   deleteWallpaperLibraryImage,
   getImage,
   getImageFilePath,
@@ -145,6 +146,19 @@ afterEach(() => {
 });
 
 describe("images.service ownership filters", () => {
+  test("does not create an image row when a write reports success without creating the file", async () => {
+    const writeSpy = spyOn(Bun, "write").mockImplementation(async () => 1);
+    try {
+      const file = new File([new Uint8Array([0])], "missing.png", { type: "image/png" });
+
+      await expect(uploadImage("u1", file)).rejects.toThrow("Image file was not created");
+      const count = getDb().query("SELECT COUNT(*) AS count FROM images").get() as { count: number };
+      expect(count.count).toBe(0);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
   test("lists only extension-owned images and returns specificity-aware URLs", () => {
     seedImage("img-1", 300, { owner_extension_identifier: "ext.gallery", owner_chat_id: "chat-1" });
     seedImage("img-2", 200, { owner_extension_identifier: "ext.gallery", owner_character_id: "char-1" });
@@ -313,6 +327,24 @@ describe("images.service ownership filters", () => {
     expect(deleteImage("u1", "clip-2")).toBe(true);
     expect(existsSync(primaryPath)).toBe(false);
     expect(existsSync(hevcPath)).toBe(false);
+  });
+
+  test("keeps the image row when deleting its files fails", () => {
+    seedImage("undeletable", 100);
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(join(imagesDir, "undeletable.png"), { recursive: true });
+
+    expect(() => deleteImage("u1", "undeletable")).toThrow("Could not delete 1 image file");
+    expect(getImage("u1", "undeletable")).not.toBeNull();
+  });
+
+  test("keeps bulk-deletion rows when deleting their files fails", async () => {
+    seedImage("bulk-undeletable", 100);
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(join(imagesDir, "bulk-undeletable.png"), { recursive: true });
+
+    await expect(deleteImagesBulk("u1", ["bulk-undeletable"])).rejects.toThrow("Could not delete 1 image file");
+    expect(getImage("u1", "bulk-undeletable")).not.toBeNull();
   });
 
   test("emits wallpaper video upload progress through transcoding and finalize stages", async () => {

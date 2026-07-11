@@ -4,7 +4,7 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { env } from "../env";
 import type { Image } from "../types/image";
-import { mkdirSync, existsSync, unlinkSync } from "fs";
+import { mkdirSync, existsSync, statSync, unlinkSync } from "fs";
 import { unlink } from "fs/promises";
 import { join, extname } from "path";
 import {
@@ -120,6 +120,37 @@ function getImagesDir(): string {
   const dir = join(env.dataDir, IMAGES_DIR);
   ensureDir(dir);
   return dir;
+}
+
+/**
+ * Write an image asset and verify that the complete payload is present before
+ * its database record can be created. Bun.write reports the byte count, but a
+ * short write would otherwise still leave the upload flow able to create a row
+ * for an incomplete or missing file.
+ */
+async function writeImageFile(filepath: string, data: Uint8Array): Promise<void> {
+  const expectedBytes = data.byteLength;
+  const bytesWritten = await Bun.write(filepath, data);
+
+  let actualBytes: number;
+  try {
+    actualBytes = statSync(filepath).size;
+  } catch (err) {
+    throw new Error(`Image file was not created at ${filepath}`, { cause: err });
+  }
+
+  if (bytesWritten === expectedBytes && actualBytes === expectedBytes) return;
+
+  // The filename is a new UUID, so removing a partial result cannot affect an
+  // existing upload. Do this best-effort; either way the DB insert is skipped.
+  try {
+    unlinkSync(filepath);
+  } catch {
+    // Preserve the original write-validation error below.
+  }
+  throw new Error(
+    `Image file write was incomplete at ${filepath}: expected ${expectedBytes} bytes, wrote ${bytesWritten}, found ${actualBytes}`,
+  );
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -375,7 +406,7 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
 
   const filename = `${id}${storedExtension}`;
   const filepath = join(dir, filename);
-  await Bun.write(filepath, buffer);
+  await writeImageFile(filepath, buffer);
 
   if (isVideo && sidecarVideoCodecs.length > 0) {
     for (const codec of sidecarVideoCodecs) {
@@ -389,7 +420,7 @@ export async function uploadImage(userId: string, file: File, options?: ImageOwn
         onProgress: (progress) => emitTranscodeProgress("transcoding_variant", codec, progress),
       });
       if (!normalized) continue;
-      await Bun.write(videoVariantPath(dir, id, codec), normalized.buffer);
+      await writeImageFile(videoVariantPath(dir, id, codec), normalized.buffer);
     }
   }
 
@@ -482,7 +513,7 @@ export async function uploadOptimizedWebpImage(userId: string, file: File, optio
       return Buffer.from(data);
     });
 
-  await Bun.write(filepath, webpBuffer);
+  await writeImageFile(filepath, webpBuffer);
 
   const derived = await deriveMediaMetadataAndThumbnails(
     userId,
@@ -561,7 +592,7 @@ export async function saveImageFromDataUrl(
   const filepath = join(dir, filename);
 
   const buffer = Buffer.from(base64, "base64");
-  await Bun.write(filepath, buffer);
+  await writeImageFile(filepath, buffer);
 
   const { width, height, hasThumbnail } = await deriveMediaMetadataAndThumbnails(
     userId,
@@ -665,7 +696,7 @@ export async function uploadImages(
         const ext = extname(item.filename || "") || ".bin";
         const filename = `${id}${ext}`;
         const filepath = join(dir, filename);
-        await Bun.write(filepath, item.data);
+        await writeImageFile(filepath, item.data);
         prepared[i] = {
           id,
           filename,
@@ -987,26 +1018,34 @@ function imageFilePaths(dir: string, id: string, filename: string): string[] {
 }
 
 export async function unlinkPaths(paths: readonly string[]): Promise<void> {
+  const failures: string[] = [];
   for (const p of paths) {
     try {
       await unlink(p);
     } catch (err: any) {
       if (err?.code !== "ENOENT") {
-        console.error(`[images] unlink failed ${p}: ${err?.message ?? err}`);
+        failures.push(`${p}: ${err?.message ?? err}`);
       }
     }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Could not delete ${failures.length} image file(s): ${failures.join("; ")}`);
   }
 }
 
 function unlinkPathsSync(paths: readonly string[]): void {
+  const failures: string[] = [];
   for (const p of paths) {
     try {
       unlinkSync(p);
     } catch (err: any) {
       if (err?.code !== "ENOENT") {
-        console.error(`[images] unlink failed ${p}: ${err?.message ?? err}`);
+        failures.push(`${p}: ${err?.message ?? err}`);
       }
     }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Could not delete ${failures.length} image file(s): ${failures.join("; ")}`);
   }
 }
 
