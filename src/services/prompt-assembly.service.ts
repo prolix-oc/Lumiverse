@@ -107,6 +107,7 @@ import * as regexScriptsSvc from "./regex-scripts.service";
 import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 import { rankVectorWorldInfoCandidatesInWorker } from "./world-info-vector-ranking-worker-host";
 import {
+  buildWorldInfoLexicalQueryBatches,
   getWorldInfoVectorCandidateRecallLimit,
   type VectorActivatedEntry,
   type VectorRetrievalTraceEntry,
@@ -4080,6 +4081,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     entries: [],
     candidateTrace: [],
     queryPreview: "",
+    lexicalQueryPreviews: [],
     eligibleCount: 0,
     hitsBeforeThreshold: 0,
     hitsAfterThreshold: 0,
@@ -4121,6 +4123,10 @@ export async function collectVectorActivatedWorldInfoDetailed(
   );
   const queryBuildMs = performance.now() - queryBuildStartedAt;
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
+  const lexicalQueryPreviews = buildWorldInfoLexicalQueryBatches(
+    queryText,
+    eligibleEntries,
+  );
 
   // Check short-TTL cache for rapid dry-run reuse. Hash the complete retrieval
   // snapshot so same-length lore edits, activation fields, index commits, and
@@ -4168,6 +4174,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     const result = {
       ...emptyResult,
       queryPreview: queryText,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
       cap: topK,
@@ -4216,6 +4223,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       const result = {
         ...emptyResult,
         queryPreview: queryText,
+        lexicalQueryPreviews,
         eligibleCount: eligibleEntries.length,
         topK,
         cap: topK,
@@ -4266,7 +4274,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
             const value = await embeddingsSvc.searchWorldBookEntriesHybridWithVector(
               userId,
               worldBookIds[i],
-              queryText,
+              lexicalQueryPreviews.map((batch) => batch.text),
               queryVector,
               candidateLimit,
               cfg.hybrid_weight_mode,
@@ -4334,6 +4342,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       entries: shortlistedEntries,
       candidateTrace,
       queryPreview: queryText,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       hitsBeforeThreshold,
       hitsAfterThreshold,
@@ -4361,6 +4370,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     return {
       ...emptyResult,
       queryPreview: queryText,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
       cap: topK,

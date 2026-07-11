@@ -521,6 +521,7 @@ app.post("/:id/diagnostics", async (c) => {
         entries: [],
         candidateTrace: [],
         queryPreview,
+        lexicalQueryPreviews: [],
         eligibleCount: 0,
         hitsBeforeThreshold: 0,
         hitsAfterThreshold: 0,
@@ -682,6 +683,7 @@ app.post("/:id/diagnostics", async (c) => {
     },
     vector_summary: vectorSummary,
     query_preview: vectorDetail.queryPreview || queryPreview,
+    lexical_query_previews: vectorDetail.lexicalQueryPreviews,
     eligible_entries: isAttached ? selectedEligibleEntries.length : 0,
     retrieval: {
       top_k: vectorDetail.topK,
