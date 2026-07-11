@@ -534,6 +534,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
     getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
   };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  contracts: Readonly<Record<string, number>>;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -3327,6 +3328,8 @@ const spindleApi: RuntimeSpindleAPI = {
       options: options || {},
     });
   },
+
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
 
   registerContextHandler(handler, priority?): void {
     assertMutationAllowed("spindle.registerContextHandler()");

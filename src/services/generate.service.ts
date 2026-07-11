@@ -567,8 +567,18 @@ interface SpindleContext {
   connectionId?: string;
   personaId?: string;
   generationType: string;
+  dryRun?: boolean;
+  userId?: string;
+  cancelGeneration?: boolean;
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   [key: string]: unknown;
+}
+
+class GenerationCancelledByExtensionError extends Error {
+  constructor() {
+    super("Generation cancelled by extension context handler");
+    this.name = "GenerationCancelledByExtension";
+  }
 }
 
 /** Result of assembling + post-processing the prompt pipeline. */
@@ -1233,6 +1243,7 @@ async function runPromptPipeline(opts: {
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
   signal?: AbortSignal;
+  isDryRun?: boolean;
 }): Promise<PromptPipelineResult> {
   // Yield to the event loop before entering the assembly pipeline so a stop
   // clicked in the first few ticks after the generation starts can actually
@@ -1250,13 +1261,19 @@ async function runPromptPipeline(opts: {
     connectionId: opts.connectionId,
     personaId: opts.personaId,
     generationType: opts.generationType,
+    dryRun: opts.isDryRun === true,
+    userId: opts.userId,
   };
   if (contextHandlerChain.count > 0) {
-    spindleContext = (await contextHandlerChain.run(
+    const handled = (await contextHandlerChain.run(
       spindleContext,
       opts.userId,
       opts.signal,
-    )) as SpindleContext;
+    )) as SpindleContext | undefined;
+    if (handled) spindleContext = handled;
+    if (spindleContext.cancelGeneration === true) {
+      throw new GenerationCancelledByExtensionError();
+    }
   }
 
   // Build messages: use explicit messages if provided, otherwise assemble from preset
@@ -2771,9 +2788,9 @@ export async function startGeneration(
           pendingCouncilRetries.delete(generationId);
         }
 
-        // If this was a user-initiated abort (stop request), emit proper events so the
-        // frontend can reset its streaming state and clean up.
-        if (abortController.signal.aborted) {
+        // User aborts and extension-requested cancels both emit stop events so
+        // the frontend resets its streaming state.
+        if (abortController.signal.aborted || err instanceof GenerationCancelledByExtensionError) {
           // Clean up staged message if one was created (sidecar council mode)
           if (stagedMessageId) {
             try {
@@ -2915,6 +2932,7 @@ export async function dryRunGeneration(
     excludeMessageId: input.exclude_message_id,
     targetCharacterId: input.target_character_id,
     signal: input.signal,
+    isDryRun: true,
   });
 
   // Compute token counts for the breakdown
