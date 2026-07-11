@@ -201,6 +201,7 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = "SYSTEM_DISK_LOW",
+  SYSTEM_SMART_ALERT = "SYSTEM_SMART_ALERT",
 
   // Multiplayer rooms (broadcast to the room:{roomId} topic). Peer chat
   // messages and bot stream tokens reuse MESSAGE_SENT / STREAM_TOKEN_RECEIVED /

@@ -42,6 +42,7 @@
     "start": "bun run src/index.ts",
     "build:lancedb:android": "bash scripts/build-lancedb-android.sh",
     "setup": "bun run scripts/setup-wizard.ts",
+    "install:smartctl": "bun run scripts/install-smartctl.ts",
     "runner": "bun run scripts/runner.ts",
     "runner:dev": "bun run scripts/runner.ts -- --dev",
     "start:all": "bun run build:frontend && FRONTEND_DIR=$(cd ../LumiverseFrontend/dist && pwd) bun run start",

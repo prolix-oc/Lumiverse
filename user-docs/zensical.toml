@@ -108,6 +108,7 @@ nav = [
     { "Display Modes" = "customization/display-modes.md" },
   ] },
   { "Settings" = [
+    { "Disk Health & SMART" = "settings/disk-health.md" },
     { "Embeddings" = "settings/embeddings.md" },
     { "Web Search" = "settings/web-search.md" },
     { "Notifications" = "settings/push-notifications.md" },

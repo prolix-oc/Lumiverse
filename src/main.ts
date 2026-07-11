@@ -121,6 +121,12 @@ startVectorizationQueueMaintenance();
 const { startDiskMonitor } = await import("./services/disk-monitor.service");
 startDiskMonitor();
 
+// SMART monitoring is optional: unavailable binaries and inaccessible host
+// devices never prevent startup. When explicitly enabled, root/container
+// deployments can also install smartmontools through a fixed package plan.
+const { initSmartctl } = await import("./services/smartctl.service");
+initSmartctl();
+
 // Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
 
@@ -312,6 +318,8 @@ async function gracefulShutdown(signal: string) {
   stopAutomaticDatabaseMaintenance();
   const { stopDiskMonitor } = await import("./services/disk-monitor.service");
   stopDiskMonitor();
+  const { stopSmartctlMonitor } = await import("./services/smartctl.service");
+  stopSmartctlMonitor();
 
   // 8. Close database (triggers WAL checkpoint)
   const { closeDatabase } = await import("./db/connection");

@@ -32,8 +32,10 @@ import {
   type OperatorDiskWarningStatus,
   type OperatorDnsStatus,
   type OperatorSharpStatus,
+  type OperatorSmartctlStatus,
   type OperatorStatus,
   type SharpSettings,
+  type SmartDriveStatus,
   type TrustedHostEntry,
   type TrustedHostsResponse,
 } from '@/api/operator'
@@ -125,6 +127,27 @@ function formatBytes(bytes: number): string {
 function formatTimestamp(ts: number | null | undefined): string {
   if (!ts) return '—'
   return new Date(ts).toLocaleString()
+}
+
+function formatIsoTimestamp(timestamp: string | null | undefined): string {
+  if (!timestamp) return '—'
+  const value = new Date(timestamp)
+  return Number.isNaN(value.getTime()) ? '—' : value.toLocaleString()
+}
+
+function formatSmartNumber(value: number | null): string {
+  return value == null ? '—' : value.toLocaleString()
+}
+
+function smartStatusTranslationKey(status: SmartDriveStatus): string {
+  const keys: Record<SmartDriveStatus, string> = {
+    ok: 'operator.smartStatusOk',
+    warning: 'operator.smartStatusWarning',
+    failing: 'operator.smartStatusFailing',
+    unavailable: 'operator.smartStatusUnavailable',
+    standby: 'operator.smartStatusStandby',
+  }
+  return keys[status]
 }
 
 function normalizeDatabaseTuning(input: DatabaseTuningSettings): DatabaseTuningSettings {
@@ -434,6 +457,10 @@ export default function OperatorPanel() {
   const [dbMaintenanceSettings, setDbMaintenanceSettings] = useState<DatabaseMaintenanceSettings>({})
   const [diskWarningStatus, setDiskWarningStatus] = useState<OperatorDiskWarningStatus | null>(null)
   const [diskWarningSettings, setDiskWarningSettings] = useState<DiskWarningSettings>({})
+  const [smartctlStatus, setSmartctlStatus] = useState<OperatorSmartctlStatus | null>(null)
+  const [smartctlError, setSmartctlError] = useState<string | null>(null)
+  const [smartctlRefreshing, setSmartctlRefreshing] = useState(false)
+  const [smartctlInstalling, setSmartctlInstalling] = useState(false)
   const [sharpStatus, setSharpStatus] = useState<OperatorSharpStatus | null>(null)
   const [sharpSettings, setSharpSettings] = useState<SharpSettings>({})
   const [dnsStatus, setDnsStatus] = useState<OperatorDnsStatus | null>(null)
@@ -618,6 +645,18 @@ export default function OperatorPanel() {
     }
   }, [])
 
+  const refreshSmartctl = useCallback(async (force = false) => {
+    try {
+      const next = await operatorApi.getSmartctl(force)
+      setSmartctlStatus(next)
+      setSmartctlError(null)
+      return next
+    } catch (err) {
+      setSmartctlError(err instanceof Error ? err.message : t('operator.smartRefreshFailed'))
+      return null
+    }
+  }, [t])
+
   const saveTrustedHosts = useCallback(async (nextConfigured: string[]) => {
     try {
       trustedHostsRequestId.current += 1
@@ -801,6 +840,7 @@ export default function OperatorPanel() {
         refreshSharpSettings(),
         refreshDnsSettings(),
         refreshDiskWarningSettings(),
+        refreshSmartctl(),
       ])
       if (mounted && s) setLoading(false)
       else if (mounted) setLoading(false)
@@ -808,7 +848,7 @@ export default function OperatorPanel() {
     fetchStatus()
     const interval = setInterval(fetchStatus, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshVectorConfig, refreshVectorHealth])
+  }, [refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshSmartctl, refreshStatus, refreshVectorConfig, refreshVectorHealth])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -864,6 +904,7 @@ export default function OperatorPanel() {
       refreshDiskWarningSettings()
       refreshSharpSettings()
       refreshDnsSettings()
+      refreshSmartctl()
       refreshTrustedHosts()
 
       // Re-subscribe to log streaming
@@ -874,7 +915,7 @@ export default function OperatorPanel() {
       clearInterval(disconnectPoll)
       unsub()
     }
-  }, [reconnecting, refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshTrustedHosts])
+  }, [reconnecting, refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshSmartctl, refreshStatus, refreshTrustedHosts])
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -1219,6 +1260,43 @@ export default function OperatorPanel() {
     }
   }, [refreshDatabase])
 
+  const handleRefreshSmartctl = useCallback(async () => {
+    setSmartctlRefreshing(true)
+    try {
+      const next = await refreshSmartctl(true)
+      if (!next) addToast({ type: 'error', message: t('operator.smartRefreshFailed') })
+    } finally {
+      setSmartctlRefreshing(false)
+    }
+  }, [addToast, refreshSmartctl, t])
+
+  const handleInstallSmartctl = useCallback(async () => {
+    setSmartctlInstalling(true)
+    try {
+      const result = await operatorApi.installSmartctl()
+      setSmartctlStatus((prev) => prev ? { ...prev, ...result.status, snapshot: prev.snapshot } : null)
+      if (result.installed) {
+        addToast({ type: 'success', message: t('operator.smartInstallSuccess') })
+        await refreshSmartctl(true)
+      } else {
+        setSmartctlError(result.error ?? t('operator.smartInstallFailed'))
+      }
+    } catch (err) {
+      const body = err instanceof ApiError ? err.body : null
+      if (body && typeof body === 'object' && 'status' in body) {
+        const result = body as { status?: Omit<OperatorSmartctlStatus, 'snapshot'>; error?: string }
+        if (result.status) {
+          setSmartctlStatus((prev) => prev ? { ...prev, ...result.status, snapshot: prev.snapshot } : prev)
+        }
+        setSmartctlError(result.error ?? t('operator.smartInstallFailed'))
+      } else {
+        setSmartctlError(err instanceof Error ? err.message : t('operator.smartInstallFailed'))
+      }
+    } finally {
+      setSmartctlInstalling(false)
+    }
+  }, [addToast, refreshSmartctl, t])
+
   const hostSourceLabel = useCallback(
     (source: TrustedHostEntry['source']) => t(hostSourceKey(source)),
     [t],
@@ -1260,6 +1338,7 @@ export default function OperatorPanel() {
   const maintenanceState = dbStatus?.maintenanceState
   const vacuumDiskWarning = dbStats?.vacuumHasEnoughFreeBytes === false
   const trustedHostsReady = !!trustedHosts
+  const smartSnapshot = smartctlStatus?.snapshot ?? smartctlStatus?.latestSnapshot
 
   return (
     <div className={styles.container}>
@@ -1594,6 +1673,227 @@ export default function OperatorPanel() {
               {!trustedHostsReady ? t('operator.hostsLoadSnapshotHint') : ''}
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Disk Health */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>{t('operator.diskHealth')}</span>
+          <div className={styles.controls}>
+            {smartctlStatus?.availability === 'installable' && (
+              <button
+                className={styles.controlBtnPrimary}
+                disabled={smartctlInstalling || smartctlRefreshing}
+                onClick={handleInstallSmartctl}
+              >
+                {smartctlInstalling ? <Loader2 size={14} className={spinClass} /> : <Download size={14} />}
+                {smartctlInstalling ? t('operator.smartInstalling') : t('operator.smartInstall')}
+              </button>
+            )}
+            <button
+              className={styles.controlBtn}
+              disabled={smartctlRefreshing || smartctlInstalling}
+              onClick={handleRefreshSmartctl}
+            >
+              <RefreshCw size={14} className={smartctlRefreshing ? spinClass : undefined} />
+              {t('operator.smartRefresh')}
+            </button>
+          </div>
+        </div>
+        <div className={styles.sectionBody}>
+          <div className={styles.smartAvailability}>
+            <span className={clsx(styles.smartAvailabilityDot, smartctlStatus?.availability === 'available' ? styles.smartOk : styles.smartUnavailable)} />
+            <span>
+              {smartctlStatus?.binary
+                ? t('operator.smartAvailable', {
+                  version: smartctlStatus.binary.version ? `v${smartctlStatus.binary.version}` : 'smartctl',
+                  path: smartctlStatus.binary.path,
+                })
+                : smartctlStatus?.message ?? t('operator.smartLoading')}
+            </span>
+          </div>
+
+          {smartctlError && <div className={styles.warningBanner}>{smartctlError}</div>}
+          {smartctlStatus?.installPlan && (
+            <span className={styles.fieldHint}>
+              {t('operator.smartInstallCommand', { command: smartctlStatus.installPlan.command.join(' ') })}
+            </span>
+          )}
+          {smartSnapshot?.error && <div className={styles.warningBanner}>{t('operator.smartCheckError', { error: smartSnapshot.error })}</div>}
+
+          {smartSnapshot && !smartSnapshot.error && (
+            <>
+              <span className={styles.fieldHint}>{t('operator.smartLastChecked', { time: formatIsoTimestamp(smartSnapshot.checkedAt) })}</span>
+              {smartSnapshot.drives.length === 0 ? (
+                <div className={styles.disabledHint}>{t('operator.smartNoDrives')}</div>
+              ) : (
+                <div className={styles.smartDriveList}>
+                  {smartSnapshot.drives.map((drive) => {
+                    const ssd = drive.kind === 'ssd' ? drive.ssd : null
+                    const hdd = drive.kind === 'hdd' ? drive.hdd : null
+                    return (
+                    <div className={styles.smartDrive} key={drive.device}>
+                      <div className={styles.smartDriveHeader}>
+                        <div>
+                          <div className={styles.smartDriveName}>{drive.model ?? drive.device}</div>
+                          <div className={styles.dbMono}>{drive.device}{drive.protocol ? ` · ${drive.protocol}` : ''}{drive.kind && drive.kind !== 'unknown' ? ` · ${drive.kind.toUpperCase()}` : ''}</div>
+                        </div>
+                        <span className={clsx(
+                          styles.smartBadge,
+                          drive.status === 'ok' && styles.smartOk,
+                          drive.status === 'warning' && styles.smartWarning,
+                          drive.status === 'failing' && styles.smartFailing,
+                          (drive.status === 'unavailable' || drive.status === 'standby') && styles.smartUnavailable,
+                        )}>
+                          {t(smartStatusTranslationKey(drive.status))}
+                        </span>
+                      </div>
+
+                      <div className={styles.smartMetrics}>
+                        <div className={styles.smartMetric}>
+                          <span>{t('operator.smartTemperature')}</span>
+                          <strong>{drive.temperatureC == null ? '—' : t('operator.smartTemperatureValue', { value: drive.temperatureC })}</strong>
+                        </div>
+                        {hdd?.powerOnHours != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerOnHours')}</span>
+                            <strong>{formatSmartNumber(hdd.powerOnHours)}</strong>
+                          </div>
+                        )}
+                        {hdd?.powerCycles != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerCycles')}</span>
+                            <strong>{formatSmartNumber(hdd.powerCycles)}</strong>
+                          </div>
+                        )}
+                        {hdd?.startStopCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartStartStopCount')}</span>
+                            <strong>{formatSmartNumber(hdd.startStopCount)}</strong>
+                          </div>
+                        )}
+                        {hdd?.loadCycleCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartLoadCycleCount')}</span>
+                            <strong>{formatSmartNumber(hdd.loadCycleCount)}</strong>
+                          </div>
+                        )}
+                        {ssd?.percentageUsed != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartWearUsed')}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.percentageUsed })}</strong>
+                          </div>
+                        )}
+                        {ssd?.percentageRemaining != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartEnduranceRemaining')}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.percentageRemaining })}</strong>
+                          </div>
+                        )}
+                        {ssd?.availableSparePercent != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{ssd.availableSpareThresholdPercent == null
+                              ? t('operator.smartAvailableSpare')
+                              : t('operator.smartAvailableSpareThreshold', { threshold: ssd.availableSpareThresholdPercent })}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.availableSparePercent })}</strong>
+                          </div>
+                        )}
+                        {ssd?.dataWrittenBytes != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartDataWritten')}</span>
+                            <strong>{formatBytes(ssd.dataWrittenBytes)}</strong>
+                          </div>
+                        )}
+                        {ssd?.powerOnHours != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerOnHours')}</span>
+                            <strong>{formatSmartNumber(ssd.powerOnHours)}</strong>
+                          </div>
+                        )}
+                        {ssd?.powerCycles != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerCycles')}</span>
+                            <strong>{formatSmartNumber(ssd.powerCycles)}</strong>
+                          </div>
+                        )}
+                        {ssd?.mediaErrors != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartMediaErrors')}</span>
+                            <strong>{formatSmartNumber(ssd.mediaErrors)}</strong>
+                          </div>
+                        )}
+                        {ssd?.unsafeShutdowns != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartUnsafeShutdowns')}</span>
+                            <strong>{formatSmartNumber(ssd.unsafeShutdowns)}</strong>
+                          </div>
+                        )}
+                        {ssd?.wearLevelingCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartWearLeveling')}</span>
+                            <strong>{formatSmartNumber(ssd.wearLevelingCount)}</strong>
+                          </div>
+                        )}
+                        {ssd?.reservedBlocksUsed != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartReservedBlocksUsed')}</span>
+                            <strong>{formatSmartNumber(ssd.reservedBlocksUsed)}</strong>
+                          </div>
+                        )}
+                        {ssd?.programFailures != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartProgramFailures')}</span>
+                            <strong>{formatSmartNumber(ssd.programFailures)}</strong>
+                          </div>
+                        )}
+                        {ssd?.eraseFailures != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartEraseFailures')}</span>
+                            <strong>{formatSmartNumber(ssd.eraseFailures)}</strong>
+                          </div>
+                        )}
+                        {drive.criticalWarning != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartCriticalWarning')}</span>
+                            <strong>{formatSmartNumber(drive.criticalWarning)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.reallocatedSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{drive.kind === 'ssd' ? t('operator.smartNandReallocated') : t('operator.smartReallocated')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.reallocatedSectors)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.pendingSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPending')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.pendingSectors)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.uncorrectableSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartUncorrectable')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.uncorrectableSectors)}</strong>
+                          </div>
+                        )}
+                      </div>
+
+                      {drive.alertConditions?.length > 0 && (
+                        <div className={styles.warningBanner}>
+                          {drive.alertConditions.map((condition, index) => (
+                            <div key={`${condition.severity}-${condition.message}-${index}`}>{condition.message}</div>
+                          ))}
+                        </div>
+                      )}
+                      {drive.message && <div className={styles.fieldHint}>{drive.message}</div>}
+                    </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 

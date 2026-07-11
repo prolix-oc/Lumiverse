@@ -87,12 +87,15 @@ Navigate to `http://localhost:7860`. On first launch, the setup wizard guides yo
 
 ## First-Run Setup Wizard
 
-The setup wizard runs automatically on first launch. It walks through four steps:
+The setup wizard runs automatically on first launch. It walks through five steps:
 
 1. **Admin Account** — Set a username (default: `admin`) and password (minimum 8 characters)
 2. **Server Port** — Choose a port (default: `7860`)
 3. **Extension Storage** — Set the maximum storage for extensions (default: 500 MB)
-4. **Identity Generation** — Creates `data/lumiverse.identity` (your encryption key) and `data/owner.credentials`
+4. **Disk Health Monitoring** — Optionally install smartmontools for SMART disk health checks
+5. **Identity Generation** — Creates `data/lumiverse.identity` (your encryption key) and `data/owner.credentials`
+
+For manual SMART installation, Linux `sudo` requirements, and an explanation of the reported drive metrics, see [Disk Health & SMART](../settings/disk-health.md).
 
 You can also run the wizard manually:
 

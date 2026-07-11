@@ -10,10 +10,15 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { platform } from "node:os";
 import { join, resolve } from "node:path";
 import { hashPassword } from "../src/crypto/password";
 import { createIdentityFile, bytesToHex } from "../src/crypto/identity";
 import { writeOwnerCredentials } from "../src/crypto/credentials";
+import {
+  getSmartctlStatus,
+  resetSmartctlResolution,
+} from "../src/services/smartctl.service";
 import {
   printBanner,
   printStepHeader,
@@ -50,6 +55,22 @@ function parseStorageInput(input: string): number | null {
   }
 }
 
+function processIsElevated(): boolean {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+async function runSmartctlInstaller(command: string[]): Promise<number> {
+  const proc = Bun.spawn({
+    cmd: command,
+    // The package manager may show its native sudo prompt. No password goes
+    // through Lumiverse; it is handled entirely by the operating system.
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  return await proc.exited;
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -75,7 +96,7 @@ async function main() {
 
   // ─── Step 1: Admin account ─────────────────────────────────────────────
 
-  printStepHeader(1, 4, "Admin Account", "Create the owner account for your Lumiverse instance.");
+  printStepHeader(1, 5, "Admin Account", "Create the owner account for your Lumiverse instance.");
 
   // BetterAuth rejects very short usernames and our macro/URL paths assume a
   // non-trivial identifier.  Validate up-front so a fat-finger doesn't seed
@@ -116,7 +137,7 @@ async function main() {
 
   // ─── Step 2: Server port ───────────────────────────────────────────────
 
-  printStepHeader(2, 4, "Server Port", "The port Lumiverse will listen on.");
+  printStepHeader(2, 5, "Server Port", "The port Lumiverse will listen on.");
 
   let port = 7860;
   const portInput = await askText("Port", { defaultValue: "7860" });
@@ -132,7 +153,7 @@ async function main() {
 
   // ─── Step 3: Extension storage ─────────────────────────────────────────
 
-  printStepHeader(3, 4, "Extension Storage", "Maximum disk budget for Spindle extension data pools.");
+  printStepHeader(3, 5, "Extension Storage", "Maximum disk budget for Spindle extension data pools.");
 
   const defaultStorage = 500 * 1024 * 1024; // 500MB
   const storageInput = await askText("Max extension storage", { defaultValue: "500MB" });
@@ -150,9 +171,59 @@ async function main() {
   console.log("");
   printDivider();
 
-  // ─── Step 4: Generate identity + write config ─────────────────────────
+  // ─── Step 4: Optional SMART support ────────────────────────────────────
 
-  printStepHeader(4, 4, "Generating Identity", "Creating your encryption identity and credentials.");
+  printStepHeader(4, 5, "Disk Health Monitoring", "Install smartmontools so Lumiverse can report physical-drive SMART health.");
+
+  let smartStatus = await getSmartctlStatus();
+  if (smartStatus.binary) {
+    console.log(`    ${theme.success}smartctl detected${theme.reset}${smartStatus.binary.version ? ` ${theme.muted}(v${smartStatus.binary.version})${theme.reset}` : ""}`);
+  } else if (!smartStatus.installPlan) {
+    console.log(`    ${theme.muted}${smartStatus.message}${theme.reset}`);
+  } else {
+    // Default to yes: this is a fixed command from a small allowlist and is
+    // the least-friction way to enable the optional diagnostics feature.
+    const installAnswer = await askText("Install smartmontools now? [Y/n]", { defaultValue: "y" });
+    const wantsInstall = !/^n(?:o)?$/i.test(installAnswer);
+    if (wantsInstall) {
+      const plan = smartStatus.installPlan;
+      let command = [...plan.command];
+      if (plan.requiresElevation) {
+        if (platform() === "win32") {
+          console.log(`    ${theme.warning}Open PowerShell as Administrator, then run:${theme.reset}`);
+          console.log(`    ${theme.muted}${command.join(" ")}${theme.reset}`);
+          console.log(`    ${theme.muted}After it finishes, restart Lumiverse.${theme.reset}`);
+          command = [];
+        } else if (!processIsElevated()) {
+          command = ["sudo", "--", ...command];
+        }
+      }
+
+      if (command.length > 0) {
+        // readline owns stdin for the wizard. Release it before handing the
+        // terminal to sudo/homebrew so its native interaction remains intact.
+        closeInput();
+        console.log(`    ${theme.muted}Running ${plan.manager} installer…${theme.reset}`);
+        const exitCode = await runSmartctlInstaller(command);
+        resetSmartctlResolution();
+        smartStatus = await getSmartctlStatus();
+        if (exitCode === 0 && smartStatus.binary) {
+          console.log(`    ${theme.success}smartctl installed successfully.${theme.reset}`);
+        } else {
+          console.log(`    ${theme.warning}Installation did not complete. SMART monitoring will stay optional.${theme.reset}`);
+        }
+      }
+    } else {
+      console.log(`    ${theme.muted}Skipped. Install later with: bun run install:smartctl${theme.reset}`);
+    }
+  }
+
+  console.log("");
+  printDivider();
+
+  // ─── Step 5: Generate identity + write config ─────────────────────────
+
+  printStepHeader(5, 5, "Generating Identity", "Creating your encryption identity and credentials.");
 
   await printCompletionAnimation();
 
