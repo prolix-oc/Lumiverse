@@ -334,6 +334,7 @@ type BackendProcessRuntimeToHost =
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
   | {
       type: "assemble_prompt";
       requestId: string;
@@ -2958,6 +2959,10 @@ export class WorkerHost {
         break;
       case "council_get_available_lumia_items":
         this.handleCouncilGetAvailableLumiaItems(msg.requestId, msg.userId);
+        break;
+      // ─── Lumia DLC (free tier, read-only) ───────────────────────────
+      case "dlc_get_catalog":
+        this.handleDlcGetCatalog(msg.requestId, msg.userId);
         break;
       // ─── Toast (free tier) ────────────────────────────────────────────
       case "toast_show":
@@ -11524,6 +11529,16 @@ export class WorkerHost {
       const resolvedUserId = this.resolveEffectiveUserId(userId);
       const items = packsSvc.getAllLumiaItems(resolvedUserId);
       this.postToWorker({ type: "response", requestId, result: items });
+    } catch (err) {
+      this.postToWorker({ type: "response", requestId, error: String(err) });
+    }
+  }
+
+  private handleDlcGetCatalog(requestId: string, userId?: string): void {
+    try {
+      const resolvedUserId = this.resolveEffectiveUserId(userId);
+      const catalog = packsSvc.getLumiaDlcCatalog(resolvedUserId);
+      this.postToWorker({ type: "response", requestId, result: catalog });
     } catch (err) {
       this.postToWorker({ type: "response", requestId, error: String(err) });
     }

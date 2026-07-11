@@ -94,6 +94,7 @@ import {
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
+import type { LumiaDlcCatalog } from "../types/pack";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -256,6 +257,7 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
   | {
       type: "assemble_prompt";
       requestId: string;
@@ -527,6 +529,10 @@ type RuntimeHostToWorker =
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+  /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
+  dlc: {
+    getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
+  };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
   registerMessageContentProcessor(
     handler: (ctx: {
@@ -3091,6 +3097,14 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "council_get_available_lumia_items", requestId, userId: options?.userId });
       return result as LumiaItemDTO[];
+    },
+  },
+
+  dlc: {
+    async getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "dlc_get_catalog", requestId, userId: options?.userId });
+      return result as LumiaDlcCatalog;
     },
   },
 
