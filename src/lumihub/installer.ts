@@ -21,6 +21,7 @@ import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { applyCharxModulesAndAssets } from "../services/charx-import.service";
 import { resolveSealedPresetBlocksForInstall, type SealedManifest } from "./sealed-presets";
+import { cloneSafePlainJsonObject } from "./payload-validation";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -763,11 +764,13 @@ function isPlainObject(value: unknown): value is Record<string, any> {
 function extractPresetPassthroughMetadata(
   preset: Record<string, any>,
 ): Record<string, any> {
-  const serializedMetadata = Object.hasOwn(preset, "metadata")
-    ? clonePresetMetadata(preset.metadata, "metadata")
+  const serializedField = readPresetMetadataField(preset, "metadata");
+  const internalField = readPresetMetadataField(preset, "passthroughMetadata");
+  const serializedMetadata = serializedField.present
+    ? clonePresetMetadata(serializedField.value, "metadata")
     : {};
-  const internalMetadata = Object.hasOwn(preset, "passthroughMetadata")
-    ? clonePresetMetadata(preset.passthroughMetadata, "passthroughMetadata")
+  const internalMetadata = internalField.present
+    ? clonePresetMetadata(internalField.value, "passthroughMetadata")
     : {};
 
   // Both forms have appeared in exports. If an export carries both, the
@@ -776,52 +779,23 @@ function extractPresetPassthroughMetadata(
   return { ...serializedMetadata, ...internalMetadata };
 }
 
-function clonePresetMetadata(value: unknown, fieldName: string): Record<string, any> {
-  try {
-    if (!isSafeJsonObject(value)) {
-      throw new Error("not a plain JSON object");
-    }
-    const cloned = JSON.parse(JSON.stringify(value));
-    if (!isSafeJsonObject(cloned)) {
-      throw new Error("clone is not a plain JSON object");
-    }
-    return cloned;
-  } catch {
+function readPresetMetadataField(
+  preset: Record<string, any>,
+  fieldName: "metadata" | "passthroughMetadata",
+): { present: boolean; value?: unknown } {
+  const descriptor = Object.getOwnPropertyDescriptor(preset, fieldName);
+  if (!descriptor) return { present: false };
+  if (!Object.hasOwn(descriptor, "value")) {
     throw new Error(`Preset export has invalid ${fieldName}`);
   }
+  return { present: true, value: descriptor.value };
 }
 
-function isSafeJsonObject(value: unknown): value is Record<string, any> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const seen = new Set<object>();
-  return isSafeJsonValue(value, seen);
-}
-
-function isSafeJsonValue(value: unknown, seen: Set<object>): boolean {
-  if (value === null) return true;
-  if (typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object") return false;
-
-  if (seen.has(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (Array.isArray(value)) {
-    if (prototype !== Array.prototype) return false;
-  } else if (prototype !== Object.prototype && prototype !== null) {
-    return false;
-  }
-
-  seen.add(value);
+function clonePresetMetadata(value: unknown, fieldName: string): Record<string, any> {
   try {
-    for (const key of Object.keys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !Object.hasOwn(descriptor, "value") || !isSafeJsonValue(descriptor.value, seen)) {
-        return false;
-      }
-    }
-    return true;
-  } finally {
-    seen.delete(value);
+    return cloneSafePlainJsonObject(value) as Record<string, any>;
+  } catch {
+    throw new Error(`Preset export has invalid ${fieldName}`);
   }
 }
 

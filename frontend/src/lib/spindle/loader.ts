@@ -52,6 +52,11 @@ import { charactersApi } from '@/api/characters'
 import { messagesApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { yieldToBrowser } from './browser-scheduler'
+import {
+  adoptFrontendSetupTeardown,
+  createFrontendExtensionCleanup,
+  finalizeFrontendLoadFailure,
+} from './frontend-extension-cleanup'
 
 interface LoadedExtension {
   id: string
@@ -282,6 +287,7 @@ function getFrontendBundleUrl(extensionId: string, manifest: SpindleManifest): s
     : getManifestSignature(manifest)
   return `/api/v1/spindle/${extensionId}/frontend?v=${encodeURIComponent(version)}`
 }
+
 
 async function doLoadFrontendExtension(
   extensionId: string,
@@ -990,101 +996,83 @@ async function doLoadFrontendExtension(
       manifest,
     }
 
-    let cleanupComplete = false
-    let teardownInvoked = false
-    const cleanup = (reportTeardownError = false): void => {
-      if (cleanupComplete) return
-      cleanupComplete = true
-
-      // Revoke extension authority before invoking any extension-owned callbacks.
-      loaded.deactivatePresetEditor()
-
-      try {
-        clearPresetEditorSubscriptions()
-      } catch {
-        // no-op
-      }
-      try {
-        destroyAllPlacementsForExtension(extensionId)
-      } catch {
-        // no-op
-      }
-
-      for (const process of Array.from(loaded.activeProcesses.values())) {
-        try {
-          loaded.activeProcesses.delete(process.processId)
-          process.terminal = true
-          void process.cleanup?.()
-          process.messageHandlers.clear()
-          process.stopHandlers.clear()
-          wsClient.send({
-            type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-            extensionId,
-            processId: process.processId,
-            event: 'frontend_unloaded',
-          })
-        } catch {
-          // no-op
-        }
-      }
-
-      if (!teardownInvoked) {
-        teardownInvoked = true
-        try {
-          loaded.teardown?.()
-        } catch (err) {
-          if (reportTeardownError) {
-            console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, err)
-          }
-        }
-      }
-
-      while (loaded.eventUnsubs.length > 0) {
-        const unsubs = loaded.eventUnsubs.splice(0)
-        for (const unsub of unsubs) {
+    const cleanup = createFrontendExtensionCleanup({
+      deactivatePresetEditor: () => loaded.deactivatePresetEditor(),
+      clearPresetEditorSubscriptions,
+      destroyPlacements: () => destroyAllPlacementsForExtension(extensionId),
+      cleanupProcesses: () => {
+        for (const process of Array.from(loaded.activeProcesses.values())) {
           try {
-            unsub()
+            loaded.activeProcesses.delete(process.processId)
+            process.terminal = true
+            void process.cleanup?.()
+            process.messageHandlers.clear()
+            process.stopHandlers.clear()
+            wsClient.send({
+              type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+              extensionId,
+              processId: process.processId,
+              event: 'frontend_unloaded',
+            })
           } catch {
             // no-op
           }
         }
-      }
-
-      try {
-        loaded.context.dom.cleanup()
-      } catch {
-        // no-op
-      }
-      const stopMountSync = loaded.stopMountSync
-      loaded.stopMountSync = undefined
-      try {
-        stopMountSync?.()
-      } catch {
-        // no-op
-      }
-      for (const node of loaded.mountRoots) {
+      },
+      teardown: () => loaded.teardown?.(),
+      reportTeardownError: (error) => {
+        console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, error)
+      },
+      drainEventSubscriptions: () => {
+        while (loaded.eventUnsubs.length > 0) {
+          const unsubs = loaded.eventUnsubs.splice(0)
+          for (const unsub of unsubs) {
+            try {
+              unsub()
+            } catch {
+              // no-op
+            }
+          }
+        }
+      },
+      cleanupDomAndMounts: () => {
         try {
-          node.remove()
+          loaded.context.dom.cleanup()
         } catch {
           // no-op
         }
-      }
-      loaded.mountRoots = []
+        const stopMountSync = loaded.stopMountSync
+        loaded.stopMountSync = undefined
+        try {
+          stopMountSync?.()
+        } catch {
+          // no-op
+        }
+        for (const node of loaded.mountRoots) {
+          try {
+            node.remove()
+          } catch {
+            // no-op
+          }
+        }
+        loaded.mountRoots = []
+      },
+      cleanupRegistries: () => {
+        clearReadyTimeout(loaded)
+        loaded.backendHandlers.clear()
+        loaded.processHandlers.clear()
+        loaded.activeProcesses.clear()
+        unregisterTagInterceptorsByExtension(extensionId)
+        unregisterDisplayResolver(loaded.identifier)
+        removeMessageWidgetsByExtension(extensionId)
+        destroyAllComponentsForExtension(extensionId)
+        clearTabMobilityHandle(extensionId)
 
-      clearReadyTimeout(loaded)
-      loaded.backendHandlers.clear()
-      loaded.processHandlers.clear()
-      loaded.activeProcesses.clear()
-      unregisterTagInterceptorsByExtension(extensionId)
-      unregisterDisplayResolver(loaded.identifier)
-      removeMessageWidgetsByExtension(extensionId)
-      destroyAllComponentsForExtension(extensionId)
-      clearTabMobilityHandle(extensionId)
-
-      if (loadedExtensions.get(extensionId) === loaded) {
-        loadedExtensions.delete(extensionId)
-      }
-    }
+        if (loadedExtensions.get(extensionId) === loaded) {
+          loadedExtensions.delete(extensionId)
+        }
+      },
+    })
     cleanupLoadedExtension = cleanup
 
     loaded = {
@@ -1118,14 +1106,14 @@ async function doLoadFrontendExtension(
       await yieldToBrowser({ when: 'paint' })
       teardownResult = mod.setup(context)
     } catch (err) {
-      cleanupLoadedExtension?.()
+      finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: false })
       throw err
     }
     if (!currentGeneration()) {
-      if (typeof teardownResult === 'function') {
-        loaded.teardown = teardownResult as () => void
-      }
-      cleanupLoadedExtension?.()
+      finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, {
+        superseded: true,
+        teardownResult,
+      })
       return
     }
 
@@ -1135,10 +1123,12 @@ async function doLoadFrontendExtension(
     if (isPromiseLike(teardownResult)) {
       void Promise.resolve(teardownResult)
         .then((resolved) => {
-          if (!isCurrentLoadedExtension(loaded)) return
-          if (typeof resolved === 'function') {
-            loaded.teardown = resolved as () => void
-          }
+          adoptFrontendSetupTeardown(
+            loaded,
+            resolved,
+            isCurrentLoadedExtension(loaded),
+            (error) => console.error(`[Spindle] Async setup teardown error for ${loaded.identifier}:`, error),
+          )
         })
         .catch((err) => {
           if (!isCurrentLoadedExtension(loaded)) return

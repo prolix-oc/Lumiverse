@@ -157,4 +157,41 @@ describe("LumiHub preset installer metadata", () => {
     expect(validation.ok).toBe(false);
     if (!validation.ok) expect(validation.error).toContain("passthroughMetadata");
   });
+
+  test("rejects accessor-backed metadata before it can execute", async () => {
+    const preset = {
+      name: "Accessor-backed",
+      blocks: [],
+    } as Record<string, unknown>;
+    Object.defineProperty(preset, "passthroughMetadata", {
+      enumerable: true,
+      get() {
+        throw new Error("metadata getter executed");
+      },
+    });
+
+    const validation = validateInstallPresetPayload(installPayload("hub-4", preset));
+    expect(validation.ok).toBe(false);
+
+    const result = await installPreset("request-5", installPayload("hub-4", preset));
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("passthroughMetadata");
+  });
+
+  test("rejects hidden metadata serialization hooks", () => {
+    const metadata = {
+      agentic_preset_composer: { mode: "single" },
+    };
+    Object.defineProperty(metadata, "toJSON", {
+      enumerable: false,
+      value: () => ({ injected: true }),
+    });
+
+    const validation = validateInstallPresetPayload(installPayload("hub-5", {
+      name: "Hidden hook",
+      blocks: [],
+      passthroughMetadata: metadata,
+    }));
+    expect(validation.ok).toBe(false);
+  });
 });

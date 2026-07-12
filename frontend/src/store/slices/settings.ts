@@ -6,6 +6,7 @@ import { BASE_URL } from '@/api/client'
 import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
   normalizeConnectionsOrder,
@@ -160,6 +161,7 @@ export function setSettingsPersistenceScope(userId: string | null): void {
 }
 
 let settingsSelectionAbort: AbortController | null = null
+const settingsLoadGeneration = createSettingsLoadGenerationGuard()
 
 function persistBatch(batch: Record<string, any>): Promise<void> {
   const generation = persistenceGeneration
@@ -791,6 +793,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
 
   loadSettings: async () => {
+    const loadGeneration = settingsLoadGeneration.begin()
+    const isCurrentLoad = () => settingsLoadGeneration.isCurrent(loadGeneration)
     settingsSelectionAbort?.abort()
     const selectionAbort = new AbortController()
     settingsSelectionAbort = selectionAbort
@@ -800,7 +804,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     try {
       selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
       const rows = await settingsApi.getAll()
-      if (loadGeneration !== settingsLoadGeneration) return
+      if (!isCurrentLoad()) return
       const patch: Record<string, any> = {}
       const defaults = get()
       const pendingImageGenerationPatch = {
@@ -815,6 +819,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // no UI setter; wipe it from the DB on load so it stops resolving to a
       // preset behind the user's back.
       if (rows.some((r) => r.key === 'activeLumiPresetId')) {
+        if (!isCurrentLoad()) return
         settingsApi.delete('activeLumiPresetId').catch(() => {})
       }
       for (const row of rows) {
@@ -838,6 +843,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         }
       }
 
+      if (!isCurrentLoad()) return
       // Migration: discard old ThemeConfig shape (has baseColors but no accent)
       if (patch.theme && 'baseColors' in patch.theme && !('accent' in patch.theme)) {
         patch.theme = null
@@ -889,12 +895,16 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         }
       }
       const requestedActiveLoomPresetId = patch.activeLoomPresetId as string | null | undefined
+      if (!isCurrentLoad()) return
       delete patch.activeLoomPresetId
       if (Object.keys(patch).length > 0) {
         set(patch as any)
+        if (!isCurrentLoad()) return
       }
       if (requestedActiveLoomPresetId !== undefined && selection) {
+        if (!isCurrentLoad()) return
         await selection.transition(requestedActiveLoomPresetId)
+        if (!isCurrentLoad()) return
       }
 
       // Reorder profile slices to match persisted connectionsOrder. Without
@@ -902,6 +912,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // ConnectionSelect, etc.) keep the backend order until the user drags
       // something in the panel — which is the visible divergence C3 found.
       if (patch.connectionsOrder) {
+        if (!isCurrentLoad()) return
         const order = patch.connectionsOrder as ConnectionsOrder
         const args = deriveReorderArgs(order, {
           llm: get().profiles,
@@ -909,22 +920,37 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           stt: get().sttProfiles,
           tts: get().ttsProfiles,
         })
-        if (args.llm) get().applyProfileOrder(args.llm)
-        if (args.imageGen) get().applyImageGenProfileOrder(args.imageGen)
-        if (args.stt) get().applySttProfileOrder(args.stt)
-        if (args.tts) get().applyTtsProfileOrder(args.tts)
+        if (args.llm) {
+          if (!isCurrentLoad()) return
+          get().applyProfileOrder(args.llm)
+        }
+        if (args.imageGen) {
+          if (!isCurrentLoad()) return
+          get().applyImageGenProfileOrder(args.imageGen)
+        }
+        if (args.stt) {
+          if (!isCurrentLoad()) return
+          get().applySttProfileOrder(args.stt)
+        }
+        if (args.tts) {
+          if (!isCurrentLoad()) return
+          get().applyTtsProfileOrder(args.tts)
+        }
       }
       if (migratedCharacterFilterTab) {
+        if (!isCurrentLoad()) return
         persistKey('filterTab', 'characters')
       }
 
       // Full settings are now authoritative. Queue recovered bridge values
       // through the same serialized persistence path as normal edits; a bridged
       // image-generation row still waits for profile reconciliation when needed.
+      if (!isCurrentLoad()) return
       set({ fullSettingsLoaded: true })
       if (pendingKeys) {
         for (const [key, value] of Object.entries(pendingKeys)) {
           if (!DATA_KEYS.has(key) || key === 'imageGeneration') continue
+          if (!isCurrentLoad()) return
           persistKey(key, patch[key] ?? value)
         }
       }
@@ -939,16 +965,19 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           || (get().imageGenProfilesLoaded && hasPendingImageGeneration)
         )
       ) {
+        if (!isCurrentLoad()) return
         persistKey('imageGeneration', patch.imageGeneration)
       }
     } catch (err) {
-      console.error('[settings] Failed to load settings:', err)
+      if (isCurrentLoad()) {
+        console.error('[settings] Failed to load settings:', err)
+      }
     } finally {
       selection?.cancel()
       if (settingsSelectionAbort === selectionAbort) {
         settingsSelectionAbort = null
       }
-      if (loadGeneration === settingsLoadGeneration) {
+      if (isCurrentLoad())
         set({ settingsLoaded: true })
       }
     }
