@@ -2051,19 +2051,30 @@ export default function LoomBuilder({
     e.target.value = ''
   }, [importFromFile, importFromST])
 
+  const presetEditorToolbar = presetEditorToolbarItems.some((item) => item.visible) ? (
+    <div className={s.extensionToolbar}>
+      {presetEditorToolbarItems.filter((item) => item.visible).map((item) => (
+        <SpindlePresetEditorToolbarItem key={item.id} item={item} />
+      ))}
+    </div>
+  ) : null
+
   // Edit view
   if (activePresetEditorTab === 'preset' && view === 'edit' && editingBlock) {
     return (
-      <BlockEditor
-        block={editingBlock}
-        blocks={activePreset?.blocks ?? []}
-        promptVariables={activePreset?.promptVariables ?? {}}
-        onSave={handleEditSave}
-        onBack={() => { setView('list'); setEditingBlock(null) }}
-        availableMacros={availableMacros}
-        refreshMacros={refreshMacros}
-        compact={compact}
-      />
+      <>
+        {presetEditorToolbar}
+        <BlockEditor
+          block={editingBlock}
+          blocks={activePreset?.blocks ?? []}
+          promptVariables={activePreset?.promptVariables ?? {}}
+          onSave={handleEditSave}
+          onBack={() => { setView('list'); setEditingBlock(null) }}
+          availableMacros={availableMacros}
+          refreshMacros={refreshMacros}
+          compact={compact}
+        />
+      </>
     )
   }
 
@@ -2129,13 +2140,7 @@ export default function LoomBuilder({
           )}
         </div>
 
-        {presetEditorToolbarItems.some((item) => item.visible) && (
-          <div className={s.extensionToolbar}>
-            {presetEditorToolbarItems.filter((item) => item.visible).map((item) => (
-              <SpindlePresetEditorToolbarItem key={item.id} item={item} />
-            ))}
-          </div>
-        )}
+        {presetEditorToolbar}
 
         {presetEditorTabs.length > 0 && (
           <div className={s.extensionTabBar} role="tablist" aria-label={lb('editorTabs.ariaLabel')}>

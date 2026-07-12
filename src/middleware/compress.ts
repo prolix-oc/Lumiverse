@@ -53,6 +53,17 @@ function negotiate(header: string): Encoding | null {
   return best;
 }
 
+function appendVary(headers: Headers, field: string): void {
+  const existing = headers.get("Vary");
+  if (!existing) {
+    headers.set("Vary", field);
+    return;
+  }
+  const fields = existing.split(",").map((value) => value.trim());
+  if (fields.includes("*") || fields.some((value) => value.toLowerCase() === field.toLowerCase())) return;
+  headers.set("Vary", [...fields, field].join(", "));
+}
+
 /** Pipe a web ReadableStream through the chosen compressor. */
 function compressStream(body: ReadableStream, encoding: Encoding): ReadableStream {
   if (encoding === "br") {
@@ -96,6 +107,6 @@ export function compress() {
     c.res = new Response(compressStream(res.body, encoding), res);
     c.res.headers.set("Content-Encoding", encoding);
     c.res.headers.delete("Content-Length");
-    c.res.headers.append("Vary", "Accept-Encoding");
+    appendVary(c.res.headers, "Accept-Encoding");
   });
 }

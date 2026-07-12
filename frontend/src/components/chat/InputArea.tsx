@@ -942,8 +942,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setOpenPopover(null)
     setPromptVariablesLoading(true)
     try {
-      const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId)
-      const preset = await presetsApi.get(activeLoomPresetId)
+      const presetId = activeLoomPresetId
+      const hydration = presetSaveCoordinator.beginHydration(presetId)
+      const preset = await presetsApi.get(presetId)
+      if (useStore.getState().activeLoomPresetId !== presetId) return
       setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
@@ -955,7 +957,11 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [activeLoomPresetId, promptVariablesLoading, t])
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
-    if (!promptVariablesPreset) return
+    if (!promptVariablesPreset || useStore.getState().activeLoomPresetId !== promptVariablesPreset.id) {
+      setPromptVariablesModalOpen(false)
+      setPromptVariablesPreset(null)
+      return
+    }
     const updated = presetSaveCoordinator.mutate(
       promptVariablesPreset.id,
       promptVariablesPreset,

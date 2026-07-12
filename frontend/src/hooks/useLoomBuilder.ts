@@ -7,7 +7,7 @@ import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
-import { presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
+import { flushPresetForGeneration, presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -122,13 +122,13 @@ export function useLoomBuilder() {
   const createPreset = useCallback(async (name: string, description?: string) => {
     setIsLoading(true)
     try {
-      const previousPresetId = activePresetRef.current?.id
-      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
+      const previousPresetId = activePresetRef.current?.id ?? activeLoomPresetId
+      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       const loom = createNewLoomPreset(name, description)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
+      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
@@ -139,13 +139,13 @@ export function useLoomBuilder() {
     } finally {
       setIsLoading(false)
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+  }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
 
   const flushPendingPreset = useCallback(async (): Promise<void> => {
-    const presetId = activePresetRef.current?.id
+    const presetId = activePresetRef.current?.id ?? activeLoomPresetId
     if (!presetId) return
-    await presetSaveCoordinator.flush(presetId)
-  }, [])
+    await flushPresetForGeneration(presetId)
+  }, [activeLoomPresetId])
 
   // Keep this mounted editor synchronized when another owner (the prompt
   // variable modal or a Spindle scoped helper) updates the shared draft.
@@ -288,7 +288,7 @@ export function useLoomBuilder() {
 
   // Delete a preset
   const deletePreset = useCallback(async (presetId: string) => {
-    await presetSaveCoordinator.flush(presetId)
+    await flushPresetForGeneration(presetId)
     await presetsApi.delete(presetId)
     presetSaveCoordinator.remove(presetId)
     await refreshRegistry()
@@ -311,10 +311,10 @@ export function useLoomBuilder() {
   const duplicatePreset = useCallback(async (presetId: string, newName: string) => {
     setIsLoading(true)
     try {
-      await presetSaveCoordinator.flush(presetId)
+      await flushPresetForGeneration(presetId)
       const hydration = presetSaveCoordinator.beginHydration(presetId)
       presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
-      await presetSaveCoordinator.flush(presetId)
+      await flushPresetForGeneration(presetId)
       const source = presetSaveCoordinator.getDraft(presetId)
       if (!source) throw new Error('Preset disappeared while preparing its duplicate')
       const copy = createNewLoomPreset(newName)
@@ -334,7 +334,7 @@ export function useLoomBuilder() {
       const created = await presetsApi.create(marshalPreset(copy))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      await presetSaveCoordinator.flush(presetId)
+      await flushPresetForGeneration(presetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
@@ -454,14 +454,14 @@ export function useLoomBuilder() {
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
     try {
-      const previousPresetId = activePresetRef.current?.id
-      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
+      const previousPresetId = activePresetRef.current?.id ?? activeLoomPresetId
+      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
       const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
+      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
@@ -497,7 +497,7 @@ export function useLoomBuilder() {
     } finally {
       setIsLoading(false)
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+  }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
 
   // Import from legacy preset JSON
   const importFromST = useCallback(async (stData: any, fileName: string) => {

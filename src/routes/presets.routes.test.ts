@@ -48,7 +48,7 @@ describe("preset cache validators", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(first.headers.get("etag")).not.toBe(second.headers.get("etag"));
-    expect(first.headers.get("vary")).toBe("Cookie");
+    expect(first.headers.get("vary")).toBe("Cookie, Accept-Encoding");
   });
 
   test("invalidates a full preset ETag when its cache revision changes", async () => {
@@ -57,6 +57,13 @@ describe("preset cache validators", () => {
     const etag = first.headers.get("etag");
     expect(first.status).toBe(200);
     expect(etag).not.toBeNull();
+    expect(etag).toStartWith('W/"');
+    const notModified = await app.request("http://localhost/preset-1", {
+      headers: { "x-test-user": "u1", "if-none-match": etag!.slice(2) },
+    });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get("etag")).toBe(etag);
+    expect(notModified.headers.get("vary")).toBe("Cookie, Accept-Encoding");
 
     getDb().run("UPDATE presets SET cache_revision = 1 WHERE id = ?", ["preset-1"]);
     const second = await app.request("http://localhost/preset-1", {
@@ -64,6 +71,6 @@ describe("preset cache validators", () => {
     });
     expect(second.status).toBe(200);
     expect(second.headers.get("etag")).not.toBe(etag);
-    expect(second.headers.get("vary")).toBe("Cookie");
+    expect(second.headers.get("vary")).toBe("Cookie, Accept-Encoding");
   });
 });
