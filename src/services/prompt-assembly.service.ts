@@ -111,6 +111,7 @@ import {
   getWorldInfoVectorCandidateRecallLimit,
   type VectorActivatedEntry,
   type VectorRetrievalTraceEntry,
+  type WorldInfoVectorQueryScope,
   type VectorWorldInfoRetrievalResult,
 } from "./world-info-vector-ranking";
 import {
@@ -1602,6 +1603,7 @@ export async function assemblePrompt(
     ctx.userId,
     messages,
     ctx.chatId,
+    worldInfoSettings,
   );
   const currentWorldInfoEntryIds = new Set(wiEntries.map((entry) => entry.id));
   let vectorActivated = ctx.precomputedVectorEntries
@@ -1619,6 +1621,7 @@ export async function assemblePrompt(
         wiEntries,
         messages,
         ctx.signal,
+        worldInfoSettings,
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
@@ -3909,41 +3912,91 @@ export function mergeActivatedWorldInfoEntries(
   };
 }
 
-function truncateToContextSize(text: string, maxTokens: number): string {
+function truncateToContextSizeWithStatus(
+  text: string,
+  maxTokens: number,
+): { text: string; truncated: boolean } {
   const maxChars = maxTokens * 3;
-  if (text.length <= maxChars) return text;
-  return text.slice(-maxChars);
+  if (text.length <= maxChars) return { text, truncated: false };
+  return { text: text.slice(-maxChars), truncated: true };
 }
 
-async function buildWorldInfoVectorQueryPreview(
+function truncateToContextSize(text: string, maxTokens: number): string {
+  return truncateToContextSizeWithStatus(text, maxTokens).text;
+}
+
+const WORLD_INFO_VECTOR_QUERY_MAX_TOKENS = 8000;
+
+export async function buildWorldInfoVectorQuery(
   messages: Message[],
-  contextSize: number,
+  globalScanDepth: number | null,
   env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
-): Promise<string> {
-  const queryMessages = messages
-    .filter((m) => !m.extra?.hidden && m.content.trim().length > 0)
-    .slice(-Math.max(1, contextSize));
+): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
+  const visibleMessages = messages.filter(
+    (m) => !m.extra?.hidden && m.content.trim().length > 0,
+  );
+  const queryMessages = globalScanDepth === null
+    ? visibleMessages
+    : visibleMessages.slice(-globalScanDepth);
   const parts = await Promise.all(queryMessages.map(async (m) => {
     const sanitized = await resolveAndSanitizeForVectorization(stripReasoningTags(m.content), env, reasoningStrip);
     return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
   }));
-  return truncateToContextSize(parts.join("\n").trim(), 8000);
+  const truncated = truncateToContextSizeWithStatus(
+    parts.join("\n").trim(),
+    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  );
+  return {
+    queryPreview: truncated.text,
+    queryScope: {
+      configuredScanDepth: globalScanDepth,
+      visibleMessagesAvailable: visibleMessages.length,
+      messagesSelected: queryMessages.length,
+      maxTokens: WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+      tokenTruncated: truncated.truncated,
+    },
+  };
+}
+
+function resolveWorldInfoVectorSettings(
+  userId: string,
+  settingsInput?: Partial<WorldInfoSettings>,
+): WorldInfoSettings {
+  if (settingsInput !== undefined) {
+    return normalizeWorldInfoSettings(settingsInput);
+  }
+  const stored = settingsSvc.getSetting(userId, "worldInfoSettings")?.value as
+    | Partial<WorldInfoSettings>
+    | undefined;
+  return normalizeWorldInfoSettings(stored);
+}
+
+export async function getWorldInfoVectorQueryDetails(
+  userId: string,
+  messages: Message[],
+  chatId?: string,
+  settingsInput?: Partial<WorldInfoSettings>,
+): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  const env = chatId ? buildMacroEnvForChat(userId, chatId) : null;
+  return buildWorldInfoVectorQuery(
+    messages,
+    worldInfoSettings.globalScanDepth,
+    env,
+    getReasoningStripOptions(userId),
+  );
 }
 
 export async function getWorldInfoVectorQueryPreview(
   userId: string,
   messages: Message[],
   chatId?: string,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<string> {
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  const env = chatId ? buildMacroEnvForChat(userId, chatId) : null;
-  return buildWorldInfoVectorQueryPreview(
-    messages,
-    cfg.preferred_context_size || 3,
-    env,
-    getReasoningStripOptions(userId),
-  );
+  return (
+    await getWorldInfoVectorQueryDetails(userId, messages, chatId, settingsInput)
+  ).queryPreview;
 }
 
 function isVectorEligibleWorldInfoEntry(
@@ -3970,6 +4023,7 @@ interface VectorWiCacheFingerprintInput {
   worldBookIds: string[];
   entries: WorldBookEntryModel[];
   queryText: string;
+  queryScope: WorldInfoVectorQueryScope;
   embeddingConfig: embeddingsSvc.EmbeddingConfigWithStatus;
   worldBookVectorSettings: WorldBookVectorSettings;
   vectorStoreConfig: VectorStoreConfig;
@@ -4002,6 +4056,7 @@ function buildVectorWiCacheFingerprint(input: VectorWiCacheFingerprintInput): st
     chatId: input.chatId,
     worldBookIds: [...input.worldBookIds].sort(),
     queryText: input.queryText,
+    queryScope: input.queryScope,
     embeddingConfig: input.embeddingConfig,
     worldBookVectorSettings: input.worldBookVectorSettings,
     vectorStoreConfig: input.vectorStoreConfig,
@@ -4075,12 +4130,20 @@ export async function collectVectorActivatedWorldInfoDetailed(
   entries: WorldBookEntryModel[],
   messages: Message[],
   signal?: AbortSignal,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const startedAt = performance.now();
   const emptyResult: VectorWorldInfoRetrievalResult = {
     entries: [],
     candidateTrace: [],
     queryPreview: "",
+    queryScope: {
+      configuredScanDepth: null,
+      visibleMessagesAvailable: 0,
+      messagesSelected: 0,
+      maxTokens: WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+      tokenTruncated: false,
+    },
     lexicalQueryPreviews: [],
     eligibleCount: 0,
     hitsBeforeThreshold: 0,
@@ -4115,9 +4178,10 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const topK = Math.max(1, worldBookVectorSettings.retrievalTopK || cfg.retrieval_top_k || 4);
   const queryBuildStartedAt = performance.now();
   const env = buildMacroEnvForChat(userId, chatId);
-  const queryText = await buildWorldInfoVectorQueryPreview(
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  const { queryPreview: queryText, queryScope } = await buildWorldInfoVectorQuery(
     messages,
-    cfg.preferred_context_size || 3,
+    worldInfoSettings.globalScanDepth,
     env,
     getReasoningStripOptions(userId),
   );
@@ -4137,6 +4201,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     worldBookIds,
     entries,
     queryText,
+    queryScope,
     embeddingConfig: cfg,
     worldBookVectorSettings,
     vectorStoreConfig: getResolvedVectorStoreConfig(),
@@ -4174,6 +4239,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     const result = {
       ...emptyResult,
       queryPreview: queryText,
+      queryScope,
       lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
@@ -4223,6 +4289,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       const result = {
         ...emptyResult,
         queryPreview: queryText,
+        queryScope,
         lexicalQueryPreviews,
         eligibleCount: eligibleEntries.length,
         topK,
@@ -4342,6 +4409,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       entries: shortlistedEntries,
       candidateTrace,
       queryPreview: queryText,
+      queryScope,
       lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       hitsBeforeThreshold,
@@ -4370,6 +4438,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
     return {
       ...emptyResult,
       queryPreview: queryText,
+      queryScope,
       lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
@@ -4397,6 +4466,7 @@ export async function collectVectorActivatedWorldInfo(
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
   signal?: AbortSignal,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<VectorActivatedEntry[]> {
   const result = await collectVectorActivatedWorldInfoDetailed(
     userId,
@@ -4405,6 +4475,7 @@ export async function collectVectorActivatedWorldInfo(
     entries,
     messages,
     signal,
+    settingsInput,
   );
   return result.entries;
 }
@@ -4466,6 +4537,8 @@ async function computeActivatedWorldInfoForChat(
     wiSources.worldBookIds,
     wiSources.entries,
     messages,
+    undefined,
+    worldInfoSettings,
   );
   return mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,

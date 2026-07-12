@@ -530,6 +530,13 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
       `Rerank cutoff: ${formatDiagnosticNumber(diagnostics.embeddings.rerank_cutoff)}`,
       `Ready: ${diagnostics.embeddings.ready}`,
       '',
+      'WORLD-BOOK QUERY SCOPE',
+      `Global scan depth: ${diagnostics.query_scope.configured_scan_depth ?? 'Unlimited'}`,
+      `Visible messages available: ${diagnostics.query_scope.visible_messages_available}`,
+      `Vector messages selected: ${diagnostics.query_scope.vector_messages_selected}`,
+      `Vector query token limit: ${diagnostics.query_scope.max_tokens}`,
+      `Vector query token-truncated: ${diagnostics.query_scope.token_truncated ? 'Yes' : 'No'}`,
+      '',
       'FINAL WORLD INFO STATS',
       `Total candidates: ${diagnostics.stats.totalCandidates}`,
       `Activated before budget: ${diagnostics.stats.activatedBeforeBudget}`,
@@ -974,6 +981,26 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.worldBookVectorization')}</span>
                         <span className={styles.factValue}>{diagnostics.embeddings.vectorize_world_books ? t('worldBookDiagnostics.on') : t('worldBookDiagnostics.off')}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.globalScanDepth')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.configured_scan_depth ?? t('worldBookDiagnostics.unlimited')}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.visibleMessagesAvailable')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.visible_messages_available}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorMessagesSelected')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.vector_messages_selected}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorQueryTokenLimit')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.max_tokens}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorQueryTruncated')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.token_truncated ? t('worldBookDiagnostics.yes') : t('worldBookDiagnostics.no')}</span>
                       </div>
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.similarityThreshold')}</span>

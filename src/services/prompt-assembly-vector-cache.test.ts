@@ -6,6 +6,7 @@ import { __vectorWiCacheTest } from "./prompt-assembly.service";
 import type { VectorStoreConfig } from "./vector-store-config.service";
 import type { WorldBookVectorSettings } from "./world-book-vector-settings.service";
 import type { VectorWorldInfoRetrievalResult } from "./world-info-vector-ranking";
+import type { WorldInfoVectorQueryScope } from "./world-info-vector-ranking";
 
 function entry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
   return {
@@ -61,6 +62,7 @@ interface FingerprintInput {
   worldBookIds: string[];
   entries: WorldBookEntry[];
   queryText: string;
+  queryScope: WorldInfoVectorQueryScope;
   embeddingConfig: EmbeddingConfigWithStatus;
   worldBookVectorSettings: WorldBookVectorSettings;
   vectorStoreConfig: VectorStoreConfig;
@@ -73,6 +75,13 @@ function fingerprintInput(): FingerprintInput {
     worldBookIds: ["book-1"],
     entries: [entry()],
     queryText: "where is alpha",
+    queryScope: {
+      configuredScanDepth: 4,
+      visibleMessagesAvailable: 10,
+      messagesSelected: 4,
+      maxTokens: 8000,
+      tokenTruncated: false,
+    },
     embeddingConfig: {
       enabled: true,
       provider: "openai" as const,
@@ -136,6 +145,13 @@ function retrievalResult(): VectorWorldInfoRetrievalResult {
     }],
     candidateTrace: [],
     queryPreview: "where is alpha",
+    queryScope: {
+      configuredScanDepth: 4,
+      visibleMessagesAvailable: 10,
+      messagesSelected: 4,
+      maxTokens: 8000,
+      tokenTruncated: false,
+    },
     lexicalQueryPreviews: [],
     eligibleCount: 1,
     hitsBeforeThreshold: 1,
@@ -178,6 +194,7 @@ describe("vector world-info retrieval cache", () => {
       (input) => { input.embeddingConfig.has_api_key = false; },
       (input) => { input.vectorStoreConfig = { provider: "milvus", milvus: { address: "127.0.0.1:19530" } }; },
       (input) => { input.worldBookVectorSettings.chunkTargetTokens = 421; },
+      (input) => { input.queryScope.configuredScanDepth = 5; },
     ];
 
     for (const mutate of mutations) {

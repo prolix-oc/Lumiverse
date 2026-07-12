@@ -144,10 +144,19 @@ export interface VectorWorldInfoTimingBreakdown {
   totalMs: number;
 }
 
+export interface WorldInfoVectorQueryScope {
+  configuredScanDepth: number | null;
+  visibleMessagesAvailable: number;
+  messagesSelected: number;
+  maxTokens: number;
+  tokenTruncated: boolean;
+}
+
 export interface VectorWorldInfoRetrievalResult {
   entries: VectorActivatedEntry[];
   candidateTrace: VectorRetrievalTraceEntry[];
   queryPreview: string;
+  queryScope: WorldInfoVectorQueryScope;
   lexicalQueryPreviews: WorldInfoLexicalQueryBatch[];
   eligibleCount: number;
   hitsBeforeThreshold: number;

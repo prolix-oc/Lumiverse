@@ -99,6 +99,17 @@ export interface WorldBookDiagnostics {
   };
   vector_summary: WorldBookVectorSummary;
   query_preview: string;
+  query_scope: {
+    configured_scan_depth: number | null;
+    visible_messages_available: number;
+    vector_messages_selected: number;
+    max_tokens: number;
+    token_truncated: boolean;
+  };
+  lexical_query_previews: Array<{
+    kind: "anchors" | "mixed" | "topical";
+    text: string;
+  }>;
   eligible_entries: number;
   retrieval: {
     top_k: number;
