@@ -9,7 +9,7 @@ import { parsePagination } from "../services/pagination";
 import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
 import {
   collectVectorActivatedWorldInfoDetailed,
-  getWorldInfoVectorQueryPreview,
+  getWorldInfoVectorQueryDetails,
   mergeActivatedWorldInfoEntries,
 } from "../services/prompt-assembly.service";
 import {
@@ -477,14 +477,20 @@ app.post("/:id/diagnostics", async (c) => {
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: embeddings.retrieval_top_k,
   });
-  const queryPreview = await getWorldInfoVectorQueryPreview(userId, messages, chat.id);
+  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const queryDetails = await getWorldInfoVectorQueryDetails(
+    userId,
+    messages,
+    chat.id,
+    worldInfoSettings,
+  );
+  const queryPreview = queryDetails.queryPreview;
   const blockerMessages: string[] = [];
 
   if (!isAttached) {
     blockerMessages.push("This world book is not attached to the active group lorebook scope, active persona, global world books, or this chat's world books.");
   }
 
-  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const wiSources = collectWorldInfoSources(
     userId,
@@ -516,11 +522,20 @@ app.post("/:id/diagnostics", async (c) => {
       });
 
   const vectorDetail = isAttached
-    ? await collectVectorActivatedWorldInfoDetailed(userId, chat.id, wiSources.worldBookIds, wiSources.entries, messages)
+    ? await collectVectorActivatedWorldInfoDetailed(
+        userId,
+        chat.id,
+        wiSources.worldBookIds,
+        wiSources.entries,
+        messages,
+        undefined,
+        worldInfoSettings,
+      )
       : {
         entries: [],
         candidateTrace: [],
         queryPreview,
+        queryScope: queryDetails.queryScope,
         lexicalQueryPreviews: [],
         eligibleCount: 0,
         hitsBeforeThreshold: 0,
@@ -683,6 +698,13 @@ app.post("/:id/diagnostics", async (c) => {
     },
     vector_summary: vectorSummary,
     query_preview: vectorDetail.queryPreview || queryPreview,
+    query_scope: {
+      configured_scan_depth: vectorDetail.queryScope.configuredScanDepth,
+      visible_messages_available: vectorDetail.queryScope.visibleMessagesAvailable,
+      vector_messages_selected: vectorDetail.queryScope.messagesSelected,
+      max_tokens: vectorDetail.queryScope.maxTokens,
+      token_truncated: vectorDetail.queryScope.tokenTruncated,
+    },
     lexical_query_previews: vectorDetail.lexicalQueryPreviews,
     eligible_entries: isAttached ? selectedEligibleEntries.length : 0,
     retrieval: {

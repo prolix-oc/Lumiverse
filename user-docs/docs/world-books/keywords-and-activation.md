@@ -100,7 +100,7 @@ These settings (in **Settings > World Info**) apply to all entries:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Global Scan Depth** | Unlimited | Default scan depth for entries without a custom scan depth |
+| **Global Scan Depth** | Unlimited | Number of recent messages searched for both keyword matching and vector retrieval; per-entry overrides affect keyword matching only |
 | **Max Recursion Passes** | 3 | How many times keywords in activated entries can trigger other entries |
 | **Max Activated Entries** | Unlimited | Cap on total activated entries |
 | **Max Token Budget** | Unlimited | Rough token limit for all world info content |
@@ -119,6 +119,8 @@ These settings (in **Settings > World Info**) apply to all entries:
     e. Check cooldown timer (if cooling down)
 3. Constant entries are always included
 4. Apply group logic (if entries are in groups)
+
+When vectorized world-book entries are enabled, semantic retrieval uses the same **Global Scan Depth** message window. Per-entry scan depth overrides remain specific to that entry's keyword matching and do not suppress independent vector retrieval. Unlimited depth considers all visible, non-empty messages, with the vector query still protected by its token safety limit.
 5. Sort by priority
 6. Enforce budget limits (entry cap and token budget)
 7. Group entries by position (before/after chat history)

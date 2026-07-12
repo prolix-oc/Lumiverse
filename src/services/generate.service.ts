@@ -58,7 +58,10 @@ import {
   type CouncilEnrichment,
   type CouncilExecutionResultWithHistory,
 } from "./council/council-execution.service";
-import { activateWorldInfo } from "./world-info-activation.service";
+import {
+  activateWorldInfo,
+  type WorldInfoSettings,
+} from "./world-info-activation.service";
 import type {
   CachedCouncilResult,
   CouncilMember,
@@ -2210,6 +2213,10 @@ export async function startGeneration(
                   resolvedPersona,
                   input.chat_id,
                 );
+              const councilWorldInfoSettings =
+                (settingsSvc.getSetting(input.userId, "worldInfoSettings")?.value as
+                  | Partial<WorldInfoSettings>
+                  | undefined) ?? {};
               let councilWiActivated =
                 wiEntries.length > 0
                   ? activateWorldInfo({
@@ -2217,6 +2224,7 @@ export async function startGeneration(
                       messages: councilMessages,
                       chatTurn: councilMessages.length,
                       wiState: {},
+                      settings: councilWorldInfoSettings,
                     }).activatedEntries
                   : [];
 
@@ -2229,10 +2237,12 @@ export async function startGeneration(
                 wiEntries,
                 councilMessages,
                 abortController.signal,
+                councilWorldInfoSettings,
               );
               councilWiActivated = mergeActivatedWorldInfoEntries(
                 councilWiActivated,
                 vectorActivated,
+                councilWorldInfoSettings,
               ).activatedEntries;
 
               // Cache for assembly to reuse

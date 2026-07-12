@@ -700,6 +700,12 @@
   white-space: pre-wrap;
 }
 
+.queryPreviewScroll {
+  max-height: clamp(220px, 38vh, 420px);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
 .factList,
 .noteList {
   display: flex;
