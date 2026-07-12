@@ -118,8 +118,6 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 /** Version key is surfaced separately as `presetVersion`; the rest of the bag round-trips verbatim. */
 const LUMIHUB_VERSION_META_KEY = '_lumiverse_preset_version'
-/** Internal metadata envelope for Spindle namespaces, kept separate from Loom-owned keys. */
-export const SPINDLE_EXTENSION_METADATA_KEY = '_lumiverse_spindle_extensions'
 const LOOM_OWNED_META_KEYS = new Set([
   'source',
   'modelProfiles',
@@ -132,6 +130,10 @@ const LOOM_OWNED_META_KEYS = new Set([
   'promptVariables',
 ])
 
+export function isLoomOwnedPresetMetadataKey(key: string): boolean {
+  return LOOM_OWNED_META_KEYS.has(key) || key.startsWith('_lumiverse_')
+}
+
 /**
  * Pull the LumiHub provenance bag (install source, hub id, slug, creator) out of a stored
  * preset's metadata so it survives the marshal/unmarshal round-trip. `marshalUpdate` rewrites
@@ -142,7 +144,7 @@ const LOOM_OWNED_META_KEYS = new Set([
 function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> | null {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (key.startsWith('_lumiverse_') && key !== LUMIHUB_VERSION_META_KEY && key !== SPINDLE_EXTENSION_METADATA_KEY) {
+    if (key.startsWith('_lumiverse_') && key !== LUMIHUB_VERSION_META_KEY) {
       bag[key] = value
     }
   }
@@ -152,7 +154,7 @@ function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (LOOM_OWNED_META_KEYS.has(key) || (key.startsWith('_lumiverse_') && key !== SPINDLE_EXTENSION_METADATA_KEY)) continue
+    if (isLoomOwnedPresetMetadataKey(key)) continue
     bag[key] = value
   }
   return bag

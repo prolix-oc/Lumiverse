@@ -4,7 +4,7 @@ import type {
   SpindlePresetEditorScopedHelper,
   SpindlePresetEditorState,
 } from './preset-editor-types'
-import { SPINDLE_EXTENSION_METADATA_KEY } from '@/lib/loom/service'
+import { isLoomOwnedPresetMetadataKey } from '@/lib/loom/service'
 
 type PresetMutator = (preset: SpindlePresetEditorDraft) => SpindlePresetEditorDraft
 
@@ -172,9 +172,8 @@ function cloneExtensionState(
   extensionIdentifier: string,
 ): SpindlePresetEditorExtensionState {
   const draft = state.preset
-  const namespaces = draft?.metadata[SPINDLE_EXTENSION_METADATA_KEY]
-  const metadata = isRecord(namespaces) && Object.hasOwn(namespaces, extensionIdentifier)
-    ? clone(namespaces[extensionIdentifier])
+  const metadata = draft && Object.hasOwn(draft.metadata, extensionIdentifier)
+    ? clone(draft.metadata[extensionIdentifier])
     : undefined
   const promptVariableValues = draft?.metadata.promptVariables
   return {
@@ -203,20 +202,19 @@ export function createPresetEditorScopedHelper(
   extensionIdentifier: string,
   access: PresetEditorScopedAccess,
 ): SpindlePresetEditorScopedHelper {
+  if (isLoomOwnedPresetMetadataKey(extensionIdentifier)) {
+    throw new Error(`PRESET_EDITOR_RESERVED_METADATA_KEY: ${extensionIdentifier}`)
+  }
+
   function applyScopedMetadataMutation(
     mutator: (current: unknown) => Record<string, unknown>,
     immediate = false,
   ): void {
     access.assertActive()
     updatePresetEditorDraft((draft) => {
-      const namespaces = draft.metadata[SPINDLE_EXTENSION_METADATA_KEY]
-      if (namespaces !== undefined && !isRecord(namespaces)) {
-        throw new Error('PRESET_EDITOR_INVALID_METADATA_NAMESPACE: Spindle metadata namespace must be an object')
-      }
-      const namespaceBag = isRecord(namespaces) ? namespaces : {}
       const nextMetadata = mutator(
-        Object.hasOwn(namespaceBag, extensionIdentifier)
-          ? clone(namespaceBag[extensionIdentifier])
+        Object.hasOwn(draft.metadata, extensionIdentifier)
+          ? clone(draft.metadata[extensionIdentifier])
           : undefined,
       )
       assertMetadataObject(nextMetadata)
@@ -224,10 +222,7 @@ export function createPresetEditorScopedHelper(
         ...draft,
         metadata: {
           ...draft.metadata,
-          [SPINDLE_EXTENSION_METADATA_KEY]: {
-            ...namespaceBag,
-            [extensionIdentifier]: clone(nextMetadata),
-          },
+          [extensionIdentifier]: clone(nextMetadata),
         },
       }
     }, immediate)

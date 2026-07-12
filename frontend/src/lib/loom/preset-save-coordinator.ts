@@ -1,6 +1,6 @@
 import { presetsApi } from '@/api/presets'
 import type { Preset, UpdatePresetInput } from '@/types/api'
-import { looksLikeLoomPresetData, marshalUpdate, SPINDLE_EXTENSION_METADATA_KEY, unmarshalPreset } from './service'
+import { looksLikeLoomPresetData, marshalUpdate, unmarshalPreset } from './service'
 import type { LoomPreset } from './types'
 
 const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
@@ -31,7 +31,6 @@ type DraftField = (typeof DRAFT_FIELDS)[number]
 interface DirtyPresetPaths {
   fields: DraftField[]
   passthroughKeys: string[]
-  spindleMetadataKeys: string[]
 }
 
 interface PendingLoomPresetEnvelope {
@@ -139,35 +138,28 @@ function isDraftField(value: unknown): value is DraftField {
 
 function normalizeDirtyPaths(value: unknown): DirtyPresetPaths | null {
   if (!isRecord(value) || !Array.isArray(value.fields) || !Array.isArray(value.passthroughKeys)) return null
-  const spindleMetadataKeys = value.spindleMetadataKeys === undefined
-    ? []
-    : value.spindleMetadataKeys
   if (
     !value.fields.every(isDraftField)
     || !value.passthroughKeys.every((key) => typeof key === 'string')
-    || !Array.isArray(spindleMetadataKeys)
-    || !spindleMetadataKeys.every((key) => typeof key === 'string')
   ) return null
   return {
     fields: [...new Set(value.fields)],
     passthroughKeys: [...new Set(value.passthroughKeys)],
-    spindleMetadataKeys: [...new Set(spindleMetadataKeys)],
   }
 }
 
 function isDirty(dirty: DirtyPresetPaths): boolean {
-  return dirty.fields.length > 0 || dirty.passthroughKeys.length > 0 || dirty.spindleMetadataKeys.length > 0
+  return dirty.fields.length > 0 || dirty.passthroughKeys.length > 0
 }
 
 function emptyDirtyPaths(): DirtyPresetPaths {
-  return { fields: [], passthroughKeys: [], spindleMetadataKeys: [] }
+  return { fields: [], passthroughKeys: [] }
 }
 
 function mergeDirtyPaths(previous: DirtyPresetPaths, next: DirtyPresetPaths): DirtyPresetPaths {
   return {
     fields: [...new Set([...previous.fields, ...next.fields])],
     passthroughKeys: [...new Set([...previous.passthroughKeys, ...next.passthroughKeys])],
-    spindleMetadataKeys: [...new Set([...previous.spindleMetadataKeys, ...next.spindleMetadataKeys])],
   }
 }
 
@@ -175,22 +167,12 @@ function getChangedPaths(before: LoomPreset, after: LoomPreset): DirtyPresetPath
   const fields = DRAFT_FIELDS.filter((field) => !sameJson(before[field], after[field]))
   const beforeMetadata = before.passthroughMetadata ?? {}
   const afterMetadata = after.passthroughMetadata ?? {}
-  const beforeNamespaces = isRecord(beforeMetadata[SPINDLE_EXTENSION_METADATA_KEY])
-    ? beforeMetadata[SPINDLE_EXTENSION_METADATA_KEY]
-    : {}
-  const afterNamespaces = isRecord(afterMetadata[SPINDLE_EXTENSION_METADATA_KEY])
-    ? afterMetadata[SPINDLE_EXTENSION_METADATA_KEY]
-    : {}
-  const spindleMetadataKeys = [...new Set([
-    ...Object.keys(beforeNamespaces),
-    ...Object.keys(afterNamespaces),
-  ])].filter((key) => !sameJson(beforeNamespaces[key], afterNamespaces[key]))
   const passthroughKeys = [...new Set([
     ...Object.keys(beforeMetadata),
     ...Object.keys(afterMetadata),
-  ])].filter((key) => key !== SPINDLE_EXTENSION_METADATA_KEY && !sameJson(beforeMetadata[key], afterMetadata[key]))
+  ])].filter((key) => !sameJson(beforeMetadata[key], afterMetadata[key]))
 
-  return { fields, passthroughKeys, spindleMetadataKeys }
+  return { fields, passthroughKeys }
 }
 
 function rebaseDirtyPaths(
@@ -204,7 +186,7 @@ function rebaseDirtyPaths(
     rebased[field] = clone(draft[field]) as never
   }
 
-  if (dirty.passthroughKeys.length > 0 || dirty.spindleMetadataKeys.length > 0) {
+  if (dirty.passthroughKeys.length > 0) {
     const metadata = clone(persisted.passthroughMetadata ?? {})
     for (const key of dirty.passthroughKeys) {
       if (Object.hasOwn(draft.passthroughMetadata, key)) {
@@ -217,33 +199,6 @@ function rebaseDirtyPaths(
       } else {
         delete metadata[key]
       }
-    }
-
-    if (dirty.spindleMetadataKeys.length > 0) {
-      const namespaces = isRecord(metadata[SPINDLE_EXTENSION_METADATA_KEY])
-        ? clone(metadata[SPINDLE_EXTENSION_METADATA_KEY])
-        : {}
-      const draftNamespaces = isRecord(draft.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY])
-        ? draft.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]
-        : {}
-      for (const extensionId of dirty.spindleMetadataKeys) {
-        if (Object.hasOwn(draftNamespaces, extensionId)) {
-          Object.defineProperty(namespaces, extensionId, {
-            value: clone(draftNamespaces[extensionId]),
-            enumerable: true,
-            writable: true,
-            configurable: true,
-          })
-        } else {
-          delete namespaces[extensionId]
-        }
-      }
-      Object.defineProperty(metadata, SPINDLE_EXTENSION_METADATA_KEY, {
-        value: namespaces,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      })
     }
     rebased.passthroughMetadata = metadata
   }
@@ -284,7 +239,7 @@ function legacyDirtyPaths(includePromptVariables: boolean): DirtyPresetPaths {
     && field !== 'presetVersion'
   ))
   if (includePromptVariables) fields.push('promptVariables')
-  return { fields, passthroughKeys: [], spindleMetadataKeys: [] }
+  return { fields, passthroughKeys: [] }
 }
 function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null {
   const entry = readPendingEntries()[presetId]
@@ -315,7 +270,7 @@ function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null
       preset: entry.preset,
       dirty: includeEditorContent
         ? legacyDirtyPaths(includePromptVariables)
-        : { fields: includePromptVariables ? ['promptVariables'] : [], passthroughKeys: [], spindleMetadataKeys: [] },
+        : { fields: includePromptVariables ? ['promptVariables'] : [], passthroughKeys: [] },
       revision: typeof entry.revision === 'number' && Number.isSafeInteger(entry.revision)
         ? entry.revision
         : 0,

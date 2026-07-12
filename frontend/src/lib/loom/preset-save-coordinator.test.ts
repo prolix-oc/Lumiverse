@@ -8,7 +8,7 @@ import {
   StalePresetHydrationError,
   type PresetSaveAdapter,
 } from './preset-save-coordinator'
-import { SPINDLE_EXTENSION_METADATA_KEY, unmarshalPreset } from './service'
+import { unmarshalPreset } from './service'
 import { presetsApi } from '@/api/presets'
 
 function rawPreset(overrides: Partial<Preset> = {}): Preset {
@@ -285,25 +285,21 @@ describe('preset save coordinator', () => {
     localStorage.clear()
   })
 
-  test('rebases a durable protected Spindle namespace over fresh sibling namespaces', async () => {
+  test('rebases a durable extension key over fresh sibling extension keys', async () => {
     localStorage.clear()
     const writes: UpdatePresetInput[] = []
     const persisted = unmarshalPreset(rawPreset({
       metadata: {
-        [SPINDLE_EXTENSION_METADATA_KEY]: {
-          first_extension: { mode: 'old' },
-          second_extension: { revision: 2 },
-        },
+        first_extension: { mode: 'old' },
+        second_extension: { revision: 2 },
       },
     }))
     const pending = {
       ...persisted,
       passthroughMetadata: {
         ...persisted.passthroughMetadata,
-        [SPINDLE_EXTENSION_METADATA_KEY]: {
-          first_extension: { mode: 'new' },
-          second_extension: { revision: 1 },
-        },
+        first_extension: { mode: 'new' },
+        second_extension: { revision: 1 },
       },
     }
     localStorage.setItem('__lumiverse_pending_loom_presets', JSON.stringify({
@@ -312,8 +308,7 @@ describe('preset save coordinator', () => {
         preset: pending,
         dirty: {
           fields: [],
-          passthroughKeys: [],
-          spindleMetadataKeys: ['first_extension'],
+          passthroughKeys: ['first_extension'],
         },
         revision: 1,
       },
@@ -328,19 +323,15 @@ describe('preset save coordinator', () => {
     expect(coordinator.hasDurablePendingRecovery(persisted.id)).toBe(true)
     const rebased = coordinator.hydrate(persisted)
     expect(coordinator.hasDurablePendingRecovery(persisted.id)).toBe(false)
-    expect(rebased.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
-      first_extension: { mode: 'new' },
-      second_extension: { revision: 2 },
-    })
+    expect(rebased.passthroughMetadata.first_extension).toEqual({ mode: 'new' })
+    expect(rebased.passthroughMetadata.second_extension).toEqual({ revision: 2 })
     await coordinator.flush(persisted.id)
-    expect(writes[0].metadata?.[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
-      first_extension: { mode: 'new' },
-      second_extension: { revision: 2 },
-    })
+    expect(writes[0].metadata?.first_extension).toEqual({ mode: 'new' })
+    expect(writes[0].metadata?.second_extension).toEqual({ revision: 2 })
     localStorage.clear()
   })
 
-  test('rebases only a dirty protected Spindle namespace over fresh sibling namespaces', async () => {
+  test('rebases only a dirty extension key over fresh sibling extension keys', async () => {
     const writes: UpdatePresetInput[] = []
     const coordinator = createPresetSaveCoordinator({
       async update(presetId, input) {
@@ -350,10 +341,8 @@ describe('preset save coordinator', () => {
     })
     const base = unmarshalPreset(rawPreset({
       metadata: {
-        [SPINDLE_EXTENSION_METADATA_KEY]: {
-          first_extension: { mode: 'old' },
-          second_extension: { revision: 1 },
-        },
+        first_extension: { mode: 'old' },
+        second_extension: { revision: 1 },
       },
     }))
     coordinator.hydrate(base)
@@ -364,31 +353,23 @@ describe('preset save coordinator', () => {
         ...preset,
         passthroughMetadata: {
           ...preset.passthroughMetadata,
-          [SPINDLE_EXTENSION_METADATA_KEY]: {
-            first_extension: { mode: 'new' },
-            second_extension: { revision: 1 },
-          },
+          first_extension: { mode: 'new' },
+          second_extension: { revision: 1 },
         },
       }),
     )
 
     const rebased = coordinator.hydrate(unmarshalPreset(rawPreset({
       metadata: {
-        [SPINDLE_EXTENSION_METADATA_KEY]: {
-          first_extension: { mode: 'old' },
-          second_extension: { revision: 2 },
-        },
+        first_extension: { mode: 'old' },
+        second_extension: { revision: 2 },
       },
     })))
-    expect(rebased.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
-      first_extension: { mode: 'new' },
-      second_extension: { revision: 2 },
-    })
+    expect(rebased.passthroughMetadata.first_extension).toEqual({ mode: 'new' })
+    expect(rebased.passthroughMetadata.second_extension).toEqual({ revision: 2 })
     await coordinator.flush(base.id)
-    expect(writes[0].metadata?.[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
-      first_extension: { mode: 'new' },
-      second_extension: { revision: 2 },
-    })
+    expect(writes[0].metadata?.first_extension).toEqual({ mode: 'new' })
+    expect(writes[0].metadata?.second_extension).toEqual({ revision: 2 })
   })
 
   test('evicts a clean no-subscriber entry after persistence completes', async () => {
@@ -646,7 +627,7 @@ describe('preset save coordinator', () => {
       [presetId]: {
         __lumiverse_pending_loom_preset_v2: 2,
         preset: unmarshalPreset(persisted),
-        dirty: { fields: ['description'], passthroughKeys: [], spindleMetadataKeys: [] },
+        dirty: { fields: ['description'], passthroughKeys: [] },
         revision: 0,
       },
     }))
