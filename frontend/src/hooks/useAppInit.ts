@@ -9,7 +9,10 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { personasApi } from '@/api/personas'
 import { packsApi } from '@/api/packs'
 import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
+import { setSettingsPersistenceScope } from '@/store/slices/settings'
 import { listAllConnections } from '@/api/listAllConnections'
+
+let appInitGeneration = 0
 
 /**
  * Eagerly load shared data that multiple panels depend on.
@@ -31,7 +34,12 @@ export function useAppInit() {
 
   useEffect(() => {
     if (!isAuthenticated || !userId) {
+      if (initializedUserId.current !== null) {
+        resetUserScopedStoreState()
+      }
       initializedUserId.current = null
+      appInitGeneration += 1
+      setSettingsPersistenceScope(null)
       return
     }
 
@@ -39,19 +47,35 @@ export function useAppInit() {
     if (initializedUserId.current && initializedUserId.current !== userId) {
       resetUserScopedStoreState()
     }
+    setSettingsPersistenceScope(userId)
     initializedUserId.current = userId
+    const generation = ++appInitGeneration
+    const isCurrent = () => (
+      appInitGeneration === generation
+      && useStore.getState().isAuthenticated
+      && useStore.getState().user?.id === userId
+    )
 
-    void initialize()
+    void initialize(isCurrent)
   }, [isAuthenticated, userId])
 }
 
-async function initialize(): Promise<void> {
+async function loadFullSettings(isCurrent: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 2 && !useStore.getState().fullSettingsLoaded; attempt += 1) {
+    if (!isCurrent()) return
+    await useStore.getState().loadSettings().catch(() => {})
+  }
+}
+
+async function initialize(isCurrent: () => boolean): Promise<void> {
   let payload: BootstrapPayload | null = null
   let errors: Record<string, string> = {}
   let landingPreloadHandled = false
+  const imageGenProfilesVersion = useStore.getState().imageGenProfilesVersion
 
   const landingPromise = bootstrapApi.fetchLanding()
     .then((response) => {
+      if (!isCurrent()) return
       const appliedRecentChats = applyLandingBootstrap(response.payload, response.errors ?? {}, {
         skipRecentChats: landingPreloadHandled,
       })
@@ -79,6 +103,7 @@ async function initialize(): Promise<void> {
       'spindle': 'fallback',
     }
   }
+  if (!isCurrent()) return
 
   if (payload) {
     const appliedRecentChats = applyBootstrap(payload, errors, {
@@ -86,13 +111,15 @@ async function initialize(): Promise<void> {
       // The split landing bootstrap owns first-paint recent chats. Avoid
       // applying the full bootstrap's placeholder and racing the landing load.
       skipRecentChats: true,
+      imageGenProfilesVersion,
     })
     if (appliedRecentChats) landingPreloadHandled = true
   }
   if (payload && !errors['startupSettings']) {
-    void useStore.getState().loadSettings()
+    void loadFullSettings(isCurrent)
   }
-  if (Object.keys(errors).length > 0) await runFallbacks(errors)
+  if (Object.keys(errors).length > 0) await runFallbacks(errors, isCurrent)
+  if (!isCurrent()) return
 
   void landingPromise
 
@@ -106,7 +133,9 @@ async function initialize(): Promise<void> {
   for (const packId of memberPackIds) {
     if (!packsWithItems[packId]) {
       packsApi.get(packId)
-        .then((data) => useStore.getState().setPackWithItems(packId, data))
+        .then((data) => {
+          if (isCurrent()) useStore.getState().setPackWithItems(packId, data)
+        })
         .catch(() => {})
     }
   }
@@ -138,7 +167,11 @@ function applyLandingBootstrap(
 function applyBootstrap(
   payload: BootstrapPayload,
   errors: Record<string, string>,
-  options: { skipStartupSettings?: boolean; skipRecentChats?: boolean } = {},
+  options: {
+    skipStartupSettings?: boolean
+    skipRecentChats?: boolean
+    imageGenProfilesVersion?: number
+  } = {},
 ): boolean {
   const store = useStore.getState()
   let appliedRecentChats = false
@@ -156,7 +189,9 @@ function applyBootstrap(
   if (!errors['tts.connections']) store.setTtsProfiles(payload.tts.connections.data)
   if (!errors['tts.providers']) store.setTtsProviders(payload.tts.providers)
 
-  if (!errors['imageGen.connections']) store.setImageGenProfiles(payload.imageGen.connections.data)
+  if (!errors['imageGen.connections']) {
+    store.setImageGenProfiles(payload.imageGen.connections.data, options.imageGenProfilesVersion)
+  }
   if (!errors['imageGen.providers']) store.setImageGenProviders(payload.imageGen.providers)
 
   if (!errors['packs']) store.setPacks(payload.packs.data)
@@ -199,18 +234,22 @@ function applyBootstrap(
 /** Fill in sections the bootstrap payload couldn't provide by calling the
  *  original per-endpoint APIs. Each fallback is fire-and-forget so one
  *  failing section can't block the others. */
-async function runFallbacks(errors: Record<string, string>): Promise<void> {
+async function runFallbacks(
+  errors: Record<string, string>,
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (!isCurrent()) return
   const store = useStore.getState()
-
-  if (errors['startupSettings']) {
-    if (!store.settingsLoaded) await store.loadSettings().catch(() => {})
-  }
+  const fullSettingsPromise = errors['startupSettings']
+    ? loadFullSettings(isCurrent)
+    : null
 
   if (errors['llm.connections'] || errors['llm.providers']) {
     Promise.allSettled([
       listAllConnections(connectionsApi),
       connectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
+      if (!isCurrent()) return
       if (profilesRes.status === 'fulfilled') store.setProfiles(profilesRes.value.data)
       if (providersRes.status === 'fulfilled') store.setProviders(providersRes.value.providers)
     })
@@ -221,6 +260,7 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
       listAllConnections(sttConnectionsApi),
       sttConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
+      if (!isCurrent()) return
       if (profilesRes.status === 'fulfilled') store.setSttProfiles(profilesRes.value.data)
       if (providersRes.status === 'fulfilled') store.setSttProviders(providersRes.value.providers)
     })
@@ -231,38 +271,55 @@ async function runFallbacks(errors: Record<string, string>): Promise<void> {
       listAllConnections(ttsConnectionsApi),
       ttsConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
+      if (!isCurrent()) return
       if (profilesRes.status === 'fulfilled') store.setTtsProfiles(profilesRes.value.data)
       if (providersRes.status === 'fulfilled') store.setTtsProviders(providersRes.value.providers)
     })
   }
 
   if (errors['imageGen.connections'] || errors['imageGen.providers']) {
+    const imageGenProfilesVersion = store.imageGenProfilesVersion
     Promise.allSettled([
       listAllConnections(imageGenConnectionsApi),
       imageGenConnectionsApi.providers(),
     ]).then(([profilesRes, providersRes]) => {
-      if (profilesRes.status === 'fulfilled') store.setImageGenProfiles(profilesRes.value.data)
+      if (!isCurrent()) return
+      if (profilesRes.status === 'fulfilled') {
+        store.setImageGenProfiles(profilesRes.value.data, imageGenProfilesVersion)
+      }
       if (providersRes.status === 'fulfilled') store.setImageGenProviders(providersRes.value.providers)
     })
   }
 
   if (errors['packs']) {
-    packsApi.list({ limit: 200 }).then((res) => store.setPacks(res.data)).catch(() => {})
+    packsApi.list({ limit: 200 })
+      .then((res) => {
+        if (isCurrent()) store.setPacks(res.data)
+      })
+      .catch(() => {})
   }
 
   if (errors['personas']) {
-    personasApi.list({ limit: 200 }).then((res) => store.setPersonas(res.data)).catch(() => {})
+    personasApi.list({ limit: 200 })
+      .then((res) => {
+        if (isCurrent()) store.setPersonas(res.data)
+      })
+      .catch(() => {})
   }
 
   if (errors['regexScripts']) {
-    store.loadRegexScripts().catch(() => {})
+    store.loadRegexScripts(isCurrent).catch(() => {})
   }
 
   if (errors['council.settings']) {
-    await store.loadCouncilSettings().catch(() => {})
+    await store.loadCouncilSettings(isCurrent).catch(() => {})
+    if (!isCurrent()) return
   }
 
   if (errors['council.tools'] || errors['spindle']) {
-    await store.loadAvailableTools()
+    await store.loadAvailableTools(isCurrent)
+    if (!isCurrent()) return
   }
+
+  if (fullSettingsPromise) await fullSettingsPromise
 }

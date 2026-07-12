@@ -1,17 +1,20 @@
 import type { StateCreator } from 'zustand'
-import type { SttConnectionsSlice } from '@/types/store'
+import type { AppStore, SttConnectionsSlice } from '@/types/store'
 import type { SttConnectionProfile } from '@/types/api'
-import { normalizeConnectionsOrder } from './connections-order-merge'
+import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
-export const createSttConnectionsSlice: StateCreator<SttConnectionsSlice> = (set) => ({
+export const createSttConnectionsSlice: StateCreator<AppStore, [], [], SttConnectionsSlice> = (set) => ({
   sttProfiles: [],
   sttProviders: [],
 
-  setSttProfiles: (profiles) => set({ sttProfiles: profiles }),
+  setSttProfiles: (profiles) =>
+    set((state) => ({
+      sttProfiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).stt),
+    })),
 
   addSttProfile: (profile) =>
     set((state) => {
-      const connectionsOrder = normalizeConnectionsOrder((state as any).connectionsOrder)
+      const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
       const order = connectionsOrder.stt
       return {
         sttProfiles: [...state.sttProfiles, profile],

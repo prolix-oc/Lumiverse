@@ -123,9 +123,10 @@ export function parseProviderErrorBody(raw: string): ParsedProviderErrorBody {
     try {
       const data = JSON.parse(trimmed) as any;
       const error = data?.error;
-      const code = error && typeof error === "object"
+      const errorId = normalizeText(data?.error_id);
+      const code = errorId || (error && typeof error === "object"
         ? normalizeText(error.code) || normalizeText(error.status) || normalizeText(error.type)
-        : normalizeText(data?.code) || normalizeText(data?.status) || normalizeText(data?.type) || normalizeText(error);
+        : normalizeText(data?.code) || normalizeText(data?.status) || normalizeText(data?.type) || normalizeText(error));
       const detail = error && typeof error === "object"
         ? normalizeText(error.message) || normalizeText(data?.error_description) || normalizeText(data?.message)
         : normalizeText(data?.error_description) || normalizeText(data?.message) || normalizeText(data?.detail) || normalizeText(error);
@@ -220,7 +221,17 @@ export async function fetchProviderJson<T>(provider: string, operation: string, 
   }
 
   if (!res.ok) await throwProviderResponseError(provider, operation, res);
-  return await res.json() as T;
+  try {
+    return await res.json() as T;
+  } catch (err) {
+    if (err instanceof ProviderRequestError) throw err;
+    throw new ProviderRequestError({
+      provider,
+      operation,
+      detail: getErrorMessage(err) || "response body could not be read",
+      retryable: true,
+    });
+  }
 }
 
 function cleanProviderMessage(message: string): string {

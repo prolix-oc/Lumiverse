@@ -14,7 +14,6 @@ import { snapRangeValue } from '@/components/shared/rangeSliderMath'
 import { useTouchActivate } from '@/hooks/useTouchActivate'
 import ModelCombobox from './connection-manager/ModelCombobox'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
-import SearchableSelect from '@/components/shared/SearchableSelect'
 import { getMacroCatalog } from '@/api/macros'
 import { getAvailableMacros } from '@/lib/loom/service'
 import type { MacroGroup } from '@/lib/loom/types'
@@ -26,8 +25,15 @@ import { ComfyWorkflowEditor } from './image-gen-connections/ComfyWorkflowEditor
 import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/lib/comfyui-mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
-import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import type { ImageGenConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
 import type { ImageGenPromptPreset, LoraEntry, LoraPreset } from '@/types/store'
+import {
+  LoraDiscoveryStatus,
+  LoraRowsEditor,
+  useLoraDiscovery,
+  type DraftLoraEntry,
+  type LoraModelLoader,
+} from './imageGenLoraEditor'
 import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
@@ -43,18 +49,28 @@ const LORA_STRENGTH_SCALE_MAX = 2
 const LORA_STRENGTH_SCALE_STEP = 0.05
 const EMPTY_LORA_PRESETS: LoraPreset[] = []
 
-type DraftLoraEntry = {
-  lora_name: string
-  weight_model: string
-  weight_clip: string
+const loadImageGenModels: LoraModelLoader = (id, subtype) => imageGenConnectionsApi.modelsBySubtype(id, subtype)
+
+type ModelLoadResult = {
+  profile: ImageGenConnectionProfile
+  modelSubtype: string
+  models: Array<{ id: string; label: string }>
+  error: string | null
+  loading: boolean
 }
 
-type LoraModelOption = {
-  id: string
-  label: string
-}
+const modelRefreshKeys = new WeakMap<ImageGenConnectionProfile, number>()
+let nextModelRefreshKey = 1
 
-type LoraDiscoveryState = 'idle' | 'loading' | 'ready' | 'error'
+function modelRefreshKey(profile: ImageGenConnectionProfile | null, modelSubtype: string): string {
+  if (!profile) return `none:${modelSubtype}`
+  let key = modelRefreshKeys.get(profile)
+  if (!key) {
+    key = nextModelRefreshKey++
+    modelRefreshKeys.set(profile, key)
+  }
+  return `${key}:${modelSubtype}`
+}
 
 
 function loraPresetToDraft(preset: LoraPreset | null): DraftLoraEntry[] {
@@ -62,6 +78,7 @@ function loraPresetToDraft(preset: LoraPreset | null): DraftLoraEntry[] {
     const weightModel = Number.isFinite(lora.weight_model) ? String(lora.weight_model) : String(LORA_DEFAULT_WEIGHT)
     const weightClipFallback = Number.isFinite(lora.weight_model) ? lora.weight_model : LORA_DEFAULT_WEIGHT
     return {
+      draftId: uuidv7(),
       lora_name: lora.lora_name,
       weight_model: weightModel,
       weight_clip: lora.weight_clip === undefined ? '' : String(Number.isFinite(lora.weight_clip) ? lora.weight_clip : weightClipFallback),
@@ -155,62 +172,105 @@ function parseComfyControlValue(control: ComfyMappedFieldControl, value: string)
  * from the provider via `imageGenConnectionsApi.modelsBySubtype` and surfaces
  * the standard searchable combobox UI used by Connections / TTS / STT panels.
  */
-function ModelComboField({
+export function ModelComboField({
   label,
   hint,
   paramKey,
   modelSubtype,
-  connectionId,
+  activeConnection,
   value,
   onChange,
+  loadModels = loadImageGenModels,
 }: {
   label: string
   hint: string
   paramKey: string
   modelSubtype: string
-  connectionId: string | null
+  activeConnection: ImageGenConnectionProfile | null
   value: any
   onChange: (key: string, value: any) => void
+  loadModels?: LoraModelLoader
 }) {
   const { t } = useTranslation('panels')
-  const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
-  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<ModelLoadResult | null>(null)
+  const latestInputsRef = useRef({ activeConnection, modelSubtype, loadModels })
+  const requestIdRef = useRef(0)
+  latestInputsRef.current = { activeConnection, modelSubtype, loadModels }
+
+  const currentResult = result
+    && result.profile === activeConnection
+    && result.modelSubtype === modelSubtype
+  const models = currentResult ? result.models : []
+  const modelError = currentResult ? result.error : null
+  const loading = currentResult ? result.loading : false
 
   const load = useCallback(async () => {
-    if (!connectionId) return
-    setLoading(true)
-    try {
-      const res = await imageGenConnectionsApi.modelsBySubtype(connectionId, modelSubtype)
-      setModels(res.models ?? [])
-    } catch {
-      setModels([])
-    } finally {
-      setLoading(false)
-    }
-  }, [connectionId, modelSubtype])
+    if (!activeConnection) return
+    const profile = activeConnection
+    const subtype = modelSubtype
+    const requestId = ++requestIdRef.current
+    setResult({ profile, modelSubtype: subtype, models: [], error: null, loading: true })
 
-  const modelIds = useMemo(() => models.map((m) => m.id), [models])
+    try {
+      const response = await loadModels(profile.id, subtype)
+      if (
+        requestId !== requestIdRef.current
+        || latestInputsRef.current.activeConnection !== profile
+        || latestInputsRef.current.modelSubtype !== subtype
+        || latestInputsRef.current.loadModels !== loadModels
+      ) return
+
+      const error = typeof response.error === 'string' && response.error.trim()
+        ? response.error.trim()
+        : null
+      setResult({
+        profile,
+        modelSubtype: subtype,
+        models: error ? [] : response.models ?? [],
+        error,
+        loading: false,
+      })
+    } catch (err: unknown) {
+      if (
+        requestId !== requestIdRef.current
+        || latestInputsRef.current.activeConnection !== profile
+        || latestInputsRef.current.modelSubtype !== subtype
+        || latestInputsRef.current.loadModels !== loadModels
+      ) return
+
+      const message = err instanceof Error && err.message.trim()
+        ? err.message.trim()
+        : t('imageGenPanel.noModelsFound')
+      setResult({ profile, modelSubtype: subtype, models: [], error: message, loading: false })
+    }
+  }, [activeConnection, loadModels, modelSubtype, t])
+
+  const modelIds = useMemo(() => models.map((model) => model.id), [models])
   const modelLabels = useMemo(() => {
     const labels: Record<string, string> = {}
-    for (const m of models) labels[m.id] = m.label
+    for (const model of models) labels[model.id] = model.label
     return labels
   }, [models])
+
+  const emptyMessage = activeConnection
+    ? t('imageGenPanel.noModelsFound')
+    : t('imageGenPanel.pickConnectionFirst')
 
   return (
     <FormField label={label} hint={hint}>
       <ModelCombobox
         value={typeof value === 'string' ? value : ''}
-        onChange={(v) => onChange(paramKey, v || undefined)}
+        onChange={(nextValue) => onChange(paramKey, nextValue || undefined)}
         models={modelIds}
         modelLabels={modelLabels}
         loading={loading}
         onRefresh={load}
         autoRefreshOnFocus
-        refreshKey={connectionId ?? ''}
-        disabled={!connectionId}
+        refreshKey={modelRefreshKey(activeConnection, modelSubtype)}
+        disabled={!activeConnection}
         placeholder={t('imageGenPanel.workflowOrConnectionDefault')}
         appearance="standard"
-        emptyMessage={connectionId ? t('imageGenPanel.noModelsFound') : t('imageGenPanel.pickConnectionFirst')}
+        emptyMessage={modelError || emptyMessage}
       />
     </FormField>
   )
@@ -254,13 +314,13 @@ function ParamField({
   schema,
   value,
   onChange,
-  connectionId,
+  activeConnection,
 }: {
   paramKey: string
   schema: ImageGenParameterSchema
   value: any
   onChange: (key: string, value: any) => void
-  connectionId?: string | null
+  activeConnection?: ImageGenConnectionProfile | null
 }) {
   const displayName = paramKey
     .replace(/([A-Z])/g, ' $1')
@@ -279,7 +339,7 @@ function ParamField({
         hint={schema.description}
         paramKey={paramKey}
         modelSubtype={schema.modelSubtype}
-        connectionId={connectionId ?? null}
+        activeConnection={activeConnection ?? null}
         value={value}
         onChange={onChange}
       />
@@ -449,8 +509,6 @@ export default function ImageGenPanel() {
   const [draftLoraBaseTags, setDraftLoraBaseTags] = useState('')
   const [loadedLoraPresetId, setLoadedLoraPresetId] = useState<string | null>(null)
   const [confirmDeleteLoraPreset, setConfirmDeleteLoraPreset] = useState(false)
-  const [availableLoras, setAvailableLoras] = useState<LoraModelOption[]>([])
-  const [loraDiscoveryState, setLoraDiscoveryState] = useState<LoraDiscoveryState>('idle')
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -487,7 +545,12 @@ export default function ImageGenPanel() {
   const providerName = activeConnection?.provider || ''
   const isComfyUI = providerName === 'comfyui'
 
-  const supportsLoraDiscovery = !!activeConnection && (activeConnection.provider === 'comfyui' || activeConnection.provider === 'swarmui')
+  const loraDiscovery = useLoraDiscovery(
+    activeConnection,
+    loadImageGenModels,
+    t('imageGenPanel.fetchLorasFailed'),
+  )
+  const supportsLoraDiscovery = loraDiscovery.supportsDiscovery
   const comfyCustomControls = useMemo(() => {
     if (!isComfyUI || !workflowConfig) return []
     return buildMappedFieldControls(workflowConfig, workflowCapabilities)
@@ -524,38 +587,24 @@ export default function ImageGenPanel() {
     void refreshActiveComfyWorkflow()
   }, [refreshActiveComfyWorkflow])
 
-  useEffect(() => {
-    if (!supportsLoraDiscovery || !activeConnection) {
-      setAvailableLoras([])
-      setLoraDiscoveryState('idle')
-      return
-    }
-
-    let cancelled = false
-    setLoraDiscoveryState('loading')
-    imageGenConnectionsApi
-      .modelsBySubtype(activeConnection.id, 'loras')
-      .then((res) => {
-        if (cancelled) return
-        setAvailableLoras(res.models.map((model) => ({ id: model.id, label: model.label })))
-        setLoraDiscoveryState('ready')
-      })
-      .catch(() => {
-        if (cancelled) return
-        setAvailableLoras([])
-        setLoraDiscoveryState('error')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [supportsLoraDiscovery, activeConnection?.id])
 
   const refreshActiveImageGenConnection = useCallback(async () => {
-    if (!activeConnection) return
+    if (
+      !activeConnection
+      || useStore.getState().activeImageGenConnectionId !== activeConnection.id
+    ) return
+    const requestUserId = useStore.getState().user?.id ?? null
+    const expectedProfileVersion = useStore.getState().imageGenProfilesVersion
     try {
       const updated = await imageGenConnectionsApi.get(activeConnection.id)
-      setImageGenProfiles(imageGenProfiles.map((profile) => (profile.id === updated.id ? updated : profile)))
+      if (
+        useStore.getState().user?.id !== requestUserId
+        || useStore.getState().activeImageGenConnectionId !== activeConnection.id
+      ) return
+      setImageGenProfiles(
+        imageGenProfiles.map((profile) => (profile.id === updated.id ? updated : profile)),
+        expectedProfileVersion,
+      )
     } catch {
       // The workflow update already succeeded; stale metadata in the list is non-fatal.
     }
@@ -962,17 +1011,19 @@ export default function ImageGenPanel() {
     setImageGenSettings,
   ])
 
-  const updateDraftLora = useCallback((index: number, patch: Partial<DraftLoraEntry>) => {
-    setDraftLoras((current) => current.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))
-  }, [])
 
   const addDraftLora = useCallback(() => {
-    setDraftLoras((current) => [...current, { lora_name: '', weight_model: String(LORA_DEFAULT_WEIGHT), weight_clip: '' }])
+    setDraftLoras((current) => [
+      ...current,
+      {
+        draftId: uuidv7(),
+        lora_name: '',
+        weight_model: String(LORA_DEFAULT_WEIGHT),
+        weight_clip: '',
+      },
+    ])
   }, [])
 
-  const removeDraftLora = useCallback((index: number) => {
-    setDraftLoras((current) => current.filter((_, i) => i !== index))
-  }, [])
 
   const pickLoraPreset = useCallback((presetId: string | null) => {
     if (!presetId) {
@@ -1078,15 +1129,20 @@ export default function ImageGenPanel() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    const requestUserId = useStore.getState().user?.id ?? null
+    const expectedProfileVersion = useStore.getState().imageGenProfilesVersion
     setImportConfigBusy(true)
     try {
       const payload = JSON.parse(await file.text())
+      if (useStore.getState().user?.id !== requestUserId) return
       const res = await imageGenApi.importConfig(payload)
+      if (useStore.getState().user?.id !== requestUserId) return
       // The backend already persisted the merged settings; this re-syncs the store.
       setImageGenSettings(res.settings)
       if (res.imported.connections > 0) {
         const list = await imageGenConnectionsApi.list({ limit: 100, offset: 0 })
-        setImageGenProfiles(list.data)
+        if (useStore.getState().user?.id !== requestUserId) return
+        setImageGenProfiles(list.data, expectedProfileVersion)
       }
       toast.success(t('imageGenPanel.importSuccess', {
         presets: res.imported.presets,
@@ -1094,7 +1150,9 @@ export default function ImageGenPanel() {
       }))
       for (const issue of res.errors || []) toast.error(issue)
     } catch (err: any) {
-      toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+      if (useStore.getState().user?.id === requestUserId) {
+        toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+      }
     } finally {
       setImportConfigBusy(false)
     }
@@ -1311,7 +1369,7 @@ export default function ImageGenPanel() {
     const seen = new Set<string>()
     const manualOptions: { value: string; label: string; sublabel?: string }[] = []
     const discoveredOptions: { value: string; label: string; sublabel?: string }[] = []
-    for (const lora of availableLoras) {
+    for (const lora of loraDiscovery.loras) {
       if (seen.has(lora.id)) continue
       seen.add(lora.id)
       discoveredOptions.push({ value: lora.id, label: lora.label, sublabel: lora.id })
@@ -1323,7 +1381,7 @@ export default function ImageGenPanel() {
       manualOptions.push({ value, label: value })
     }
     return [...manualOptions, ...discoveredOptions]
-  }, [availableLoras, draftLoras])
+  }, [loraDiscovery.loras, draftLoras])
 
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
@@ -1585,71 +1643,14 @@ export default function ImageGenPanel() {
               />
             </FormField>
 
-            <div className={styles.loraRows}>
-              {draftLoras.map((row, index) => (
-                <div key={index} className={styles.loraRow}>
-                  <div className={styles.loraRowHeader}>
-                    <span className={styles.loraRowTitle}>{t('imageGenPanel.loraEntry')} {index + 1}</span>
-                    <Button
-                      variant="danger-ghost"
-                      size="icon-sm"
-                      icon={<Trash2 size={14} />}
-                      onClick={() => removeDraftLora(index)}
-                      aria-label={t('imageGenPanel.removeLora')}
-                    />
-                  </div>
-
-                  <FormField label={t('imageGenPanel.loraFilename')}>
-                    <div className={styles.loraFilenameControls}>
-                      {supportsLoraDiscovery && (
-                        <SearchableSelect
-                          value={row.lora_name}
-                          onChange={(value) => updateDraftLora(index, { lora_name: value })}
-                          options={loraFilenameOptions}
-                          placeholder={t('imageGenPanel.loraFilenamePlaceholder')}
-                          searchPlaceholder={t('imageGenPanel.loraFilenamePlaceholder')}
-                          emptyMessage={t('imageGenPanel.noModelsFound')}
-                          portal
-                          minWidth={320}
-                          clearable
-                          disabled={loraDiscoveryState === 'loading'}
-                        />
-                      )}
-                      <TextInput
-                        value={row.lora_name}
-                        onChange={(value) => updateDraftLora(index, { lora_name: value })}
-                        placeholder={t('imageGenPanel.loraFilenamePlaceholder')}
-                      />
-                    </div>
-                  </FormField>
-
-                  <div className={styles.loraWeightGrid}>
-                    <FormField label={t('imageGenPanel.weightModel')}>
-                      <TextInput
-                        type="number"
-                        min={LORA_WEIGHT_MIN}
-                        max={LORA_WEIGHT_MAX}
-                        step={LORA_WEIGHT_STEP}
-                        value={row.weight_model}
-                        onChange={(value) => updateDraftLora(index, { weight_model: value })}
-                        placeholder={String(LORA_DEFAULT_WEIGHT)}
-                      />
-                    </FormField>
-                    <FormField label={t('imageGenPanel.weightClip')}>
-                      <TextInput
-                        type="number"
-                        min={LORA_WEIGHT_MIN}
-                        max={LORA_WEIGHT_MAX}
-                        step={LORA_WEIGHT_STEP}
-                        value={row.weight_clip}
-                        onChange={(value) => updateDraftLora(index, { weight_clip: value })}
-                        placeholder={row.weight_model || String(LORA_DEFAULT_WEIGHT)}
-                      />
-                    </FormField>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <LoraDiscoveryStatus controller={loraDiscovery} />
+            <LoraRowsEditor
+              rows={draftLoras}
+              onChange={setDraftLoras}
+              filenameOptions={loraFilenameOptions}
+              supportsDiscovery={supportsLoraDiscovery}
+              discoveryState={loraDiscovery.state}
+            />
 
             <Button variant="secondary" size="sm" icon={<Plus size={14} />} onClick={addDraftLora}>
               {t('imageGenPanel.addLora')}
@@ -1847,14 +1848,14 @@ export default function ImageGenPanel() {
 
               {/* Main parameters */}
               {paramGroups.main.map(([key, schema]) => (
-                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
               ))}
 
               {/* Advanced parameters */}
               {paramGroups.advanced.length > 0 && (
                 <EditorSection title={t('imageGenPanel.advanced')} Icon={Settings2} defaultExpanded={false}>
                   {paramGroups.advanced.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               )}
@@ -1863,7 +1864,7 @@ export default function ImageGenPanel() {
               {paramGroups.extra.map(({ name, params }) => (
                 <EditorSection key={name} title={name.charAt(0).toUpperCase() + name.slice(1)} Icon={Settings2} defaultExpanded={false}>
                   {params.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               ))}
@@ -1980,7 +1981,7 @@ export default function ImageGenPanel() {
               {paramGroups.references.length > 0 && !supportsRefs && (
                 <EditorSection title={t('imageGenPanel.references')} Icon={IconBrush} defaultExpanded={false}>
                   {paramGroups.references.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               )}

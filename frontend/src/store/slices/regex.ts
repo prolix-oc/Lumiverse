@@ -8,9 +8,9 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
   regexScripts: [],
   regexEditingId: null,
 
-  loadRegexScripts: async () => {
+  loadRegexScripts: async (shouldApply = () => true) => {
     const res = await regexApi.list({ limit: 1000 })
-    set({ regexScripts: res.data })
+    if (shouldApply()) set({ regexScripts: res.data })
   },
 
   /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */

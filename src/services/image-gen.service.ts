@@ -424,7 +424,11 @@ export async function generateSceneBackground(
     if (!promptResult.prompt.trim()) throw new Error("Image generation prompt is required");
     if (promptResult.negativePrompt) params.negativePrompt = promptResult.negativePrompt;
 
-    if (combinedLoras.length > 0) {
+    // Swarm needs matching list normalization even when callers supply only raw layers.
+    if (
+      combinedLoras.length > 0
+      || (connection.provider === "swarmui" && params.loras !== undefined)
+    ) {
       applyLorasToParams(connection.provider, params, combinedLoras);
     }
 
@@ -973,15 +977,26 @@ function applyLorasToParams(
   params: Record<string, unknown>,
   loras: LoraEntry[],
 ): void {
-  if (loras.length === 0) return;
-
   if (provider === "swarmui") {
-    const existingNames = stringParam(params.loras);
-    const existingWeights = stringParam(params.loraWeights);
-    const names = loras.map((entry) => entry.lora_name).join(",");
-    const weights = loras.map((entry) => String(entry.weight_model)).join(",");
-    params.loras = existingNames ? `${existingNames},${names}` : names;
-    params.loraWeights = existingWeights ? `${existingWeights},${weights}` : weights;
+    const nameSlots = commaSeparatedSlots(params.loras);
+    const weightSlots = commaSeparatedSlots(params.loraWeights);
+    const existingNames: string[] = [];
+    const existingWeights: string[] = [];
+    for (const [index, name] of nameSlots.entries()) {
+      if (!name) continue;
+      existingNames.push(name);
+      // Swarm aligns names and weights by index; bare existing names use its default weight.
+      existingWeights.push(weightSlots[index] || "1");
+    }
+
+    params.loras = [
+      ...existingNames,
+      ...loras.map((entry) => entry.lora_name),
+    ].join(",");
+    params.loraWeights = [
+      ...existingWeights,
+      ...loras.map((entry) => String(entry.weight_model)),
+    ].join(",");
     return;
   }
 
@@ -1073,6 +1088,15 @@ function normalizeGenerationParameters(
 
 function stringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function commaSeparatedSlots(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : [value];
+  return values.flatMap((item) => {
+    if (typeof item === "string") return item.split(",").map((part) => part.trim());
+    if (typeof item === "number" && Number.isFinite(item)) return [String(item)];
+    return [""];
+  });
 }
 
 function resolveComfySeedParam(value: unknown): number | undefined {

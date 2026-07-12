@@ -441,6 +441,8 @@ export interface WorldBookEntryViewPreference {
 // ---- Settings Slice ----
 export interface SettingsSlice {
   settingsLoaded: boolean
+  /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
+  fullSettingsLoaded: boolean
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
   charactersPerPage: number
@@ -677,9 +679,9 @@ export interface CouncilSlice {
   setCouncilExecuting: (executing: boolean) => void
   setCouncilToolsFailure: (failure: CouncilToolsFailedInfo | null) => void
 
-  loadCouncilSettings: () => Promise<void>
+  loadCouncilSettings: (shouldApply?: () => boolean) => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
-  loadAvailableTools: () => Promise<void>
+  loadAvailableTools: (shouldApply?: () => boolean) => Promise<void>
   /** Set merged council tools from pre-fetched data (bootstrap payload).
    *  Same merge rules as `loadAvailableTools`, zero network round trips. */
   hydrateCouncilTools: (
@@ -698,6 +700,8 @@ export interface CouncilSlice {
 // ---- Generation Slice ----
 export interface GenerationSlice {
   imageGeneration: ImageGenSettings
+  /** User edits made before the full settings row has hydrated. */
+  pendingImageGenerationPatch?: Partial<ImageGenSettings>
   sceneBackground: string | null
   sceneGenerating: boolean
   setImageGenSettings: (settings: Partial<ImageGenSettings>) => void
@@ -1237,7 +1241,7 @@ import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from
 export interface RegexSlice {
   regexScripts: RegexScript[]
   regexEditingId: string | null
-  loadRegexScripts: () => Promise<void>
+  loadRegexScripts: (shouldApply?: () => boolean) => Promise<void>
   /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */
   setRegexScripts: (scripts: RegexScript[]) => void
   addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
@@ -1279,10 +1283,14 @@ export interface ExpressionSlice {
 // ---- Image Gen Connections Slice ----
 export interface ImageGenConnectionsSlice {
   imageGenProfiles: ImageGenConnectionProfile[]
+  /** True once the current user's image-gen profile list has been fetched. */
+  imageGenProfilesLoaded: boolean
+  /** Monotonic local revision used to reject stale async profile results. */
+  imageGenProfilesVersion: number
   activeImageGenConnectionId: string | null
   imageGenProviders: ImageGenProviderInfo[]
 
-  setImageGenProfiles: (profiles: ImageGenConnectionProfile[]) => void
+  setImageGenProfiles: (profiles: ImageGenConnectionProfile[], expectedVersion?: number) => void
   setActiveImageGenConnection: (id: string | null) => void
   addImageGenProfile: (profile: ImageGenConnectionProfile) => void
   updateImageGenProfile: (id: string, updates: Partial<ImageGenConnectionProfile>) => void

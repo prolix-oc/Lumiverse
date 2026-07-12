@@ -46,6 +46,41 @@ describe("parseProviderErrorBody", () => {
     expect(parsed.detail!.length).toBeLessThanOrEqual(500);
   });
 
+  test("normalizes a top-level error_id before generic error fallbacks", () => {
+    const parsed = parseProviderErrorBody(JSON.stringify({
+      error: "Invalid session ID. You may need to refresh the page.",
+      error_id: " invalid_session_id ",
+    }));
+
+    expect(parsed).toEqual({
+      code: "invalid_session_id",
+      detail: "Invalid session ID. You may need to refresh the page.",
+    });
+  });
+
+  test("falls back when a top-level error_id is malformed", () => {
+    const parsed = parseProviderErrorBody(JSON.stringify({
+      error: "Invalid sub-type.",
+      error_id: { unexpected: true },
+    }));
+
+    expect(parsed).toEqual({
+      code: "Invalid sub-type.",
+      detail: "Invalid sub-type.",
+    });
+  });
+
+  test("bounds a top-level error_id", () => {
+    const parsed = parseProviderErrorBody(JSON.stringify({
+      error: "Invalid sub-type.",
+      error_id: "x".repeat(600),
+    }));
+
+    expect(parsed.code).toBe(`${"x".repeat(497)}...`);
+    expect(parsed.code).toHaveLength(500);
+    expect(parsed.detail).toBe("Invalid sub-type.");
+  });
+
   test("returns empty on empty input", () => {
     expect(parseProviderErrorBody("")).toEqual({});
     expect(parseProviderErrorBody("   ")).toEqual({});
