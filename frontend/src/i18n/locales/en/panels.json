@@ -1655,7 +1655,7 @@
     "convertAndReindex": "Convert & Reindex",
     "ok": "OK",
     "globalScanDepth": "GLOBAL SCAN DEPTH",
-    "globalScanDepthHint": "Default keyword scan depth for entries without a per-entry setting, and the recent-message scope used by world-book vector retrieval.",
+    "globalScanDepthHint": "Controls how many recent messages world books search for both keyword matches and vector retrieval. Per-entry scan depth overrides apply only to keyword matching.",
     "unlimited": "Unlimited",
     "maxRecursionPasses": "MAX RECURSION PASSES",
     "maxRecursionPassesHint": "How many recursive keyword-chaining passes to run. 0 disables recursion entirely.",

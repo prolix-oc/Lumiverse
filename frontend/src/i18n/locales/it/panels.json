@@ -1576,7 +1576,7 @@
     "convertAndReindex": "Converti e reindicizza",
     "ok": "OK",
     "globalScanDepth": "PROFONDITÀ SCANSIONE GLOBALE",
-    "globalScanDepthHint": "Profondità predefinita per le parole chiave nelle voci senza impostazione individuale e intervallo di messaggi recenti usato dal recupero vettoriale dei worldbook.",
+    "globalScanDepthHint": "Controlla quanti messaggi recenti vengono cercati dai worldbook sia per le parole chiave sia per il recupero vettoriale. Le impostazioni per singola voce si applicano solo alle parole chiave.",
     "unlimited": "Illimitato",
     "maxRecursionPasses": "PASSAGGI RICORSIONE MASSIMI",
     "maxRecursionPassesHint": "Quanti passaggi di chaining ricorsivo di parole chiave eseguire. 0 disabilita completamente la ricorsione.",

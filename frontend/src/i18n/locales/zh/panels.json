@@ -1575,7 +1575,7 @@
     "convertAndReindex": "转换并重新索引",
     "ok": "确定",
     "globalScanDepth": "全局扫描深度",
-    "globalScanDepthHint": "无单条设置的条目使用的默认关键词扫描深度，同时也是世界书向量检索使用的最近消息范围。",
+    "globalScanDepthHint": "控制世界书在关键词匹配和向量检索中搜索多少条最近消息。单条目的扫描深度覆盖仅适用于关键词匹配。",
     "unlimited": "无限制",
     "maxRecursionPasses": "最大递归轮次",
     "maxRecursionPassesHint": "关键词链式递归的最大轮次。0 表示完全禁用递归。",

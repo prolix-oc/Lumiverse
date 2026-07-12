@@ -100,7 +100,7 @@ These settings (in **Settings > World Info**) apply to all entries:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Global Scan Depth** | Unlimited | Default keyword depth for entries without a custom depth, and the recent-message scope for world-book vector retrieval |
+| **Global Scan Depth** | Unlimited | Number of recent messages searched for both keyword matching and vector retrieval; per-entry overrides affect keyword matching only |
 | **Max Recursion Passes** | 3 | How many times keywords in activated entries can trigger other entries |
 | **Max Activated Entries** | Unlimited | Cap on total activated entries |
 | **Max Token Budget** | Unlimited | Rough token limit for all world info content |

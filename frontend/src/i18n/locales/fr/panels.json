@@ -1575,7 +1575,7 @@
     "convertAndReindex": "Convertir et réindexer",
     "ok": "D'ACCORD",
     "globalScanDepth": "PROFONDEUR D'ANALYSE GLOBALE",
-    "globalScanDepthHint": "Profondeur d'analyse des mots-clés par défaut pour les entrées sans réglage individuel, et portée des messages récents utilisée par la recherche vectorielle des livres de lore.",
+    "globalScanDepthHint": "Contrôle le nombre de messages récents recherchés par les livres de lore, à la fois pour les mots-clés et la recherche vectorielle. Les réglages par entrée s'appliquent uniquement aux mots-clés.",
     "unlimited": "Illimité",
     "maxRecursionPasses": "PASSAGES DE RÉCURSION MAXIMUM",
     "maxRecursionPassesHint": "Combien de passes de chaînage de mots-clés récursives à exécuter. 0 désactive entièrement la récursivité.",

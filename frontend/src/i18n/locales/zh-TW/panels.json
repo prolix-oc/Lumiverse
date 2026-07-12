@@ -1575,7 +1575,7 @@
     "convertAndReindex": "轉換並重新索引",
     "ok": "確定",
     "globalScanDepth": "全局掃描深度",
-    "globalScanDepthHint": "無單條設定的條目使用的預設關鍵詞掃描深度，同時也是世界書向量檢索使用的最近訊息範圍。",
+    "globalScanDepthHint": "控制世界書在關鍵詞比對和向量檢索中搜尋多少條最近訊息。單條目的掃描深度覆寫僅適用於關鍵詞比對。",
     "unlimited": "無限制",
     "maxRecursionPasses": "最大遞歸輪次",
     "maxRecursionPassesHint": "關鍵詞鏈式遞歸的最大輪次。0 表示完全禁用遞歸。",
