@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { AppStore, GenerationSlice } from '@/types/store'
-import { persistKey } from './settings'
+import { persistKey, persistPendingImageGenerationPatch } from './settings'
 
 export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSlice> = (set) => ({
   imageGeneration: {
@@ -28,14 +28,24 @@ export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSli
     backgroundOpacity: 0.35,
     fadeTransitionMs: 800,
   },
+  pendingImageGenerationPatch: undefined,
   sceneBackground: null,
   sceneGenerating: false,
 
   setImageGenSettings: (settings) =>
     set((state) => {
       const imageGeneration = { ...state.imageGeneration, ...settings }
-      persistKey('imageGeneration', imageGeneration)
       const patch: Partial<AppStore> = { imageGeneration }
+      if (state.fullSettingsLoaded) {
+        persistKey('imageGeneration', imageGeneration)
+        patch.pendingImageGenerationPatch = undefined
+      } else {
+        patch.pendingImageGenerationPatch = {
+          ...state.pendingImageGenerationPatch,
+          ...settings,
+        }
+        persistPendingImageGenerationPatch(settings)
+      }
       if (Object.prototype.hasOwnProperty.call(settings, 'activeImageGenConnectionId')) {
         patch.activeImageGenConnectionId = settings.activeImageGenConnectionId ?? null
       }

@@ -2,7 +2,7 @@ import type { ImageProvider } from "../provider";
 import type { ImageProviderCapabilities, ImageParameterSchemaMap } from "../param-schema";
 import type { ImageGenRequest, ImageGenResponse } from "../types";
 import { applyRawOverride, PROTECTED_RAW_OVERRIDE_KEYS } from "../types";
-import { fetchProviderJson, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
+import { fetchProviderJson, parseProviderErrorBody, ProviderRequestError, throwProviderResponseError } from "../../utils/provider-errors";
 
 /** Clamp a number into the 0..1 range (denoising strength). */
 function clamp01(n: number): number {
@@ -210,16 +210,53 @@ export class SdApiImageProvider implements ImageProvider {
       .map((m: { id: string; label: string }) => ({ id: m.id, label: m.label || m.id }));
   }
 
-  /** Parse the `/sdapi/v1/loras` response into a model list. */
+  private invalidLoraListingResponse(): ProviderRequestError {
+    return new ProviderRequestError({
+      provider: this.displayName,
+      operation: "LoRA listing",
+      detail: "SD API returned an invalid LoRA listing response",
+    });
+  }
+
+  /**
+   * Parse the canonical `/sdapi/v1/loras` response into generation-ready IDs.
+   * `path` is the provider value accepted by the SD API LoRA request. Some
+   * older compatible servers omit it, so a non-empty `name` is the explicit
+   * compatibility fallback only in that case.
+   */
   private parseLoras(data: unknown): Array<{ id: string; label: string }> {
-    const items = Array.isArray(data) ? data : [];
-    return items
-      .map((l: any) => ({
-        id: String(l?.name || l?.path || "").trim(),
-        label: String(l?.name || l?.path || "").trim(),
-      }))
-      .filter((m: { id: string; label: string }) => !!m.id)
-      .map((m: { id: string; label: string }) => ({ id: m.id, label: m.label || m.id }));
+    if (!Array.isArray(data)) {
+      if (data && typeof data === "object") {
+        const response = data as Record<string, unknown>;
+        if (response.error || response.error_id) {
+          const parsed = parseProviderErrorBody(JSON.stringify(data) ?? "");
+          throw new ProviderRequestError({
+            provider: this.displayName,
+            operation: "LoRA listing",
+            code: parsed.code,
+            detail: parsed.detail || "SD API returned an error",
+          });
+        }
+      }
+      throw this.invalidLoraListingResponse();
+    }
+
+    const items = data;
+    const models: Array<{ id: string; label: string }> = [];
+
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw this.invalidLoraListingResponse();
+      }
+      const lora = item as Record<string, unknown>;
+      const path = typeof lora.path === "string" && lora.path.trim() ? lora.path : undefined;
+      const name = typeof lora.name === "string" && lora.name.trim() ? lora.name : undefined;
+      const id = path || name;
+      if (!id) throw this.invalidLoraListingResponse();
+      models.push({ id, label: name || id });
+    }
+
+    return models;
   }
 
   /** Parse the `/sdapi/v1/samplers` response into a model list. */
