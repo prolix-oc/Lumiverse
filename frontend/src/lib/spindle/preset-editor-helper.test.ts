@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
   createPresetEditorScopedHelper,
+  getPresetEditorState,
   setPresetEditorController,
   subscribePresetEditorState,
   syncPresetEditorState,
@@ -93,11 +94,12 @@ describe('scoped preset editor helper', () => {
     const observed: SpindlePresetEditorState[] = []
     const unsubscribe = subscribePresetEditorState((state) => observed.push(state))
 
+    const first = draft()
     syncPresetEditorState({
-      open: false,
-      presetId: null,
+      open: true,
+      presetId: first.id,
       activeTabId: 'preset',
-      preset: null,
+      preset: first,
     })
     const next = { ...draft(), id: 'preset-2' }
     syncPresetEditorState({
@@ -107,9 +109,54 @@ describe('scoped preset editor helper', () => {
       preset: next,
     })
 
-    expect(observed).toHaveLength(2)
-    expect(observed[0]).toMatchObject({ open: false, presetId: null, preset: null })
-    expect(observed[1]).toMatchObject({ open: true, presetId: 'preset-2' })
+    expect(observed).toHaveLength(3)
+    expect(observed[0]).toMatchObject({ open: true, presetId: 'preset-1' })
+    expect(observed[1]).toMatchObject({ open: false, presetId: null, preset: null })
+    expect(observed[2]).toMatchObject({ open: true, presetId: 'preset-2' })
+    unsubscribe()
+  })
+
+  test('makes a synthetic close authoritative while notifying listeners', () => {
+    const first = draft()
+    const next = { ...draft(), id: 'preset-2' }
+    let updates = 0
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: next.id,
+        activeTabId: 'preset',
+        preset: next,
+      }),
+      setActiveTab() {},
+      updatePreset() { updates += 1 },
+      async flush() {},
+    })
+    syncPresetEditorState({
+      open: true,
+      presetId: first.id,
+      activeTabId: 'preset',
+      preset: first,
+    })
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+    const readsDuringClose: SpindlePresetEditorState[] = []
+    const unsubscribe = subscribePresetEditorState((state) => {
+      if (state.open) return
+      readsDuringClose.push(getPresetEditorState())
+      expect(() => helper.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_CLOSED')
+    })
+
+    syncPresetEditorState({
+      open: true,
+      presetId: next.id,
+      activeTabId: 'preset',
+      preset: next,
+    })
+
+    expect(readsDuringClose).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
+    expect(updates).toBe(0)
     unsubscribe()
   })
 

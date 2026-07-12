@@ -29,6 +29,7 @@ const DEFAULT_STATE: SpindlePresetEditorState = {
 
 let controller: PresetEditorController | null = null
 let snapshot: SpindlePresetEditorState = DEFAULT_STATE
+let publishingDepth = 0
 const listeners = new Set<(state: SpindlePresetEditorState) => void>()
 
 function clone<T>(value: T): T {
@@ -53,14 +54,24 @@ function cloneState(state: SpindlePresetEditorState): SpindlePresetEditorState {
 }
 
 function publishState(next: SpindlePresetEditorState): void {
-  snapshot = cloneState(next)
-  for (const handler of listeners) {
-    try { handler(cloneState(snapshot)) } catch { /* no-op */ }
+  const published = cloneState(next)
+  snapshot = published
+  publishingDepth += 1
+  try {
+    for (const handler of listeners) {
+      try { handler(cloneState(published)) } catch { /* no-op */ }
+    }
+  } finally {
+    publishingDepth -= 1
   }
 }
 
+function getCurrentState(): SpindlePresetEditorState {
+  return publishingDepth > 0 || !controller ? snapshot : controller.getState()
+}
+
 function assertOpenController(): PresetEditorController {
-  const current = controller?.getState()
+  const current = getCurrentState()
   if (!controller || !current?.open || !current.preset) {
     throw new Error('PRESET_EDITOR_CLOSED: Preset editor is not open or has no selected preset')
   }
@@ -73,13 +84,21 @@ export function setPresetEditorController(next: PresetEditorController | null): 
 }
 
 export function syncPresetEditorState(next: SpindlePresetEditorState): void {
+  if (
+    snapshot.open
+    && snapshot.presetId
+    && next.open
+    && next.presetId
+    && snapshot.presetId !== next.presetId
+  ) {
+    publishState(DEFAULT_STATE)
+  }
   publishState(next)
 }
 
 export function getPresetEditorState(): SpindlePresetEditorState {
-  // Controller reads are synchronous; subscriptions still publish on the
-  // normal React synchronization path.
-  return cloneState(controller ? controller.getState() : snapshot)
+  // A published transition snapshot is authoritative during listener delivery.
+  return cloneState(getCurrentState())
 }
 
 export function subscribePresetEditorState(
@@ -100,7 +119,7 @@ export async function flushPresetEditorDraft(): Promise<void> {
 }
 
 export function setPresetEditorActiveTab(tabId: string): void {
-  if (!controller?.getState().open) return
+  if (!controller || !getCurrentState().open) return
   controller.setActiveTab(tabId)
 }
 
