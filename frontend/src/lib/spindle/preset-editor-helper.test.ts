@@ -142,10 +142,15 @@ describe('scoped preset editor helper', () => {
       trackSubscription(unsubscribe) { return unsubscribe },
     })
     const readsDuringClose: SpindlePresetEditorState[] = []
+    let closeMutationError: unknown
     const unsubscribe = subscribePresetEditorState((state) => {
       if (state.open) return
       readsDuringClose.push(getPresetEditorState())
-      expect(() => helper.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_CLOSED')
+      try {
+        helper.setMetadata({ mode: 'stale' })
+      } catch (error) {
+        closeMutationError = error
+      }
     })
 
     syncPresetEditorState({
@@ -156,6 +161,8 @@ describe('scoped preset editor helper', () => {
     })
 
     expect(readsDuringClose).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
+    expect(closeMutationError).toBeInstanceOf(Error)
+    expect((closeMutationError as Error).message).toContain('PRESET_EDITOR_CLOSED')
     expect(updates).toBe(0)
     unsubscribe()
   })
