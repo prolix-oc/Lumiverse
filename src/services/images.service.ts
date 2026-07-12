@@ -4,7 +4,7 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { env } from "../env";
 import type { Image } from "../types/image";
-import { mkdirSync, existsSync, statSync, unlinkSync } from "fs";
+import { mkdirSync, existsSync, lstatSync, statSync, unlinkSync } from "fs";
 import { unlink } from "fs/promises";
 import { join, extname } from "path";
 import {
@@ -1017,17 +1017,63 @@ function imageFilePaths(dir: string, id: string, filename: string): string[] {
   return paths;
 }
 
+const TRANSIENT_UNLINK_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const UNLINK_RETRY_DELAYS_MS = [50, 100, 200, 400, 800] as const;
+
+/**
+ * `unlink` errors are not fully portable: in particular, Bun has reported
+ * EPERM for an already-missing path on some Windows versions. Re-check the
+ * path instead of deciding solely from the original errno. lstat is used so a
+ * broken symlink is still considered an entry that should be removed.
+ */
+function imagePathIsGone(path: string): boolean {
+  try {
+    lstatSync(path);
+    return false;
+  } catch (err: any) {
+    return err?.code === "ENOENT" || err?.code === "ENOTDIR";
+  }
+}
+
+function imagePathIsDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function unlinkFailure(path: string, err: any): string {
+  return `${path}: ${err?.message ?? err}`;
+}
+
 export async function unlinkPaths(paths: readonly string[]): Promise<void> {
   const failures: string[] = [];
-  for (const p of paths) {
-    try {
-      await unlink(p);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        failures.push(`${p}: ${err?.message ?? err}`);
+  let pending = [...new Set(paths)].filter((path) => !imagePathIsGone(path));
+
+  for (let attempt = 0; pending.length > 0; attempt++) {
+    const retry: string[] = [];
+    for (const p of pending) {
+      try {
+        await unlink(p);
+      } catch (err: any) {
+        if (err?.code === "ENOENT" || imagePathIsGone(p)) continue;
+        if (
+          TRANSIENT_UNLINK_CODES.has(err?.code)
+          && !imagePathIsDirectory(p)
+          && attempt < UNLINK_RETRY_DELAYS_MS.length
+        ) {
+          retry.push(p);
+        } else {
+          failures.push(unlinkFailure(p, err));
+        }
       }
     }
+    if (retry.length === 0) break;
+    await Bun.sleep(UNLINK_RETRY_DELAYS_MS[attempt]);
+    pending = retry;
   }
+
   if (failures.length > 0) {
     throw new Error(`Could not delete ${failures.length} image file(s): ${failures.join("; ")}`);
   }
@@ -1035,15 +1081,31 @@ export async function unlinkPaths(paths: readonly string[]): Promise<void> {
 
 function unlinkPathsSync(paths: readonly string[]): void {
   const failures: string[] = [];
-  for (const p of paths) {
-    try {
-      unlinkSync(p);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") {
-        failures.push(`${p}: ${err?.message ?? err}`);
+  let pending = [...new Set(paths)].filter((path) => !imagePathIsGone(path));
+
+  for (let attempt = 0; pending.length > 0; attempt++) {
+    const retry: string[] = [];
+    for (const p of pending) {
+      try {
+        unlinkSync(p);
+      } catch (err: any) {
+        if (err?.code === "ENOENT" || imagePathIsGone(p)) continue;
+        if (
+          TRANSIENT_UNLINK_CODES.has(err?.code)
+          && !imagePathIsDirectory(p)
+          && attempt < UNLINK_RETRY_DELAYS_MS.length
+        ) {
+          retry.push(p);
+        } else {
+          failures.push(unlinkFailure(p, err));
+        }
       }
     }
+    if (retry.length === 0) break;
+    Bun.sleepSync(UNLINK_RETRY_DELAYS_MS[attempt]);
+    pending = retry;
   }
+
   if (failures.length > 0) {
     throw new Error(`Could not delete ${failures.length} image file(s): ${failures.join("; ")}`);
   }
