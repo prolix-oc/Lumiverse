@@ -483,12 +483,14 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         const current = entries.get(presetId)
         if (current?.queuedRevision === revision) {
           current.queuedRevision = null
+          evictCleanEntry(presetId)
         }
       },
       () => {
         const current = entries.get(presetId)
         if (current?.queuedRevision === revision) {
           current.queuedRevision = null
+          evictCleanEntry(presetId)
         }
       },
     )
@@ -523,7 +525,6 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     },
 
     hydrate(preset, token): LoomPreset {
-      let isStaleHydration = false
       try {
       // Read ordering and confirmed persistence are independent: a local dirty
       // mutation may rebase over the newest read, but an older read cannot
@@ -536,7 +537,6 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         || token.readEpoch !== getHydrationReadEpoch(preset.id, token.owner)
         || token.confirmedEpoch !== getConfirmedEpoch(preset.id)
       )) {
-        isStaleHydration = true
         const current = entries.get(preset.id)
         if (current) return clone(current.draft)
         throw new StalePresetHydrationError(preset.id)
@@ -548,6 +548,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         const created = ensure(preset.id, preset)
         if (token && isAuthoritativeRead) advanceConfirmedEpoch(preset.id)
         publish(created)
+        if (!token) evictCleanEntry(preset.id)
         return clone(created.draft)
       }
 
@@ -565,9 +566,10 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       if (isDirty(entry.dirty) && persistedChanged) {
         void enqueuePersist(preset.id, entry).catch(() => {})
       }
+      if (!token && !isDirty(entry.dirty)) evictCleanEntry(preset.id)
       return clone(entry.draft)
       } finally {
-        if (token && pendingHydrations.delete(token) && !isStaleHydration) {
+        if (token && pendingHydrations.delete(token)) {
           evictCleanEntry(token.presetId)
         }
       }

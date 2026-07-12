@@ -391,6 +391,28 @@ describe('preset save coordinator', () => {
     })
   })
 
+  test('evicts a clean no-subscriber entry after persistence completes', async () => {
+    localStorage.clear()
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const base = unmarshalPreset(rawPreset())
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, description: 'Saved without a subscriber' }),
+      { immediate: true },
+    )
+
+    await coordinator.flush(base.id)
+    await Promise.resolve()
+    expect(coordinator.getDraft(base.id)).toBeNull()
+    localStorage.clear()
+  })
+
   test('rejects a delayed persisted read after a newer write was confirmed', async () => {
     localStorage.clear()
     const writes: UpdatePresetInput[] = []
@@ -417,7 +439,7 @@ describe('preset save coordinator', () => {
 
     coordinator.mutate(
       base.id,
-      base,
+      afterDelayedRead,
       (preset) => ({ ...preset, promptVariables: { 'block-1': { tone: 'warm' } } }),
       { immediate: true },
     )
