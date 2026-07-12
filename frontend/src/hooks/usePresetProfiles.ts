@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
+import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import type { PromptBlock } from '@/lib/loom/types'
 
 /**
@@ -35,7 +36,6 @@ export function usePresetProfiles(
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeProfileId = useStore((s) => s.activeProfileId)
-  const setActiveLoomPreset = useStore((s) => s.setActiveLoomPreset)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const addToast = useStore((s) => s.addToast)
 
@@ -281,8 +281,8 @@ export function usePresetProfiles(
 
   const selectResolvedPreset = useCallback(() => {
     if (!resolvedPresetId || resolvedPresetId === presetId) return
-    setActiveLoomPreset(resolvedPresetId)
-  }, [resolvedPresetId, presetId, setActiveLoomPreset])
+    void transitionActiveLoomPreset(resolvedPresetId).catch(() => {})
+  }, [resolvedPresetId, presetId])
 
   return {
     // State

@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import type { Preset, UpdatePresetInput } from '@/types/api'
 import type { LoomPreset } from './types'
-import { createPresetSaveCoordinator, type PresetSaveAdapter } from './preset-save-coordinator'
+import {
+  createPresetSaveCoordinator,
+  flushPresetForGeneration,
+  presetSaveCoordinator,
+  StalePresetHydrationError,
+  type PresetSaveAdapter,
+} from './preset-save-coordinator'
 import { SPINDLE_EXTENSION_METADATA_KEY, unmarshalPreset } from './service'
+import { presetsApi } from '@/api/presets'
 
 function rawPreset(overrides: Partial<Preset> = {}): Preset {
   return {
@@ -421,6 +428,90 @@ describe('preset save coordinator', () => {
     localStorage.clear()
   })
 
+  test('allows only the latest concurrently started hydration to establish a draft', async () => {
+    localStorage.clear()
+    const writes: UpdatePresetInput[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const stale = unmarshalPreset(rawPreset({ name: 'Stale read', updated_at: 1 }))
+    const fresh = unmarshalPreset(rawPreset({ name: 'Fresh read', updated_at: 2 }))
+
+    const firstRead = coordinator.beginHydration(stale.id)
+    const secondRead = coordinator.beginHydration(fresh.id)
+    expect(() => coordinator.hydrate(stale, firstRead)).toThrow(StalePresetHydrationError)
+
+    const loaded = coordinator.hydrate(fresh, secondRead)
+    const edited = coordinator.mutate(
+      loaded.id,
+      loaded,
+      (preset) => ({ ...preset, description: 'Locally edited after the fresh read' }),
+      { immediate: true },
+    )
+    await coordinator.flush(edited.id)
+
+    expect(writes).toHaveLength(1)
+    expect(writes[0].name).toBe('Fresh read')
+    expect(writes[0].metadata?.description).toBe('Locally edited after the fresh read')
+    localStorage.clear()
+  })
+
+  test('rebases a local dirty mutation over the latest in-flight persisted read', async () => {
+    localStorage.clear()
+    const writes: UpdatePresetInput[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const base = unmarshalPreset(rawPreset({ name: 'Base', updated_at: 1 }))
+    coordinator.hydrate(base)
+    const read = coordinator.beginHydration(base.id)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, promptVariables: { 'block-1': { tone: 'warm' } } }),
+    )
+
+    const rebased = coordinator.hydrate(
+      unmarshalPreset(rawPreset({ name: 'Fresh base', updated_at: 2 })),
+      read,
+    )
+    await coordinator.flush(base.id)
+
+    expect(rebased.name).toBe('Fresh base')
+    expect(rebased.promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
+    expect(writes).toHaveLength(1)
+    expect(writes[0].name).toBe('Fresh base')
+    localStorage.clear()
+  })
+
+  test('rejects a delayed read after a direct authoritative hydration', () => {
+    localStorage.clear()
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const old = unmarshalPreset(rawPreset({ name: 'Old row', updated_at: 1 }))
+    coordinator.hydrate(old)
+    const delayedRead = coordinator.beginHydration(old.id)
+
+    const current = coordinator.hydrate(unmarshalPreset(rawPreset({
+      name: 'Authoritative row',
+      updated_at: 2,
+    })))
+    const afterDelayedRead = coordinator.hydrate(old, delayedRead)
+
+    expect(current.name).toBe('Authoritative row')
+    expect(afterDelayedRead.name).toBe('Authoritative row')
+    localStorage.clear()
+  })
+
   test('notifies a subscription registered before the first hydration', () => {
     localStorage.clear()
     const base = unmarshalPreset(rawPreset())
@@ -443,8 +534,8 @@ describe('preset save coordinator', () => {
       { immediate: true },
     )
 
-    expect(observed).toHaveLength(1)
-    expect(observed[0].promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
+    expect(observed).toHaveLength(2)
+    expect(observed[1].promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
     unsubscribe()
     localStorage.clear()
   })
@@ -471,9 +562,48 @@ describe('preset save coordinator', () => {
       { immediate: true },
     )
 
-    expect(received).toHaveLength(1)
-    expect(received[0].name).toBe('Current subscriber receives this')
+    expect(received).toHaveLength(2)
+    expect(received[1].name).toBe('Current subscriber receives this')
     currentUnsubscribe()
     localStorage.clear()
+  })
+
+  test('single-flights concurrent durable recovery before generation', async () => {
+    const presetId = 'single-flight-recovery'
+    const persisted = rawPreset({ id: presetId })
+    const originalGet = presetsApi.get
+    const originalUpdate = presetsApi.update
+    let getCalls = 0
+    let resolveGet!: (preset: Preset) => void
+    const pendingGet = new Promise<Preset>((resolve) => { resolveGet = resolve })
+    presetSaveCoordinator.remove(presetId)
+    localStorage.setItem('__lumiverse_pending_loom_presets', JSON.stringify({
+      [presetId]: {
+        __lumiverse_pending_loom_preset_v2: 2,
+        preset: unmarshalPreset(persisted),
+        dirty: { fields: ['description'], passthroughKeys: [], spindleMetadataKeys: [] },
+        revision: 0,
+      },
+    }))
+    ;(presetsApi as any).get = async () => {
+      getCalls += 1
+      return pendingGet
+    }
+    ;(presetsApi as any).update = async (id: string, input: UpdatePresetInput) => persistedFromUpdate(id, input)
+
+    try {
+      const first = flushPresetForGeneration(presetId)
+      const second = flushPresetForGeneration(presetId)
+      await Promise.resolve()
+      expect(getCalls).toBe(1)
+
+      resolveGet(persisted)
+      await Promise.all([first, second])
+    } finally {
+      ;(presetsApi as any).get = originalGet
+      ;(presetsApi as any).update = originalUpdate
+      presetSaveCoordinator.remove(presetId)
+      localStorage.removeItem('__lumiverse_pending_loom_presets')
+    }
   })
 })

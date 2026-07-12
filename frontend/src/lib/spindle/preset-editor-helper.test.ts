@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   createPresetEditorScopedHelper,
   setPresetEditorController,
+  subscribePresetEditorState,
+  syncPresetEditorState,
 } from './preset-editor-helper'
 import { createPresetEditorAccess } from './preset-editor-access'
 import type { SpindlePresetEditorDraft, SpindlePresetEditorState } from './preset-editor-types'
@@ -61,6 +63,54 @@ describe('scoped preset editor helper', () => {
 
     helper.activateBuiltinTab('blocks')
     expect(activeTab).toBe('preset')
+  })
+
+  test('rejects a retained helper after the controller closes during a preset switch', () => {
+    let current = draft()
+    let open = true
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open,
+        presetId: open ? current.id : null,
+        activeTabId: 'preset',
+        preset: open ? current : null,
+      }),
+      setActiveTab() {},
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    open = false
+    expect(() => helper.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_CLOSED')
+    expect(current.metadata[SPINDLE_EXTENSION_METADATA_KEY]).toBeUndefined()
+  })
+
+  test('publishes a closed state before exposing the next selected preset', () => {
+    const observed: SpindlePresetEditorState[] = []
+    const unsubscribe = subscribePresetEditorState((state) => observed.push(state))
+
+    syncPresetEditorState({
+      open: false,
+      presetId: null,
+      activeTabId: 'preset',
+      preset: null,
+    })
+    const next = { ...draft(), id: 'preset-2' }
+    syncPresetEditorState({
+      open: true,
+      presetId: next.id,
+      activeTabId: 'preset',
+      preset: next,
+    })
+
+    expect(observed).toHaveLength(2)
+    expect(observed[0]).toMatchObject({ open: false, presetId: null, preset: null })
+    expect(observed[1]).toMatchObject({ open: true, presetId: 'preset-2' })
+    unsubscribe()
   })
 
   test('keeps colliding extension identifiers separate from Loom-owned metadata', () => {

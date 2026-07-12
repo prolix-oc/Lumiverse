@@ -7,7 +7,8 @@ import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
-import { flushPresetForGeneration, presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
+import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
+import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -21,7 +22,6 @@ import {
 import {
   createNewLoomPreset,
   marshalPreset,
-  marshalUpdate,
   unmarshalPreset,
   detectSupportedParamsFromProviders,
   getAvailableMacros,
@@ -70,6 +70,10 @@ export function useLoomBuilder() {
       setIsLoading(false)
     }).catch((err) => {
       if (cancelled) return
+      if (err instanceof StalePresetHydrationError) {
+        setIsLoading(false)
+        return
+      }
       // Retroactive cleanup: if the persisted active preset id points at a row
       // that no longer exists (legacy deletions that didn't cascade), clear it
       // so generation doesn't keep 400ing on a ghost id.
@@ -122,14 +126,11 @@ export function useLoomBuilder() {
   const createPreset = useCallback(async (name: string, description?: string) => {
     setIsLoading(true)
     try {
-      const previousPresetId = activePresetRef.current?.id ?? activeLoomPresetId
-      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       const loom = createNewLoomPreset(name, description)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
-      setActiveLoomPreset(created.id)
+      await transitionActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
       return newLoom
@@ -139,7 +140,7 @@ export function useLoomBuilder() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   const flushPendingPreset = useCallback(async (): Promise<void> => {
     const presetId = activePresetRef.current?.id ?? activeLoomPresetId
@@ -152,9 +153,10 @@ export function useLoomBuilder() {
   useEffect(() => {
     if (!activeLoomPresetId) return
     return presetSaveCoordinator.subscribe(activeLoomPresetId, (preset) => {
-      if (activePresetRef.current?.id !== preset.id) return
+      if (useStore.getState().activeLoomPresetId !== preset.id) return
       activePresetRef.current = preset
       setActivePreset(preset)
+      setIsLoading(false)
     })
   }, [activeLoomPresetId])
 
@@ -195,6 +197,7 @@ export function useLoomBuilder() {
         activePresetRef.current = restored
         setActivePreset(restored)
       }).catch((err) => {
+        if (err instanceof StalePresetHydrationError) return
         console.warn('[LoomBuilder] Failed to rebase restored preset:', err)
       })
     }
@@ -204,26 +207,22 @@ export function useLoomBuilder() {
 
   // Flush the prior draft before changing the editor target so extension and
   // native edits cannot be delivered to the wrong preset or lost on unmount.
+  // All supported manual and automatic selection paths use the same
+  // coordinator so the departing draft is flushed before a new id is exposed.
   const selectPreset = useCallback(async (presetId: string | null) => {
-    await flushPendingPreset()
-    if (!presetId) {
-      setActiveLoomPreset(null)
-      setActivePreset(null)
-      return
-    }
-    setActiveLoomPreset(presetId)
-  }, [flushPendingPreset, setActiveLoomPreset])
+    await transitionActiveLoomPreset(presetId)
+  }, [])
 
   // Read activePreset through a ref so saveStructure stays reference-stable
   // across renders. The coordinator remains the authoritative draft owner.
-  activePresetRef.current = activePreset
+  activePresetRef.current = activePreset?.id === activeLoomPresetId ? activePreset : null
 
   const updateActivePreset = useCallback((
     updater: (current: LoomPreset) => LoomPreset,
     immediate = false,
   ) => {
     const current = activePresetRef.current
-    if (!current) return
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
     const updated = presetSaveCoordinator.mutate(
       current.id,
       current,
@@ -243,7 +242,7 @@ export function useLoomBuilder() {
     blocks: PromptBlock[],
   ) => {
     const current = activePresetRef.current
-    if (!current) return
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
     const updated = presetSaveCoordinator.mutate(
       current.id,
@@ -335,7 +334,7 @@ export function useLoomBuilder() {
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
       await flushPresetForGeneration(presetId)
-      setActiveLoomPreset(created.id)
+      await transitionActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
       return newLoom
@@ -345,7 +344,7 @@ export function useLoomBuilder() {
     } finally {
       setIsLoading(false)
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Block manipulation helpers
   const addBlock = useCallback((block: PromptBlock, index?: number) => {
@@ -434,7 +433,7 @@ export function useLoomBuilder() {
   // surface immediately.
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
     const current = activePresetRef.current
-    if (!current) return
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
     const updated = presetSaveCoordinator.mutate(
       current.id,
       current,
@@ -454,15 +453,12 @@ export function useLoomBuilder() {
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
     try {
-      const previousPresetId = activePresetRef.current?.id ?? activeLoomPresetId
-      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
       const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      if (previousPresetId) await flushPresetForGeneration(previousPresetId)
-      setActiveLoomPreset(created.id)
+      await transitionActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
 
@@ -497,7 +493,7 @@ export function useLoomBuilder() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Import from legacy preset JSON
   const importFromST = useCallback(async (stData: any, fileName: string) => {
@@ -593,7 +589,7 @@ export function useLoomBuilder() {
     // State
     registry: loomRegistry,
     activePresetId: activeLoomPresetId,
-    activePreset,
+    activePreset: activePreset?.id === activeLoomPresetId ? activePreset : null,
     isLoading,
     error,
     availableMacros,

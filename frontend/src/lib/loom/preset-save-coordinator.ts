@@ -63,7 +63,8 @@ export interface PresetMutationOptions {
 
 export interface PresetHydrationToken {
   readonly presetId: string
-  readonly epoch: number
+  readonly readEpoch: number
+  readonly confirmedEpoch: number
 }
 
 export class StalePresetHydrationError extends Error {
@@ -75,9 +76,9 @@ export class StalePresetHydrationError extends Error {
 
 export interface PresetSaveCoordinator {
   /**
-   * Capture the coordinator state before beginning an asynchronous persisted-row read.
-   * Pass this token to `hydrate()` when the read resolves so stale responses cannot
-   * replace a newer local mutation or persistence confirmation.
+   * Reserve the latest hydration generation before beginning an asynchronous
+   * persisted-row read. Pass this token to `hydrate()` when it resolves; only
+   * the most recently begun read can replace coordinator state.
    */
   beginHydration(presetId: string): PresetHydrationToken
   /**
@@ -374,11 +375,18 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
 export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetSaveCoordinator {
   const entries = new Map<string, PresetSaveEntry>()
   const listenersByPreset = new Map<string, Set<(preset: LoomPreset) => void>>()
-  const hydrationEpochs = new Map<string, number>()
+  const hydrationReadEpochs = new Map<string, number>()
+  const confirmedEpochs = new Map<string, number>()
 
-  const getHydrationEpoch = (presetId: string): number => hydrationEpochs.get(presetId) ?? 0
-  const advanceHydrationEpoch = (presetId: string): void => {
-    hydrationEpochs.set(presetId, getHydrationEpoch(presetId) + 1)
+  const getHydrationReadEpoch = (presetId: string): number => hydrationReadEpochs.get(presetId) ?? 0
+  const reserveHydrationRead = (presetId: string): number => {
+    const next = getHydrationReadEpoch(presetId) + 1
+    hydrationReadEpochs.set(presetId, next)
+    return next
+  }
+  const getConfirmedEpoch = (presetId: string): number => confirmedEpochs.get(presetId) ?? 0
+  const advanceConfirmedEpoch = (presetId: string): void => {
+    confirmedEpochs.set(presetId, getConfirmedEpoch(presetId) + 1)
   }
 
   function publish(entry: PresetSaveEntry): void {
@@ -426,7 +434,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       } else {
         current.draft = rebaseDirtyPaths(saved, current.draft, current.dirty)
       }
-      advanceHydrationEpoch(presetId)
+      advanceConfirmedEpoch(presetId)
       writePendingEnvelope(presetId, current)
       publish(current)
       return saved
@@ -456,11 +464,23 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 
   return {
     beginHydration(presetId): PresetHydrationToken {
-      return { presetId, epoch: getHydrationEpoch(presetId) }
+      return {
+        presetId,
+        readEpoch: reserveHydrationRead(presetId),
+        confirmedEpoch: getConfirmedEpoch(presetId),
+      }
     },
 
     hydrate(preset, token): LoomPreset {
-      if (token && (token.presetId !== preset.id || token.epoch !== getHydrationEpoch(preset.id))) {
+      // Read ordering and confirmed persistence are independent: a local dirty
+      // mutation may rebase over the newest read, but an older read cannot
+      // replace a subsequently confirmed persisted row.
+      if (!token) advanceConfirmedEpoch(preset.id)
+      if (token && (
+        token.presetId !== preset.id
+        || token.readEpoch !== getHydrationReadEpoch(preset.id)
+        || token.confirmedEpoch !== getConfirmedEpoch(preset.id)
+      )) {
         const current = entries.get(preset.id)
         if (current) return clone(current.draft)
         throw new StalePresetHydrationError(preset.id)
@@ -469,7 +489,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       const entry = entries.get(preset.id)
       if (!entry) {
         const created = ensure(preset.id, preset)
-        advanceHydrationEpoch(preset.id)
+        publish(created)
         if (isDirty(created.dirty)) void enqueuePersist(preset.id, created).catch(() => {})
         return clone(created.draft)
       }
@@ -482,7 +502,6 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       if (isDirty(entry.dirty) && persistedChanged) {
         entry.revision += 1
       }
-      advanceHydrationEpoch(preset.id)
       writePendingEnvelope(preset.id, entry)
       publish(entry)
       if (isDirty(entry.dirty) && persistedChanged) {
@@ -516,7 +535,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       entry.draft = clone({ ...after, updatedAt: Date.now() })
       entry.dirty = mergeDirtyPaths(entry.dirty, changed)
       entry.revision += 1
-      advanceHydrationEpoch(presetId)
+      // Dirty local paths intentionally remain compatible with an in-flight
+      // latest read; hydrate() rebases them over its fresh persisted base.
       writePendingEnvelope(presetId, entry)
       publish(entry)
 
@@ -568,7 +588,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       const entry = entries.get(presetId)
       clearTimeout(entry?.timer)
       entries.delete(presetId)
-      advanceHydrationEpoch(presetId)
+      advanceConfirmedEpoch(presetId)
       listenersByPreset.delete(presetId)
       removePendingEnvelope(presetId)
     },
@@ -578,6 +598,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 export const presetSaveCoordinator = createPresetSaveCoordinator({
   update: (presetId, input) => presetsApi.update(presetId, input),
 })
+
+const durableRecoveryFlushes = new Map<string, Promise<void>>()
 
 /**
  * Await the selected preset's latest draft before generation reads it. When
@@ -591,8 +613,31 @@ export async function flushPresetForGeneration(presetId: string | undefined): Pr
     return
   }
 
-  const hydration = presetSaveCoordinator.beginHydration(presetId)
-  const persisted = unmarshalPreset(await presetsApi.get(presetId))
-  presetSaveCoordinator.hydrate(persisted, hydration)
-  await presetSaveCoordinator.flush(presetId)
+  const existingRecovery = durableRecoveryFlushes.get(presetId)
+  if (existingRecovery) {
+    await existingRecovery
+    return
+  }
+
+  const recovery = (async () => {
+    while (true) {
+      const hydration = presetSaveCoordinator.beginHydration(presetId)
+      const persisted = unmarshalPreset(await presetsApi.get(presetId))
+      try {
+        presetSaveCoordinator.hydrate(persisted, hydration)
+        break
+      } catch (error) {
+        if (!(error instanceof StalePresetHydrationError)) throw error
+      }
+    }
+    await presetSaveCoordinator.flush(presetId)
+  })()
+  durableRecoveryFlushes.set(presetId, recovery)
+  try {
+    await recovery
+  } finally {
+    if (durableRecoveryFlushes.get(presetId) === recovery) {
+      durableRecoveryFlushes.delete(presetId)
+    }
+  }
 }

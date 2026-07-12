@@ -1649,12 +1649,23 @@ export default function LoomBuilder({
 
   useEffect(() => {
     setPresetEditorController({
-      getState: () => ({
-        open: true,
-        presetId: activePresetRef.current?.id ?? null,
-        activeTabId: activePresetEditorTabRef.current,
-        preset: activePresetRef.current ? toPresetEditorDraft(activePresetRef.current) : null,
-      }),
+      getState: () => {
+        const preset = activePresetRef.current
+        if (!preset || preset.id !== __contextMeterStore.getState().activeLoomPresetId) {
+          return {
+            open: false,
+            presetId: null,
+            activeTabId: activePresetEditorTabRef.current,
+            preset: null,
+          }
+        }
+        return {
+          open: true,
+          presetId: preset.id,
+          activeTabId: activePresetEditorTabRef.current,
+          preset: toPresetEditorDraft(preset),
+        }
+      },
       setActiveTab: (tabId) => {
         setView('list')
         setEditingBlock(null)
@@ -1671,13 +1682,22 @@ export default function LoomBuilder({
   }, [])
 
   useEffect(() => {
+    if (!activePreset || activePreset.id !== activePresetId) {
+      syncPresetEditorState({
+        open: false,
+        presetId: null,
+        activeTabId: activePresetEditorTab,
+        preset: null,
+      })
+      return
+    }
     syncPresetEditorState({
       open: true,
-      presetId: activePreset?.id ?? null,
+      presetId: activePreset.id,
       activeTabId: activePresetEditorTab,
-      preset: activePreset ? toPresetEditorDraft(activePreset) : null,
+      preset: toPresetEditorDraft(activePreset),
     })
-  }, [activePreset, activePresetEditorTab])
+  }, [activePreset, activePresetEditorTab, activePresetId])
 
   useEffect(() => {
     if (activePresetEditorTab === 'preset') return

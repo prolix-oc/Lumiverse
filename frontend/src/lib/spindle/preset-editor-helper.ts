@@ -60,7 +60,8 @@ function publishState(next: SpindlePresetEditorState): void {
 }
 
 function assertOpenController(): PresetEditorController {
-  if (!controller || !snapshot.open || !snapshot.preset) {
+  const current = controller?.getState()
+  if (!controller || !current?.open || !current.preset) {
     throw new Error('PRESET_EDITOR_CLOSED: Preset editor is not open or has no selected preset')
   }
   return controller
@@ -99,7 +100,7 @@ export async function flushPresetEditorDraft(): Promise<void> {
 }
 
 export function setPresetEditorActiveTab(tabId: string): void {
-  if (!controller || !snapshot.open) return
+  if (!controller?.getState().open) return
   controller.setActiveTab(tabId)
 }
 

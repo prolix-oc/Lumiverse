@@ -19,7 +19,7 @@ import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import { unmarshalPreset } from '@/lib/loom/service'
-import { presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
+import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -949,6 +949,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
+      if (err instanceof StalePresetHydrationError) return
       console.error('[InputArea] Failed to load prompt variables preset:', err)
       toast.error(t('toast.failedLoadPromptVariables'))
     } finally {
