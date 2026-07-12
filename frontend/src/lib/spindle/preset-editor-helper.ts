@@ -1,4 +1,9 @@
-import type { SpindlePresetEditorDraft, SpindlePresetEditorState } from './preset-editor-types'
+import type {
+  SpindlePresetEditorDraft,
+  SpindlePresetEditorExtensionState,
+  SpindlePresetEditorScopedHelper,
+  SpindlePresetEditorState,
+} from './preset-editor-types'
 
 type PresetMutator = (preset: SpindlePresetEditorDraft) => SpindlePresetEditorDraft
 
@@ -7,6 +12,11 @@ interface PresetEditorController {
   setActiveTab(tabId: string): void
   updatePreset(mutator: PresetMutator, immediate: boolean): void
   flush(): Promise<void>
+}
+
+export interface PresetEditorScopedAccess {
+  assertActive(): void
+  trackSubscription(unsubscribe: () => void): () => void
 }
 
 const DEFAULT_STATE: SpindlePresetEditorState = {
@@ -84,4 +94,92 @@ export async function flushPresetEditorDraft(): Promise<void> {
 export function setPresetEditorActiveTab(tabId: string): void {
   if (!controller || !snapshot.open) return
   controller.setActiveTab(tabId)
+}
+
+function cloneExtensionState(
+  state: SpindlePresetEditorState,
+  extensionIdentifier: string,
+): SpindlePresetEditorExtensionState {
+  const draft = state.preset
+  const metadata = draft && Object.hasOwn(draft.metadata, extensionIdentifier)
+    ? clone(draft.metadata[extensionIdentifier])
+    : undefined
+  const promptVariableValues = draft?.metadata.promptVariables
+  return {
+    open: state.open,
+    presetId: state.presetId,
+    activeTabId: state.activeTabId,
+    blocks: draft ? clone(draft.blocks) : [],
+    promptVariableValues: promptVariableValues && typeof promptVariableValues === 'object'
+      ? clone(promptVariableValues) as SpindlePresetEditorExtensionState['promptVariableValues']
+      : {},
+    metadata,
+  }
+}
+
+function assertMetadataObject(value: unknown): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('PRESET_EDITOR_INVALID_METADATA: Extension metadata must be an object')
+  }
+}
+
+/**
+ * Create the cooperative, extension-identifier-scoped editor facade. This
+ * constrains supported API mutations; it is not a sandbox for same-origin code.
+ */
+export function createPresetEditorScopedHelper(
+  extensionIdentifier: string,
+  access: PresetEditorScopedAccess,
+): SpindlePresetEditorScopedHelper {
+  function applyScopedMetadataMutation(
+    mutator: (current: unknown) => Record<string, unknown>,
+    immediate = false,
+  ): void {
+    access.assertActive()
+    updatePresetEditorDraft((draft) => {
+      const nextMetadata = mutator(
+        Object.hasOwn(draft.metadata, extensionIdentifier)
+          ? clone(draft.metadata[extensionIdentifier])
+          : undefined,
+      )
+      assertMetadataObject(nextMetadata)
+      return {
+        ...draft,
+        metadata: {
+          ...draft.metadata,
+          [extensionIdentifier]: clone(nextMetadata),
+        },
+      }
+    }, immediate)
+  }
+
+  return {
+    getState(): SpindlePresetEditorExtensionState {
+      access.assertActive()
+      return cloneExtensionState(getPresetEditorState(), extensionIdentifier)
+    },
+    onChange(handler: (state: SpindlePresetEditorExtensionState) => void): () => void {
+      access.assertActive()
+      const unsubscribe = subscribePresetEditorState((state) => {
+        handler(cloneExtensionState(state, extensionIdentifier))
+      })
+      return access.trackSubscription(unsubscribe)
+    },
+    setMetadata(value, options): void {
+      assertMetadataObject(value)
+      applyScopedMetadataMutation(() => value, options?.immediate === true)
+    },
+    updateMetadata(mutator, options): void {
+      applyScopedMetadataMutation(mutator, options?.immediate === true)
+    },
+    activateBuiltinTab(tab): void {
+      access.assertActive()
+      if (tab !== 'blocks') throw new Error(`PRESET_EDITOR_UNKNOWN_BUILTIN_TAB:${tab}`)
+      setPresetEditorActiveTab('preset')
+    },
+    flush(): Promise<void> {
+      access.assertActive()
+      return flushPresetEditorDraft()
+    },
+  }
 }

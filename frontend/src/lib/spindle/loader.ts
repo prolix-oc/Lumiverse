@@ -17,6 +17,7 @@ import {
   createDrawerTabHandle,
   createCharacterEditorTabHandle,
   createPresetEditorTabHandle,
+  createPresetEditorToolbarItemHandle,
   createFloatWidgetHandle,
   createDockPanelHandle,
   createAppMountHandle,
@@ -24,6 +25,7 @@ import {
   createTabMobilityHandle,
   clearTabMobilityHandle,
   destroyAllPlacementsForExtension,
+  destroyPresetEditorPlacementsForExtension,
 } from './placement-helper'
 import {
   getCharacterEditorState,
@@ -37,6 +39,7 @@ import {
   subscribePresetEditorState,
   updatePresetEditorDraft,
   flushPresetEditorDraft,
+  createPresetEditorScopedHelper,
 } from './preset-editor-helper'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
@@ -393,16 +396,47 @@ async function doLoadFrontendExtension(
     )
     const uiEvents = createUIEventsHelper(extensionId)
 
-    // Cache granted permissions for synchronous permission checks in ui methods.
-    // Kept in sync via the SPINDLE_PERMISSION_CHANGED WS event so admin
-    // grant/revoke takes effect without a full extension reload.
     let cachedGrantedPermissions: string[] = await permissionsPromise
+    let presetPermissionEpoch = 0
+    const presetEditorUnsubscribers = new Set<() => void>()
+    const trackPresetEditorSubscription = (unsubscribe: () => void): (() => void) => {
+      const tracked = () => {
+        if (!presetEditorUnsubscribers.delete(tracked)) return
+        unsubscribe()
+      }
+      presetEditorUnsubscribers.add(tracked)
+      return tracked
+    }
+    const clearPresetEditorSubscriptions = () => {
+      for (const unsubscribe of [...presetEditorUnsubscribers]) {
+        unsubscribe()
+      }
+    }
+
+    const scopedPresetAccessEpoch = presetPermissionEpoch
+    const scopedPresetEditor = createPresetEditorScopedHelper(manifest.identifier, {
+      assertActive() {
+        if (!cachedGrantedPermissions.includes('presets')) {
+          throw new Error('PERMISSION_DENIED:presets — preset editor extension helper requires the presets permission')
+        }
+        if (presetPermissionEpoch !== scopedPresetAccessEpoch) {
+          throw new Error('PRESET_EDITOR_REVOKED: Register a new preset editor placement before using the extension helper')
+        }
+      },
+      trackSubscription: trackPresetEditorSubscription,
+    })
+
     const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
-      if (payload?.extensionId === extensionId && Array.isArray(payload.allGranted)) {
-        cachedGrantedPermissions = payload.allGranted
+      if (payload?.extensionId !== extensionId || !Array.isArray(payload.allGranted)) return
+      const hadPresetPermission = cachedGrantedPermissions.includes('presets')
+      cachedGrantedPermissions = payload.allGranted
+      if (hadPresetPermission && !cachedGrantedPermissions.includes('presets')) {
+        presetPermissionEpoch += 1
+        clearPresetEditorSubscriptions()
+        destroyPresetEditorPlacementsForExtension(extensionId)
       }
     })
-    eventUnsubs.push(unsubPermissionSync)
+    eventUnsubs.push(unsubPermissionSync, clearPresetEditorSubscriptions)
     const mountedPoints = new Set<string>()
     let openModalCount = 0
 
@@ -512,6 +546,13 @@ async function doLoadFrontendExtension(
           }
           return createPresetEditorTabHandle(extensionId, options)
         },
+        registerPresetEditorToolbarItem(options) {
+          const granted = cachedGrantedPermissions
+          if (!granted.includes('presets')) {
+            throw new Error('PERMISSION_DENIED:presets — registerPresetEditorToolbarItem requires the presets permission')
+          }
+          return createPresetEditorToolbarItemHandle(extensionId, options)
+        },
         createFloatWidget(options) {
           const granted = cachedGrantedPermissions
           if (!granted.includes('ui_panels')) {
@@ -595,6 +636,7 @@ async function doLoadFrontendExtension(
           },
         },
         presetEditor: {
+          extension: scopedPresetEditor,
           getState() {
             const granted = cachedGrantedPermissions
             if (!granted.includes('presets')) {
@@ -607,7 +649,7 @@ async function doLoadFrontendExtension(
             if (!granted.includes('presets')) {
               throw new Error('PERMISSION_DENIED:presets — presetEditor.onChange requires the presets permission')
             }
-            return subscribePresetEditorState(handler)
+            return trackPresetEditorSubscription(subscribePresetEditorState(handler))
           },
           updatePreset(mutator, options) {
             const granted = cachedGrantedPermissions

@@ -17,6 +17,8 @@ import type {
 import type {
   SpindlePresetEditorTabOptions,
   SpindlePresetEditorTabHandle,
+  SpindlePresetEditorToolbarItemOptions,
+  SpindlePresetEditorToolbarItemHandle,
 } from './preset-editor-types'
 import { useStore } from '@/store'
 import type { TabLocation } from './tab-mobility-types'
@@ -40,6 +42,21 @@ function nextId(extensionId: string, kind: string): string {
 // ── Tab Mobility Handle Cache ──
 // Each call to createTabMobilityHandle subscribes to useStore.
 // Cache one handle per extensionId to avoid subscription leaks.
+
+const presetEditorPlacementDisposers = new Map<string, Set<() => void>>()
+
+function trackPresetEditorPlacement(extensionId: string, dispose: () => void): void {
+  const disposers = presetEditorPlacementDisposers.get(extensionId) ?? new Set<() => void>()
+  disposers.add(dispose)
+  presetEditorPlacementDisposers.set(extensionId, disposers)
+}
+
+function untrackPresetEditorPlacement(extensionId: string, dispose: () => void): void {
+  const disposers = presetEditorPlacementDisposers.get(extensionId)
+  if (!disposers) return
+  disposers.delete(dispose)
+  if (disposers.size === 0) presetEditorPlacementDisposers.delete(extensionId)
+}
 const _tabMobilityCache = new Map<string, ReturnType<typeof createTabMobilityHandle>>
 
 function getStore() {
@@ -193,6 +210,18 @@ export function createPresetEditorTabHandle(
 
   getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
 
+  let destroyed = false
+  const destroy = () => {
+    if (destroyed) return
+    destroyed = true
+    unsubscribeState()
+    root.remove()
+    getStore().unregisterPresetEditorTab(tabId)
+    activateHandlers.clear()
+    untrackPresetEditorPlacement(extensionId, destroy)
+  }
+  trackPresetEditorPlacement(extensionId, destroy)
+
   return {
     root,
     tabId,
@@ -202,15 +231,50 @@ export function createPresetEditorTabHandle(
     activate() {
       setPresetEditorActiveTab(tabId)
     },
-    destroy() {
-      unsubscribeState()
-      getStore().unregisterPresetEditorTab(tabId)
-      activateHandlers.clear()
-    },
+    destroy,
     onActivate(handler: () => void): () => void {
       activateHandlers.add(handler)
       return () => { activateHandlers.delete(handler) }
     },
+  }
+}
+
+// ── Preset Editor Toolbar ──
+
+export function createPresetEditorToolbarItemHandle(
+  extensionId: string,
+  options: SpindlePresetEditorToolbarItemOptions,
+): SpindlePresetEditorToolbarItemHandle {
+  const itemId = nextId(extensionId, `preset-editor-toolbar:${options.id}`)
+  const root = document.createElement('div')
+  root.setAttribute('data-spindle-extension-root', extensionId)
+  root.setAttribute('data-spindle-preset-editor-toolbar-item', itemId)
+
+  getStore().registerPresetEditorToolbarItem({
+    id: itemId,
+    extensionId,
+    ariaLabel: options.ariaLabel,
+    root,
+    visible: true,
+  })
+
+  let destroyed = false
+  const destroy = () => {
+    if (destroyed) return
+    destroyed = true
+    root.remove()
+    getStore().unregisterPresetEditorToolbarItem(itemId)
+    untrackPresetEditorPlacement(extensionId, destroy)
+  }
+  trackPresetEditorPlacement(extensionId, destroy)
+
+  return {
+    root,
+    itemId,
+    setVisible(visible: boolean) {
+      getStore().setPresetEditorToolbarItemVisible(itemId, visible)
+    },
+    destroy,
   }
 }
 
@@ -523,6 +587,26 @@ function createTabMobilityHandleUncached(extensionId: string): {
 
 // ── Cleanup ──
 
+/** Destroy preset-only roots and subscriptions without unloading other extension UI. */
+export function destroyPresetEditorPlacementsForExtension(extensionId: string): void {
+  const disposers = presetEditorPlacementDisposers.get(extensionId)
+  if (disposers) {
+    for (const dispose of [...disposers]) {
+      try { dispose() } catch { /* no-op */ }
+    }
+  }
+
+  const store = getStore()
+  for (const tab of store.presetEditorTabs.filter((entry) => entry.extensionId === extensionId)) {
+    try { tab.root.remove() } catch { /* no-op */ }
+    store.unregisterPresetEditorTab(tab.id)
+  }
+  for (const item of store.presetEditorToolbarItems.filter((entry) => entry.extensionId === extensionId)) {
+    try { item.root.remove() } catch { /* no-op */ }
+    store.unregisterPresetEditorToolbarItem(item.id)
+  }
+}
+
 export function destroyAllPlacementsForExtension(extensionId: string) {
   const store = getStore()
 
@@ -534,11 +618,7 @@ export function destroyAllPlacementsForExtension(extensionId: string) {
     try { tab.root.remove() } catch { /* no-op */ }
   }
 
-  for (const tab of store.presetEditorTabs.filter((t) => t.extensionId === extensionId)) {
-    try { tab.root.remove() } catch { /* no-op */ }
-  }
-
-  // Clean up DOM for app mounts
+  destroyPresetEditorPlacementsForExtension(extensionId)
   for (const m of store.appMounts.filter((m) => m.extensionId === extensionId)) {
     try { m.root.remove() } catch { /* no-op */ }
   }

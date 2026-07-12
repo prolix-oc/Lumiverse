@@ -91,6 +91,7 @@ import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
 import SpindlePresetEditorTabContent from '@/components/spindle/SpindlePresetEditorTabContent'
+import SpindlePresetEditorToolbarItem from '@/components/spindle/SpindlePresetEditorToolbarItem'
 import { applyPresetEditorDraft, toPresetEditorDraft } from '@/lib/spindle/preset-editor-adapter'
 import { setPresetEditorController, syncPresetEditorState } from '@/lib/spindle/preset-editor-helper'
 import s from './LoomBuilder.module.css'
@@ -1528,6 +1529,7 @@ export default function LoomBuilder({
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
+  const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
   const activePresetRef = useRef(activePreset)
   const suppressNextProfileApplyRef = useRef<string | null>(null)
@@ -2126,6 +2128,14 @@ export default function LoomBuilder({
             </div>
           )}
         </div>
+
+        {presetEditorToolbarItems.some((item) => item.visible) && (
+          <div className={s.extensionToolbar}>
+            {presetEditorToolbarItems.filter((item) => item.visible).map((item) => (
+              <SpindlePresetEditorToolbarItem key={item.id} item={item} />
+            ))}
+          </div>
+        )}
 
         {presetEditorTabs.length > 0 && (
           <div className={s.extensionTabBar} role="tablist" aria-label="Preset editor tabs">

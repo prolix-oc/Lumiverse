@@ -18,7 +18,8 @@ import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avat
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
-import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
+import { unmarshalPreset } from '@/lib/loom/service'
+import { presetSaveCoordinator } from '@/lib/loom/preset-save-coordinator'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -942,7 +943,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setPromptVariablesLoading(true)
     try {
       const preset = await presetsApi.get(activeLoomPresetId)
-      setPromptVariablesPreset(unmarshalPreset(preset))
+      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset)))
       setPromptVariablesModalOpen(true)
     } catch (err) {
       console.error('[InputArea] Failed to load prompt variables preset:', err)
@@ -954,14 +955,15 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
     if (!promptVariablesPreset) return
-    const updated: LoomPreset = {
-      ...promptVariablesPreset,
-      promptVariables: values,
-      updatedAt: Date.now(),
-    }
+    const updated = presetSaveCoordinator.mutate(
+      promptVariablesPreset.id,
+      promptVariablesPreset,
+      (preset) => ({ ...preset, promptVariables: values }),
+      { immediate: true },
+    )
     try {
-      const saved = await presetsApi.update(updated.id, marshalUpdate(updated))
-      setPromptVariablesPreset(unmarshalPreset(saved))
+      const saved = await presetSaveCoordinator.flush(updated.id)
+      setPromptVariablesPreset(saved ?? updated)
     } catch (err) {
       console.warn('[InputArea] Failed to save prompt variable values:', err)
       toast.error(t('toast.failedSavePromptVariables'))
