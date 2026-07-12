@@ -209,7 +209,14 @@ export function createPresetEditorTabHandle(
     wasActive = isActive
   })
 
-  getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
+  try {
+    getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
+  } catch (error) {
+    unsubscribeState()
+    root.remove()
+    activateHandlers.clear()
+    throw error
+  }
 
   let destroyed = false
   const assertUsable = () => {

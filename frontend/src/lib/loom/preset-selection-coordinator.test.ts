@@ -82,6 +82,33 @@ describe('preset selection coordinator', () => {
     expect(activePresetId).toBe('preset-b')
   })
 
+  test('keeps a manual selection authoritative when a delayed settings read resolves later', async () => {
+    let activePresetId: string | null = 'preset-a'
+    const pendingManualFlush = deferred<void>()
+    const manualFlushStarted = deferred<void>()
+    const coordinator = createPresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => { activePresetId = presetId },
+      flushPreset: async () => {
+        manualFlushStarted.resolve()
+        await pendingManualFlush.promise
+      },
+    })
+    const pendingSettingsRead = deferred<string>()
+    const settingsSelection = coordinator.begin()
+    const delayedSettingsSelection = pendingSettingsRead.promise.then((presetId) => settingsSelection.transition(presetId))
+    const manualSelection = coordinator.transition('preset-c')
+
+    await manualFlushStarted.promise
+    pendingSettingsRead.resolve('preset-a')
+    expect(await delayedSettingsSelection).toBe(false)
+    pendingManualFlush.resolve()
+    await manualSelection
+
+    expect(activePresetId).toBe('preset-c')
+  })
+
+
   test('does not expose a stale intermediate target after a later switch request', async () => {
     let activePresetId: string | null = 'preset-a'
     const exposed: (string | null)[] = []

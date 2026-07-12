@@ -653,6 +653,11 @@ export async function installPreset(
       return { requestId, success: false, error: "Preset export is missing preset data" };
     }
     const p = preset as Record<string, any>;
+    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
+    const existingPassthroughMetadata = existing
+      ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
+      : {};
+    const passthroughMetadata = extractPresetPassthroughMetadata(p);
     const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
     const blocks = Array.isArray(p.blocks) ? p.blocks : [];
 
@@ -680,6 +685,8 @@ export async function installPreset(
         advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
       },
       metadata: {
+        ...existingPassthroughMetadata,
+        ...passthroughMetadata,
         source: isPlainObject(p.source) ? p.source : null,
         modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
         schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
@@ -700,7 +707,6 @@ export async function installPreset(
 
     // Update the existing installation in place when this preset was installed
     // from LumiHub before, so "Update" advances the version instead of duplicating.
-    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
     let saved;
     if (existing) {
       saved = presetsSvc.updatePreset(userId, existing.id, presetInput)!;
@@ -746,6 +752,77 @@ export async function installPreset(
 
 function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Clone metadata supplied by the hub before spreading it into the persisted
+ * metadata object. Install requests normally arrive from JSON, but keeping the
+ * check here makes direct callers obey the same plain-JSON contract and avoids
+ * invoking getters or copying values from arbitrary prototypes.
+ */
+function extractPresetPassthroughMetadata(
+  preset: Record<string, any>,
+): Record<string, any> {
+  const serializedMetadata = Object.hasOwn(preset, "metadata")
+    ? clonePresetMetadata(preset.metadata, "metadata")
+    : {};
+  const internalMetadata = Object.hasOwn(preset, "passthroughMetadata")
+    ? clonePresetMetadata(preset.passthroughMetadata, "passthroughMetadata")
+    : {};
+
+  // Both forms have appeared in exports. If an export carries both, the
+  // internal Loom bag wins conflicts while the installer-owned fields below
+  // remain authoritative either way.
+  return { ...serializedMetadata, ...internalMetadata };
+}
+
+function clonePresetMetadata(value: unknown, fieldName: string): Record<string, any> {
+  try {
+    if (!isSafeJsonObject(value)) {
+      throw new Error("not a plain JSON object");
+    }
+    const cloned = JSON.parse(JSON.stringify(value));
+    if (!isSafeJsonObject(cloned)) {
+      throw new Error("clone is not a plain JSON object");
+    }
+    return cloned;
+  } catch {
+    throw new Error(`Preset export has invalid ${fieldName}`);
+  }
+}
+
+function isSafeJsonObject(value: unknown): value is Record<string, any> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const seen = new Set<object>();
+  return isSafeJsonValue(value, seen);
+}
+
+function isSafeJsonValue(value: unknown, seen: Set<object>): boolean {
+  if (value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object") return false;
+
+  if (seen.has(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) return false;
+  } else if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+
+  seen.add(value);
+  try {
+    for (const key of Object.keys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !Object.hasOwn(descriptor, "value") || !isSafeJsonValue(descriptor.value, seen)) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    seen.delete(value);
+  }
 }
 
 async function materializeSealedPresetBlocks(

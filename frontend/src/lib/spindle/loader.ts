@@ -72,6 +72,7 @@ interface LoadedExtension {
   holdReady: boolean
   setupComplete: boolean
   readyTimeout: ReturnType<typeof setTimeout> | null
+  cleanup(reportTeardownError?: boolean): void
 }
 
 type FrontendProcessHandler = (
@@ -287,6 +288,8 @@ async function doLoadFrontendExtension(
   manifest: SpindleManifest,
   force = false
 ): Promise<void> {
+  let loaded!: LoadedExtension
+  let cleanupLoadedExtension: ((reportTeardownError?: boolean) => void) | undefined
   const generation = (loadGeneration.get(extensionId) || 0) + 1
   loadGeneration.set(extensionId, generation)
 
@@ -477,7 +480,6 @@ async function doLoadFrontendExtension(
       clearExtensionMountPoints(extensionId)
     }
 
-    let loaded!: LoadedExtension
     const context: FrontendExtensionContext = {
       dom,
       ready() {
@@ -988,6 +990,103 @@ async function doLoadFrontendExtension(
       manifest,
     }
 
+    let cleanupComplete = false
+    let teardownInvoked = false
+    const cleanup = (reportTeardownError = false): void => {
+      if (cleanupComplete) return
+      cleanupComplete = true
+
+      // Revoke extension authority before invoking any extension-owned callbacks.
+      loaded.deactivatePresetEditor()
+
+      try {
+        clearPresetEditorSubscriptions()
+      } catch {
+        // no-op
+      }
+      try {
+        destroyAllPlacementsForExtension(extensionId)
+      } catch {
+        // no-op
+      }
+
+      for (const process of Array.from(loaded.activeProcesses.values())) {
+        try {
+          loaded.activeProcesses.delete(process.processId)
+          process.terminal = true
+          void process.cleanup?.()
+          process.messageHandlers.clear()
+          process.stopHandlers.clear()
+          wsClient.send({
+            type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+            extensionId,
+            processId: process.processId,
+            event: 'frontend_unloaded',
+          })
+        } catch {
+          // no-op
+        }
+      }
+
+      if (!teardownInvoked) {
+        teardownInvoked = true
+        try {
+          loaded.teardown?.()
+        } catch (err) {
+          if (reportTeardownError) {
+            console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, err)
+          }
+        }
+      }
+
+      while (loaded.eventUnsubs.length > 0) {
+        const unsubs = loaded.eventUnsubs.splice(0)
+        for (const unsub of unsubs) {
+          try {
+            unsub()
+          } catch {
+            // no-op
+          }
+        }
+      }
+
+      try {
+        loaded.context.dom.cleanup()
+      } catch {
+        // no-op
+      }
+      const stopMountSync = loaded.stopMountSync
+      loaded.stopMountSync = undefined
+      try {
+        stopMountSync?.()
+      } catch {
+        // no-op
+      }
+      for (const node of loaded.mountRoots) {
+        try {
+          node.remove()
+        } catch {
+          // no-op
+        }
+      }
+      loaded.mountRoots = []
+
+      clearReadyTimeout(loaded)
+      loaded.backendHandlers.clear()
+      loaded.processHandlers.clear()
+      loaded.activeProcesses.clear()
+      unregisterTagInterceptorsByExtension(extensionId)
+      unregisterDisplayResolver(loaded.identifier)
+      removeMessageWidgetsByExtension(extensionId)
+      destroyAllComponentsForExtension(extensionId)
+      clearTabMobilityHandle(extensionId)
+
+      if (loadedExtensions.get(extensionId) === loaded) {
+        loadedExtensions.delete(extensionId)
+      }
+    }
+    cleanupLoadedExtension = cleanup
+
     loaded = {
       id: extensionId,
       generation,
@@ -1010,6 +1109,7 @@ async function doLoadFrontendExtension(
       holdReady: false,
       setupComplete: false,
       readyTimeout: null,
+      cleanup,
     }
 
     let teardownResult: unknown
@@ -1018,31 +1118,14 @@ async function doLoadFrontendExtension(
       await yieldToBrowser({ when: 'paint' })
       teardownResult = mod.setup(context)
     } catch (err) {
-      if (loadedExtensions.get(extensionId) === loaded) {
-        loadedExtensions.delete(extensionId)
-      }
-      clearReadyTimeout(loaded)
-      dom.cleanup()
-      cleanupMountInfra()
+      cleanupLoadedExtension?.()
       throw err
     }
-
     if (!currentGeneration()) {
-      try {
-        if (typeof teardownResult === 'function') {
-          teardownResult()
-        } else {
-          mod.teardown?.()
-        }
-      } catch {
-        // no-op
+      if (typeof teardownResult === 'function') {
+        loaded.teardown = teardownResult as () => void
       }
-      if (loadedExtensions.get(extensionId) === loaded) {
-        loadedExtensions.delete(extensionId)
-      }
-      clearReadyTimeout(loaded)
-      dom.cleanup()
-      cleanupMountInfra()
+      cleanupLoadedExtension?.()
       return
     }
 
@@ -1122,58 +1205,7 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
   const loaded = loadedExtensions.get(extensionId)
   if (!loaded) return
 
-  for (const process of Array.from(loaded.activeProcesses.values())) {
-    try {
-      loaded.activeProcesses.delete(process.processId)
-      process.terminal = true
-      void process.cleanup?.()
-      process.messageHandlers.clear()
-      process.stopHandlers.clear()
-      wsClient.send({
-        type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-        extensionId,
-        processId: process.processId,
-        event: 'frontend_unloaded',
-      })
-    } catch {
-      // no-op
-    }
-  }
-
-  loaded.deactivatePresetEditor()
-
-  try {
-    loaded.teardown?.()
-  } catch (err) {
-    console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, err)
-  }
-
-  // Clean up DOM
-  loaded.context.dom.cleanup()
-  loaded.stopMountSync?.()
-  for (const node of loaded.mountRoots) {
-    try {
-      node.remove()
-    } catch {
-      // no-op
-    }
-  }
-
-  // Clean up event subscriptions
-  for (const unsub of loaded.eventUnsubs) {
-    unsub()
-  }
-
-  clearReadyTimeout(loaded)
-  loaded.backendHandlers.clear()
-  loaded.processHandlers.clear()
-  unregisterTagInterceptorsByExtension(extensionId)
-  unregisterDisplayResolver(loaded.identifier)
-  removeMessageWidgetsByExtension(extensionId)
-  destroyAllComponentsForExtension(extensionId)
-  destroyAllPlacementsForExtension(extensionId)
-  clearTabMobilityHandle(extensionId)
-  loadedExtensions.delete(extensionId)
+  loaded.cleanup(true)
 
   console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
 }

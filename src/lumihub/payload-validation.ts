@@ -25,6 +25,11 @@ export type ValidationResult<T> =
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 
 function isString(value: unknown, max = MAX_STRING_LEN): value is string {
   return typeof value === "string" && value.length <= max;
@@ -179,7 +184,22 @@ export function validateInstallPresetPayload(
   if (!isPlainObject(raw.presetData)) {
     return { ok: false, error: "presetData must be an object" };
   }
-  if (JSON.stringify(raw.presetData).length > MAX_PRESET_DATA_BYTES) {
+  const presetData = raw.presetData;
+  const preset = isPlainObject(presetData.preset) ? presetData.preset : null;
+  if (preset) {
+    for (const key of ["passthroughMetadata", "metadata"] as const) {
+      if (preset[key] !== undefined && !isPlainJsonObject(preset[key])) {
+        return { ok: false, error: `preset.${key} must be a plain JSON object` };
+      }
+    }
+  }
+  let serializedPresetData: string;
+  try {
+    serializedPresetData = JSON.stringify(presetData);
+  } catch {
+    return { ok: false, error: "presetData must contain valid JSON" };
+  }
+  if (serializedPresetData.length > MAX_PRESET_DATA_BYTES) {
     return { ok: false, error: `presetData exceeds ${MAX_PRESET_DATA_BYTES} bytes` };
   }
   if (raw.presetVersion != null && !isString(raw.presetVersion, 64)) {

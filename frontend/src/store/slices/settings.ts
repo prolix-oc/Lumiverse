@@ -3,7 +3,7 @@ import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSe
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
-import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
+import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import {
@@ -794,9 +794,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     settingsSelectionAbort?.abort()
     const selectionAbort = new AbortController()
     settingsSelectionAbort = selectionAbort
+    let selection: PresetSelectionRequest | null = null
     const loadGeneration = ++settingsLoadGeneration
     const localRevisionAtLoadStart = localSettingsRevision
     try {
+      selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
       const rows = await settingsApi.getAll()
       if (loadGeneration !== settingsLoadGeneration) return
       const patch: Record<string, any> = {}
@@ -891,11 +893,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (Object.keys(patch).length > 0) {
         set(patch as any)
       }
-      if (
-        requestedActiveLoomPresetId !== undefined
-        && requestedActiveLoomPresetId !== get().activeLoomPresetId
-      ) {
-        await transitionActiveLoomPreset(requestedActiveLoomPresetId, { signal: selectionAbort.signal })
+      if (requestedActiveLoomPresetId !== undefined && selection) {
+        await selection.transition(requestedActiveLoomPresetId)
       }
 
       // Reorder profile slices to match persisted connectionsOrder. Without
@@ -945,6 +944,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     } catch (err) {
       console.error('[settings] Failed to load settings:', err)
     } finally {
+      selection?.cancel()
       if (settingsSelectionAbort === selectionAbort) {
         settingsSelectionAbort = null
       }
