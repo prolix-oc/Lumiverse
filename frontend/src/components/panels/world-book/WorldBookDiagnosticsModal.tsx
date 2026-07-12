@@ -946,7 +946,12 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                         <h3 className={styles.sectionTitle}>{t('worldBookDiagnostics.sections.queryTitle')}</h3>
                       </div>
                     </div>
-                    <div className={styles.queryBlock}>
+                    <div
+                      className={clsx(styles.queryBlock, styles.scrollPanel, styles.queryPreviewScroll)}
+                      role="region"
+                      aria-label={t('worldBookDiagnostics.sections.queryTitle')}
+                      tabIndex={0}
+                    >
                       {diagnostics.query_preview || t('worldBookDiagnostics.sections.noQuery')}
                     </div>
                     {diagnostics.lexical_query_previews.map((batch, index) => (
