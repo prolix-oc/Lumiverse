@@ -62,6 +62,7 @@ interface LoadedExtension {
   context: SpindleFrontendContext
   teardown?: () => void
   eventUnsubs: (() => void)[]
+  deactivatePresetEditor(): void
   backendHandlers: Set<(payload: unknown) => void>
   processHandlers: Map<string, FrontendProcessHandler>
   activeProcesses: Map<string, ActiveFrontendProcess>
@@ -397,6 +398,7 @@ async function doLoadFrontendExtension(
     const uiEvents = createUIEventsHelper(extensionId)
 
     let cachedGrantedPermissions: string[] = await permissionsPromise
+    let presetEditorActive = true
     const presetEditorUnsubscribers = new Set<() => void>()
     const trackPresetEditorSubscription = (unsubscribe: () => void): (() => void) => {
       const tracked = () => {
@@ -417,6 +419,15 @@ async function doLoadFrontendExtension(
       () => cachedGrantedPermissions,
       trackPresetEditorSubscription,
     )
+
+    const assertPresetPermission = () => {
+      if (!presetEditorActive) {
+        throw new Error('PRESET_EDITOR_DISPOSED: Extension frontend has been unloaded')
+      }
+      if (!cachedGrantedPermissions.includes('presets')) {
+        throw new Error('PERMISSION_DENIED:presets — preset editor operation requires the presets permission')
+      }
+    }
 
     const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
       if (payload?.extensionId !== extensionId || !Array.isArray(payload.allGranted)) return
@@ -532,18 +543,12 @@ async function doLoadFrontendExtension(
           return createCharacterEditorTabHandle(extensionId, options)
         },
         registerPresetEditorTab(options) {
-          const granted = cachedGrantedPermissions
-          if (!granted.includes('presets')) {
-            throw new Error('PERMISSION_DENIED:presets — registerPresetEditorTab requires the presets permission')
-          }
-          return createPresetEditorTabHandle(extensionId, options)
+          assertPresetPermission()
+          return createPresetEditorTabHandle(extensionId, options, assertPresetPermission)
         },
         registerPresetEditorToolbarItem(options) {
-          const granted = cachedGrantedPermissions
-          if (!granted.includes('presets')) {
-            throw new Error('PERMISSION_DENIED:presets — registerPresetEditorToolbarItem requires the presets permission')
-          }
-          return createPresetEditorToolbarItemHandle(extensionId, options)
+          assertPresetPermission()
+          return createPresetEditorToolbarItemHandle(extensionId, options, assertPresetPermission)
         },
         createFloatWidget(options) {
           const granted = cachedGrantedPermissions
@@ -632,31 +637,19 @@ async function doLoadFrontendExtension(
             return scopedPresetAccess.acquire()
           },
           getState() {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.getState requires the presets permission')
-            }
+            assertPresetPermission()
             return getPresetEditorState()
           },
           onChange(handler) {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.onChange requires the presets permission')
-            }
+            assertPresetPermission()
             return trackPresetEditorSubscription(subscribePresetEditorState(handler))
           },
           updatePreset(mutator, options) {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.updatePreset requires the presets permission')
-            }
+            assertPresetPermission()
             updatePresetEditorDraft(mutator, options?.immediate === true)
           },
           flush() {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.flush requires the presets permission')
-            }
+            assertPresetPermission()
             return flushPresetEditorDraft()
           },
         },
@@ -1004,6 +997,10 @@ async function doLoadFrontendExtension(
       context,
       teardown: mod.teardown,
       eventUnsubs,
+      deactivatePresetEditor: () => {
+        presetEditorActive = false
+        scopedPresetAccess.dispose()
+      },
       backendHandlers,
       processHandlers,
       activeProcesses,
@@ -1142,6 +1139,8 @@ export async function unloadFrontendExtension(extensionId: string): Promise<void
       // no-op
     }
   }
+
+  loaded.deactivatePresetEditor()
 
   try {
     loaded.teardown?.()

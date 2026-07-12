@@ -61,9 +61,10 @@ export function useLoomBuilder() {
 
     let cancelled = false
     setIsLoading(true)
+    const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId)
     presetsApi.get(activeLoomPresetId).then((preset) => {
       if (cancelled) return
-      const loadedPreset = presetSaveCoordinator.hydrate(unmarshalPreset(preset))
+      const loadedPreset = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
       activePresetRef.current = loadedPreset
       setActivePreset(loadedPreset)
       setIsLoading(false)
@@ -121,10 +122,13 @@ export function useLoomBuilder() {
   const createPreset = useCallback(async (name: string, description?: string) => {
     setIsLoading(true)
     try {
+      const previousPresetId = activePresetRef.current?.id
+      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
       const loom = createNewLoomPreset(name, description)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
+      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
@@ -184,8 +188,9 @@ export function useLoomBuilder() {
       if (!event.persisted) return
       const presetId = activePresetRef.current?.id
       if (!presetId) return
+      const hydration = presetSaveCoordinator.beginHydration(presetId)
       void presetsApi.get(presetId).then((preset) => {
-        const restored = presetSaveCoordinator.hydrate(unmarshalPreset(preset))
+        const restored = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
         if (activePresetRef.current?.id !== restored.id) return
         activePresetRef.current = restored
         setActivePreset(restored)
@@ -263,9 +268,10 @@ export function useLoomBuilder() {
 
   // Rename a preset
   const renamePreset = useCallback(async (presetId: string, newName: string) => {
+    const hydration = presetSaveCoordinator.beginHydration(presetId)
     const current = presetId === activePresetRef.current?.id
       ? activePresetRef.current
-      : presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)))
+      : presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
     const updated = presetSaveCoordinator.mutate(
       presetId,
       current,
@@ -306,7 +312,11 @@ export function useLoomBuilder() {
     setIsLoading(true)
     try {
       await presetSaveCoordinator.flush(presetId)
-      const source = presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)))
+      const hydration = presetSaveCoordinator.beginHydration(presetId)
+      presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
+      await presetSaveCoordinator.flush(presetId)
+      const source = presetSaveCoordinator.getDraft(presetId)
+      if (!source) throw new Error('Preset disappeared while preparing its duplicate')
       const copy = createNewLoomPreset(newName)
       // Copy all content from the coordinator-confirmed persisted source.
       copy.blocks = JSON.parse(JSON.stringify(source.blocks))
@@ -324,6 +334,7 @@ export function useLoomBuilder() {
       const created = await presetsApi.create(marshalPreset(copy))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
+      await presetSaveCoordinator.flush(presetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)
@@ -443,11 +454,14 @@ export function useLoomBuilder() {
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
     setIsLoading(true)
     try {
+      const previousPresetId = activePresetRef.current?.id
+      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
       const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
+      if (previousPresetId) await presetSaveCoordinator.flush(previousPresetId)
       setActiveLoomPreset(created.id)
       activePresetRef.current = newLoom
       setActivePreset(newLoom)

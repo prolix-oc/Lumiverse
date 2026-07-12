@@ -13,14 +13,25 @@ export function createPresetEditorAccess(
 ): {
   acquire(): SpindlePresetEditorScopedHelper
   revoke(): void
+  dispose(): void
 } {
   let epoch = 0
+  let disposed = false
 
   return {
     acquire(): SpindlePresetEditorScopedHelper {
+      if (disposed) {
+        throw new Error('PRESET_EDITOR_DISPOSED: Extension frontend has been unloaded')
+      }
+      if (!getGrantedPermissions().includes('presets')) {
+        throw new Error('PERMISSION_DENIED:presets — preset editor extension helper requires the presets permission')
+      }
       const acquiredEpoch = epoch
       return createPresetEditorScopedHelper(extensionIdentifier, {
         assertActive() {
+          if (disposed) {
+            throw new Error('PRESET_EDITOR_DISPOSED: Extension frontend has been unloaded')
+          }
           if (!getGrantedPermissions().includes('presets')) {
             throw new Error('PERMISSION_DENIED:presets — preset editor extension helper requires the presets permission')
           }
@@ -32,6 +43,11 @@ export function createPresetEditorAccess(
       })
     },
     revoke() {
+      epoch += 1
+    },
+    dispose() {
+      if (disposed) return
+      disposed = true
       epoch += 1
     },
   }

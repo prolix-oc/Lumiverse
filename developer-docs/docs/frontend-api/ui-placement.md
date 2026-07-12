@@ -240,10 +240,10 @@ await editor.flush()
 ```
 
 `getState()` and `onChange()` expose structured clones of the active preset id,
-tab, Main blocks, prompt-variable values, and the raw value at
-`metadata[callingExtensionIdentifier]`. `setMetadata()` accepts a JSON object;
-`updateMetadata()` receives that raw value and must return a JSON object. Both
-replace only the calling extension's top-level metadata key.
+tab, Main blocks, prompt-variable values, and the raw value owned by the calling
+extension's namespace. `setMetadata()` accepts a JSON object; `updateMetadata()`
+receives that raw value and must return a JSON object. Both replace only the
+calling extension's namespace; the host keeps it separate from Loom-owned keys.
 `activateBuiltinTab('blocks')` selects the host's stable native Blocks tab.
 
 The helper is cooperative least-authority API design, **not** isolation against

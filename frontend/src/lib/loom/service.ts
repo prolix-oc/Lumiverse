@@ -118,6 +118,8 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 /** Version key is surfaced separately as `presetVersion`; the rest of the bag round-trips verbatim. */
 const LUMIHUB_VERSION_META_KEY = '_lumiverse_preset_version'
+/** Internal metadata envelope for Spindle namespaces, kept separate from Loom-owned keys. */
+export const SPINDLE_EXTENSION_METADATA_KEY = '_lumiverse_spindle_extensions'
 const LOOM_OWNED_META_KEYS = new Set([
   'source',
   'modelProfiles',
@@ -140,7 +142,7 @@ const LOOM_OWNED_META_KEYS = new Set([
 function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> | null {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (key.startsWith('_lumiverse_') && key !== LUMIHUB_VERSION_META_KEY) {
+    if (key.startsWith('_lumiverse_') && key !== LUMIHUB_VERSION_META_KEY && key !== SPINDLE_EXTENSION_METADATA_KEY) {
       bag[key] = value
     }
   }
@@ -150,7 +152,7 @@ function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (LOOM_OWNED_META_KEYS.has(key) || key.startsWith('_lumiverse_')) continue
+    if (LOOM_OWNED_META_KEYS.has(key) || (key.startsWith('_lumiverse_') && key !== SPINDLE_EXTENSION_METADATA_KEY)) continue
     bag[key] = value
   }
   return bag

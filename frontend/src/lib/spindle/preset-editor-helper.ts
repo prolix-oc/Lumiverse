@@ -4,6 +4,7 @@ import type {
   SpindlePresetEditorScopedHelper,
   SpindlePresetEditorState,
 } from './preset-editor-types'
+import { SPINDLE_EXTENSION_METADATA_KEY } from '@/lib/loom/service'
 
 type PresetMutator = (preset: SpindlePresetEditorDraft) => SpindlePresetEditorDraft
 
@@ -36,6 +37,10 @@ function clone<T>(value: T): T {
   } catch {
     return JSON.parse(JSON.stringify(value)) as T
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 function cloneState(state: SpindlePresetEditorState): SpindlePresetEditorState {
@@ -71,7 +76,9 @@ export function syncPresetEditorState(next: SpindlePresetEditorState): void {
 }
 
 export function getPresetEditorState(): SpindlePresetEditorState {
-  return cloneState(snapshot)
+  // Controller reads are synchronous; subscriptions still publish on the
+  // normal React synchronization path.
+  return cloneState(controller ? controller.getState() : snapshot)
 }
 
 export function subscribePresetEditorState(
@@ -101,8 +108,9 @@ function cloneExtensionState(
   extensionIdentifier: string,
 ): SpindlePresetEditorExtensionState {
   const draft = state.preset
-  const metadata = draft && Object.hasOwn(draft.metadata, extensionIdentifier)
-    ? clone(draft.metadata[extensionIdentifier])
+  const namespaces = draft?.metadata[SPINDLE_EXTENSION_METADATA_KEY]
+  const metadata = isRecord(namespaces) && Object.hasOwn(namespaces, extensionIdentifier)
+    ? clone(namespaces[extensionIdentifier])
     : undefined
   const promptVariableValues = draft?.metadata.promptVariables
   return {
@@ -137,9 +145,14 @@ export function createPresetEditorScopedHelper(
   ): void {
     access.assertActive()
     updatePresetEditorDraft((draft) => {
+      const namespaces = draft.metadata[SPINDLE_EXTENSION_METADATA_KEY]
+      if (namespaces !== undefined && !isRecord(namespaces)) {
+        throw new Error('PRESET_EDITOR_INVALID_METADATA_NAMESPACE: Spindle metadata namespace must be an object')
+      }
+      const namespaceBag = isRecord(namespaces) ? namespaces : {}
       const nextMetadata = mutator(
-        Object.hasOwn(draft.metadata, extensionIdentifier)
-          ? clone(draft.metadata[extensionIdentifier])
+        Object.hasOwn(namespaceBag, extensionIdentifier)
+          ? clone(namespaceBag[extensionIdentifier])
           : undefined,
       )
       assertMetadataObject(nextMetadata)
@@ -147,7 +160,10 @@ export function createPresetEditorScopedHelper(
         ...draft,
         metadata: {
           ...draft.metadata,
-          [extensionIdentifier]: clone(nextMetadata),
+          [SPINDLE_EXTENSION_METADATA_KEY]: {
+            ...namespaceBag,
+            [extensionIdentifier]: clone(nextMetadata),
+          },
         },
       }
     }, immediate)

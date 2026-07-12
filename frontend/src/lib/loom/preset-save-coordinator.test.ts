@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Preset, UpdatePresetInput } from '@/types/api'
 import type { LoomPreset } from './types'
 import { createPresetSaveCoordinator, type PresetSaveAdapter } from './preset-save-coordinator'
-import { unmarshalPreset } from './service'
+import { SPINDLE_EXTENSION_METADATA_KEY, unmarshalPreset } from './service'
 
 function rawPreset(overrides: Partial<Preset> = {}): Preset {
   return {
@@ -87,6 +87,54 @@ describe('preset save coordinator', () => {
     expect(writes).toHaveLength(2)
     expect(writes[1].prompt_order).toHaveLength(1)
     expect(writes[1].metadata?.promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
+  })
+
+  test('flush waits for a mutation queued while an earlier write is in flight', async () => {
+    const writes: UpdatePresetInput[] = []
+    let resolveFirst!: (preset: Preset) => void
+    let resolveSecond!: (preset: Preset) => void
+    let markFirstStarted!: () => void
+    let markSecondStarted!: () => void
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve })
+    const secondStarted = new Promise<void>((resolve) => { markSecondStarted = resolve })
+    let callCount = 0
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        callCount += 1
+        if (callCount === 1) {
+          markFirstStarted()
+          return new Promise<Preset>((resolve) => { resolveFirst = resolve })
+        }
+        markSecondStarted()
+        return new Promise<Preset>((resolve) => { resolveSecond = resolve })
+      },
+    })
+    const base = unmarshalPreset(rawPreset())
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, name: 'First write' }),
+      { immediate: true },
+    )
+    await firstStarted
+    let flushed = false
+    const flushing = coordinator.flush(base.id).then(() => { flushed = true })
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, description: 'Second write' }),
+      { immediate: true },
+    )
+    resolveFirst(persistedFromUpdate(base.id, writes[0]))
+    await secondStarted
+    expect(flushed).toBe(false)
+    resolveSecond(persistedFromUpdate(base.id, writes[1]))
+    await flushing
+    expect(writes).toHaveLength(2)
+    expect(writes[1].name).toBe('First write')
+    expect(writes[1].metadata?.description).toBe('Second write')
   })
 
   test('rebases only locally-owned dirty fields over a fresh persisted row', async () => {
@@ -227,6 +275,149 @@ describe('preset save coordinator', () => {
     expect(rebased.name).toBe('Unsaved editor name')
     expect(rebased.promptVariables).toEqual({ 'block-1': { tone: 'fresh' } })
     expect(rebased.passthroughMetadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
+    localStorage.clear()
+  })
+
+  test('rebases a durable protected Spindle namespace over fresh sibling namespaces', async () => {
+    localStorage.clear()
+    const writes: UpdatePresetInput[] = []
+    const persisted = unmarshalPreset(rawPreset({
+      metadata: {
+        [SPINDLE_EXTENSION_METADATA_KEY]: {
+          first_extension: { mode: 'old' },
+          second_extension: { revision: 2 },
+        },
+      },
+    }))
+    const pending = {
+      ...persisted,
+      passthroughMetadata: {
+        ...persisted.passthroughMetadata,
+        [SPINDLE_EXTENSION_METADATA_KEY]: {
+          first_extension: { mode: 'new' },
+          second_extension: { revision: 1 },
+        },
+      },
+    }
+    localStorage.setItem('__lumiverse_pending_loom_presets', JSON.stringify({
+      [persisted.id]: {
+        __lumiverse_pending_loom_preset_v2: 2,
+        preset: pending,
+        dirty: {
+          fields: [],
+          passthroughKeys: [],
+          spindleMetadataKeys: ['first_extension'],
+        },
+        revision: 1,
+      },
+    }))
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+
+    expect(coordinator.hasDurablePendingRecovery(persisted.id)).toBe(true)
+    const rebased = coordinator.hydrate(persisted)
+    expect(coordinator.hasDurablePendingRecovery(persisted.id)).toBe(false)
+    expect(rebased.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      first_extension: { mode: 'new' },
+      second_extension: { revision: 2 },
+    })
+    await coordinator.flush(persisted.id)
+    expect(writes[0].metadata?.[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      first_extension: { mode: 'new' },
+      second_extension: { revision: 2 },
+    })
+    localStorage.clear()
+  })
+
+  test('rebases only a dirty protected Spindle namespace over fresh sibling namespaces', async () => {
+    const writes: UpdatePresetInput[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const base = unmarshalPreset(rawPreset({
+      metadata: {
+        [SPINDLE_EXTENSION_METADATA_KEY]: {
+          first_extension: { mode: 'old' },
+          second_extension: { revision: 1 },
+        },
+      },
+    }))
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        passthroughMetadata: {
+          ...preset.passthroughMetadata,
+          [SPINDLE_EXTENSION_METADATA_KEY]: {
+            first_extension: { mode: 'new' },
+            second_extension: { revision: 1 },
+          },
+        },
+      }),
+    )
+
+    const rebased = coordinator.hydrate(unmarshalPreset(rawPreset({
+      metadata: {
+        [SPINDLE_EXTENSION_METADATA_KEY]: {
+          first_extension: { mode: 'old' },
+          second_extension: { revision: 2 },
+        },
+      },
+    })))
+    expect(rebased.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      first_extension: { mode: 'new' },
+      second_extension: { revision: 2 },
+    })
+    await coordinator.flush(base.id)
+    expect(writes[0].metadata?.[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      first_extension: { mode: 'new' },
+      second_extension: { revision: 2 },
+    })
+  })
+
+  test('rejects a delayed persisted read after a newer write was confirmed', async () => {
+    localStorage.clear()
+    const writes: UpdatePresetInput[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const base = unmarshalPreset(rawPreset({ name: 'Before delayed read' }))
+    coordinator.hydrate(base)
+
+    const delayedRead = coordinator.beginHydration(base.id)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, name: 'Saved before delayed read resolves' }),
+      { immediate: true },
+    )
+    await coordinator.flush(base.id)
+
+    const afterDelayedRead = coordinator.hydrate(base, delayedRead)
+    expect(afterDelayedRead.name).toBe('Saved before delayed read resolves')
+
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, promptVariables: { 'block-1': { tone: 'warm' } } }),
+      { immediate: true },
+    )
+    await coordinator.flush(base.id)
+
+    expect(writes).toHaveLength(2)
+    expect(writes[1].name).toBe('Saved before delayed read resolves')
     localStorage.clear()
   })
 

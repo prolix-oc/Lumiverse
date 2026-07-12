@@ -6,6 +6,7 @@ import {
   marshalUpdate,
   unmarshalPreset,
 } from './service'
+import { SPINDLE_EXTENSION_METADATA_KEY } from './service'
 
 function rawPreset(metadata: Record<string, unknown>): Preset {
   return {
@@ -50,6 +51,39 @@ describe('Loom extension metadata preservation', () => {
     expect(marshalPreset(imported).metadata?.agentic_preset_composer).toEqual({
       version: 1,
       pipelines: [{ id: 'main' }],
+    })
+  })
+
+  test('preserves colliding extension namespaces in the protected Spindle envelope', () => {
+    const nativeSource = {
+      type: 'native-source',
+      slug: null,
+      importedVersion: null,
+      importedName: null,
+      importedAt: 1,
+    }
+    const loom = unmarshalPreset(rawPreset({
+      source: nativeSource,
+      description: 'Native description',
+      [SPINDLE_EXTENSION_METADATA_KEY]: {
+        source: { mode: 'parallel' },
+        description: { mode: 'single' },
+      },
+    }))
+
+    expect(loom.source).toEqual(nativeSource)
+    expect(loom.description).toBe('Native description')
+    expect(loom.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      source: { mode: 'parallel' },
+      description: { mode: 'single' },
+    })
+
+    const metadata = marshalUpdate(loom).metadata!
+    expect(metadata.source).toEqual(nativeSource)
+    expect(metadata.description).toBe('Native description')
+    expect(metadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      source: { mode: 'parallel' },
+      description: { mode: 'single' },
     })
   })
 })

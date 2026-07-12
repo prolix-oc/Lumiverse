@@ -19,5 +19,5 @@ export default function SpindlePresetEditorToolbarItem({ item }: Props) {
     }, { phase: 'paint' })
   }, [item.root])
 
-  return <div ref={hostRef} aria-label={item.ariaLabel} />
+  return <div ref={hostRef} role="group" aria-label={item.ariaLabel} />
 }

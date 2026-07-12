@@ -190,6 +190,7 @@ export function createCharacterEditorTabHandle(
 export function createPresetEditorTabHandle(
   extensionId: string,
   options: SpindlePresetEditorTabOptions,
+  assertActive: () => void,
 ): SpindlePresetEditorTabHandle {
   const tabId = nextId(extensionId, `preset-editor-tab:${options.id}`)
   const root = document.createElement('div')
@@ -211,6 +212,10 @@ export function createPresetEditorTabHandle(
   getStore().registerPresetEditorTab({ id: tabId, extensionId, title: options.title, root })
 
   let destroyed = false
+  const assertUsable = () => {
+    assertActive()
+    if (destroyed) throw new Error('PRESET_EDITOR_DESTROYED: Preset editor tab has been destroyed')
+  }
   const destroy = () => {
     if (destroyed) return
     destroyed = true
@@ -226,13 +231,16 @@ export function createPresetEditorTabHandle(
     root,
     tabId,
     setTitle(title: string) {
+      assertUsable()
       getStore().updatePresetEditorTab(tabId, { title })
     },
     activate() {
+      assertUsable()
       setPresetEditorActiveTab(tabId)
     },
     destroy,
     onActivate(handler: () => void): () => void {
+      assertUsable()
       activateHandlers.add(handler)
       return () => { activateHandlers.delete(handler) }
     },
@@ -244,6 +252,7 @@ export function createPresetEditorTabHandle(
 export function createPresetEditorToolbarItemHandle(
   extensionId: string,
   options: SpindlePresetEditorToolbarItemOptions,
+  assertActive: () => void,
 ): SpindlePresetEditorToolbarItemHandle {
   const itemId = nextId(extensionId, `preset-editor-toolbar:${options.id}`)
   const root = document.createElement('div')
@@ -259,6 +268,10 @@ export function createPresetEditorToolbarItemHandle(
   })
 
   let destroyed = false
+  const assertUsable = () => {
+    assertActive()
+    if (destroyed) throw new Error('PRESET_EDITOR_DESTROYED: Preset editor toolbar item has been destroyed')
+  }
   const destroy = () => {
     if (destroyed) return
     destroyed = true
@@ -272,6 +285,7 @@ export function createPresetEditorToolbarItemHandle(
     root,
     itemId,
     setVisible(visible: boolean) {
+      assertUsable()
       getStore().setPresetEditorToolbarItemVisible(itemId, visible)
     },
     destroy,

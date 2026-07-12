@@ -431,7 +431,7 @@ function upgradeLegacyPresetMetadata(userId: string, row: PresetRow): void {
   metadata._lumiverse_preset_slug = BUILTIN_DEFAULT_PRESET_SLUG;
   metadata.isDefault = true;
   getDb()
-    .query("UPDATE presets SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .query("UPDATE presets SET metadata = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?")
     .run(
       JSON.stringify(metadata),
       Math.floor(Date.now() / 1000),

@@ -942,8 +942,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setOpenPopover(null)
     setPromptVariablesLoading(true)
     try {
+      const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId)
       const preset = await presetsApi.get(activeLoomPresetId)
-      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset)))
+      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
       console.error('[InputArea] Failed to load prompt variables preset:', err)

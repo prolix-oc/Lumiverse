@@ -68,7 +68,7 @@ export interface SpindlePresetEditorExtensionState {
   blocks: PromptBlockDTO[]
   /** Detached prompt-variable values cloned from the host draft. */
   promptVariableValues: PromptVariableValuesDTO
-  /** Structured clone of metadata[callingExtensionIdentifier]. */
+  /** Structured clone of the calling extension's host-managed metadata namespace. */
   readonly metadata: unknown
 }
 

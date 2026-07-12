@@ -5,6 +5,7 @@ import {
 } from './preset-editor-helper'
 import { createPresetEditorAccess } from './preset-editor-access'
 import type { SpindlePresetEditorDraft, SpindlePresetEditorState } from './preset-editor-types'
+import { SPINDLE_EXTENSION_METADATA_KEY } from '@/lib/loom/service'
 
 function draft(): SpindlePresetEditorDraft {
   return {
@@ -53,11 +54,55 @@ describe('scoped preset editor helper', () => {
     expect(current.metadata).toEqual({
       promptVariables: { 'block-1': { tone: 'neutral' } },
       another_extension: { preserved: true },
-      agentic_preset_composer: { mode: 'parallel' },
+      [SPINDLE_EXTENSION_METADATA_KEY]: {
+        agentic_preset_composer: { mode: 'parallel' },
+      },
     })
 
     helper.activateBuiltinTab('blocks')
     expect(activeTab).toBe('preset')
+  })
+
+  test('keeps colliding extension identifiers separate from Loom-owned metadata', () => {
+    let current: SpindlePresetEditorDraft = {
+      ...draft(),
+      metadata: {
+        ...draft().metadata,
+        source: { type: 'native-source' },
+        description: 'Native description',
+      },
+    }
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: current,
+      }),
+      setActiveTab() {},
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+
+    const source = createPresetEditorScopedHelper('source', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+    const description = createPresetEditorScopedHelper('description', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+    source.setMetadata({ mode: 'parallel' })
+    description.setMetadata({ mode: 'single' })
+
+    expect(current.metadata.source).toEqual({ type: 'native-source' })
+    expect(current.metadata.description).toBe('Native description')
+    expect(current.metadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      source: { mode: 'parallel' },
+      description: { mode: 'single' },
+    })
+    expect(source.getState().metadata).toEqual({ mode: 'parallel' })
+    expect(description.getState().metadata).toEqual({ mode: 'single' })
   })
 
   test('rejects use after a permission revocation invalidates access', () => {
@@ -97,11 +142,27 @@ describe('scoped preset editor helper', () => {
     const retained = access.acquire()
     permissions = []
     access.revoke()
+    expect(() => access.acquire()).toThrow('PERMISSION_DENIED:presets')
     permissions = ['presets']
     expect(() => retained.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_REVOKED')
 
     const reacquired = access.acquire()
     reacquired.setMetadata({ mode: 'parallel' })
-    expect(current.metadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
+    expect(current.metadata[SPINDLE_EXTENSION_METADATA_KEY]).toEqual({
+      agentic_preset_composer: { mode: 'parallel' },
+    })
+
+  })
+  test('permanently invalidates helpers when the extension frontend unloads', () => {
+    const access = createPresetEditorAccess(
+      'agentic_preset_composer',
+      () => ['presets'],
+      (unsubscribe) => unsubscribe,
+    )
+    const retained = access.acquire()
+    access.dispose()
+
+    expect(() => access.acquire()).toThrow('PRESET_EDITOR_DISPOSED')
+    expect(() => retained.getState()).toThrow('PRESET_EDITOR_DISPOSED')
   })
 })

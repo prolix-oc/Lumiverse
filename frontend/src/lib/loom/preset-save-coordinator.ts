@@ -1,6 +1,6 @@
 import { presetsApi } from '@/api/presets'
 import type { Preset, UpdatePresetInput } from '@/types/api'
-import { looksLikeLoomPresetData, marshalUpdate, unmarshalPreset } from './service'
+import { looksLikeLoomPresetData, marshalUpdate, SPINDLE_EXTENSION_METADATA_KEY, unmarshalPreset } from './service'
 import type { LoomPreset } from './types'
 
 const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
@@ -31,6 +31,7 @@ type DraftField = (typeof DRAFT_FIELDS)[number]
 interface DirtyPresetPaths {
   fields: DraftField[]
   passthroughKeys: string[]
+  spindleMetadataKeys: string[]
 }
 
 interface PendingLoomPresetEnvelope {
@@ -60,16 +61,36 @@ export interface PresetMutationOptions {
   debounceMs?: number
 }
 
+export interface PresetHydrationToken {
+  readonly presetId: string
+  readonly epoch: number
+}
+
+export class StalePresetHydrationError extends Error {
+  constructor(presetId: string) {
+    super(`Stale preset hydration: ${presetId}`)
+    this.name = 'StalePresetHydrationError'
+  }
+}
+
 export interface PresetSaveCoordinator {
+  /**
+   * Capture the coordinator state before beginning an asynchronous persisted-row read.
+   * Pass this token to `hydrate()` when the read resolves so stale responses cannot
+   * replace a newer local mutation or persistence confirmation.
+   */
+  beginHydration(presetId: string): PresetHydrationToken
   /**
    * Incorporate a freshly read persisted row. Any durable or in-memory dirty
    * paths are rebased over that row; untouched paths always come from the row.
    */
-  hydrate(preset: LoomPreset): LoomPreset
+  hydrate(preset: LoomPreset, token?: PresetHydrationToken): LoomPreset
   /** Return the current per-preset draft, if this coordinator owns one. */
   getDraft(presetId: string): LoomPreset | null
   /** True when the preset has unsaved local changes. */
   hasPendingChanges(presetId: string): boolean
+  /** True when only durable recovery state exists and a persisted read is required before flushing. */
+  hasDurablePendingRecovery(presetId: string): boolean
   /**
    * Atomically derive a draft from the coordinator's current value. A fallback
    * is used only on the first writer for a preset, preventing a stale caller
@@ -113,25 +134,35 @@ function isDraftField(value: unknown): value is DraftField {
 
 function normalizeDirtyPaths(value: unknown): DirtyPresetPaths | null {
   if (!isRecord(value) || !Array.isArray(value.fields) || !Array.isArray(value.passthroughKeys)) return null
-  if (!value.fields.every(isDraftField) || !value.passthroughKeys.every((key) => typeof key === 'string')) return null
+  const spindleMetadataKeys = value.spindleMetadataKeys === undefined
+    ? []
+    : value.spindleMetadataKeys
+  if (
+    !value.fields.every(isDraftField)
+    || !value.passthroughKeys.every((key) => typeof key === 'string')
+    || !Array.isArray(spindleMetadataKeys)
+    || !spindleMetadataKeys.every((key) => typeof key === 'string')
+  ) return null
   return {
     fields: [...new Set(value.fields)],
     passthroughKeys: [...new Set(value.passthroughKeys)],
+    spindleMetadataKeys: [...new Set(spindleMetadataKeys)],
   }
 }
 
 function isDirty(dirty: DirtyPresetPaths): boolean {
-  return dirty.fields.length > 0 || dirty.passthroughKeys.length > 0
+  return dirty.fields.length > 0 || dirty.passthroughKeys.length > 0 || dirty.spindleMetadataKeys.length > 0
 }
 
 function emptyDirtyPaths(): DirtyPresetPaths {
-  return { fields: [], passthroughKeys: [] }
+  return { fields: [], passthroughKeys: [], spindleMetadataKeys: [] }
 }
 
 function mergeDirtyPaths(previous: DirtyPresetPaths, next: DirtyPresetPaths): DirtyPresetPaths {
   return {
     fields: [...new Set([...previous.fields, ...next.fields])],
     passthroughKeys: [...new Set([...previous.passthroughKeys, ...next.passthroughKeys])],
+    spindleMetadataKeys: [...new Set([...previous.spindleMetadataKeys, ...next.spindleMetadataKeys])],
   }
 }
 
@@ -139,12 +170,22 @@ function getChangedPaths(before: LoomPreset, after: LoomPreset): DirtyPresetPath
   const fields = DRAFT_FIELDS.filter((field) => !sameJson(before[field], after[field]))
   const beforeMetadata = before.passthroughMetadata ?? {}
   const afterMetadata = after.passthroughMetadata ?? {}
+  const beforeNamespaces = isRecord(beforeMetadata[SPINDLE_EXTENSION_METADATA_KEY])
+    ? beforeMetadata[SPINDLE_EXTENSION_METADATA_KEY]
+    : {}
+  const afterNamespaces = isRecord(afterMetadata[SPINDLE_EXTENSION_METADATA_KEY])
+    ? afterMetadata[SPINDLE_EXTENSION_METADATA_KEY]
+    : {}
+  const spindleMetadataKeys = [...new Set([
+    ...Object.keys(beforeNamespaces),
+    ...Object.keys(afterNamespaces),
+  ])].filter((key) => !sameJson(beforeNamespaces[key], afterNamespaces[key]))
   const passthroughKeys = [...new Set([
     ...Object.keys(beforeMetadata),
     ...Object.keys(afterMetadata),
-  ])].filter((key) => !sameJson(beforeMetadata[key], afterMetadata[key]))
+  ])].filter((key) => key !== SPINDLE_EXTENSION_METADATA_KEY && !sameJson(beforeMetadata[key], afterMetadata[key]))
 
-  return { fields, passthroughKeys }
+  return { fields, passthroughKeys, spindleMetadataKeys }
 }
 
 function rebaseDirtyPaths(
@@ -158,7 +199,7 @@ function rebaseDirtyPaths(
     rebased[field] = clone(draft[field]) as never
   }
 
-  if (dirty.passthroughKeys.length > 0) {
+  if (dirty.passthroughKeys.length > 0 || dirty.spindleMetadataKeys.length > 0) {
     const metadata = clone(persisted.passthroughMetadata ?? {})
     for (const key of dirty.passthroughKeys) {
       if (Object.hasOwn(draft.passthroughMetadata, key)) {
@@ -171,6 +212,33 @@ function rebaseDirtyPaths(
       } else {
         delete metadata[key]
       }
+    }
+
+    if (dirty.spindleMetadataKeys.length > 0) {
+      const namespaces = isRecord(metadata[SPINDLE_EXTENSION_METADATA_KEY])
+        ? clone(metadata[SPINDLE_EXTENSION_METADATA_KEY])
+        : {}
+      const draftNamespaces = isRecord(draft.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY])
+        ? draft.passthroughMetadata[SPINDLE_EXTENSION_METADATA_KEY]
+        : {}
+      for (const extensionId of dirty.spindleMetadataKeys) {
+        if (Object.hasOwn(draftNamespaces, extensionId)) {
+          Object.defineProperty(namespaces, extensionId, {
+            value: clone(draftNamespaces[extensionId]),
+            enumerable: true,
+            writable: true,
+            configurable: true,
+          })
+        } else {
+          delete namespaces[extensionId]
+        }
+      }
+      Object.defineProperty(metadata, SPINDLE_EXTENSION_METADATA_KEY, {
+        value: namespaces,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
     }
     rebased.passthroughMetadata = metadata
   }
@@ -211,7 +279,7 @@ function legacyDirtyPaths(includePromptVariables: boolean): DirtyPresetPaths {
     && field !== 'presetVersion'
   ))
   if (includePromptVariables) fields.push('promptVariables')
-  return { fields, passthroughKeys: [] }
+  return { fields, passthroughKeys: [], spindleMetadataKeys: [] }
 }
 function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null {
   const entry = readPendingEntries()[presetId]
@@ -242,7 +310,7 @@ function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null
       preset: entry.preset,
       dirty: includeEditorContent
         ? legacyDirtyPaths(includePromptVariables)
-        : { fields: includePromptVariables ? ['promptVariables'] : [], passthroughKeys: [] },
+        : { fields: includePromptVariables ? ['promptVariables'] : [], passthroughKeys: [], spindleMetadataKeys: [] },
       revision: typeof entry.revision === 'number' && Number.isSafeInteger(entry.revision)
         ? entry.revision
         : 0,
@@ -306,6 +374,12 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
 export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetSaveCoordinator {
   const entries = new Map<string, PresetSaveEntry>()
   const listenersByPreset = new Map<string, Set<(preset: LoomPreset) => void>>()
+  const hydrationEpochs = new Map<string, number>()
+
+  const getHydrationEpoch = (presetId: string): number => hydrationEpochs.get(presetId) ?? 0
+  const advanceHydrationEpoch = (presetId: string): void => {
+    hydrationEpochs.set(presetId, getHydrationEpoch(presetId) + 1)
+  }
 
   function publish(entry: PresetSaveEntry): void {
     const snapshot = clone(entry.draft)
@@ -352,6 +426,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       } else {
         current.draft = rebaseDirtyPaths(saved, current.draft, current.dirty)
       }
+      advanceHydrationEpoch(presetId)
       writePendingEnvelope(presetId, current)
       publish(current)
       return saved
@@ -380,10 +455,21 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   }
 
   return {
-    hydrate(preset: LoomPreset): LoomPreset {
+    beginHydration(presetId): PresetHydrationToken {
+      return { presetId, epoch: getHydrationEpoch(presetId) }
+    },
+
+    hydrate(preset, token): LoomPreset {
+      if (token && (token.presetId !== preset.id || token.epoch !== getHydrationEpoch(preset.id))) {
+        const current = entries.get(preset.id)
+        if (current) return clone(current.draft)
+        throw new StalePresetHydrationError(preset.id)
+      }
+
       const entry = entries.get(preset.id)
       if (!entry) {
         const created = ensure(preset.id, preset)
+        advanceHydrationEpoch(preset.id)
         if (isDirty(created.dirty)) void enqueuePersist(preset.id, created).catch(() => {})
         return clone(created.draft)
       }
@@ -396,6 +482,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       if (isDirty(entry.dirty) && persistedChanged) {
         entry.revision += 1
       }
+      advanceHydrationEpoch(preset.id)
       writePendingEnvelope(preset.id, entry)
       publish(entry)
       if (isDirty(entry.dirty) && persistedChanged) {
@@ -413,6 +500,10 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       return Boolean(entries.get(presetId) && isDirty(entries.get(presetId)!.dirty))
     },
 
+    hasDurablePendingRecovery(presetId: string): boolean {
+      return !entries.has(presetId) && readPendingEnvelope(presetId) !== null
+    },
+
     mutate(presetId, fallback, mutator, options = {}): LoomPreset {
       const entry = ensure(presetId, fallback)
       const before = entry.draft
@@ -425,6 +516,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       entry.draft = clone({ ...after, updatedAt: Date.now() })
       entry.dirty = mergeDirtyPaths(entry.dirty, changed)
       entry.revision += 1
+      advanceHydrationEpoch(presetId)
       writePendingEnvelope(presetId, entry)
       publish(entry)
 
@@ -437,14 +529,23 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     },
 
     async flush(presetId: string): Promise<LoomPreset | null> {
-      const entry = entries.get(presetId)
-      if (!entry) return null
-      if (entry.timer) {
-        clearTimeout(entry.timer)
-        entry.timer = null
+      while (true) {
+        const entry = entries.get(presetId)
+        if (!entry) return null
+        if (entry.timer) {
+          clearTimeout(entry.timer)
+          entry.timer = null
+        }
+
+        const revision = entry.revision
+        const chain = isDirty(entry.dirty) ? enqueuePersist(presetId, entry) : entry.chain
+        const saved = await chain
+        const current = entries.get(presetId)
+        if (!current) return saved
+        if (current.revision === revision && !isDirty(current.dirty) && current.chain === chain) {
+          return saved
+        }
       }
-      if (isDirty(entry.dirty)) return enqueuePersist(presetId, entry)
-      return entry.chain
     },
 
     flushBestEffort(presetId: string): void {
@@ -467,6 +568,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       const entry = entries.get(presetId)
       clearTimeout(entry?.timer)
       entries.delete(presetId)
+      advanceHydrationEpoch(presetId)
       listenersByPreset.delete(presetId)
       removePendingEnvelope(presetId)
     },
@@ -477,8 +579,20 @@ export const presetSaveCoordinator = createPresetSaveCoordinator({
   update: (presetId, input) => presetsApi.update(presetId, input),
 })
 
-/** Await the active preset's latest draft before a generation endpoint reads it. */
+/**
+ * Await the selected preset's latest draft before generation reads it. When
+ * Loom has not mounted yet, hydrate durable recovery state over a fresh row
+ * first so prompt-only or scoped writes cannot be skipped.
+ */
 export async function flushPresetForGeneration(presetId: string | undefined): Promise<void> {
   if (!presetId) return
+  if (!presetSaveCoordinator.hasDurablePendingRecovery(presetId)) {
+    await presetSaveCoordinator.flush(presetId)
+    return
+  }
+
+  const hydration = presetSaveCoordinator.beginHydration(presetId)
+  const persisted = unmarshalPreset(await presetsApi.get(presetId))
+  presetSaveCoordinator.hydrate(persisted, hydration)
   await presetSaveCoordinator.flush(presetId)
 }
