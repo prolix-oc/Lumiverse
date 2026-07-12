@@ -91,7 +91,7 @@ export interface SpindlePresetEditorToolbarUI {
 }
 
 export interface SpindlePresetEditorExtensionHelper {
-  extension: SpindlePresetEditorScopedHelper
+  readonly extension: SpindlePresetEditorScopedHelper
 }
 
 export type SpindlePresetEditorUI = SpindleFrontendContext['ui']

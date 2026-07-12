@@ -222,6 +222,10 @@ semantics beneath its required `ariaLabel`.
 
 This additive helper is scoped to the calling extension's manifest identifier:
 
+The `extension` property is a read-only getter; each read acquires the current
+revocation-bound scoped helper.
+
+
 ```ts
 const editor = ctx.ui.presetEditor.extension
 const state = editor.getState()
