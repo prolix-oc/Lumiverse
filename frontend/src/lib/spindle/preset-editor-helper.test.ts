@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
   createPresetEditorScopedHelper,
+  flushPresetEditorDraft,
   getPresetEditorState,
   setPresetEditorController,
   subscribePresetEditorState,
@@ -143,6 +144,7 @@ describe('scoped preset editor helper', () => {
     })
     const readsDuringClose: SpindlePresetEditorState[] = []
     let closeMutationError: unknown
+    let closeTabError: unknown
     const unsubscribe = subscribePresetEditorState((state) => {
       if (state.open) return
       readsDuringClose.push(getPresetEditorState())
@@ -150,6 +152,11 @@ describe('scoped preset editor helper', () => {
         helper.setMetadata({ mode: 'stale' })
       } catch (error) {
         closeMutationError = error
+      }
+      try {
+        helper.activateBuiltinTab('blocks')
+      } catch (error) {
+        closeTabError = error
       }
     })
 
@@ -163,7 +170,51 @@ describe('scoped preset editor helper', () => {
     expect(readsDuringClose).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
     expect(closeMutationError).toBeInstanceOf(Error)
     expect((closeMutationError as Error).message).toContain('PRESET_EDITOR_CLOSED')
+    expect(closeTabError).toBeInstanceOf(Error)
+    expect((closeTabError as Error).message).toContain('PRESET_EDITOR_CLOSED')
     expect(updates).toBe(0)
+    unsubscribe()
+  })
+
+  test('rejects non-JSON extension metadata before it reaches coordinator state', () => {
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    expect(() => helper.setMetadata(new Map() as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+    expect(() => helper.setMetadata({ nested: { count: BigInt(1) } } as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+    expect(() => helper.setMetadata({ callback: () => {} } as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+  })
+
+  test('does not republish an obsolete controller after an in-flight flush', async () => {
+    const current = draft()
+    let resolveFlush!: () => void
+    const pendingFlush = new Promise<void>((resolve) => { resolveFlush = resolve })
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: current,
+      }),
+      setActiveTab() {},
+      updatePreset() {},
+      flush: () => pendingFlush,
+    })
+    const observed: SpindlePresetEditorState[] = []
+    const unsubscribe = subscribePresetEditorState((state) => observed.push(state))
+
+    const flush = flushPresetEditorDraft()
+    setPresetEditorController(null)
+    resolveFlush()
+    await flush
+
+    expect(getPresetEditorState()).toMatchObject({ open: false, presetId: null, preset: null })
+    expect(observed).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
     unsubscribe()
   })
 

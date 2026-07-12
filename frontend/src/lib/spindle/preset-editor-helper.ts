@@ -44,6 +44,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  } catch {
+    return false
+  }
+}
+
+function isJsonValue(value: unknown, ancestors = new WeakSet<object>()): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0)
+  if (typeof value !== 'object') return false
+
+  if (ancestors.has(value)) return false
+  ancestors.add(value)
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!(index in value) || !isJsonValue(value[index], ancestors)) return false
+      }
+      return Reflect.ownKeys(value).every((key) => (
+        key === 'length'
+        || (typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key) && Number(key) < value.length)
+      ))
+    }
+    if (!isPlainObject(value)) return false
+    return Reflect.ownKeys(value).every((key) => {
+      if (typeof key !== 'string') return false
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return !!descriptor
+        && descriptor.enumerable
+        && Object.hasOwn(descriptor, 'value')
+        && isJsonValue(descriptor.value, ancestors)
+    })
+  } catch {
+    return false
+  } finally {
+    ancestors.delete(value)
+  }
+}
+
 function cloneState(state: SpindlePresetEditorState): SpindlePresetEditorState {
   return {
     open: state.open,
@@ -115,12 +158,13 @@ export function updatePresetEditorDraft(mutator: PresetMutator, immediate = fals
 export async function flushPresetEditorDraft(): Promise<void> {
   const activeController = assertOpenController()
   await activeController.flush()
-  publishState(activeController.getState())
+  if (controller === activeController) {
+    syncPresetEditorState(activeController.getState())
+  }
 }
 
 export function setPresetEditorActiveTab(tabId: string): void {
-  if (!controller || !getCurrentState().open) return
-  controller.setActiveTab(tabId)
+  assertOpenController().setActiveTab(tabId)
 }
 
 function cloneExtensionState(
@@ -146,8 +190,8 @@ function cloneExtensionState(
 }
 
 function assertMetadataObject(value: unknown): asserts value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('PRESET_EDITOR_INVALID_METADATA: Extension metadata must be an object')
+  if (!isPlainObject(value) || !isJsonValue(value)) {
+    throw new Error('PRESET_EDITOR_INVALID_METADATA: Extension metadata must be a plain JSON object')
   }
 }
 

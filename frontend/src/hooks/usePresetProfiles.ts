@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
-import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
+import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import type { PromptBlock } from '@/lib/loom/types'
 
 /**
@@ -44,6 +44,20 @@ export function usePresetProfiles(
   const [charSlot, setCharSlot] = useState<CharSlot>(EMPTY_CHAR_SLOT)
   const [connectionSlot, setConnectionSlot] = useState<ConnectionSlot>(EMPTY_CONNECTION_SLOT)
   const [isLoading, setIsLoading] = useState(false)
+  const selectionIntentRef = useRef<PresetSelectionRequest | null>(null)
+
+  useEffect(() => {
+    selectionIntentRef.current?.cancel()
+    const selectionIntent = beginActiveLoomPresetSelection()
+    selectionIntentRef.current = selectionIntent
+    return () => {
+      selectionIntent.cancel()
+      if (selectionIntentRef.current === selectionIntent) {
+        selectionIntentRef.current = null
+      }
+    }
+  }, [activeChatId, activeCharacterId, activeProfileId, presetId])
+
 
   // Load defaults for the currently selected preset. Defaults are stored per
   // preset, so switching presets should load a different default snapshot.
@@ -281,7 +295,15 @@ export function usePresetProfiles(
 
   const selectResolvedPreset = useCallback(() => {
     if (!resolvedPresetId || resolvedPresetId === presetId) return
-    void transitionActiveLoomPreset(resolvedPresetId).catch(() => {})
+    const selection = selectionIntentRef.current ?? beginActiveLoomPresetSelection()
+    selectionIntentRef.current = selection
+    void selection.transition(resolvedPresetId)
+      .catch(() => {})
+      .finally(() => {
+        if (selectionIntentRef.current === selection) {
+          selectionIntentRef.current = null
+        }
+      })
   }, [resolvedPresetId, presetId])
 
   return {

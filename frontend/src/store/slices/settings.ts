@@ -3,6 +3,7 @@ import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSe
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
+import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
 import {
@@ -157,6 +158,8 @@ function bridgeStorageKey(key: string): string {
 export function setSettingsPersistenceScope(userId: string | null): void {
   persistenceScope = userId
 }
+
+let settingsSelectionAbort: AbortController | null = null
 
 function persistBatch(batch: Record<string, any>): Promise<void> {
   const generation = persistenceGeneration
@@ -788,6 +791,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
 
   loadSettings: async () => {
+    settingsSelectionAbort?.abort()
+    const selectionAbort = new AbortController()
+    settingsSelectionAbort = selectionAbort
     const loadGeneration = ++settingsLoadGeneration
     const localRevisionAtLoadStart = localSettingsRevision
     try {
@@ -880,8 +886,16 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           patch.activeImageGenConnectionId = savedConnectionId
         }
       }
+      const requestedActiveLoomPresetId = patch.activeLoomPresetId as string | null | undefined
+      delete patch.activeLoomPresetId
       if (Object.keys(patch).length > 0) {
         set(patch as any)
+      }
+      if (
+        requestedActiveLoomPresetId !== undefined
+        && requestedActiveLoomPresetId !== get().activeLoomPresetId
+      ) {
+        await transitionActiveLoomPreset(requestedActiveLoomPresetId, { signal: selectionAbort.signal })
       }
 
       // Reorder profile slices to match persisted connectionsOrder. Without
@@ -931,6 +945,9 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     } catch (err) {
       console.error('[settings] Failed to load settings:', err)
     } finally {
+      if (settingsSelectionAbort === selectionAbort) {
+        settingsSelectionAbort = null
+      }
       if (loadGeneration === settingsLoadGeneration) {
         set({ settingsLoaded: true })
       }

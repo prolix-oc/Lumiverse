@@ -9,8 +9,14 @@ export interface PresetSelectionTransitionOptions {
   signal?: AbortSignal
 }
 
+export interface PresetSelectionRequest {
+  transition(presetId: string | null): Promise<boolean>
+  cancel(): void
+}
+
 export interface PresetSelectionCoordinator {
-  transition(presetId: string | null, options?: PresetSelectionTransitionOptions): Promise<void>
+  begin(options?: PresetSelectionTransitionOptions): PresetSelectionRequest
+  transition(presetId: string | null, options?: PresetSelectionTransitionOptions): Promise<boolean>
 }
 
 /**
@@ -22,33 +28,64 @@ export function createPresetSelectionCoordinator(adapter: PresetSelectionAdapter
   let chain: Promise<void> = Promise.resolve()
   let latestRequest = 0
 
-  return {
-    transition(presetId, options = {}) {
-      const request = ++latestRequest
-      const invalidate = () => {
-        if (latestRequest === request) latestRequest += 1
+  const begin = (options: PresetSelectionTransitionOptions = {}): PresetSelectionRequest => {
+    if (options.signal?.aborted) {
+      return {
+        transition: async () => false,
+        cancel() {},
       }
-      options.signal?.addEventListener('abort', invalidate, { once: true })
-      const isStale = () => options.signal?.aborted === true || request !== latestRequest
-      const transition = chain.catch(() => {}).then(async () => {
-        if (isStale()) return
-        while (true) {
-          const currentPresetId = adapter.getActivePresetId()
-          if (currentPresetId === presetId) return
-          if (currentPresetId) await adapter.flushPreset(currentPresetId)
-          if (isStale()) return
+    }
 
-          // An external lifecycle transition changed the source while this
-          // transition was flushing. Rebase that source before continuing.
-          if (adapter.getActivePresetId() !== currentPresetId) continue
-          adapter.setActivePresetId(presetId)
-          return
+    const request = ++latestRequest
+    let closed = false
+    const invalidate = () => {
+      if (latestRequest === request) latestRequest += 1
+    }
+    const cleanup = () => {
+      options.signal?.removeEventListener('abort', invalidate)
+    }
+    const cancel = () => {
+      if (closed) return
+      invalidate()
+      closed = true
+      cleanup()
+    }
+    options.signal?.addEventListener('abort', cancel, { once: true })
+    const isStale = () => closed || options.signal?.aborted === true || request !== latestRequest
+
+    return {
+      transition(presetId) {
+        if (isStale()) {
+          cleanup()
+          return Promise.resolve(false)
         }
-      }).finally(() => {
-        options.signal?.removeEventListener('abort', invalidate)
-      })
-      chain = transition.catch(() => {})
-      return transition
-    },
+        const transition = chain.catch(() => {}).then(async (): Promise<boolean> => {
+          if (isStale()) return false
+          while (true) {
+            const currentPresetId = adapter.getActivePresetId()
+            if (currentPresetId === presetId) return true
+            if (currentPresetId) await adapter.flushPreset(currentPresetId)
+            if (isStale()) return false
+
+            // An external lifecycle transition changed the source while this
+            // transition was flushing. Rebase that source before continuing.
+            if (adapter.getActivePresetId() !== currentPresetId) continue
+            adapter.setActivePresetId(presetId)
+            return true
+          }
+        }).finally(() => {
+          closed = true
+          cleanup()
+        })
+        chain = transition.then(() => {}, () => {})
+        return transition
+      },
+      cancel,
+    }
+  }
+
+  return {
+    begin,
+    transition: (presetId, options) => begin(options).transition(presetId),
   }
 }

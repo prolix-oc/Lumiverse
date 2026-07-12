@@ -459,6 +459,32 @@ describe('preset save coordinator', () => {
     localStorage.clear()
   })
 
+  test('keeps an editor hydration usable when a later auxiliary read fails', () => {
+    localStorage.clear()
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const editorRow = unmarshalPreset(rawPreset({ name: 'Editor row', updated_at: 1 }))
+    const unsubscribe = coordinator.subscribe(editorRow.id, () => {})
+    const editorRead = coordinator.beginHydration(editorRow.id, 'loom-editor')
+    const promptRead = coordinator.beginHydration(editorRow.id, 'prompt-variables')
+
+    const editorDraft = coordinator.hydrate(editorRow, editorRead)
+    expect(editorDraft.name).toBe('Editor row')
+    // The prompt-variable request intentionally never resolves. The selected
+    // editor still owns a usable persisted draft rather than remaining blank.
+    expect(coordinator.getDraft(editorRow.id)?.name).toBe('Editor row')
+
+    const freshPromptRow = unmarshalPreset(rawPreset({ name: 'Fresh prompt row', updated_at: 2 }))
+    const promptDraft = coordinator.hydrate(freshPromptRow, promptRead)
+    expect(promptDraft.name).toBe('Fresh prompt row')
+    expect(coordinator.hydrate(editorRow, editorRead).name).toBe('Fresh prompt row')
+    unsubscribe()
+    localStorage.clear()
+  })
+
   test('rebases a local dirty mutation over the latest in-flight persisted read', async () => {
     localStorage.clear()
     const writes: UpdatePresetInput[] = []
@@ -565,6 +591,23 @@ describe('preset save coordinator', () => {
     expect(received).toHaveLength(2)
     expect(received[1].name).toBe('Current subscriber receives this')
     currentUnsubscribe()
+    localStorage.clear()
+  })
+
+  test('evicts a clean preset once its final listener unsubscribes', () => {
+    localStorage.clear()
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    const base = unmarshalPreset(rawPreset())
+    const unsubscribe = coordinator.subscribe(base.id, () => {})
+    coordinator.hydrate(base)
+    expect(coordinator.getDraft(base.id)).not.toBeNull()
+
+    unsubscribe()
+    expect(coordinator.getDraft(base.id)).toBeNull()
     localStorage.clear()
   })
 

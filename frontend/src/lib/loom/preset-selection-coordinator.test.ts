@@ -32,6 +32,56 @@ describe('preset selection coordinator', () => {
     expect(activePresetId).toBe('preset-b')
   })
 
+  test('does not expose an aborted lifecycle selection after its flush completes', async () => {
+    let activePresetId: string | null = 'preset-a'
+    const pendingFlush = deferred<void>()
+    const coordinator = createPresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => { activePresetId = presetId },
+      flushPreset: async () => { await pendingFlush.promise },
+    })
+    const abort = new AbortController()
+    const transition = coordinator.transition('preset-b', { signal: abort.signal })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    abort.abort()
+    pendingFlush.resolve()
+    await transition
+
+    expect(activePresetId).toBe('preset-a')
+  })
+
+  test('ignores a request whose lifecycle was cancelled before it reached selection', async () => {
+    let activePresetId: string | null = 'preset-a'
+    let flushes = 0
+    const coordinator = createPresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => { activePresetId = presetId },
+      flushPreset: async () => { flushes += 1 },
+    })
+    const abort = new AbortController()
+    abort.abort()
+
+    await coordinator.transition('preset-b', { signal: abort.signal })
+    expect(activePresetId).toBe('preset-a')
+    expect(flushes).toBe(0)
+  })
+
+  test('rejects an older asynchronous intent after a later manual selection commits', async () => {
+    let activePresetId: string | null = 'preset-a'
+    const coordinator = createPresetSelectionCoordinator({
+      getActivePresetId: () => activePresetId,
+      setActivePresetId: (presetId) => { activePresetId = presetId },
+      flushPreset: async () => {},
+    })
+
+    const createIntent = coordinator.begin()
+    expect(await coordinator.transition('preset-b')).toBe(true)
+    expect(await createIntent.transition('preset-c')).toBe(false)
+    expect(activePresetId).toBe('preset-b')
+  })
+
   test('does not expose a stale intermediate target after a later switch request', async () => {
     let activePresetId: string | null = 'preset-a'
     const exposed: (string | null)[] = []

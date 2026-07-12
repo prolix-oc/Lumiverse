@@ -63,7 +63,9 @@ export interface PresetMutationOptions {
 
 export interface PresetHydrationToken {
   readonly presetId: string
+  readonly owner: string
   readonly readEpoch: number
+  readonly globalReadEpoch: number
   readonly confirmedEpoch: number
 }
 
@@ -76,11 +78,13 @@ export class StalePresetHydrationError extends Error {
 
 export interface PresetSaveCoordinator {
   /**
-   * Reserve the latest hydration generation before beginning an asynchronous
-   * persisted-row read. Pass this token to `hydrate()` when it resolves; only
-   * the most recently begun read can replace coordinator state.
+   * Reserve this consumer's next persisted-row read. A later read by the same
+   * consumer supersedes it; another consumer cannot strand this reader if its
+   * own request fails.
    */
-  beginHydration(presetId: string): PresetHydrationToken
+  beginHydration(presetId: string, owner?: string): PresetHydrationToken
+  /** Release a hydration token whose persisted-row request did not resolve. */
+  cancelHydration(token: PresetHydrationToken): void
   /**
    * Incorporate a freshly read persisted row. Any durable or in-memory dirty
    * paths are rebased over that row; untouched paths always come from the row.
@@ -375,18 +379,36 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
 export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetSaveCoordinator {
   const entries = new Map<string, PresetSaveEntry>()
   const listenersByPreset = new Map<string, Set<(preset: LoomPreset) => void>>()
-  const hydrationReadEpochs = new Map<string, number>()
+  const hydrationReadEpochs = new Map<string, Map<string, number>>()
+  const latestHydrationReadEpochs = new Map<string, number>()
   const confirmedEpochs = new Map<string, number>()
+  const pendingHydrations = new Set<PresetHydrationToken>()
 
-  const getHydrationReadEpoch = (presetId: string): number => hydrationReadEpochs.get(presetId) ?? 0
-  const reserveHydrationRead = (presetId: string): number => {
-    const next = getHydrationReadEpoch(presetId) + 1
-    hydrationReadEpochs.set(presetId, next)
-    return next
+  const getHydrationReadEpoch = (presetId: string, owner: string): number => (
+    hydrationReadEpochs.get(presetId)?.get(owner) ?? 0
+  )
+  const reserveHydrationRead = (presetId: string, owner: string): {
+    readEpoch: number
+    globalReadEpoch: number
+  } => {
+    const owners = hydrationReadEpochs.get(presetId) ?? new Map<string, number>()
+    const readEpoch = getHydrationReadEpoch(presetId, owner) + 1
+    owners.set(owner, readEpoch)
+    hydrationReadEpochs.set(presetId, owners)
+    const globalReadEpoch = (latestHydrationReadEpochs.get(presetId) ?? 0) + 1
+    latestHydrationReadEpochs.set(presetId, globalReadEpoch)
+    return { readEpoch, globalReadEpoch }
   }
   const getConfirmedEpoch = (presetId: string): number => confirmedEpochs.get(presetId) ?? 0
   const advanceConfirmedEpoch = (presetId: string): void => {
     confirmedEpochs.set(presetId, getConfirmedEpoch(presetId) + 1)
+  }
+
+  const hasPendingHydration = (presetId: string): boolean => {
+    for (const token of pendingHydrations) {
+      if (token.presetId === presetId) return true
+    }
+    return false
   }
 
   function publish(entry: PresetSaveEntry): void {
@@ -412,6 +434,22 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     }
     entries.set(presetId, entry)
     return entry
+  }
+
+  function evictCleanEntry(presetId: string): void {
+    const entry = entries.get(presetId)
+    if (
+      !entry
+      || entry.listeners.size > 0
+      || entry.timer !== null
+      || entry.queuedRevision !== null
+      || isDirty(entry.dirty)
+      || hasPendingHydration(presetId)
+    ) return
+    entries.delete(presetId)
+    if (listenersByPreset.get(presetId) === entry.listeners) {
+      listenersByPreset.delete(presetId)
+    }
   }
 
   function enqueuePersist(presetId: string, entry: PresetSaveEntry): Promise<LoomPreset> {
@@ -443,11 +481,15 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     link.then(
       () => {
         const current = entries.get(presetId)
-        if (current?.queuedRevision === revision) current.queuedRevision = null
+        if (current?.queuedRevision === revision) {
+          current.queuedRevision = null
+        }
       },
       () => {
         const current = entries.get(presetId)
-        if (current?.queuedRevision === revision) current.queuedRevision = null
+        if (current?.queuedRevision === revision) {
+          current.queuedRevision = null
+        }
       },
     )
     link.catch(() => {})
@@ -463,34 +505,49 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   }
 
   return {
-    beginHydration(presetId): PresetHydrationToken {
-      return {
+    beginHydration(presetId, owner = 'default'): PresetHydrationToken {
+      const reservation = reserveHydrationRead(presetId, owner)
+      const token = {
         presetId,
-        readEpoch: reserveHydrationRead(presetId),
+        owner,
+        readEpoch: reservation.readEpoch,
+        globalReadEpoch: reservation.globalReadEpoch,
         confirmedEpoch: getConfirmedEpoch(presetId),
       }
+      pendingHydrations.add(token)
+      return token
+    },
+
+    cancelHydration(token): void {
+      if (pendingHydrations.delete(token)) evictCleanEntry(token.presetId)
     },
 
     hydrate(preset, token): LoomPreset {
+      let isStaleHydration = false
+      try {
       // Read ordering and confirmed persistence are independent: a local dirty
       // mutation may rebase over the newest read, but an older read cannot
-      // replace a subsequently confirmed persisted row.
+      // replace a subsequently confirmed persisted row. A non-authoritative
+      // consumer read remains a valid fallback until the latest consumer read
+      // succeeds, so one failed auxiliary load cannot blank the active editor.
       if (!token) advanceConfirmedEpoch(preset.id)
       if (token && (
         token.presetId !== preset.id
-        || token.readEpoch !== getHydrationReadEpoch(preset.id)
+        || token.readEpoch !== getHydrationReadEpoch(preset.id, token.owner)
         || token.confirmedEpoch !== getConfirmedEpoch(preset.id)
       )) {
+        isStaleHydration = true
         const current = entries.get(preset.id)
         if (current) return clone(current.draft)
         throw new StalePresetHydrationError(preset.id)
       }
-
+      const isAuthoritativeRead = !token
+        || token.globalReadEpoch === (latestHydrationReadEpochs.get(preset.id) ?? 0)
       const entry = entries.get(preset.id)
       if (!entry) {
         const created = ensure(preset.id, preset)
+        if (token && isAuthoritativeRead) advanceConfirmedEpoch(preset.id)
         publish(created)
-        if (isDirty(created.dirty)) void enqueuePersist(preset.id, created).catch(() => {})
         return clone(created.draft)
       }
 
@@ -502,12 +559,18 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       if (isDirty(entry.dirty) && persistedChanged) {
         entry.revision += 1
       }
+      if (token && isAuthoritativeRead) advanceConfirmedEpoch(preset.id)
       writePendingEnvelope(preset.id, entry)
       publish(entry)
       if (isDirty(entry.dirty) && persistedChanged) {
         void enqueuePersist(preset.id, entry).catch(() => {})
       }
       return clone(entry.draft)
+      } finally {
+        if (token && pendingHydrations.delete(token) && !isStaleHydration) {
+          evictCleanEntry(token.presetId)
+        }
+      }
     },
 
     getDraft(presetId: string): LoomPreset | null {
@@ -580,7 +643,9 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         if (!listeners.delete(listener) || listeners.size > 0) return
         if (!entries.has(presetId) && listenersByPreset.get(presetId) === listeners) {
           listenersByPreset.delete(presetId)
+          return
         }
+        evictCleanEntry(presetId)
       }
     },
 
@@ -621,12 +686,13 @@ export async function flushPresetForGeneration(presetId: string | undefined): Pr
 
   const recovery = (async () => {
     while (true) {
-      const hydration = presetSaveCoordinator.beginHydration(presetId)
-      const persisted = unmarshalPreset(await presetsApi.get(presetId))
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'durable-recovery')
       try {
+        const persisted = unmarshalPreset(await presetsApi.get(presetId))
         presetSaveCoordinator.hydrate(persisted, hydration)
         break
       } catch (error) {
+        presetSaveCoordinator.cancelHydration(hydration)
         if (!(error instanceof StalePresetHydrationError)) throw error
       }
     }

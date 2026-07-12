@@ -941,14 +941,18 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (promptVariablesLoading) return
     setOpenPopover(null)
     setPromptVariablesLoading(true)
+    const presetId = activeLoomPresetId
+    const hydration = presetSaveCoordinator.beginHydration(presetId, 'prompt-variables')
     try {
-      const presetId = activeLoomPresetId
-      const hydration = presetSaveCoordinator.beginHydration(presetId)
       const preset = await presetsApi.get(presetId)
-      if (useStore.getState().activeLoomPresetId !== presetId) return
+      if (useStore.getState().activeLoomPresetId !== presetId) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        return
+      }
       setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
+      presetSaveCoordinator.cancelHydration(hydration)
       if (err instanceof StalePresetHydrationError) return
       console.error('[InputArea] Failed to load prompt variables preset:', err)
       toast.error(t('toast.failedLoadPromptVariables'))

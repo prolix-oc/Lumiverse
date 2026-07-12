@@ -8,7 +8,7 @@ import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
-import { transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
+import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -61,14 +61,18 @@ export function useLoomBuilder() {
 
     let cancelled = false
     setIsLoading(true)
-    const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId)
+    const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId, 'loom-editor')
     presetsApi.get(activeLoomPresetId).then((preset) => {
-      if (cancelled) return
+      if (cancelled) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        return
+      }
       const loadedPreset = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
       activePresetRef.current = loadedPreset
       setActivePreset(loadedPreset)
       setIsLoading(false)
     }).catch((err) => {
+      presetSaveCoordinator.cancelHydration(hydration)
       if (cancelled) return
       if (err instanceof StalePresetHydrationError) {
         setIsLoading(false)
@@ -79,9 +83,11 @@ export function useLoomBuilder() {
       // so generation doesn't keep 400ing on a ghost id.
       if (err instanceof ApiError && err.status === 404) {
         presetSaveCoordinator.remove(activeLoomPresetId)
-        activePresetRef.current = null
-        setActiveLoomPreset(null)
-        setActivePreset(null)
+        if (useStore.getState().activeLoomPresetId === activeLoomPresetId) {
+          activePresetRef.current = null
+          useStore.getState().setActiveLoomPreset(null)
+          setActivePreset(null)
+        }
         setIsLoading(false)
         return
       }
@@ -89,8 +95,12 @@ export function useLoomBuilder() {
       setError(err.message)
       setIsLoading(false)
     })
-    return () => { cancelled = true }
-  }, [activeLoomPresetId, setActiveLoomPreset])
+    return () => {
+      cancelled = true
+      presetSaveCoordinator.cancelHydration(hydration)
+    }
+  }, [activeLoomPresetId])
+
 
   // Refresh registry from API
   const refreshRegistry = useCallback(async () => {
@@ -124,17 +134,20 @@ export function useLoomBuilder() {
 
   // Create a new preset
   const createPreset = useCallback(async (name: string, description?: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
       const loom = createNewLoomPreset(name, description)
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      await transitionActiveLoomPreset(created.id)
-      activePresetRef.current = newLoom
-      setActivePreset(newLoom)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
@@ -190,13 +203,18 @@ export function useLoomBuilder() {
       if (!event.persisted) return
       const presetId = activePresetRef.current?.id
       if (!presetId) return
-      const hydration = presetSaveCoordinator.beginHydration(presetId)
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'loom-editor')
       void presetsApi.get(presetId).then((preset) => {
+        if (useStore.getState().activeLoomPresetId !== presetId) {
+          presetSaveCoordinator.cancelHydration(hydration)
+          return
+        }
         const restored = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
         if (activePresetRef.current?.id !== restored.id) return
         activePresetRef.current = restored
         setActivePreset(restored)
       }).catch((err) => {
+        presetSaveCoordinator.cancelHydration(hydration)
         if (err instanceof StalePresetHydrationError) return
         console.warn('[LoomBuilder] Failed to rebase restored preset:', err)
       })
@@ -267,10 +285,16 @@ export function useLoomBuilder() {
 
   // Rename a preset
   const renamePreset = useCallback(async (presetId: string, newName: string) => {
-    const hydration = presetSaveCoordinator.beginHydration(presetId)
-    const current = presetId === activePresetRef.current?.id
-      ? activePresetRef.current
-      : presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
+    let current = presetId === activePresetRef.current?.id ? activePresetRef.current : null
+    if (!current) {
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'preset-rename')
+      try {
+        current = presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
+      } catch (error) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        throw error
+      }
+    }
     const updated = presetSaveCoordinator.mutate(
       presetId,
       current,
@@ -291,9 +315,11 @@ export function useLoomBuilder() {
     await presetsApi.delete(presetId)
     presetSaveCoordinator.remove(presetId)
     await refreshRegistry()
-    if (presetId === activeLoomPresetId) {
+    // A later coordinated selection may have committed while deletion was in
+    // flight. Only clear the live selection when it still names this row.
+    if (useStore.getState().activeLoomPresetId === presetId) {
       activePresetRef.current = null
-      setActiveLoomPreset(null)
+      useStore.getState().setActiveLoomPreset(null)
       setActivePreset(null)
     }
     // Refresh connection profiles so any stale preset_id references (the
@@ -304,18 +330,26 @@ export function useLoomBuilder() {
     } catch {
       // non-fatal — store just keeps the previous profile list
     }
-  }, [activeLoomPresetId, refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Duplicate a preset
   const duplicatePreset = useCallback(async (presetId: string, newName: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
       await flushPresetForGeneration(presetId)
-      const hydration = presetSaveCoordinator.beginHydration(presetId)
-      presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
-      await flushPresetForGeneration(presetId)
-      const source = presetSaveCoordinator.getDraft(presetId)
-      if (!source) throw new Error('Preset disappeared while preparing its duplicate')
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'preset-duplicate')
+      let hydratedSource: LoomPreset
+      try {
+        hydratedSource = presetSaveCoordinator.hydrate(
+          unmarshalPreset(await presetsApi.get(presetId)),
+          hydration,
+        )
+      } catch (error) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        throw error
+      }
+      const source = await presetSaveCoordinator.flush(presetId) ?? hydratedSource
       const copy = createNewLoomPreset(newName)
       // Copy all content from the coordinator-confirmed persisted source.
       copy.blocks = JSON.parse(JSON.stringify(source.blocks))
@@ -334,11 +368,13 @@ export function useLoomBuilder() {
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
       await flushPresetForGeneration(presetId)
-      await transitionActiveLoomPreset(created.id)
-      activePresetRef.current = newLoom
-      setActivePreset(newLoom)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
@@ -451,6 +487,7 @@ export function useLoomBuilder() {
   }, [])
 
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
@@ -458,9 +495,10 @@ export function useLoomBuilder() {
       const created = await presetsApi.create(marshalPreset(loom))
       const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      await transitionActiveLoomPreset(created.id)
-      activePresetRef.current = newLoom
-      setActivePreset(newLoom)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
 
       const embeddedRegex = Array.isArray(payload?.extensions?.regex_scripts)
         ? payload.extensions.regex_scripts
@@ -488,6 +526,7 @@ export function useLoomBuilder() {
 
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
