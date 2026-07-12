@@ -2960,6 +2960,10 @@
   "panel": "Pannello",
   "loomBuilder": {
     "unknownProvider": "Sconosciuto",
+    "editorTabs": {
+      "ariaLabel": "Schede dell'editor dei preset",
+      "preset": "Preset"
+    },
     "tokens": " token",
     "category": {
       "dragDisabledSearch": "Riordinamento disabilitato durante la ricerca",

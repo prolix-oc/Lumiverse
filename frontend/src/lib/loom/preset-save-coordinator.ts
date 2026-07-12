@@ -305,6 +305,7 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
  */
 export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetSaveCoordinator {
   const entries = new Map<string, PresetSaveEntry>()
+  const listenersByPreset = new Map<string, Set<(preset: LoomPreset) => void>>()
 
   function publish(entry: PresetSaveEntry): void {
     const snapshot = clone(entry.draft)
@@ -319,6 +320,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     if (fallback.id !== presetId) throw new Error('Preset coordinator fallback id mismatch')
 
     const entry = createEntry(fallback)
+    entry.listeners = listenersByPreset.get(presetId) ?? new Set()
+    listenersByPreset.set(presetId, entry.listeners)
     const pending = readPendingEnvelope(presetId)
     if (pending) {
       entry.draft = rebaseDirtyPaths(fallback, pending.preset, pending.dirty)
@@ -449,16 +452,22 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     },
 
     subscribe(presetId, listener): () => void {
-      const entry = entries.get(presetId)
-      if (!entry) return () => {}
-      entry.listeners.add(listener)
-      return () => { entry.listeners.delete(listener) }
+      const listeners = listenersByPreset.get(presetId) ?? new Set<(preset: LoomPreset) => void>()
+      listenersByPreset.set(presetId, listeners)
+      listeners.add(listener)
+      return () => {
+        if (!listeners.delete(listener) || listeners.size > 0) return
+        if (!entries.has(presetId) && listenersByPreset.get(presetId) === listeners) {
+          listenersByPreset.delete(presetId)
+        }
+      }
     },
 
     remove(presetId: string): void {
       const entry = entries.get(presetId)
       clearTimeout(entry?.timer)
       entries.delete(presetId)
+      listenersByPreset.delete(presetId)
       removePendingEnvelope(presetId)
     },
   }

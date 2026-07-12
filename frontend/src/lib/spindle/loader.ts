@@ -39,8 +39,8 @@ import {
   subscribePresetEditorState,
   updatePresetEditorDraft,
   flushPresetEditorDraft,
-  createPresetEditorScopedHelper,
 } from './preset-editor-helper'
+import { createPresetEditorAccess } from './preset-editor-access'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
@@ -397,7 +397,6 @@ async function doLoadFrontendExtension(
     const uiEvents = createUIEventsHelper(extensionId)
 
     let cachedGrantedPermissions: string[] = await permissionsPromise
-    let presetPermissionEpoch = 0
     const presetEditorUnsubscribers = new Set<() => void>()
     const trackPresetEditorSubscription = (unsubscribe: () => void): (() => void) => {
       const tracked = () => {
@@ -413,25 +412,18 @@ async function doLoadFrontendExtension(
       }
     }
 
-    const scopedPresetAccessEpoch = presetPermissionEpoch
-    const scopedPresetEditor = createPresetEditorScopedHelper(manifest.identifier, {
-      assertActive() {
-        if (!cachedGrantedPermissions.includes('presets')) {
-          throw new Error('PERMISSION_DENIED:presets — preset editor extension helper requires the presets permission')
-        }
-        if (presetPermissionEpoch !== scopedPresetAccessEpoch) {
-          throw new Error('PRESET_EDITOR_REVOKED: Register a new preset editor placement before using the extension helper')
-        }
-      },
-      trackSubscription: trackPresetEditorSubscription,
-    })
+    const scopedPresetAccess = createPresetEditorAccess(
+      manifest.identifier,
+      () => cachedGrantedPermissions,
+      trackPresetEditorSubscription,
+    )
 
     const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
       if (payload?.extensionId !== extensionId || !Array.isArray(payload.allGranted)) return
       const hadPresetPermission = cachedGrantedPermissions.includes('presets')
       cachedGrantedPermissions = payload.allGranted
       if (hadPresetPermission && !cachedGrantedPermissions.includes('presets')) {
-        presetPermissionEpoch += 1
+        scopedPresetAccess.revoke()
         clearPresetEditorSubscriptions()
         destroyPresetEditorPlacementsForExtension(extensionId)
       }
@@ -636,7 +628,9 @@ async function doLoadFrontendExtension(
           },
         },
         presetEditor: {
-          extension: scopedPresetEditor,
+          get extension() {
+            return scopedPresetAccess.acquire()
+          },
           getState() {
             const granted = cachedGrantedPermissions
             if (!granted.includes('presets')) {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Preset, UpdatePresetInput } from '@/types/api'
+import type { LoomPreset } from './types'
 import { createPresetSaveCoordinator, type PresetSaveAdapter } from './preset-save-coordinator'
 import { unmarshalPreset } from './service'
 
@@ -226,6 +227,62 @@ describe('preset save coordinator', () => {
     expect(rebased.name).toBe('Unsaved editor name')
     expect(rebased.promptVariables).toEqual({ 'block-1': { tone: 'fresh' } })
     expect(rebased.passthroughMetadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
+    localStorage.clear()
+  })
+
+  test('notifies a subscription registered before the first hydration', () => {
+    localStorage.clear()
+    const base = unmarshalPreset(rawPreset())
+    const observed: LoomPreset[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+
+    const unsubscribe = coordinator.subscribe(base.id, (preset) => observed.push(preset))
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        promptVariables: { 'block-1': { tone: 'warm' } },
+      }),
+      { immediate: true },
+    )
+
+    expect(observed).toHaveLength(1)
+    expect(observed[0].promptVariables).toEqual({ 'block-1': { tone: 'warm' } })
+    unsubscribe()
+    localStorage.clear()
+  })
+
+  test('does not let a stale cleanup erase a replacement pre-hydration listener', () => {
+    localStorage.clear()
+    const base = unmarshalPreset(rawPreset())
+    const received: LoomPreset[] = []
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+
+    const staleUnsubscribe = coordinator.subscribe(base.id, () => {})
+    coordinator.remove(base.id)
+    const currentUnsubscribe = coordinator.subscribe(base.id, (preset) => received.push(preset))
+    staleUnsubscribe()
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({ ...preset, name: 'Current subscriber receives this' }),
+      { immediate: true },
+    )
+
+    expect(received).toHaveLength(1)
+    expect(received[0].name).toBe('Current subscriber receives this')
+    currentUnsubscribe()
     localStorage.clear()
   })
 })

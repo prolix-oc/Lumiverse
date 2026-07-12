@@ -64,8 +64,10 @@ export interface SpindlePresetEditorExtensionState {
   readonly open: boolean
   readonly presetId: string | null
   readonly activeTabId: string | null
-  readonly blocks: readonly PromptBlockDTO[]
-  readonly promptVariableValues: Readonly<PromptVariableValuesDTO>
+  /** A detached array cloned from the host draft. */
+  blocks: PromptBlockDTO[]
+  /** Detached prompt-variable values cloned from the host draft. */
+  promptVariableValues: PromptVariableValuesDTO
   /** Structured clone of metadata[callingExtensionIdentifier]. */
   readonly metadata: unknown
 }

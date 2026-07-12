@@ -236,10 +236,11 @@ await editor.flush()
 ```
 
 `getState()` and `onChange()` expose structured clones of the active preset id,
-tab, Main blocks, prompt-variable values, and only
-`metadata[callingExtensionIdentifier]`. `setMetadata()` and `updateMetadata()`
-can replace only that top-level metadata key. `activateBuiltinTab('blocks')`
-selects the host's stable native Blocks tab.
+tab, Main blocks, prompt-variable values, and the raw value at
+`metadata[callingExtensionIdentifier]`. `setMetadata()` accepts a JSON object;
+`updateMetadata()` receives that raw value and must return a JSON object. Both
+replace only the calling extension's top-level metadata key.
+`activateBuiltinTab('blocks')` selects the host's stable native Blocks tab.
 
 The helper is cooperative least-authority API design, **not** isolation against
 hostile same-origin extension code. It shares Loom's one per-preset serialized
@@ -247,9 +248,9 @@ save coordinator with native edits, recovery, rename, duplicate, prompt-variable
 updates, and generation flushes; direct whole-preset writes are unnecessary.
 
 All toolbar, tab, and helper operations require `presets`. Revoking that
-permission immediately removes the extension's preset roots and subscriptions;
-previous scoped helper instances reject until the extension frontend is reloaded
-and registers again.
+permission immediately removes the extension's preset roots and subscriptions.
+Previously acquired scoped helpers stay revoked. After `presets` is regranted,
+read `ctx.ui.presetEditor.extension` again to acquire a fresh helper.
 
 ## Float Widgets (requires `ui_panels`)
 

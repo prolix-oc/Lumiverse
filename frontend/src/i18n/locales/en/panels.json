@@ -3091,6 +3091,10 @@
   "panel": "Panel",
   "loomBuilder": {
     "unknownProvider": "Unknown",
+    "editorTabs": {
+      "ariaLabel": "Preset editor tabs",
+      "preset": "Preset"
+    },
     "tokens": " tokens",
     "category": {
       "dragDisabledSearch": "Reordering disabled while searching",

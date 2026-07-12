@@ -2952,6 +2952,10 @@
   "panel": "面板",
   "loomBuilder": {
     "unknownProvider": "未知",
+    "editorTabs": {
+      "ariaLabel": "預設編輯器分頁",
+      "preset": "預設"
+    },
     "tokens": " 詞元",
     "category": {
       "dragDisabledSearch": "搜索時無法排序",

@@ -2138,7 +2138,7 @@ export default function LoomBuilder({
         )}
 
         {presetEditorTabs.length > 0 && (
-          <div className={s.extensionTabBar} role="tablist" aria-label="Preset editor tabs">
+          <div className={s.extensionTabBar} role="tablist" aria-label={lb('editorTabs.ariaLabel')}>
             <button
               type="button"
               role="tab"
@@ -2146,7 +2146,7 @@ export default function LoomBuilder({
               className={clsx(s.extensionTab, activePresetEditorTab === 'preset' && s.extensionTabActive)}
               onClick={() => setActivePresetEditorTab('preset')}
             >
-              Preset
+              {lb('editorTabs.preset')}
             </button>
             {presetEditorTabs.map((tab) => (
               <button

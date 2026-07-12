@@ -3,6 +3,7 @@ import {
   createPresetEditorScopedHelper,
   setPresetEditorController,
 } from './preset-editor-helper'
+import { createPresetEditorAccess } from './preset-editor-access'
 import type { SpindlePresetEditorDraft, SpindlePresetEditorState } from './preset-editor-types'
 
 function draft(): SpindlePresetEditorDraft {
@@ -71,5 +72,36 @@ describe('scoped preset editor helper', () => {
     expect(() => helper.getState()).toThrow('PRESET_EDITOR_REVOKED')
     active = true
     expect(() => helper.setMetadata({ mode: 'single' })).toThrow('PRESET_EDITOR_CLOSED')
+  })
+
+  test('invalidates retained helpers while allowing a newly acquired helper after regrant', () => {
+    let current = draft()
+    let permissions = ['presets']
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: current,
+      }),
+      setActiveTab() {},
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+    const access = createPresetEditorAccess(
+      'agentic_preset_composer',
+      () => permissions,
+      (unsubscribe) => unsubscribe,
+    )
+
+    const retained = access.acquire()
+    permissions = []
+    access.revoke()
+    permissions = ['presets']
+    expect(() => retained.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_REVOKED')
+
+    const reacquired = access.acquire()
+    reacquired.setMetadata({ mode: 'parallel' })
+    expect(current.metadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
   })
 })
