@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getPreset, getPresetCacheRevision, getPresetUpdatedAt, getPresetRegistrySignature, updatePreset } from "./presets.service";
+import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -82,12 +82,6 @@ describe("presets.service — ETag sources + row trim", () => {
     expect(getPreset("u2", "p1")).toBeNull();
   });
 
-  test("getPresetUpdatedAt returns updated_at, null for missing or other-user", () => {
-    insertPreset({ id: "p1", name: "A", provider: "openai", user_id: "u1", updated_at: 42 });
-    expect(getPresetUpdatedAt("u1", "p1")).toBe(42);
-    expect(getPresetUpdatedAt("u1", "missing")).toBeNull();
-    expect(getPresetUpdatedAt("u2", "p1")).toBeNull();
-  });
 
   test("registry signatures are scoped by user and filters", () => {
     insertPreset({ id: "p1", name: "A", provider: "openai", user_id: "u1", updated_at: 100 });

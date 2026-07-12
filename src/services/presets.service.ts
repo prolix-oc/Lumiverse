@@ -231,16 +231,6 @@ export function getPresetCacheRevision(userId: string, id: string): number | nul
   return row ? row.cache_revision : null;
 }
 
-/**
- * Fetch a preset's user-visible update timestamp without reading the full row.
- * Returns null when the preset doesn't exist for this user.
- */
-export function getPresetUpdatedAt(userId: string, id: string): number | null {
-  const row = getDb()
-    .query("SELECT updated_at FROM presets WHERE id = ? AND user_id = ?")
-    .get(id, userId) as { updated_at: number } | null;
-  return row ? row.updated_at : null;
-}
 
 /**
  * Validate that a usable preset exists for generation. Throws a config error
