@@ -31,11 +31,13 @@
   },
   "overrides": {
     "lru-cache": "11.2.7",
-    "kysely": "0.28.15"
+    "kysely": "0.28.15",
+    "protobufjs": "8.7.0"
   },
   "resolutions": {
     "lru-cache": "11.2.7",
-    "kysely": "0.28.15"
+    "kysely": "0.28.15",
+    "protobufjs": "8.7.0"
   },
   "scripts": {
     "dev": "bun run --watch src/index.ts",
