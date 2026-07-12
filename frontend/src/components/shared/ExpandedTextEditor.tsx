@@ -12,6 +12,7 @@ import {
   type Ref,
   type ReactNode,
   type SyntheticEvent,
+  type TextareaHTMLAttributes,
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
@@ -530,7 +531,7 @@ export default function ExpandedTextEditor({
  * Drop-in wrapper: renders the original textarea with an expand button overlay.
  * When expanded, opens a full-screen ExpandedTextEditor modal.
  */
-interface ExpandableTextareaProps {
+interface ExpandableTextareaProps extends Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, 'name' | 'aria-label'> {
   value: string
   onChange: (value: string) => void
   title: string
@@ -564,6 +565,8 @@ export const ExpandableTextarea = forwardRef<HTMLTextAreaElement, ExpandableText
   macros,
   onRefreshMacros,
   markdownOnly,
+  name,
+  'aria-label': ariaLabel,
 }, forwardedRef) {
   const { t } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
   const [expanded, setExpanded] = useState(false)
@@ -601,6 +604,8 @@ export const ExpandableTextarea = forwardRef<HTMLTextAreaElement, ExpandableText
         placeholder={placeholder}
         rows={rows}
         spellCheck={spellCheck}
+        name={name}
+        aria-label={ariaLabel}
       />
       <button
         className={s.expandBtn}
