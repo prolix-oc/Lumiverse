@@ -710,6 +710,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
           }
 
           current.confirmed = clone(latest)
+          rememberConfirmedCacheRevision(presetId, latest)
           const rebased = rebaseDirtyPaths(latest, current.draft, current.dirty)
           current.draft = rebased
           advanceConfirmedEpoch(presetId)
@@ -817,8 +818,9 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       if (staleTokenlessEcho) {
         if (
           existingEntry
+          && residentCacheRevision !== undefined
           && (rememberedCacheRevision === undefined
-            || residentCacheRevision === rememberedCacheRevision)
+            || residentCacheRevision >= rememberedCacheRevision)
         ) {
           return clone(existingEntry.draft)
         }
