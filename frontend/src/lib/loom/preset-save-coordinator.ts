@@ -50,6 +50,7 @@ interface PresetSaveEntry {
   chain: Promise<LoomPreset>
   queuedRevision: number | null
   queuedSnapshot: LoomPreset | null
+  queuedSnapshots: LoomPreset[]
   listeners: Set<(preset: LoomPreset) => void>
 }
 
@@ -497,6 +498,7 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
     chain: Promise.resolve(clone(preset)),
     queuedRevision: null,
     queuedSnapshot: null,
+    queuedSnapshots: [],
     listeners: new Set(),
   }
 }
@@ -620,6 +622,11 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
             return clone(entry.confirmed)
           }
           pendingSnapshot = rebaseDirtyPaths(entry.confirmed, pendingSnapshot, entry.dirty)
+          if (!entry.queuedSnapshots.some((queued) => (
+            sameJson(canonicalPersistedPayload(queued), canonicalPersistedPayload(pendingSnapshot))
+          ))) {
+            entry.queuedSnapshots.push(clone(pendingSnapshot))
+          }
           conflictBase = clone(entry.confirmed)
           const savedRow = await adapter.update(presetId, marshalUpdate(pendingSnapshot))
           const current = entries.get(presetId)
@@ -700,6 +707,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         if (scopeEpoch === enqueueEpoch && current === entry && current.queuedRevision === revision) {
           current.queuedRevision = null
           current.queuedSnapshot = null
+          current.queuedSnapshots = []
           evictCleanEntry(presetId)
         }
       },
@@ -708,6 +716,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         if (scopeEpoch === enqueueEpoch && current === entry && current.queuedRevision === revision) {
           current.queuedRevision = null
           current.queuedSnapshot = null
+          current.queuedSnapshots = []
           evictCleanEntry(presetId)
         }
       },
@@ -787,8 +796,9 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 
       if (
         entry.queuedRevision !== null
-        && entry.queuedSnapshot
-        && sameJson(canonicalPersistedPayload(entry.queuedSnapshot), canonicalPersistedPayload(preset))
+        && entry.queuedSnapshots.some((queued) => (
+          sameJson(canonicalPersistedPayload(queued), canonicalPersistedPayload(preset))
+        ))
       ) {
         entry.confirmed = clone(preset)
         entry.draft = isDirty(entry.dirty)

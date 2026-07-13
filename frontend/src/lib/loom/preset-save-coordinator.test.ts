@@ -1064,6 +1064,7 @@ describe('preset save coordinator', () => {
       { immediate: true },
     )
     resolveFirst(firstSaved)
+    expect(() => coordinator.hydrate(unmarshalPreset(firstSaved))).not.toThrow()
 
     await coordinator.flush(base.id)
     expect(writes).toHaveLength(3)
