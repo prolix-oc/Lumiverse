@@ -73,4 +73,58 @@ describe("preset cache validators", () => {
     expect(second.headers.get("etag")).not.toBe(etag);
     expect(second.headers.get("vary")).toBe("Cookie, Accept-Encoding");
   });
+  test("returns a revision conflict without clobbering, then increments on a matching update", async () => {
+    insertPreset("preset-1", "u1", 3);
+
+    const stale = await app.request("http://localhost/preset-1", {
+      method: "PUT",
+      headers: { "x-test-user": "u1", "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "stale",
+        metadata: { stale: true },
+        expected_cache_revision: 2,
+      }),
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({
+      error: "Preset preset-1 changed since revision 2; current revision is 3",
+      code: "PRESET_REVISION_CONFLICT",
+      expected_cache_revision: 2,
+      actual_cache_revision: 3,
+    });
+
+    const successful = await app.request("http://localhost/preset-1", {
+      method: "PUT",
+      headers: { "x-test-user": "u1", "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "newer",
+        expected_cache_revision: 3,
+      }),
+    });
+    expect(successful.status).toBe(200);
+    const updated = await successful.json();
+    expect(updated.name).toBe("newer");
+    expect(updated.cache_revision).toBe(4);
+
+    const row = getDb().query("SELECT name, metadata, cache_revision FROM presets WHERE id = ?").get("preset-1");
+    expect(row).toEqual({ name: "newer", metadata: "{}", cache_revision: 4 });
+  });
+
+  test("rejects unconditional updates without a revision precondition", async () => {
+    insertPreset("preset-1", "u1", 3);
+
+    const response = await app.request("http://localhost/preset-1", {
+      method: "PUT",
+      headers: { "x-test-user": "u1", "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { stale: true } }),
+    });
+
+    expect(response.status).toBe(428);
+    expect(await response.json()).toEqual({
+      error: "expected_cache_revision is required",
+      code: "PRESET_REVISION_REQUIRED",
+    });
+    const row = getDb().query("SELECT metadata, cache_revision FROM presets WHERE id = ?").get("preset-1");
+    expect(row).toEqual({ metadata: "{}", cache_revision: 3 });
+  });
 });

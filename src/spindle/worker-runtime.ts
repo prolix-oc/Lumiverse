@@ -88,6 +88,7 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import { deserializeWorkerResponseError } from "./worker-response-error";
 import {
   assertValidSharedRpcEndpoint,
   normalizeOwnedSharedRpcEndpoint,
@@ -4026,10 +4027,11 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         if (msg.error) {
           // Convert host-side abort errors back into a real DOMException so
           // extensions can do `err.name === "AbortError"` the usual way.
-          if (msg.error.startsWith("AbortError:")) {
-            pending.reject(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+          const responseError = msg.error
+          if (typeof responseError === "string" && responseError.startsWith("AbortError:")) {
+            pending.reject(makeAbortError(responseError.slice("AbortError:".length).trim()))
           } else {
-            pending.reject(new Error(msg.error));
+            pending.reject(deserializeWorkerResponseError(responseError))
           }
         } else {
           pending.resolve(msg.result);

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import * as svc from "../services/presets.service";
+import { PresetRevisionConflictError } from "../types/preset";
 import { parsePagination } from "../services/pagination";
 import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
 
@@ -67,9 +68,31 @@ app.get("/:id", (c) => {
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const preset = svc.updatePreset(userId, c.req.param("id"), body);
-  if (!preset) return c.json({ error: "Not found" }, 404);
-  return c.json(preset);
+  if (
+    typeof body.expected_cache_revision !== "number"
+    || !Number.isSafeInteger(body.expected_cache_revision)
+    || body.expected_cache_revision < 0
+  ) {
+    return c.json({
+      error: "expected_cache_revision is required",
+      code: "PRESET_REVISION_REQUIRED",
+    }, 428);
+  }
+  try {
+    const preset = svc.updatePreset(userId, c.req.param("id"), body);
+    if (!preset) return c.json({ error: "Not found" }, 404);
+    return c.json(preset);
+  } catch (err) {
+    if (err instanceof PresetRevisionConflictError) {
+      return c.json({
+        error: err.message,
+        code: err.code,
+        expected_cache_revision: err.expectedCacheRevision,
+        actual_cache_revision: err.actualCacheRevision,
+      }, 409);
+    }
+    throw err;
+  }
 });
 
 app.delete("/:id", (c) => {

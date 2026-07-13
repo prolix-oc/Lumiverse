@@ -266,13 +266,18 @@ export function createPresetEditorToolbarItemHandle(
   root.setAttribute('data-spindle-extension-root', extensionId)
   root.setAttribute('data-spindle-preset-editor-toolbar-item', itemId)
 
-  getStore().registerPresetEditorToolbarItem({
-    id: itemId,
-    extensionId,
-    ariaLabel: options.ariaLabel,
-    root,
-    visible: true,
-  })
+  try {
+    getStore().registerPresetEditorToolbarItem({
+      id: itemId,
+      extensionId,
+      ariaLabel: options.ariaLabel,
+      root,
+      visible: true,
+    })
+  } catch (error) {
+    root.remove()
+    throw error
+  }
 
   let destroyed = false
   const assertUsable = () => {

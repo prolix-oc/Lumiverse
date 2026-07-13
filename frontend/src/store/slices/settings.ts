@@ -146,7 +146,6 @@ let flushInFlight = false
 let activeFlushPromise: Promise<void> | null = null
 let activeFlushBatch: Record<string, any> | null = null
 let persistenceGeneration = 0
-let settingsLoadGeneration = 0
 let localSettingsRevision = 0
 const localSettingRevisions = new Map<string, number>()
 let persistenceScope: string | null = null
@@ -422,7 +421,7 @@ export function resetSettingsPersistence(): void {
     } catch {}
   }
   persistenceGeneration += 1
-  settingsLoadGeneration += 1
+  settingsLoadGeneration.begin()
   dirtyKeys.clear()
   flushInFlight = false
   activeFlushPromise = null
@@ -799,7 +798,6 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     const selectionAbort = new AbortController()
     settingsSelectionAbort = selectionAbort
     let selection: PresetSelectionRequest | null = null
-    const loadGeneration = ++settingsLoadGeneration
     const localRevisionAtLoadStart = localSettingsRevision
     try {
       selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
@@ -977,7 +975,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (settingsSelectionAbort === selectionAbort) {
         settingsSelectionAbort = null
       }
-      if (isCurrentLoad())
+      if (isCurrentLoad()) {
         set({ settingsLoaded: true })
       }
     }

@@ -7,6 +7,7 @@ export interface Preset {
   prompt_order: any[];
   prompts: Record<string, any>;
   metadata: Record<string, any>;
+  cache_revision?: number;
   created_at: number;
   updated_at: number;
 }
@@ -21,7 +22,27 @@ export interface CreatePresetInput {
   metadata?: Record<string, any>;
 }
 
-export type UpdatePresetInput = Partial<CreatePresetInput>;
+export type UpdatePresetInput = Partial<CreatePresetInput> & {
+  /** Transport-only optimistic concurrency precondition; never persisted. */
+  expected_cache_revision?: number;
+};
+
+export class PresetRevisionConflictError extends Error {
+  readonly code = "PRESET_REVISION_CONFLICT";
+  readonly presetId: string;
+  readonly expectedCacheRevision: number;
+  readonly actualCacheRevision: number;
+
+  constructor(presetId: string, expectedCacheRevision: number, actualCacheRevision: number) {
+    super(
+      `Preset ${presetId} changed since revision ${expectedCacheRevision}; current revision is ${actualCacheRevision}`,
+    );
+    this.name = "PresetRevisionConflictError";
+    this.presetId = presetId;
+    this.expectedCacheRevision = expectedCacheRevision;
+    this.actualCacheRevision = actualCacheRevision;
+  }
+}
 
 // --- Loom Preset Assembly Types ---
 

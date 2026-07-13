@@ -5,6 +5,7 @@ import type { LoomPreset } from './types'
 
 const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
 const PENDING_LOOM_PRESET_ENVELOPE_KEY = '__lumiverse_pending_loom_preset_v2'
+const MAX_REVISION_CONFLICT_RETRIES = 3
 
 const DRAFT_FIELDS = [
   'name',
@@ -48,11 +49,14 @@ interface PresetSaveEntry {
   timer: ReturnType<typeof globalThis.setTimeout> | null
   chain: Promise<LoomPreset>
   queuedRevision: number | null
+  queuedSnapshot: LoomPreset | null
   listeners: Set<(preset: LoomPreset) => void>
 }
 
 export interface PresetSaveAdapter {
   update(presetId: string, input: UpdatePresetInput): Promise<Preset>
+  /** Read the latest persisted row when a conditional update detects a conflict. */
+  get?: (presetId: string) => Promise<Preset>
 }
 
 export interface PresetMutationOptions {
@@ -66,6 +70,7 @@ export interface PresetHydrationToken {
   readonly readEpoch: number
   readonly globalReadEpoch: number
   readonly confirmedEpoch: number
+  readonly scopeEpoch: number
 }
 
 export class StalePresetHydrationError extends Error {
@@ -74,8 +79,18 @@ export class StalePresetHydrationError extends Error {
     this.name = 'StalePresetHydrationError'
   }
 }
+export class PresetScopeChangedError extends Error {
+  constructor() {
+    super('Preset save scope changed during generation flush')
+    this.name = 'PresetScopeChangedError'
+  }
+}
 
 export interface PresetSaveCoordinator {
+  /** Replace the authenticated-user scope and discard in-memory work from the previous scope. */
+  setScope(scope: string | null): void
+  /** Identify the current scope for guarding in-flight recovery work. */
+  getScopeEpoch(): number
   /**
    * Reserve this consumer's next persisted-row read. A later read by the same
    * consumer supersedes it; another consumer cannot strand this reader if its
@@ -127,9 +142,33 @@ function clone<T>(value: T): T {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
+function isRevisionConflict(error: unknown): boolean {
+  if (!isRecord(error) || error.status !== 409 || !isRecord(error.body)) return false
+  return error.body.code === 'PRESET_REVISION_CONFLICT'
+}
 
 function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  if (Object.is(left, right)) return true
+  if (
+    typeof left !== 'object'
+    || left === null
+    || typeof right !== 'object'
+    || right === null
+  ) return false
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => sameJson(value, right[index]))
+  }
+  if (!isRecord(left) || !isRecord(right)) return false
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every((key) => Object.hasOwn(right, key) && sameJson(left[key], right[key]))
+}
+
+function canonicalPersistedPayload(preset: LoomPreset): unknown {
+  const { expected_cache_revision: _expectedCacheRevision, ...payload } = marshalUpdate(preset)
+  return payload
 }
 
 function isDraftField(value: unknown): value is DraftField {
@@ -174,6 +213,93 @@ function getChangedPaths(before: LoomPreset, after: LoomPreset): DirtyPresetPath
 
   return { fields, passthroughKeys }
 }
+function preserveResponseState(
+  saved: LoomPreset,
+  source: LoomPreset,
+  response: Preset,
+): LoomPreset {
+  const responseMetadata = isRecord(response.metadata) ? response.metadata : {}
+  const responseParameters = isRecord(response.parameters) ? response.parameters : {}
+  const responsePrompts = isRecord(response.prompts) ? response.prompts : {}
+  const preserved = clone(saved)
+
+  if (!Object.hasOwn(response, 'name')) preserved.name = source.name
+  if (!Object.hasOwn(response, 'created_at')) preserved.createdAt = source.createdAt
+  if (!Object.hasOwn(response, 'updated_at')) preserved.updatedAt = source.updatedAt
+  if (!Object.hasOwn(response, 'prompt_order')) preserved.blocks = clone(source.blocks)
+  if (!Object.hasOwn(response, 'cache_revision') && typeof source.cacheRevision === 'number') {
+    preserved.cacheRevision = source.cacheRevision
+  } else if (typeof response.cache_revision !== 'number' && typeof source.cacheRevision === 'number') {
+    preserved.cacheRevision = source.cacheRevision
+  }
+
+  if (!Object.hasOwn(responseParameters, 'samplerOverrides')) {
+    preserved.samplerOverrides = clone(source.samplerOverrides)
+  }
+  if (!Object.hasOwn(responseParameters, 'customBody')) {
+    preserved.customBody = clone(source.customBody)
+  }
+  if (!Object.hasOwn(responsePrompts, 'promptBehavior')) {
+    preserved.promptBehavior = clone(source.promptBehavior)
+  }
+  if (!Object.hasOwn(responsePrompts, 'completionSettings')) {
+    preserved.completionSettings = clone(source.completionSettings)
+  }
+  if (!Object.hasOwn(responsePrompts, 'advancedSettings')) {
+    preserved.advancedSettings = clone(source.advancedSettings)
+  }
+
+  if (!Object.hasOwn(responseMetadata, 'source')) preserved.source = clone(source.source)
+  if (!Object.hasOwn(responseMetadata, 'modelProfiles')) {
+    preserved.modelProfiles = clone(source.modelProfiles)
+  }
+  if (!Object.hasOwn(responseMetadata, 'schemaVersion')) {
+    preserved.schemaVersion = source.schemaVersion
+  }
+  if (!Object.hasOwn(responseMetadata, 'description')) {
+    preserved.description = source.description
+  }
+  if (!Object.hasOwn(responseMetadata, 'coverUrl') && !Object.hasOwn(responseMetadata, 'cover_url')) {
+    preserved.coverUrl = source.coverUrl
+  }
+  if (!Object.hasOwn(responseMetadata, 'isDefault')) {
+    preserved.isDefault = source.isDefault
+  }
+  if (!Object.hasOwn(responseMetadata, 'lastProfileKey')) {
+    preserved.lastProfileKey = source.lastProfileKey
+  }
+  if (!Object.hasOwn(responseMetadata, 'promptVariables')) {
+    preserved.promptVariables = clone(source.promptVariables)
+  }
+  if (!Object.hasOwn(responseMetadata, '_lumiverse_preset_version')) {
+    preserved.presetVersion = source.presetVersion
+  }
+
+  const savedMetadata = saved.passthroughMetadata ?? {}
+  const sourceMetadata = source.passthroughMetadata ?? {}
+  const missingPassthroughKeys = Object.keys(sourceMetadata).filter((key) => (
+    !Object.hasOwn(responseMetadata, key)
+  ))
+  if (missingPassthroughKeys.length > 0) {
+    preserved.passthroughMetadata = {
+      ...clone(sourceMetadata),
+      ...clone(savedMetadata),
+    }
+  }
+
+  const savedLumihubMeta = saved.lumihubMeta ?? {}
+  const sourceLumihubMeta = source.lumihubMeta ?? {}
+  const missingLumihubKeys = Object.keys(sourceLumihubMeta).filter((key) => (
+    !Object.hasOwn(responseMetadata, key)
+  ))
+  if (missingLumihubKeys.length > 0) {
+    preserved.lumihubMeta = {
+      ...clone(sourceLumihubMeta),
+      ...clone(savedLumihubMeta),
+    }
+  }
+  return preserved
+}
 
 function rebaseDirtyPaths(
   persisted: LoomPreset,
@@ -205,11 +331,32 @@ function rebaseDirtyPaths(
 
   return rebased
 }
+function confirmPersistedDirtyPaths(
+  persisted: LoomPreset,
+  draft: LoomPreset,
+  dirty: DirtyPresetPaths,
+): { draft: LoomPreset; dirty: DirtyPresetPaths } {
+  const fields = dirty.fields.filter((field) => !sameJson(persisted[field], draft[field]))
+  const persistedMetadata = persisted.passthroughMetadata ?? {}
+  const draftMetadata = draft.passthroughMetadata ?? {}
+  const passthroughKeys = dirty.passthroughKeys.filter((key) => (
+    !sameJson(persistedMetadata[key], draftMetadata[key])
+  ))
+  const remaining = { fields, passthroughKeys }
+  return {
+    draft: rebaseDirtyPaths(persisted, draft, remaining),
+    dirty: remaining,
+  }
+}
 
-function readPendingEntries(): Record<string, unknown> {
+function pendingStorageKey(scope: string | null): string {
+  return scope ? `${PENDING_LOOM_PRESETS_KEY}:${scope}` : PENDING_LOOM_PRESETS_KEY
+}
+
+function readPendingEntries(scope: string | null): Record<string, unknown> {
   if (typeof window === 'undefined') return {}
   try {
-    const raw = globalThis.localStorage.getItem(PENDING_LOOM_PRESETS_KEY)
+    const raw = globalThis.localStorage.getItem(pendingStorageKey(scope))
     if (!raw) return {}
     const parsed: unknown = JSON.parse(raw)
     return isRecord(parsed) ? parsed : {}
@@ -218,16 +365,18 @@ function readPendingEntries(): Record<string, unknown> {
   }
 }
 
-function writePendingEntries(entries: Record<string, unknown>): void {
-  if (typeof window === 'undefined') return
+function writePendingEntries(scope: string | null, entries: Record<string, unknown>): boolean {
+  if (typeof window === 'undefined') return false
   try {
     if (Object.keys(entries).length === 0) {
-      globalThis.localStorage.removeItem(PENDING_LOOM_PRESETS_KEY)
-      return
+      globalThis.localStorage.removeItem(pendingStorageKey(scope))
+      return true
     }
-    globalThis.localStorage.setItem(PENDING_LOOM_PRESETS_KEY, JSON.stringify(entries))
+    globalThis.localStorage.setItem(pendingStorageKey(scope), JSON.stringify(entries))
+    return true
   } catch {
     // Recovery is best-effort; the in-memory coordinator still serializes work.
+    return false
   }
 }
 
@@ -241,8 +390,8 @@ function legacyDirtyPaths(includePromptVariables: boolean): DirtyPresetPaths {
   if (includePromptVariables) fields.push('promptVariables')
   return { fields, passthroughKeys: [] }
 }
-function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null {
-  const entry = readPendingEntries()[presetId]
+function readPendingEnvelope(presetId: string, scope: string | null): PendingLoomPresetEnvelope | null {
+  const entry = readPendingEntries(scope)[presetId]
   if (!isRecord(entry)) return null
 
   if (entry[PENDING_LOOM_PRESET_ENVELOPE_KEY] === 2) {
@@ -288,12 +437,30 @@ function readPendingEnvelope(presetId: string): PendingLoomPresetEnvelope | null
     revision: 0,
   }
 }
+function migrateLegacyPendingEnvelope(presetId: string, scope: string | null): void {
+  if (!scope || readPendingEnvelope(presetId, scope)) return
+  const legacy = readPendingEnvelope(presetId, null)
+  if (!legacy) return
 
-function writePendingEnvelope(presetId: string, entry: PresetSaveEntry): void {
-  const all = readPendingEntries()
+  const scopedEntries = readPendingEntries(scope)
+  scopedEntries[presetId] = legacy
+  if (!writePendingEntries(scope, scopedEntries)) return
+
+  const legacyEntries = readPendingEntries(null)
+  if (!(presetId in legacyEntries)) return
+  delete legacyEntries[presetId]
+  writePendingEntries(null, legacyEntries)
+}
+
+function writePendingEnvelope(
+  presetId: string,
+  entry: PresetSaveEntry,
+  scope: string | null,
+): void {
+  const all = readPendingEntries(scope)
   if (!isDirty(entry.dirty)) {
     delete all[presetId]
-    writePendingEntries(all)
+    writePendingEntries(scope, all)
     return
   }
 
@@ -304,14 +471,14 @@ function writePendingEnvelope(presetId: string, entry: PresetSaveEntry): void {
     revision: entry.revision,
   }
   all[presetId] = envelope
-  writePendingEntries(all)
+  writePendingEntries(scope, all)
 }
 
-function removePendingEnvelope(presetId: string): void {
-  const all = readPendingEntries()
+function removePendingEnvelope(presetId: string, scope: string | null): void {
+  const all = readPendingEntries(scope)
   if (!(presetId in all)) return
   delete all[presetId]
-  writePendingEntries(all)
+  writePendingEntries(scope, all)
 }
 
 function createEntry(preset: LoomPreset): PresetSaveEntry {
@@ -323,6 +490,7 @@ function createEntry(preset: LoomPreset): PresetSaveEntry {
     timer: null,
     chain: Promise.resolve(clone(preset)),
     queuedRevision: null,
+    queuedSnapshot: null,
     listeners: new Set(),
   }
 }
@@ -338,6 +506,20 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   const latestHydrationReadEpochs = new Map<string, number>()
   const confirmedEpochs = new Map<string, number>()
   const pendingHydrations = new Set<PresetHydrationToken>()
+  let scopeEpoch = 0
+  let pendingStorageScope: string | null = null
+
+  const discardScopeState = (): void => {
+    for (const entry of entries.values()) {
+      if (entry.timer !== null) globalThis.clearTimeout(entry.timer)
+    }
+    entries.clear()
+    listenersByPreset.clear()
+    hydrationReadEpochs.clear()
+    latestHydrationReadEpochs.clear()
+    confirmedEpochs.clear()
+    pendingHydrations.clear()
+  }
 
   const getHydrationReadEpoch = (presetId: string, owner: string): number => (
     hydrationReadEpochs.get(presetId)?.get(owner) ?? 0
@@ -381,7 +563,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     const entry = createEntry(fallback)
     entry.listeners = listenersByPreset.get(presetId) ?? new Set()
     listenersByPreset.set(presetId, entry.listeners)
-    const pending = readPendingEnvelope(presetId)
+    const pending = readPendingEnvelope(presetId, pendingStorageScope)
     if (pending) {
       entry.draft = rebaseDirtyPaths(fallback, pending.preset, pending.dirty)
       entry.dirty = pending.dirty
@@ -413,38 +595,111 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 
     const revision = entry.revision
     const snapshot = clone(entry.draft)
+    const conflictBase = clone(entry.confirmed)
     entry.queuedRevision = revision
+    entry.queuedSnapshot = clone(snapshot)
+    const enqueueEpoch = scopeEpoch
     const previous = entry.chain.catch(() => entry.confirmed)
     const link = previous.then(async () => {
-      const saved = unmarshalPreset(await adapter.update(presetId, marshalUpdate(snapshot)))
-      const current = entries.get(presetId)
-      if (!current) return saved
+      let pendingSnapshot = snapshot
+      let conflictRetries = 0
 
-      current.confirmed = clone(saved)
-      if (current.revision === revision) {
-        current.draft = clone(saved)
-        current.dirty = emptyDirtyPaths()
-      } else {
-        current.draft = rebaseDirtyPaths(saved, current.draft, current.dirty)
+      while (true) {
+        if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+          return clone(entry.confirmed)
+        }
+
+        try {
+          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+            return clone(entry.confirmed)
+          }
+          const savedRow = await adapter.update(presetId, marshalUpdate(pendingSnapshot))
+          const current = entries.get(presetId)
+          if (scopeEpoch !== enqueueEpoch || current !== entry) {
+            return clone(entry.confirmed)
+          }
+          const responseSource = current.queuedSnapshot ?? pendingSnapshot
+          const saved = preserveResponseState(
+            unmarshalPreset(savedRow),
+            responseSource,
+            savedRow,
+          )
+
+          current.confirmed = clone(saved)
+          if (current.revision === revision) {
+            current.draft = clone(saved)
+            current.dirty = emptyDirtyPaths()
+          } else {
+            const rebased = confirmPersistedDirtyPaths(saved, current.draft, current.dirty)
+            current.draft = rebased.draft
+            current.dirty = rebased.dirty
+          }
+          advanceConfirmedEpoch(presetId)
+          writePendingEnvelope(presetId, current, pendingStorageScope)
+          publish(current)
+          return saved
+        } catch (error) {
+          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+            return clone(entry.confirmed)
+          }
+          if (!isRevisionConflict(error) || !adapter.get || conflictRetries >= MAX_REVISION_CONFLICT_RETRIES) {
+            throw error
+          }
+
+          conflictRetries += 1
+          let latestRow: Preset
+          try {
+            latestRow = await adapter.get(presetId)
+          } catch (readError) {
+            if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+              return clone(entry.confirmed)
+            }
+            throw readError
+          }
+          if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
+            return clone(entry.confirmed)
+          }
+          const latest = unmarshalPreset(latestRow)
+          const current = entries.get(presetId)
+          if (
+            entry.dirty.fields.includes('blocks')
+            && !sameJson(latest.blocks, conflictBase.blocks)
+          ) {
+            // Block arrays need block-id/property-aware merging. Until that
+            // merge exists, surface only conflicts that changed blocks
+            // remotely; unrelated persisted fields can still be rebased.
+            throw error
+          }
+          if (scopeEpoch !== enqueueEpoch || current !== entry) {
+            return clone(entry.confirmed)
+          }
+
+          current.confirmed = clone(latest)
+          const rebased = rebaseDirtyPaths(latest, current.draft, current.dirty)
+          current.draft = rebased
+          advanceConfirmedEpoch(presetId)
+          writePendingEnvelope(presetId, current, pendingStorageScope)
+          publish(current)
+          pendingSnapshot = clone(current.draft)
+          current.queuedSnapshot = clone(pendingSnapshot)
+        }
       }
-      advanceConfirmedEpoch(presetId)
-      writePendingEnvelope(presetId, current)
-      publish(current)
-      return saved
     })
     entry.chain = link
     link.then(
       () => {
         const current = entries.get(presetId)
-        if (current?.queuedRevision === revision) {
+        if (scopeEpoch === enqueueEpoch && current === entry && current.queuedRevision === revision) {
           current.queuedRevision = null
+          current.queuedSnapshot = null
           evictCleanEntry(presetId)
         }
       },
       () => {
         const current = entries.get(presetId)
-        if (current?.queuedRevision === revision) {
+        if (scopeEpoch === enqueueEpoch && current === entry && current.queuedRevision === revision) {
           current.queuedRevision = null
+          current.queuedSnapshot = null
           evictCleanEntry(presetId)
         }
       },
@@ -462,6 +717,16 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   }
 
   return {
+    setScope(nextScope: string | null): void {
+      if (pendingStorageScope === nextScope) return
+      pendingStorageScope = nextScope
+      scopeEpoch += 1
+      discardScopeState()
+    },
+
+    getScopeEpoch(): number {
+      return scopeEpoch
+    },
     beginHydration(presetId, owner = 'default'): PresetHydrationToken {
       const reservation = reserveHydrationRead(presetId, owner)
       const token = {
@@ -470,6 +735,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         readEpoch: reservation.readEpoch,
         globalReadEpoch: reservation.globalReadEpoch,
         confirmedEpoch: getConfirmedEpoch(presetId),
+        scopeEpoch,
       }
       pendingHydrations.add(token)
       return token
@@ -487,6 +753,9 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       // consumer read remains a valid fallback until the latest consumer read
       // succeeds, so one failed auxiliary load cannot blank the active editor.
       if (!token) advanceConfirmedEpoch(preset.id)
+      if (token && token.scopeEpoch !== scopeEpoch) {
+        throw new PresetScopeChangedError()
+      }
       if (token && (
         token.presetId !== preset.id
         || token.readEpoch !== getHydrationReadEpoch(preset.id, token.owner)
@@ -496,6 +765,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         if (current) return clone(current.draft)
         throw new StalePresetHydrationError(preset.id)
       }
+      if (!entries.has(preset.id)) migrateLegacyPendingEnvelope(preset.id, pendingStorageScope)
       const isAuthoritativeRead = !token
         || token.globalReadEpoch === (latestHydrationReadEpochs.get(preset.id) ?? 0)
       const entry = entries.get(preset.id)
@@ -507,16 +777,33 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         return clone(created.draft)
       }
 
+      if (
+        entry.queuedRevision !== null
+        && entry.queuedSnapshot
+        && sameJson(canonicalPersistedPayload(entry.queuedSnapshot), canonicalPersistedPayload(preset))
+      ) {
+        entry.confirmed = clone(preset)
+        entry.draft = isDirty(entry.dirty)
+          ? rebaseDirtyPaths(preset, entry.draft, entry.dirty)
+          : clone(preset)
+        entry.queuedSnapshot = clone(entry.draft)
+        if (token && isAuthoritativeRead) advanceConfirmedEpoch(preset.id)
+        writePendingEnvelope(preset.id, entry, pendingStorageScope)
+        publish(entry)
+        return clone(entry.draft)
+      }
       const persistedChanged = !sameJson(entry.confirmed, preset)
+      const rebased = isDirty(entry.dirty)
+        ? confirmPersistedDirtyPaths(preset, entry.draft, entry.dirty)
+        : { draft: clone(preset), dirty: emptyDirtyPaths() }
       entry.confirmed = clone(preset)
-      entry.draft = isDirty(entry.dirty)
-        ? rebaseDirtyPaths(preset, entry.draft, entry.dirty)
-        : clone(preset)
+      entry.draft = rebased.draft
+      entry.dirty = rebased.dirty
       if (isDirty(entry.dirty) && persistedChanged) {
         entry.revision += 1
       }
       if (token && isAuthoritativeRead) advanceConfirmedEpoch(preset.id)
-      writePendingEnvelope(preset.id, entry)
+      writePendingEnvelope(preset.id, entry, pendingStorageScope)
       publish(entry)
       if (isDirty(entry.dirty) && persistedChanged) {
         void enqueuePersist(preset.id, entry).catch(() => {})
@@ -540,7 +827,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     },
 
     hasDurablePendingRecovery(presetId: string): boolean {
-      return !entries.has(presetId) && readPendingEnvelope(presetId) !== null
+      return !entries.has(presetId) && readPendingEnvelope(presetId, pendingStorageScope) !== null
     },
 
     mutate(presetId, fallback, mutator, options = {}): LoomPreset {
@@ -552,12 +839,19 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       const changed = getChangedPaths(before, after)
       if (!isDirty(changed)) return clone(before)
 
-      entry.draft = clone({ ...after, updatedAt: Date.now() })
+      const confirmedCacheRevision = before.cacheRevision
+      entry.draft = clone({
+        ...after,
+        updatedAt: Date.now(),
+        ...(typeof confirmedCacheRevision === 'number'
+          ? { cacheRevision: confirmedCacheRevision }
+          : {}),
+      })
       entry.dirty = mergeDirtyPaths(entry.dirty, changed)
       entry.revision += 1
       // Dirty local paths intentionally remain compatible with an in-flight
       // latest read; hydrate() rebases them over its fresh persisted base.
-      writePendingEnvelope(presetId, entry)
+      writePendingEnvelope(presetId, entry, pendingStorageScope)
       publish(entry)
 
       if (options.immediate) {
@@ -612,48 +906,62 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       entries.delete(presetId)
       advanceConfirmedEpoch(presetId)
       listenersByPreset.delete(presetId)
-      removePendingEnvelope(presetId)
+      removePendingEnvelope(presetId, pendingStorageScope)
     },
   }
 }
 
 export const presetSaveCoordinator = createPresetSaveCoordinator({
   update: (presetId, input) => presetsApi.update(presetId, input),
+  get: (presetId) => presetsApi.get(presetId),
 })
 
 const durableRecoveryFlushes = new Map<string, Promise<void>>()
-
-/**
- * Await the selected preset's latest draft before generation reads it. When
- * Loom has not mounted yet, hydrate durable recovery state over a fresh row
- * first so prompt-only or scoped writes cannot be skipped.
- */
+export function setPresetSaveCoordinatorScope(scope: string | null): void {
+  const previousScopeEpoch = presetSaveCoordinator.getScopeEpoch()
+  presetSaveCoordinator.setScope(scope)
+  if (presetSaveCoordinator.getScopeEpoch() !== previousScopeEpoch) {
+    durableRecoveryFlushes.clear()
+  }
+}
 export async function flushPresetForGeneration(presetId: string | undefined): Promise<void> {
   if (!presetId) return
+  const scopeEpoch = presetSaveCoordinator.getScopeEpoch()
+  const assertScope = (): void => {
+    if (presetSaveCoordinator.getScopeEpoch() !== scopeEpoch) {
+      throw new PresetScopeChangedError()
+    }
+  }
   if (!presetSaveCoordinator.hasDurablePendingRecovery(presetId)) {
     await presetSaveCoordinator.flush(presetId)
+    assertScope()
     return
   }
 
   const existingRecovery = durableRecoveryFlushes.get(presetId)
   if (existingRecovery) {
     await existingRecovery
+    assertScope()
     return
   }
 
   const recovery = (async () => {
     while (true) {
+      assertScope()
       const hydration = presetSaveCoordinator.beginHydration(presetId, 'durable-recovery')
       try {
         const persisted = unmarshalPreset(await presetsApi.get(presetId))
+        assertScope()
         presetSaveCoordinator.hydrate(persisted, hydration)
         break
       } catch (error) {
         presetSaveCoordinator.cancelHydration(hydration)
+        assertScope()
         if (!(error instanceof StalePresetHydrationError)) throw error
       }
     }
     await presetSaveCoordinator.flush(presetId)
+    assertScope()
   })()
   durableRecoveryFlushes.set(presetId, recovery)
   try {

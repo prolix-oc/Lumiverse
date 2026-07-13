@@ -3,8 +3,18 @@ import {
   adoptFrontendSetupTeardown,
   createFrontendExtensionCleanup,
   finalizeFrontendLoadFailure,
+  isPermissionBootstrapCurrent,
+  observeFrontendSetupTeardown,
   type FrontendExtensionCleanupResources,
 } from './frontend-extension-cleanup'
+
+function invokeLoadedTeardown(loaded: { teardown?: () => void; teardownClaimed?: boolean }): void {
+  if (loaded.teardownClaimed) return
+  const teardown = loaded.teardown
+  if (!teardown) return
+  loaded.teardownClaimed = true
+  teardown()
+}
 
 function resources(teardown: () => void, events: string[]): FrontendExtensionCleanupResources {
   return {
@@ -20,6 +30,17 @@ function resources(teardown: () => void, events: string[]): FrontendExtensionCle
 }
 
 describe('frontend extension cleanup lifecycle', () => {
+  test('does not let a revoke event get overwritten by the in-flight permission GET', () => {
+    let adopted: string[] | undefined
+    const requestVersion = 0
+    const revokeEventVersion = 1
+    if (isPermissionBootstrapCurrent(requestVersion, revokeEventVersion)) {
+      adopted = ['presets']
+    }
+
+    expect(adopted).toBeUndefined()
+    expect(isPermissionBootstrapCurrent(requestVersion, requestVersion)).toBe(true)
+  })
   test('setup-throw cleanup revokes authority and tears down each resource once', () => {
     const events: string[] = []
     let teardownCalls = 0
@@ -97,5 +118,56 @@ describe('frontend extension cleanup lifecycle', () => {
       () => { staleErrors += 1 },
     )
     expect(staleErrors).toBe(1)
+  })
+  test('deduplicates repeated stale setup teardowns before invoking them', () => {
+    let calls = 0
+    let errors = 0
+    const loaded: { teardown?: () => void; teardownClaimed?: boolean; staleTeardowns?: Set<() => void> } = {}
+    const staleTeardown = () => { calls += 1 }
+
+    adoptFrontendSetupTeardown(loaded, staleTeardown, false, () => { errors += 1 })
+    adoptFrontendSetupTeardown(loaded, staleTeardown, false, () => { errors += 1 })
+
+    expect(calls).toBe(1)
+    expect(errors).toBe(0)
+  })
+
+  test('reports a late current setup error so the loader can dispose the extension', async () => {
+    let errors = 0
+    const loaded: { teardown?: () => void } = {}
+    observeFrontendSetupTeardown(
+      Promise.reject(new Error('setup failed late')),
+      loaded,
+      () => true,
+      () => { errors += 1 },
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(errors).toBe(1)
+  })
+
+  test('claims static teardown before a stale async setup result settles', async () => {
+    let staticCalls = 0
+    let staleCalls = 0
+    const loaded: { teardown?: () => void; teardownClaimed?: boolean; staleTeardowns?: Set<() => void> } = {
+      teardown: () => { staticCalls += 1 },
+    }
+    const cleanup = createFrontendExtensionCleanup(resources(() => {
+      invokeLoadedTeardown(loaded)
+    }, []))
+    let resolveSetup!: (teardown: () => void) => void
+    const setup = new Promise<() => void>((resolve) => {
+      resolveSetup = resolve
+    })
+
+    observeFrontendSetupTeardown(setup, loaded, () => false, () => {})
+    cleanup()
+    resolveSetup(() => { staleCalls += 1 })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(staticCalls).toBe(1)
+    expect(staleCalls).toBe(1)
   })
 })

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import * as presetEditorHelper from './preset-editor-helper'
-import type { SpindlePresetEditorState, SpindlePresetEditorTabHandle } from './preset-editor-types'
+import type {
+  SpindlePresetEditorState,
+  SpindlePresetEditorTabHandle,
+  SpindlePresetEditorToolbarItemHandle,
+} from './preset-editor-types'
 import { createSpindlePlacementSlice } from '@/store/slices/spindle-placement'
 import type { SpindlePlacementSlice } from '@/types/store'
 
@@ -19,7 +23,11 @@ mock.module('@/store', () => ({ useStore: mockedUseStore }))
 
 // The target module must load after the narrow store facade is registered.
 // This is a test-only module-loading boundary; production imports stay static.
-const { createPresetEditorTabHandle } = await import('./placement-helper')
+const {
+  createPresetEditorTabHandle,
+  createPresetEditorToolbarItemHandle,
+  destroyPresetEditorPlacementsForExtension,
+} = await import('./placement-helper')
 
 type TrackedRoot = {
   root: HTMLElement
@@ -32,13 +40,14 @@ const originalSubscribe = presetEditorHelper.subscribePresetEditorState
 
 let createdRoots: TrackedRoot[] = []
 let handles: SpindlePresetEditorTabHandle[] = []
+let toolbarHandles: SpindlePresetEditorToolbarItemHandle[] = []
 let activeSubscriptions = 0
 
 beforeEach(() => {
   placementStore = placementStoreFactory(createSpindlePlacementSlice)
   createdRoots = []
   handles = []
-  activeSubscriptions = 0
+  toolbarHandles = []
 
   document.createElement = ((tagName: string) => {
     const root = originalCreateElement(tagName)
@@ -62,6 +71,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  for (const handle of toolbarHandles) handle.destroy()
   for (const handle of handles) handle.destroy()
   placementStore = placementStoreFactory(createSpindlePlacementSlice)
   document.createElement = originalCreateElement
@@ -101,5 +111,57 @@ describe('preset editor tab registration', () => {
     expect(activeSubscriptions).toBe(8)
     expect(createdRoots[9]?.removed).toBe(true)
     expect(placementStore.getState().presetEditorTabs).toHaveLength(8)
+  })
+})
+
+describe('preset editor toolbar registration', () => {
+  test('unwinds the root when per-extension or global cap rejects registration', () => {
+    toolbarHandles.push(createPresetEditorToolbarItemHandle(extensionId, {
+      id: 'per-extension-0',
+      ariaLabel: 'Per-extension 0',
+    }, () => {}))
+
+    expect(() => createPresetEditorToolbarItemHandle(extensionId, {
+      id: 'per-extension-overflow',
+      ariaLabel: 'Per-extension overflow',
+    }, () => {})).toThrow('Preset editor toolbar item limit reached')
+    expect(createdRoots[1]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(1)
+
+    for (let index = 0; index < 3; index += 1) {
+      toolbarHandles.push(createPresetEditorToolbarItemHandle(`global-extension-${index}`, {
+        id: `global-${index}`,
+        ariaLabel: `Global ${index}`,
+      }, () => {}))
+    }
+
+    expect(() => createPresetEditorToolbarItemHandle('global-overflow', {
+      id: 'global-overflow',
+      ariaLabel: 'Global overflow',
+    }, () => {})).toThrow('Global preset editor toolbar item limit reached')
+    expect(createdRoots[5]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(4)
+  })
+
+  test('removes revoked toolbar resources and rejects stale handle calls', () => {
+    let active = true
+    const handle = createPresetEditorToolbarItemHandle(extensionId, {
+      id: 'revoked',
+      ariaLabel: 'Revoked toolbar item',
+    }, () => {
+      if (!active) throw new Error('PERMISSION_DENIED:presets')
+    })
+    toolbarHandles.push(handle)
+
+    handle.setVisible(false)
+    expect(placementStore.getState().presetEditorToolbarItems[0]?.visible).toBe(false)
+    active = false
+    destroyPresetEditorPlacementsForExtension(extensionId)
+
+    expect(createdRoots[0]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(0)
+    expect(() => handle.setVisible(true)).toThrow('PERMISSION_DENIED')
+    active = true
+    expect(() => handle.setVisible(true)).toThrow('PRESET_EDITOR_DESTROYED')
   })
 })

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
+import { PresetRevisionConflictError } from "../types/preset";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -75,6 +76,7 @@ describe("presets.service — ETag sources + row trim", () => {
     expect(preset!.prompt_order).toEqual([{ id: "b1" }]);
     expect(preset!.engine).toBe("loom");
     expect(preset!.updated_at).toBe(100);
+    expect(preset!.cache_revision).toBe(0);
   });
 
   test("getPreset is scoped to the owning user", () => {
@@ -122,5 +124,47 @@ describe("presets.service — ETag sources + row trim", () => {
     expect(getPresetCacheRevision("u1", "p1")).toBe(2);
     expect(second?.name).toBe("C");
     expect(getPresetCacheRevision("u1", "missing")).toBeNull();
+  });
+
+  test("rejects a stale conditional writer without changing newer metadata or blocks", () => {
+    insertPreset({
+      id: "p1",
+      name: "A",
+      provider: "loom",
+      user_id: "u1",
+      prompt_order: [{ id: "original" }],
+    });
+
+    const first = updatePreset("u1", "p1", {
+      name: "newer",
+      prompt_order: [{ id: "newer-block" }],
+      expected_cache_revision: 0,
+    });
+    expect(first?.cache_revision).toBe(1);
+
+    expect(() => updatePreset("u1", "p1", {
+      metadata: { source: "stale-writer" },
+      prompt_order: [{ id: "stale-block" }],
+      expected_cache_revision: 0,
+    })).toThrow(PresetRevisionConflictError);
+
+    const current = getPreset("u1", "p1");
+    expect(current?.name).toBe("newer");
+    expect(current?.prompt_order).toEqual([{ id: "newer-block" }]);
+    expect(current?.metadata).toEqual({});
+    expect(current?.cache_revision).toBe(1);
+  });
+
+  test("rejects stale conditional no-op writers", () => {
+    insertPreset({ id: "p1", name: "A", provider: "loom", user_id: "u1" });
+    const current = updatePreset("u1", "p1", { name: "newer" });
+    expect(current?.cache_revision).toBe(1);
+
+    expect(() => updatePreset("u1", "p1", {
+      expected_cache_revision: 0,
+    })).toThrow(PresetRevisionConflictError);
+
+    expect(getPreset("u1", "p1")?.name).toBe("newer");
+    expect(getPreset("u1", "p1")?.cache_revision).toBe(1);
   });
 });

@@ -3,6 +3,7 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptVariableValue } from "../types/preset";
+import { PresetRevisionConflictError } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -74,6 +75,7 @@ function rowToPreset(row: any): Preset {
     prompt_order: JSON.parse(row.prompt_order),
     prompts: JSON.parse(row.prompts),
     metadata: JSON.parse(row.metadata),
+    cache_revision: row.cache_revision ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -312,15 +314,42 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
   if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
 
-  if (fields.length === 0) return existing;
+  const expectedCacheRevision = input.expected_cache_revision;
+  if (fields.length === 0) {
+    if (expectedCacheRevision !== undefined && expectedCacheRevision !== (existing.cache_revision ?? 0)) {
+      throw new PresetRevisionConflictError(id, expectedCacheRevision, existing.cache_revision ?? 0);
+    }
+    return existing;
+  }
 
   fields.push("updated_at = ?", "cache_revision = cache_revision + 1");
   values.push(Math.floor(Date.now() / 1000));
-  values.push(id);
-  values.push(userId);
 
-  getDb().query(`UPDATE presets SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getPreset(userId, id)!;
+  const where = ["id = ?", "user_id = ?"];
+  values.push(id, userId);
+  if (expectedCacheRevision !== undefined) {
+    where.push("cache_revision = ?");
+    values.push(expectedCacheRevision);
+  }
+
+  const changes = getDb()
+    .query(`UPDATE presets SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
+    .run(...values)
+    .changes;
+  if (changes === 0) {
+    // A conditional miss is either a deleted row (the normal not-found result)
+    // or a stale writer. Read the current revision only after the atomic update
+    // has failed so the distinction cannot race the mutation itself.
+    const current = getPreset(userId, id);
+    if (!current) return null;
+    if (expectedCacheRevision !== undefined) {
+      throw new PresetRevisionConflictError(id, expectedCacheRevision, current.cache_revision ?? 0);
+    }
+    return null;
+  }
+
+  const updated = getPreset(userId, id);
+  if (!updated) return null;
   eventBus.emit(EventType.PRESET_CHANGED, { id, preset: updated }, userId);
   return updated;
 }
@@ -442,7 +471,7 @@ export function createPromptBlock(
     : blocks.length;
   blocks.splice(insertAt, 0, block);
 
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return block;
 }
 
@@ -461,7 +490,7 @@ export function updatePromptBlock(
 
   const updated = normalizePromptBlock({ ...blocks[index], ...(input || {}), id: blockId });
   blocks[index] = updated;
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return updated;
 }
 
@@ -474,7 +503,7 @@ export function deletePromptBlock(userId: string, presetId: string, blockId: str
   if (index === -1) return false;
 
   blocks.splice(index, 1);
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return true;
 }
 

@@ -710,7 +710,10 @@ export async function installPreset(
     // from LumiHub before, so "Update" advances the version instead of duplicating.
     let saved;
     if (existing) {
-      saved = presetsSvc.updatePreset(userId, existing.id, presetInput)!;
+      saved = presetsSvc.updatePreset(userId, existing.id, {
+        ...presetInput,
+        expected_cache_revision: existing.cache_revision,
+      })!;
     } else {
       saved = presetsSvc.createPreset(userId, presetInput);
       eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);

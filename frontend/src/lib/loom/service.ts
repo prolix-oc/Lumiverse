@@ -366,6 +366,7 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
+    ...(typeof preset.cache_revision === 'number' ? { cacheRevision: preset.cache_revision } : {}),
     blocks: (preset.prompt_order || []) as PromptBlock[],
     source: meta.source || null,
     isDefault: meta.isDefault || false,
@@ -388,6 +389,9 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
   const blocks = normalizeCategoryBlockState(loom.blocks)
   return {
     name: loom.name,
+    ...(typeof loom.cacheRevision === 'number'
+      ? { expected_cache_revision: loom.cacheRevision }
+      : {}),
     parameters: {
       samplerOverrides: loom.samplerOverrides,
       customBody: loom.customBody,
