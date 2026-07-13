@@ -1071,7 +1071,15 @@ describe('preset save coordinator', () => {
     expect(writes).toHaveLength(3)
     expect(writes.map((input) => input.expected_cache_revision)).toEqual([1, 2, 2])
     expect(writes[2].prompt_order?.[0]?.content).toBe('second')
+    const hydrationToken = coordinator.beginHydration(base.id)
     expect(() => coordinator.hydrate(unmarshalPreset(firstSaved))).not.toThrow()
+    const newerPersisted = unmarshalPreset(rawPreset({
+      ...firstSaved,
+      name: 'newer',
+      cache_revision: 4,
+      prompt_order: firstSaved.prompt_order?.map((candidate) => ({ ...candidate, content: 'second' })),
+    }))
+    expect(coordinator.hydrate(newerPersisted, hydrationToken).name).toBe('newer')
     expect(coordinator.getDraft(base.id)?.blocks[0]?.content).toBe('second')
     unsubscribe()
     localStorage.clear()

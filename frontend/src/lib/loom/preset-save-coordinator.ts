@@ -769,7 +769,6 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       // replace a subsequently confirmed persisted row. A non-authoritative
       // consumer read remains a valid fallback until the latest consumer read
       // succeeds, so one failed auxiliary load cannot blank the active editor.
-      if (!token) advanceConfirmedEpoch(preset.id)
       if (token && token.scopeEpoch !== scopeEpoch) {
         throw new PresetScopeChangedError()
       }
@@ -783,6 +782,17 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         throw new StalePresetHydrationError(preset.id)
       }
       if (!entries.has(preset.id)) migrateLegacyPendingEnvelope(preset.id, pendingStorageScope)
+      const existingEntry = entries.get(preset.id)
+      if (
+        !token
+        && existingEntry
+        && typeof preset.cacheRevision === 'number'
+        && typeof existingEntry.confirmed.cacheRevision === 'number'
+        && preset.cacheRevision < existingEntry.confirmed.cacheRevision
+      ) {
+        return clone(existingEntry.draft)
+      }
+      if (!token) advanceConfirmedEpoch(preset.id)
       const isAuthoritativeRead = !token
         || token.globalReadEpoch === (latestHydrationReadEpochs.get(preset.id) ?? 0)
       const entry = entries.get(preset.id)
