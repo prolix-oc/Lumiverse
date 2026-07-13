@@ -595,7 +595,6 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
 
     const revision = entry.revision
     const snapshot = clone(entry.draft)
-    const conflictBase = clone(entry.confirmed)
     entry.queuedRevision = revision
     entry.queuedSnapshot = clone(snapshot)
     const enqueueEpoch = scopeEpoch
@@ -603,6 +602,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     const link = previous.then(async () => {
       let pendingSnapshot = snapshot
       let conflictRetries = 0
+      let conflictBase: LoomPreset | null = null
 
       while (true) {
         if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
@@ -613,6 +613,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
           if (scopeEpoch !== enqueueEpoch || entries.get(presetId) !== entry) {
             return clone(entry.confirmed)
           }
+          pendingSnapshot = rebaseDirtyPaths(entry.confirmed, pendingSnapshot, entry.dirty)
+          conflictBase = clone(entry.confirmed)
           const savedRow = await adapter.update(presetId, marshalUpdate(pendingSnapshot))
           const current = entries.get(presetId)
           if (scopeEpoch !== enqueueEpoch || current !== entry) {
@@ -663,7 +665,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
           const current = entries.get(presetId)
           if (
             entry.dirty.fields.includes('blocks')
-            && !sameJson(latest.blocks, conflictBase.blocks)
+            && !sameJson(latest.blocks, conflictBase!.blocks)
           ) {
             // Block arrays need block-id/property-aware merging. Until that
             // merge exists, surface only conflicts that changed blocks

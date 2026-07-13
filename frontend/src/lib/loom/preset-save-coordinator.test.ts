@@ -989,6 +989,88 @@ describe('preset save coordinator', () => {
     localStorage.clear()
   })
 
+  test('uses the post-queue block revision as the retry base', async () => {
+    localStorage.clear()
+    const block = {
+      id: 'block-a',
+      name: 'Block A',
+      content: 'base',
+      role: 'system' as const,
+      enabled: true,
+      position: 'pre_history' as const,
+      depth: 0,
+      marker: null,
+      isLocked: false,
+      color: null,
+      injectionTrigger: [],
+    }
+    const base = unmarshalPreset(rawPreset({
+      prompt_order: [block],
+      cache_revision: 1,
+    }))
+    const firstSaved = rawPreset({
+      ...base,
+      prompt_order: [{ ...block, content: 'first' }],
+      cache_revision: 2,
+    })
+    const conflict = Object.assign(new Error('preset revision conflict'), {
+      status: 409,
+      body: { code: 'PRESET_REVISION_CONFLICT' },
+    })
+    const writes: UpdatePresetInput[] = []
+    let updateCalls = 0
+    let markFirstStarted!: () => void
+    let resolveFirst!: (preset: Preset) => void
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve })
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        writes.push(structuredClone(input))
+        updateCalls += 1
+        if (updateCalls === 1) {
+          markFirstStarted()
+          return new Promise<Preset>((resolve) => { resolveFirst = resolve })
+        }
+        if (updateCalls === 2) throw conflict
+        return rawPreset({
+          ...firstSaved,
+          id: presetId,
+          prompt_order: input.prompt_order ?? firstSaved.prompt_order,
+          cache_revision: 3,
+        })
+      },
+      async get() {
+        return firstSaved
+      },
+    })
+    coordinator.hydrate(base)
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'first' })),
+      }),
+      { immediate: true },
+    )
+    await firstStarted
+    coordinator.mutate(
+      base.id,
+      base,
+      (preset) => ({
+        ...preset,
+        blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'second' })),
+      }),
+      { immediate: true },
+    )
+    resolveFirst(firstSaved)
+
+    await coordinator.flush(base.id)
+    expect(writes).toHaveLength(3)
+    expect(writes.map((input) => input.expected_cache_revision)).toEqual([1, 2, 2])
+    expect(writes[2].prompt_order?.[0]?.content).toBe('second')
+    localStorage.clear()
+  })
+
   test('confirms persisted dirty paths individually while retaining newer edits', async () => {
     localStorage.clear()
     const base = unmarshalPreset(rawPreset({
