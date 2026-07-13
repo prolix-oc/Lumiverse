@@ -1309,6 +1309,53 @@ describe('preset save coordinator', () => {
     expect(coordinator.getDraft(base.id)?.name).toBe('Replacement')
     localStorage.clear()
   })
+  test('keeps conflict-recovered fields against an older tokenless echo', async () => {
+    localStorage.clear()
+    const base = unmarshalPreset(rawPreset({
+      cache_revision: 1,
+      metadata: { description: 'Base description' },
+    }))
+    const latest = rawPreset({
+      cache_revision: 3,
+      metadata: { description: 'Remote description' },
+    })
+    const stale = unmarshalPreset(rawPreset({
+      cache_revision: 2,
+      metadata: { description: 'Stale description' },
+    }))
+    const conflict = Object.assign(new Error('preset revision conflict'), {
+      status: 409,
+      body: { code: 'PRESET_REVISION_CONFLICT' },
+    })
+    let updateCalls = 0
+    let markRetryStarted!: () => void
+    let rejectRetry!: (error: Error) => void
+    const retryStarted = new Promise<void>((resolve) => { markRetryStarted = resolve })
+    const coordinator = createPresetSaveCoordinator({
+      async update() {
+        updateCalls += 1
+        if (updateCalls === 1) throw conflict
+        markRetryStarted()
+        return new Promise<Preset>((_resolve, reject) => { rejectRetry = reject })
+      },
+      async get() {
+        return latest
+      },
+    })
+
+    coordinator.hydrate(base)
+    coordinator.mutate(base.id, base, (preset) => ({ ...preset, name: 'Local name' }), { immediate: true })
+    await retryStarted
+
+    const echoed = coordinator.hydrate(stale)
+    expect(echoed.name).toBe('Local name')
+    expect(echoed.description).toBe('Remote description')
+    const retryFailure = new Error('retry failed')
+    rejectRetry(retryFailure)
+    await expect(coordinator.flush(base.id)).rejects.toThrow('retry failed')
+    localStorage.clear()
+  })
+
   test('bounds recoverable revision conflict retries', async () => {
     localStorage.clear()
     const base = unmarshalPreset(rawPreset({ cache_revision: 1 }))
