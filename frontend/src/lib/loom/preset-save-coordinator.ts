@@ -795,6 +795,15 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       }
 
       if (
+        typeof preset.cacheRevision === 'number'
+        && typeof entry.confirmed.cacheRevision === 'number'
+        && preset.cacheRevision < entry.confirmed.cacheRevision
+      ) {
+        // A late echo for an older queued write cannot regress the confirmed
+        // revision while a newer dispatch is still in flight.
+        return clone(entry.draft)
+      }
+      if (
         entry.queuedRevision !== null
         && entry.queuedSnapshots.some((queued) => (
           sameJson(canonicalPersistedPayload(queued), canonicalPersistedPayload(preset))
