@@ -8,6 +8,7 @@ import {
   presetSaveCoordinator,
   StalePresetHydrationError,
   PresetScopeChangedError,
+  PresetBlockConflictError,
   type PresetSaveAdapter,
 } from './preset-save-coordinator'
 import { unmarshalPreset } from './service'
@@ -1068,6 +1069,45 @@ describe('preset save coordinator', () => {
     expect(writes).toHaveLength(3)
     expect(writes.map((input) => input.expected_cache_revision)).toEqual([1, 2, 2])
     expect(writes[2].prompt_order?.[0]?.content).toBe('second')
+    localStorage.clear()
+  })
+
+  test('surfaces remote block changes during hydration', () => {
+    localStorage.clear()
+    const block = {
+      id: 'block-a',
+      name: 'Block A',
+      content: 'base',
+      role: 'system' as const,
+      enabled: true,
+      position: 'pre_history' as const,
+      depth: 0,
+      marker: null,
+      isLocked: false,
+      color: null,
+      injectionTrigger: [],
+    }
+    const base = unmarshalPreset(rawPreset({
+      prompt_order: [block],
+      cache_revision: 1,
+    }))
+    const coordinator = createPresetSaveCoordinator({
+      async update(presetId, input) {
+        return persistedFromUpdate(presetId, input)
+      },
+    })
+    coordinator.hydrate(base)
+    coordinator.mutate(base.id, base, (preset) => ({
+      ...preset,
+      blocks: preset.blocks.map((candidate) => ({ ...candidate, content: 'local' })),
+    }))
+
+    const remote = unmarshalPreset(rawPreset({
+      prompt_order: [{ ...block, content: 'remote' }],
+      cache_revision: 2,
+    }))
+    expect(() => coordinator.hydrate(remote)).toThrow(PresetBlockConflictError)
+    expect(coordinator.getDraft(base.id)?.blocks[0]?.content).toBe('local')
     localStorage.clear()
   })
 

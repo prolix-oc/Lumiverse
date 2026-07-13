@@ -85,6 +85,12 @@ export class PresetScopeChangedError extends Error {
     this.name = 'PresetScopeChangedError'
   }
 }
+export class PresetBlockConflictError extends Error {
+  constructor(presetId: string) {
+    super(`Preset block changes conflict with a newer persisted revision: ${presetId}`)
+    this.name = 'PresetBlockConflictError'
+  }
+}
 
 export interface PresetSaveCoordinator {
   /** Replace the authenticated-user scope and discard in-memory work from the previous scope. */
@@ -793,6 +799,12 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         writePendingEnvelope(preset.id, entry, pendingStorageScope)
         publish(entry)
         return clone(entry.draft)
+      }
+      if (
+        entry.dirty.fields.includes('blocks')
+        && !sameJson(preset.blocks, entry.confirmed.blocks)
+      ) {
+        throw new PresetBlockConflictError(preset.id)
       }
       const persistedChanged = !sameJson(entry.confirmed, preset)
       const rebased = isDirty(entry.dirty)
