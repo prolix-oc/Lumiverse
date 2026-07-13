@@ -1044,7 +1044,6 @@ describe('preset save coordinator', () => {
       },
     })
     coordinator.hydrate(base)
-    const unsubscribe = coordinator.subscribe(base.id, () => {})
     coordinator.mutate(
       base.id,
       base,
@@ -1072,17 +1071,72 @@ describe('preset save coordinator', () => {
     expect(writes.map((input) => input.expected_cache_revision)).toEqual([1, 2, 2])
     expect(writes[2].prompt_order?.[0]?.content).toBe('second')
     const hydrationToken = coordinator.beginHydration(base.id)
-    expect(() => coordinator.hydrate(unmarshalPreset(firstSaved))).not.toThrow()
+    expect(coordinator.hydrate(unmarshalPreset(firstSaved)).blocks[0]?.content).toBe('second')
     const newerPersisted = unmarshalPreset(rawPreset({
       ...firstSaved,
       name: 'newer',
       cache_revision: 4,
       prompt_order: firstSaved.prompt_order?.map((candidate) => ({ ...candidate, content: 'second' })),
     }))
-    expect(coordinator.hydrate(newerPersisted, hydrationToken).name).toBe('newer')
-    expect(coordinator.getDraft(base.id)?.blocks[0]?.content).toBe('second')
-    unsubscribe()
+    const hydratedNewer = coordinator.hydrate(newerPersisted, hydrationToken)
+    expect(hydratedNewer.name).toBe('newer')
+    expect(hydratedNewer.blocks[0]?.content).toBe('second')
     localStorage.clear()
+  })
+
+  test('rebases local edits when a stale echo follows clean eviction', () => {
+    localStorage.clear()
+    const block = {
+      id: 'base-block',
+      name: 'Base block',
+      content: 'base',
+      role: 'system' as const,
+      enabled: true,
+      position: 'pre_history' as const,
+      depth: 0,
+      marker: null,
+      isLocked: false,
+      color: null,
+      injectionTrigger: [],
+    }
+    const base = unmarshalPreset(rawPreset({ prompt_order: [block], cache_revision: 2 }))
+    const remoteBlock = { ...base.blocks[0], id: 'remote-block', content: 'remote' }
+    const persisted = {
+      ...base,
+      cacheRevision: 3,
+      name: 'Persisted',
+      blocks: [...base.blocks, remoteBlock],
+    }
+    const coordinator = createPresetSaveCoordinator({
+      async update() {
+        return rawPreset({ cache_revision: 3 })
+      },
+    })
+    coordinator.hydrate(persisted)
+    coordinator.mutate(
+      persisted.id,
+      base,
+      (preset) => ({
+        ...preset,
+        blocks: [
+          ...preset.blocks,
+          { ...preset.blocks[0], id: 'local-block', content: 'local' },
+        ],
+      }),
+    )
+
+    const draftBeforeEcho = coordinator.getDraft(persisted.id)
+    expect(draftBeforeEcho?.blocks.map((block) => block.id)).toEqual([
+      base.blocks[0].id,
+      'remote-block',
+      'local-block',
+    ])
+    const hydrated = coordinator.hydrate(base)
+    expect(hydrated.blocks.map((block) => block.id)).toEqual([
+      base.blocks[0].id,
+      'remote-block',
+      'local-block',
+    ])
   })
 
   test('surfaces remote block changes during hydration', () => {

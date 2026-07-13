@@ -513,6 +513,16 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
   const hydrationReadEpochs = new Map<string, Map<string, number>>()
   const latestHydrationReadEpochs = new Map<string, number>()
   const confirmedEpochs = new Map<string, number>()
+  const confirmedCacheRevisions = new Map<string, number>()
+  const confirmedSnapshots = new Map<string, LoomPreset>()
+  const rememberConfirmedCacheRevision = (presetId: string, preset: LoomPreset): void => {
+    if (typeof preset.cacheRevision !== 'number') return
+    const previous = confirmedCacheRevisions.get(presetId)
+    if (previous === undefined || preset.cacheRevision > previous) {
+      confirmedCacheRevisions.set(presetId, preset.cacheRevision)
+      confirmedSnapshots.set(presetId, clone(preset))
+    }
+  }
   const pendingHydrations = new Set<PresetHydrationToken>()
   let scopeEpoch = 0
   let pendingStorageScope: string | null = null
@@ -526,6 +536,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     hydrationReadEpochs.clear()
     latestHydrationReadEpochs.clear()
     confirmedEpochs.clear()
+    confirmedCacheRevisions.clear()
+    confirmedSnapshots.clear()
     pendingHydrations.clear()
   }
 
@@ -567,13 +579,20 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     const existing = entries.get(presetId)
     if (existing) return existing
     if (fallback.id !== presetId) throw new Error('Preset coordinator fallback id mismatch')
-
-    const entry = createEntry(fallback)
+    const remembered = confirmedSnapshots.get(presetId)
+    const initial = remembered
+      && typeof fallback.cacheRevision === 'number'
+      && typeof remembered.cacheRevision === 'number'
+      && remembered.cacheRevision > fallback.cacheRevision
+      ? remembered
+      : fallback
+    const entry = createEntry(initial)
+    rememberConfirmedCacheRevision(presetId, entry.confirmed)
     entry.listeners = listenersByPreset.get(presetId) ?? new Set()
     listenersByPreset.set(presetId, entry.listeners)
     const pending = readPendingEnvelope(presetId, pendingStorageScope)
     if (pending) {
-      entry.draft = rebaseDirtyPaths(fallback, pending.preset, pending.dirty)
+      entry.draft = rebaseDirtyPaths(initial, pending.preset, pending.dirty)
       entry.dirty = pending.dirty
       entry.revision = pending.revision
     }
@@ -641,6 +660,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
           )
 
           current.confirmed = clone(saved)
+          rememberConfirmedCacheRevision(presetId, saved)
           if (current.revision === revision) {
             current.draft = clone(saved)
             current.dirty = emptyDirtyPaths()
@@ -783,14 +803,40 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
       }
       if (!entries.has(preset.id)) migrateLegacyPendingEnvelope(preset.id, pendingStorageScope)
       const existingEntry = entries.get(preset.id)
-      if (
-        !token
-        && existingEntry
+      const residentCacheRevision = existingEntry?.confirmed.cacheRevision
+      const rememberedCacheRevision = confirmedCacheRevisions.get(preset.id)
+      const confirmedCacheRevision = residentCacheRevision === undefined
+        ? rememberedCacheRevision
+        : rememberedCacheRevision === undefined
+          ? residentCacheRevision
+          : Math.max(residentCacheRevision, rememberedCacheRevision)
+      const staleTokenlessEcho = !token
         && typeof preset.cacheRevision === 'number'
-        && typeof existingEntry.confirmed.cacheRevision === 'number'
-        && preset.cacheRevision < existingEntry.confirmed.cacheRevision
-      ) {
-        return clone(existingEntry.draft)
+        && typeof confirmedCacheRevision === 'number'
+        && preset.cacheRevision < confirmedCacheRevision
+      if (staleTokenlessEcho) {
+        if (
+          existingEntry
+          && (rememberedCacheRevision === undefined
+            || residentCacheRevision === rememberedCacheRevision)
+        ) {
+          return clone(existingEntry.draft)
+        }
+        const confirmedSnapshot = confirmedSnapshots.get(preset.id)
+        if (confirmedSnapshot) {
+          if (existingEntry) {
+            existingEntry.confirmed = clone(confirmedSnapshot)
+            existingEntry.draft = isDirty(existingEntry.dirty)
+              ? rebaseDirtyPaths(confirmedSnapshot, existingEntry.draft, existingEntry.dirty)
+              : clone(confirmedSnapshot)
+            writePendingEnvelope(preset.id, existingEntry, pendingStorageScope)
+            publish(existingEntry)
+            return clone(existingEntry.draft)
+          }
+          return clone(confirmedSnapshot)
+        }
+        if (existingEntry) return clone(existingEntry.draft)
+        throw new StalePresetHydrationError(preset.id)
       }
       if (!token) advanceConfirmedEpoch(preset.id)
       const isAuthoritativeRead = !token
@@ -820,6 +866,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         ))
       ) {
         entry.confirmed = clone(preset)
+        rememberConfirmedCacheRevision(preset.id, preset)
         entry.draft = isDirty(entry.dirty)
           ? rebaseDirtyPaths(preset, entry.draft, entry.dirty)
           : clone(preset)
@@ -840,6 +887,7 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
         ? confirmPersistedDirtyPaths(preset, entry.draft, entry.dirty)
         : { draft: clone(preset), dirty: emptyDirtyPaths() }
       entry.confirmed = clone(preset)
+      rememberConfirmedCacheRevision(preset.id, preset)
       entry.draft = rebased.draft
       entry.dirty = rebased.dirty
       if (isDirty(entry.dirty) && persistedChanged) {
@@ -946,6 +994,8 @@ export function createPresetSaveCoordinator(adapter: PresetSaveAdapter): PresetS
     remove(presetId: string): void {
       const entry = entries.get(presetId)
       clearTimeout(entry?.timer)
+      confirmedCacheRevisions.delete(presetId)
+      confirmedSnapshots.delete(presetId)
       entries.delete(presetId)
       advanceConfirmedEpoch(presetId)
       listenersByPreset.delete(presetId)
