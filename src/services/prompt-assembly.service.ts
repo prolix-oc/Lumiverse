@@ -5552,6 +5552,7 @@ const MIN_CLIP_SAFETY_MARGIN = 256;
 const CLIP_SAFETY_MARGIN_RATIO = 0.02;
 /** Fallback response headroom when `max_tokens` is unset. Matches the industry default. */
 const FALLBACK_MAX_RESPONSE_TOKENS = 4096;
+const CLIP_YIELD_CHAR_BUDGET = 262_144;
 
 /**
  * Clip oldest chat-history messages from the assembled prompt so the total
@@ -5619,24 +5620,24 @@ export async function clipToContextBudget(
   const n = result.length;
   const historyIndices: number[] = [];
   let fixedTokens = 0;
+  let charsSinceYield = 0;
+  const yieldWhenDue = async (): Promise<void> => {
+    if (charsSinceYield < CLIP_YIELD_CHAR_BUDGET) return;
+    charsSinceYield = 0;
+    await new Promise<void>((r) => setTimeout(r, 0));
+    if (signal?.aborted)
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  };
   for (let i = 0; i < n; i++) {
-    // Cheap classification pass — history is just index-pushed, so only the
-    // (few) fixed messages are tokenized here. The expensive tokenization now
-    // lives in the newest→oldest walk below, which yields by tokenization count;
-    // this loop only needs a coarse safety yield so a stop can still land on a
-    // pathologically long chat. Yielding per-iteration here would add macrotask
-    // overhead that, on fast hardware, costs more than the work it interrupts.
-    if (i > 0 && (i & 4095) === 0) {
-      await new Promise<void>((r) => setTimeout(r, 0));
-      if (signal?.aborted)
-        throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    }
     const msg = result[i];
     if (isChatHistoryMessage(msg)) {
       historyIndices.push(i);
-    } else {
-      fixedTokens += counter.count(`${msg.role}\n${getTextContent(msg)}`);
+      continue;
     }
+    const text = `${msg.role}\n${getTextContent(msg)}`;
+    charsSinceYield += text.length;
+    await yieldWhenDue();
+    fixedTokens += counter.count(text);
   }
 
   const remainingHistoryBudget = inputBudget - fixedTokens;
@@ -5710,22 +5711,12 @@ export async function clipToContextBudget(
   // older message is dropped without ever being tokenized.
   let accHistoryTokens = 0;
   let oldestKeptHistoryIdx = -1;
-  let tokenized = 0;
   for (let i = historyIndices.length - 1; i >= 0; i--) {
-    // Yield every 256 tokenized messages. `counter.count()` is sync (~0.5ms/msg
-    // on Termux), so a large budget keeping thousands of messages must yield to
-    // keep /generate/stop responsive — but each setTimeout(0) costs ~1ms of
-    // event-loop overhead, so yielding too often dominates the work it guards.
-    // 256 ≈ 128ms between yields on Termux (well within stop-button latency)
-    // while keeping the macrotask overhead negligible.
-    if (tokenized > 0 && (tokenized & 255) === 0) {
-      await new Promise<void>((r) => setTimeout(r, 0));
-      if (signal?.aborted)
-        throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    }
     const msg = result[historyIndices[i]];
-    const t = counter.count(`${msg.role}\n${getTextContent(msg)}`);
-    tokenized++;
+    const text = `${msg.role}\n${getTextContent(msg)}`;
+    charsSinceYield += text.length;
+    await yieldWhenDue();
+    const t = counter.count(text);
     if (accHistoryTokens + t > remainingHistoryBudget) break;
     accHistoryTokens += t;
     oldestKeptHistoryIdx = i;

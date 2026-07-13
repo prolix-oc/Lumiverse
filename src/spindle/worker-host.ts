@@ -3445,12 +3445,15 @@ export class WorkerHost {
 
         return new Promise<InterceptorResult>((resolve, reject) => {
           const timeout = setTimeout(() => {
-            this.pendingRequests.delete(requestId);
-            reject(
-              new Error(
-                `Interceptor timeout from ${this.manifest.identifier} (${Math.round(timeoutMs / 1000)}s)`
-              )
-            );
+            setTimeout(() => {
+              if (!this.pendingRequests.has(requestId)) return;
+              this.pendingRequests.delete(requestId);
+              reject(
+                new Error(
+                  `Interceptor timeout from ${this.manifest.identifier} (${Math.round(timeoutMs / 1000)}s)`
+                )
+              );
+            }, 0);
           }, timeoutMs);
 
           this.pendingRequests.set(requestId, {
