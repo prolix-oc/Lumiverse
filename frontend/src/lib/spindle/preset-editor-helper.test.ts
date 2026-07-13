@@ -1,0 +1,291 @@
+import { afterEach, describe, expect, test } from 'bun:test'
+import {
+  createPresetEditorScopedHelper,
+  flushPresetEditorDraft,
+  getPresetEditorState,
+  setPresetEditorController,
+  subscribePresetEditorState,
+  syncPresetEditorState,
+} from './preset-editor-helper'
+import { createPresetEditorAccess } from './preset-editor-access'
+import type { SpindlePresetEditorDraft, SpindlePresetEditorState } from './preset-editor-types'
+
+function draft(): SpindlePresetEditorDraft {
+  return {
+    id: 'preset-1',
+    name: 'Preset',
+    blocks: [],
+    parameters: {},
+    prompts: {},
+    metadata: {
+      promptVariables: { 'block-1': { tone: 'neutral' } },
+      another_extension: { preserved: true },
+    },
+    createdAt: 1,
+    updatedAt: 2,
+  }
+}
+
+afterEach(() => { setPresetEditorController(null) })
+
+describe('scoped preset editor helper', () => {
+  test('clones Main fields and mutates only its identifier namespace', () => {
+    let current = draft()
+    let activeTab = 'preset'
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: activeTab,
+        preset: current,
+      }),
+      setActiveTab(tabId) { activeTab = tabId },
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    const state = helper.getState()
+    ;(state.promptVariableValues as Record<string, Record<string, string>>)['block-1'].tone = 'changed locally'
+    expect(current.metadata.promptVariables).toEqual({ 'block-1': { tone: 'neutral' } })
+
+    helper.setMetadata({ mode: 'parallel' }, { immediate: true })
+    expect(current.metadata).toEqual({
+      promptVariables: { 'block-1': { tone: 'neutral' } },
+      another_extension: { preserved: true },
+      agentic_preset_composer: { mode: 'parallel' },
+    })
+
+    helper.activateBuiltinTab('blocks')
+    expect(activeTab).toBe('preset')
+  })
+
+  test('rejects a retained helper after the controller closes during a preset switch', () => {
+    let current = draft()
+    let open = true
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open,
+        presetId: open ? current.id : null,
+        activeTabId: 'preset',
+        preset: open ? current : null,
+      }),
+      setActiveTab() {},
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    open = false
+    expect(() => helper.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_CLOSED')
+    expect(current.metadata.agentic_preset_composer).toBeUndefined()
+  })
+
+  test('publishes a closed state before exposing the next selected preset', () => {
+    const observed: SpindlePresetEditorState[] = []
+    const unsubscribe = subscribePresetEditorState((state) => observed.push(state))
+
+    const first = draft()
+    syncPresetEditorState({
+      open: true,
+      presetId: first.id,
+      activeTabId: 'preset',
+      preset: first,
+    })
+    const next = { ...draft(), id: 'preset-2' }
+    syncPresetEditorState({
+      open: true,
+      presetId: next.id,
+      activeTabId: 'preset',
+      preset: next,
+    })
+
+    expect(observed).toHaveLength(3)
+    expect(observed[0]).toMatchObject({ open: true, presetId: 'preset-1' })
+    expect(observed[1]).toMatchObject({ open: false, presetId: null, preset: null })
+    expect(observed[2]).toMatchObject({ open: true, presetId: 'preset-2' })
+    unsubscribe()
+  })
+
+  test('makes a synthetic close authoritative while notifying listeners', () => {
+    const first = draft()
+    const next = { ...draft(), id: 'preset-2' }
+    let updates = 0
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: next.id,
+        activeTabId: 'preset',
+        preset: next,
+      }),
+      setActiveTab() {},
+      updatePreset() { updates += 1 },
+      async flush() {},
+    })
+    syncPresetEditorState({
+      open: true,
+      presetId: first.id,
+      activeTabId: 'preset',
+      preset: first,
+    })
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+    const readsDuringClose: SpindlePresetEditorState[] = []
+    let closeMutationError: unknown
+    let closeTabError: unknown
+    const unsubscribe = subscribePresetEditorState((state) => {
+      if (state.open) return
+      readsDuringClose.push(getPresetEditorState())
+      try {
+        helper.setMetadata({ mode: 'stale' })
+      } catch (error) {
+        closeMutationError = error
+      }
+      try {
+        helper.activateBuiltinTab('blocks')
+      } catch (error) {
+        closeTabError = error
+      }
+    })
+
+    syncPresetEditorState({
+      open: true,
+      presetId: next.id,
+      activeTabId: 'preset',
+      preset: next,
+    })
+
+    expect(readsDuringClose).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
+    expect(closeMutationError).toBeInstanceOf(Error)
+    expect((closeMutationError as Error).message).toContain('PRESET_EDITOR_CLOSED')
+    expect(closeTabError).toBeInstanceOf(Error)
+    expect((closeTabError as Error).message).toContain('PRESET_EDITOR_CLOSED')
+    expect(updates).toBe(0)
+    unsubscribe()
+  })
+
+  test('rejects non-JSON extension metadata before it reaches coordinator state', () => {
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    expect(() => helper.setMetadata(new Map() as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+    expect(() => helper.setMetadata({ nested: { count: BigInt(1) } } as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+    expect(() => helper.setMetadata({ callback: () => {} } as unknown as Record<string, unknown>))
+      .toThrow('PRESET_EDITOR_INVALID_METADATA')
+  })
+
+  test('does not republish an obsolete controller after an in-flight flush', async () => {
+    const current = draft()
+    let resolveFlush!: () => void
+    const pendingFlush = new Promise<void>((resolve) => { resolveFlush = resolve })
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: current,
+      }),
+      setActiveTab() {},
+      updatePreset() {},
+      flush: () => pendingFlush,
+    })
+    const observed: SpindlePresetEditorState[] = []
+    const unsubscribe = subscribePresetEditorState((state) => observed.push(state))
+
+    const flush = flushPresetEditorDraft()
+    setPresetEditorController(null)
+    resolveFlush()
+    await flush
+
+    expect(getPresetEditorState()).toMatchObject({ open: false, presetId: null, preset: null })
+    expect(observed).toEqual([expect.objectContaining({ open: false, presetId: null, preset: null })])
+    unsubscribe()
+  })
+
+  test('rejects extension identifiers that collide with Loom-owned metadata', () => {
+    expect(() => createPresetEditorScopedHelper('source', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })).toThrow('PRESET_EDITOR_RESERVED_METADATA_KEY')
+    expect(() => createPresetEditorScopedHelper('description', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })).toThrow('PRESET_EDITOR_RESERVED_METADATA_KEY')
+    expect(() => createPresetEditorScopedHelper('_lumiverse_extension', {
+      assertActive() {},
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })).toThrow('PRESET_EDITOR_RESERVED_METADATA_KEY')
+  })
+
+  test('rejects use after a permission revocation invalidates access', () => {
+    let active = false
+    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+      assertActive() {
+        if (!active) throw new Error('PRESET_EDITOR_REVOKED')
+      },
+      trackSubscription(unsubscribe) { return unsubscribe },
+    })
+
+    expect(() => helper.getState()).toThrow('PRESET_EDITOR_REVOKED')
+    active = true
+    expect(() => helper.setMetadata({ mode: 'single' })).toThrow('PRESET_EDITOR_CLOSED')
+  })
+
+  test('invalidates retained helpers while allowing a newly acquired helper after regrant', () => {
+    let current = draft()
+    let permissions = ['presets']
+    setPresetEditorController({
+      getState: (): SpindlePresetEditorState => ({
+        open: true,
+        presetId: current.id,
+        activeTabId: 'preset',
+        preset: current,
+      }),
+      setActiveTab() {},
+      updatePreset(mutator) { current = mutator(current) },
+      async flush() {},
+    })
+    const access = createPresetEditorAccess(
+      'agentic_preset_composer',
+      () => permissions,
+      (unsubscribe) => unsubscribe,
+    )
+
+    const retained = access.acquire()
+    permissions = []
+    access.revoke()
+    expect(() => access.acquire()).toThrow('PERMISSION_DENIED:presets')
+    permissions = ['presets']
+    expect(() => retained.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_REVOKED')
+
+    const reacquired = access.acquire()
+    reacquired.setMetadata({ mode: 'parallel' })
+    expect(current.metadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
+
+  })
+  test('permanently invalidates helpers when the extension frontend unloads', () => {
+    const access = createPresetEditorAccess(
+      'agentic_preset_composer',
+      () => ['presets'],
+      (unsubscribe) => unsubscribe,
+    )
+    const retained = access.acquire()
+    access.dispose()
+
+    expect(() => access.acquire()).toThrow('PRESET_EDITOR_DISPOSED')
+    expect(() => retained.getState()).toThrow('PRESET_EDITOR_DISPOSED')
+  })
+})

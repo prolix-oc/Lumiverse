@@ -30,7 +30,8 @@ function initDefaultPresetTestDb(): void {
     updated_at INTEGER NOT NULL DEFAULT 0,
     prompts TEXT NOT NULL DEFAULT '{}',
     user_id TEXT,
-    engine TEXT NOT NULL DEFAULT 'classic'
+    engine TEXT NOT NULL DEFAULT 'classic',
+    cache_revision INTEGER NOT NULL DEFAULT 0
   )`);
 
   db.run(`CREATE TABLE settings (
@@ -170,6 +171,9 @@ describe("default preset seeding", () => {
     expect(countPresets("u1")).toBe(1);
     expect(findBuiltInPreset("u1")?.id).toBe("legacy-built-in");
     expect(settingsSvc.getSetting("u1", BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY)?.value).toBe(1);
+    expect(getDb().query("SELECT cache_revision FROM presets WHERE id = ?").get("legacy-built-in")).toEqual({
+      cache_revision: 1,
+    });
   });
 
   test("startup backfill seeds all unmarked users once and only auto-activates empty accounts", () => {

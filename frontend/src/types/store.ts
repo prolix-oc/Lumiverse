@@ -1131,6 +1131,7 @@ import type {
   DrawerTabState,
   CharacterEditorTabState,
   PresetEditorTabState,
+  PresetEditorToolbarItemState,
   FloatWidgetState,
   DockPanelState,
   AppMountState,
@@ -1143,6 +1144,7 @@ export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
   characterEditorTabs: CharacterEditorTabState[]
   presetEditorTabs: PresetEditorTabState[]
+  presetEditorToolbarItems: PresetEditorToolbarItemState[]
   floatWidgets: FloatWidgetState[]
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
@@ -1166,6 +1168,10 @@ export interface SpindlePlacementSlice {
   registerPresetEditorTab: (tab: PresetEditorTabState) => void
   unregisterPresetEditorTab: (tabId: string) => void
   updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => void
+
+  registerPresetEditorToolbarItem: (item: PresetEditorToolbarItemState) => void
+  unregisterPresetEditorToolbarItem: (itemId: string) => void
+  setPresetEditorToolbarItemVisible: (itemId: string, visible: boolean) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void

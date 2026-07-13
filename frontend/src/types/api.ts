@@ -686,6 +686,8 @@ export interface Preset {
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  /** Monotonic persisted revision used for conditional preset updates. */
+  cache_revision?: number;
 }
 
 export interface CreatePresetInput {
@@ -697,7 +699,10 @@ export interface CreatePresetInput {
   metadata?: Record<string, any>;
 }
 
-export type UpdatePresetInput = Partial<CreatePresetInput>;
+export type UpdatePresetInput = Partial<CreatePresetInput> & {
+  /** Transport-only precondition for an atomic cache revision check. */
+  expected_cache_revision?: number;
+};
 
 export interface PresetRegistryItem {
   id: string;

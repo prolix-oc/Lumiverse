@@ -209,6 +209,55 @@ Unknown preset metadata is preserved across native edits, duplication, and
 internal Loom export/import. Loom-owned fields remain authoritative if a
 passthrough metadata bag contains a colliding key.
 
+### Preset-editor toolbar items
+
+`ctx.ui.registerPresetEditorToolbarItem({ id, ariaLabel })` registers one
+extension-owned root above Loom's list/edit branch. Each extension can register
+one item; four items are available globally. The returned handle exposes `root`,
+`itemId`, `setVisible(visible)`, and `destroy()`. The host supplies placement
+only: extension code owns the toolbar's controls, labels, and accessibility
+semantics beneath its required `ariaLabel`.
+
+### `ctx.ui.presetEditor.extension`
+
+This additive helper is scoped to the calling extension's manifest identifier:
+
+The `extension` property is a read-only getter; each read acquires the current
+revocation-bound scoped helper.
+
+
+```ts
+const editor = ctx.ui.presetEditor.extension
+const state = editor.getState()
+
+editor.updateMetadata((current) => ({
+  ...(current && typeof current === 'object' ? current : {}),
+  mode: 'parallel',
+}), { immediate: true })
+
+editor.activateBuiltinTab('blocks')
+await editor.flush()
+```
+
+`getState()` and `onChange()` expose structured clones of the active preset id,
+tab, Main blocks, prompt-variable values, and the raw value at
+`metadata.<manifest identifier>`. `setMetadata()` accepts a JSON object;
+`updateMetadata()` receives that raw value and must return a JSON object. Both
+replace only the calling extension's top-level passthrough key. Manifest
+identifiers colliding with Loom-owned metadata keys, including `source` and
+`description`, are rejected rather than allowed to mutate Main-owned fields.
+`activateBuiltinTab('blocks')` selects the host's stable native Blocks tab.
+
+The helper is cooperative least-authority API design, **not** isolation against
+hostile same-origin extension code. It shares Loom's one per-preset serialized
+save coordinator with native edits, recovery, rename, duplicate, prompt-variable
+updates, and generation flushes; direct whole-preset writes are unnecessary.
+
+All toolbar, tab, and helper operations require `presets`. Revoking that
+permission immediately removes the extension's preset roots and subscriptions.
+Previously acquired scoped helpers stay revoked. After `presets` is regranted,
+read `ctx.ui.presetEditor.extension` again to acquire a fresh helper.
+
 ## Float Widgets (requires `ui_panels`)
 
 Create a small draggable widget overlaying the UI. Max 2 per extension, 8 global.

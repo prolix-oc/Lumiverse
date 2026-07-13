@@ -91,6 +91,7 @@ import { Button } from '@/components/shared/FormComponents'
 import { toast } from '@/lib/toast'
 import { markLoomRuntimeProfileContext } from '@/lib/loom/runtimeProfile'
 import SpindlePresetEditorTabContent from '@/components/spindle/SpindlePresetEditorTabContent'
+import SpindlePresetEditorToolbarItem from '@/components/spindle/SpindlePresetEditorToolbarItem'
 import { applyPresetEditorDraft, toPresetEditorDraft } from '@/lib/spindle/preset-editor-adapter'
 import { setPresetEditorController, syncPresetEditorState } from '@/lib/spindle/preset-editor-helper'
 import s from './LoomBuilder.module.css'
@@ -1528,6 +1529,7 @@ export default function LoomBuilder({
 
   const presetProfiles = usePresetProfiles(activePresetId, activePreset?.blocks)
   const presetEditorTabs = __contextMeterStore((state) => state.presetEditorTabs)
+  const presetEditorToolbarItems = __contextMeterStore((state) => state.presetEditorToolbarItems)
   const addToast = __contextMeterStore((s) => s.addToast)
   const activePresetRef = useRef(activePreset)
   const suppressNextProfileApplyRef = useRef<string | null>(null)
@@ -1647,12 +1649,23 @@ export default function LoomBuilder({
 
   useEffect(() => {
     setPresetEditorController({
-      getState: () => ({
-        open: true,
-        presetId: activePresetRef.current?.id ?? null,
-        activeTabId: activePresetEditorTabRef.current,
-        preset: activePresetRef.current ? toPresetEditorDraft(activePresetRef.current) : null,
-      }),
+      getState: () => {
+        const preset = activePresetRef.current
+        if (!preset || preset.id !== __contextMeterStore.getState().activeLoomPresetId) {
+          return {
+            open: false,
+            presetId: null,
+            activeTabId: activePresetEditorTabRef.current,
+            preset: null,
+          }
+        }
+        return {
+          open: true,
+          presetId: preset.id,
+          activeTabId: activePresetEditorTabRef.current,
+          preset: toPresetEditorDraft(preset),
+        }
+      },
       setActiveTab: (tabId) => {
         setView('list')
         setEditingBlock(null)
@@ -1669,13 +1682,22 @@ export default function LoomBuilder({
   }, [])
 
   useEffect(() => {
+    if (!activePreset || activePreset.id !== activePresetId) {
+      syncPresetEditorState({
+        open: false,
+        presetId: null,
+        activeTabId: activePresetEditorTab,
+        preset: null,
+      })
+      return
+    }
     syncPresetEditorState({
       open: true,
-      presetId: activePreset?.id ?? null,
+      presetId: activePreset.id,
       activeTabId: activePresetEditorTab,
-      preset: activePreset ? toPresetEditorDraft(activePreset) : null,
+      preset: toPresetEditorDraft(activePreset),
     })
-  }, [activePreset, activePresetEditorTab])
+  }, [activePreset, activePresetEditorTab, activePresetId])
 
   useEffect(() => {
     if (activePresetEditorTab === 'preset') return
@@ -2049,19 +2071,30 @@ export default function LoomBuilder({
     e.target.value = ''
   }, [importFromFile, importFromST])
 
+  const presetEditorToolbar = presetEditorToolbarItems.some((item) => item.visible) ? (
+    <div className={s.extensionToolbar}>
+      {presetEditorToolbarItems.filter((item) => item.visible).map((item) => (
+        <SpindlePresetEditorToolbarItem key={item.id} item={item} />
+      ))}
+    </div>
+  ) : null
+
   // Edit view
   if (activePresetEditorTab === 'preset' && view === 'edit' && editingBlock) {
     return (
-      <BlockEditor
-        block={editingBlock}
-        blocks={activePreset?.blocks ?? []}
-        promptVariables={activePreset?.promptVariables ?? {}}
-        onSave={handleEditSave}
-        onBack={() => { setView('list'); setEditingBlock(null) }}
-        availableMacros={availableMacros}
-        refreshMacros={refreshMacros}
-        compact={compact}
-      />
+      <>
+        {presetEditorToolbar}
+        <BlockEditor
+          block={editingBlock}
+          blocks={activePreset?.blocks ?? []}
+          promptVariables={activePreset?.promptVariables ?? {}}
+          onSave={handleEditSave}
+          onBack={() => { setView('list'); setEditingBlock(null) }}
+          availableMacros={availableMacros}
+          refreshMacros={refreshMacros}
+          compact={compact}
+        />
+      </>
     )
   }
 
@@ -2127,8 +2160,10 @@ export default function LoomBuilder({
           )}
         </div>
 
+        {presetEditorToolbar}
+
         {presetEditorTabs.length > 0 && (
-          <div className={s.extensionTabBar} role="tablist" aria-label="Preset editor tabs">
+          <div className={s.extensionTabBar} role="tablist" aria-label={lb('editorTabs.ariaLabel')}>
             <button
               type="button"
               role="tab"
@@ -2136,7 +2171,7 @@ export default function LoomBuilder({
               className={clsx(s.extensionTab, activePresetEditorTab === 'preset' && s.extensionTabActive)}
               onClick={() => setActivePresetEditorTab('preset')}
             >
-              Preset
+              {lb('editorTabs.preset')}
             </button>
             {presetEditorTabs.map((tab) => (
               <button

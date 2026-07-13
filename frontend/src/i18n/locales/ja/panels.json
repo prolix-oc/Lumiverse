@@ -2952,6 +2952,10 @@
   "panel": "パネル",
   "loomBuilder": {
     "unknownProvider": "不明",
+    "editorTabs": {
+      "ariaLabel": "プリセットエディターのタブ",
+      "preset": "プリセット"
+    },
     "tokens": " トークン",
     "category": {
       "dragDisabledSearch": "検索中の並べ替えは無効です",

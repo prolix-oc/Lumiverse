@@ -10,6 +10,7 @@ import { personasApi } from '@/api/personas'
 import { packsApi } from '@/api/packs'
 import { resetUserScopedStoreState } from '@/store/user-scoped-reset'
 import { setSettingsPersistenceScope } from '@/store/slices/settings'
+import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 import { listAllConnections } from '@/api/listAllConnections'
 
 let appInitGeneration = 0
@@ -40,6 +41,7 @@ export function useAppInit() {
       initializedUserId.current = null
       appInitGeneration += 1
       setSettingsPersistenceScope(null)
+      setPresetSaveCoordinatorScope(null)
       return
     }
 
@@ -48,6 +50,7 @@ export function useAppInit() {
       resetUserScopedStoreState()
     }
     setSettingsPersistenceScope(userId)
+    setPresetSaveCoordinatorScope(userId)
     initializedUserId.current = userId
     const generation = ++appInitGeneration
     const isCurrent = () => (

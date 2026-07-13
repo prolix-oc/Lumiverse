@@ -35,6 +35,9 @@ import { createConnectionSlice } from './slices/connection'
 import { createWeaverSlice } from './slices/weaver'
 import { createContainersSlice } from './slices/containers'
 import { registerUserScopedResetStore } from './user-scoped-reset'
+import { configurePresetSelectionCoordinator } from '@/lib/loom/preset-selection-coordinator'
+import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
+
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -72,5 +75,11 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createWeaverSlice(...a),
   ...createContainersSlice(...a),
 }))
+
+configurePresetSelectionCoordinator({
+  getActivePresetId: () => useStore.getState().activeLoomPresetId,
+  setActivePresetId: (presetId) => useStore.getState().setActiveLoomPreset(presetId),
+  flushPreset: flushPresetForGeneration,
+})
 
 registerUserScopedResetStore(useStore, useStore.getState())

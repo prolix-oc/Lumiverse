@@ -121,7 +121,7 @@ import {
   type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
-import type { CreatePresetInput, UpdatePresetInput } from "../types/preset";
+import { PresetRevisionConflictError, type CreatePresetInput, type UpdatePresetInput } from "../types/preset";
 import { getDb } from "../db/connection";
 import { normalizeSpindleAppNavigationPath } from "./url-safety";
 import {
@@ -156,6 +156,13 @@ import { createHash } from "crypto";
 import { join, resolve, relative, sep, extname } from "path";
 import { tmpdir } from "os";
 
+type PresetConflictWorkerError = {
+  code: string;
+  message: string;
+  presetId?: string;
+  expectedCacheRevision?: number;
+  actualCacheRevision?: number;
+};
 const EPHEMERAL_MAX_FILES = 250;
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
 
@@ -6290,11 +6297,26 @@ export class WorkerHost {
   private handlePresetsUpdate(requestId: string, presetId: string, input: UpdatePresetInput, userId?: string): void {
     try {
       const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const preset = presetsSvc.updatePreset(resolvedUserId, presetId, input || {});
+      const requestedInput = input || {};
+      if (requestedInput.expected_cache_revision === undefined) {
+        throw new Error("Preset revision is required for preset updates");
+      }
+      const preset = presetsSvc.updatePreset(resolvedUserId, presetId, requestedInput);
       if (!preset) throw new Error("Preset not found");
       this.postToWorker({ type: "response", requestId, result: preset });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
+      const error: string | PresetConflictWorkerError = err instanceof PresetRevisionConflictError
+        ? {
+            code: err.code,
+            message: err.message,
+            presetId: err.presetId,
+            expectedCacheRevision: err.expectedCacheRevision,
+            actualCacheRevision: err.actualCacheRevision,
+          }
+        : err.message;
+      // The published 0.6.2 host contract types errors as strings; the
+      // revision-safe candidate widens this field to structured metadata.
+      this.postToWorker({ type: "response", requestId, error: error as unknown as string });
     }
   }
 

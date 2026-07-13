@@ -9,6 +9,7 @@ const PLACEMENT_LIMITS = {
   drawerTabs: { perExtension: 4, global: 8 },
   characterEditorTabs: { perExtension: 4, global: 8 },
   presetEditorTabs: { perExtension: 4, global: 8 },
+  presetEditorToolbarItems: { perExtension: 1, global: 4 },
   floatWidgets: { perExtension: 2, global: 8 },
   dockPanels: { perExtensionPerEdge: 1, globalPerEdge: 2 },
   appMounts: { perExtension: 1, global: 4 },
@@ -47,6 +48,14 @@ export interface PresetEditorTabState {
   extensionId: string
   title: string
   root: HTMLElement
+}
+
+export interface PresetEditorToolbarItemState {
+  id: string
+  extensionId: string
+  ariaLabel: string
+  root: HTMLElement
+  visible: boolean
 }
 
 export interface FloatWidgetState {
@@ -140,6 +149,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   drawerTabs: [],
   characterEditorTabs: [],
   presetEditorTabs: [],
+  presetEditorToolbarItems: [],
   floatWidgets: [],
   dockPanels: [],
   appMounts: [],
@@ -228,6 +238,34 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => {
     set((state) => ({
       presetEditorTabs: state.presetEditorTabs.map((t) => t.id === tabId ? { ...t, ...updates } : t),
+    }))
+  },
+
+  // ── Preset Editor Toolbar ──
+
+  registerPresetEditorToolbarItem: (item: PresetEditorToolbarItemState) => {
+    const state = get()
+    const extCount = state.presetEditorToolbarItems.filter((entry) => entry.extensionId === item.extensionId).length
+    if (extCount >= PLACEMENT_LIMITS.presetEditorToolbarItems.perExtension) {
+      throw new Error(`Preset editor toolbar item limit reached (max ${PLACEMENT_LIMITS.presetEditorToolbarItems.perExtension} per extension)`)
+    }
+    if (state.presetEditorToolbarItems.length >= PLACEMENT_LIMITS.presetEditorToolbarItems.global) {
+      throw new Error(`Global preset editor toolbar item limit reached (max ${PLACEMENT_LIMITS.presetEditorToolbarItems.global})`)
+    }
+    set({ presetEditorToolbarItems: [...state.presetEditorToolbarItems, item] })
+  },
+
+  unregisterPresetEditorToolbarItem: (itemId: string) => {
+    set((state) => ({
+      presetEditorToolbarItems: state.presetEditorToolbarItems.filter((item) => item.id !== itemId),
+    }))
+  },
+
+  setPresetEditorToolbarItemVisible: (itemId: string, visible: boolean) => {
+    set((state) => ({
+      presetEditorToolbarItems: state.presetEditorToolbarItems.map((item) =>
+        item.id === itemId ? { ...item, visible } : item
+      ),
     }))
   },
 
@@ -371,6 +409,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
       drawerTabs: state.drawerTabs.filter((t) => t.extensionId !== extensionId),
       characterEditorTabs: state.characterEditorTabs.filter((t) => t.extensionId !== extensionId),
       presetEditorTabs: state.presetEditorTabs.filter((t) => t.extensionId !== extensionId),
+      presetEditorToolbarItems: state.presetEditorToolbarItems.filter((item) => item.extensionId !== extensionId),
       floatWidgets: state.floatWidgets.filter((w) => w.extensionId !== extensionId),
       dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
       appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),

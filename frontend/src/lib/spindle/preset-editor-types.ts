@@ -1,4 +1,4 @@
-import type { PromptBlockDTO, SpindleFrontendContext } from 'lumiverse-spindle-types'
+import type { PromptBlockDTO, PromptVariableValuesDTO, SpindleFrontendContext } from 'lumiverse-spindle-types'
 
 export interface SpindlePresetEditorTabOptions {
   id: string
@@ -12,6 +12,20 @@ export interface SpindlePresetEditorTabHandle {
   activate(): void
   destroy(): void
   onActivate(handler: () => void): () => void
+}
+
+export type SpindlePresetEditorBuiltinTabId = 'blocks'
+
+export interface SpindlePresetEditorToolbarItemOptions {
+  id: string
+  ariaLabel: string
+}
+
+export interface SpindlePresetEditorToolbarItemHandle {
+  readonly root: HTMLElement
+  readonly itemId: string
+  setVisible(visible: boolean): void
+  destroy(): void
 }
 
 export interface SpindlePresetEditorDraft {
@@ -46,7 +60,43 @@ export interface SpindlePresetEditorHelper {
   flush(): Promise<void>
 }
 
-export type SpindlePresetEditorUI = SpindleFrontendContext['ui'] & {
-  registerPresetEditorTab(options: SpindlePresetEditorTabOptions): SpindlePresetEditorTabHandle
-  presetEditor: SpindlePresetEditorHelper
+export interface SpindlePresetEditorExtensionState {
+  readonly open: boolean
+  readonly presetId: string | null
+  readonly activeTabId: string | null
+  /** A detached array cloned from the host draft. */
+  readonly blocks: readonly PromptBlockDTO[]
+  /** Detached prompt-variable values cloned from the host draft. */
+  readonly promptVariableValues: Readonly<PromptVariableValuesDTO>
+  /** Structured clone of the calling extension's top-level metadata value. */
+  readonly metadata: unknown
 }
+
+export interface SpindlePresetEditorScopedHelper {
+  getState(): SpindlePresetEditorExtensionState
+  onChange(handler: (state: SpindlePresetEditorExtensionState) => void): () => void
+  setMetadata(value: Record<string, unknown>, options?: SpindlePresetEditorSaveOptions): void
+  updateMetadata(
+    mutator: (current: unknown) => Record<string, unknown>,
+    options?: SpindlePresetEditorSaveOptions,
+  ): void
+  activateBuiltinTab(tab: SpindlePresetEditorBuiltinTabId): void
+  flush(): Promise<void>
+}
+
+export interface SpindlePresetEditorToolbarUI {
+  registerPresetEditorToolbarItem(
+    options: SpindlePresetEditorToolbarItemOptions,
+  ): SpindlePresetEditorToolbarItemHandle
+}
+
+export interface SpindlePresetEditorExtensionHelper {
+  readonly extension: SpindlePresetEditorScopedHelper
+}
+
+export type SpindlePresetEditorUI = SpindleFrontendContext['ui']
+  & SpindlePresetEditorToolbarUI
+  & {
+    registerPresetEditorTab(options: SpindlePresetEditorTabOptions): SpindlePresetEditorTabHandle
+    presetEditor: SpindlePresetEditorHelper & SpindlePresetEditorExtensionHelper
+  }

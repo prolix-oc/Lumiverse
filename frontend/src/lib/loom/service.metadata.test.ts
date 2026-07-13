@@ -52,4 +52,5 @@ describe('Loom extension metadata preservation', () => {
       pipelines: [{ id: 'main' }],
     })
   })
+
 })

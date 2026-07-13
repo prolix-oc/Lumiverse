@@ -4,6 +4,7 @@ import { authClient, getAuthErrorMessage, readAuthErrorResponseMeta, type AuthEr
 import { post, get, del } from '@/api/client'
 import { resetUserScopedStoreState } from '../user-scoped-reset'
 import { setSettingsPersistenceScope } from './settings'
+import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 
 let authMutationGeneration = 0
 let sessionCheckGeneration = 0
@@ -46,6 +47,7 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, getState) => ({
       if (data?.user) {
         resetUserScopedStoreState()
         setSettingsPersistenceScope(data.user.id)
+        setPresetSaveCoordinatorScope(data.user.id)
         set({
           user: data.user as AuthUser,
           session: { token: data.token } as any,
@@ -107,6 +109,7 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set, getState) => ({
           resetUserScopedStoreState()
         }
         setSettingsPersistenceScope(data.user.id)
+        setPresetSaveCoordinatorScope(data.user.id)
         set({
           user: data.user as AuthUser,
           session: data.session as any,

@@ -21,6 +21,7 @@ import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { applyCharxModulesAndAssets } from "../services/charx-import.service";
 import { resolveSealedPresetBlocksForInstall, type SealedManifest } from "./sealed-presets";
+import { cloneSafePlainJsonObject } from "./payload-validation";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -653,6 +654,11 @@ export async function installPreset(
       return { requestId, success: false, error: "Preset export is missing preset data" };
     }
     const p = preset as Record<string, any>;
+    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
+    const existingPassthroughMetadata = existing
+      ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
+      : {};
+    const passthroughMetadata = extractPresetPassthroughMetadata(p);
     const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
     const blocks = Array.isArray(p.blocks) ? p.blocks : [];
 
@@ -680,6 +686,8 @@ export async function installPreset(
         advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
       },
       metadata: {
+        ...existingPassthroughMetadata,
+        ...passthroughMetadata,
         source: isPlainObject(p.source) ? p.source : null,
         modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
         schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
@@ -700,10 +708,12 @@ export async function installPreset(
 
     // Update the existing installation in place when this preset was installed
     // from LumiHub before, so "Update" advances the version instead of duplicating.
-    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
     let saved;
     if (existing) {
-      saved = presetsSvc.updatePreset(userId, existing.id, presetInput)!;
+      saved = presetsSvc.updatePreset(userId, existing.id, {
+        ...presetInput,
+        expected_cache_revision: existing.cache_revision,
+      })!;
     } else {
       saved = presetsSvc.createPreset(userId, presetInput);
       eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);
@@ -746,6 +756,50 @@ export async function installPreset(
 
 function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Clone metadata supplied by the hub before spreading it into the persisted
+ * metadata object. Install requests normally arrive from JSON, but keeping the
+ * check here makes direct callers obey the same plain-JSON contract and avoids
+ * invoking getters or copying values from arbitrary prototypes.
+ */
+function extractPresetPassthroughMetadata(
+  preset: Record<string, any>,
+): Record<string, any> {
+  const serializedField = readPresetMetadataField(preset, "metadata");
+  const internalField = readPresetMetadataField(preset, "passthroughMetadata");
+  const serializedMetadata = serializedField.present
+    ? clonePresetMetadata(serializedField.value, "metadata")
+    : {};
+  const internalMetadata = internalField.present
+    ? clonePresetMetadata(internalField.value, "passthroughMetadata")
+    : {};
+
+  // Both forms have appeared in exports. If an export carries both, the
+  // internal Loom bag wins conflicts while the installer-owned fields below
+  // remain authoritative either way.
+  return { ...serializedMetadata, ...internalMetadata };
+}
+
+function readPresetMetadataField(
+  preset: Record<string, any>,
+  fieldName: "metadata" | "passthroughMetadata",
+): { present: boolean; value?: unknown } {
+  const descriptor = Object.getOwnPropertyDescriptor(preset, fieldName);
+  if (!descriptor) return { present: false };
+  if (!Object.hasOwn(descriptor, "value")) {
+    throw new Error(`Preset export has invalid ${fieldName}`);
+  }
+  return { present: true, value: descriptor.value };
+}
+
+function clonePresetMetadata(value: unknown, fieldName: string): Record<string, any> {
+  try {
+    return cloneSafePlainJsonObject(value) as Record<string, any>;
+  } catch {
+    throw new Error(`Preset export has invalid ${fieldName}`);
+  }
 }
 
 async function materializeSealedPresetBlocks(

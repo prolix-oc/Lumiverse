@@ -130,6 +130,10 @@ const LOOM_OWNED_META_KEYS = new Set([
   'promptVariables',
 ])
 
+export function isLoomOwnedPresetMetadataKey(key: string): boolean {
+  return LOOM_OWNED_META_KEYS.has(key) || key.startsWith('_lumiverse_')
+}
+
 /**
  * Pull the LumiHub provenance bag (install source, hub id, slug, creator) out of a stored
  * preset's metadata so it survives the marshal/unmarshal round-trip. `marshalUpdate` rewrites
@@ -150,7 +154,7 @@ function extractLumihubMeta(meta: Record<string, any>): Record<string, unknown> 
 function extractPassthroughMetadata(meta: Record<string, any>): Record<string, unknown> {
   const bag: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(meta)) {
-    if (LOOM_OWNED_META_KEYS.has(key) || key.startsWith('_lumiverse_')) continue
+    if (isLoomOwnedPresetMetadataKey(key)) continue
     bag[key] = value
   }
   return bag
@@ -362,6 +366,7 @@ export function unmarshalPreset(preset: Preset): LoomPreset {
     schemaVersion: meta.schemaVersion || 1,
     createdAt: preset.created_at,
     updatedAt: preset.updated_at,
+    ...(typeof preset.cache_revision === 'number' ? { cacheRevision: preset.cache_revision } : {}),
     blocks: (preset.prompt_order || []) as PromptBlock[],
     source: meta.source || null,
     isDefault: meta.isDefault || false,
@@ -384,6 +389,9 @@ export function marshalUpdate(loom: LoomPreset): UpdatePresetInput {
   const blocks = normalizeCategoryBlockState(loom.blocks)
   return {
     name: loom.name,
+    ...(typeof loom.cacheRevision === 'number'
+      ? { expected_cache_revision: loom.cacheRevision }
+      : {}),
     parameters: {
       samplerOverrides: loom.samplerOverrides,
       customBody: loom.customBody,

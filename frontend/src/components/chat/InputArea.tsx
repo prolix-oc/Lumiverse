@@ -18,7 +18,8 @@ import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avat
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
-import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
+import { unmarshalPreset } from '@/lib/loom/service'
+import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -940,11 +941,19 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (promptVariablesLoading) return
     setOpenPopover(null)
     setPromptVariablesLoading(true)
+    const presetId = activeLoomPresetId
+    const hydration = presetSaveCoordinator.beginHydration(presetId, 'prompt-variables')
     try {
-      const preset = await presetsApi.get(activeLoomPresetId)
-      setPromptVariablesPreset(unmarshalPreset(preset))
+      const preset = await presetsApi.get(presetId)
+      if (useStore.getState().activeLoomPresetId !== presetId) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        return
+      }
+      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
+      presetSaveCoordinator.cancelHydration(hydration)
+      if (err instanceof StalePresetHydrationError) return
       console.error('[InputArea] Failed to load prompt variables preset:', err)
       toast.error(t('toast.failedLoadPromptVariables'))
     } finally {
@@ -953,15 +962,20 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [activeLoomPresetId, promptVariablesLoading, t])
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
-    if (!promptVariablesPreset) return
-    const updated: LoomPreset = {
-      ...promptVariablesPreset,
-      promptVariables: values,
-      updatedAt: Date.now(),
+    if (!promptVariablesPreset || useStore.getState().activeLoomPresetId !== promptVariablesPreset.id) {
+      setPromptVariablesModalOpen(false)
+      setPromptVariablesPreset(null)
+      return
     }
+    const updated = presetSaveCoordinator.mutate(
+      promptVariablesPreset.id,
+      promptVariablesPreset,
+      (preset) => ({ ...preset, promptVariables: values }),
+      { immediate: true },
+    )
     try {
-      const saved = await presetsApi.update(updated.id, marshalUpdate(updated))
-      setPromptVariablesPreset(unmarshalPreset(saved))
+      const saved = await presetSaveCoordinator.flush(updated.id)
+      setPromptVariablesPreset(saved ?? updated)
     } catch (err) {
       console.warn('[InputArea] Failed to save prompt variable values:', err)
       toast.error(t('toast.failedSavePromptVariables'))

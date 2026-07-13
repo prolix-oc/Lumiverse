@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useStore } from '@/store'
 import { presetsApi } from '@/api/presets'
 import { connectionsApi } from '@/api/connections'
-import { ApiError, BASE_URL } from '@/api/client'
+import { ApiError } from '@/api/client'
 import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
+import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
+import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
@@ -20,7 +22,6 @@ import {
 import {
   createNewLoomPreset,
   marshalPreset,
-  marshalUpdate,
   unmarshalPreset,
   detectSupportedParamsFromProviders,
   getAvailableMacros,
@@ -32,49 +33,6 @@ import {
   detectImportedPresetKind,
 } from '@/lib/loom/service'
 
-const PENDING_LOOM_PRESETS_KEY = '__lumiverse_pending_loom_presets'
-
-function readPendingLoomPresets(): Record<string, LoomPreset> {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = localStorage.getItem(PENDING_LOOM_PRESETS_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function writePendingLoomPresets(presets: Record<string, LoomPreset>) {
-  if (typeof window === 'undefined') return
-  try {
-    if (Object.keys(presets).length === 0) {
-      localStorage.removeItem(PENDING_LOOM_PRESETS_KEY)
-      return
-    }
-    localStorage.setItem(PENDING_LOOM_PRESETS_KEY, JSON.stringify(presets))
-  } catch {}
-}
-
-function getPendingLoomPreset(id: string): LoomPreset | null {
-  const pending = readPendingLoomPresets()[id]
-  return pending && typeof pending === 'object' ? pending : null
-}
-
-function setPendingLoomPreset(preset: LoomPreset) {
-  const pending = readPendingLoomPresets()
-  pending[preset.id] = preset
-  writePendingLoomPresets(pending)
-}
-
-function clearPendingLoomPreset(id: string, expected?: LoomPreset) {
-  const pending = readPendingLoomPresets()
-  if (!(id in pending)) return
-  if (expected && JSON.stringify(pending[id]) !== JSON.stringify(expected)) return
-  delete pending[id]
-  writePendingLoomPresets(pending)
-}
 
 export function useLoomBuilder() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
@@ -88,42 +46,48 @@ export function useLoomBuilder() {
   const [activePreset, setActivePreset] = useState<LoomPreset | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const activePresetRef = useRef<LoomPreset | null>(null)
 
-  // Load active preset when activeLoomPresetId changes
+  // Load active preset when activeLoomPresetId changes. Durable recovery is
+  // rebased through the process-wide coordinator so an old local snapshot
+  // cannot overwrite unrelated prompt-variable or extension metadata changes.
   useEffect(() => {
     if (!activeLoomPresetId) {
+      activePresetRef.current = null
       setActivePreset(null)
       return
     }
-    if (activePreset?.id === activeLoomPresetId) {
-      return
-    }
+    if (activePresetRef.current?.id === activeLoomPresetId) return
+
     let cancelled = false
     setIsLoading(true)
+    const hydration = presetSaveCoordinator.beginHydration(activeLoomPresetId, 'loom-editor')
     presetsApi.get(activeLoomPresetId).then((preset) => {
-      if (!cancelled) {
-        const loadedPreset = unmarshalPreset(preset)
-        const pendingPreset = getPendingLoomPreset(activeLoomPresetId)
-
-        if (pendingPreset && JSON.stringify(marshalUpdate(pendingPreset)) !== JSON.stringify(marshalUpdate(loadedPreset))) {
-          setActivePreset(pendingPreset)
-          void presetsApi.update(pendingPreset.id, marshalUpdate(pendingPreset))
-            .then(() => clearPendingLoomPreset(pendingPreset.id))
-            .catch(() => {})
-        } else {
-          if (pendingPreset) clearPendingLoomPreset(activeLoomPresetId)
-          setActivePreset(loadedPreset)
-        }
-        setIsLoading(false)
+      if (cancelled) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        return
       }
+      const loadedPreset = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
+      activePresetRef.current = loadedPreset
+      setActivePreset(loadedPreset)
+      setIsLoading(false)
     }).catch((err) => {
+      presetSaveCoordinator.cancelHydration(hydration)
       if (cancelled) return
+      if (err instanceof StalePresetHydrationError) {
+        setIsLoading(false)
+        return
+      }
       // Retroactive cleanup: if the persisted active preset id points at a row
       // that no longer exists (legacy deletions that didn't cascade), clear it
       // so generation doesn't keep 400ing on a ghost id.
       if (err instanceof ApiError && err.status === 404) {
-        setActiveLoomPreset(null)
-        setActivePreset(null)
+        presetSaveCoordinator.remove(activeLoomPresetId)
+        if (useStore.getState().activeLoomPresetId === activeLoomPresetId) {
+          activePresetRef.current = null
+          useStore.getState().setActiveLoomPreset(null)
+          setActivePreset(null)
+        }
         setIsLoading(false)
         return
       }
@@ -131,8 +95,12 @@ export function useLoomBuilder() {
       setError(err.message)
       setIsLoading(false)
     })
-    return () => { cancelled = true }
-  }, [activeLoomPresetId, activePreset?.id, setActiveLoomPreset])
+    return () => {
+      cancelled = true
+      presetSaveCoordinator.cancelHydration(hydration)
+    }
+  }, [activeLoomPresetId])
+
 
   // Refresh registry from API
   const refreshRegistry = useCallback(async () => {
@@ -166,87 +134,46 @@ export function useLoomBuilder() {
 
   // Create a new preset
   const createPreset = useCallback(async (name: string, description?: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
       const loom = createNewLoomPreset(name, description)
       const created = await presetsApi.create(marshalPreset(loom))
-      const newLoom = unmarshalPreset(created)
+      const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      setActiveLoomPreset(created.id)
-      setActivePreset(newLoom)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
       setIsLoading(false)
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
-  // Debounced preset save
-  const pendingSaveRef = useRef<LoomPreset | null>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const persistChainRef = useRef<Promise<void>>(Promise.resolve())
+  const flushPendingPreset = useCallback(async (): Promise<void> => {
+    const presetId = activePresetRef.current?.id ?? activeLoomPresetId
+    if (!presetId) return
+    await flushPresetForGeneration(presetId)
+  }, [activeLoomPresetId])
 
-  const persistPreset = useCallback((preset: LoomPreset): Promise<void> => {
-    setPendingLoomPreset(preset)
-    const operation = persistChainRef.current
-      .catch(() => {})
-      .then(async () => {
-        await presetsApi.update(preset.id, marshalUpdate(preset))
-        clearPendingLoomPreset(preset.id, preset)
-      })
-    persistChainRef.current = operation
-    return operation
-  }, [])
+  // Keep this mounted editor synchronized when another owner (the prompt
+  // variable modal or a Spindle scoped helper) updates the shared draft.
+  useEffect(() => {
+    if (!activeLoomPresetId) return
+    return presetSaveCoordinator.subscribe(activeLoomPresetId, (preset) => {
+      if (useStore.getState().activeLoomPresetId !== preset.id) return
+      activePresetRef.current = preset
+      setActivePreset(preset)
+      setIsLoading(false)
+    })
+  }, [activeLoomPresetId])
 
-  const persistPresetKeepalive = useCallback((preset: LoomPreset) => {
-    setPendingLoomPreset(preset)
-    fetch(`${BASE_URL}/presets/${encodeURIComponent(preset.id)}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      credentials: 'include',
-      body: JSON.stringify(marshalUpdate(preset)),
-      keepalive: true,
-    }).catch(() => {})
-  }, [])
-
-  const debouncedSavePreset = useCallback((preset: LoomPreset) => {
-    pendingSaveRef.current = preset
-    setPendingLoomPreset(preset)
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(async () => {
-      const toSave = pendingSaveRef.current
-      if (toSave) {
-        pendingSaveRef.current = null
-        try {
-          await persistPreset(toSave)
-        } catch (err) {
-          console.warn('[LoomBuilder] Debounced save failed:', err)
-        }
-      }
-    }, 400)
-  }, [persistPreset])
-
-  const flushPendingPreset = useCallback(async (mode: 'default' | 'keepalive' = 'default'): Promise<void> => {
-    const pending = pendingSaveRef.current
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = null
-    }
-    pendingSaveRef.current = null
-    if (mode === 'keepalive') {
-      if (pending) persistPresetKeepalive(pending)
-      return
-    }
-    if (pending) await persistPreset(pending)
-    await persistChainRef.current
-  }, [persistPreset, persistPresetKeepalive])
-
-  // Flush pending save on unmount
+  // Flush pending save on unmount.
   useEffect(() => () => {
     void flushPendingPreset()
   }, [flushPendingPreset])
@@ -254,7 +181,10 @@ export function useLoomBuilder() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
-    const handlePageExit = () => { void flushPendingPreset('keepalive') }
+    const handlePageExit = () => {
+      const presetId = activePresetRef.current?.id
+      if (presetId) presetSaveCoordinator.flushBestEffort(presetId)
+    }
     window.addEventListener('beforeunload', handlePageExit)
     window.addEventListener('pagehide', handlePageExit)
 
@@ -262,81 +192,91 @@ export function useLoomBuilder() {
       window.removeEventListener('beforeunload', handlePageExit)
       window.removeEventListener('pagehide', handlePageExit)
     }
-  }, [flushPendingPreset])
+  }, [])
 
-  const takePendingPreset = useCallback((presetId: string): LoomPreset | null => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = null
+  // BFCache restoration keeps React mounted, so re-read and field-rebase the
+  // active preset instead of replaying a stale full-document snapshot.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return
+      const presetId = activePresetRef.current?.id
+      if (!presetId) return
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'loom-editor')
+      void presetsApi.get(presetId).then((preset) => {
+        if (useStore.getState().activeLoomPresetId !== presetId) {
+          presetSaveCoordinator.cancelHydration(hydration)
+          return
+        }
+        const restored = presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration)
+        if (activePresetRef.current?.id !== restored.id) return
+        activePresetRef.current = restored
+        setActivePreset(restored)
+      }).catch((err) => {
+        presetSaveCoordinator.cancelHydration(hydration)
+        if (err instanceof StalePresetHydrationError) return
+        console.warn('[LoomBuilder] Failed to rebase restored preset:', err)
+      })
     }
-
-    const pending = pendingSaveRef.current?.id === presetId
-      ? pendingSaveRef.current
-      : null
-
-    pendingSaveRef.current = null
-    return pending
+    window.addEventListener('pageshow', handlePageShow)
+    return () => { window.removeEventListener('pageshow', handlePageShow) }
   }, [])
 
   // Flush the prior draft before changing the editor target so extension and
   // native edits cannot be delivered to the wrong preset or lost on unmount.
+  // All supported manual and automatic selection paths use the same
+  // coordinator so the departing draft is flushed before a new id is exposed.
   const selectPreset = useCallback(async (presetId: string | null) => {
-    await flushPendingPreset()
-    if (!presetId) {
-      setActiveLoomPreset(null)
-      setActivePreset(null)
-      return
-    }
-    setActiveLoomPreset(presetId)
-  }, [flushPendingPreset, setActiveLoomPreset])
+    await transitionActiveLoomPreset(presetId)
+  }, [])
 
   // Read activePreset through a ref so saveStructure stays reference-stable
-  // across renders. When saveBlocks is captured by downstream effects, a
-  // changing reference would either cause runaway effect loops or leak stale
-  // activePreset into the callback — the ref avoids both.
-  const activePresetRef = useRef(activePreset)
-  activePresetRef.current = activePreset
+  // across renders. The coordinator remains the authoritative draft owner.
+  activePresetRef.current = activePreset?.id === activeLoomPresetId ? activePreset : null
 
   const updateActivePreset = useCallback((
     updater: (current: LoomPreset) => LoomPreset,
     immediate = false,
   ) => {
     const current = activePresetRef.current
-    if (!current) return
-    const updated = updater(current)
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
+    const updated = presetSaveCoordinator.mutate(
+      current.id,
+      current,
+      updater,
+      { immediate },
+    )
     activePresetRef.current = updated
     setActivePreset(updated)
     if (immediate) {
-      takePendingPreset(updated.id)
-      void persistPreset(updated).catch((err) => {
+      void presetSaveCoordinator.flush(updated.id).catch((err) => {
         console.warn('[LoomBuilder] Immediate preset save failed:', err)
       })
-    } else {
-      debouncedSavePreset(updated)
     }
-  }, [debouncedSavePreset, persistPreset, takePendingPreset])
+  }, [])
 
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
   ) => {
     const current = activePresetRef.current
-    if (!current) return
-    const base = takePendingPreset(current.id) ?? current
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
     const normalizedBlocks = normalizeCategoryBlockState(blocks)
-    const updated = {
-      ...base,
-      blocks: normalizedBlocks,
-      updatedAt: Date.now(),
-    }
+    const updated = presetSaveCoordinator.mutate(
+      current.id,
+      current,
+      (draft) => ({ ...draft, blocks: normalizedBlocks }),
+      { immediate: true },
+    )
     activePresetRef.current = updated
     setActivePreset(updated)
     try {
-      await persistPreset(updated)
+      await presetSaveCoordinator.flush(updated.id)
       refreshRegistry()
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save preset structure:', err)
     }
-  }, [persistPreset, refreshRegistry, takePendingPreset])
+  }, [refreshRegistry])
 
   // Save blocks
   const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
@@ -345,22 +285,41 @@ export function useLoomBuilder() {
 
   // Rename a preset
   const renamePreset = useCallback(async (presetId: string, newName: string) => {
-    if (presetId === activePresetRef.current?.id) {
-      updateActivePreset((current) => ({ ...current, name: newName, updatedAt: Date.now() }), true)
-      await flushPendingPreset()
-    } else {
-      await presetsApi.update(presetId, { name: newName })
+    let current = presetId === activePresetRef.current?.id ? activePresetRef.current : null
+    if (!current) {
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'preset-rename')
+      try {
+        current = presetSaveCoordinator.hydrate(unmarshalPreset(await presetsApi.get(presetId)), hydration)
+      } catch (error) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        throw error
+      }
     }
+    const updated = presetSaveCoordinator.mutate(
+      presetId,
+      current,
+      (draft) => ({ ...draft, name: newName }),
+      { immediate: true },
+    )
+    if (updated.id === activePresetRef.current?.id) {
+      activePresetRef.current = updated
+      setActivePreset(updated)
+    }
+    await presetSaveCoordinator.flush(presetId)
     await refreshRegistry()
-  }, [flushPendingPreset, refreshRegistry, updateActivePreset])
+  }, [refreshRegistry])
 
   // Delete a preset
   const deletePreset = useCallback(async (presetId: string) => {
-    await flushPendingPreset()
+    await flushPresetForGeneration(presetId)
     await presetsApi.delete(presetId)
+    presetSaveCoordinator.remove(presetId)
     await refreshRegistry()
-    if (presetId === activeLoomPresetId) {
-      setActiveLoomPreset(null)
+    // A later coordinated selection may have committed while deletion was in
+    // flight. Only clear the live selection when it still names this row.
+    if (useStore.getState().activeLoomPresetId === presetId) {
+      activePresetRef.current = null
+      useStore.getState().setActiveLoomPreset(null)
       setActivePreset(null)
     }
     // Refresh connection profiles so any stale preset_id references (the
@@ -371,42 +330,57 @@ export function useLoomBuilder() {
     } catch {
       // non-fatal — store just keeps the previous profile list
     }
-  }, [activeLoomPresetId, flushPendingPreset, refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Duplicate a preset
   const duplicatePreset = useCallback(async (presetId: string, newName: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
-      await flushPendingPreset()
-      const original = await presetsApi.get(presetId)
-      const loom = unmarshalPreset(original)
+      await flushPresetForGeneration(presetId)
+      const hydration = presetSaveCoordinator.beginHydration(presetId, 'preset-duplicate')
+      let hydratedSource: LoomPreset
+      try {
+        hydratedSource = presetSaveCoordinator.hydrate(
+          unmarshalPreset(await presetsApi.get(presetId)),
+          hydration,
+        )
+      } catch (error) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        throw error
+      }
+      const source = await presetSaveCoordinator.flush(presetId) ?? hydratedSource
       const copy = createNewLoomPreset(newName)
-      // Copy all content from original
-      copy.blocks = JSON.parse(JSON.stringify(loom.blocks))
-      copy.samplerOverrides = { ...loom.samplerOverrides }
-      copy.customBody = { ...loom.customBody }
-      copy.promptBehavior = { ...loom.promptBehavior }
-      copy.completionSettings = { ...loom.completionSettings }
-      copy.advancedSettings = { ...loom.advancedSettings }
-      copy.modelProfiles = { ...loom.modelProfiles }
-      copy.passthroughMetadata = JSON.parse(JSON.stringify(loom.passthroughMetadata || {}))
-      copy.promptVariables = JSON.parse(JSON.stringify(loom.promptVariables || {}))
-      copy.source = loom.source ? { ...loom.source } : null
-      copy.coverUrl = loom.coverUrl
+      // Copy all content from the coordinator-confirmed persisted source.
+      copy.blocks = JSON.parse(JSON.stringify(source.blocks))
+      copy.samplerOverrides = { ...source.samplerOverrides }
+      copy.customBody = { ...source.customBody }
+      copy.promptBehavior = { ...source.promptBehavior }
+      copy.completionSettings = { ...source.completionSettings }
+      copy.advancedSettings = { ...source.advancedSettings }
+      copy.modelProfiles = { ...source.modelProfiles }
+      copy.passthroughMetadata = JSON.parse(JSON.stringify(source.passthroughMetadata))
+      copy.promptVariables = JSON.parse(JSON.stringify(source.promptVariables))
+      copy.source = source.source ? { ...source.source } : null
+      copy.coverUrl = source.coverUrl
 
       const created = await presetsApi.create(marshalPreset(copy))
-      const newLoom = unmarshalPreset(created)
+      const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      setActiveLoomPreset(created.id)
-      setActivePreset(newLoom)
+      await flushPresetForGeneration(presetId)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
       setIsLoading(false)
     }
-  }, [flushPendingPreset, refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Block manipulation helpers
   const addBlock = useCallback((block: PromptBlock, index?: number) => {
@@ -494,29 +468,37 @@ export function useLoomBuilder() {
   // so we bypass the debouncer and wait for the network round-trip so errors
   // surface immediately.
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
-    if (!activePreset) return
-    const base = takePendingPreset(activePreset.id) ?? activePreset
-    const updated = { ...base, promptVariables: values, updatedAt: Date.now() }
+    const current = activePresetRef.current
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
+    const updated = presetSaveCoordinator.mutate(
+      current.id,
+      current,
+      (draft) => ({ ...draft, promptVariables: values }),
+      { immediate: true },
+    )
     activePresetRef.current = updated
     setActivePreset(updated)
     try {
-      await persistPreset(updated)
+      await presetSaveCoordinator.flush(updated.id)
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save prompt variable values:', err)
       throw err
     }
-  }, [activePreset, persistPreset, takePendingPreset])
+  }, [])
 
   const persistImportedPreset = useCallback(async (payload: any, fileName?: string) => {
+    const selection = beginActiveLoomPresetSelection()
     setIsLoading(true)
     try {
       const fallbackName = fileName?.replace(/\.json$/i, '') || 'Imported Preset'
       const loom = coerceImportedLoomPreset(payload, fallbackName)
       const created = await presetsApi.create(marshalPreset(loom))
-      const newLoom = unmarshalPreset(created)
+      const newLoom = presetSaveCoordinator.hydrate(unmarshalPreset(created))
       await refreshRegistry()
-      setActiveLoomPreset(created.id)
-      setActivePreset(newLoom)
+      if (await selection.transition(created.id)) {
+        activePresetRef.current = newLoom
+        setActivePreset(newLoom)
+      }
 
       const embeddedRegex = Array.isArray(payload?.extensions?.regex_scripts)
         ? payload.extensions.regex_scripts
@@ -544,12 +526,13 @@ export function useLoomBuilder() {
 
       return newLoom
     } catch (err: any) {
+      selection.cancel()
       setError(err.message)
       throw err
     } finally {
       setIsLoading(false)
     }
-  }, [refreshRegistry, setActiveLoomPreset])
+  }, [refreshRegistry])
 
   // Import from legacy preset JSON
   const importFromST = useCallback(async (stData: any, fileName: string) => {
@@ -645,7 +628,7 @@ export function useLoomBuilder() {
     // State
     registry: loomRegistry,
     activePresetId: activeLoomPresetId,
-    activePreset,
+    activePreset: activePreset?.id === activeLoomPresetId ? activePreset : null,
     isLoading,
     error,
     availableMacros,

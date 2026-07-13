@@ -17,6 +17,7 @@ import {
   createDrawerTabHandle,
   createCharacterEditorTabHandle,
   createPresetEditorTabHandle,
+  createPresetEditorToolbarItemHandle,
   createFloatWidgetHandle,
   createDockPanelHandle,
   createAppMountHandle,
@@ -24,6 +25,7 @@ import {
   createTabMobilityHandle,
   clearTabMobilityHandle,
   destroyAllPlacementsForExtension,
+  destroyPresetEditorPlacementsForExtension,
 } from './placement-helper'
 import {
   getCharacterEditorState,
@@ -38,6 +40,7 @@ import {
   updatePresetEditorDraft,
   flushPresetEditorDraft,
 } from './preset-editor-helper'
+import { createPresetEditorAccess } from './preset-editor-access'
 import { createComponentsHelper, destroyAllComponentsForExtension } from './components-helper'
 import { generateUUID } from '@/lib/uuid'
 import { installSpindleNavigationGuards } from './navigation-guards'
@@ -49,6 +52,12 @@ import { charactersApi } from '@/api/characters'
 import { messagesApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { yieldToBrowser } from './browser-scheduler'
+import {
+  createFrontendExtensionCleanup,
+  finalizeFrontendLoadFailure,
+  isPermissionBootstrapCurrent,
+  observeFrontendSetupTeardown,
+} from './frontend-extension-cleanup'
 
 interface LoadedExtension {
   id: string
@@ -58,7 +67,10 @@ interface LoadedExtension {
   module: SpindleFrontendModule
   context: SpindleFrontendContext
   teardown?: () => void
+  teardownClaimed: boolean
+  staleTeardowns: Set<() => void>
   eventUnsubs: (() => void)[]
+  deactivatePresetEditor(): void
   backendHandlers: Set<(payload: unknown) => void>
   processHandlers: Map<string, FrontendProcessHandler>
   activeProcesses: Map<string, ActiveFrontendProcess>
@@ -68,6 +80,7 @@ interface LoadedExtension {
   holdReady: boolean
   setupComplete: boolean
   readyTimeout: ReturnType<typeof setTimeout> | null
+  cleanup(reportTeardownError?: boolean): void
 }
 
 type FrontendProcessHandler = (
@@ -157,11 +170,17 @@ type PendingStartupItem =
     }
 
 const loadedExtensions = new Map<string, LoadedExtension>()
-const loadInFlight = new Map<string, { promise: Promise<void>; force: boolean; manifestSignature: string }>()
+const loadInFlight = new Map<string, {
+  promise: Promise<void>
+  force: boolean
+  manifestSignature: string
+  invalidated: boolean
+}>()
 const loadGeneration = new Map<string, number>()
 const recentForceLoads = new Map<string, { manifestSignature: string; completedAt: number }>()
 const FORCE_LOAD_DEDUPE_MS = 2000
 const pendingStartupItems = new Map<string, PendingStartupItem[]>()
+const pendingPermissionBootstraps = new Map<string, () => void>()
 const MAX_PENDING_STARTUP_ITEMS = 100
 const FRONTEND_READY_TIMEOUT_MS = 10_000
 const extensionMountPoints = new Map<string, Set<SpindleMountPoint>>()
@@ -217,9 +236,6 @@ function queueStartupItem(extensionId: string, item: PendingStartupItem): void {
   pendingStartupItems.set(extensionId, queue)
 }
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return !!value && typeof value === 'object' && typeof (value as PromiseLike<unknown>).then === 'function'
-}
 
 function clearReadyTimeout(loaded: LoadedExtension): void {
   if (loaded.readyTimeout) {
@@ -278,15 +294,14 @@ function getFrontendBundleUrl(extensionId: string, manifest: SpindleManifest): s
   return `/api/v1/spindle/${extensionId}/frontend?v=${encodeURIComponent(version)}`
 }
 
+
 async function doLoadFrontendExtension(
   extensionId: string,
   manifest: SpindleManifest,
   force = false
 ): Promise<void> {
-  const generation = (loadGeneration.get(extensionId) || 0) + 1
-  loadGeneration.set(extensionId, generation)
-
-  const currentGeneration = () => loadGeneration.get(extensionId) === generation
+  let loaded!: LoadedExtension
+  let cleanupLoadedExtension: ((reportTeardownError?: boolean) => void) | undefined
   const manifestSignature = getManifestSignature(manifest)
   const existing = loadedExtensions.get(extensionId)
 
@@ -295,27 +310,138 @@ async function doLoadFrontendExtension(
   }
 
   if (existing) {
-    await unloadFrontendExtension(extensionId)
+    await unloadFrontendExtension(extensionId, { invalidateGeneration: false })
   }
 
+  const generation = (loadGeneration.get(extensionId) || 0) + 1
+  loadGeneration.set(extensionId, generation)
+  const currentGeneration = () => loadGeneration.get(extensionId) === generation
   const bundleUrl = getFrontendBundleUrl(extensionId, manifest)
+  const eventUnsubs: (() => void)[] = []
+  let cachedGrantedPermissions: string[] = []
+  let permissionEventVersion = 0
+  let presetEditorActive = true
+  let presetEditorAccessRevoked = false
+  const presetEditorUnsubscribers = new Set<() => void>()
+  const trackPresetEditorSubscription = (unsubscribe: () => void): (() => void) => {
+    const tracked = () => {
+      if (!presetEditorUnsubscribers.delete(tracked)) return
+      unsubscribe()
+    }
+    presetEditorUnsubscribers.add(tracked)
+    return tracked
+  }
+  const clearPresetEditorSubscriptions = () => {
+    for (const unsubscribe of [...presetEditorUnsubscribers]) {
+      unsubscribe()
+    }
+  }
+  let scopedPresetAccess = createPresetEditorAccess(
+    manifest.identifier,
+    () => cachedGrantedPermissions,
+    trackPresetEditorSubscription,
+  )
+  const revokePresetEditorAccess = () => {
+    if (presetEditorAccessRevoked) return
+    presetEditorAccessRevoked = true
+    scopedPresetAccess.dispose()
+    clearPresetEditorSubscriptions()
+    destroyPresetEditorPlacementsForExtension(extensionId)
+  }
+  const restorePresetEditorAccess = () => {
+    if (!presetEditorAccessRevoked) return
+    scopedPresetAccess = createPresetEditorAccess(
+      manifest.identifier,
+      () => cachedGrantedPermissions,
+      trackPresetEditorSubscription,
+    )
+    presetEditorAccessRevoked = false
+  }
+  const assertPresetPermission = () => {
+    if (!presetEditorActive) {
+      throw new Error('PRESET_EDITOR_DISPOSED: Extension frontend has been unloaded')
+    }
+    if (!cachedGrantedPermissions.includes('presets')) {
+      throw new Error('PERMISSION_DENIED:presets — preset editor operation requires the presets permission')
+    }
+  }
+  let permissionBootstrapCleaned = false
+  const cleanupPermissionBootstrap = () => {
+    if (permissionBootstrapCleaned) return
+    permissionBootstrapCleaned = true
+    pendingStartupItems.delete(extensionId)
+    if (pendingPermissionBootstraps.get(extensionId) === cleanupPermissionBootstrap) {
+      pendingPermissionBootstraps.delete(extensionId)
+    }
+    while (eventUnsubs.length > 0) {
+      const unsubs = eventUnsubs.splice(0)
+      for (const unsubscribe of unsubs) {
+        try {
+          unsubscribe()
+        } catch {
+          // no-op
+        }
+      }
+    }
+    try {
+      clearPresetEditorSubscriptions()
+    } catch {
+      // no-op
+    }
+    scopedPresetAccess.dispose()
+  }
+  pendingPermissionBootstraps.set(extensionId, cleanupPermissionBootstrap)
+  const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: unknown) => {
+    if (!currentGeneration()) return
+    if (typeof payload !== 'object' || payload === null || !('extensionId' in payload) || !('allGranted' in payload)) return
+    const payloadExtensionId = payload.extensionId
+    const allGrantedValue = payload.allGranted
+    if (
+      payloadExtensionId !== extensionId
+      || !Array.isArray(allGrantedValue)
+      || !allGrantedValue.every((permission): permission is string => typeof permission === 'string')
+    ) return
+    permissionEventVersion += 1
+    cachedGrantedPermissions = allGrantedValue
+    if (cachedGrantedPermissions.includes('presets')) {
+      restorePresetEditorAccess()
+    } else {
+      revokePresetEditorAccess()
+    }
+  })
+  eventUnsubs.push(unsubPermissionSync)
 
   try {
     const responsePromise = fetch(bundleUrl)
+    const permissionReadVersion = permissionEventVersion
     const permissionsPromise = spindleApi.getPermissions(extensionId)
       .then((permRes) => permRes.granted)
       .catch(() => [] as string[])
     installSpindleNavigationGuards()
 
     const response = await responsePromise
-    if (!response.ok) return // No frontend bundle
+    if (!response.ok) {
+      cleanupPermissionBootstrap()
+      return // No frontend bundle
+    }
 
     const blob = await response.blob()
     const blobUrl = URL.createObjectURL(blob)
-
-    await yieldToBrowser({ when: 'paint' })
-    const mod: SpindleFrontendModule = await import(/* @vite-ignore */ blobUrl)
-    URL.revokeObjectURL(blobUrl)
+    let mod!: SpindleFrontendModule
+    try {
+      if (currentGeneration()) {
+        await yieldToBrowser({ when: 'paint' })
+        if (currentGeneration()) {
+          mod = await import(/* @vite-ignore */ blobUrl)
+        }
+      }
+    } finally {
+      URL.revokeObjectURL(blobUrl)
+    }
+    if (!currentGeneration()) {
+      cleanupPermissionBootstrap()
+      return
+    }
 
     // Frontend extensions still execute in the Lumiverse document context so
     // existing UI roots remain fully interactive. Scriptable iframe content must
@@ -323,10 +449,10 @@ async function doLoadFrontendExtension(
 
     if (typeof mod.setup !== 'function') {
       console.warn(`[Spindle:${manifest.identifier}] Frontend module missing setup()`)
+      cleanupPermissionBootstrap()
       return
     }
 
-    const eventUnsubs: (() => void)[] = []
     const backendHandlers = new Set<(payload: unknown) => void>()
     const processHandlers = new Map<string, FrontendProcessHandler>()
     const activeProcesses = new Map<string, ActiveFrontendProcess>()
@@ -393,18 +519,17 @@ async function doLoadFrontendExtension(
     )
     const uiEvents = createUIEventsHelper(extensionId)
 
-    // Cache granted permissions for synchronous permission checks in ui methods.
-    // Kept in sync via the SPINDLE_PERMISSION_CHANGED WS event so admin
-    // grant/revoke takes effect without a full extension reload.
-    let cachedGrantedPermissions: string[] = await permissionsPromise
-    const unsubPermissionSync = wsClient.on('SPINDLE_PERMISSION_CHANGED', (payload: any) => {
-      if (payload?.extensionId === extensionId && Array.isArray(payload.allGranted)) {
-        cachedGrantedPermissions = payload.allGranted
-      }
-    })
-    eventUnsubs.push(unsubPermissionSync)
+    const initialPermissions = await permissionsPromise
+    if (isPermissionBootstrapCurrent(permissionReadVersion, permissionEventVersion)) {
+      cachedGrantedPermissions = initialPermissions
+    }
+    if (!currentGeneration()) {
+      cleanupPermissionBootstrap()
+      return
+    }
     const mountedPoints = new Set<string>()
     let openModalCount = 0
+    const pendingPermissionCleanups = new Set<() => void>()
 
     const attachMountRoots = () => {
       if (document.body.hasAttribute('data-chat-chrome-entering')) {
@@ -440,7 +565,6 @@ async function doLoadFrontendExtension(
       clearExtensionMountPoints(extensionId)
     }
 
-    let loaded!: LoadedExtension
     const context: FrontendExtensionContext = {
       dom,
       ready() {
@@ -506,11 +630,12 @@ async function doLoadFrontendExtension(
           return createCharacterEditorTabHandle(extensionId, options)
         },
         registerPresetEditorTab(options) {
-          const granted = cachedGrantedPermissions
-          if (!granted.includes('presets')) {
-            throw new Error('PERMISSION_DENIED:presets — registerPresetEditorTab requires the presets permission')
-          }
-          return createPresetEditorTabHandle(extensionId, options)
+          assertPresetPermission()
+          return createPresetEditorTabHandle(extensionId, options, assertPresetPermission)
+        },
+        registerPresetEditorToolbarItem(options) {
+          assertPresetPermission()
+          return createPresetEditorToolbarItemHandle(extensionId, options, assertPresetPermission)
         },
         createFloatWidget(options) {
           const granted = cachedGrantedPermissions
@@ -595,32 +720,24 @@ async function doLoadFrontendExtension(
           },
         },
         presetEditor: {
+          get extension() {
+            assertPresetPermission()
+            return scopedPresetAccess.acquire()
+          },
           getState() {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.getState requires the presets permission')
-            }
+            assertPresetPermission()
             return getPresetEditorState()
           },
           onChange(handler) {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.onChange requires the presets permission')
-            }
-            return subscribePresetEditorState(handler)
+            assertPresetPermission()
+            return trackPresetEditorSubscription(subscribePresetEditorState(handler))
           },
           updatePreset(mutator, options) {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.updatePreset requires the presets permission')
-            }
+            assertPresetPermission()
             updatePresetEditorDraft(mutator, options?.immediate === true)
           },
           flush() {
-            const granted = cachedGrantedPermissions
-            if (!granted.includes('presets')) {
-              throw new Error('PERMISSION_DENIED:presets — presetEditor.flush requires the presets permission')
-            }
+            assertPresetPermission()
             return flushPresetEditorDraft()
           },
         },
@@ -825,19 +942,44 @@ async function doLoadFrontendExtension(
           if (needed.length === 0) return cachedGrantedPermissions
 
           const requestId = generateUUID()
+          const requestPermissionVersion = permissionEventVersion
 
           return new Promise<string[]>((resolve, reject) => {
-            const handler = ((e: CustomEvent) => {
-              if (e.detail.requestId !== requestId) return
+            let settled = false
+            const complete = (approved: boolean, granted: string[]) => {
+              if (settled) return
+              settled = true
               window.removeEventListener('spindle:permission-resolved', handler)
-              if (e.detail.approved) {
-                cachedGrantedPermissions = e.detail.granted
-                resolve(e.detail.granted)
+              pendingPermissionCleanups.delete(cancel)
+              if (approved) {
+                if (permissionEventVersion !== requestPermissionVersion) {
+                  resolve([...cachedGrantedPermissions])
+                  return
+                }
+                permissionEventVersion += 1
+                cachedGrantedPermissions = granted
+                if (cachedGrantedPermissions.includes('presets')) {
+                  restorePresetEditorAccess()
+                } else {
+                  revokePresetEditorAccess()
+                }
+                resolve(granted)
               } else {
                 reject(new Error('Permission request denied by user'))
               }
+            }
+            const handler = ((e: CustomEvent) => {
+              if (e.detail.requestId !== requestId) return
+              complete(!!e.detail.approved, e.detail.granted ?? [])
             }) as EventListener
-
+            const cancel = () => {
+              complete(false, [])
+              const pending = useStore.getState().pendingPermissionRequest
+              if (pending?.id === requestId && pending.extensionId === extensionId) {
+                useStore.setState({ pendingPermissionRequest: null })
+              }
+            }
+            pendingPermissionCleanups.add(cancel)
             window.addEventListener('spindle:permission-resolved', handler)
 
             useStore.getState().showPermissionRequest({
@@ -959,6 +1101,100 @@ async function doLoadFrontendExtension(
       manifest,
     }
 
+    const cleanup = createFrontendExtensionCleanup({
+      deactivatePresetEditor: () => loaded.deactivatePresetEditor(),
+      clearPresetEditorSubscriptions,
+      destroyPlacements: () => destroyAllPlacementsForExtension(extensionId),
+      cleanupProcesses: () => {
+        for (const process of Array.from(loaded.activeProcesses.values())) {
+          try {
+            loaded.activeProcesses.delete(process.processId)
+            process.terminal = true
+            void process.cleanup?.()
+            process.messageHandlers.clear()
+            process.stopHandlers.clear()
+            wsClient.send({
+              type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+              extensionId,
+              processId: process.processId,
+              event: 'frontend_unloaded',
+            })
+          } catch {
+            // no-op
+          }
+        }
+      },
+      teardown: () => {
+        if (loaded.teardownClaimed) return
+        const teardown = loaded.teardown
+        if (!teardown) return
+        // Claim before invoking so a late async setup result cannot repeat it.
+        loaded.teardownClaimed = true
+        teardown()
+      },
+      reportTeardownError: (error) => {
+        console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, error)
+      },
+      drainEventSubscriptions: () => {
+        while (loaded.eventUnsubs.length > 0) {
+          const unsubs = loaded.eventUnsubs.splice(0)
+          for (const unsub of unsubs) {
+            try {
+              unsub()
+            } catch {
+              // no-op
+            }
+          }
+        }
+      },
+      cleanupDomAndMounts: () => {
+        try {
+          loaded.context.dom.cleanup()
+        } catch {
+          // no-op
+        }
+        const stopMountSync = loaded.stopMountSync
+        loaded.stopMountSync = undefined
+        try {
+          stopMountSync?.()
+        } catch {
+          // no-op
+        }
+        for (const node of loaded.mountRoots) {
+          try {
+            node.remove()
+          } catch {
+            // no-op
+          }
+        }
+        loaded.mountRoots = []
+      },
+      cleanupRegistries: () => {
+        for (const cancel of [...pendingPermissionCleanups]) {
+          try {
+            cancel()
+          } catch {
+            // no-op
+          }
+        }
+        clearReadyTimeout(loaded)
+        loaded.backendHandlers.clear()
+        loaded.processHandlers.clear()
+        loaded.activeProcesses.clear()
+        unregisterTagInterceptorsByExtension(extensionId)
+        unregisterDisplayResolver(loaded.identifier)
+        removeMessageWidgetsByExtension(extensionId)
+        destroyAllComponentsForExtension(extensionId)
+        clearTabMobilityHandle(extensionId)
+
+        if (loadedExtensions.get(extensionId) === loaded) {
+          loadedExtensions.delete(extensionId)
+        }
+      },
+    })
+    cleanupLoadedExtension = cleanup
+    pendingPermissionBootstraps.delete(extensionId)
+
     loaded = {
       id: extensionId,
       generation,
@@ -967,7 +1203,13 @@ async function doLoadFrontendExtension(
       module: mod,
       context,
       teardown: mod.teardown,
+      teardownClaimed: false,
+      staleTeardowns: new Set(),
       eventUnsubs,
+      deactivatePresetEditor: () => {
+        presetEditorActive = false
+        scopedPresetAccess.dispose()
+      },
       backendHandlers,
       processHandlers,
       activeProcesses,
@@ -977,61 +1219,52 @@ async function doLoadFrontendExtension(
       holdReady: false,
       setupComplete: false,
       readyTimeout: null,
+      cleanup,
     }
 
     let teardownResult: unknown
     try {
+      if (!currentGeneration()) {
+        finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: true })
+        return
+      }
       loadedExtensions.set(extensionId, loaded)
       await yieldToBrowser({ when: 'paint' })
+      if (!currentGeneration()) {
+        finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: true })
+        return
+      }
       teardownResult = mod.setup(context)
     } catch (err) {
-      if (loadedExtensions.get(extensionId) === loaded) {
-        loadedExtensions.delete(extensionId)
-      }
-      clearReadyTimeout(loaded)
-      dom.cleanup()
-      cleanupMountInfra()
+      finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: false })
       throw err
     }
-
+    observeFrontendSetupTeardown(
+      teardownResult,
+      loaded,
+      () => isCurrentLoadedExtension(loaded),
+      (error) => {
+        console.error(`[Spindle] Async setup error for ${loaded.identifier}:`, error)
+        void unloadFrontendExtension(loaded.id)
+      },
+      (error) => {
+        console.error(`[Spindle] Stale async setup teardown error for ${loaded.identifier}:`, error)
+      },
+    )
     if (!currentGeneration()) {
-      try {
-        if (typeof teardownResult === 'function') {
-          teardownResult()
-        } else {
-          mod.teardown?.()
-        }
-      } catch {
-        // no-op
-      }
-      if (loadedExtensions.get(extensionId) === loaded) {
-        loadedExtensions.delete(extensionId)
-      }
-      clearReadyTimeout(loaded)
-      dom.cleanup()
-      cleanupMountInfra()
+      finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, {
+        superseded: true,
+        teardownResult,
+      })
       return
     }
 
     loaded.setupComplete = true
     loaded.mountRoots = Array.from(mountRoots.values())
-
-    if (isPromiseLike(teardownResult)) {
-      void Promise.resolve(teardownResult)
-        .then((resolved) => {
-          if (!isCurrentLoadedExtension(loaded)) return
-          if (typeof resolved === 'function') {
-            loaded.teardown = resolved as () => void
-          }
-        })
-        .catch((err) => {
-          if (!isCurrentLoadedExtension(loaded)) return
-          console.error(`[Spindle] Async setup error for ${loaded.identifier}:`, err)
-          void unloadFrontendExtension(loaded.id)
-        })
-    } else if (typeof teardownResult === 'function') {
+    if (typeof teardownResult === 'function') {
       loaded.teardown = teardownResult as () => void
     }
+
 
     console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
     if (!loaded.isReady) {
@@ -1042,6 +1275,9 @@ async function doLoadFrontendExtension(
       }
     }
   } catch (err) {
+    if (!cleanupLoadedExtension) {
+      cleanupPermissionBootstrap()
+    }
     console.error(`[Spindle] Failed to load frontend for ${manifest.identifier}:`, err)
   }
 }
@@ -1061,7 +1297,7 @@ export async function loadFrontendExtension(
     }
   }
 
-  if (pending && (!force || (pending.force && pending.manifestSignature === manifestSignature))) {
+  if (pending && !pending.invalidated && (!force || (pending.force && pending.manifestSignature === manifestSignature))) {
     await pending.promise
     return
   }
@@ -1072,7 +1308,7 @@ export async function loadFrontendExtension(
     })
     .then(() => doLoadFrontendExtension(extensionId, manifest, force))
 
-  loadInFlight.set(extensionId, { promise: next, force, manifestSignature })
+  loadInFlight.set(extensionId, { promise: next, force, manifestSignature, invalidated: false })
   try {
     await next
     if (force) {
@@ -1085,60 +1321,21 @@ export async function loadFrontendExtension(
   }
 }
 
-export async function unloadFrontendExtension(extensionId: string): Promise<void> {
+export async function unloadFrontendExtension(
+  extensionId: string,
+  options: { invalidateGeneration?: boolean } = {},
+): Promise<void> {
+  if (options.invalidateGeneration !== false) {
+    loadGeneration.set(extensionId, (loadGeneration.get(extensionId) || 0) + 1)
+    pendingStartupItems.delete(extensionId)
+    pendingPermissionBootstraps.get(extensionId)?.()
+    const pendingLoad = loadInFlight.get(extensionId)
+    if (pendingLoad) pendingLoad.invalidated = true
+  }
   const loaded = loadedExtensions.get(extensionId)
   if (!loaded) return
 
-  for (const process of Array.from(loaded.activeProcesses.values())) {
-    try {
-      loaded.activeProcesses.delete(process.processId)
-      process.terminal = true
-      void process.cleanup?.()
-      process.messageHandlers.clear()
-      process.stopHandlers.clear()
-      wsClient.send({
-        type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-        extensionId,
-        processId: process.processId,
-        event: 'frontend_unloaded',
-      })
-    } catch {
-      // no-op
-    }
-  }
-
-  try {
-    loaded.teardown?.()
-  } catch (err) {
-    console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, err)
-  }
-
-  // Clean up DOM
-  loaded.context.dom.cleanup()
-  loaded.stopMountSync?.()
-  for (const node of loaded.mountRoots) {
-    try {
-      node.remove()
-    } catch {
-      // no-op
-    }
-  }
-
-  // Clean up event subscriptions
-  for (const unsub of loaded.eventUnsubs) {
-    unsub()
-  }
-
-  clearReadyTimeout(loaded)
-  loaded.backendHandlers.clear()
-  loaded.processHandlers.clear()
-  unregisterTagInterceptorsByExtension(extensionId)
-  unregisterDisplayResolver(loaded.identifier)
-  removeMessageWidgetsByExtension(extensionId)
-  destroyAllComponentsForExtension(extensionId)
-  destroyAllPlacementsForExtension(extensionId)
-  clearTabMobilityHandle(extensionId)
-  loadedExtensions.delete(extensionId)
+  loaded.cleanup(true)
 
   console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
 }

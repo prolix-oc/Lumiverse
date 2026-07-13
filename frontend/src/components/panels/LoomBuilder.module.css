@@ -50,6 +50,20 @@
   flex-wrap: wrap;
 }
 
+.extensionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.extensionToolbar > div {
+  min-width: 0;
+}
+
 .extensionTabBar {
   display: flex;
   gap: 4px;

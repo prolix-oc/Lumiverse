@@ -175,6 +175,8 @@ export interface LoomPreset {
   schemaVersion: number
   createdAt: number
   updatedAt: number
+  /** Monotonic persisted revision for conditional coordinator updates. Omitted for raw imports. */
+  cacheRevision?: number
   blocks: PromptBlock[]
   source: PresetSource | null
   isDefault: boolean

@@ -111,6 +111,22 @@ describe('preset editor placements', () => {
     slice.state.removeAllByExtension('ext-1')
     expect(slice.state.presetEditorTabs).toHaveLength(0)
   })
+
+  test('registers and synchronously removes extension toolbar roots', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorToolbarItem({
+      id: 'toolbar-1',
+      extensionId: 'ext-1',
+      ariaLabel: 'Agent mode controls',
+      root,
+      visible: true,
+    })
+    slice.state.setPresetEditorToolbarItemVisible('toolbar-1', false)
+    expect(slice.state.presetEditorToolbarItems[0].visible).toBe(false)
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorToolbarItems).toHaveLength(0)
+  })
 })
 
 describe('hideAllPlacements / showAllPlacements', () => {
