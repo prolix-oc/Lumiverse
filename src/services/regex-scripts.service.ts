@@ -16,12 +16,13 @@ import type { MacroEnv } from "../macros/types";
 import { evaluate } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
 import {
-  regexCollectSandboxed,
+  regexCaptureReplacementsSandboxed,
   regexReplaceSandboxed,
   regexTestSandboxed,
   RegexTimeoutError,
-  type SandboxMatch,
+  type SandboxCaptureReplacement,
 } from "../utils/regex-sandbox";
+import { substituteRegexCaptures as substituteRegexCapturesCore } from "../utils/regex-sandbox-core";
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
 const REGEX_SLOW_WARNING_MS = 5_000;
@@ -990,56 +991,7 @@ export function substituteRegexCaptures(
   input: string,
   namedGroups?: Record<string, string>,
 ): string {
-  return template.replace(
-    /\$(?:(\$)|(&)|(`)|(')|(\d{1,2})|<([^>]*)>)/g,
-    (token, dollar, amp, backtick, quote, digits, name) => {
-      if (dollar !== undefined) return "$";
-      if (amp !== undefined) return fullMatch;
-      if (backtick !== undefined) return input.slice(0, offset);
-      if (quote !== undefined) return input.slice(offset + fullMatch.length);
-      if (digits !== undefined) {
-        const idx = parseInt(digits, 10);
-        if (idx >= 1 && idx <= groups.length) return groups[idx - 1] ?? "";
-        return token;
-      }
-      if (name !== undefined && namedGroups) return namedGroups[name] ?? token;
-      return token;
-    },
-  );
-}
-
-/**
- * Collect all regex matches from a string, returning match metadata needed
- * for capture-group substitution.
- */
-function collectMatches(content: string, regex: RegExp) {
-  const re = new RegExp(regex.source, regex.flags);
-  const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
-
-  if (re.global || re.sticky) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      matches.push({
-        fullMatch: m[0],
-        index: m.index,
-        groups: Array.from(m).slice(1),
-        namedGroups: m.groups,
-      });
-      if (m[0].length === 0) re.lastIndex++;
-    }
-  } else {
-    const m = re.exec(content);
-    if (m) {
-      matches.push({
-        fullMatch: m[0],
-        index: m.index,
-        groups: Array.from(m).slice(1),
-        namedGroups: m.groups,
-      });
-    }
-  }
-
-  return matches;
+  return substituteRegexCapturesCore(template, fullMatch, groups, offset, input, namedGroups);
 }
 
 /**
@@ -1047,7 +999,7 @@ function collectMatches(content: string, regex: RegExp) {
  */
 function rebuildFromMatches(
   content: string,
-  matches: { fullMatch: string; index: number }[],
+  matches: { index: number; matchLength: number }[],
   replacements: string[],
 ): string {
   let out = "";
@@ -1055,7 +1007,7 @@ function rebuildFromMatches(
   for (let i = 0; i < matches.length; i++) {
     out += content.slice(lastIdx, matches[i].index);
     out += replacements[i];
-    lastIdx = matches[i].index + matches[i].fullMatch.length;
+    lastIdx = matches[i].index + matches[i].matchLength;
   }
   out += content.slice(lastIdx);
   return out;
@@ -1160,21 +1112,20 @@ export async function applyRegexScripts(
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
-        // Match collection runs in the regex sandbox so a pathological
-        // user-authored pattern can't freeze the event loop here.
-        const matches: SandboxMatch[] = await regexCollectSandboxed(
+        // Capture interpolation runs in the regex sandbox so a pathological
+        // pattern can't freeze the event loop and large capture arrays never
+        // need to cross the worker boundary.
+        const matches: SandboxCaptureReplacement[] = await regexCaptureReplacementsSandboxed(
           findRegex,
           script.flags,
           result,
+          script.replace_string,
           REGEX_SCRIPT_TIMEOUT_MS,
         );
         if (matches.length > 0) {
           const replacements = await Promise.all(
-            matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
-              const withCaptures = substituteRegexCaptures(
-                script.replace_string, fullMatch, groups, index, result, namedGroups,
-              );
-              const evalResult = await evaluate(withCaptures, macroEnv, registry);
+            matches.map(async ({ replacement }) => {
+              const evalResult = await evaluate(replacement, macroEnv, registry);
               foldFingerprint(options?.outFingerprint, evalResult);
               return evalResult.text;
             }),

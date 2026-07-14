@@ -56,6 +56,7 @@
     "release": "bash scripts/release.sh",
     "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts",
     "bench:mmap": "bun run scripts/bench-mmap.ts",
+    "bench:regex-captures": "bun run scripts/bench-regex-captures.ts",
     "edit-env": "bun run scripts/edit-env.ts"
   },
   "type": "module",

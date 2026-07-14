@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   activatePresetBoundRegexScripts,
+  applyRegexScripts,
   createRegexScript,
   exportRegexScripts,
   getCharacterBoundScripts,
@@ -13,6 +14,8 @@ import {
   toggleRegexScript,
   updateRegexScript,
 } from "./regex-scripts.service";
+import { initMacros } from "../macros";
+import type { RegexScript } from "../types/regex-script";
 
 const USER_ID = "u1";
 
@@ -23,6 +26,7 @@ function mustGetScript(id: string) {
 }
 
 beforeAll(() => {
+  initMacros();
   closeDatabase();
   initDatabase(":memory:");
   const db = getDb();
@@ -415,5 +419,57 @@ describe("regex performance reporting", () => {
       flags: "gg",
     });
     expect(typeof result).toBe("string");
+  });
+});
+
+describe("raw capture processing", () => {
+  test("applies macros without transferring a 300-group match to the host", async () => {
+    const groupCount = 300;
+    const script = {
+      id: "large-capture-script",
+      user_id: USER_ID,
+      name: "Large capture script",
+      script_id: "large_capture_script",
+      find_regex: "(a)".repeat(groupCount),
+      replace_string: "{{upper::$1}}-$99-$100",
+      flags: "g",
+      placement: ["ai_output"],
+      scope: "global",
+      scope_id: null,
+      target: ["prompt"],
+      min_depth: null,
+      max_depth: null,
+      substitute_macros: "raw",
+      trim_strings: [],
+      run_on_edit: false,
+      disabled: false,
+      sort_order: 0,
+      description: "",
+      folder: "",
+      pack_id: null,
+      preset_id: null,
+      character_id: null,
+      metadata: {},
+      created_at: 0,
+      updated_at: 0,
+    } satisfies RegexScript;
+    const macroEnv = {
+      commit: true,
+      variables: {
+        local: new Map<string, string>(),
+        global: new Map<string, string>(),
+        chat: new Map<string, string>(),
+      },
+      dynamicMacros: {},
+      extra: {},
+    } as any;
+
+    expect(await applyRegexScripts(
+      "a".repeat(groupCount),
+      [script],
+      "ai_output",
+      undefined,
+      macroEnv,
+    )).toBe("A-a-a0");
   });
 });

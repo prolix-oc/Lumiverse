@@ -42,8 +42,14 @@ export interface SandboxMatch {
   namedGroups?: Record<string, string>;
 }
 
+export interface SandboxCaptureReplacement {
+  index: number;
+  matchLength: number;
+  replacement: string;
+}
+
 interface QueueItem {
-  op: "replace" | "test" | "collect";
+  op: "replace" | "test" | "collect" | "capture-replacements";
   payload: Record<string, unknown>;
   timeoutMs: number;
   resolve: (value: unknown) => void;
@@ -228,6 +234,17 @@ function runRegexInline<T>(
     }) as T);
   }
 
+  if (op === "capture-replacements") {
+    return Promise.resolve(runRegexRequest({
+      id: "inline",
+      op,
+      pattern: String(payload.pattern ?? ""),
+      flags: String(payload.flags ?? ""),
+      input: String(payload.input ?? ""),
+      replacement: String(payload.replacement ?? ""),
+    }) as T);
+  }
+
   return Promise.resolve(runRegexRequest({
     id: "inline",
     op,
@@ -283,6 +300,32 @@ export async function regexCollectSandboxed(
   return getPool().run<SandboxMatch[]>(
     "collect",
     { pattern, flags, input },
+    timeoutMs,
+  );
+}
+
+/**
+ * Collect raw-mode replacement templates with captures already interpolated.
+ * This keeps large capture arrays inside the worker instead of cloning them
+ * across the worker boundary.
+ */
+export async function regexCaptureReplacementsSandboxed(
+  pattern: string,
+  flags: string,
+  input: string,
+  replacement: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<SandboxCaptureReplacement[]> {
+  assertCompilable(pattern, flags);
+  if (!shouldUseBunWorkers()) {
+    return runRegexInline<SandboxCaptureReplacement[]>(
+      "capture-replacements",
+      { pattern, flags, input, replacement },
+    );
+  }
+  return getPool().run<SandboxCaptureReplacement[]>(
+    "capture-replacements",
+    { pattern, flags, input, replacement },
     timeoutMs,
   );
 }
