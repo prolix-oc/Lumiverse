@@ -14,6 +14,10 @@ export interface Setting {
 
 const MAX_SETTING_KEY_LENGTH = 200;
 const MAX_SETTING_VALUE_BYTES = 2 * 1024 * 1024; // 2 MB serialized JSON
+// Theme packs embed their assets as base64 in savedThemes. A fully supported
+// 250 MiB theme archive expands to about 333 MiB when represented as JSON, so
+// this leaves room for the manifest and saved-theme metadata.
+export const MAX_SAVED_THEMES_VALUE_BYTES = 350 * 1024 * 1024;
 const SETTING_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 export class InvalidSettingError extends Error {
@@ -52,9 +56,12 @@ function serializeValueOrThrow(key: string, value: unknown): string {
   } catch (err: any) {
     throw new InvalidSettingError(`Setting "${key}" value is not JSON-serializable: ${err?.message || "unknown"}`);
   }
-  if (json.length > MAX_SETTING_VALUE_BYTES) {
+  const maxBytes = key === "savedThemes"
+    ? MAX_SAVED_THEMES_VALUE_BYTES
+    : MAX_SETTING_VALUE_BYTES;
+  if (json.length > maxBytes) {
     throw new InvalidSettingError(
-      `Setting "${key}" exceeds ${MAX_SETTING_VALUE_BYTES} bytes serialized`,
+      `Setting "${key}" exceeds ${maxBytes} bytes serialized`,
     );
   }
   return json;

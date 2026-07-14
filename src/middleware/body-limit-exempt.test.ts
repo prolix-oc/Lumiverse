@@ -6,6 +6,10 @@ describe("isLargeUploadBodyLimitExemptPath", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/wallpapers")).toBe(true);
   });
 
+  test("allows saved theme packs with embedded assets through the global 10MB guard", () => {
+    expect(isLargeUploadBodyLimitExemptPath("/api/v1/settings/saved-themes")).toBe(true);
+  });
+
   test("still rejects unrelated image routes", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/rebuild-thumbnails")).toBe(false);
   });

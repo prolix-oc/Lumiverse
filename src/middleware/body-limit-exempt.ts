@@ -13,6 +13,7 @@ export function isLargeUploadBodyLimitExemptPath(path: string): boolean {
     path === "/api/v1/images" ||
     path === "/api/v1/images/wallpapers" ||
     path === "/api/v1/theme-assets" ||
+    path === "/api/v1/settings/saved-themes" ||
     path === "/api/v1/notification-sounds/completion" ||
     GALLERY_PATH_RE.test(path) ||
     EXPRESSIONS_ZIP_PATH_RE.test(path) ||

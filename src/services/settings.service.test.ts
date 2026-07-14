@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { putMany, putSetting } from "./settings.service";
+import { MAX_SAVED_THEMES_VALUE_BYTES, putMany, putSetting } from "./settings.service";
 
 function initSettingsDb(): void {
   closeDatabase();
@@ -64,6 +64,21 @@ beforeEach(initSettingsDb);
 afterEach(() => closeDatabase());
 
 describe("settings.service world-book vector tracking", () => {
+  test("allows saved theme packs to exceed the generic 2 MB settings cap", () => {
+    const embeddedAsset = "a".repeat(3 * 1024 * 1024);
+
+    expect(() => putSetting("u1", "savedThemes", [{
+      kind: "pack",
+      pack: { assets: [{ dataBase64: embeddedAsset }] },
+    }])).not.toThrow();
+
+    const row = getDb().query(
+      "SELECT length(value) AS size FROM settings WHERE key = ? AND user_id = ?",
+    ).get("savedThemes", "u1") as { size: number };
+    expect(row.size).toBeGreaterThan(2 * 1024 * 1024);
+    expect(row.size).toBeLessThan(MAX_SAVED_THEMES_VALUE_BYTES);
+  });
+
   test("changing worldBookVectorSettings resets indexed entries back to trackable pending/not_enabled states", () => {
     insertBook("b1");
     insertEntry({
