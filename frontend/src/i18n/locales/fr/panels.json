@@ -2980,6 +2980,7 @@
       "backToList": "Retour à la liste",
       "title": "Modifier le bloc",
       "save": "Enregistrer",
+      "validationFailed": "Impossible d’appliquer cette modification du bloc. Vérifiez les valeurs et réessayez.",
       "name": "Nom",
       "namePlaceholder": "Nom du bloc",
       "role": "Rôle",

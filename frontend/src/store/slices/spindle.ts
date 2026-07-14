@@ -309,10 +309,25 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   },
 
   openSpindleConfirm: (request) => {
+    const previous = get().pendingConfirm
+    if (previous && previous.requestId !== request.requestId) {
+      wsClient.send({
+        type: 'SPINDLE_CONFIRM_RESULT',
+        requestId: previous.requestId,
+        confirmed: false,
+      })
+      window.dispatchEvent(
+        new CustomEvent('spindle:confirm-resolved', {
+          detail: { requestId: previous.requestId, confirmed: false },
+        })
+      )
+    }
     set({ pendingConfirm: request })
   },
 
   closeSpindleConfirm: (requestId: string, confirmed: boolean) => {
+    const current = get().pendingConfirm
+    if (!current || current.requestId !== requestId) return
     set({ pendingConfirm: null })
     wsClient.send({
       type: 'SPINDLE_CONFIRM_RESULT',

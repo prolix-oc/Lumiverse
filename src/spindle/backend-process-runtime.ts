@@ -1,8 +1,14 @@
+import { initializeSandbox } from "./worker-runtime-sandbox";
+
+const nativeProcessExit = process.exit.bind(process);
+
 type BackendProcessInit = {
   processId: string;
   entry: string;
   kind: string;
   entryPath: string;
+  /** Host-derived capability; extension input never controls this flag. */
+  allowDynamicCode?: boolean;
   key?: string;
   payload?: unknown;
   metadata?: Record<string, unknown>;
@@ -83,16 +89,17 @@ function shutdown(kind: "complete" | "fail" | "stopped", error?: string): void {
 
   if (kind === "fail") {
     post({ type: "fail", error: error?.trim() || "Backend process failed" });
-    process.exit(1);
+    nativeProcessExit(1);
     return;
   }
 
   post({ type: kind });
-  process.exit(0);
+  nativeProcessExit(0);
 }
 
 async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>): Promise<void> {
   try {
+    initializeSandbox({ allowDynamicCode: msg.process.allowDynamicCode === true });
     const mod = await import(msg.process.entryPath);
     const handler = typeof mod.default === "function"
       ? (mod.default as BackendProcessHandler)

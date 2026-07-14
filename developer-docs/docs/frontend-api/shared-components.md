@@ -63,7 +63,7 @@ Every handle implements `SpindleMountedComponent<TOptions>`:
 |---|---|---|
 | `componentId` | `string` | Host-assigned ID, unique per extension. Useful in logs. |
 | `element` | `HTMLElement` | The target element the component was mounted into. |
-| `update(patch)` | `void` | Merge a partial of the original options into the live component. Pass only the fields you want to change. |
+| `update(patch)` | `void` | Merge a partial of the original options into the live component. Pass only the fields you want to change; omitted fields remain unchanged. Component-specific option semantics apply; use the documented option shape and do not rely on unknown fields or `undefined` being rejected. |
 | `destroy()` | `void` | Unmount the React tree and release host resources. The target element is left in place. |
 
 Form components add `getValue()` so you can read the current value at any time:
@@ -80,6 +80,11 @@ handle.update({ disabled: true })  // any partial option works
 Components are **auto-controlled** by the host. You supply an initial value and an `onChange` callback — the host owns internal state across user interactions. To force the value from your code, call `handle.update({ value })`. To read the current value, call `handle.getValue()`.
 
 You do **not** need to mirror state into your own variables and call `update()` on every change — that's already happening inside the host.
+
+### `onChange` ordering and detached snapshots
+
+For form components, the host commits the next value before invoking `onChange`, so `handle.getValue()` inside the callback already returns that next value. If the callback calls `handle.update({ value })`, that programmatic update is applied afterward and wins. Values passed to callbacks and returned by `getValue()` are detached snapshots; mutating a mutable array (for example, a multiselect value) or a Loom editor snapshot cannot mutate host state.
+
 
 ## Component catalog
 
@@ -101,6 +106,75 @@ You do **not** need to mirror state into your own variables and call `update()` 
 | `mountCollapsibleSection` | Titled, expandable container — see [body slot](#collapsible-sections-with-host-managed-chrome) |
 | `mountPagination` | Page navigation with per-page selector |
 | `mountCloseButton` | Themed X button |
+| `mountLoomBlockEditor` | Native Loom prompt-block editor with validated, extension-owned state |
+
+## Loom block editor
+
+`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still be connected inside a live, currently registered placement root owned by the calling extension (the same target rules as every shared component apply). A detached element with only an ownership attribute is not a valid target.
+
+The public value is deliberately closed:
+
+```ts
+interface SpindleLoomBlockEditorValue {
+  blocks: PromptBlockDTO[]
+  promptVariableValues: PromptVariableValuesDTO
+}
+
+interface SpindleLoomBlockEditorOptions {
+  value: SpindleLoomBlockEditorValue
+  onChange?: (value: SpindleLoomBlockEditorValue) => void
+  readOnly?: boolean
+  compact?: boolean
+}
+```
+
+`value` is required. `readOnly` defaults to `false`; `compact` defaults to `true` (matching the native preset editor's space-efficient layout in extension panels). `readOnly` disables user edits while still allowing a programmatic `update()`. Unknown own keys in the value, a block, or the options are rejected. The six host-owned sealed/provenance fields — `sealed`, `sealedKey`, `sealedSource`, `sealedOriginPresetId`, `sealedOriginVersion`, and `sealedSha256` — are intentionally not part of the public `PromptBlockDTO` boundary and must not be supplied by an extension. Main keeps those fields in its trusted projection and merges accepted public edits back without exposing or replacing them.
+
+Mounting validates and deep-clones the complete value before rendering. `onChange` receives a detached clone, and `getValue()` returns a detached clone, so mutating either snapshot cannot mutate host state. `update({ value })` validates and deep-clones the replacement before committing it; an invalid value or option patch is rejected atomically rather than partially applied.
+
+### Loom value limits
+
+The host applies these limits before cloning or rendering:
+
+| Limit | Maximum |
+|---|---:|
+| Object/array nesting depth | 16 |
+| Visited values/nodes | 16,384 |
+| Aggregate object properties and array entries | 65,536 |
+| One string | 65,536 JavaScript string units |
+| All strings combined | 4 MiB after UTF-8 encoding |
+| Blocks | 512 |
+| Prompt variables per block | 512 |
+| Options per select or multiselect variable | 256 |
+| Prompt-variable block buckets | 512 |
+| Prompt-variable values per bucket | 256 |
+
+Preflight also rejects cyclic graphs, accessors, sparse arrays, and custom object prototypes. Limits apply to both the initial `value` and later `update({ value })` calls; exceeding one rejects the whole operation without changing the current editor value.
+
+`maxNodes` counts every value visited during preflight, including primitive values, not only object and array nodes.
+
+```ts
+const editor = ctx.components.mountLoomBlockEditor(slot, {
+  value: { blocks: initialBlocks, promptVariableValues: {} },
+  compact: true,
+  onChange: (next) => {
+    console.log('Loom draft changed', next.blocks.length)
+  },
+})
+
+editor.update({ readOnly: true })
+const snapshot = editor.getValue()
+await editor.refreshMacros()
+editor.destroy()
+```
+
+The editor's macro picker is also intentionally scoped. It displays only `core-public` macros and macros owned by the current extension; definitions owned by other extensions are filtered out. `refreshMacros()` refreshes that filtered catalog and serializes refreshes. The filtered catalog is independently bounded to 128 categories, 256 macros per category, 32 arguments per macro, 8,192 nodes, 32,768 entries, a nesting depth of 16, 65,536 units per string, and 4 MiB of UTF-8 string data. A public mount has no contextual preview adapter: it does not resolve macros against a chat, character, persona, or active connection, does not issue preview/generation requests, and does not render the Main-only contextual preview controls.
+
+### Loom editor lifecycle
+
+- `destroy()` is idempotent. It unmounts the React tree and releases component/portal resources, but leaves the extension-owned target element in the DOM.
+- The host also destroys Loom mounts when the extension is disabled, unloaded, updated, or reloaded; when the relevant permission or placement root is revoked; or when the owned root is removed. A stale handle never remounts or resurrects the component.
+- After teardown, `update()` and `getValue()` throw `COMPONENT_DESTROYED`, and `refreshMacros()` returns a rejected promise with the same lifecycle error. A refresh that was already in flight ignores any late catalog settlement after teardown.
 
 ## Text inputs
 

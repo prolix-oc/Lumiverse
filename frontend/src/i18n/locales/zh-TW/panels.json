@@ -2980,6 +2980,7 @@
       "backToList": "返回列表",
       "title": "編輯塊",
       "save": "保存",
+      "validationFailed": "無法套用此區塊變更。請檢查數值後再試一次。",
       "name": "名稱",
       "namePlaceholder": "塊名稱",
       "role": "角色",

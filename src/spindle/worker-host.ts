@@ -40,7 +40,8 @@ import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { registry as macroRegistry } from "../macros";
+import { registry as macroRegistry, canonicalMacroName, type MacroOwner } from "../macros/MacroRegistry";
+import type { MacroDefinition } from "../macros/types";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
 import { contextHandlerChain } from "./context-handler";
 import {
@@ -164,7 +165,24 @@ type PresetConflictWorkerError = {
   actualCacheRevision?: number;
 };
 const EPHEMERAL_MAX_FILES = 250;
+const MAX_MACRO_REGISTRATIONS = 128;
+const MAX_MACRO_NAME_BYTES = 128;
+const MAX_MACRO_CATEGORY_BYTES = 256;
+const MAX_MACRO_DESCRIPTION_BYTES = 4_096;
+const MAX_MACRO_RETURNS_BYTES = 1_024;
+const MAX_MACRO_ALIASES = 32;
+const MAX_MACRO_ALIAS_BYTES = 128;
+const MAX_MACRO_ARGS = 64;
+const MAX_MACRO_ARG_NAME_BYTES = 128;
+const MAX_MACRO_ARG_DESCRIPTION_BYTES = 1_024;
+const MAX_MACRO_HANDLER_BYTES = 65_536;
+const MAX_MACRO_CACHED_VALUE_BYTES = 262_144;
+const MAX_MACRO_PULL_RESULT_BYTES = 262_144;
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
+
+function exceedsUtf8Limit(value: string, maxBytes: number): boolean {
+  return Buffer.byteLength(value, "utf8") > maxBytes;
+}
 
 type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
 type TokenModelSource = "main" | "sidecar" | "explicit";
@@ -322,6 +340,7 @@ type BackendProcessRuntimeInit = {
   payload?: unknown;
   metadata?: Record<string, unknown>;
   userId?: string;
+  allowDynamicCode?: boolean;
 };
 
 type SpindleUserRole = "operator" | "admin" | "user";
@@ -859,6 +878,10 @@ const THINKING_DISPLAY_VALUES = new Set<ThinkingDisplayDTO>([
   "omitted",
 ]);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -945,6 +968,8 @@ export class WorkerHost {
     "--lumiverse-transition-fast",
   ]);
   private runtime: RuntimeTransport | null = null;
+  private runtimeTransportToken: { epoch: number } | null = null;
+  private nextRuntimeTransportEpoch = 0;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
     string,
@@ -962,6 +987,7 @@ export class WorkerHost {
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
   private worldInfoInterceptorUnregister: (() => void) | null = null;
+  private readonly macroOwner: MacroOwner;
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
   private toastTimestamps: number[] = [];
@@ -972,7 +998,7 @@ export class WorkerHost {
   private static readonly MAX_BACKEND_PROCESSES = 16;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
   private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
-  private onWorkerReady: (() => void) | null = null;
+  private onWorkerReady: ((error?: Error) => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
   private onRuntimeExit: (() => void) | null = null;
   private runtimeExitPromise: Promise<void> | null = null;
@@ -986,10 +1012,15 @@ export class WorkerHost {
   private backendProcessKeyIndex = new Map<string, string>();
   private sharedRpcPermissionScopes = new Map<string, Set<string>>();
 
+  /**
+   * `generation` is intentionally injectable only for deterministic lifecycle
+   * tests. Production callers omit it so each host receives a fresh token.
+   */
   constructor(
     public readonly extensionId: string,
     public readonly manifest: SpindleManifest,
-    extensionInfo: ExtensionInfo
+    extensionInfo: ExtensionInfo,
+    generation?: string,
   ) {
     const metadata = (extensionInfo.metadata || {}) as Record<string, unknown>;
     this.installScope = metadata.install_scope === "user" ? "user" : "operator";
@@ -997,6 +1028,14 @@ export class WorkerHost {
       typeof metadata.installed_by_user_id === "string" && metadata.installed_by_user_id.trim()
         ? metadata.installed_by_user_id
         : null;
+    const macroGeneration =
+      typeof generation === "string" && generation.trim()
+        ? generation.trim()
+        : crypto.randomUUID();
+    this.macroOwner = {
+      extensionId: this.manifest.identifier.trim(),
+      generation: macroGeneration,
+    };
   }
 
   private getScopedUserId(): string | null {
@@ -1566,6 +1605,9 @@ export class WorkerHost {
       );
       return;
     }
+    if (!macroRegistry.activateExtensionGeneration(this.macroOwner)) {
+      throw new Error(`Invalid macro owner for ${this.manifest.identifier}`);
+    }
 
     const runtimePath = join(import.meta.dir, "worker-runtime.ts");
     const storagePath = this.getStorageRootPath(this.manifest.identifier);
@@ -1575,60 +1617,74 @@ export class WorkerHost {
       this.onRuntimeExit = resolve;
     });
     const startTime = performance.now();
-
-    this.runtime = createRuntimeTransport({
-      runtimePath,
-      extensionIdentifier: this.manifest.identifier,
-      repoPath,
-      storagePath,
-      onMessage: (message) => {
-        this.handleMessage(message as RuntimeWorkerToHost);
-      },
-      onError: (message) => {
-        console.error(
-          `[Spindle:${this.manifest.identifier}] Worker error:`,
-          message
-        );
-        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-          extensionId: this.extensionId,
-          identifier: this.manifest.identifier,
-          error: message,
-        });
-
-        try {
-          this.runtime?.postMessage({ type: "ping" } as any);
-        } catch {
-          console.warn(
-            `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
+    const runtimeToken = { epoch: ++this.nextRuntimeTransportEpoch };
+    this.runtimeTransportToken = runtimeToken;
+    let runtime: RuntimeTransport;
+    try {
+      runtime = createRuntimeTransport({
+        runtimePath,
+        extensionIdentifier: this.manifest.identifier,
+        repoPath,
+        storagePath,
+        onMessage: (message) => {
+          if (this.runtimeTransportToken !== runtimeToken) return;
+          this.handleMessage(message as RuntimeWorkerToHost);
+        },
+        onError: (message) => {
+          if (this.runtimeTransportToken !== runtimeToken) return;
+          console.error(
+            `[Spindle:${this.manifest.identifier}] Worker error:`,
+            message
           );
+          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+            extensionId: this.extensionId,
+            identifier: this.manifest.identifier,
+            error: message,
+          });
+          try {
+            this.runtime?.postMessage({ type: "ping" });
+          } catch {
+            console.warn(
+              `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
+            );
+            this.cleanup();
+          }
+        },
+        onExit: (exitCode, signalCode, error) => {
+          if (this.runtimeTransportToken !== runtimeToken) return;
+          const wasStopping = this.runtimeStopping;
+          const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
+          this.onWorkerShutdownAck?.();
+          this.onWorkerShutdownAck = null;
+          this.onWorkerReady?.(new Error(details));
+          this.onWorkerReady = null;
+          this.onRuntimeExit?.();
+          this.onRuntimeExit = null;
+          if (wasStopping) {
+            this.cleanup();
+            return;
+          }
+          console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
+          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+            extensionId: this.extensionId,
+            identifier: this.manifest.identifier,
+            error: details,
+          });
           this.cleanup();
-        }
-      },
-      onExit: (exitCode, signalCode, error) => {
-        const wasStopping = this.runtimeStopping;
-        this.onWorkerShutdownAck?.();
-        this.onWorkerShutdownAck = null;
-        this.onRuntimeExit?.();
-        this.onRuntimeExit = null;
-        if (wasStopping) {
-          this.cleanup();
-          return;
-        }
-        const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
-        console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
-        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-          extensionId: this.extensionId,
-          identifier: this.manifest.identifier,
-          error: details,
-        });
-        this.cleanup();
-      },
-    });
+        },
+      });
+    } catch (error) {
+      if (this.runtimeTransportToken === runtimeToken) {
+        this.runtimeTransportToken = null;
+      }
+      throw error;
+    }
+    this.runtime = runtime;
 
     // Wait for the worker to finish loading the extension and registering
     // all macros/interceptors before resolving, so callers know the
     // extension is ready.
-    const readyPromise = new Promise<void>((resolve) => {
+    const readyPromise = new Promise<void>((resolve, reject) => {
       const readyTimeout = setTimeout(() => {
         console.warn(
           `[Spindle:${this.manifest.identifier}] Worker ready timeout (10s) — proceeding`
@@ -1636,9 +1692,10 @@ export class WorkerHost {
         resolve();
       }, 10_000);
 
-      this.onWorkerReady = () => {
+      this.onWorkerReady = (error) => {
         clearTimeout(readyTimeout);
-        resolve();
+        if (error) reject(error);
+        else resolve();
       };
     });
 
@@ -1655,10 +1712,17 @@ export class WorkerHost {
   }
 
   async stop(): Promise<void> {
-    if (!this.runtime) return;
+    if (!this.runtime) {
+      this.runtimeStopping = true;
+      this.clearMacroRegistrations();
+      this.rejectPendingRequests();
+      return;
+    }
     const runtime = this.runtime;
     const runtimeExitPromise = this.runtimeExitPromise;
     this.runtimeStopping = true;
+    this.clearMacroRegistrations();
+    this.rejectPendingRequests();
     this.stopRuntimeStatsSampling();
     this.stopAllFrontendProcesses("backend_unloaded");
     this.stopAllBackendProcesses("backend_unloaded");
@@ -1681,6 +1745,7 @@ export class WorkerHost {
       this.onWorkerShutdownAck = finish;
 
       const timer = setTimeout(() => {
+        if (settled) return;
         // Fallback: worker never acknowledged. Force-terminate.
         try {
           runtime.terminate();
@@ -1701,6 +1766,11 @@ export class WorkerHost {
     });
 
     if (runtime.mode === "worker") {
+      try {
+        runtime.terminate();
+      } catch {
+        // ignore — terminate is best-effort
+      }
       await this.emitRuntimeStats("shutdown");
       this.cleanup();
       return;
@@ -1732,9 +1802,30 @@ export class WorkerHost {
         void runtimeExitPromise.finally(finish);
       });
     }
+    // Fail-closed: if the transport onExit callback never fired (wedged
+    // subprocess, missing exit report), cleanup still runs.  On normal exit
+    // the onExit callback already called cleanup() and nulled this.runtime,
+    // so the guard avoids a redundant second pass.
+    if (this.runtime) this.cleanup();
+  }
+
+  private clearMacroRegistrations(): void {
+    macroRegistry.unregisterOwner(this.macroOwner);
+    macroRegistry.deactivateExtensionGeneration(this.macroOwner);
+    this.registeredMacroNames.clear();
+    this.macroValueCache.clear();
+  }
+
+  private rejectPendingRequests(): void {
+    for (const [, pending] of this.pendingRequests) {
+      pending.reject(new Error("Extension worker stopped"));
+    }
+    this.pendingRequests.clear();
   }
 
   private cleanup(): void {
+    this.runtimeTransportToken = null;
+    this.nextRuntimeTransportEpoch += 1;
     this.stopRuntimeStatsSampling();
     this.stopAllFrontendProcesses("backend_unloaded");
     this.stopAllBackendProcesses("backend_unloaded");
@@ -1773,12 +1864,8 @@ export class WorkerHost {
     // Drop any prompt-regex ownership claims so the host resumes its own pass
     clearPromptRegexOwner(this.extensionId);
 
-    // Unregister all macros registered by this extension
-    for (const macroName of this.registeredMacroNames) {
-      macroRegistry.unregisterMacro(macroName);
-    }
-    this.registeredMacroNames.clear();
-    this.macroValueCache.clear();
+    // Remove only registrations and caches belonging to this worker generation.
+    this.clearMacroRegistrations();
     this.toastTimestamps = [];
 
     // Clear commands and broadcast removal
@@ -1803,10 +1890,7 @@ export class WorkerHost {
     unregisterSharedRpcEndpointsByOwner(this.manifest.identifier);
 
     // Reject pending requests
-    for (const [, pending] of this.pendingRequests) {
-      pending.reject(new Error("Extension worker stopped"));
-    }
-    this.pendingRequests.clear();
+    this.rejectPendingRequests();
 
     // Abort any in-flight generations so upstream HTTP requests don't leak
     // past the extension's lifetime.
@@ -1840,6 +1924,33 @@ export class WorkerHost {
   }
 
   sendFrontendMessage(payload: unknown, userId: string): void {
+    if (this.runtimeStopping) return;
+    if (isRecord(payload) && payload.type === "__loom_macro_catalog_request") {
+      const requestId = payload.requestId;
+      if (typeof requestId !== "string" || !requestId.trim()) return;
+      const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
+      const normalizedOwnerId =
+        typeof this.installedByUserId === "string" ? this.installedByUserId.trim() : "";
+      const targetUserId =
+        this.installScope === "user"
+          ? normalizedOwnerId
+          : normalizedUserId;
+      if (!targetUserId) return;
+      eventBus.emit(
+        EventType.SPINDLE_FRONTEND_MSG,
+        {
+          extensionId: this.extensionId,
+          identifier: this.manifest.identifier,
+          data: {
+            type: "__loom_macro_catalog_response",
+            requestId,
+            catalog: macroRegistry.getPublicCatalog(this.macroOwner),
+          },
+        },
+        targetUserId,
+      );
+      return;
+    }
     this.postToWorker({ type: "frontend_message", payload, userId });
   }
 
@@ -2145,11 +2256,13 @@ export class WorkerHost {
     });
   }
 
-  private handleMessage(msg: RuntimeWorkerToHost): void {
-    const scopeId = typeof (msg as any).rpcPermissionScopeId === "string"
-      ? (msg as any).rpcPermissionScopeId
-      : undefined;
-    sharedRpcPermissionScope.run(scopeId, () => this.handleMessageInScope(msg));
+  private handleMessage(msg: unknown): void {
+    if (!isRecord(msg) || typeof msg.type !== "string") return
+    const typed = msg as unknown as RuntimeWorkerToHost
+    const scopeId = typeof msg.rpcPermissionScopeId === "string"
+      ? msg.rpcPermissionScopeId
+      : undefined
+    sharedRpcPermissionScope.run(scopeId, () => this.handleMessageInScope(typed))
   }
 
   private handleMessageInScope(msg: RuntimeWorkerToHost): void {
@@ -2455,17 +2568,26 @@ export class WorkerHost {
         this.handleEnclaveList(msg.requestId, msg.userId);
         break;
       case "frontend_message": {
+        // Messages queued by a worker during teardown must not outlive this host.
+        if (!this.runtime || this.runtimeStopping) break;
         // User-scoped extensions can only ever target their installer; the
         // worker-supplied userId is ignored to prevent cross-user delivery.
         // Operator-scoped extensions may pass an explicit userId to route the
         // message to a single connected user — when omitted we fall back to
         // the legacy broadcast behaviour for backwards compatibility.
-        const targetUserId =
-          this.installScope === "user"
-            ? this.installedByUserId ?? undefined
-            : typeof msg.userId === "string" && msg.userId.length > 0
-              ? msg.userId
-              : undefined;
+        const normalizedOwnerId =
+          typeof this.installedByUserId === "string" ? this.installedByUserId.trim() : "";
+        if (this.installScope === "user" && !normalizedOwnerId) break;
+        let targetUserId: string | undefined;
+        if (this.installScope === "user") {
+          targetUserId = normalizedOwnerId;
+        } else if (msg.userId === undefined) {
+          targetUserId = undefined;
+        } else if (typeof msg.userId !== "string" || !msg.userId.trim()) {
+          break;
+        } else {
+          targetUserId = msg.userId.trim();
+        }
         eventBus.emit(
           EventType.SPINDLE_FRONTEND_MSG,
           {
@@ -3235,74 +3357,261 @@ export class WorkerHost {
 
   // ─── Macro registration ──────────────────────────────────────────────
 
-  private handleRegisterMacro(definition: any): void {
-    const macroName = String(definition.name || "").trim();
-    if (!macroName) return;
+  private rejectMacroRegistration(
+    registrationId: string,
+    macroName: string,
+    reason: string,
+  ): void {
+    if (registrationId) {
+      this.postToWorker({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: { registrationId, accepted: false },
+      });
+    }
+    console.warn(
+      "[Spindle:%s] Macro '%s' rejected: %s",
+      this.manifest.identifier,
+      macroName || "<unnamed>",
+      reason,
+    );
+  }
 
-    // Check if this would overwrite a built-in macro before registering
-    const existing = macroRegistry.getMacro(macroName);
-    if (existing?.builtIn) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Cannot override built-in macro: ${macroName}`
-      );
+  private handleRegisterMacro(definition: unknown): void {
+    if (!isRecord(definition)) return;
+    const payload = definition;
+    const registrationId =
+      typeof payload.registrationId === "string"
+        ? payload.registrationId
+        : "";
+    const rawMacroName = typeof payload.name === "string" ? payload.name : "";
+    if (exceedsUtf8Limit(rawMacroName, MAX_MACRO_NAME_BYTES)) {
+      this.rejectMacroRegistration(registrationId, rawMacroName.trim(), `name exceeds ${MAX_MACRO_NAME_BYTES} UTF-8 bytes`);
+      return;
+    }
+    const macroName = rawMacroName.trim();
+    const macroKey = canonicalMacroName(macroName);
+    if (!macroName || !macroKey) {
+      this.rejectMacroRegistration(registrationId, macroName, "name must be non-empty");
+      return;
+    }
+    if (!this.registeredMacroNames.has(macroKey) && this.registeredMacroNames.size >= MAX_MACRO_REGISTRATIONS) {
+      this.rejectMacroRegistration(registrationId, macroName, `macro registration limit reached (${MAX_MACRO_REGISTRATIONS})`);
       return;
     }
 
-    this.registeredMacroNames.add(macroName);
+    const handlerSource =
+      typeof payload.handler === "string" ? payload.handler : null;
+    if (handlerSource === null) {
+      this.rejectMacroRegistration(
+        registrationId,
+        macroName,
+        "handler must be a serialized function body",
+      );
+      return;
+    }
+    if (exceedsUtf8Limit(handlerSource, MAX_MACRO_HANDLER_BYTES)) {
+      this.rejectMacroRegistration(
+        registrationId,
+        macroName,
+        `handler body exceeds ${MAX_MACRO_HANDLER_BYTES} UTF-8 bytes`,
+      );
+      return;
+    }
+    if (handlerSource) {
+      const moduleAccess = managerSvc.detectSerializedHandlerModuleAccess(handlerSource);
+      if (moduleAccess.length > 0) {
+        this.rejectMacroRegistration(
+          registrationId,
+          macroName,
+          `blocked capabilities: ${moduleAccess.join(", ")}`,
+        );
+        return;
+      }
+      const blocked = managerSvc.detectDangerousBackendCapabilities(
+        `async function __spindleMacroHandler(ctx) {\n${handlerSource}\n}`,
+        managerSvc.declaredCapabilitiesFromManifest(this.manifest),
+      );
+      if (blocked.length > 0) {
+        this.rejectMacroRegistration(
+          registrationId,
+          macroName,
+          `blocked capabilities: ${blocked.join(", ")}`,
+        );
+        return;
+      }
+    }
 
-    macroRegistry.registerMacro({
+    const returnTypeValue = payload.returnType;
+    const returnType: MacroDefinition["returnType"] =
+      returnTypeValue === "integer" ||
+      returnTypeValue === "number" ||
+      returnTypeValue === "boolean"
+        ? returnTypeValue
+        : "string";
+
+    let args: MacroDefinition["args"];
+    if (payload.args !== undefined) {
+      if (!Array.isArray(payload.args)) {
+        this.rejectMacroRegistration(registrationId, macroName, "args must be an array");
+        return;
+      }
+      if (payload.args.length > MAX_MACRO_ARGS) {
+        this.rejectMacroRegistration(registrationId, macroName, `args exceed ${MAX_MACRO_ARGS} entries`);
+        return;
+      }
+      args = [];
+      for (const arg of payload.args) {
+        if (!isRecord(arg)) continue;
+        const rawArgName = typeof arg.name === "string" ? arg.name : "";
+        if (exceedsUtf8Limit(rawArgName, MAX_MACRO_ARG_NAME_BYTES)) {
+          this.rejectMacroRegistration(registrationId, macroName, `argument name exceeds ${MAX_MACRO_ARG_NAME_BYTES} UTF-8 bytes`);
+          return;
+        }
+        const argName = rawArgName.trim() || "arg";
+        const argDescription =
+          typeof arg.description === "string" ? arg.description : undefined;
+        if (
+          argDescription !== undefined &&
+          exceedsUtf8Limit(argDescription, MAX_MACRO_ARG_DESCRIPTION_BYTES)
+        ) {
+          this.rejectMacroRegistration(
+            registrationId,
+            macroName,
+            `argument description exceeds ${MAX_MACRO_ARG_DESCRIPTION_BYTES} UTF-8 bytes`,
+          );
+          return;
+        }
+        args.push({
+          name: argName,
+          description: argDescription,
+          optional: arg.required === false || arg.optional === true,
+        });
+      }
+    }
+
+    let aliases: string[] | undefined;
+    if (payload.aliases !== undefined) {
+      if (!Array.isArray(payload.aliases)) {
+        this.rejectMacroRegistration(registrationId, macroName, "aliases must be an array");
+        return;
+      }
+      if (payload.aliases.length > MAX_MACRO_ALIASES) {
+        this.rejectMacroRegistration(registrationId, macroName, `aliases exceed ${MAX_MACRO_ALIASES} entries`);
+        return;
+      }
+      aliases = [];
+      for (const alias of payload.aliases) {
+        if (typeof alias !== "string") continue;
+        if (exceedsUtf8Limit(alias, MAX_MACRO_ALIAS_BYTES)) {
+          this.rejectMacroRegistration(registrationId, macroName, `alias exceeds ${MAX_MACRO_ALIAS_BYTES} UTF-8 bytes`);
+          return;
+        }
+        const trimmedAlias = alias.trim();
+        if (trimmedAlias) aliases.push(trimmedAlias);
+      }
+    }
+    const category =
+      typeof payload.category === "string"
+        ? payload.category
+        : `extension:${this.manifest.identifier}`;
+    if (exceedsUtf8Limit(category, MAX_MACRO_CATEGORY_BYTES)) {
+      this.rejectMacroRegistration(registrationId, macroName, `category exceeds ${MAX_MACRO_CATEGORY_BYTES} UTF-8 bytes`);
+      return;
+    }
+    const description = typeof payload.description === "string" ? payload.description : "";
+    if (exceedsUtf8Limit(description, MAX_MACRO_DESCRIPTION_BYTES)) {
+      this.rejectMacroRegistration(registrationId, macroName, `description exceeds ${MAX_MACRO_DESCRIPTION_BYTES} UTF-8 bytes`);
+      return;
+    }
+    const returns = typeof payload.returns === "string" ? payload.returns : undefined;
+    if (returns !== undefined && exceedsUtf8Limit(returns, MAX_MACRO_RETURNS_BYTES)) {
+      this.rejectMacroRegistration(registrationId, macroName, `returns exceeds ${MAX_MACRO_RETURNS_BYTES} UTF-8 bytes`);
+      return;
+    }
+    const extensionDefinition: MacroDefinition = {
       name: macroName,
-      category: definition.category || `extension:${this.manifest.identifier}`,
-      description: definition.description || "",
-      returnType: definition.returnType || "string",
-      args: Array.isArray(definition.args)
-        ? definition.args.map((arg: any) => ({
-            name: String(arg.name || "arg"),
-            description: arg.description ? String(arg.description) : undefined,
-            optional: arg.required === false,
-          }))
-        : undefined,
+      // Extensions may add a suffix beneath their own namespace, but may not
+      // claim a host category (the registry enforces this again).
+      category,
+      description,
+      returnType,
+      returns,
+      aliases,
+      args,
+      strictArgs: payload.strictArgs === true,
+      delayArgResolution: payload.delayArgResolution === true,
+      terminal: payload.terminal === true,
+      volatile: payload.volatile === true,
       handler: async (ctx) => {
-        // Bail immediately if the worker is not running — avoids a 5s timeout
-        // that would stall prompt assembly for every extension macro.
-        if (!this.runtime) {
-          console.debug("[Spindle:%s] Macro '%s' skipped: worker not running", this.manifest.identifier, macroName);
+        // A delayed handler from an old worker must not access the current
+        // generation's cache or transport.
+        if (
+          this.runtimeStopping ||
+          !macroRegistry.isOwnedMacro(macroKey, this.macroOwner) ||
+          !this.runtime
+        ) {
+          console.debug(
+            "[Spindle:%s] Macro '%s' skipped: inactive worker generation",
+            this.manifest.identifier,
+            macroName,
+          );
           return "";
         }
 
-        const chatId = ctx?.env?.chat?.id;
+        const chatId = ctx.env.chat.id;
         const scopedUserId = this.getScopedUserId();
-        if (scopedUserId && (typeof chatId !== "string" || !chatId)) {
+        if (scopedUserId && !chatId) {
           return "";
         }
-        if (typeof chatId === "string" && chatId) {
+        if (chatId) {
           const ownerUserId = this.getChatOwnerId(chatId);
           this.enforceScopedUser(ownerUserId);
         }
 
         // Push model: if the extension has pushed a cached value via
         // updateMacroValue(), return it immediately — no RPC roundtrip.
-        const cached = this.macroValueCache.get(macroName);
+        const cached = this.macroValueCache.get(macroKey);
         if (cached !== undefined) return cached;
 
         // Pull model (legacy): RPC to the worker and await response
         const requestId = crypto.randomUUID();
         return await new Promise<string>((resolvePromise) => {
-          // Set up a one-time listener for the response
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
-            console.warn("[Spindle:%s] Macro '%s' timed out after 5s", this.manifest.identifier, macroName);
+            console.warn(
+              "[Spindle:%s] Macro '%s' timed out after 5s",
+              this.manifest.identifier,
+              macroName,
+            );
             resolvePromise(`[Spindle:${this.manifest.identifier}] Macro timeout`);
           }, 5000);
 
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
               clearTimeout(timeout);
-              resolvePromise(String(val ?? ""));
+              if (
+                typeof val !== "string" ||
+                exceedsUtf8Limit(val, MAX_MACRO_PULL_RESULT_BYTES)
+              ) {
+                console.warn(
+                  "[Spindle:%s] Macro '%s' returned an oversized or invalid result",
+                  this.manifest.identifier,
+                  macroName,
+                );
+                resolvePromise("");
+                return;
+              }
+              resolvePromise(val);
             },
             reject: (err) => {
               clearTimeout(timeout);
-              console.warn("[Spindle:%s] Macro '%s' rejected: %s", this.manifest.identifier, macroName, err);
+              console.warn(
+                "[Spindle:%s] Macro '%s' rejected: %s",
+                this.manifest.identifier,
+                macroName,
+                err,
+              );
               resolvePromise("");
             },
           });
@@ -3315,7 +3624,11 @@ export class WorkerHost {
             safeExtra = JSON.parse(JSON.stringify(ctx.env.extra));
           } catch {
             // Non-serializable extra — pass an empty object rather than failing
-            console.debug("[Spindle:%s] Macro '%s': env.extra not serializable, passing empty", this.manifest.identifier, macroName);
+            console.debug(
+              "[Spindle:%s] Macro '%s': env.extra not serializable, passing empty",
+              this.manifest.identifier,
+              macroName,
+            );
           }
 
           const safeEnv = {
@@ -3330,8 +3643,8 @@ export class WorkerHost {
             },
             dynamicMacros: Object.fromEntries(
               Object.entries(ctx.env.dynamicMacros).filter(
-                ([, v]) => typeof v === "string"
-              )
+                ([, value]) => typeof value === "string",
+              ),
             ),
             extra: safeExtra,
           };
@@ -3339,7 +3652,7 @@ export class WorkerHost {
           try {
             this.postToWorker({
               type: "event",
-              event: `__macro_invoke__`,
+              event: "__macro_invoke__",
               payload: {
                 requestId,
                 name: macroName,
@@ -3359,32 +3672,72 @@ export class WorkerHost {
           } catch (err) {
             clearTimeout(timeout);
             this.pendingRequests.delete(requestId);
-            console.warn("[Spindle:%s] Macro '%s' postToWorker failed: %s", this.manifest.identifier, macroName, err);
+            console.warn(
+              "[Spindle:%s] Macro '%s' postToWorker failed: %s",
+              this.manifest.identifier,
+              macroName,
+              err,
+            );
             // postMessage failure means the worker is dead — clean up to
-            // prevent all subsequent extension macros from timing out (5s each).
+            // prevent all subsequent extension macros from timing out.
             if (this.runtime) {
-              console.warn("[Spindle:%s] Worker appears dead, cleaning up registrations", this.manifest.identifier);
+              console.warn(
+                "[Spindle:%s] Worker appears dead, cleaning up registrations",
+                this.manifest.identifier,
+              );
               this.cleanup();
             }
             resolvePromise("");
           }
         });
       },
-    });
+    };
+    const accepted = macroRegistry.registerExtensionMacro(
+      extensionDefinition,
+      this.macroOwner,
+    );
+    if (registrationId) {
+      this.postToWorker({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: { registrationId, accepted },
+      });
+    }
+    if (!accepted) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Macro registration rejected: ${macroName}`,
+      );
+      return;
+    }
+    this.macroValueCache.delete(macroKey);
+    this.registeredMacroNames.add(macroKey);
   }
 
   private handleUnregisterMacro(name: string): void {
-    const macroName = String(name || "").trim();
-    if (!macroName) return;
-    macroRegistry.unregisterMacro(macroName);
-    this.registeredMacroNames.delete(macroName);
-    this.macroValueCache.delete(macroName);
+    const macroName = typeof name === "string" ? name.trim() : "";
+    const macroKey = canonicalMacroName(macroName);
+    if (!macroKey) return;
+    const primaryKey = macroRegistry.getPrimaryName(macroKey);
+    if (!primaryKey || !macroRegistry.unregisterMacro(primaryKey, this.macroOwner)) {
+      return;
+    }
+    this.registeredMacroNames.delete(primaryKey);
+    this.macroValueCache.delete(primaryKey);
   }
 
   private handleUpdateMacroValue(name: string, value: string): void {
-    const macroName = String(name || "").trim();
-    if (!macroName) return;
-    this.macroValueCache.set(macroName, String(value ?? ""));
+    const macroKey = canonicalMacroName(name);
+    const primaryKey = macroRegistry.getPrimaryName(macroKey);
+    if (!primaryKey || !macroRegistry.isOwnedMacro(primaryKey, this.macroOwner)) {
+      return;
+    }
+    if (typeof value !== "string" || exceedsUtf8Limit(value, MAX_MACRO_CACHED_VALUE_BYTES)) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Macro value update rejected for ${primaryKey}`,
+      );
+      return;
+    }
+    this.macroValueCache.set(primaryKey, value);
   }
 
   // ─── Interceptor registration ────────────────────────────────────────
@@ -10617,6 +10970,7 @@ export class WorkerHost {
           payload: options?.payload,
           ...(options?.metadata ? { metadata: options.metadata } : {}),
           ...(userId ? { userId } : {}),
+          allowDynamicCode: this.manifest.requested_capabilities?.includes("dynamic_code_execution") === true,
         },
       } satisfies HostToBackendProcessRuntime);
     } catch (err: any) {

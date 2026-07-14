@@ -5,6 +5,7 @@ import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 import styles from './SpindleFloatWidget.module.css'
 
@@ -37,12 +38,13 @@ export default function SpindleFloatWidget({ widget }: Props) {
     if (!host) return
 
     return scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(widget.extensionId, widget.root)) return
       if (!host.isConnected) return
       if (!host.contains(widget.root)) {
         host.replaceChildren(widget.root)
       }
     }, { phase: 'paint' })
-  }, [widget.root])
+  }, [widget.extensionId, widget.root])
 
   const clampPos = useCallback(
     (x: number, y: number) => {

@@ -817,8 +817,173 @@ const sharedRpcHandlers = new Map<
   (ctx: { endpoint: string; requesterExtensionId: string; effectivePermissions: readonly string[] }) => unknown | Promise<unknown>
 >();
 const grantedPermissions = new Set<string>();
-const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promise<unknown>>();
-const macroInvocationStack: MacroInvocationState[] = [];
+type ExtensionMacroHandler = (ctx: unknown) => unknown | Promise<unknown>;
+type AsyncFunctionConstructor = new (
+  ...args: string[]
+) => ExtensionMacroHandler;
+type NormalizedMacroHandler = {
+  candidate: ExtensionMacroHandler | null;
+  source: string;
+};
+
+const MAX_MACRO_HANDLER_SOURCE_LENGTH = 65_536;
+const BLOCKED_MACRO_PARAMETER_NAMES = Object.freeze([
+  "require",
+  "module",
+  "createRequire",
+  "globalThis",
+  "self",
+  "global",
+  "process",
+  "Bun",
+  "Deno",
+  "Function",
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "Worker",
+  "SharedWorker",
+  "BroadcastChannel",
+]);
+const nativeAsyncFunctionConstructor = Object.getPrototypeOf(
+  async function () {},
+).constructor as AsyncFunctionConstructor;
+const nativeReflectConstruct = Reflect.construct;
+
+function compileMacroHandler(body: string): ExtensionMacroHandler {
+  try {
+    return nativeReflectConstruct(
+      nativeAsyncFunctionConstructor,
+      ["ctx", ...BLOCKED_MACRO_PARAMETER_NAMES, `"use strict"; return await (async () => {\n${body}\n})();`],
+    ) as ExtensionMacroHandler;
+  } catch {
+    throw new Error("Macro handler body is not valid JavaScript");
+  }
+}
+
+function normalizeMacroHandler(value: unknown): NormalizedMacroHandler {
+  if (typeof value === "function") {
+    return {
+      candidate: value as ExtensionMacroHandler,
+      source: "",
+    };
+  }
+  if (typeof value !== "string") {
+    throw new Error("Macro handler must be a function or serialized function body");
+  }
+  if (value.length > MAX_MACRO_HANDLER_SOURCE_LENGTH) {
+    throw new Error(
+      `Macro handler body exceeds ${MAX_MACRO_HANDLER_SOURCE_LENGTH} characters`,
+    );
+  }
+  if (!value.trim()) return { candidate: null, source: "" };
+  return {
+    candidate: compileMacroHandler(value),
+    source: value,
+  };
+}
+type PendingMacroRegistration = {
+  key: string;
+  aliases: string[];
+  version: number;
+  candidate: ExtensionMacroHandler | null;
+};
+
+const extensionMacroHandlers = new Map<string, ExtensionMacroHandler>();
+const macroAliases = new Map<string, string>();
+const acceptedExtensionMacroHandlers = new Map<string, ExtensionMacroHandler | null>();
+const acceptedMacroAliases = new Map<string, string[]>();
+const acceptedMacroVersions = new Map<string, number>();
+const macroHandlerVersions = new Map<string, number>();
+const pendingMacroRegistrations = new Map<string, PendingMacroRegistration>();
+function findPendingMacro(key: string): PendingMacroRegistration | undefined {
+  let match: PendingMacroRegistration | undefined;
+  for (const pending of pendingMacroRegistrations.values()) {
+    if (pending.key !== key && !pending.aliases.includes(key)) continue;
+    if (!match || pending.version > match.version) match = pending;
+  }
+  return match;
+}
+
+function resolveMacroPrimaryKey(key: string): string {
+  // A primary name always wins over a pending alias from another token. This
+  // prevents an in-flight registration from hijacking unregister/update
+  // operations for an already accepted primary.
+  if (extensionMacroHandlers.has(key) || acceptedExtensionMacroHandlers.has(key)) {
+    return key;
+  }
+  const activePrimary = macroAliases.get(key);
+  if (activePrimary) return activePrimary;
+  return findPendingMacro(key)?.key ?? key;
+}
+
+function resolveActiveMacroPrimaryKey(key: string): string {
+  if (extensionMacroHandlers.has(key) || acceptedExtensionMacroHandlers.has(key)) {
+    return key;
+  }
+  return macroAliases.get(key) ?? key;
+}
+
+function replaceMacroAliases(primary: string, aliases: readonly string[]): void {
+  for (const [alias, owner] of macroAliases) {
+    if (owner === primary) macroAliases.delete(alias);
+  }
+  for (const alias of aliases) {
+    if (alias && alias !== primary) macroAliases.set(alias, primary);
+  }
+}
+
+function cancelPendingMacroRegistrations(primary: string, requestedKey?: string): void {
+  for (const [registrationId, pending] of pendingMacroRegistrations) {
+    if (
+      pending.key === primary ||
+      (requestedKey !== undefined &&
+        (pending.key === requestedKey || pending.aliases.includes(requestedKey)))
+    ) {
+      pendingMacroRegistrations.delete(registrationId);
+    }
+  }
+}
+
+function reconcileAcceptedMacro(primary: string): void {
+  if (!acceptedExtensionMacroHandlers.has(primary)) {
+    extensionMacroHandlers.delete(primary);
+    replaceMacroAliases(primary, []);
+    return;
+  }
+  const handler = acceptedExtensionMacroHandlers.get(primary);
+  if (handler) extensionMacroHandlers.set(primary, handler);
+  else extensionMacroHandlers.delete(primary);
+  replaceMacroAliases(primary, acceptedMacroAliases.get(primary) ?? []);
+}
+function hydrateMacroInvocationContext(context: unknown): Record<string, unknown> {
+  if (!context || typeof context !== "object" || Array.isArray(context)) return {}
+  const record = context as Record<string, unknown>
+  const env = record.env
+  if (!env || typeof env !== "object" || Array.isArray(env)) return record
+  const envRecord = env as Record<string, unknown>
+  const variables = envRecord.variables
+  if (!variables || typeof variables !== "object" || Array.isArray(variables)) return record
+  const variableRecord = variables as Record<string, unknown>
+  const asMap = (value: unknown): Map<string, unknown> => {
+    if (value instanceof Map) return value
+    if (!value || typeof value !== "object" || Array.isArray(value)) return new Map()
+    return new Map(Object.entries(value as Record<string, unknown>))
+  }
+  return {
+    ...record,
+    env: {
+      ...envRecord,
+      variables: {
+        ...variableRecord,
+        local: asMap(variableRecord.local),
+        global: asMap(variableRecord.global),
+        chat: asMap(variableRecord.chat),
+      },
+    },
+  }
+}
+const macroInvocationContext = new AsyncLocalStorage<MacroInvocationState | undefined>();
 const sharedRpcPermissionScope = new AsyncLocalStorage<SharedRpcPermissionScope | undefined>();
 
 function isLocalRuntimeEvent(event: string): boolean {
@@ -921,7 +1086,7 @@ function createBackendProcessHandle(info: BackendProcessInfo): {
 }
 
 function getActiveMacroInvocation(): MacroInvocationState | null {
-  return macroInvocationStack.length > 0 ? macroInvocationStack[macroInvocationStack.length - 1]! : null;
+  return macroInvocationContext.getStore() ?? null;
 }
 
 function assertMutationAllowed(operation: string): void {
@@ -1132,49 +1297,104 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   registerMacro(def): void {
+    if (!def || typeof def !== "object" || typeof def.name !== "string") {
+      post({ type: "log", level: "error", message: "Macro registration requires a string name." })
+      return
+    }
+    const normalizedName = def.name.trim()
+    if (!normalizedName) {
+      post({ type: "log", level: "error", message: "Macro registration requires a non-empty name." })
+      return
+    }
     assertMutationAllowed("spindle.registerMacro()");
-    if (typeof def.handler === "function") {
-      // Function handler — store directly, strip before posting (not serializable)
-      extensionMacroHandlers.set(def.name.toLowerCase(), def.handler as (ctx: unknown) => unknown | Promise<unknown>);
-    } else if (typeof def.handler === "string" && def.handler.trim()) {
-      // String handlers used to be compiled via `new Function(...)`, which is
-      // equivalent to eval() inside the worker context — every macro string
-      // would run with full access to the extension's RPC bridge. That made
-      // the handler value itself an arbitrary-code-execution sink. Refuse to
-      // load string handlers; extensions must export real functions.
+    let normalized: NormalizedMacroHandler;
+    try {
+      normalized = normalizeMacroHandler(def.handler);
+    } catch (error) {
+      const reason = error instanceof Error
+        ? error.message
+        : "Macro handler is invalid";
       post({
         type: "log",
         level: "error",
-        message: `Macro "${def.name}" was registered with a string handler. ` +
-          `String handlers are no longer supported — return a function from your ` +
-          `module instead. The macro was NOT registered.`,
+        message: `Macro "${normalizedName}" was not registered: ${reason}`,
       });
       return;
     }
-    // Strip handler before posting — host creates its own RPC handler;
-    // functions can't survive structured cloning anyway
+
+    const key = normalizedName.toLowerCase()
+    const aliases = Array.isArray((def as { aliases?: unknown }).aliases)
+      ? Array.from(new Set(
+        (def as { aliases?: unknown[] }).aliases
+          ?.filter((alias): alias is string => typeof alias === "string")
+          .map((alias) => alias.trim().toLowerCase())
+          .filter((alias) => alias && alias !== key),
+      ))
+      : [];
+    const version = (macroHandlerVersions.get(key) ?? 0) + 1;
+    macroHandlerVersions.set(key, version);
+    const registrationId = crypto.randomUUID();
+    pendingMacroRegistrations.set(registrationId, {
+      key,
+      aliases,
+      version,
+      candidate: normalized.candidate,
+    });
+
+    // Function handlers already live in install-scanned extension source and
+    // cannot survive structured cloning. Serialized bodies cross the worker
+    // boundary so the host can apply the same capability scan before making
+    // the pending registration visible to prompt resolution.
     const { handler: _, ...serializableDef } = def;
     post({
       type: "register_macro",
       definition: {
         ...serializableDef,
-        // Always send an empty handler over the wire; the host invokes the
-        // worker's resolveMacro() RPC for execution and never trusts the
-        // serialized field.
-        handler: "",
-      },
+        registrationId,
+        handler: normalized.source,
+      } as typeof def,
     });
   },
 
   unregisterMacro(name: string): void {
-    assertMutationAllowed("spindle.unregisterMacro()");
-    extensionMacroHandlers.delete(name.toLowerCase());
-    post({ type: "unregister_macro", name });
+    assertMutationAllowed("spindle.unregisterMacro()")
+    const key = typeof name === "string" ? name.trim().toLowerCase() : ""
+    if (!key) return
+    const primaryKey = resolveMacroPrimaryKey(key)
+    const affectedPrimaries = new Set<string>([primaryKey])
+    for (const pending of pendingMacroRegistrations.values()) {
+      if (
+        pending.key === primaryKey ||
+        pending.key === key ||
+        pending.aliases.includes(key) ||
+        pending.aliases.includes(primaryKey)
+      ) {
+        affectedPrimaries.add(pending.key)
+      }
+    }
+    for (const affectedPrimary of affectedPrimaries) {
+      extensionMacroHandlers.delete(affectedPrimary)
+      acceptedExtensionMacroHandlers.delete(affectedPrimary)
+      acceptedMacroAliases.delete(affectedPrimary)
+      acceptedMacroVersions.delete(affectedPrimary)
+      // Bump the primary token before cancelling registrations. Removing
+      // pending entries makes any late acknowledgement a no-op.
+      macroHandlerVersions.set(
+        affectedPrimary,
+        (macroHandlerVersions.get(affectedPrimary) ?? 0) + 1,
+      )
+      replaceMacroAliases(affectedPrimary, [])
+      cancelPendingMacroRegistrations(affectedPrimary, key)
+    }
+    for (const affectedPrimary of [...affectedPrimaries].sort()) {
+      post({ type: "unregister_macro", name: affectedPrimary })
+    }
   },
-
   updateMacroValue(name: string, value: string): void {
-    assertMutationAllowed("spindle.updateMacroValue()");
-    post({ type: "update_macro_value", name, value: String(value ?? "") });
+    assertMutationAllowed("spindle.updateMacroValue()")
+    const key = typeof name === "string" ? name.trim().toLowerCase() : ""
+    if (!key) return
+    post({ type: "update_macro_value", name: key, value: String(value ?? "") })
   },
 
   registerInterceptor(handler, priority?): void {
@@ -3746,7 +3966,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       // the static scan (detectDangerousBackendCapabilities, run before this
       // entry is loaded) and, when enabled, by the OS-level sandbox (sandbox
       // mode). The sandbox here is a cooperative speed bump, not the boundary.
-      initializeSandbox();
+      initializeSandbox({
+        allowDynamicCode: manifest.requested_capabilities?.includes("dynamic_code_execution") === true,
+      });
 
       // Dynamically import the extension's backend entry
       try {
@@ -3766,6 +3988,35 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "event": {
+      if (msg.event === "__macro_registration_result__") {
+        const payload =
+          msg.payload && typeof msg.payload === "object" && !Array.isArray(msg.payload)
+            ? msg.payload as { registrationId?: unknown; accepted?: unknown }
+            : {};
+        const registrationId =
+          typeof payload.registrationId === "string"
+            ? payload.registrationId
+            : "";
+        const pending = pendingMacroRegistrations.get(registrationId);
+        if (!pending) break;
+        pendingMacroRegistrations.delete(registrationId);
+
+        const accepted = payload.accepted === true;
+        if (accepted) {
+          const acceptedVersion = acceptedMacroVersions.get(pending.key) ?? 0;
+          if (pending.version >= acceptedVersion) {
+            // The highest accepted token is authoritative even when a newer
+            // registration is still pending. Reconciliation below keeps that
+            // accepted handler live until a newer token is accepted.
+            acceptedExtensionMacroHandlers.set(pending.key, pending.candidate);
+            acceptedMacroAliases.set(pending.key, [...pending.aliases]);
+            acceptedMacroVersions.set(pending.key, pending.version);
+          }
+        }
+        reconcileAcceptedMacro(pending.key);
+        break;
+      }
+
       if (msg.event === "__macro_invoke__") {
         const payload = (msg.payload ?? {}) as {
           requestId?: string;
@@ -3773,8 +4024,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           context?: { commit?: boolean } & Record<string, unknown>;
         };
         const requestId = typeof payload.requestId === "string" ? payload.requestId : "";
-        const name = typeof payload.name === "string" ? payload.name.toLowerCase() : "";
-        const handler = extensionMacroHandlers.get(name);
+        const name = typeof payload.name === "string" ? payload.name.trim().toLowerCase() : "";
+        const primary = resolveActiveMacroPrimaryKey(name);
+        const handler = extensionMacroHandlers.get(primary);
 
         if (!requestId) break;
         if (!handler) {
@@ -3787,21 +4039,23 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         }
 
         try {
-          macroInvocationStack.push({ commit: payload.context?.commit !== false });
-          const value = await Promise.resolve(handler(payload.context ?? {}));
+          const context = hydrateMacroInvocationContext(payload.context)
+          const invocation = { commit: context.commit !== false }
+          const value = await macroInvocationContext.run(
+            invocation,
+            () => Promise.resolve(handler(context)),
+          )
           post({
             type: "macro_result",
             requestId,
             result: value == null ? "" : String(value),
-          });
+          })
         } catch (err: any) {
           post({
             type: "macro_result",
             requestId,
             error: err?.message || "Macro execution failed",
-          });
-        } finally {
-          macroInvocationStack.pop();
+          })
         }
         break;
       }

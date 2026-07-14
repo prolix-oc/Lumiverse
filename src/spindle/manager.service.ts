@@ -24,6 +24,12 @@ import {
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
+import {
+  BLOCKED_BUN_API_LABELS,
+  BLOCKED_GLOBAL_API_LABELS,
+  BLOCKED_MODULE_SPECIFIER_LABELS,
+  DANGEROUS_PROCESS_API_NAMES,
+} from "./dangerous-runtime-policy";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
 import { bunCmd } from "../utils/bun-cmd";
 
@@ -32,74 +38,36 @@ function isManagedPermission(permission: string): permission is SpindlePermissio
   return isValidPermission(permission);
 }
 
-type BackendSafetyCheck = {
-  label: string;
-  regex: RegExp;
-};
-
 type SourceSpan = { start: number; end: number };
 type ScannableSource = { text: string; ignoredSpans: SourceSpan[] };
 
-const DANGEROUS_MODULE_LABELS = new Map<string, string>([
-  ["fs", "filesystem module access"],
-  ["fs/promises", "filesystem module access"],
-  ["node:fs", "filesystem module access"],
-  ["node:fs/promises", "filesystem module access"],
-  ["child_process", "subprocess module access"],
-  ["node:child_process", "subprocess module access"],
-  ["net", "direct socket module access"],
-  ["tls", "direct socket module access"],
-  ["dgram", "direct socket module access"],
-  ["http", "direct socket module access"],
-  ["https", "direct socket module access"],
-  ["node:net", "direct socket module access"],
-  ["node:tls", "direct socket module access"],
-  ["node:dgram", "direct socket module access"],
-  ["node:http", "direct socket module access"],
-  ["node:https", "direct socket module access"],
-  ["worker_threads", "worker or cluster module access"],
-  ["cluster", "worker or cluster module access"],
-  ["node:worker_threads", "worker or cluster module access"],
-  ["node:cluster", "worker or cluster module access"],
-  ["bun:sqlite", "direct SQLite module access"],
-  ["node:sqlite", "direct SQLite module access"],
-]);
 
-const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync", "serve", "connect", "listen"]);
-const DANGEROUS_PROCESS_PROPERTIES = new Set(["env", "exit", "kill", "chdir", "dlopen"]);
+const EXECUTABLE_MODULE_SPECIFIER_LABEL = "module loading";
+const MODULE_COMMENT_GAP = String.raw`(?:\s|/\*(?:(?!\*/)[\s\S])*\*/|//[^\r\n]*(?:\r?\n|$))*`;
+
+function isExecutableModuleSpecifier(specifier: string): boolean {
+  const trimmed = specifier.trim();
+  return (
+    /^(?:data|blob|file|http|https):/i.test(trimmed) ||
+    /^[/\\]/.test(trimmed) ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  );
+}
+
+function addModuleSpecifierHit(specifier: string, hits: Set<string>): void {
+  if (isExecutableModuleSpecifier(specifier)) {
+    hits.add(EXECUTABLE_MODULE_SPECIFIER_LABEL);
+  }
+  const label = BLOCKED_MODULE_SPECIFIER_LABELS.get(specifier.trim());
+  if (label) hits.add(label);
+}
+
+const DANGEROUS_BUN_PROPERTIES = BLOCKED_BUN_API_LABELS;
+const DANGEROUS_PROCESS_PROPERTIES = new Map<string, string>(
+  DANGEROUS_PROCESS_API_NAMES.map((name) => [name, "dangerous process API usage"] as const),
+);
 const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
 const warnedWindowsSpindleBunFallback = new Set<string>();
-
-const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
-  {
-    label: "filesystem module access",
-    regex: /(?:from\s*["'`](?:node:)?fs(?:\/promises)?["'`]|require\s*\(\s*["'`](?:node:)?fs(?:\/promises)?["'`]\s*\)|import\s*\(\s*["'`](?:node:)?fs(?:\/promises)?["'`]\s*\))/,
-  },
-  {
-    label: "subprocess module access",
-    regex: /(?:from\s*["'`](?:node:)?child_process["'`]|require\s*\(\s*["'`](?:node:)?child_process["'`]\s*\)|import\s*\(\s*["'`](?:node:)?child_process["'`]\s*\))/,
-  },
-  {
-    label: "direct socket module access",
-    regex: /(?:from\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]|require\s*\(\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]\s*\)|import\s*\(\s*["'`](?:node:)?(?:net|tls|dgram|http|https)["'`]\s*\))/,
-  },
-  {
-    label: "worker or cluster module access",
-    regex: /(?:from\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]|require\s*\(\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]\s*\)|import\s*\(\s*["'`](?:node:)?(?:worker_threads|cluster)["'`]\s*\))/,
-  },
-  {
-    label: "direct SQLite module access",
-    regex: /(?:from\s*["'`](?:bun:sqlite|node:sqlite)["'`]|require\s*\(\s*["'`](?:bun:sqlite|node:sqlite)["'`]\s*\)|import\s*\(\s*["'`](?:bun:sqlite|node:sqlite)["'`]\s*\))/,
-  },
-  {
-    label: "dangerous Bun system API usage",
-    regex: /\bBun\.(?:file|write|spawn|spawnSync|serve|connect|listen)\b/,
-  },
-  {
-    label: "dangerous process API usage",
-    regex: /\bprocess\.(?:env|exit|kill|chdir|dlopen)\b/,
-  },
-];
 
 function normalizeJavaScriptForSafetyScan(content: string): string {
   try {
@@ -293,9 +261,19 @@ function collectIgnoredSpans(source: string): SourceSpan[] {
 
 function isIgnoredIndex(index: number | undefined, spans: SourceSpan[]): boolean {
   if (index === undefined || index < 0) return false;
-  for (const span of spans) {
-    if (index < span.start) return false;
-    if (index >= span.start && index < span.end) return true;
+
+  let low = 0;
+  let high = spans.length - 1;
+  while (low <= high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const span = spans[middle];
+    if (index < span.start) {
+      high = middle - 1;
+    } else if (index >= span.end) {
+      low = middle + 1;
+    } else {
+      return true;
+    }
   }
   return false;
 }
@@ -354,6 +332,44 @@ function decodeSimpleStringExpression(raw: string): string | null {
   return literalParts.length > 0 ? literalParts.join("") : null;
 }
 
+function stripModuleExpressionComments(raw: string): string | null {
+  let result = "";
+  let quote: "'" | '"' | "`" | null = null;
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (quote) {
+      result += char;
+      if (char === "\\") {
+        result += raw[++i] ?? "";
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      result += char;
+      continue;
+    }
+    if (char === "/" && raw[i + 1] === "/") {
+      const end = raw.indexOf("\n", i + 2);
+      if (end < 0) break;
+      result += " ";
+      i = end - 1;
+      continue;
+    }
+    if (char === "/" && raw[i + 1] === "*") {
+      const end = raw.indexOf("*/", i + 2);
+      if (end < 0) return null;
+      result += " ";
+      i = end + 1;
+      continue;
+    }
+    result += char;
+  }
+  return quote ? null : result;
+}
+
 /**
  * Resolve a dynamic `import()` / `require()` specifier ONLY when the entire
  * expression is a provably-constant string: a single string literal, a `+`
@@ -371,7 +387,9 @@ function decodeSimpleStringExpression(raw: string): string | null {
  * because the unresolved string could be `node:fs`, `child_process`, etc.).
  */
 function resolveStaticModuleSpecifier(raw: string): string | null {
-  const trimmed = raw.trim();
+  const withoutComments = stripModuleExpressionComments(raw);
+  if (withoutComments === null) return null;
+  const trimmed = withoutComments.trim();
   if (!trimmed) return null;
 
   // `String.fromCharCode(<int literals>)` — constant only when every argument
@@ -410,8 +428,229 @@ function resolveStaticModuleSpecifier(raw: string): string | null {
   }
   return matchedAny ? value : null;
 }
+/**
+ * Resolve a complete static string expression for serialized global-object
+ * property keys. Unlike module-call resolution, this deliberately rejects
+ * import attributes and every other trailing token instead of accepting a
+ * comma-delimited prefix.
+ */
+function resolveStrictStaticStringExpression(raw: string): string | null {
+  const withoutComments = stripModuleExpressionComments(raw);
+  if (withoutComments === null) return null;
+  const trimmed = withoutComments.trim();
+  if (!trimmed) return null;
+
+  const charCode = trimmed.match(/^String\.fromCharCode\s*\(([^)]*)\)$/);
+  if (charCode) {
+    const parts = charCode[1].split(",").map((part) => part.trim());
+    if (parts.length === 0 || parts.some((part) => !/^\d+$/.test(part))) return null;
+    const codes = parts.map(Number);
+    if (codes.some((code) => !Number.isInteger(code) || code < 0 || code > 0x10ffff)) return null;
+    return String.fromCodePoint(...codes);
+  }
+
+  const LITERAL = /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\$]|\\.|\$(?!\{))*`)/;
+  let rest = trimmed;
+  let value = "";
+  let matchedAny = false;
+  while (rest) {
+    const match = rest.match(LITERAL);
+    if (!match) return null;
+    const decoded = decodeQuotedLiteral(match[0]);
+    if (decoded === null) return null;
+    value += decoded;
+    matchedAny = true;
+    rest = rest.slice(match[0].length).replace(/^\s+/, "");
+    if (!rest) break;
+    if (rest[0] !== "+") return null;
+    rest = rest.slice(1).replace(/^\s+/, "");
+    if (!rest) return null;
+  }
+  return matchedAny ? value : null;
+}
+const MODULE_LITERAL_RE =
+  /(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\$]|\\.|\$(?!\{))*`)/;
+const STATIC_MODULE_IMPORT_RE = new RegExp(
+  `\\b(?:import|export)${MODULE_COMMENT_GAP}(?:(?:[^;\\n]*?${MODULE_COMMENT_GAP}from${MODULE_COMMENT_GAP})?(${MODULE_LITERAL_RE.source}))`,
+  "g",
+);
+const MODULE_CALL_ARGUMENT_MAX_LENGTH = 65_536;
+const MODULE_CALL_ARGUMENT_FRAGMENT =
+  `((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\)){1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}}?)`;
+const SERIALIZED_MODULE_CALL_PREFIX_RE = new RegExp(
+  `\\b(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(`,
+  "g",
+);
+const BARE_MODULE_CALL_PREFIX_RE = new RegExp(
+  `(?<![.\\w$])(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(`,
+  "g",
+);
+const SERIALIZED_REQUIRE_REFERENCE_RE = /(?<![\w$])require\b(?!\s*:)/g;
+
+const MODULE_CALL_RE = new RegExp(
+  `\\b(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+  "g",
+);
+const BARE_MODULE_CALL_RE = new RegExp(
+  `(?<![.\\w$])(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+  "g",
+);
+const IMPORT_META_ALLOWED_PROPERTIES: Readonly<Record<string, true>> = {
+  url: true,
+  dir: true,
+  file: true,
+  path: true,
+  main: true,
+  resolve: true,
+};
+const IMPORT_META_RE = new RegExp(
+  `\\bimport${MODULE_COMMENT_GAP}\\.${MODULE_COMMENT_GAP}meta\\b`,
+  "g",
+);
+const IMPORT_META_PROPERTY_RE = new RegExp(
+  `^${MODULE_COMMENT_GAP}(?:(?:\\.${MODULE_COMMENT_GAP}|\\?\\.${MODULE_COMMENT_GAP})([A-Za-z_$][\\w$]*)|(?:\\?\\.${MODULE_COMMENT_GAP})?\\[([^\\]]{1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}})\\])`,
+);
+const IMPORT_META_CALL_PREFIX_RE = new RegExp(
+  `^${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?\\(`,
+);
+const IMPORT_META_CALL_RE = new RegExp(
+  `^${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+);
+
+// `import.meta.require` is a module loader; every other metadata escape fails closed.
+function addImportMetaRequireHits(source: ScannableSource, hits: Set<string>): void {
+  for (const match of matchOutsideIgnored(source, IMPORT_META_RE)) {
+    if (match.index === undefined) continue;
+    const tail = source.text.slice(match.index + match[0].length);
+    const propertyMatch = tail.match(IMPORT_META_PROPERTY_RE);
+    if (!propertyMatch) {
+      hits.add("dynamic module access");
+      continue;
+    }
+
+    const property =
+      propertyMatch[1] ?? resolveStrictStaticStringExpression(propertyMatch[2] ?? "");
+    const afterProperty = tail.slice(propertyMatch[0].length);
+    if (property === null) {
+      hits.add("dynamic module access");
+      continue;
+    }
+    if (Object.hasOwn(IMPORT_META_ALLOWED_PROPERTIES, property)) continue;
+    if (property !== "require") {
+      hits.add("dynamic module access");
+      continue;
+    }
+
+    if (!IMPORT_META_CALL_PREFIX_RE.test(afterProperty)) {
+      hits.add("dynamic module access");
+      continue;
+    }
+    IMPORT_META_CALL_PREFIX_RE.lastIndex = 0;
+    const call = afterProperty.match(IMPORT_META_CALL_RE);
+    if (!call) {
+      hits.add("dynamic module access");
+      continue;
+    }
+    const resolved = resolveStaticModuleSpecifier(call[1]);
+    if (resolved === null) {
+      hits.add("dynamic module access");
+    } else {
+      addModuleSpecifierHit(resolved, hits);
+    }
+  }
+}
+
+function addStaticModuleHits(source: ScannableSource, hits: Set<string>): void {
+  for (const match of matchOutsideIgnored(source, STATIC_MODULE_IMPORT_RE)) {
+    const specifier = decodeQuotedLiteral(match[1]);
+    if (specifier !== null) addModuleSpecifierHit(specifier, hits);
+  }
+}
+
+function addReachableModuleRequireHits(source: ScannableSource, hits: Set<string>): void {
+  const moduleObjects = new Set(["module", "globalThis.module"]);
+  for (const match of matchOutsideIgnored(
+    source,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:module|globalThis\s*\.\s*module)\b/,
+  )) {
+    moduleObjects.add(match[1]);
+  }
+
+  for (const objectName of moduleObjects) {
+    const escapedObject = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const directCalls = new RegExp(
+      `\\b${escapedObject}${MODULE_COMMENT_GAP}\\.${MODULE_COMMENT_GAP}require${MODULE_COMMENT_GAP}\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+      "g",
+    );
+    for (const match of matchOutsideIgnored(source, directCalls)) {
+      const resolved = resolveStaticModuleSpecifier(match[1]);
+      if (resolved === null) {
+        hits.add("dynamic module access");
+      } else {
+        addModuleSpecifierHit(resolved, hits);
+      }
+    }
+
+    const computedCalls = new RegExp(
+      `\\b${escapedObject}${MODULE_COMMENT_GAP}\\[([^\\]]{1,100})\\]${MODULE_COMMENT_GAP}\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+      "g",
+    );
+    for (const match of matchOutsideIgnored(source, computedCalls)) {
+      if (decodeSimpleStringExpression(match[1]) !== "require") continue;
+      const resolved = resolveStaticModuleSpecifier(match[2]);
+      if (resolved === null) {
+        hits.add("dynamic module access");
+      } else {
+        addModuleSpecifierHit(resolved, hits);
+      }
+    }
+
+    const memberAccess = new RegExp(
+      `\\b${escapedObject}${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}require|\\[([^\\]]{1,100})\\])`,
+      "g",
+    );
+    for (const match of matchOutsideIgnored(source, memberAccess)) {
+      if (match[1] !== undefined && decodeSimpleStringExpression(match[1]) !== "require") continue;
+      const after = source.text.slice((match.index ?? 0) + match[0].length);
+      if (/^\s*\(/.test(after)) continue;
+      hits.add("dynamic module access");
+    }
+  }
+
+  // `require.main` and `require.cache` expose Module instances whose
+  // `.require(...)` methods bypass the guarded top-level require function.
+  if (
+    matchOutsideIgnored(
+      source,
+      /\brequire\s*(?:\.\s*(?:main|cache)|\[\s*["'`](?:main|cache)["'`]\s*\])/,
+    ).length > 0
+  ) {
+    hits.add("dynamic module access");
+  }
+
+  for (const match of matchOutsideIgnored(
+    source,
+    /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:module|globalThis\s*\.\s*module)\b/,
+  )) {
+    for (const entry of match[1].split(",")) {
+      const key = entry.trim().split(/\s*:/, 1)[0]?.trim();
+      if (key === "require" || /^\[\s*["'`]require["'`]\s*\]$/.test(key ?? "")) {
+        hits.add("dynamic module access");
+      }
+    }
+  }
+}
 
 function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
+  for (const match of matchOutsideIgnored(source, MODULE_CALL_RE)) {
+    if (match.index !== undefined) {
+      const tail = source.text.slice(match.index + match[0].length);
+      if (/^\s*\{/.test(tail)) continue; // `require(name) { … }` — a definition
+    }
+    const resolved = resolveStaticModuleSpecifier(match[1]);
+    if (resolved !== null) addModuleSpecifierHit(resolved, hits);
+  }
+
   // Only the BARE dynamic-import operator `import(…)` and the global
   // `require(…)` are real module-load surfaces. Member calls (`x.require(…)`,
   // `ns.import(…)`) and shorthand method definitions (`require(name) { … }`)
@@ -419,43 +658,700 @@ function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void 
   // literally named `require`/`import` (e.g. RisuAI-compat layers). The
   // negative lookbehind `(?<![.\w$])` drops member access and identifier-
   // prefixed names; the trailing-`{` check below drops method definitions.
-  // No coverage is lost — a constant dangerous specifier on ANY receiver is
-  // still caught by DANGEROUS_BACKEND_CHECKS, and a dynamic `globalThis.require`
-  // is caught at runtime by guardRequire (a real override, unlike `import()`).
-  for (const match of matchOutsideIgnored(source, /(?<![.\w$])(?:require|import)\s*\(([^;\n]{1,300})\)/)) {
+  // Constant specifiers on ANY receiver were resolved through the shared map
+  // above; unresolved bare calls fail closed because they could name a blocked
+  // builtin at runtime.
+  for (const match of matchOutsideIgnored(source, BARE_MODULE_CALL_RE)) {
     if (match.index !== undefined) {
       const tail = source.text.slice(match.index + match[0].length);
       if (/^\s*\{/.test(tail)) continue; // `require(name) { … }` — a definition
     }
-    const resolved = resolveStaticModuleSpecifier(match[1]);
-    if (resolved === null) {
+    if (resolveStaticModuleSpecifier(match[1]) === null) {
       // Specifier is not a provable constant — fail closed. We cannot tell
       // whether it resolves to `node:fs`, `child_process`, etc., so block it.
       hits.add("dynamic module access");
+    }
+  }
+  // A bare call whose arguments exceed the bounded extractor cannot be
+  // resolved safely. Member calls are intentionally excluded by this prefix,
+  // preserving unrelated receiver methods.
+  const boundedBareCallStarts = new Set(
+    matchOutsideIgnored(source, BARE_MODULE_CALL_RE)
+      .map((match) => match.index)
+      .filter((index): index is number => index !== undefined),
+  );
+  for (const prefix of matchOutsideIgnored(source, BARE_MODULE_CALL_PREFIX_RE)) {
+    if (prefix.index !== undefined && !boundedBareCallStarts.has(prefix.index)) {
+      hits.add("dynamic module access");
+    }
+  }
+}
+
+
+const DYNAMIC_GLOBAL_API_LABEL = "dynamic global API access";
+const GLOBAL_API_KEY_MAX_LENGTH = 300;
+const GLOBAL_OBJECT_NAMES = ["globalThis", "self", "global"] as const;
+const GLOBAL_ALIAS_SCOPE_LIMIT = 4096;
+
+type GlobalAliasScope = {
+  start: number;
+  end: number;
+  parent: GlobalAliasScope | null;
+  children: GlobalAliasScope[];
+  bindings: Map<string, boolean>;
+  functionBoundary: boolean;
+};
+
+function addGlobalApiHits(source: ScannableSource, hits: Set<string>): void {
+  /*
+   * Track only identifier bindings whose current value is one of the three
+   * intrinsic global objects. Scope-local provenance prevents an ordinary
+   * nested object or a later reassignment from inheriting an outer alias.
+   * The scope model is intentionally bounded and lexical; it does not attempt
+   * to evaluate arbitrary expressions, calls, or control-flow joins.
+   */
+  const rootScope: GlobalAliasScope = {
+    start: 0,
+    end: source.text.length,
+    parent: null,
+    children: [],
+    bindings: new Map(),
+    functionBoundary: true,
+  };
+  const scopes: GlobalAliasScope[] = [rootScope];
+  const scopeStack: GlobalAliasScope[] = [rootScope];
+  const overflowSpans: SourceSpan[] = [];
+  let overflowDepth = 0;
+  let overflowStart = -1;
+  let ignoredSpanIndex = 0;
+  for (let index = 0; index < source.text.length; index += 1) {
+    while (
+      ignoredSpanIndex < source.ignoredSpans.length &&
+      source.ignoredSpans[ignoredSpanIndex].end <= index
+    ) {
+      ignoredSpanIndex += 1;
+    }
+    const ignored = source.ignoredSpans[ignoredSpanIndex];
+    if (ignored && index >= ignored.start && index < ignored.end) {
+      index = ignored.end - 1;
       continue;
     }
-    const label = DANGEROUS_MODULE_LABELS.get(resolved);
-    if (label) hits.add(label);
+    if (source.text[index] === "{") {
+      if (overflowDepth > 0 || scopes.length >= GLOBAL_ALIAS_SCOPE_LIMIT) {
+        if (overflowDepth === 0) overflowStart = index;
+        overflowDepth += 1;
+        continue;
+      }
+      const parent = scopeStack[scopeStack.length - 1] ?? rootScope;
+      const child: GlobalAliasScope = {
+        start: index,
+        end: source.text.length,
+        parent,
+        children: [],
+        bindings: new Map(),
+        functionBoundary: false,
+      };
+      parent.children.push(child);
+      scopes.push(child);
+      scopeStack.push(child);
+    } else if (source.text[index] === "}") {
+      if (overflowDepth > 0) {
+        overflowDepth -= 1;
+        if (overflowDepth === 0 && overflowStart >= 0) {
+          overflowSpans.push({ start: overflowStart, end: index + 1 });
+          overflowStart = -1;
+        }
+      } else if (scopeStack.length > 1) {
+        const closed = scopeStack.pop();
+        if (closed) closed.end = index + 1;
+      }
+    }
+  }
+  if (overflowDepth > 0 && overflowStart >= 0) {
+    overflowSpans.push({ start: overflowStart, end: source.text.length });
+  }
+  rootScope.end = source.text.length;
+
+  const scopeAt = (position: number): GlobalAliasScope => {
+    let current = rootScope;
+    let descended = true;
+    while (descended) {
+      descended = false;
+      for (const child of current.children) {
+        if (position >= child.start && position < child.end) {
+          current = child;
+          descended = true;
+          break;
+        }
+      }
+    }
+    return current;
+  };
+  const findBindingScope = (name: string, scope: GlobalAliasScope): GlobalAliasScope => {
+    let current: GlobalAliasScope | null = scope;
+    while (current) {
+      if (current.bindings.has(name)) return current;
+      current = current.parent;
+    }
+    return scope;
+  };
+  const isIntrinsicGlobal = (name: string): boolean =>
+    (GLOBAL_OBJECT_NAMES as readonly string[]).includes(name);
+  const bindingHistory = new Map<
+    GlobalAliasScope,
+    Map<string, Array<{ position: number; value: boolean }>>
+  >();
+  const possibleGlobalBindings = new Map<GlobalAliasScope, Set<string>>();
+  const markPossibleGlobal = (scope: GlobalAliasScope, name: string): void => {
+    let names = possibleGlobalBindings.get(scope);
+    if (!names) {
+      names = new Set();
+      possibleGlobalBindings.set(scope, names);
+    }
+    names.add(name);
+  };
+  const resolveCurrentBinding = (name: string, position: number): boolean => {
+    let current: GlobalAliasScope | null = scopeAt(position);
+    while (current) {
+      if (possibleGlobalBindings.get(current)?.has(name)) return true;
+      const value = current.bindings.get(name);
+      if (value !== undefined) return value;
+      current = current.parent;
+    }
+    return isIntrinsicGlobal(name);
+  };
+  const resolveBinding = (name: string, position: number): boolean => {
+    let current: GlobalAliasScope | null = scopeAt(position);
+    while (current) {
+      if (possibleGlobalBindings.get(current)?.has(name)) return true;
+      const history = bindingHistory.get(current)?.get(name);
+      if (history && history.length > 0) {
+        for (let index = history.length - 1; index >= 0; index -= 1) {
+          if (history[index].position <= position) return history[index].value;
+        }
+        // A synthetic nested binding created by a later assignment does not
+        // shadow the outer value before that assignment.
+        current = current.parent;
+        continue;
+      }
+      const binding = current.bindings.get(name);
+      if (binding !== undefined) return binding;
+      current = current.parent;
+    }
+    return isIntrinsicGlobal(name);
+  };
+  const isOverflowedPosition = (position: number): boolean =>
+    overflowSpans.some((span) => position >= span.start && position < span.end);
+  const bindDeclaration = (name: string, position: number, isVar = false): void => {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || isOverflowedPosition(position)) return;
+    let scope = scopeAt(position);
+    const forHeader = source.text.slice(0, position).match(/\bfor\s*\([^)]*$/);
+    if (forHeader) {
+      const close = source.text.indexOf(")", position);
+      const bodyStart = close < 0 ? -1 : source.text.indexOf("{", close + 1);
+      if (bodyStart >= 0) scope = scopeAt(bodyStart + 1);
+    }
+    if (isVar) {
+      while (scope.parent && !scope.functionBoundary) scope = scope.parent;
+    }
+    scope.bindings.set(name, false);
+  };
+  const CONTROL_FLOW_HEADERS = new Set(["if", "for", "while", "switch", "with", "catch"]);
+  const markFunctionBody = (bodyStart: number): void => {
+    if (bodyStart < 0) return;
+    const bodyScope = scopeAt(bodyStart + 1);
+    bodyScope.functionBoundary = true;
+  };
+  for (const match of matchOutsideIgnored(
+    source,
+    /\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\(/g,
+  )) {
+    markFunctionBody(source.text.indexOf("{", (match.index ?? 0) + match[0].length));
+  }
+  for (const match of matchOutsideIgnored(source, /(?<![\w$])(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) {
+    markFunctionBody(source.text.indexOf("{", (match.index ?? 0) + match[0].length));
+  }
+  for (const match of matchOutsideIgnored(
+    source,
+    /(?<![\w$])([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g,
+  )) {
+    if (!CONTROL_FLOW_HEADERS.has(match[1])) {
+      markFunctionBody(source.text.lastIndexOf("{", (match.index ?? 0) + match[0].length));
+    }
+  }
+  // Pre-bind declarations so uses before a declaration do not accidentally
+  // resolve to the intrinsic global object.
+  for (const match of matchOutsideIgnored(
+    source,
+    /\b(const|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
+  )) {
+    bindDeclaration(match[2], match.index ?? 0, match[1] === "var");
+  }
+  const namedDeclarations = /\b(function|class)\s+([A-Za-z_$][\w$]*)\b/g;
+  for (const match of matchOutsideIgnored(source, namedDeclarations)) {
+    const before = source.text.slice(0, match.index ?? 0).trimEnd();
+    const beforeWithoutComments = (stripModuleExpressionComments(before) ?? before).trimEnd();
+    const isExpressionName =
+      /(?:=>|[=(:,{[!&|?+\-*\/%~])\s*$/.test(beforeWithoutComments) ||
+      /\b(?:void|typeof|delete|new|return|throw|yield|await|instanceof|in|of|case)\s*$/.test(beforeWithoutComments);
+    if (!isExpressionName) bindDeclaration(match[2], match.index ?? 0);
+    const bodyStart = source.text.indexOf("{", (match.index ?? 0) + match[0].length);
+    if (bodyStart >= 0) {
+      const bodyScope = scopeAt(bodyStart + 1);
+      bodyScope.bindings.set(match[2], false);
+      if (match[1] === "function") bodyScope.functionBoundary = true;
+    }
+  }
+  const destructuringDeclaration = /\b(const|let|var)\s*\{([^}]*)\}/g;
+  for (const match of matchOutsideIgnored(source, destructuringDeclaration)) {
+    for (const entry of match[2].split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed || trimmed.startsWith("...")) continue;
+      const binding = trimmed.includes(":")
+        ? trimmed.split(/\s*:/).slice(1).join(":").trim()
+        : trimmed;
+      const name = binding.split(/\s*=/, 1)[0]?.trim() ?? "";
+      bindDeclaration(name, match.index ?? 0, match[1] === "var");
+    }
+  }
+  const importDeclaration =
+    /\bimport\s+(?:\{([^}]*)\}|\*\s+as\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*))\s+from\b/g;
+  for (const match of matchOutsideIgnored(source, importDeclaration)) {
+    if (match[1] !== undefined) {
+      for (const entry of match[1].split(",")) {
+        const name = (entry.trim().match(/\bas\s+([A-Za-z_$][\w$]*)\s*$/)?.[1] ??
+          entry.trim().match(/([A-Za-z_$][\w$]*)\s*$/)?.[1]) ?? "";
+        bindDeclaration(name, match.index ?? 0);
+      }
+    } else {
+      bindDeclaration(match[2] ?? match[3] ?? "", match.index ?? 0);
+    }
+  }
+
+  const parameterBindings = (raw: string): Map<string, boolean> => {
+    const result = new Map<string, boolean>();
+    const splitTopLevel = (value: string): string[] => {
+      const parts: string[] = [];
+      let start = 0;
+      let braces = 0;
+      let brackets = 0;
+      let parens = 0;
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === "{") braces += 1;
+        else if (value[index] === "}") braces = Math.max(0, braces - 1);
+        else if (value[index] === "[") brackets += 1;
+        else if (value[index] === "]") brackets = Math.max(0, brackets - 1);
+        else if (value[index] === "(") parens += 1;
+        else if (value[index] === ")") parens = Math.max(0, parens - 1);
+        else if (value[index] === "," && braces === 0 && brackets === 0 && parens === 0) {
+          parts.push(value.slice(start, index));
+          start = index + 1;
+        }
+      }
+      parts.push(value.slice(start));
+      return parts;
+    };
+    const topLevelIndex = (value: string, wanted: string): number => {
+      let braces = 0;
+      let brackets = 0;
+      let parens = 0;
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === "{") braces += 1;
+        else if (value[index] === "}") braces = Math.max(0, braces - 1);
+        else if (value[index] === "[") brackets += 1;
+        else if (value[index] === "]") brackets = Math.max(0, brackets - 1);
+        else if (value[index] === "(") parens += 1;
+        else if (value[index] === ")") parens = Math.max(0, parens - 1);
+        else if (value[index] === wanted && braces === 0 && brackets === 0 && parens === 0) {
+          return index;
+        }
+      }
+      return -1;
+    };
+    const collect = (value: string): void => {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      const defaultIndex = topLevelIndex(trimmed, "=");
+      const pattern = defaultIndex >= 0 ? trimmed.slice(0, defaultIndex).trim() : trimmed;
+      const defaultValue = defaultIndex >= 0 ? trimmed.slice(defaultIndex + 1).trim() : "";
+      const hasGlobalDefault = /^(?:globalThis|self|global)$/.test(defaultValue);
+      if (pattern.startsWith("...")) {
+        collect(pattern.slice(3));
+        return;
+      }
+      if (pattern.startsWith("{") && pattern.endsWith("}")) {
+        for (const entry of splitTopLevel(pattern.slice(1, -1))) {
+          const colon = topLevelIndex(entry, ":");
+          collect(colon >= 0 ? entry.slice(colon + 1) : entry);
+        }
+        return;
+      }
+      if (pattern.startsWith("[") && pattern.endsWith("]")) {
+        for (const entry of splitTopLevel(pattern.slice(1, -1))) collect(entry);
+        return;
+      }
+      if (/^[A-Za-z_$][\w$]*$/.test(pattern)) result.set(pattern, hasGlobalDefault);
+    };
+    const cleaned = stripModuleExpressionComments(raw) ?? raw;
+    collect(cleaned);
+    return result;
+  };
+  const bindParameters = (raw: string, position: number, bodyStart?: number): void => {
+    const scope = bodyStart === undefined ? scopeAt(position) : scopeAt(bodyStart + 1);
+    if (bodyStart !== undefined) scope.functionBoundary = true;
+    for (const [name, isGlobal] of parameterBindings(raw)) {
+      scope.bindings.set(name, isGlobal);
+    }
+  };
+  const parameterSpans: SourceSpan[] = [];
+  const rememberParameterSpan = (start: number, end: number): void => {
+    if (start >= 0 && end > start) parameterSpans.push({ start, end });
+  };
+  const isInParameterSpan = (position: number): boolean =>
+    parameterSpans.some((span) => position >= span.start && position < span.end);
+  const findClosingParen = (opening: number): number => {
+    let depth = 0;
+    let ignoredIndex = 0;
+    for (let index = opening; index < source.text.length; index += 1) {
+      while (
+        ignoredIndex < source.ignoredSpans.length &&
+        source.ignoredSpans[ignoredIndex].end <= index
+      ) {
+        ignoredIndex += 1;
+      }
+      const ignored = source.ignoredSpans[ignoredIndex];
+      if (ignored && index >= ignored.start && index < ignored.end) {
+        index = ignored.end - 1;
+        continue;
+      }
+      if (source.text[index] === "(") depth += 1;
+      else if (source.text[index] === ")" && --depth === 0) return index;
+    }
+    return -1;
+  };
+  const findOpeningParen = (closing: number): number => {
+    let depth = 0;
+    for (let index = closing; index >= 0; index -= 1) {
+      if (isIgnoredIndex(index, source.ignoredSpans)) {
+        const span = source.ignoredSpans.find(
+          (candidate) => index >= candidate.start && index < candidate.end,
+        );
+        index = (span?.start ?? index) - 1;
+        continue;
+      }
+      if (source.text[index] === ")") depth += 1;
+      else if (source.text[index] === "(" && --depth === 0) return index;
+    }
+    return -1;
+  };
+  const findNextCodeIndex = (start: number): number => {
+    let index = start;
+    while (index < source.text.length) {
+      const ignored = source.ignoredSpans.find(
+        (candidate) => index >= candidate.start && index < candidate.end,
+      );
+      if (ignored) {
+        index = ignored.end;
+        continue;
+      }
+      if (!/\s/.test(source.text[index])) return index;
+      index += 1;
+    }
+    return -1;
+  };
+
+  // Re-scan headers with balanced parentheses. The bounded regex passes above
+  // still mark ordinary functions, while this pass keeps nested defaults and
+  // destructuring parameters in the correct function scope.
+  for (const match of matchOutsideIgnored(
+    source,
+    /\bfunction(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\(/g,
+  )) {
+    if (match.index === undefined) continue;
+    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
+    const closing = findClosingParen(opening);
+    if (opening < 0 || closing < 0) continue;
+    rememberParameterSpan(opening + 1, closing);
+    const bodyStart = findNextCodeIndex(closing + 1);
+    bindParameters(
+      source.text.slice(opening + 1, closing),
+      match.index,
+      bodyStart >= 0 && source.text[bodyStart] === "{" ? bodyStart : undefined,
+    );
+  }
+  for (const match of matchOutsideIgnored(source, /\bcatch\s*\(/g)) {
+    if (match.index === undefined) continue;
+    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
+    const closing = findClosingParen(opening);
+    if (opening < 0 || closing < 0) continue;
+    rememberParameterSpan(opening + 1, closing);
+    const bodyStart = findNextCodeIndex(closing + 1);
+    bindParameters(
+      source.text.slice(opening + 1, closing),
+      match.index,
+      bodyStart >= 0 && source.text[bodyStart] === "{" ? bodyStart : undefined,
+    );
+  }
+  for (const match of matchOutsideIgnored(source, /=>/g)) {
+    if (match.index === undefined) continue;
+    const arrowIndex = match.index;
+    const previous = arrowIndex - 1;
+    let cursor = previous;
+    while (cursor >= 0 && /\s/.test(source.text[cursor])) cursor -= 1;
+    let opening = -1;
+    let closing = -1;
+    let raw = "";
+    if (cursor >= 0 && source.text[cursor] === ")") {
+      closing = cursor;
+      opening = findOpeningParen(closing);
+      if (opening < 0) continue;
+      raw = source.text.slice(opening + 1, closing);
+      rememberParameterSpan(opening + 1, closing);
+    } else {
+      const identifier = source.text.slice(0, arrowIndex).match(/[A-Za-z_$][\w$]*\s*$/);
+      if (!identifier) continue;
+      raw = identifier[0].trim();
+    }
+    const bodyStart = findNextCodeIndex(arrowIndex + 2);
+    if (bodyStart >= 0 && source.text[bodyStart] === "{") {
+      bindParameters(raw, arrowIndex, bodyStart);
+      continue;
+    }
+    const parent = scopeAt(arrowIndex);
+    const semicolon = source.text.indexOf(";", arrowIndex + 2);
+    const newline = source.text.indexOf("\n", arrowIndex + 2);
+    const candidates = [semicolon, newline, source.text.length].filter((value) => value >= 0);
+    const end = Math.min(...candidates) + 1;
+    const expressionScope: GlobalAliasScope = {
+      start: opening >= 0 ? opening : arrowIndex,
+      end,
+      parent,
+      children: [],
+      bindings: new Map(),
+      functionBoundary: false,
+    };
+    parent.children.push(expressionScope);
+    parent.children.sort((a, b) => a.start - b.start);
+    for (const [name, isGlobal] of parameterBindings(raw)) {
+      expressionScope.bindings.set(name, isGlobal);
+    }
+  }
+  // Object/class methods and constructors have no `function` keyword. A
+  // balanced pass also covers computed method names and nested defaults.
+  for (const match of matchOutsideIgnored(
+    source,
+    /(?<![\w$])(?:\basync\s+)?(?:\*\s*)?(?:[A-Za-z_$][\w$]*|\[[^\]]+\])\s*\(/g,
+  )) {
+    if (match.index === undefined) continue;
+    const name = match[0].match(/(?:[A-Za-z_$][\w$]*|\[[^\]]+\])\s*\(/)?.[0] ?? "";
+    const methodName = name.replace(/\s*\($/, "").trim();
+    if (CONTROL_FLOW_HEADERS.has(methodName)) continue;
+    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
+    const closing = findClosingParen(opening);
+    if (opening < 0 || closing < 0) continue;
+    const bodyStart = findNextCodeIndex(closing + 1);
+    if (bodyStart < 0 || source.text[bodyStart] !== "{") continue;
+    rememberParameterSpan(opening + 1, closing);
+    bindParameters(source.text.slice(opening + 1, closing), match.index, bodyStart);
+  }
+  const nearestFunctionScope = (scope: GlobalAliasScope): GlobalAliasScope => {
+    let current = scope;
+    while (current.parent && !current.functionBoundary) current = current.parent;
+    return current;
+  };
+  const recordBindingUpdate = (
+    scope: GlobalAliasScope,
+    name: string,
+    position: number,
+    value: boolean,
+  ): void => {
+    scope.bindings.set(name, value);
+    let byName = bindingHistory.get(scope);
+    if (!byName) {
+      byName = new Map();
+      bindingHistory.set(scope, byName);
+    }
+    let history = byName.get(name);
+    if (!history) {
+      history = [];
+      byName.set(name, history);
+    }
+    history.push({ position, value });
+  };
+
+  for (const match of matchOutsideIgnored(
+    source,
+    /\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+([\s\S]*?)\)/g,
+  )) {
+    if (match.index === undefined) continue;
+    const opening = source.text.indexOf("(", match.index);
+    const closing = findClosingParen(opening);
+    if (opening < 0 || closing < 0) continue;
+    const bodyStart = findNextCodeIndex(closing + 1);
+    if (bodyStart < 0 || source.text[bodyStart] !== "{") continue;
+    const header = source.text.slice(opening + 1, closing);
+    const declaration = header.match(
+      /^\s*(const|let|var)\s+([A-Za-z_$][\w$]*)\s+([\s\S]*)$/,
+    );
+    if (!declaration || declaration[1] === "var") continue;
+    const remainder = declaration[3];
+    const initializer =
+      remainder.match(/^=\s*([^;]*)/)?.[1] ??
+      remainder.match(/^(?:of|in)\s+([\s\S]*)/)?.[1] ??
+      "";
+    const globalReference = initializer.match(/\b(globalThis|self|global)\b/)?.[1];
+    if (globalReference && resolveCurrentBinding(globalReference, match.index)) {
+      scopeAt(bodyStart + 1).bindings.set(declaration[2], true);
+    }
+  }
+  const assignmentStarts = matchOutsideIgnored(
+    source,
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*=\s*/g,
+  ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  for (const match of assignmentStarts) {
+    if (match.index === undefined) continue;
+    if (isInParameterSpan(match.index)) continue;
+    const rhsStart = match.index + match[0].length;
+    if (source.text[rhsStart] === "=" || source.text[rhsStart] === ">") continue;
+    const lhs = match[1];
+    const rhs = source.text.slice(rhsStart);
+    const rhsToken = rhs.match(/^([A-Za-z_$][\w$]*)\b/);
+    const rhsName = rhsToken?.[1];
+    const remainder = rhsToken ? rhs.slice(rhsToken[0].length) : rhs;
+    const isSimpleReference =
+      rhsName !== undefined &&
+      !/^\s*(?:[.[?(`+\-*/%&|^<>=!:])/.test(remainder);
+    const currentScope = scopeAt(match.index);
+    const targetScope = findBindingScope(lhs, currentScope);
+    const value =
+      isSimpleReference &&
+      rhsName !== undefined &&
+      resolveCurrentBinding(rhsName, match.index);
+    if (isOverflowedPosition(match.index)) {
+      continue;
+    }
+    const functionScope = nearestFunctionScope(currentScope);
+    const nestedFunctionWrite = functionScope !== rootScope && targetScope !== functionScope;
+    if (nestedFunctionWrite) {
+      recordBindingUpdate(functionScope, lhs, match.index, value);
+      if (value) markPossibleGlobal(targetScope, lhs);
+    } else if (targetScope !== currentScope) {
+      // A block/loop write may not execute. Preserve a possible-global outer
+      // value and keep the definite write local to this lexical scope.
+      if (value) recordBindingUpdate(targetScope, lhs, match.index, true);
+      recordBindingUpdate(currentScope, lhs, match.index, value);
+    } else {
+      recordBindingUpdate(targetScope, lhs, match.index, value);
+    }
+  }
+
+  const isOverflowed = (position: number): boolean =>
+    overflowSpans.some((span) => position >= span.start && position < span.end);
+  const scanGlobalPropertyAccesses = (): void => {
+    const dotAccess = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
+    for (const match of matchOutsideIgnored(source, dotAccess)) {
+      if (match.index !== undefined && isOverflowed(match.index)) {
+        hits.add(DYNAMIC_GLOBAL_API_LABEL);
+        continue;
+      }
+      if (!resolveBinding(match[1], match.index ?? 0)) continue;
+      const label = BLOCKED_GLOBAL_API_LABELS.get(match[2]);
+      if (label) hits.add(label);
+    }
+
+    const computedOpen = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
+    for (const match of matchOutsideIgnored(source, computedOpen)) {
+      if (match.index !== undefined && isOverflowed(match.index)) {
+        hits.add(DYNAMIC_GLOBAL_API_LABEL);
+        continue;
+      }
+      if (!resolveBinding(match[1], match.index ?? 0)) continue;
+
+      if (match.index === undefined) continue;
+      const opening = source.text.indexOf("[", match.index + match[0].length - 1);
+      const closing = opening < 0 ? -1 : source.text.indexOf("]", opening + 1);
+      if (
+        opening < 0 ||
+        closing < 0 ||
+        closing - opening - 1 > GLOBAL_API_KEY_MAX_LENGTH
+      ) {
+        hits.add(DYNAMIC_GLOBAL_API_LABEL);
+        continue;
+      }
+      const property = resolveStrictStaticStringExpression(
+        source.text.slice(opening + 1, closing),
+      );
+      if (property === null) {
+        hits.add(DYNAMIC_GLOBAL_API_LABEL);
+        continue;
+      }
+      const label = BLOCKED_GLOBAL_API_LABELS.get(property);
+      if (label) hits.add(label);
+    }
+  };
+  scanGlobalPropertyAccesses();
+
+  const recordDestructuredGlobalApiHits = (entries: string): void => {
+    for (const entry of entries.split(",")) {
+      const trimmed = entry.trim();
+      const key = trimmed.split(/\s*:/, 1)[0]?.trim().split(/\s*=/, 1)[0]?.trim() ?? "";
+      if (!key || key.startsWith("...")) continue;
+      const computed = key.startsWith("[");
+      const normalized = computed ? key.replace(/^\[\s*|\s*\]$/g, "") : key;
+      const property = computed
+        ? resolveStrictStaticStringExpression(normalized)
+        : decodeSimpleStringExpression(normalized) ?? normalized;
+      if (computed && property === null) {
+        hits.add(DYNAMIC_GLOBAL_API_LABEL);
+        continue;
+      }
+      const label = property === null ? undefined : BLOCKED_GLOBAL_API_LABELS.get(property);
+      if (label) hits.add(label);
+    }
+  };
+  const declaration = new RegExp(
+    `\\b(?:const|let|var)${MODULE_COMMENT_GAP}\\{([^}]+)\\}${MODULE_COMMENT_GAP}=${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)\\b`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, declaration)) {
+    if (!resolveBinding(match[2], match.index ?? 0)) continue;
+    const tail = source.text.slice((match.index ?? 0) + match[0].length);
+    if (/^\s*(?:[.?]|\[)/.test(tail)) continue;
+    recordDestructuredGlobalApiHits(match[1]);
+  }
+  const assignment = new RegExp(
+    `\\(${MODULE_COMMENT_GAP}\\{([^}]+)\\}${MODULE_COMMENT_GAP}=${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)\\b`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, assignment)) {
+    if (!resolveBinding(match[2], match.index ?? 0)) continue;
+    const tail = source.text.slice((match.index ?? 0) + match[0].length);
+    if (/^\s*(?:[.?]|\[)/.test(tail)) continue;
+    recordDestructuredGlobalApiHits(match[1]);
   }
 }
 
 function addPropertyAccessHits(
   source: ScannableSource,
   objectName: string,
-  properties: Set<string>,
-  label: string,
-  hits: Set<string>
+  propertyLabels: ReadonlyMap<string, string>,
+  hits: Set<string>,
 ): void {
   const escapedObject = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const dotAccess = new RegExp(`\\b${escapedObject}\\s*\\.\\s*([A-Za-z_$][\\w$]*)`, "g");
   for (const match of matchOutsideIgnored(source, dotAccess)) {
-    if (properties.has(match[1])) hits.add(label);
+    const label = propertyLabels.get(match[1]);
+    if (label) hits.add(label);
   }
 
-  const computedAccess = new RegExp(`\\b${escapedObject}\\s*\\[([^\\]]{1,300})\\]`, "g");
+  const computedAccess = new RegExp(
+    `\\b${escapedObject}\\s*\\[([^\\]]{1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}})\\]`,
+    "g",
+  );
   for (const match of matchOutsideIgnored(source, computedAccess)) {
     const property = decodeSimpleStringExpression(match[1]);
-    if (property && properties.has(property)) hits.add(label);
+    const label = property === null ? undefined : propertyLabels.get(property);
+    if (label) hits.add(label);
   }
 }
 
@@ -470,8 +1366,7 @@ function addAliasPropertyHits(source: ScannableSource, hits: Set<string>): void 
       source,
       alias,
       aliasSource === "Bun" ? DANGEROUS_BUN_PROPERTIES : DANGEROUS_PROCESS_PROPERTIES,
-      aliasSource === "Bun" ? "dangerous Bun system API usage" : "dangerous process API usage",
-      hits
+      hits,
     );
   }
 }
@@ -480,14 +1375,52 @@ function addDestructuringHits(source: ScannableSource, hits: Set<string>): void 
   for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*Bun\b/)) {
     for (const prop of match[1].split(",")) {
       const name = prop.trim().split(/\s*:/, 1)[0]?.trim();
-      if (DANGEROUS_BUN_PROPERTIES.has(name)) hits.add("dangerous Bun system API usage");
+      const label = DANGEROUS_BUN_PROPERTIES.get(name);
+      if (label) hits.add(label);
     }
   }
 
   for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\b/)) {
     for (const prop of match[1].split(",")) {
       const name = prop.trim().split(/\s*:/, 1)[0]?.trim();
-      if (DANGEROUS_PROCESS_PROPERTIES.has(name)) hits.add("dangerous process API usage");
+      const label = DANGEROUS_PROCESS_PROPERTIES.get(name);
+      if (label) hits.add(label);
+    }
+  }
+}
+
+function addSerializedModuleDestructuringHits(source: ScannableSource, hits: Set<string>): void {
+  const roots = "(?:globalThis|self|global)";
+  const destructuring = new RegExp(
+    `\\b(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${roots}\\b`,
+  );
+  for (const match of matchOutsideIgnored(source, destructuring)) {
+    for (const entry of match[1].split(",")) {
+      const rawKey = entry.trim().split(/\s*:/, 1)[0]?.trim() ?? "";
+      const keyExpression = rawKey.split(/\s*=/, 1)[0]?.trim() ?? "";
+      if (/^[A-Za-z_$][\w$]*$/.test(keyExpression)) {
+        if (keyExpression === "require") hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+        continue;
+      }
+      const key = keyExpression.replace(/^\[\s*|\s*\]$/g, "");
+      const property = resolveStrictStaticStringExpression(key);
+      if (property === null || property === "require") {
+        hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+      }
+    }
+  }
+}
+
+function addSerializedComputedModuleAccessHits(source: ScannableSource, hits: Set<string>): void {
+  const roots = "(?:globalThis|self|global)";
+  const computedAccess = new RegExp(
+    `\\b${roots}${MODULE_COMMENT_GAP}\\[([^\\]]{1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}})\\]`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, computedAccess)) {
+    const property = resolveStrictStaticStringExpression(match[1]);
+    if (property === null || property === "require") {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
     }
   }
 }
@@ -498,8 +1431,9 @@ function addDestructuringHits(source: ScannableSource, hits: Set<string>): void 
  * declared in `spindle.json`'s `requested_capabilities` field; the user
  * grants them on install just like `permissions`. Only labels with a
  * meaningful false-positive rate get a capability mapping — filesystem,
- * subprocess, sockets, sqlite, workers, Bun system APIs, and process APIs
- * remain hard-blocked with no opt-in available.
+ * subprocess, sockets, sqlite, workers, module loaders, native FFI loaders,
+ * direct network/filesystem/subprocess/sensitive/worker runtime APIs, Bun
+ * system APIs, and process APIs remain hard-blocked with no opt-in available.
  */
 const LABEL_TO_CAPABILITY: ReadonlyMap<string, SpindleCapability> = new Map([
   ["dynamic code execution", "dynamic_code_execution"],
@@ -519,6 +1453,63 @@ const LABEL_TO_CAPABILITY: ReadonlyMap<string, SpindleCapability> = new Map([
  */
 const EMPTY_FUNCTION_PROBE_RE = /\bFunction\s*\(\s*(?:""|''|``|)\s*\)/g;
 
+const SERIALIZED_HANDLER_MODULE_LABEL = "module loading";
+const SERIALIZED_MODULE_PROPERTY_LABELS: ReadonlyMap<string, string> = new Map([
+  ["require", SERIALIZED_HANDLER_MODULE_LABEL],
+]);
+const SERIALIZED_GLOBAL_MODULE_OBJECTS = ["globalThis", "self", "global"] as const;
+
+/**
+ * Serialized macro handlers execute inside a worker but are not extension
+ * bundles: they have no module-loading contract at all. Keep this check
+ * independent from the install-time dangerous-module map so package-local
+ * imports, `data:`/`file:` URLs, and loader aliases cannot become a handler
+ * capability by omission or manifest opt-in.
+ */
+export function detectSerializedHandlerModuleAccess(content: string): string[] {
+  const hits = new Set<string>();
+  for (const source of createScannableSources(content)) {
+    if (matchOutsideIgnored(source, STATIC_MODULE_IMPORT_RE).length > 0) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+    if (matchOutsideIgnored(source, SERIALIZED_MODULE_CALL_PREFIX_RE).length > 0) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+    if (matchOutsideIgnored(source, SERIALIZED_REQUIRE_REFERENCE_RE).length > 0) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+    for (const objectName of SERIALIZED_GLOBAL_MODULE_OBJECTS) {
+      addPropertyAccessHits(source, objectName, SERIALIZED_MODULE_PROPERTY_LABELS, hits);
+    }
+    addSerializedComputedModuleAccessHits(source, hits);
+    addSerializedModuleDestructuringHits(source, hits);
+    if (
+      matchOutsideIgnored(
+        source,
+        new RegExp(
+          `\\b(?:module|globalThis${MODULE_COMMENT_GAP}\\.module)${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}require|\\[\\s*["'\\x60]require["'\\x60]\\s*\\])`,
+        ),
+      ).length > 0
+    ) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+    if (
+      matchOutsideIgnored(
+        source,
+        new RegExp(
+          `\\brequire${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}(?:main|cache)|\\[\\s*["'\\x60](?:main|cache)["'\\x60]\\s*\\])`,
+        ),
+      ).length > 0
+    ) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+    if (matchOutsideIgnored(source, new RegExp(`\\bcreateRequire${MODULE_COMMENT_GAP}\\(`)).length > 0) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+    }
+  }
+  return [...hits];
+}
+
 function isEmptyFunctionProbe(source: ScannableSource, matchIndex: number): boolean {
   EMPTY_FUNCTION_PROBE_RE.lastIndex = 0;
   let probe: RegExpExecArray | null;
@@ -537,24 +1528,48 @@ export function detectDangerousBackendCapabilities(
 ): string[] {
   const hits = new Set<string>();
   for (const source of createScannableSources(content)) {
-    for (const check of DANGEROUS_BACKEND_CHECKS) {
-      if (matchOutsideIgnored(source, check.regex).length > 0) {
-        hits.add(check.label);
-      }
-    }
+    addStaticModuleHits(source, hits);
+    addReachableModuleRequireHits(source, hits);
     addDynamicModuleHits(source, hits);
-    addPropertyAccessHits(source, "Bun", DANGEROUS_BUN_PROPERTIES, "dangerous Bun system API usage", hits);
-    addPropertyAccessHits(source, "process", DANGEROUS_PROCESS_PROPERTIES, "dangerous process API usage", hits);
+    addImportMetaRequireHits(source, hits);
+    addGlobalApiHits(source, hits);
+    addPropertyAccessHits(source, "Bun", DANGEROUS_BUN_PROPERTIES, hits);
+    addPropertyAccessHits(source, "process", DANGEROUS_PROCESS_PROPERTIES, hits);
     addAliasPropertyHits(source, hits);
     addDestructuringHits(source, hits);
     if (matchOutsideIgnored(source, /\bObject\.getOwnPropertyDescriptor\s*\(\s*process\s*,\s*["'`]env["'`]/).length > 0) {
       hits.add("dangerous process API usage");
     }
 
-    // Dynamic code execution — `eval(` / `Function(`. The empty-body
-    // Function probe (`new Function("")`) is excluded as a known
-    // feature-detect pattern with no real execution capability.
-    const dynExecMatches = matchOutsideIgnored(source, /\beval\s*\(|\bFunction\s*\(/);
+    // Dynamic code execution — direct `eval(` / `Function(` calls and common
+    // `.constructor(...)` indirections available from function objects. The
+    // empty-body Function probe (`new Function("")`) is excluded as a known
+    // feature-detect pattern with no execution capability. The worker sandbox
+    // independently seals all dynamic-function prototype constructors.
+    const reflectConstructorMatches = matchOutsideIgnored(
+      source,
+      /\bReflect\.(?:construct|apply)\s*\(\s*[^,\n;]{0,512}(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])/,
+    ).filter((match) => {
+      if (match.index === undefined) return false;
+      for (const token of match[0].matchAll(
+        /(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])/g,
+      )) {
+        if (
+          token.index !== undefined &&
+          !isIgnoredIndex(match.index + token.index, source.ignoredSpans)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+    const dynExecMatches = [
+      ...matchOutsideIgnored(
+        source,
+        /\beval\s*\(|\bFunction\s*\(|(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])\s*(?:\?\.\s*)?(?:\.\s*(?:call|apply|bind)\s*)?\(/,
+      ),
+      ...reflectConstructorMatches,
+    ];
     for (const match of dynExecMatches) {
       if (match.index === undefined) continue;
       const matchedText = match[0];

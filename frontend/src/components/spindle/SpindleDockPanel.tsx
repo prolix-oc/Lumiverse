@@ -5,6 +5,7 @@ import type { DockPanelState } from '@/store/slices/spindle-placement'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 import styles from './SpindleDockPanel.module.css'
 import clsx from 'clsx'
@@ -72,12 +73,13 @@ export default function SpindleDockPanel({ panel }: Props) {
     if (!host || panel.collapsed) return
 
     return scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(panel.extensionId, panel.root)) return
       if (!host.isConnected) return
       if (!host.contains(panel.root)) {
         host.replaceChildren(panel.root)
       }
     }, { phase: 'paint' })
-  }, [panel.collapsed, panel.root])
+  }, [panel.collapsed, panel.extensionId, panel.root])
 
   const CollapseIcon = (() => {
     if (panel.collapsed) {

@@ -36,7 +36,7 @@ export function upsertMessageWidget(
   options: SpindleMessageWidgetRenderOptions,
   onMessage?: (payload: unknown) => void,
   corsProxy?: (url: string, options?: any) => Promise<any>,
-): void {
+): () => void {
   const list = widgetsByMessage.get(options.messageId) || []
   const nextRecord: MessageWidgetRecord = { ...options, extensionId, onMessage, corsProxy }
   const idx = list.findIndex((w) => w.extensionId === extensionId && w.widgetId === options.widgetId)
@@ -44,6 +44,20 @@ export function upsertMessageWidget(
   else list[idx] = nextRecord
   widgetsByMessage.set(options.messageId, list)
   notify()
+  const messageId = nextRecord.messageId
+
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    const currentList = widgetsByMessage.get(messageId)
+    if (!currentList) return
+    const currentIndex = currentList.indexOf(nextRecord)
+    if (currentIndex === -1) return
+    currentList.splice(currentIndex, 1)
+    if (currentList.length === 0) widgetsByMessage.delete(messageId)
+    notify()
+  }
 }
 
 export function removeMessageWidget(extensionId: string, messageId: string, widgetId: string): void {

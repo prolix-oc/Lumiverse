@@ -31,6 +31,8 @@ For normal backend logic, keep using your main `backend.ts`. For frontend work, 
 - the child entry must export either a default function or a named `run` function
 - the child entry does **not** receive the full `spindle` API
 - child and parent communicate only through process-scoped messaging
+- the cooperative runtime sandbox is initialized before importing the child entry; direct `fetch`, `WebSocket`, `Worker`, and `BroadcastChannel` globals plus dangerous Bun and `process` APIs are disabled
+- the sandbox is not OS-level isolation and does not intercept native `import()`; use process-scoped messaging to ask the parent runtime to perform allowed host API work
 
 That narrower surface is intentional: it keeps the isolation boundary small and lets the host terminate a wedged child without having to proxy the entire backend API through a second runtime.
 

@@ -246,7 +246,7 @@ tab, Main blocks, prompt-variable values, and the raw value at
 replace only the calling extension's top-level passthrough key. Manifest
 identifiers colliding with Loom-owned metadata keys, including `source` and
 `description`, are rejected rather than allowed to mutate Main-owned fields.
-`activateBuiltinTab('blocks')` selects the host's stable native Blocks tab.
+`activateBuiltinTab('blocks')` activates the host's stable native preset-editor view. The visible tab label is the localized `Preset` translation; `blocks` is the API identifier, not a literal label.
 
 The helper is cooperative least-authority API design, **not** isolation against
 hostile same-origin extension code. It shares Loom's one per-preset serialized
@@ -745,7 +745,7 @@ resetBtn.addEventListener('click', async () => {
 | Input Bar Action | 4 | 12 |
 | Modal | 2 stacked | — |
 
-Exceeding limits throws an error. All placements are automatically cleaned up when an extension is disabled or removed.
+Exceeding limits throws an error. All placements are automatically cleaned up when an extension is disabled, removed, updated, or reloaded. A placement that requires a permission is also removed immediately when that permission is revoked; its stale handle remains closed.
 
 ## User Control
 

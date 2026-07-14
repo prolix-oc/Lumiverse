@@ -31,8 +31,58 @@ import {
   toggleBlockWithCategoryRules,
   coerceImportedLoomPreset,
   detectImportedPresetKind,
+  reconcilePromptVariableValues,
+  pruneOrphanPromptVariables,
+  validatePromptVariableSchema,
 } from '@/lib/loom/service'
 
+
+type LoomPrivateBlockFields = Pick<
+  PromptBlock,
+  'sealed' | 'sealedKey' | 'sealedSource' | 'sealedOriginPresetId' | 'sealedOriginVersion' | 'sealedSha256'
+>
+
+type LoomPrivateBlockChange = {
+  blockId: string
+  /** Zero-based occurrence among blocks sharing blockId; required for duplicates. */
+  occurrence?: number
+  patch: Partial<LoomPrivateBlockFields>
+}
+
+function applyPrivateBlockChange(
+  currentBlocks: PromptBlock[],
+  nextBlocks: PromptBlock[],
+  change: LoomPrivateBlockChange | undefined,
+): PromptBlock[] {
+  if (!change) return nextBlocks
+  const currentMatches = currentBlocks.filter((block) => block.id === change.blockId).length
+  const nextMatches = nextBlocks.filter((block) => block.id === change.blockId).length
+  const occurrence = change.occurrence
+  if (currentMatches > 1) {
+    if (!Number.isSafeInteger(occurrence) || occurrence < 0 || occurrence >= currentMatches) {
+      throw new Error('LOOM_AMBIGUOUS_BLOCK_OCCURRENCE: duplicate block changes require an exact occurrence')
+    }
+    if (nextMatches !== currentMatches) {
+      throw new Error('LOOM_AMBIGUOUS_BLOCK_OCCURRENCE: duplicate block occurrence count changed')
+    }
+  } else if (occurrence !== undefined && occurrence !== 0) {
+    throw new Error('LOOM_AMBIGUOUS_BLOCK_OCCURRENCE: occurrence must identify the unique block')
+  }
+  let seen = 0
+  let applied = false
+  const updated = nextBlocks.map((block) => {
+    if (block.id !== change.blockId) return block
+    const matches = occurrence === undefined || occurrence === seen
+    seen += 1
+    if (!matches) return block
+    applied = true
+    return { ...block, ...change.patch }
+  })
+  if (!applied) {
+    throw new Error('LOOM_AMBIGUOUS_BLOCK_OCCURRENCE: requested block occurrence is absent')
+  }
+  return updated
+}
 
 export function useLoomBuilder() {
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
@@ -258,23 +308,41 @@ export function useLoomBuilder() {
 
   const saveStructure = useCallback(async (
     blocks: PromptBlock[],
-  ) => {
+  ): Promise<boolean> => {
     const current = activePresetRef.current
-    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
-    const normalizedBlocks = normalizeCategoryBlockState(blocks)
-    const updated = presetSaveCoordinator.mutate(
-      current.id,
-      current,
-      (draft) => ({ ...draft, blocks: normalizedBlocks }),
-      { immediate: true },
-    )
-    activePresetRef.current = updated
-    setActivePreset(updated)
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return false
     try {
+      const normalizedBlocks = normalizeCategoryBlockState(blocks)
+      validatePromptVariableSchema(normalizedBlocks, { legacyBaseline: current.blocks })
+      let promptVariables: PromptVariableValues
+      try {
+        // A strict check distinguishes a clean prior schema from a legacy one.
+        // Legacy values are pruned by tolerant name/schema union so native edits
+        // do not re-run strict validation against the anomaly they preserve.
+        validatePromptVariableSchema(current.blocks)
+        promptVariables = reconcilePromptVariableValues(
+          current.promptVariables,
+          current.blocks,
+          normalizedBlocks,
+          { legacyBaseline: current.blocks },
+        )
+      } catch {
+        promptVariables = pruneOrphanPromptVariables(current.promptVariables, normalizedBlocks)
+      }
+      const updated = presetSaveCoordinator.mutate(
+        current.id,
+        current,
+        (draft) => ({ ...draft, blocks: normalizedBlocks, promptVariables }),
+        { immediate: true },
+      )
+      activePresetRef.current = updated
+      setActivePreset(updated)
       await presetSaveCoordinator.flush(updated.id)
-      refreshRegistry()
+      await refreshRegistry()
+      return true
     } catch (err) {
       console.warn('[LoomBuilder] Failed to save preset structure:', err)
+      return false
     }
   }, [refreshRegistry])
 
@@ -282,6 +350,37 @@ export function useLoomBuilder() {
   const saveBlocks = useCallback(async (blocks: PromptBlock[]) => {
     await saveStructure(blocks)
   }, [saveStructure])
+
+  const saveLoomValue = useCallback(async (
+    blocks: PromptBlock[],
+    promptVariables: PromptVariableValues,
+    privateBlockChange?: LoomPrivateBlockChange,
+  ) => {
+    const current = activePresetRef.current
+    if (!current || useStore.getState().activeLoomPresetId !== current.id) return
+    const normalizedBlocks = normalizeCategoryBlockState(blocks)
+    validatePromptVariableSchema(normalizedBlocks, { legacyBaseline: current.blocks })
+    const nextBlocks = applyPrivateBlockChange(current.blocks, normalizedBlocks, privateBlockChange)
+    const updated = presetSaveCoordinator.mutate(
+      current.id,
+      current,
+      (draft) => ({
+        ...draft,
+        blocks: nextBlocks,
+        promptVariables,
+      }),
+      { immediate: true },
+    )
+    activePresetRef.current = updated
+    setActivePreset(updated)
+    try {
+      await presetSaveCoordinator.flush(updated.id)
+      await refreshRegistry()
+    } catch (err) {
+      console.warn('[LoomBuilder] Failed to save Loom editor value:', err)
+      throw err
+    }
+  }, [refreshRegistry])
 
   // Rename a preset
   const renamePreset = useCallback(async (presetId: string, newName: string) => {
@@ -394,19 +493,37 @@ export function useLoomBuilder() {
     saveBlocks(blocks)
   }, [activePreset, saveBlocks])
 
-  const removeBlock = useCallback((blockId: string) => {
-    if (!activePreset) return
-    const blocks = activePreset.blocks.filter(b => b.id !== blockId)
-    saveBlocks(blocks)
-  }, [activePreset, saveBlocks])
+  const removeBlock = useCallback(async (
+    blockId: string,
+    replacement?: { blocks: PromptBlock[]; promptVariables?: PromptVariableValues },
+  ) => {
+    const current = activePresetRef.current
+    if (!current) return
+    const sourceBlocks = replacement?.blocks ?? current.blocks
+    const blocks = sourceBlocks
+      .filter((block) => block.id !== blockId)
+      .map((block) => block.group === blockId ? { ...block, group: null } : block)
+    const promptVariables = { ...(replacement?.promptVariables ?? current.promptVariables ?? {}) }
+    delete promptVariables[blockId]
+    await saveLoomValue(blocks, promptVariables)
+  }, [saveLoomValue])
 
-  const updateBlock = useCallback((blockId: string, updates: Partial<PromptBlock>) => {
-    if (!activePreset) return
-    const blocks = activePreset.blocks.map(b =>
+  const updateBlock = useCallback((blockId: string, updates: Partial<PromptBlock>): boolean => {
+    const current = activePresetRef.current
+    if (!current) return false
+    const blocks = current.blocks.map(b => (
       b.id === blockId ? { ...b, ...updates } : b
-    )
-    saveBlocks(blocks)
-  }, [activePreset, saveBlocks])
+    ))
+    let normalizedBlocks: PromptBlock[]
+    try {
+      normalizedBlocks = normalizeCategoryBlockState(blocks)
+      validatePromptVariableSchema(normalizedBlocks, { legacyBaseline: current.blocks })
+    } catch {
+      return false
+    }
+    void saveBlocks(normalizedBlocks).catch(() => {})
+    return true
+  }, [saveBlocks])
 
   const toggleBlock = useCallback((blockId: string) => {
     if (!activePreset) return
@@ -621,7 +738,7 @@ export function useLoomBuilder() {
   }, [activeProfileId, profiles, providers])
 
   const refreshConnectionProfile = useCallback(() => {
-    // Connection profile is derived from store, no manual refresh needed
+    // Connection profile is derived from store, so no manual refresh is needed.
   }, [])
 
   return {
@@ -650,6 +767,7 @@ export function useLoomBuilder() {
     createPreset,
     selectPreset,
     saveBlocks,
+    saveLoomValue,
     deletePreset,
     duplicatePreset,
     renamePreset,

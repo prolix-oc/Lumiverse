@@ -1,7 +1,6 @@
 import type { StateCreator } from 'zustand'
 import type { SpindlePlacementSlice } from '@/types/store'
-import type { SpindleDockEdge } from 'lumiverse-spindle-types'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleDockEdge, SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 // ── Capacity limits ──
 
