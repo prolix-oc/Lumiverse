@@ -1846,6 +1846,14 @@ export default function LoomBuilder({
   )
 
   const groups = useMemo(() => computeGroups(activePreset?.blocks), [activePreset?.blocks])
+  const categoryIds = useMemo(
+    () => (activePreset?.blocks ?? [])
+      .filter((block) => block.marker === 'category')
+      .map((block) => block.id),
+    [activePreset?.blocks],
+  )
+  const allCategoriesCollapsed = categoryIds.length > 0
+    && categoryIds.every((categoryId) => collapsedCategories.has(categoryId))
 
   const searchTokens = useMemo(
     () => deferredTrimmedSearchQuery.toLowerCase().split(/\s+/).filter(Boolean),
@@ -1883,10 +1891,9 @@ export default function LoomBuilder({
   useEffect(() => {
     if (activePreset?.blocks && activePresetId && activePresetId !== lastCollapsedPresetRef.current) {
       lastCollapsedPresetRef.current = activePresetId
-      const categoryIds = activePreset.blocks.filter(b => b.marker === 'category').map(b => b.id)
       setCollapsedCategories(new Set(categoryIds))
     }
-  }, [activePresetId, activePreset])
+  }, [activePresetId, activePreset?.blocks, categoryIds])
 
   useEffect(() => {
     setIsSearchOpen(false)
@@ -1964,6 +1971,15 @@ export default function LoomBuilder({
       return next
     })
   }, [])
+
+  const toggleAllCategories = useCallback(() => {
+    setCollapsedCategories((current) => {
+      const shouldExpand = categoryIds.length > 0
+        && categoryIds.every((categoryId) => current.has(categoryId))
+      if (shouldExpand) return new Set()
+      return new Set(categoryIds)
+    })
+  }, [categoryIds])
 
   const toggleSearch = useCallback(() => {
     if (isSearchVisible) {
@@ -2228,6 +2244,20 @@ export default function LoomBuilder({
           >
             <Search size={14} />
             {isSearchVisible ? lb('search.close') : lb('search.search')}
+          </button>
+          <button
+            type="button"
+            className={s.btn}
+            onClick={toggleAllCategories}
+            disabled={categoryIds.length === 0 || isSearchActive}
+            title={isSearchActive
+              ? lb('category.bulkUnavailableSearch')
+              : allCategoriesCollapsed
+                ? lb('category.expandAll')
+                : lb('category.collapseAll')}
+          >
+            {allCategoriesCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {allCategoriesCollapsed ? lb('category.expandAll') : lb('category.collapseAll')}
           </button>
           {activePreset && isSearchVisible && (
             <div className={s.searchBarRow}>
