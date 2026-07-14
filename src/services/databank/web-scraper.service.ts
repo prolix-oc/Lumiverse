@@ -8,9 +8,11 @@
  * Adapted from LoomBuilder's lib/web/ modules.
  */
 
-import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
 import { safeFetch, SSRFError } from "../../utils/safe-fetch";
+import {
+  parseWebPageInWorker,
+  WebPageParserWorkerError,
+} from "./web-page-parser-worker-client";
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -309,36 +311,22 @@ async function scrapeWebPage(url: string): Promise<ScrapedContent> {
   const html = await response.text();
 
   try {
-    const dom = new JSDOM(html, { url });
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
-
-    if (!article) {
-      throw new ScrapeError("Could not extract article content from page", "no_content");
-    }
-
-    // Strip HTML from article content to get plain text
-    const textDom = new JSDOM(`<div>${article.content}</div>`);
-    const rawText = textDom.window.document.body.textContent || "";
-    const cleanText = cleanExtractedText(rawText);
-
-    if (!cleanText.trim()) {
-      throw new ScrapeError("Extracted content is empty", "no_content");
-    }
-
+    const article = await parseWebPageInWorker(html, url);
     return {
       title: article.title || new URL(url).hostname,
-      content: cleanText,
+      content: article.content,
       url,
       sourceType: "web",
-      contentLength: cleanText.length,
+      contentLength: article.content.length,
       metadata: {
         byline: article.byline || null,
         excerpt: article.excerpt || null,
       },
     };
   } catch (err) {
-    if (err instanceof ScrapeError) throw err;
+    if (err instanceof WebPageParserWorkerError) {
+      throw new ScrapeError(err.message, err.code);
+    }
     throw new ScrapeError("Failed to parse page content", "parse_error");
   }
 }
@@ -372,13 +360,4 @@ function htmlToPlainText(html: string): string {
   text = text.replace(/\n +/g, "\n");
   text = text.replace(/ +\n/g, "\n");
   return text.trim();
-}
-
-function cleanExtractedText(text: string): string {
-  return text
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n +/g, "\n")
-    .replace(/ +\n/g, "\n")
-    .trim();
 }
