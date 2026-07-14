@@ -496,6 +496,8 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   favoritesBarCollapsed: false,
   globalWorldBooks: [],
   worldInfoSettings: {
+    forceCaseSensitive: false,
+    forceMatchWholeWords: false,
     globalScanDepth: null,
     maxRecursionPasses: 3,
     maxActivatedEntries: 0,

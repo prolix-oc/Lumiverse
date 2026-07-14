@@ -309,18 +309,78 @@ describe("activateWorldInfo recursion settings", () => {
 describe("normalizeWorldInfoSettings", () => {
   test("normalizes invalid and zero-valued world info settings", () => {
     expect(normalizeWorldInfoSettings({
+      forceCaseSensitive: true,
+      forceMatchWholeWords: true,
       globalScanDepth: 0,
       maxRecursionPasses: -1,
       maxActivatedEntries: -5,
       maxTokenBudget: -100,
       minPriority: -2,
     })).toEqual({
+      forceCaseSensitive: true,
+      forceMatchWholeWords: true,
       globalScanDepth: null,
       maxRecursionPasses: 0,
       maxActivatedEntries: 0,
       maxTokenBudget: 0,
       minPriority: 0,
     });
+  });
+
+  test("defaults global keyword matching overrides to off", () => {
+    expect(normalizeWorldInfoSettings({})).toMatchObject({
+      forceCaseSensitive: false,
+      forceMatchWholeWords: false,
+    });
+  });
+});
+
+describe("global keyword matching overrides", () => {
+  test("forces case-sensitive matching without changing the entry", () => {
+    const entry = makeEntry({ key: ["Thornfield"], selective: false, vectorized: false });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("thornfield")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { forceCaseSensitive: true },
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
+    expect(entry.case_sensitive).toBe(false);
+  });
+
+  test("forces whole-word matching without changing the entry", () => {
+    const entry = makeEntry({ key: ["fire"], selective: false, vectorized: false });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("firehouse")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { forceMatchWholeWords: true },
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
+    expect(entry.match_whole_words).toBe(false);
+  });
+
+  test("keeps per-entry matching options when global overrides are off", () => {
+    const entry = makeEntry({
+      key: ["Thornfield"],
+      selective: false,
+      vectorized: false,
+      case_sensitive: true,
+      match_whole_words: true,
+    });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("thornfields")],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
   });
 });
 

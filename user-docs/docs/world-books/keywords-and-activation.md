@@ -30,6 +30,8 @@ Any one of these appearing in the chat will trigger the entry.
 !!! tip "Use whole-word matching for common words"
     If your keyword is "fire," whole-word matching prevents it from triggering on "firehouse," "firewall," or "campfire" — unless those are relevant too.
 
+You can force **Case Sensitive** or **Match Whole Words** for every entry at once from **Lorebook → Activation Settings**. Turning a global option off returns control to each entry's own setting without changing any entries.
+
 ---
 
 ## Secondary Keywords & Selective Logic

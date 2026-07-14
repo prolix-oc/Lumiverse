@@ -5,6 +5,9 @@ import clsx from 'clsx'
 import type {
   SpindleComponentTarget,
   SpindleComponentsHelper,
+  SpindleLoomBlockEditorValue,
+  SpindleLoomBlockEditorOptions,
+  SpindleLoomBlockEditorHandle,
   SpindleConnectionRef,
   SpindleMountedComponent,
   SpindleTextInputOptions,
@@ -58,6 +61,10 @@ import CollapsibleSection from '@/components/shared/CollapsibleSection'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
+import { ControlledLoomBlockEditor } from '@/components/panels/LoomBuilder'
+import { getMacroCatalog } from '@/api/macros'
+import { getAvailableMacros } from '@/lib/loom/service'
+import type { MacroGroup, PromptBlock, PromptVariableValues } from '@/lib/loom/types'
 
 import { useStore } from '@/store'
 import { connectionsApi } from '@/api/connections'
@@ -118,6 +125,7 @@ interface BridgeAPI<TOptions, TValue> {
   refresh?(): void
   open?(): void
   close?(): void
+  refreshMacros?(): Promise<void>
   isExpanded?(): boolean
   body?: HTMLElement
 }
@@ -763,6 +771,68 @@ function CollapsibleSectionBridge({
   )
 }
 
+function LoomBlockEditorBridge({
+  initial,
+  bridge,
+}: {
+  initial: SpindleLoomBlockEditorOptions
+  bridge: BridgeAPI<SpindleLoomBlockEditorOptions, SpindleLoomBlockEditorValue>
+}) {
+  const [props, setProps] = useState(initial)
+  const [value, setValue] = useState<SpindleLoomBlockEditorValue>(initial.value)
+  const [availableMacros, setAvailableMacros] = useState<MacroGroup[]>(() => getAvailableMacros())
+  useBridgeBinding(bridge, props, setProps, value, setValue, 'value')
+
+  const refreshMacros = useMemo(() => async () => {
+    try {
+      const catalog = await getMacroCatalog()
+      const groups: MacroGroup[] = catalog.categories.map((category) => ({
+        category: category.category,
+        macros: category.macros.map((macro) => ({
+          name: macro.name,
+          syntax: macro.syntax,
+          description: macro.description,
+          args: macro.args,
+          returns: macro.returns,
+        })),
+      }))
+      const apiCategories = new Set(groups.map((group) => group.category))
+      setAvailableMacros([
+        ...groups,
+        ...getAvailableMacros().filter((group) => !apiCategories.has(group.category)),
+      ])
+    } catch {
+      // Keep the built-in catalog when the live catalog is unavailable.
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    bridge.refreshMacros = refreshMacros
+  }, [bridge, refreshMacros])
+
+  return (
+    <ControlledLoomBlockEditor
+      blocks={value.blocks as PromptBlock[]}
+      promptVariables={value.promptVariableValues as PromptVariableValues}
+      onChange={(blocks) => {
+        const next: SpindleLoomBlockEditorValue = {
+          ...value,
+          blocks: blocks.map((block) => ({
+            ...block,
+            group: block.group ?? null,
+          })),
+        }
+        setValue(next)
+        props.onChange?.(next)
+      }}
+      availableMacros={availableMacros}
+      refreshMacros={() => { void refreshMacros() }}
+      readOnly={props.readOnly}
+      compact={props.compact}
+    />
+  )
+}
+
 /** Renders a host-managed element into the React tree without React owning its children. */
 function Slot({ el }: { el: HTMLElement }) {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -926,6 +996,16 @@ export function createComponentsHelper(extensionId: string): SpindleComponentsHe
     ))
     return buildHandle(extensionId, id, el, result) as SpindleCloseButtonHandle
   }
+  function mountLoomBlockEditor(target: SpindleComponentTarget, options: SpindleLoomBlockEditorOptions): SpindleLoomBlockEditorHandle {
+    const el = resolveTarget(target)
+    const id = nextId(extensionId, 'loom-block-editor')
+    const result = mountBridge<SpindleLoomBlockEditorOptions, SpindleLoomBlockEditorValue>(el, (b) => (
+      <LoomBlockEditorBridge initial={options} bridge={b} />
+    ))
+    const handle = buildHandle(extensionId, id, el, result) as SpindleLoomBlockEditorHandle
+    handle.refreshMacros = () => result.bridge.refreshMacros?.() ?? Promise.resolve()
+    return handle
+  }
 
   return {
     mountTextInput: mountText,
@@ -944,5 +1024,6 @@ export function createComponentsHelper(extensionId: string): SpindleComponentsHe
     mountCollapsibleSection,
     mountPagination,
     mountCloseButton,
+    mountLoomBlockEditor,
   }
 }

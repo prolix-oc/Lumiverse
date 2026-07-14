@@ -376,7 +376,7 @@ interface BlockEditorProps {
   compact: boolean
 }
 
-function BlockEditor({ block, blocks, promptVariables, onSave, onBack, availableMacros, refreshMacros, compact }: BlockEditorProps) {
+export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, availableMacros, refreshMacros, compact }: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { injectionTriggerTypes, injectionTriggerLabel } = useLoomOptionLabels()
@@ -784,6 +784,108 @@ function BlockEditor({ block, blocks, promptVariables, onSave, onBack, available
           onRefreshMacros={refreshMacros}
         />
       )}
+    </div>
+  )
+}
+
+export interface ControlledLoomBlockEditorProps {
+  blocks: PromptBlock[]
+  promptVariables: PromptVariableValues
+  onChange: (blocks: PromptBlock[]) => void
+  availableMacros: MacroGroup[]
+  refreshMacros?: () => void
+  readOnly?: boolean
+  compact?: boolean
+}
+
+/**
+ * Controlled Loom block editor surface used by host integrations such as
+ * Spindle. It deliberately reuses the same BlockEditor as the preset editor,
+ * while leaving persistence and ownership of the block array to the caller.
+ */
+export function ControlledLoomBlockEditor({
+  blocks,
+  promptVariables,
+  onChange,
+  availableMacros,
+  refreshMacros,
+  readOnly = false,
+  compact = true,
+}: ControlledLoomBlockEditorProps) {
+  const { t } = useLb()
+  const { t: tc } = useTranslation('common')
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
+  const editingBlock = editingBlockId
+    ? blocks.find((block) => block.id === editingBlockId) ?? null
+    : null
+
+  useEffect(() => {
+    if (editingBlockId && !blocks.some((block) => block.id === editingBlockId)) {
+      setEditingBlockId(null)
+    }
+  }, [blocks, editingBlockId])
+
+  if (editingBlock && !readOnly) {
+    return (
+      <BlockEditor
+        key={JSON.stringify(editingBlock)}
+        block={editingBlock}
+        blocks={blocks}
+        promptVariables={promptVariables}
+        onSave={(updates) => {
+          onChange(blocks.map((block) => (
+            block.id === editingBlock.id ? { ...block, ...updates } : block
+          )))
+          setEditingBlockId(null)
+        }}
+        onBack={() => setEditingBlockId(null)}
+        availableMacros={availableMacros}
+        refreshMacros={refreshMacros}
+        compact={compact}
+      />
+    )
+  }
+
+  return (
+    <div className={clsx(s.layout, compact && s.layoutCompact)}>
+      <div className={s.toolbar}>
+        <span className={s.title}>{t('preset.blocks', { count: blocks.length })}</span>
+      </div>
+      <div className={s.scrollArea}>
+        <div className={s.blockList}>
+          {blocks.length === 0 ? (
+            <div className={s.empty}>{t('empty.noBlocksTitle')}</div>
+          ) : blocks.map((block) => (
+            <div key={block.id} className={clsx(s.item, !block.enabled && s.itemDisabled)}>
+              <div className={s.blockContent}>
+                <div className={s.blockNameRow}>
+                  <span className={s.blockName}>{block.name}</span>
+                  <span className={s.blockMetaRow}>
+                    <span className={clsx(s.badge, ROLE_BADGES[block.role] || s.badgeSystem)}>
+                      {ROLE_DISPLAY_LABELS[block.role] || block.role}
+                    </span>
+                  </span>
+                </div>
+                {block.content && (
+                  <span className={s.blockPreview}>
+                    {block.content.slice(0, 100)}{block.content.length > 100 ? '…' : ''}
+                  </span>
+                )}
+              </div>
+              {!readOnly && (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => setEditingBlockId(block.id)}
+                  title={tc('actions.edit')}
+                >
+                  <Edit2 size={14} />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

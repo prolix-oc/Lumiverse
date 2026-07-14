@@ -22,6 +22,10 @@ export type WiState = Record<string, WiEntryState>;
  * compatibility (no limits applied when unset).
  */
 export interface WorldInfoSettings {
+  /** Force case-sensitive keyword matching for every entry. */
+  forceCaseSensitive: boolean;
+  /** Force whole-word keyword matching for every non-regex entry. */
+  forceMatchWholeWords: boolean;
   /** Default scan depth for entries with scan_depth=null. null = scan all messages. */
   globalScanDepth: number | null;
   /** Max recursion passes for keyword chaining (0 = no recursion). */
@@ -36,6 +40,8 @@ export interface WorldInfoSettings {
 }
 
 export const DEFAULT_WORLD_INFO_SETTINGS: WorldInfoSettings = {
+  forceCaseSensitive: false,
+  forceMatchWholeWords: false,
   globalScanDepth: null,
   maxRecursionPasses: 3,
   maxActivatedEntries: 0,
@@ -60,6 +66,8 @@ export function normalizeWorldInfoSettings(
       : defaultScanDepth;
 
   return {
+    forceCaseSensitive: input.forceCaseSensitive === true,
+    forceMatchWholeWords: input.forceMatchWholeWords === true,
     globalScanDepth,
     maxRecursionPasses: nonNegativeInteger(
       input.maxRecursionPasses,
@@ -470,7 +478,10 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
     maxPasses } = args;
 
-  const matcher = new WorldInfoMatcher(conditional);
+  const matcher = new WorldInfoMatcher(conditional, {
+    forceCaseSensitive: settings.forceCaseSensitive,
+    forceMatchWholeWords: settings.forceMatchWholeWords,
+  });
   const state: ScanState = makeScanState();
 
   // Pass 0 base: scan messages once per unique effective scan_depth.

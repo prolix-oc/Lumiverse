@@ -15,6 +15,7 @@ import WorldBookDiagnosticsModal from '@/components/panels/world-book/WorldBookD
 import { formatWorldBookReindexStatus } from '@/lib/worldBookVectorization'
 import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
 import { Button } from '@/components/shared/FormComponents'
+import { Toggle } from '@/components/shared/Toggle'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import FolderDropdown from '@/components/shared/FolderDropdown'
@@ -1134,6 +1135,24 @@ function WorldInfoSettingsForm({
 
   return (
     <div className={styles.wiSettingsBody}>
+      <div className={styles.wiField}>
+        <Toggle.Checkbox
+          checked={settings.forceCaseSensitive === true}
+          onChange={(checked) => onChange({ forceCaseSensitive: checked })}
+          label={t('worldBookPanel.forceCaseSensitive')}
+          hint={t('worldBookPanel.forceCaseSensitiveHint')}
+        />
+      </div>
+
+      <div className={styles.wiField}>
+        <Toggle.Checkbox
+          checked={settings.forceMatchWholeWords === true}
+          onChange={(checked) => onChange({ forceMatchWholeWords: checked })}
+          label={t('worldBookPanel.forceMatchWholeWords')}
+          hint={t('worldBookPanel.forceMatchWholeWordsHint')}
+        />
+      </div>
+
       <div className={styles.wiField}>
         <label className={styles.wiFieldLabel}>{t('worldBookPanel.globalScanDepth')}</label>
         <p className={styles.wiFieldHint}>

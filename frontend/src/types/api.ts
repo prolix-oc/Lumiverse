@@ -1139,6 +1139,8 @@ export interface ChatMemorySettings {
 }
 
 export interface WorldInfoSettings {
+  forceCaseSensitive: boolean;
+  forceMatchWholeWords: boolean;
   globalScanDepth: number | null;
   maxRecursionPasses: number;
   maxActivatedEntries: number;
