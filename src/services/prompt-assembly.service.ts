@@ -5763,6 +5763,19 @@ export async function clipToContextBudget(
  * Priority (lowest → highest): sampler overrides → advanced settings → reasoning settings → custom body.
  * Request-level overrides (merged by the caller) take the highest priority.
  */
+export function applyGoogleSearchPresetSetting(
+  params: Record<string, any>,
+  enabled: boolean | undefined,
+  providerName?: string | null,
+): void {
+  if (
+    enabled === true &&
+    (providerName === "google" || providerName === "google_vertex")
+  ) {
+    params.enable_web_search = true;
+  }
+}
+
 function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
@@ -5775,6 +5788,15 @@ function buildParameters(
   modelName?: string | null,
 ): Record<string, any> {
   const params: Record<string, any> = {};
+
+  // The Loom "Use web search" checkbox is provider-agnostic in storage, but
+  // Google AI Studio and Vertex expose it as the native google_search tool.
+  // Other providers must not receive this internal compatibility key.
+  applyGoogleSearchPresetSetting(
+    params,
+    preset?.prompts?.completionSettings?.enableWebSearch,
+    providerName,
+  );
 
   // Streaming toggle — transport-level concern, orthogonal to sampler tuning.
   // Applied regardless of overrides.enabled so users can disable streaming without
