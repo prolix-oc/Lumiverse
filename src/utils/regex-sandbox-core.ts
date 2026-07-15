@@ -1,3 +1,5 @@
+import { getRegexSearchEnd } from "./regex-search-window";
+
 export interface RegexReplaceRequest {
   id: string;
   op: "replace";
@@ -176,29 +178,33 @@ function collectCaptureReplacements(
 }
 
 export function runRegexRequest(data: RegexRequest): unknown {
+  const replacement = "replacement" in data ? data.replacement : "";
+  const searchEnd = getRegexSearchEnd(data.input, data.pattern, data.flags, replacement);
+  const input = searchEnd === data.input.length ? data.input : data.input.slice(0, searchEnd);
+  const tail = searchEnd === data.input.length ? "" : data.input.slice(searchEnd);
   const re = new RegExp(data.pattern, data.flags);
 
   if (data.op === "replace") {
-    return data.input.replace(re, data.replacement);
+    return input.replace(re, data.replacement) + tail;
   }
 
   if (data.op === "test") {
     let matches = 0;
     const counter = new RegExp(re.source, re.flags);
-    data.input.replace(counter, (...args) => {
+    input.replace(counter, (...args) => {
       matches++;
       return String(args[0] ?? "");
     });
-    const result = data.input.replace(re, data.replacement);
+    const result = input.replace(re, data.replacement) + tail;
     return { result, matches };
   }
 
   if (data.op === "collect") {
-    return collectMatches(data.input, re);
+    return collectMatches(input, re);
   }
 
   if (data.op === "capture-replacements") {
-    return collectCaptureReplacements(data.input, re, data.replacement);
+    return collectCaptureReplacements(input, re, data.replacement);
   }
 
   throw new Error(`Unknown regex op: ${(data as { op: string }).op}`);

@@ -15,6 +15,10 @@ import GroupChatMemberBar from './GroupChatMemberBar'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
 import { shouldPinMessageListTail } from './messageListPinning'
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT } from './collapsibleLayout'
+import {
+  MESSAGE_CONTENT_LAYOUT_EVENT,
+  shouldPreserveScrollAnchorForLayout,
+} from '@/lib/message-content-layout'
 import type { Message } from '@/types/api'
 import type { OOCStyleType } from '@/types/store'
 import styles from './MessageList.module.css'
@@ -27,7 +31,6 @@ interface MessageListProps {
 
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
-const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 // TanStack recommends a forgiving end threshold for chat so that minor
 // overscroll, mobile momentum settling, and soft-keyboard shrink/growth don't
 // immediately unpin the viewport from new output.
@@ -42,6 +45,7 @@ const MOBILE_RANGE_WARM_MS = 1200
 // finds rows mounted.
 const INITIAL_RANGE_WARM_DELAY_MS = 300
 const USER_CONTROLLED_ROW_RESIZE_SETTLE_MS = 450
+const PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS = 1500
 
 type VirtualListItem =
   | { type: 'loadingOlder'; key: string }
@@ -211,6 +215,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const recentCollapsibleToggleMessageIdRef = useRef<string | null>(null)
   const recentCollapsibleToggleUntilRef = useRef(0)
   const recentCollapsibleToggleTimerRef = useRef<number | null>(null)
+  const programmaticReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
   const keyboardRepinTimersRef = useRef<number[]>([])
   const keyboardRepinSuppressedUntilRef = useRef(0)
   const interceptorRegistryVersion = useSyncExternalStore(
@@ -283,6 +288,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     setEditableFocusInList(false)
     recentCollapsibleToggleMessageIdRef.current = null
     recentCollapsibleToggleUntilRef.current = 0
+    programmaticReflowUntilByMessageIdRef.current.clear()
     if (recentCollapsibleToggleTimerRef.current != null) {
       window.clearTimeout(recentCollapsibleToggleTimerRef.current)
       recentCollapsibleToggleTimerRef.current = null
@@ -691,6 +697,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           && performance.now() <= recentCollapsibleToggleUntilRef.current
         )
       )
+      const programmaticReflowUntil = row?.type === 'message'
+        ? programmaticReflowUntilByMessageIdRef.current.get(row.message.id) ?? 0
+        : 0
+      const isProgrammaticContentReflow = performance.now() <= programmaticReflowUntil
       return shouldAdjustMessageListScrollOnResize({
         delta,
         itemStart: item.start,
@@ -702,6 +712,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         isStreamingTail,
         isFocusedEditableRow,
         isUserToggledCollapsibleRow,
+        isProgrammaticContentReflow,
       })
     },
     [streamingTargetMessageId, virtualListItems]
@@ -1201,6 +1212,16 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       pendingRow = target instanceof Element
         ? target.closest<HTMLElement>('[data-virtual-index]')
         : null
+
+      if (pendingRow && shouldPreserveScrollAnchorForLayout(event)) {
+        const messageId = pendingRow.dataset.messageId
+        if (messageId) {
+          programmaticReflowUntilByMessageIdRef.current.set(
+            messageId,
+            performance.now() + PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS,
+          )
+        }
+      }
 
       // Debounce the burst of layout events fired during streaming/content
       // changes so we don't re-measure the same row multiple times per frame.

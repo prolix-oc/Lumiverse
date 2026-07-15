@@ -2,6 +2,7 @@ import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetad
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import type { SpindleDisplayContext } from 'lumiverse-spindle-types'
+import { getRegexSearchEnd, replaceWithinRegexSearchWindow } from './search-window'
 
 interface DisplayRegexMatch {
   fullMatch: string
@@ -101,10 +102,18 @@ function substituteRegexCaptures(
   })
 }
 
-function collectRegexMatches(input: string, regex: RegExp): DisplayRegexMatch[] {
+function collectRegexMatches(
+  input: string,
+  regex: RegExp,
+  pattern: string,
+  flags: string,
+  replacementTemplate: string,
+): DisplayRegexMatch[] {
   const matches: DisplayRegexMatch[] = []
+  const searchEnd = getRegexSearchEnd(input, pattern, flags, replacementTemplate)
+  const searchable = searchEnd === input.length ? input : input.slice(0, searchEnd)
 
-  input.replace(regex, (fullMatch, ...args) => {
+  searchable.replace(regex, (fullMatch, ...args) => {
     const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
     const namedGroups = hasNamedGroups ? args.pop() as Record<string, string> : undefined
     args.pop() as string
@@ -154,11 +163,13 @@ interface SlowRegexReport {
 }
 
 const DISPLAY_SLOW_REGEX_WARNING_MS = 5_000
+const REGEX_PERFORMANCE_ENGINE_VERSION = 2
 
 function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
   const raw = script.metadata?.regex_performance
   if (!raw || typeof raw !== 'object') return null
   if (raw.slow !== true || typeof raw.version !== 'number') return null
+  if (raw.engine_version !== REGEX_PERFORMANCE_ENGINE_VERSION) return null
   return raw as RegexPerformanceMetadata
 }
 
@@ -255,7 +266,7 @@ export function applyDisplayRegex(
       let replaceString = script.replace_string
 
       if (script.substitute_macros === 'raw') {
-        result = result.replace(regex, (fullMatch, ...args) => {
+        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, (fullMatch, ...args) => {
           const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
           const namedGroups = hasNamedGroups ? args.pop() as Record<string, string> : undefined
           const input = args.pop() as string
@@ -267,7 +278,7 @@ export function applyDisplayRegex(
             : withCaptures
         })
       } else if (script.substitute_macros === 'after') {
-        result = result.replace(regex, replaceString)
+        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
       } else {
         // Prefer backend-resolved replacement string (full macro engine)
         if (script.substitute_macros !== 'none') {
@@ -282,7 +293,7 @@ export function applyDisplayRegex(
           }
         }
 
-        result = result.replace(regex, replaceString)
+        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
       }
 
       // Apply trim_strings
@@ -382,7 +393,13 @@ export async function applyDisplayRegexAsync(
 
     try {
       if (script.substitute_macros === 'raw') {
-        const matches = collectRegexMatches(result, regex)
+        const matches = collectRegexMatches(
+          result,
+          regex,
+          findRegex,
+          script.flags,
+          script.replace_string,
+        )
         if (matches.length > 0) {
           const templates: Record<string, string> = {}
           const fallbackReplacements = matches.map((match, index) => {
@@ -411,7 +428,14 @@ export async function applyDisplayRegexAsync(
           )
         }
       } else if (script.substitute_macros === 'after') {
-        const substituted = result.replace(regex, script.replace_string)
+        const substituted = replaceWithinRegexSearchWindow(
+          result,
+          regex,
+          findRegex,
+          script.flags,
+          script.replace_string,
+          script.replace_string,
+        )
         if (hasMacroSyntax(substituted)) {
           const resolved = await resolveRawTemplates({ [`${script.id}:body`]: substituted })
           result = resolved[`${script.id}:body`] ?? substituted
@@ -431,7 +455,7 @@ export async function applyDisplayRegexAsync(
           }
         }
 
-        result = result.replace(regex, replaceString)
+        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
       }
 
       for (const trim of script.trim_strings) {

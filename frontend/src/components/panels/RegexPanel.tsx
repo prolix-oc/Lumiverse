@@ -84,6 +84,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
   const raw = script.metadata?.regex_performance
   if (!raw || typeof raw !== 'object') return null
   if (raw.slow !== true || typeof raw.version !== 'number') return null
+  if (raw.engine_version !== 2) return null
   return raw as RegexPerformanceMetadata
 }
 

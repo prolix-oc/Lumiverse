@@ -26,6 +26,7 @@ import { substituteRegexCaptures as substituteRegexCapturesCore } from "../utils
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
 const REGEX_SLOW_WARNING_MS = 5_000;
+const REGEX_PERFORMANCE_ENGINE_VERSION = 2;
 
 type RegexPerformanceSource = "prompt_backend" | "response_backend" | "display_backend" | "display_client";
 
@@ -37,6 +38,7 @@ interface RegexPerformanceMetadata {
   detected_at: number;
   source: RegexPerformanceSource;
   version: number;
+  engine_version: number;
 }
 
 export interface RegexPerformanceIssue {
@@ -157,6 +159,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
   const value = raw as Partial<RegexPerformanceMetadata>;
   if (value.slow !== true) return null;
   if (typeof value.version !== "number") return null;
+  if (value.engine_version !== REGEX_PERFORMANCE_ENGINE_VERSION) return null;
   return {
     slow: true,
     timed_out: value.timed_out === true,
@@ -165,6 +168,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
     detected_at: typeof value.detected_at === "number" ? value.detected_at : 0,
     source: (value.source as RegexPerformanceSource) || "display_backend",
     version: value.version,
+    engine_version: value.engine_version,
   };
 }
 
@@ -221,6 +225,7 @@ export function reportRegexScriptPerformance(
       detected_at: Math.floor(Date.now() / 1000),
       source: issue.source ?? "display_backend",
       version: script.updated_at,
+      engine_version: REGEX_PERFORMANCE_ENGINE_VERSION,
     } satisfies RegexPerformanceMetadata,
   };
 

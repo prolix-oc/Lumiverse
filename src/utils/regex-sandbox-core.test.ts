@@ -95,3 +95,37 @@ describe("capture-replacements regex operation", () => {
     expect("fullMatch" in result[0]).toBe(false);
   });
 });
+
+describe("terminal-literal search window", () => {
+  test("skips a large unterminated tail without changing completed replacements", () => {
+    const fields = Array.from({ length: 21 }, (_, index) => `field${index + 1}`);
+    const fieldPattern = String.raw`([^\]|]+)`;
+    const pattern = String.raw`\[METER\|${Array.from({ length: 21 }, () => fieldPattern).join(String.raw`\|`)}\]([\s\S]*?)\[\/METER\]`;
+    const valid = `[METER|${fields.join("|")}]body[/METER]`;
+    const incomplete = `[METER|${fields.join("|")}]${"body ".repeat(5)}`;
+    const input = valid + incomplete.repeat(3_000);
+
+    const result = runRegexRequest({
+      id: "bounded-replace",
+      op: "replace",
+      pattern,
+      flags: "gi",
+      input,
+      replacement: "<$1>",
+    });
+    expect(result).toBe(`<field1>${incomplete.repeat(3_000)}`);
+  });
+
+  test("preserves full-suffix replacement semantics", () => {
+    const input = "fooENDING trailing";
+    const request = {
+      id: "suffix-replacement",
+      op: "replace" as const,
+      pattern: "fooENDING",
+      flags: "g",
+      input,
+      replacement: "$'",
+    };
+    expect(runRegexRequest(request)).toBe(input.replace(/fooENDING/g, "$'"));
+  });
+});

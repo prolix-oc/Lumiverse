@@ -21,6 +21,10 @@ import {
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { SpindleMessageWidgets } from '@/lib/spindle/message-widgets'
+import {
+  dispatchMessageContentLayout,
+  MESSAGE_CONTENT_LAYOUT_EVENT,
+} from '@/lib/message-content-layout'
 import { useStore } from '@/store'
 import i18n from '@/i18n'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
@@ -320,7 +324,6 @@ marked.setOptions({
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const YOUTUBE_EMBED_TOKEN = 'LUMIVERSE_YOUTUBE_EMBED'
-const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 const DETAILS_TOGGLE_KEYS = new Set(['Enter', ' ', 'Spacebar'])
 const SPECIAL_PIECE_RE = new RegExp(`<!--(${HTML_ISLAND_TOKEN}|${YOUTUBE_EMBED_TOKEN})_(\\d+)-->`, 'g')
 const YOUTUBE_NOCOOKIE_ORIGIN = 'https://www.youtube-nocookie.com'
@@ -1144,7 +1147,7 @@ function notifyMessageContentLayout(el: HTMLElement): void {
   // load/error listeners below already catch later size changes. The previous
   // immediate + 2x rAF triple dispatch fired ~3 events for every shadow-DOM
   // mutation/row mount and caused a measurement storm during scroll/streaming.
-  el.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
+  dispatchMessageContentLayout(el)
 }
 
 function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolean }) {
@@ -1417,12 +1420,28 @@ export default function MessageContent({
   )
   const deferredResolvedContent = useDeferredValue(resolvedContent)
   const renderContent = isStreaming ? balanceStreamingDetails(deferredResolvedContent) : resolvedContent
+  const previousRenderContentRef = useRef<string | null>(null)
   const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const containerRef = useRef<HTMLDivElement>(null)
   const prevTextLenRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+
+  // Regex macro resolution and tag-interceptor registration can replace an
+  // already-mounted message after the user has scrolled away from the tail.
+  // Mark that reflow before ResizeObserver delivers the row's new height so
+  // the virtual list can preserve the viewport independently of its stale
+  // scrollDirection value. Initial mounts deliberately remain unmarked.
+  useLayoutEffect(() => {
+    const previous = previousRenderContentRef.current
+    previousRenderContentRef.current = renderContent
+    if (previous === null || previous === renderContent) return
+
+    const container = containerRef.current
+    if (!container) return
+    dispatchMessageContentLayout(container, { preserveScrollAnchor: true })
+  }, [renderContent])
 
   const handleLightboxClose = useCallback(() => setLightboxSrc(null), [])
 

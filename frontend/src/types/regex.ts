@@ -11,6 +11,7 @@ export interface RegexPerformanceMetadata {
   detected_at: number
   source: 'prompt_backend' | 'response_backend' | 'display_backend' | 'display_client'
   version: number
+  engine_version?: number
 }
 
 export interface RegexScript {

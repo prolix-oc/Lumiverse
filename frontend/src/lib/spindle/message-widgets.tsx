@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
 import { createSandboxFrame } from './sandbox-frame'
 import { scheduleSpindleDomTask } from './browser-scheduler'
+import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 
 export interface SpindleMessageWidgetRenderOptions {
   messageId: string
@@ -110,6 +111,10 @@ function MessageWidgetFrame({ widget }: { widget: MessageWidgetRecord }): ReactE
         if (height > 0) widgetHeightCache.set(widgetKey, height)
       })
       resizeObserver.observe(frame.element)
+      // The scheduled insertion can happen well after the message row was
+      // measured. Notify the list before mutating the row so its resize policy
+      // treats this as programmatic content expansion, not backward scrolling.
+      dispatchMessageContentLayout(host, { preserveScrollAnchor: true })
       host.replaceChildren(frame.element)
 
       dispose = () => {

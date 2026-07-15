@@ -371,6 +371,7 @@ describe("regex performance reporting", () => {
     expect(result.script?.metadata?.regex_performance?.slow).toBe(true);
     expect(result.script?.metadata?.regex_performance?.source).toBe("display_client");
     expect(result.script?.metadata?.regex_performance?.version).toBe(script.updated_at);
+    expect(result.script?.metadata?.regex_performance?.engine_version).toBe(2);
   });
 
   test("clears performance warning metadata when regex definition changes", () => {

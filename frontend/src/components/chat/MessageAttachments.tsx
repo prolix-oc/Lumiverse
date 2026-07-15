@@ -9,10 +9,9 @@ import { useLongPress } from '@/hooks/useLongPress'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import LazyImage from '@/components/shared/LazyImage'
+import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 import styles from './MessageAttachments.module.css'
 import clsx from 'clsx'
-
-const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 
 interface MessageAttachmentsProps {
   attachments: MessageAttachment[]
@@ -65,7 +64,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
     setLightboxFallbackSrc(getRelayPreviewUrl(att))
   }, [])
   const notifyImageLayout = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
-    event.currentTarget.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
+    dispatchMessageContentLayout(event.currentTarget)
   }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)

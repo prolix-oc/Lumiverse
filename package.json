@@ -57,6 +57,8 @@
     "backfill-thumbnails": "bun run scripts/backfill-thumbnails.ts",
     "bench:mmap": "bun run scripts/bench-mmap.ts",
     "bench:regex-captures": "bun run scripts/bench-regex-captures.ts",
+    "bench:regex-social-links": "bun run scripts/bench-regex-social-links.ts",
+    "bench:message-tags": "bun run scripts/bench-message-tag-interceptors.ts",
     "edit-env": "bun run scripts/edit-env.ts"
   },
   "type": "module",
