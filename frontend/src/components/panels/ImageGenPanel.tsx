@@ -2123,12 +2123,15 @@ export default function ImageGenPanel() {
           onDelete={() => { setSceneBackground(null); setGeneratedPreview(null) }}
         />
       )}
-      {workflowEditorOpen && (
+      {workflowEditorOpen && activeConnection && (
         <ComfyWorkflowEditor
+          connectionId={activeConnection.id}
           config={workflowConfig}
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}
+          onWorkflowActivated={setWorkflowConfig}
+          onConnectionRefresh={refreshActiveImageGenConnection}
           onClose={() => setWorkflowEditorOpen(false)}
         />
       )}
