@@ -118,6 +118,18 @@
   gap: 6px;
 }
 
+.descriptionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.descriptionLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 500;
+  color: var(--lumiverse-text-muted);
+}
+
 .descTextarea {
   width: 100%;
   background: var(--lumiverse-bg);
