@@ -262,7 +262,12 @@ export const wsHandler = upgradeWebSocket((c) => {
 
         if (data.type === "room_message") {
           if (!roomAuth) return;
-          const result = multiplayerSvc.submitPeerMessage(roomAuth.roomId, roomAuth.participantId, data.content);
+          const result = multiplayerSvc.submitPeerMessage(
+            roomAuth.roomId,
+            roomAuth.participantId,
+            data.content,
+            data.associative_regex_append,
+          );
           if (!result.ok) {
             ws.send(JSON.stringify({ event: "ROOM_MESSAGE_REJECTED", payload: { reason: result.reason }, timestamp: Date.now() }));
           }

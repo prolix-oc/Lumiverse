@@ -1545,6 +1545,160 @@ export function getMessage(userId: string, id: string): Message | null {
   return rowToMessage(row);
 }
 
+export interface AssociativeRegexActionUsage {
+  script_id: string;
+  action_id: string;
+  used_at: number;
+}
+
+export type ClaimAssociativeRegexActionResult =
+  | { status: "claimed"; message: Message; usage: AssociativeRegexActionUsage }
+  | { status: "used"; message: Message; usage: AssociativeRegexActionUsage }
+  | { status: "not_found" };
+
+export interface AssociativeRegexActionBatchInput {
+  messageId: string;
+  instanceId: string;
+  scriptId: string;
+  actionId: string;
+  multiSelect: boolean;
+}
+
+export type ClaimAssociativeRegexActionsResult =
+  | { status: "claimed"; messages: Message[]; usages: AssociativeRegexActionUsage[] }
+  | { status: "used"; messages: Message[]; usage: AssociativeRegexActionUsage }
+  | { status: "not_found"; messages: Message[] };
+
+/** Atomically finalize a generation trigger and its provisional selections. */
+export function claimAssociativeRegexActions(
+  userId: string,
+  chatId: string,
+  inputs: AssociativeRegexActionBatchInput[],
+): ClaimAssociativeRegexActionsResult {
+  if (inputs.length === 0) return { status: "claimed", messages: [], usages: [] };
+  const db = getDb();
+  const outcome = db.transaction(() => {
+    const messages = new Map<string, Message>();
+    const usageMaps = new Map<string, Record<string, AssociativeRegexActionUsage>>();
+    const seenClaims = new Set<string>();
+
+    for (const input of inputs) {
+      const existing = messages.get(input.messageId) ?? getMessage(userId, input.messageId);
+      if (!existing || existing.chat_id !== chatId) return { status: "not_found" as const };
+      messages.set(input.messageId, existing);
+      if (!usageMaps.has(input.messageId)) {
+        const stored = existing.extra?.associative_regex_action_usage;
+        usageMaps.set(input.messageId,
+          stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {},
+        );
+      }
+
+      const usageByInstance = usageMaps.get(input.messageId)!;
+      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
+      const uniqueKey = `${input.messageId}:${claimKey}`;
+      if (seenClaims.has(uniqueKey)) continue;
+      seenClaims.add(uniqueKey);
+      const prior = usageByInstance[input.instanceId]
+        ?? usageByInstance[claimKey]
+        ?? (!input.multiSelect
+          ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
+          : undefined);
+      if (prior && typeof prior === "object") return { status: "used" as const, usage: prior };
+    }
+
+    const usages: AssociativeRegexActionUsage[] = [];
+    const now = Math.floor(Date.now() / 1000);
+    for (const input of inputs) {
+      const usageByInstance = usageMaps.get(input.messageId)!;
+      const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
+      if (usageByInstance[claimKey]) continue;
+      const usage: AssociativeRegexActionUsage = {
+        script_id: input.scriptId,
+        action_id: input.actionId,
+        used_at: now,
+      };
+      usageByInstance[claimKey] = usage;
+      usages.push(usage);
+    }
+
+    for (const [messageId, usageByInstance] of usageMaps) {
+      const existing = messages.get(messageId)!;
+      const nextExtra = normalizeStoredMessageExtra(
+        { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
+        existing.swipes.length,
+        existing.swipe_id,
+      );
+      db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+        .run(JSON.stringify(nextExtra), messageId, chatId);
+    }
+    return { status: "claimed" as const, usages };
+  })();
+
+  const messageIds = [...new Set(inputs.map((input) => input.messageId))];
+  const messages = messageIds
+    .map((messageId) => getMessage(userId, messageId))
+    .filter((message): message is Message => !!message);
+  if (outcome.status === "not_found") return { status: "not_found", messages };
+  if (outcome.status === "used") return { ...outcome, messages };
+  for (const message of messages) eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message }, userId);
+  return { ...outcome, messages };
+}
+
+/**
+ * Atomically claim one rendered regex-action block. Usage is stored on the
+ * source message so it survives refreshes and is shared by every client.
+ */
+export function claimAssociativeRegexAction(
+  userId: string,
+  chatId: string,
+  messageId: string,
+  input: { instanceId: string; scriptId: string; actionId: string; multiSelect?: boolean },
+): ClaimAssociativeRegexActionResult {
+  const db = getDb();
+  const outcome = db.transaction(() => {
+    const existing = getMessage(userId, messageId);
+    if (!existing || existing.chat_id !== chatId) return { status: "not_found" as const };
+
+    const stored = existing.extra?.associative_regex_action_usage;
+    const usageByInstance: Record<string, AssociativeRegexActionUsage> =
+      stored && typeof stored === "object" && !Array.isArray(stored)
+        ? { ...stored }
+        : {};
+    const claimKey = input.multiSelect ? `${input.instanceId}:${input.actionId}` : input.instanceId;
+    const prior = usageByInstance[input.instanceId]
+      ?? usageByInstance[claimKey]
+      ?? (!input.multiSelect
+        ? Object.entries(usageByInstance).find(([key]) => key.startsWith(`${input.instanceId}:`))?.[1]
+        : undefined);
+    if (prior && typeof prior === "object") {
+      return { status: "used" as const, usage: prior };
+    }
+
+    const usage: AssociativeRegexActionUsage = {
+      script_id: input.scriptId,
+      action_id: input.actionId,
+      used_at: Math.floor(Date.now() / 1000),
+    };
+    usageByInstance[claimKey] = usage;
+    const nextExtra = normalizeStoredMessageExtra(
+      { ...(existing.extra || {}), associative_regex_action_usage: usageByInstance },
+      existing.swipes.length,
+      existing.swipe_id,
+    );
+    db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
+      .run(JSON.stringify(nextExtra), messageId, chatId);
+    return { status: "claimed" as const, usage };
+  })();
+
+  if (outcome.status === "not_found") return outcome;
+  const message = getMessage(userId, messageId);
+  if (!message) return { status: "not_found" };
+  if (outcome.status === "claimed") {
+    eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message }, userId);
+  }
+  return { ...outcome, message };
+}
+
 export function createMessage(chatId: string, input: CreateMessageInput, userId: string): Message {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);

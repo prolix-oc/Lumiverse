@@ -69,6 +69,7 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
       script_id: typeof raw.script_id === "string" ? raw.script_id : id,
       find_regex: findRegex,
       replace_string: replaceString,
+      actions: svc.normalizeRegexActions(raw.actions),
       flags,
       placement,
       scope: raw.scope === "character" || raw.scope === "chat" ? raw.scope : "global",

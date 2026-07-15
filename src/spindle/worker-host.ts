@@ -8355,6 +8355,7 @@ export class WorkerHost {
       script_id: s.script_id || "",
       find_regex: s.find_regex,
       replace_string: s.replace_string,
+      actions: s.actions || [],
       flags: s.flags,
       placement: s.placement,
       scope: s.scope,
@@ -8372,7 +8373,7 @@ export class WorkerHost {
       metadata: s.metadata || {},
       created_at: s.created_at,
       updated_at: s.updated_at,
-    };
+    } as RegexScriptDTO;
   }
 
   private handleRegexScriptsList(

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
@@ -11,7 +11,7 @@ import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
-import type { RegexPlacement, RegexTarget, RegexScope, RegexMacroMode } from '@/types/regex'
+import type { RegexPlacement, RegexTarget, RegexScope, RegexMacroMode, RegexAction } from '@/types/regex'
 import styles from './RegexEditorModal.module.css'
 import clsx from 'clsx'
 
@@ -115,6 +115,7 @@ export default function RegexEditorModal() {
   const [userScriptId, setUserScriptId] = useState('')
   const [findRegex, setFindRegex] = useState('')
   const [replaceString, setReplaceString] = useState('')
+  const [actions, setActions] = useState<RegexAction[]>([])
   const [flags, setFlags] = useState('gi')
   const [placement, setPlacement] = useState<RegexPlacement[]>(['ai_output'])
   const [target, setTarget] = useState<RegexTarget[]>(['response'])
@@ -128,6 +129,7 @@ export default function RegexEditorModal() {
   const [folder, setFolder] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [presetsOpen, setPresetsOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
 
   // Live test
   const [testInput, setTestInput] = useState('')
@@ -139,6 +141,7 @@ export default function RegexEditorModal() {
       setUserScriptId(script.script_id || '')
       setFindRegex(script.find_regex)
       setReplaceString(script.replace_string)
+      setActions(script.actions || [])
       setFlags(script.flags)
       setPlacement([...script.placement])
       setTarget([...script.target])
@@ -193,6 +196,7 @@ export default function RegexEditorModal() {
         script_id: userScriptId,
         find_regex: findRegex,
         replace_string: replaceString,
+        actions,
         flags,
         placement,
         target,
@@ -210,7 +214,7 @@ export default function RegexEditorModal() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message)
     }
-  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
+  }, [scriptId, script, activeCharacterId, activeChatId, name, userScriptId, findRegex, replaceString, actions, flags, placement, target, scope, minDepth, maxDepth, substituteMacros, trimStrings, runOnEdit, description, folder, updateRegexScript, closeModal])
 
   if (!script) return null
 
@@ -225,6 +229,29 @@ export default function RegexEditorModal() {
   const applyPreset = (find: string, replace: string) => {
     setFindRegex(find)
     setReplaceString(replace)
+  }
+
+  const addAction = () => {
+    let index = actions.length + 1
+    let id = `choice_${index}`
+    const existing = new Set(actions.map((action) => action.id))
+    while (existing.has(id)) id = `choice_${++index}`
+    setActions((current) => [...current, {
+      id,
+      type: 'send',
+      multi_select: false,
+      cost: '1',
+      limit: '3',
+      title: '',
+      subtitle: '',
+      content: '',
+    }])
+    setTarget((current) => current.includes('display') ? current : [...current, 'display'])
+    setActionsOpen(true)
+  }
+
+  const updateAction = (index: number, updates: Partial<RegexAction>) => {
+    setActions((current) => current.map((action, i) => i === index ? { ...action, ...updates } : action))
   }
 
   return (
@@ -369,6 +396,124 @@ export default function RegexEditorModal() {
                 spellCheck={false}
               />
             </div>
+          </div>
+
+          {/* Associative actions */}
+          <div className={styles.section}>
+            <div className={styles.actionSectionHeader}>
+              <button type="button" className={styles.sectionToggle} onClick={() => setActionsOpen(!actionsOpen)}>
+                {actionsOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                <span>{tr('actions')}</span>
+                {actions.length > 0 && <span className={styles.actionCount}>{actions.length}</span>}
+              </button>
+              <button type="button" className={styles.addActionButton} onClick={addAction}>
+                <Plus size={13} /> {tr('addAction')}
+              </button>
+            </div>
+            {actionsOpen && (
+              <div className={styles.actionList}>
+                <div className={styles.actionHint}>{tr('actionsHint')}</div>
+                {actions.map((action, index) => (
+                  <div className={styles.actionCard} key={index}>
+                    <div className={styles.actionCardHeader}>
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>{tr('actionId')}</label>
+                        <input
+                          className={clsx(styles.fieldInput, styles.monoText)}
+                          value={action.id}
+                          onChange={(event) => updateAction(index, {
+                            id: event.target.value.replace(/^[^A-Za-z]+/, '').replace(/[^A-Za-z0-9_:.-]/g, '').slice(0, 64),
+                          })}
+                          placeholder="choice_1"
+                        />
+                      </div>
+                      <div className={styles.actionType}>
+                        <button
+                          type="button"
+                          className={clsx(styles.segmentedBtn, action.type === 'send' && styles.segmentedBtnActive)}
+                          onClick={() => updateAction(index, { type: 'send' })}
+                        >
+                          {tr('actionSend')}
+                        </button>
+                        <button
+                          type="button"
+                          className={clsx(styles.segmentedBtn, action.type === 'append' && styles.segmentedBtnActive)}
+                          onClick={() => updateAction(index, { type: 'append' })}
+                        >
+                          {tr('actionAppend')}
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.removeActionButton}
+                        onClick={() => setActions((current) => current.filter((_, i) => i !== index))}
+                        title={tr('removeAction')}
+                        aria-label={tr('removeAction')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <Toggle.Checkbox
+                      checked={action.multi_select}
+                      onChange={(checked) => updateAction(index, { multi_select: checked })}
+                      label={tr('actionMultiSelect')}
+                      hint={tr('actionMultiSelectHint')}
+                    />
+                    {action.multi_select && (
+                      <div className={styles.actionTitleRow}>
+                        <div className={styles.field}>
+                          <label className={styles.fieldLabel}>{tr('actionCost')}</label>
+                          <input
+                            className={styles.fieldInput}
+                            value={action.cost}
+                            onChange={(event) => updateAction(index, { cost: event.target.value })}
+                            placeholder={tr('actionCostPlaceholder')}
+                          />
+                        </div>
+                        <div className={styles.field}>
+                          <label className={styles.fieldLabel}>{tr('actionLimit')}</label>
+                          <input
+                            className={styles.fieldInput}
+                            value={action.limit}
+                            onChange={(event) => updateAction(index, { limit: event.target.value })}
+                            placeholder={tr('actionLimitPlaceholder')}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className={styles.actionTitleRow}>
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>{tr('actionTitle')}</label>
+                        <input className={styles.fieldInput} value={action.title} onChange={(event) => updateAction(index, { title: event.target.value })} placeholder={tr('actionTitlePlaceholder')} />
+                      </div>
+                      <div className={styles.field}>
+                        <label className={styles.fieldLabel}>{tr('actionSubtitle')}</label>
+                        <input className={styles.fieldInput} value={action.subtitle} onChange={(event) => updateAction(index, { subtitle: event.target.value })} placeholder={tr('actionSubtitlePlaceholder')} />
+                      </div>
+                    </div>
+                    <div className={styles.field}>
+                      <label className={styles.fieldLabel}>
+                        {tr('actionContent')}
+                        <span className={styles.fieldHint}>{tr(
+                          action.multi_select
+                            ? (action.type === 'send' ? 'actionContentMultiSendHint' : 'actionContentMultiAppendHint')
+                            : (action.type === 'send' ? 'actionContentSendHint' : 'actionContentAppendHint'),
+                        )}</span>
+                      </label>
+                      <ExpandableTextarea
+                        className={styles.monoInput}
+                        value={action.content}
+                        onChange={(value) => updateAction(index, { content: value })}
+                        title={tr('actionContent')}
+                        placeholder={tr('actionContentPlaceholder')}
+                        rows={2}
+                      />
+                    </div>
+                  </div>
+                ))}
+                {actions.length === 0 && <div className={styles.actionEmpty}>{tr('actionsEmpty')}</div>}
+              </div>
+            )}
           </div>
 
           {/* Targeting — compact 2-col grid */}

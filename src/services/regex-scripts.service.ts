@@ -11,6 +11,7 @@ import type {
   RegexPlacement,
   RegexScope,
   RegexTarget,
+  RegexAction,
 } from "../types/regex-script";
 import type { MacroEnv } from "../macros/types";
 import { evaluate } from "../macros/MacroEvaluator";
@@ -23,6 +24,10 @@ import {
   type SandboxCaptureReplacement,
 } from "../utils/regex-sandbox";
 import { substituteRegexCaptures as substituteRegexCapturesCore } from "../utils/regex-sandbox-core";
+import {
+  buildRegexActionCaptureTemplate,
+  decorateRegexActionReplacements,
+} from "../utils/regex-actions";
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
 const REGEX_SLOW_WARNING_MS = 5_000;
@@ -70,6 +75,9 @@ const VALID_TARGETS = new Set(["prompt", "response", "display"]);
 const VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped", "after"]);
 const MAX_PATTERN_LENGTH = 10_000;
+const MAX_REGEX_ACTIONS = 50;
+const MAX_REGEX_ACTION_FIELD_LENGTH = 10_000;
+const REGEX_ACTION_ID_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,63}$/;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
 const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
@@ -305,6 +313,7 @@ export function rowToRegexScript(row: any): RegexScript {
   return {
     ...row,
     script_id: row.script_id || "",
+    actions: normalizeRegexActions(parseJsonArray(row.actions)),
     placement: JSON.parse(row.placement),
     target,
     trim_strings: JSON.parse(row.trim_strings),
@@ -316,6 +325,40 @@ export function rowToRegexScript(row: any): RegexScript {
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
   };
+}
+
+function parseJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeRegexActions(value: unknown): RegexAction[] {
+  if (!Array.isArray(value)) return [];
+  const actions: RegexAction[] = [];
+  for (const raw of value.slice(0, MAX_REGEX_ACTIONS)) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const type = item.type === "append" ? "append" : item.type === "send" ? "send" : null;
+    if (!REGEX_ACTION_ID_RE.test(id) || !type) continue;
+    actions.push({
+      id,
+      type,
+      multi_select: item.multi_select === true,
+      cost: typeof item.cost === "string" ? item.cost.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "1",
+      limit: typeof item.limit === "string" ? item.limit.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "3",
+      title: typeof item.title === "string" ? item.title.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      subtitle: typeof item.subtitle === "string" ? item.subtitle.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      content: typeof item.content === "string" ? item.content.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+    });
+  }
+  return actions;
 }
 
 function validateFlags(flags: string): boolean {
@@ -363,6 +406,29 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
 
   if (input.find_regex !== undefined && input.find_regex.length > MAX_PATTERN_LENGTH) {
     return "find_regex exceeds maximum length";
+  }
+  if (input.actions !== undefined) {
+    if (!Array.isArray(input.actions)) return "actions must be an array";
+    if (input.actions.length > MAX_REGEX_ACTIONS) return `actions exceeds maximum length (${MAX_REGEX_ACTIONS})`;
+    const ids = new Set<string>();
+    for (const action of input.actions) {
+      if (!action || typeof action !== "object") return "actions contains an invalid entry";
+      if (!REGEX_ACTION_ID_RE.test(action.id?.trim?.() ?? "")) {
+        return "action id must start with a letter and contain only letters, numbers, _, :, . or -";
+      }
+      if (ids.has(action.id.trim())) return `duplicate action id: ${action.id.trim()}`;
+      ids.add(action.id.trim());
+      if (action.type !== "send" && action.type !== "append") return `Invalid action type: ${action.type}`;
+      if (action.multi_select !== undefined && typeof action.multi_select !== "boolean") {
+        return "action multi_select must be a boolean";
+      }
+      for (const field of [action.title, action.subtitle, action.content, action.cost ?? "1", action.limit ?? "3"]) {
+        if (typeof field !== "string") return "action title, subtitle, content, cost, and limit must be strings";
+        if (field.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "action field exceeds maximum length";
+      }
+      if (!action.content.trim()) return `action content is required: ${action.id}`;
+    }
+    input.actions = normalizeRegexActions(input.actions);
   }
   if (input.flags !== undefined && !validateFlags(input.flags)) {
     return "Invalid flags — allowed: d, g, i, m, s, u, v, y";
@@ -533,8 +599,8 @@ export function createRegexScript(
   try {
     getDb()
       .query(
-        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -543,6 +609,7 @@ export function createRegexScript(
         input.script_id ?? "",
         input.find_regex,
         input.replace_string ?? "",
+        JSON.stringify(input.actions ?? []),
         input.flags ?? "gi",
         JSON.stringify(input.placement ?? ["ai_output"]),
         input.scope ?? "global",
@@ -630,6 +697,7 @@ export function updateRegexScript(
   if (nextInput.script_id !== undefined) { fields.push("script_id = ?"); values.push(nextInput.script_id); }
   if (nextInput.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(nextInput.find_regex); }
   if (nextInput.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(nextInput.replace_string); }
+  if (nextInput.actions !== undefined) { fields.push("actions = ?"); values.push(JSON.stringify(nextInput.actions)); }
   if (nextInput.flags !== undefined) { fields.push("flags = ?"); values.push(nextInput.flags); }
   if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
   if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
@@ -734,8 +802,8 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
@@ -744,6 +812,7 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
       "", // script_id intentionally blank on duplicate — must be unique
       existing.find_regex,
       existing.replace_string,
+      JSON.stringify(existing.actions),
       existing.flags,
       JSON.stringify(existing.placement),
       existing.scope,
@@ -1114,6 +1183,19 @@ export async function applyRegexScripts(
         findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv, options?.outFingerprint);
       }
 
+      const actionCapture = script.actions.length > 0 && options?.source === "display_backend"
+        ? buildRegexActionCaptureTemplate(script.actions)
+        : null;
+      const actionMatches = actionCapture
+        ? await regexCaptureReplacementsSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            actionCapture.template,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          )
+        : [];
+
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
@@ -1135,15 +1217,29 @@ export async function applyRegexScripts(
               return evalResult.text;
             }),
           );
-          result = rebuildFromMatches(result, matches, replacements);
+          result = rebuildFromMatches(
+            result,
+            matches,
+            actionCapture
+              ? decorateRegexActionReplacements(replacements, actionMatches, actionCapture.unpack, script.id)
+              : replacements,
+          );
         }
       } else if (macroEnv && script.substitute_macros === "after") {
-        const substituted = await regexReplaceSandboxed(
+        const matches = await regexCaptureReplacementsSandboxed(
           findRegex,
           script.flags,
           result,
           script.replace_string,
           REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        const replacements = matches.map((match) => match.replacement);
+        const substituted = rebuildFromMatches(
+          result,
+          matches,
+          actionCapture
+            ? decorateRegexActionReplacements(replacements, actionMatches, actionCapture.unpack, script.id)
+            : replacements,
         );
         const evalResult = await evaluate(substituted, macroEnv, registry);
         foldFingerprint(options?.outFingerprint, evalResult);
@@ -1160,13 +1256,33 @@ export async function applyRegexScripts(
         } else if (macroEnv && script.substitute_macros !== "none") {
           replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv, options?.outFingerprint);
         }
-        result = await regexReplaceSandboxed(
-          findRegex,
-          script.flags,
-          result,
-          replaceString,
-          REGEX_SCRIPT_TIMEOUT_MS,
-        );
+        if (actionCapture) {
+          const matches = await regexCaptureReplacementsSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            replaceString,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          );
+          result = rebuildFromMatches(
+            result,
+            matches,
+            decorateRegexActionReplacements(
+              matches.map((match) => match.replacement),
+              actionMatches,
+              actionCapture.unpack,
+              script.id,
+            ),
+          );
+        } else {
+          result = await regexReplaceSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            replaceString,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          );
+        }
       }
 
       // Apply trim_strings
@@ -1546,6 +1662,7 @@ export function importRegexScripts(
         script_id: item.script_id ?? "",
         find_regex: pattern,
         replace_string: item.replaceString ?? item.replace_string ?? "",
+        actions: item.actions ?? [],
         flags,
         placement: placement.length > 0 ? placement : ["ai_output"],
         scope: item.scope ?? "global",

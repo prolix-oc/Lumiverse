@@ -13,6 +13,30 @@
 
 .contentChar {}
 
+.content :global([data-lumiverse-regex-action]) {
+  cursor: pointer;
+}
+
+.content :global([data-lumiverse-regex-action]:focus-visible) {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.content :global([data-lumiverse-regex-action-used="true"]) {
+  opacity: 0.55;
+  filter: saturate(0.45);
+}
+
+.content :global([data-lumiverse-regex-action-selected]) {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.content :global([data-lumiverse-regex-action-budget-blocked]:not([data-lumiverse-regex-action-selected])) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* Prevent browser-generated quote marks on <q> wrappers */
 .prose {
   display: flow-root;

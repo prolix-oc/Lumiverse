@@ -256,6 +256,34 @@ async function yieldAndCheckAbort(signal?: AbortSignal): Promise<void> {
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
 }
 
+const REGEX_APPEND_ITEM_MAX = 10_000;
+const REGEX_APPEND_TOTAL_MAX = 50_000;
+
+/** Read the client-selected, chat-invisible appendix attached to a user turn. */
+export function getAssociativeRegexAppend(extra: Record<string, any> | null | undefined): string {
+  const raw = extra?.associative_regex_append;
+  if (!Array.isArray(raw)) return "";
+  const parts: string[] = [];
+  let total = 0;
+  for (const item of raw.slice(0, 20)) {
+    if (!item || typeof item !== "object" || typeof item.content !== "string") continue;
+    const content = item.content.trim().slice(0, REGEX_APPEND_ITEM_MAX);
+    if (!content) continue;
+    const remaining = REGEX_APPEND_TOTAL_MAX - total;
+    if (remaining <= 0) break;
+    const bounded = content.slice(0, remaining);
+    parts.push(bounded);
+    total += bounded.length;
+  }
+  return parts.join("\n");
+}
+
+function appendAssociativeRegexContext(content: string, msg: Message): string {
+  if (!msg.is_user) return content;
+  const appendix = getAssociativeRegexAppend(msg.extra);
+  return appendix ? `${content}\n\n${appendix}` : content;
+}
+
 /** True when assemblePrompt is executing inside the prompt-assembly worker
  *  isolate (flag set by prompt-assembly-worker.ts at module load). */
 function runningInAssemblyWorker(): boolean {
@@ -2405,11 +2433,12 @@ export async function assemblePrompt(
           rawContent.includes("<USER>") ||
           rawContent.includes("<BOT>") ||
           rawContent.includes("<CHAR>");
-        const resolvedContent = needsEval
+        const visibleResolvedContent = needsEval
           ? healFormattingArtifacts(
               (await evaluate(rawContent, macroEnv, registry)).text,
             )
           : rawContent;
+        const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
         const attachments = attachmentsForContext(msg, generatedImageContextPolicy);
         if (msg.extra?.image_gen && resolvedContent.trim().length === 0 && attachments.length === 0) {
           continue;
@@ -5776,7 +5805,7 @@ export function applyGoogleSearchPresetSetting(
   }
 }
 
-function buildParameters(
+export function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
   reasoningSettings?: {
@@ -6151,9 +6180,10 @@ async function onelinerImpersonation(
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
-    const resolvedContent = healFormattingArtifacts(
+    const visibleResolvedContent = healFormattingArtifacts(
       (await evaluate(msg.content, macroEnv, registry)).text,
     );
+    const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
     result.push({ role, content: resolvedContent });
     historyParts.push(resolvedContent);
     messageCount++;
@@ -6434,7 +6464,8 @@ async function legacyAssembly(
     } else if (signal?.aborted) {
       throw signal.reason ?? new DOMException("Aborted", "AbortError");
     }
-    const resolved = healFormattingArtifacts(await resolveMacros(m.content));
+    const visibleResolved = healFormattingArtifacts(await resolveMacros(m.content));
+    const resolved = appendAssociativeRegexContext(visibleResolved, m);
     const attachments = attachmentsForContext(m, legacyGeneratedImageContextPolicy);
     if (m.extra?.image_gen && resolved.trim().length === 0 && attachments.length === 0) {
       continue;

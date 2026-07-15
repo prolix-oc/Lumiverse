@@ -2,6 +2,23 @@ export type RegexPlacement = "user_input" | "ai_output" | "world_info" | "reason
 export type RegexScope = "global" | "character" | "chat";
 export type RegexTarget = "prompt" | "response" | "display";
 export type RegexMacroMode = "none" | "raw" | "escaped" | "after";
+export type RegexActionType = "send" | "append";
+
+export interface RegexAction {
+  /** Matches data-regex-action="..." (preferred) or id="..." in replacement HTML. */
+  id: string;
+  type: RegexActionType;
+  /** When true, this option is claimed independently and staged until the next send signal. */
+  multi_select: boolean;
+  /** Capture-aware numeric cost template used by multi-select actions. */
+  cost: string;
+  /** Capture-aware positive total-cost bound for the rendered action block. */
+  limit: string;
+  title: string;
+  subtitle: string;
+  /** Visible message text for send, or hidden prompt appendix for append. */
+  content: string;
+}
 
 export interface RegexScript {
   id: string;
@@ -10,6 +27,7 @@ export interface RegexScript {
   script_id: string;
   find_regex: string;
   replace_string: string;
+  actions: RegexAction[];
   flags: string;
   placement: RegexPlacement[];
   scope: RegexScope;
@@ -37,6 +55,7 @@ export interface CreateRegexScriptInput {
   find_regex: string;
   script_id?: string;
   replace_string?: string;
+  actions?: RegexAction[];
   flags?: string;
   placement?: RegexPlacement[];
   scope?: RegexScope;

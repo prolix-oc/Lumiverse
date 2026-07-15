@@ -164,6 +164,29 @@ export const messagesApi = {
     return post<Message>(`/chats/${chatId}/messages`, input)
   },
 
+  claimRegexAction(chatId: string, messageId: string, input: {
+    script_id: string
+    action_id: string
+    instance_id: string
+  }) {
+    return post<{
+      message: Message
+      usage: { script_id: string; action_id: string; used_at: number }
+    }>(`/chats/${chatId}/messages/${messageId}/regex-action`, input)
+  },
+
+  claimRegexActions(chatId: string, selections: Array<{
+    message_id: string
+    script_id: string
+    action_id: string
+    instance_id: string
+  }>) {
+    return post<{
+      messages: Message[]
+      usages: Array<{ script_id: string; action_id: string; used_at: number }>
+    }>(`/chats/${chatId}/messages/regex-actions/claim`, { selections })
+  },
+
   update(chatId: string, messageId: string, input: UpdateMessageInput) {
     return put<Message>(`/chats/${chatId}/messages/${messageId}`, input)
   },

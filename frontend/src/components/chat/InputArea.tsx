@@ -45,6 +45,20 @@ import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueH
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { orderGroupResponseIds, readGroupResponseOrder } from '@/lib/groupResponseOrder'
+import {
+  REGEX_ACTION_EVENT,
+  clearRegexSelectionForSource,
+  claimLocalRegexAction,
+  claimLocalRegexActions,
+  consumeRegexSelections,
+  getPendingRegexSelections,
+  hasPendingRegexSelectionsForBlock,
+  queueRegexSelection,
+  restoreRegexSelections,
+  toggleRegexSelection,
+  type PendingRegexSelection,
+  type RegexActionActivation,
+} from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
 
 interface InputAreaProps {
@@ -58,6 +72,22 @@ const STT_VISUALIZER_BARS = 18
 const MOBILE_QUEUE_HOLD_PROMPT_MS = 180
 const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
+
+function stackVisibleRegexSelections(base: string, selections: PendingRegexSelection[]): string {
+  return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function serializeHiddenRegexSelections(selections: PendingRegexSelection[]) {
+  return selections.filter((item) => item.type === 'append').map((item) => ({
+    content: item.content,
+    action_id: item.id,
+    script_id: item.scriptId,
+    instance_id: item.instanceId,
+    source_message_id: item.messageId,
+  }))
+}
 const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
   const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
   return 0.12 + centerBias * 0.22
@@ -201,6 +231,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
   const navigate = useNavigate()
   const [text, setText] = useState('')
+  const [pendingRegexVisibleCount, setPendingRegexVisibleCount] = useState(0)
   const [lastImpersonateInput, setLastImpersonateInput] = useState<string>('')
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
@@ -248,6 +279,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
+  const regexActionHandlingRef = useRef(false)
   const generationNonceRef = useRef(0)
   const touchHoldPromptTimerRef = useRef<number>(0)
   const touchQueueArmTimerRef = useRef<number>(0)
@@ -295,6 +327,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const messages = useStore((s) => s.messages)
   const addMessage = useStore((s) => s.addMessage)
+  const updateMessage = useStore((s) => s.updateMessage)
   const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const stopStreaming = useStore((s) => s.stopStreaming)
@@ -901,6 +934,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // Restore draft on mount or chat switch
   useEffect(() => {
     setLastImpersonateInput('')
+    setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
     if (!saveDraftInput) return
     try {
       const saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId)
@@ -1366,7 +1400,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
     return false
   }, [messages])
-  const hasDraftContent = text.trim().length > 0 || pendingAttachments.length > 0
+  const hasDraftContent = text.trim().length > 0 || pendingAttachments.length > 0 || pendingRegexVisibleCount > 0
   const [mobileQueueHoldState, setMobileQueueHoldState] = useState<MobileQueueHoldState>('idle')
 
   const setMobileQueueHoldVisualState = useCallback((next: MobileQueueHoldState) => {
@@ -1420,12 +1454,58 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
   }, [mobileQueueHoldState, hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
+  const finalizeRegexSelections = useCallback(async (
+    selections: PendingRegexSelection[],
+    triggerAction?: RegexActionActivation,
+  ): Promise<boolean> => {
+    const multiSelections = selections.filter((selection) => selection.multi_select)
+    const actionsToClaim: RegexActionActivation[] = [
+      ...multiSelections,
+      ...(triggerAction ? [triggerAction] : []),
+    ]
+    if (actionsToClaim.length === 0) return true
+
+    if (mpRoomId && !mpIsHost) {
+      if (claimLocalRegexActions(actionsToClaim)) return true
+      for (const selection of multiSelections) clearRegexSelectionForSource(selection)
+      setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      toast.info(t('toast.regexActionAlreadyUsed'))
+      return false
+    }
+
+    try {
+      const result = await messagesApi.claimRegexActions(chatId, actionsToClaim.flatMap((selection) => (
+        selection.messageId ? [{
+          message_id: selection.messageId,
+          script_id: selection.scriptId,
+          action_id: selection.id,
+          instance_id: selection.instanceId,
+        }] : []
+      )))
+      for (const message of result.messages) updateMessage(message.id, { extra: message.extra })
+      return true
+    } catch (error: any) {
+      for (const message of error?.body?.messages || []) {
+        if (message?.id && message?.extra) updateMessage(message.id, { extra: message.extra })
+      }
+      if (error?.status === 404 || error?.status === 409) {
+        for (const selection of multiSelections) clearRegexSelectionForSource(selection)
+        setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      }
+      toast.info(error?.body?.error || t('toast.regexActionClaimFailed'))
+      return false
+    }
+  }, [chatId, mpIsHost, mpRoomId, t, updateMessage])
+
   // Multiplayer room send. Returns 'sent' (routed to the room — caller stops),
   // 'blocked' (off-turn / closed freeform window — caller stops), or 'local'
   // (not in a room, or host in round-robin → caller does its normal local
   // send/queue). Shared by send AND queue so both are turn/window-gated
   // identically — queueing must not be a bypass.
-  const attemptRoomSend = useCallback((): 'sent' | 'blocked' | 'local' => {
+  const attemptRoomSend = useCallback(async (
+    contentOverride?: string,
+    triggerAction?: RegexActionActivation,
+  ): Promise<'sent' | 'blocked' | 'local'> => {
     const mp = useStore.getState()
     if (!mp.mpRoomId) return 'local'
     if (!mp.isMyTurn()) {
@@ -1436,34 +1516,59 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     // peers always, and the host during a freeform window — submits via the room.
     const hostFreeformContribution = mp.mpIsHost && mp.mpTurnStrategy === 'freeform'
     if (mp.mpIsHost && !hostFreeformContribution) return 'local'
-    const roomContent = text.trim()
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const roomContent = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
     if (!roomContent) return 'blocked'
-    sendRoomAction({ type: 'room_message', content: roomContent })
-    setText('')
-    if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+    if (!await finalizeRegexSelections(pendingSelections, triggerAction)) return 'blocked'
+    const consumedSelections = consumeRegexSelections(chatId)
+    setPendingRegexVisibleCount(0)
+    sendRoomAction({
+      type: 'room_message',
+      content: roomContent,
+      associative_regex_append: serializeHiddenRegexSelections(consumedSelections),
+    })
+    if (contentOverride === undefined) {
+      setText('')
+      if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+    }
     requestAnimationFrame(() => {
       if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
     })
     return 'sent'
-  }, [text, chatId, saveDraftInput, resizeTextarea])
+  }, [text, chatId, saveDraftInput, resizeTextarea, finalizeRegexSelections])
 
   const handleQueueMessage = useCallback(async () => {
     if (sendingRef.current || isGeneratingInChat) return
+    sendingRef.current = true
     // In a room, queueing IS sending — gate by turn/window + route through the
     // host (peers can't write to the chat directly).
-    if (attemptRoomSend() !== 'local') return
-    const content = text.trim()
+    if (await attemptRoomSend() !== 'local') {
+      sendingRef.current = false
+      return
+    }
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const content = stackVisibleRegexSelections(text, pendingSelections)
     const attachments = pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
       : undefined
-    if (!content && !attachments) return
+    if (!content && !attachments) {
+      sendingRef.current = false
+      return
+    }
 
-    sendingRef.current = true
+    if (!await finalizeRegexSelections(pendingSelections)) {
+      sendingRef.current = false
+      return
+    }
+
     setText('')
     setPendingAttachments([])
     if (saveDraftInput) {
       try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
     }
+
+    let consumedRegexSelections: PendingRegexSelection[] = []
+    const regexSelectionsFinalized = pendingSelections.some((selection) => selection.multi_select)
 
     requestAnimationFrame(() => {
       if (textareaRef.current) {
@@ -1478,6 +1583,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       const extra: Record<string, any> = {}
       if (effectivePersonaId) extra.persona_id = effectivePersonaId
       if (attachments) extra.attachments = attachments
+      consumedRegexSelections = consumeRegexSelections(chatId)
+      setPendingRegexVisibleCount(0)
+      const hiddenSelections = serializeHiddenRegexSelections(consumedRegexSelections)
+      if (hiddenSelections.length > 0) extra.associative_regex_append = hiddenSelections
 
       const msg = await messagesApi.create(chatId, {
         is_user: true,
@@ -1488,30 +1597,53 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       addMessage(msg)
       toast.info(t('toast.messageQueued'), { duration: 1500 })
     } catch (err: any) {
+      restoreRegexSelections(
+        chatId,
+        regexSelectionsFinalized
+          ? consumedRegexSelections.filter((selection) => !selection.multi_select)
+          : consumedRegexSelections,
+      )
+      setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
       console.error('[InputArea] Failed to queue message:', err)
       toast.error(err?.body?.error || err?.message || t('toast.failedQueueMessage'))
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend, finalizeRegexSelections])
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (
+    contentOverride?: string,
+    triggerAction?: RegexActionActivation,
+  ) => {
     if (sendingRef.current || isGeneratingInChat) return
+    sendingRef.current = true
 
     // Multiplayer: route through the room (turn/window-gated) unless we're the
     // host in round-robin, who sends locally on their own chat.
-    if (attemptRoomSend() !== 'local') return
+    if (await attemptRoomSend(contentOverride, triggerAction) !== 'local') {
+      sendingRef.current = false
+      return
+    }
 
-    const content = text.trim()
-    const attachments = pendingAttachments.length > 0
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const sourceText = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
+    const content = sourceText.trim()
+    const attachments = contentOverride === undefined && pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
       : undefined
 
-    sendingRef.current = true
+    const willCreateMessage = !!content || !!attachments
+    if (willCreateMessage && !await finalizeRegexSelections(pendingSelections, triggerAction)) {
+      sendingRef.current = false
+      return
+    }
+
     const nonce = ++generationNonceRef.current
-    setText('')
-    setPendingAttachments([])
-    if (saveDraftInput) {
+    if (contentOverride === undefined) {
+      setText('')
+      setPendingAttachments([])
+    }
+    if (contentOverride === undefined && saveDraftInput) {
       try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
     }
     setStreamingError(null)
@@ -1524,6 +1656,11 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       }
     })
 
+    let consumedRegexSelections: PendingRegexSelection[] = []
+    let regexAppendsCommitted = false
+    const regexSelectionsFinalized = willCreateMessage && (
+      !!triggerAction || pendingSelections.some((selection) => selection.multi_select)
+    )
     try {
       const effectivePersonaId = isTemporaryChat ? null : activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
@@ -1536,7 +1673,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
-        user_input: text || undefined,
+        user_input: sourceText || undefined,
       }
 
       // Parse @mentions in the user's message (group chats only). Each mention
@@ -1602,12 +1739,17 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         const extra: Record<string, any> = {}
         if (effectivePersonaId) extra.persona_id = effectivePersonaId
         if (attachments) extra.attachments = attachments
+        consumedRegexSelections = consumeRegexSelections(chatId)
+        setPendingRegexVisibleCount(0)
+        const hiddenSelections = serializeHiddenRegexSelections(consumedRegexSelections)
+        if (hiddenSelections.length > 0) extra.associative_regex_append = hiddenSelections
         const msg = await messagesApi.create(chatId, {
           is_user: true,
           name: effectivePersonaName,
           content: finalContent || '(attached)',
           extra: Object.keys(extra).length > 0 ? extra : undefined,
         })
+        regexAppendsCommitted = true
         // Optimistically add to store so it appears immediately
         addMessage(msg)
         // Show streaming state immediately so stop button appears during assembly
@@ -1633,6 +1775,15 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         consumeOneshotGuides()
       }
     } catch (err: any) {
+      if (!regexAppendsCommitted) {
+        restoreRegexSelections(
+          chatId,
+          regexSelectionsFinalized
+            ? consumedRegexSelections.filter((selection) => !selection.multi_select)
+            : consumedRegexSelections,
+        )
+        setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      }
       if (generationNonceRef.current !== nonce) return
       console.error('[InputArea] Failed to send:', err)
       const msg = err?.body?.error || err?.message || te('failedToStartGeneration')
@@ -1641,7 +1792,101 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections])
+
+  useEffect(() => {
+    const handleRegexAction = async (event: Event) => {
+      const action = (event as CustomEvent<RegexActionActivation>).detail
+      if (!action || action.chatId !== chatId) return
+      if (!action.messageId || regexActionHandlingRef.current) return
+      if (action.multi_select && sendingRef.current) {
+        toast.info(t('toast.regexActionSelectionLocked'))
+        return
+      }
+      if (!action.multi_select && action.type === 'send' && (sendingRef.current || isGeneratingInChat)) {
+        toast.info(t('toast.regexActionClaimFailed'))
+        return
+      }
+      regexActionHandlingRef.current = true
+      try {
+        if (action.multi_select) {
+          const result = toggleRegexSelection(action)
+          setPendingRegexVisibleCount(result.items.filter((item) => item.type === 'send').length)
+          if ('reason' in result) {
+            if (result.reason === 'removed') {
+              toast.info(t('toast.regexActionMultiRemoved'), { title: action.title || t('toast.regexActionSelected') })
+            } else if (result.reason === 'used') {
+              toast.info(t('toast.regexActionAlreadyUsed'))
+            } else {
+              toast.info(t(result.reason === 'invalid_limit'
+                ? 'toast.regexActionInvalidLimit'
+                : 'toast.regexActionLimitReached', { limit: action.limit }))
+            }
+            return
+          }
+          toast.info(action.subtitle || t('toast.regexActionMultiQueued', {
+            cost: action.cost,
+            total: result.items
+              .filter((item) => item.messageId === action.messageId && item.instanceId === action.instanceId)
+              .reduce((sum, item) => sum + item.cost, 0),
+            limit: action.limit,
+          }), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
+          textareaRef.current?.focus()
+          return
+        }
+        if (action.type === 'append' && hasPendingRegexSelectionsForBlock(action)) {
+          toast.info(t('toast.regexActionClearMultiFirst'))
+          return
+        }
+        if (mpRoomId && !mpIsHost) {
+          if (action.type === 'append') {
+            if (!claimLocalRegexAction(action)) {
+              toast.info(t('toast.regexActionAlreadyUsed'))
+              return
+            }
+            queueRegexSelection(action)
+            setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+            toast.info(action.subtitle || t('toast.regexActionQueued'), {
+              title: action.title || t('toast.regexActionSelected'),
+              duration: 2500,
+            })
+            return
+          }
+          await handleSend(action.content, action)
+          return
+        }
+
+        if (action.type === 'append') {
+          const claimed = await messagesApi.claimRegexAction(chatId, action.messageId, {
+            script_id: action.scriptId,
+            action_id: action.id,
+            instance_id: action.instanceId,
+          })
+          updateMessage(claimed.message.id, { extra: claimed.message.extra })
+          queueRegexSelection(action)
+          setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+          toast.info(action.subtitle || t('toast.regexActionQueued'), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
+          textareaRef.current?.focus()
+          return
+        }
+        await handleSend(action.content, action)
+      } catch (error: any) {
+        const current = error?.body?.message
+        if (current?.id && current?.extra) updateMessage(current.id, { extra: current.extra })
+        toast.info(error?.body?.error || t('toast.regexActionClaimFailed'))
+      } finally {
+        regexActionHandlingRef.current = false
+      }
+    }
+    window.addEventListener(REGEX_ACTION_EVENT, handleRegexAction)
+    return () => window.removeEventListener(REGEX_ACTION_EVENT, handleRegexAction)
+  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, t, updateMessage])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()

@@ -28,6 +28,15 @@ import {
 import { useStore } from '@/store'
 import i18n from '@/i18n'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
+import {
+  REGEX_SELECTIONS_CHANGED_EVENT,
+  dispatchRegexAction,
+  getRegexBlockSelectionCost,
+  isRegexSelectionPending,
+  type RegexActionActivation,
+  type ResolvedRegexActionPayload,
+} from '@/lib/regex/actionBus'
+import { toast } from '@/lib/toast'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
 import ImageLightbox from '@/components/shared/ImageLightbox'
@@ -1158,6 +1167,9 @@ function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolea
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
     shadow.innerHTML = `<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`
+    for (const actionEl of shadow.querySelectorAll<HTMLElement>('[data-lumiverse-regex-action]')) {
+      actionEl.style.cursor = 'pointer'
+    }
     if (
       el.classList.contains('not-prose')
       || el.classList.contains('not-island-prose')
@@ -1346,6 +1358,11 @@ export default function MessageContent({
 }: MessageContentProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const regexScripts = useStore((s) => s.regexScripts)
+  const actionUsage = useStore((s) => {
+    if (!messageId) return undefined
+    return s.messages.find((message) => message.id === messageId)?.extra?.associative_regex_action_usage
+  })
   const characters = useStore((s) => s.characters)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
@@ -1427,6 +1444,17 @@ export default function MessageContent({
   const containerRef = useRef<HTMLDivElement>(null)
   const prevTextLenRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [regexSelectionVersion, setRegexSelectionVersion] = useState(0)
+
+  useEffect(() => {
+    const refresh = () => setRegexSelectionVersion((version) => version + 1)
+    window.addEventListener(REGEX_SELECTIONS_CHANGED_EVENT, refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener(REGEX_SELECTIONS_CHANGED_EVENT, refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [])
 
   // Regex macro resolution and tag-interceptor registration can replace an
   // already-mounted message after the user has scrolled away from the tail.
@@ -1450,12 +1478,173 @@ export default function MessageContent({
     const container = containerRef.current
     if (!container) return
     const handleClick = (e: MouseEvent) => {
+      if (e.composedPath().some((node) => node instanceof Element && node.hasAttribute('data-lumiverse-regex-action'))) return
       const img = (e.target as HTMLElement).closest('img[data-lightbox], .prose img') as HTMLImageElement | null
       if (img?.src) setLightboxSrc(img.src)
     }
     container.addEventListener('click', handleClick)
     return () => container.removeEventListener('click', handleClick)
   }, [])
+
+  // Display-regex actions can live in ordinary prose or inside an HTML
+  // island's shadow root. composedPath() finds the authored target in both.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || isStreaming || !chatId) return
+
+    const activate = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return
+      const target = event.composedPath().find((node): node is Element => (
+        node instanceof Element && node.hasAttribute('data-lumiverse-regex-action')
+      ))
+      if (!target) return
+      const encoded = target.getAttribute('data-lumiverse-regex-action')
+      if (!encoded) return
+      try {
+        const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
+        if (
+          (payload.type !== 'send' && payload.type !== 'append') ||
+          typeof payload.id !== 'string' || typeof payload.scriptId !== 'string' ||
+          typeof payload.instanceId !== 'string' ||
+          typeof payload.multi_select !== 'boolean' ||
+          typeof payload.cost !== 'number' || !Number.isFinite(payload.cost) || payload.cost <= 0 ||
+          typeof payload.limit !== 'number' || !Number.isFinite(payload.limit) || payload.limit < 0 ||
+          typeof payload.content !== 'string' || !payload.content.trim()
+        ) return
+        const configured = regexScripts
+          .find((script) => script.id === payload.scriptId && !script.disabled && script.target.includes('display'))
+          ?.actions.find((action) => action.id === payload.id)
+        if (
+          !configured ||
+          configured.type !== payload.type ||
+          configured.multi_select !== payload.multi_select
+        ) return
+        event.preventDefault()
+        event.stopPropagation()
+        const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
+        const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
+          key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
+        ))
+        const alreadyUsed = configured.multi_select
+          ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
+          : blockHasSelection
+        if (target.getAttribute('aria-disabled') === 'true' || alreadyUsed) {
+          toast.info(t('toast.regexActionAlreadyUsed'))
+          return
+        }
+        dispatchRegexAction({
+          id: payload.id,
+          type: payload.type,
+          multi_select: configured.multi_select,
+          cost: payload.cost,
+          limit: payload.limit,
+          title: typeof payload.title === 'string' ? payload.title : '',
+          subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+          content: payload.content,
+          scriptId: payload.scriptId,
+          instanceId: payload.instanceId,
+          chatId,
+          messageId,
+        })
+      } catch {}
+    }
+
+    container.addEventListener('click', activate)
+    container.addEventListener('keydown', activate)
+    return () => {
+      container.removeEventListener('click', activate)
+      container.removeEventListener('keydown', activate)
+    }
+  }, [chatId, messageId, isStreaming, regexScripts, actionUsage, t, regexSelectionVersion])
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container || !actionUsage) return
+    const elements: Element[] = Array.from(container.querySelectorAll('[data-lumiverse-regex-action]'))
+    for (const island of container.querySelectorAll<HTMLElement>(`.${styles.htmlIsland}`)) {
+      if (island.shadowRoot) {
+        elements.push(...Array.from(island.shadowRoot.querySelectorAll('[data-lumiverse-regex-action]')))
+      }
+    }
+    for (const element of elements) {
+      const encoded = element.getAttribute('data-lumiverse-regex-action')
+      if (!encoded) continue
+      try {
+        const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
+        if (
+          !payload.instanceId || !payload.id || !payload.scriptId ||
+          (payload.type !== 'send' && payload.type !== 'append') ||
+          typeof payload.cost !== 'number' || typeof payload.limit !== 'number'
+        ) continue
+        const configured = regexScripts
+          .find((script) => script.id === payload.scriptId)
+          ?.actions.find((action) => action.id === payload.id)
+        if (!configured) continue
+        const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
+        const blockHasSelection = Object.keys(actionUsage).some((key) => (
+          key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
+        ))
+        const used = configured.multi_select
+          ? !!actionUsage[payload.instanceId] || !!actionUsage[usageKey]
+          : blockHasSelection
+        const activation: RegexActionActivation = {
+          id: payload.id,
+          type: payload.type,
+          multi_select: configured.multi_select,
+          cost: payload.cost,
+          limit: payload.limit,
+          title: typeof payload.title === 'string' ? payload.title : '',
+          subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+          content: typeof payload.content === 'string' ? payload.content : '',
+          scriptId: payload.scriptId,
+          instanceId: payload.instanceId,
+          chatId: chatId || '',
+          messageId,
+        }
+        const selected = configured.multi_select && !!chatId && isRegexSelectionPending(activation)
+        const budgetBlocked = configured.multi_select && !selected && payload.limit > 0 && (
+          getRegexBlockSelectionCost(activation) + payload.cost > payload.limit
+        )
+        element.toggleAttribute('data-lumiverse-regex-action-selected', selected)
+        element.toggleAttribute('data-lumiverse-regex-action-budget-blocked', budgetBlocked)
+        if (configured.multi_select) element.setAttribute('aria-pressed', selected ? 'true' : 'false')
+        else element.removeAttribute('aria-pressed')
+        if (used) {
+          element.setAttribute('aria-disabled', 'true')
+          element.setAttribute('data-lumiverse-regex-action-used', 'true')
+          element.setAttribute('tabindex', '-1')
+          if (element instanceof HTMLElement || element instanceof SVGElement) {
+            element.style.cursor = 'not-allowed'
+            element.style.opacity = '0.55'
+            element.style.filter = 'saturate(0.45)'
+          }
+        } else {
+          element.removeAttribute('aria-disabled')
+          element.removeAttribute('data-lumiverse-regex-action-used')
+          element.setAttribute('tabindex', '0')
+          if (element instanceof HTMLElement || element instanceof SVGElement) {
+            if (budgetBlocked) {
+              element.style.cursor = 'not-allowed'
+              element.style.opacity = '0.55'
+            } else {
+              element.style.removeProperty('cursor')
+              element.style.removeProperty('opacity')
+            }
+            element.style.removeProperty('filter')
+          }
+        }
+        if (element instanceof HTMLElement || element instanceof SVGElement) {
+          if (selected) {
+            element.style.outline = '2px solid var(--lumiverse-primary)'
+            element.style.outlineOffset = '2px'
+          } else {
+            element.style.removeProperty('outline')
+            element.style.removeProperty('outline-offset')
+          }
+        }
+      } catch {}
+    }
+  }, [actionUsage, regexScripts, renderContent, regexSelectionVersion, chatId, messageId])
 
   // Attach click handler for code copy buttons
   useEffect(() => {

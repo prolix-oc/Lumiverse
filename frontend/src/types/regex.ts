@@ -2,6 +2,18 @@ export type RegexPlacement = 'user_input' | 'ai_output' | 'world_info' | 'reason
 export type RegexScope = 'global' | 'character' | 'chat'
 export type RegexTarget = 'prompt' | 'response' | 'display'
 export type RegexMacroMode = 'none' | 'raw' | 'escaped' | 'after'
+export type RegexActionType = 'send' | 'append'
+
+export interface RegexAction {
+  id: string
+  type: RegexActionType
+  multi_select: boolean
+  cost: string
+  limit: string
+  title: string
+  subtitle: string
+  content: string
+}
 
 export interface RegexPerformanceMetadata {
   slow: boolean
@@ -21,6 +33,7 @@ export interface RegexScript {
   script_id: string
   find_regex: string
   replace_string: string
+  actions: RegexAction[]
   flags: string
   placement: RegexPlacement[]
   scope: RegexScope
@@ -47,6 +60,7 @@ export interface CreateRegexScriptInput {
   find_regex: string
   script_id?: string
   replace_string?: string
+  actions?: RegexAction[]
   flags?: string
   placement?: RegexPlacement[]
   scope?: RegexScope

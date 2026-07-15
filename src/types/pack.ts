@@ -194,6 +194,7 @@ export interface PackImportPayload {
     scriptId?: string;
     findRegex: string;
     replaceString?: string;
+    actions?: import("./regex-script").RegexAction[];
     flags?: string;
     placement?: string[];
     target?: string | string[];

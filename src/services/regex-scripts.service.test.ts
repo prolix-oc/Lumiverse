@@ -8,6 +8,7 @@ import {
   getCharacterBoundScripts,
   getRegexScript,
   getRegexScriptByScriptId,
+  importRegexScripts,
   importCharacterBoundRegexScripts,
   reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
@@ -46,6 +47,7 @@ beforeAll(() => {
     script_id TEXT NOT NULL DEFAULT '',
     find_regex TEXT NOT NULL,
     replace_string TEXT NOT NULL DEFAULT '',
+    actions TEXT NOT NULL DEFAULT '[]',
     flags TEXT NOT NULL DEFAULT 'gi',
     placement TEXT NOT NULL,
     scope TEXT NOT NULL,
@@ -433,6 +435,7 @@ describe("raw capture processing", () => {
       script_id: "large_capture_script",
       find_regex: "(a)".repeat(groupCount),
       replace_string: "{{upper::$1}}-$99-$100",
+      actions: [],
       flags: "g",
       placement: ["ai_output"],
       scope: "global",
@@ -472,5 +475,126 @@ describe("raw capture processing", () => {
       undefined,
       macroEnv,
     )).toBe("A-a-a0");
+  });
+});
+
+describe("associative regex actions", () => {
+  test("persists actions and resolves their capture templates per replacement", async () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Choices",
+      find_regex: "\\[([^|]+)\\|([^\\]]+)\\]",
+      replace_string: '<button data-regex-action="choose">$1</button>',
+      placement: ["ai_output"],
+      target: ["display"],
+      actions: [{
+        id: "choose",
+        type: "append",
+        multi_select: false,
+        cost: "1",
+        limit: "3",
+        title: "Choose $1",
+        subtitle: "Next turn",
+        content: "The user chose $2",
+      }],
+    });
+    expect(typeof created).not.toBe("string");
+    const script = created as RegexScript;
+    expect(script.actions).toHaveLength(1);
+
+    const output = await applyRegexScripts(
+      '[North|the trail]',
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { source: "display_backend" },
+    );
+    expect(output).toContain('data-lumiverse-regex-action="');
+    expect(output).toContain(">North</button>");
+    const encoded = output.match(/data-lumiverse-regex-action="([^"]+)"/)?.[1];
+    expect(encoded).toBeTruthy();
+    const payload = JSON.parse(decodeURIComponent(encoded!));
+    expect(payload).toMatchObject({
+      id: "choose",
+      type: "append",
+      multi_select: false,
+      cost: 1,
+      limit: 0,
+      title: "Choose North",
+      subtitle: "Next turn",
+      content: "The user chose the trail",
+      scriptId: script.id,
+      instanceId: `${script.id}:0:17`,
+    });
+  });
+
+  test("documentation examples import and resolve their action captures", async () => {
+    const scenePayload = await Bun.file(new URL(
+      "../../user-docs/docs/assets/examples/regex-actions/scene-card-action.json",
+      import.meta.url,
+    )).json();
+    const multiPayload = await Bun.file(new URL(
+      "../../user-docs/docs/assets/examples/regex-actions/multi-select-scene-planner.json",
+      import.meta.url,
+    )).json();
+
+    expect(importRegexScripts(USER_ID, scenePayload)).toMatchObject({ imported: 1, skipped: 0, errors: [] });
+    expect(importRegexScripts(USER_ID, multiPayload)).toMatchObject({ imported: 1, skipped: 0, errors: [] });
+
+    const sceneScript = getRegexScriptByScriptId(USER_ID, "demo_interactive_scene_card");
+    const multiScript = getRegexScriptByScriptId(USER_ID, "demo_multi_select_scene_planner");
+    expect(sceneScript).not.toBeNull();
+    expect(multiScript).not.toBeNull();
+
+    const sceneOutput = await applyRegexScripts(
+      `<scene><location>Moonlit Courtyard</location><description>A silver gate waits.</description><choice>Open the gate</choice></scene>`,
+      [sceneScript!],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { source: "display_backend" },
+    );
+    const sceneEncoded = sceneOutput.match(/data-lumiverse-regex-action="([^"]+)"/)?.[1];
+    expect(sceneEncoded).toBeTruthy();
+    expect(JSON.parse(decodeURIComponent(sceneEncoded!))).toMatchObject({
+      id: "choose-scene",
+      multi_select: false,
+      title: "Choose: Open the gate",
+      subtitle: "Scene: Moonlit Courtyard",
+      content: "I choose to Open the gate.",
+    });
+
+    const multiOutput = await applyRegexScripts(
+      `<scene-options><title>Sleeping City</title><budget>3</budget><route cost="2">Take the rooftops</route><companion cost="1">Bring Lyra</companion><tone cost="1">Keep it tense</tone></scene-options>`,
+      [multiScript!],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { source: "display_backend" },
+    );
+    const multiActions = [...multiOutput.matchAll(/data-lumiverse-regex-action="([^"]+)"/g)]
+      .map((match) => JSON.parse(decodeURIComponent(match[1])));
+    expect(multiActions).toHaveLength(3);
+    expect(multiActions.map((action) => ({
+      id: action.id,
+      type: action.type,
+      cost: action.cost,
+      limit: action.limit,
+      content: action.content,
+    }))).toEqual([
+      { id: "select-route", type: "send", cost: 2, limit: 3, content: "Route: Take the rooftops" },
+      { id: "select-companion", type: "send", cost: 1, limit: 3, content: "Companion: Bring Lyra" },
+      {
+        id: "select-tone",
+        type: "append",
+        cost: 1,
+        limit: 3,
+        content: "Write the next scene with this direction: Keep it tense. Treat it as guidance, not dialogue spoken by the user.",
+      },
+    ]);
+    expect(multiActions.every((action) => action.multi_select === true)).toBe(true);
   });
 });

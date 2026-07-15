@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "type": "lumiverse_regex_scripts",
+  "scripts": [
+    {
+      "name": "Demo — Multi-select Scene Planner",
+      "script_id": "demo_multi_select_scene_planner",
+      "find_regex": "<scene-options>\\s*<title>([\\s\\S]*?)<\\/title>\\s*<budget>([\\s\\S]*?)<\\/budget>\\s*<route\\s+cost=[\"']([\\d.]+)[\"']>([\\s\\S]*?)<\\/route>\\s*<companion\\s+cost=[\"']([\\d.]+)[\"']>([\\s\\S]*?)<\\/companion>\\s*<tone\\s+cost=[\"']([\\d.]+)[\"']>([\\s\\S]*?)<\\/tone>\\s*<\\/scene-options>",
+      "replace_string": "<style>.lumi-plan{margin:1rem 0;padding:1.15rem;border:1px solid rgba(56,189,248,.28);border-radius:18px;background:linear-gradient(150deg,rgba(8,47,73,.94),rgba(15,23,42,.97));color:#e0f2fe}.lumi-plan-label{margin:0 0 .25rem;color:#7dd3fc;font-size:.7rem;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.lumi-plan-title{margin:0 0 .9rem;color:#fff;font-size:1.18rem}.lumi-plan-grid{display:grid;gap:.6rem}.lumi-plan-option{display:flex;align-items:center;gap:.7rem;width:100%;padding:.7rem .8rem;border:1px solid rgba(125,211,252,.3);border-radius:11px;background:rgba(14,116,144,.14);color:#e0f2fe;font:inherit;text-align:left;cursor:pointer}.lumi-plan-option:hover{background:rgba(14,116,144,.3)}.lumi-plan-icon{display:grid;place-items:center;flex:0 0 1.8rem;height:1.8rem;border-radius:9px;background:rgba(56,189,248,.18)}.lumi-plan-option[data-lumiverse-regex-action-selected]{background:rgba(2,132,199,.4);border-color:#7dd3fc}.lumi-plan-option[data-lumiverse-regex-action-used='true']{background:rgba(15,23,42,.42);cursor:not-allowed}.lumi-plan-note{margin:.8rem 0 0;color:#94a3b8;font-size:.78rem}</style><section class=\"lumi-plan\"><p class=\"lumi-plan-label\">Build your next turn · Budget $2</p><h3 class=\"lumi-plan-title\">$1</h3><div class=\"lumi-plan-grid\"><button type=\"button\" class=\"lumi-plan-option\" data-regex-action=\"select-route\"><span class=\"lumi-plan-icon\">$3</span><span><strong>Route</strong><br>$4</span></button><button type=\"button\" class=\"lumi-plan-option\" data-regex-action=\"select-companion\"><span class=\"lumi-plan-icon\">$5</span><span><strong>Companion</strong><br>$6</span></button><button type=\"button\" class=\"lumi-plan-option\" data-regex-action=\"select-tone\"><span class=\"lumi-plan-icon\">$7</span><span><strong>Hidden direction</strong><br>$8</span></button></div><p class=\"lumi-plan-note\">Select up to $2 total cost. Click a selected option again to remove it, then press Send.</p></section>",
+      "actions": [
+        {
+          "id": "select-route",
+          "type": "send",
+          "multi_select": true,
+          "cost": "$3",
+          "limit": "$2",
+          "title": "Route selected",
+          "subtitle": "$4",
+          "content": "Route: $4"
+        },
+        {
+          "id": "select-companion",
+          "type": "send",
+          "multi_select": true,
+          "cost": "$5",
+          "limit": "$2",
+          "title": "Companion selected",
+          "subtitle": "$6",
+          "content": "Companion: $6"
+        },
+        {
+          "id": "select-tone",
+          "type": "append",
+          "multi_select": true,
+          "cost": "$7",
+          "limit": "$2",
+          "title": "Tone selected",
+          "subtitle": "$8",
+          "content": "Write the next scene with this direction: $8. Treat it as guidance, not dialogue spoken by the user."
+        }
+      ],
+      "flags": "gi",
+      "placement": ["ai_output"],
+      "scope": "global",
+      "scope_id": null,
+      "target": ["display"],
+      "min_depth": null,
+      "max_depth": null,
+      "trim_strings": [],
+      "run_on_edit": true,
+      "substitute_macros": "none",
+      "disabled": false,
+      "sort_order": 1,
+      "description": "Demonstrates independently claimed visible and hidden multi-select modifiers.",
+      "folder": "Regex Action Demos",
+      "metadata": {}
+    }
+  ],
+  "exported_at": 0
+}

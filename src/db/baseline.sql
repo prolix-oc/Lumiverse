@@ -616,6 +616,7 @@ CREATE TABLE regex_scripts (
   name TEXT NOT NULL,
   find_regex TEXT NOT NULL,
   replace_string TEXT NOT NULL DEFAULT '',
+  actions TEXT NOT NULL DEFAULT '[]',
   flags TEXT NOT NULL DEFAULT 'gi',
   placement TEXT NOT NULL DEFAULT '["ai_output"]',
   scope TEXT NOT NULL DEFAULT 'global',

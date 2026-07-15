@@ -67,6 +67,15 @@ function parseFragment(html: string): HTMLDivElement {
   return root as HTMLDivElement
 }
 
+test('preserves inert associative regex action metadata while stripping event handlers', () => {
+  const root = parseFragment(sanitizeRichHtml(
+    '<button data-lumiverse-regex-action="%7B%22id%22%3A%22north%22%7D" onclick="alert(1)">North</button>',
+  ))
+  const button = root.querySelector('button')
+  expect(button?.getAttribute('data-lumiverse-regex-action')).toBe('%7B%22id%22%3A%22north%22%7D')
+  expect(button?.hasAttribute('onclick')).toBe(false)
+})
+
 describe('richHtmlSanitizer inline SVG support', () => {
   test('preserves safe inline svg in rich html', () => {
     const root = parseFragment(

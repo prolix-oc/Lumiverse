@@ -197,6 +197,11 @@ export interface MessageExtra {
   _loom_inject?: import('@/lib/loom/types').LoomInjectTag;
   _loom_block_id?: string;
   attachments?: MessageAttachment[];
+  associative_regex_action_usage?: Record<string, {
+    script_id: string;
+    action_id: string;
+    used_at: number;
+  }>;
   [key: string]: any;
 }
 

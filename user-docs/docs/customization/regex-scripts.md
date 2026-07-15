@@ -76,6 +76,82 @@ You can select multiple placements for the same script.
 
 ---
 
+## Associative Regex Actions
+
+Associative regex actions turn elements in replacement HTML into choices. This is useful for interactive scene cards, CYOA responses, suggested dialogue, loadout selectors, and similar interfaces.
+
+Actions require a script with the **Display** target. In the replacement HTML, associate a clickable element with an action by giving it a `data-regex-action` value:
+
+```html
+<button type="button" data-regex-action="enter-gate">Enter the gate</button>
+```
+
+Then add an action in the script's **Actions** section whose ID is `enter-gate`. An element's regular `id` attribute can also be used, but `data-regex-action` is recommended because it does not interfere with CSS or page IDs.
+
+Each action has these fields:
+
+| Field | Description |
+|-------|-------------|
+| **ID** | Connects the action to `data-regex-action` in the replacement HTML. IDs must be unique within the script. |
+| **Type: Send** | Sends visible user content and starts generation immediately. |
+| **Type: Append** | Waits for the user's next message, then adds hidden content to that generation's prompt. |
+| **Multi-select option** | Lets this option be selected independently. Multi-select actions are staged instead of generating immediately, then stacked on the next Send. |
+| **Selection cost** | Numeric cost of a multi-select option. Accepts a literal such as `2` or a capture such as `$3`, allowing the regex creator or generated output to set the price. |
+| **Block cost limit** | Positive total-cost bound for the rendered block. Accepts literals and captures. If options resolve different limits, the lowest positive value is enforced. |
+| **Title / Subtitle** | Labels and hover text for the action. These may contain capture references. |
+| **Content** | The visible message or hidden prompt modifier produced by the action. |
+
+Titles, subtitles, content, cost, and limit support the same capture references as the replacement string, including `$1`, `$2`, `$&`, and named captures such as `$<location>`.
+
+### One-shot behavior
+
+Each rendered regex match is a stateful action block. A normal action consumes the entire block when selected. Multi-select choices remain provisional until Send: click an option once to add it and click it again to remove it. At Send, the selected options are claimed together and become one-shot.
+
+Used choices stay disabled when the user scrolls away, refreshes, or opens the chat on another client. This prevents an old scene card from triggering the same generation influence more than once. If normal and multi-select actions are mixed in one block, a normal **Send** action acts as the commit trigger: its content and all staged modifiers are claimed and sent together. A normal **Append** action is non-triggering and cannot replace staged selections from its own block.
+
+### How multi-select content is applied
+
+Multi-select actions wait for the next Send signal:
+
+- An option can be toggled on or off until Send begins.
+- A new option is rejected when its cost would put the block above its limit.
+- Clicking a normal Send action also counts as Send and batches that action with every staged modifier.
+- **Send** modifiers are joined to the user's visible message, separated by blank lines.
+- **Append** modifiers are stacked in a hidden prompt appendix attached to that user message.
+- A visible Send modifier can enable Send even when the text box is empty.
+- Append-only selections keep waiting until the user sends an actual message.
+
+### Importable examples
+
+- [Scene card with a single action](../assets/examples/regex-actions/scene-card-action.json) transforms `<scene>...</scene>` output into a styled HTML card. Its button sends the captured choice immediately.
+- [Multi-select scene planner](../assets/examples/regex-actions/multi-select-scene-planner.json) provides two visible selections and one hidden tone modifier, all stacked on the next Send.
+
+The first example expects AI output shaped like this:
+
+```xml
+<scene>
+  <location>Moonlit Courtyard</location>
+  <description>A silver gate stands between ivy-covered walls.</description>
+  <choice>Open the silver gate</choice>
+</scene>
+```
+
+The multi-select demo expects:
+
+```xml
+<scene-options>
+  <title>Crossing the Sleeping City</title>
+  <budget>3</budget>
+  <route cost="2">Take the rooftops</route>
+  <companion cost="1">Bring Lyra</companion>
+  <tone cost="1">Keep the scene tense and quiet</tone>
+</scene-options>
+```
+
+Import either JSON file through **Regex Scripts → Import**.
+
+---
+
 ## Scope
 
 | Scope | Applies To |

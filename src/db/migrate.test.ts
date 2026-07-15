@@ -12,6 +12,11 @@ describe("database migrations", () => {
       expect(
         db.query("SELECT name FROM _migrations WHERE name = ?").get("093_preset_cache_revision.sql"),
       ).toEqual({ name: "093_preset_cache_revision.sql" });
+      expect(
+        db.query("SELECT name FROM _migrations WHERE name = ?").get("094_regex_actions.sql"),
+      ).toEqual({ name: "094_regex_actions.sql" });
+      const regexColumns = db.query("PRAGMA table_info(regex_scripts)").all() as Array<{ name: string }>;
+      expect(regexColumns.some((column) => column.name === "actions")).toBe(true);
     } finally {
       db.close();
     }
