@@ -71,4 +71,25 @@ describe("Bun streaming-response compatibility", () => {
     expect(response.headers.get("content-length")).toBeNull();
     expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(source);
   });
+
+  test("returns fixed gzip bytes for affected Windows extension bundles", async () => {
+    const fallbackApp = new Hono();
+    fallbackApp.use("*", compress({ platform: "win32", bunVersion: "1.3.14" }));
+    const source = "export function setup() {}".repeat(128);
+    fallbackApp.get("/api/v1/spindle/test-id/frontend", (c) => c.newResponse(source, 200, {
+      "Content-Type": "application/javascript",
+      "Content-Length": String(source.length),
+      ETag: '"spindle-frontend-test"',
+    }));
+
+    const response = await fallbackApp.request(
+      "http://localhost/api/v1/spindle/test-id/frontend?v=bundle-1",
+      { headers: { "Accept-Encoding": "br, gzip" } },
+    );
+    const compressed = new Uint8Array(await response.arrayBuffer());
+
+    expect(response.headers.get("content-encoding")).toBe("gzip");
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(source);
+  });
 });
