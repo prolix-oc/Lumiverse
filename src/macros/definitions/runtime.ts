@@ -117,8 +117,10 @@ export function registerStateMacros(): void {
     handler: async (ctx) => {
       const key = (ctx.args[0] ?? "").trim();
       if (!key) return "";
+      const userId = typeof ctx.env.extra.userId === "string" ? ctx.env.extra.userId : "";
+      if (!userId) return "";
       const { resolveSealedPresetBlock } = await import("../../lumihub/sealed-presets");
-      return resolveSealedPresetBlock(ctx.env.extra.presetMetadata, key);
+      return resolveSealedPresetBlock(userId, ctx.env.extra.presetMetadata, key);
     },
   });
 }

@@ -8,6 +8,7 @@ export type SealedManifest = {
 const cache = new Map<string, Promise<Record<string, string>>>();
 
 export async function resolveSealedPresetBlock(
+  userId: string,
   presetMetadata: Record<string, any> | undefined,
   blockKey: string,
 ): Promise<string> {
@@ -28,10 +29,10 @@ export async function resolveSealedPresetBlock(
     : typeof presetMetadata._lumiverse_preset_version === "string"
       ? presetMetadata._lumiverse_preset_version
       : null;
-  const cacheKey = `${hubPresetId}:${version ?? ""}`;
+  const cacheKey = `${userId}:${hubPresetId}:${version ?? ""}`;
   let pending = cache.get(cacheKey);
   if (!pending) {
-    pending = fetchSealedBlocks(hubPresetId, version, manifest);
+    pending = fetchSealedBlocks(userId, hubPresetId, version, manifest);
     cache.set(cacheKey, pending);
   }
 
@@ -46,20 +47,22 @@ export async function resolveSealedPresetBlock(
 }
 
 export async function resolveSealedPresetBlocksForInstall(
+  userId: string,
   hubPresetId: string,
   version: string | null,
   manifest: SealedManifest,
 ): Promise<Record<string, string>> {
   if (!hubPresetId || !manifest.blocks?.length) return {};
-  return fetchSealedBlocks(hubPresetId, version, manifest);
+  return fetchSealedBlocks(userId, hubPresetId, version, manifest);
 }
 
 async function fetchSealedBlocks(
+  userId: string,
   hubPresetId: string,
   version: string | null,
   manifest: SealedManifest,
 ): Promise<Record<string, string>> {
-  const config = await getLinkConfig();
+  const config = await getLinkConfig(userId);
   if (!config) return {};
 
   const base = config.lumihubUrl.replace(/\/+$/, "");

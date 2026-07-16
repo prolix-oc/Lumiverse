@@ -12,7 +12,6 @@ import { mapWithConcurrency } from "../utils/concurrency";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getFirstUserId } from "../auth/seed";
 import * as wbSvc from "../services/world-books.service";
 import * as presetsSvc from "../services/presets.service";
 import * as regexSvc from "../services/regex-scripts.service";
@@ -40,14 +39,14 @@ import type {
  */
 export async function installCharacter(
   requestId: string,
+  userId: string,
   payload: InstallCharacterPayload
 ): Promise<InstallResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
     return {
       requestId,
       success: false,
-      error: "No owner user configured on this Lumiverse instance",
+      error: "No target user configured for this LumiHub install",
       errorCode: "UNKNOWN",
     };
   }
@@ -498,11 +497,11 @@ async function installFromChub(
  */
 export async function installWorldbook(
   requestId: string,
+  userId: string,
   payload: InstallWorldbookPayload
 ): Promise<InstallWorldbookResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -584,14 +583,14 @@ export async function installWorldbook(
   }
 }
 
-/** Install a theme export from LumiHub into the owner's active theme settings. */
+/** Install a theme export from LumiHub into the linked user's active theme settings. */
 export async function installTheme(
   requestId: string,
+  userId: string,
   payload: InstallThemePayload,
 ): Promise<InstallThemeResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -638,14 +637,14 @@ export async function installTheme(
   }
 }
 
-/** Install a Loom preset export from LumiHub into the owner's preset library. */
+/** Install a Loom preset export from LumiHub into the linked user's preset library. */
 export async function installPreset(
   requestId: string,
+  userId: string,
   payload: InstallPresetPayload,
 ): Promise<InstallPresetResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -676,7 +675,7 @@ export async function installPreset(
       : {};
     const passthroughMetadata = extractPresetPassthroughMetadata(p);
     const sealedPreset = isPlainObject(payload.sealedPreset) ? payload.sealedPreset as SealedManifest : null;
-    const materializedBlocks = await materializeSealedPresetBlocks(blocks, payload.presetId, presetVersion, sealedPreset);
+    const materializedBlocks = await materializeSealedPresetBlocks(userId, blocks, payload.presetId, presetVersion, sealedPreset);
     const incomingSamplerOverrides = isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {};
     const incomingCustomBody = isPlainObject(p.customBody) ? p.customBody : {};
     const incomingPromptVariables = isPlainObject(p.promptVariables) ? p.promptVariables : {};
@@ -958,6 +957,7 @@ function isPromptVariableOption(value: unknown): value is { id: string; label: s
 }
 
 async function materializeSealedPresetBlocks(
+  userId: string,
   blocks: any[],
   hubPresetId: string,
   version: string | null,
@@ -983,7 +983,7 @@ async function materializeSealedPresetBlocks(
   }
   if (!usedKeys.size) return blocks;
 
-  const resolved = await resolveSealedPresetBlocksForInstall(hubPresetId, version, sealedPreset);
+  const resolved = await resolveSealedPresetBlocksForInstall(userId, hubPresetId, version, sealedPreset);
   for (const key of usedKeys) {
     if (typeof resolved[key] !== "string") {
       throw new Error(`Unable to fetch or verify sealed preset block: ${key}`);

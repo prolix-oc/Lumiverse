@@ -260,8 +260,8 @@ async function gracefulShutdown(signal: string) {
 
   // 3. Disconnect LumiHub WebSocket client
   try {
-    const { getLumiHubClient } = await import("./lumihub/client");
-    getLumiHubClient().disconnect();
+    const { disconnectAllLumiHubClients } = await import("./lumihub/client");
+    disconnectAllLumiHubClients();
   } catch {}
 
   // 3.5 Disconnect all MCP servers

@@ -1,12 +1,12 @@
 import { Hono } from "hono";
-import { requireOwner } from "../auth/middleware";
 import * as linkSvc from "../services/lumihub-link.service";
-import { getLumiHubClient } from "../lumihub/client";
+import { deleteLumiHubClient, getLumiHubClient } from "../lumihub/client";
 import { safeFetch, validateHost, SSRFError } from "../utils/safe-fetch";
 
 // --- PKCE state storage (in-memory, same pattern as spindle/oauth-state.ts) ---
 
 interface PKCEState {
+  userId: string;
   codeVerifier: string;
   lumihubUrl: string;
   instanceName: string;
@@ -54,12 +54,11 @@ lumihubCallbackRoute.get("/callback", async (c) => {
       stateKey = stateParam;
     }
   } else {
-    for (const [key, entry] of pkceStateMap) {
-      if (Date.now() <= entry.expiresAt) {
-        pkceState = entry;
-        stateKey = key;
-        break;
-      }
+    // Backward compatibility for hubs that do not echo `state`, but only when
+    // there is exactly one possible session. Guessing would cross user links.
+    const active = [...pkceStateMap.entries()].filter(([, entry]) => Date.now() <= entry.expiresAt);
+    if (active.length === 1) {
+      [stateKey, pkceState] = active[0];
     }
   }
 
@@ -117,6 +116,7 @@ lumihubCallbackRoute.get("/callback", async (c) => {
 
     // Save the link config (encrypted)
     await linkSvc.saveLinkConfig(
+      pkceState.userId,
       pkceState.lumihubUrl,
       data.ws_url,
       data.token,
@@ -125,7 +125,7 @@ lumihubCallbackRoute.get("/callback", async (c) => {
     );
 
     // Start the WebSocket connection
-    const client = getLumiHubClient();
+    const client = getLumiHubClient(pkceState.userId);
     client.connect(data.ws_url, data.token);
 
     return c.html(successHtml("Linked Successfully", "Your Lumiverse instance is now linked to LumiHub. You can close this window."));
@@ -139,8 +139,9 @@ lumihubCallbackRoute.get("/callback", async (c) => {
 
 export const lumihubRoutes = new Hono();
 
-/** Initiate a link to LumiHub (owner only). */
-lumihubRoutes.post("/link", requireOwner, async (c) => {
+/** Initiate a personal link to LumiHub. */
+lumihubRoutes.post("/link", async (c) => {
+  const userId = c.get("userId");
   const body = await c.req.json();
   const lumihubUrl = body.lumihub_url?.replace(/\/+$/, "");
   const instanceName = body.instance_name || "My Lumiverse";
@@ -189,9 +190,16 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
   // Generate PKCE
   const { codeVerifier, codeChallenge } = await linkSvc.generatePKCE();
 
+  // A user can only have one live linking attempt. Retire an abandoned retry
+  // so old popup tabs cannot accumulate ambiguous fallback candidates.
+  for (const [key, entry] of pkceStateMap) {
+    if (entry.userId === userId) pkceStateMap.delete(key);
+  }
+
   // Store PKCE state
   const stateId = crypto.randomUUID();
   pkceStateMap.set(stateId, {
+    userId,
     codeVerifier,
     lumihubUrl,
     instanceName,
@@ -215,12 +223,13 @@ lumihubRoutes.post("/link", requireOwner, async (c) => {
 
 /** Get LumiHub connection status. */
 lumihubRoutes.get("/status", async (c) => {
-  const config = await linkSvc.getLinkConfig();
+  const userId = c.get("userId");
+  const config = await linkSvc.getLinkConfig(userId);
   if (!config) {
     return c.json({ linked: false });
   }
 
-  const client = getLumiHubClient();
+  const client = getLumiHubClient(userId);
   return c.json({
     linked: true,
     lumihub_url: config.lumihubUrl,
@@ -232,8 +241,9 @@ lumihubRoutes.get("/status", async (c) => {
 });
 
 /** Toggle sharing anonymous usage counters with the linked hub. */
-lumihubRoutes.post("/stats-sharing", requireOwner, async (c) => {
-  const config = await linkSvc.getLinkConfig();
+lumihubRoutes.post("/stats-sharing", async (c) => {
+  const userId = c.get("userId");
+  const config = await linkSvc.getLinkConfig(userId);
   if (!config) {
     return c.json({ error: "Not linked to a LumiHub" }, 400);
   }
@@ -243,18 +253,18 @@ lumihubRoutes.post("/stats-sharing", requireOwner, async (c) => {
     return c.json({ error: "Body must be { enabled: boolean }" }, 400);
   }
 
-  linkSvc.setStatsSharing(body.enabled);
+  linkSvc.setStatsSharing(userId, body.enabled);
   if (body.enabled) {
-    getLumiHubClient().syncStats();
+    getLumiHubClient(userId).syncStats();
   }
   return c.json({ success: true, share_usage_stats: body.enabled });
 });
 
-/** Unlink from LumiHub (owner only). */
-lumihubRoutes.post("/unlink", requireOwner, async (c) => {
-  const client = getLumiHubClient();
-  client.disconnect();
-  linkSvc.deleteLinkConfig();
+/** Unlink the current user's LumiHub account. */
+lumihubRoutes.post("/unlink", async (c) => {
+  const userId = c.get("userId");
+  deleteLumiHubClient(userId);
+  linkSvc.deleteLinkConfig(userId);
   return c.json({ success: true });
 });
 

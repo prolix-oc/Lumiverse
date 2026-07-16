@@ -3,6 +3,7 @@ import { getEncryptionKeyBytes } from "../crypto/init";
 
 interface LinkRow {
   id: string;
+  user_id: string;
   lumihub_url: string;
   ws_url: string;
   instance_name: string;
@@ -17,6 +18,7 @@ interface LinkRow {
 
 export interface LinkConfig {
   id: string;
+  userId: string;
   lumihubUrl: string;
   wsUrl: string;
   instanceName: string;
@@ -73,14 +75,10 @@ async function decrypt(encrypted: string, ivB64: string, tagB64: string): Promis
   return new TextDecoder().decode(decrypted);
 }
 
-/** Get the current LumiHub link configuration, or null if not linked. */
-export async function getLinkConfig(): Promise<LinkConfig | null> {
-  const row = getDb().query("SELECT * FROM lumihub_link LIMIT 1").get() as LinkRow | null;
-  if (!row) return null;
-
-  const linkToken = await decrypt(row.link_token_encrypted, row.link_token_iv, row.link_token_tag);
+function rowToConfig(row: LinkRow, linkToken: string): LinkConfig {
   return {
     id: row.id,
+    userId: row.user_id,
     lumihubUrl: row.lumihub_url,
     wsUrl: row.ws_url,
     instanceName: row.instance_name,
@@ -92,53 +90,71 @@ export async function getLinkConfig(): Promise<LinkConfig | null> {
   };
 }
 
-/** Save a new LumiHub link configuration (replaces any existing). */
+/** Get a user's LumiHub link configuration, or null if they have not linked. */
+export async function getLinkConfig(userId: string): Promise<LinkConfig | null> {
+  const row = getDb().query("SELECT * FROM lumihub_link WHERE user_id = ? LIMIT 1").get(userId) as LinkRow | null;
+  if (!row) return null;
+
+  const linkToken = await decrypt(row.link_token_encrypted, row.link_token_iv, row.link_token_tag);
+  return rowToConfig(row, linkToken);
+}
+
+/** Get every configured link for startup reconnection. */
+export async function listLinkConfigs(): Promise<LinkConfig[]> {
+  const rows = getDb().query("SELECT * FROM lumihub_link WHERE user_id IS NOT NULL").all() as LinkRow[];
+  return Promise.all(rows.map(async (row) => {
+    const token = await decrypt(row.link_token_encrypted, row.link_token_iv, row.link_token_tag);
+    return rowToConfig(row, token);
+  }));
+}
+
+/** Save a user's LumiHub link configuration (replaces only that user's link). */
 export async function saveLinkConfig(
+  userId: string,
   lumihubUrl: string,
   wsUrl: string,
   linkToken: string,
   instanceId: string,
   instanceName: string
 ): Promise<void> {
-  // Delete any existing link
-  getDb().run("DELETE FROM lumihub_link");
+  getDb().query("DELETE FROM lumihub_link WHERE user_id = ?").run(userId);
 
   const { encrypted, iv, tag } = await encrypt(linkToken);
   getDb()
     .query(
-      `INSERT INTO lumihub_link (lumihub_url, ws_url, instance_name, link_token_encrypted, link_token_iv, link_token_tag, instance_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO lumihub_link (user_id, lumihub_url, ws_url, instance_name, link_token_encrypted, link_token_iv, link_token_tag, instance_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(lumihubUrl, wsUrl, instanceName, encrypted, iv, tag, instanceId);
+    .run(userId, lumihubUrl, wsUrl, instanceName, encrypted, iv, tag, instanceId);
 }
 
-/** Delete the LumiHub link configuration. */
-export function deleteLinkConfig(): void {
-  getDb().run("DELETE FROM lumihub_link");
+/** Delete one user's LumiHub link configuration. */
+export function deleteLinkConfig(userId: string): void {
+  getDb().query("DELETE FROM lumihub_link WHERE user_id = ?").run(userId);
 }
 
-/** Check if a LumiHub link is configured. */
-export function isLinked(): boolean {
-  const row = getDb().query("SELECT id FROM lumihub_link LIMIT 1").get();
+/** Check if a LumiHub link is configured for a user. */
+export function isLinked(userId: string): boolean {
+  const row = getDb().query("SELECT id FROM lumihub_link WHERE user_id = ? LIMIT 1").get(userId);
   return row !== null;
 }
 
 /** Update the last_connected_at timestamp. */
-export function updateLastConnected(): void {
-  getDb().run("UPDATE lumihub_link SET last_connected_at = datetime('now')");
+export function updateLastConnected(userId: string): void {
+  getDb().query("UPDATE lumihub_link SET last_connected_at = datetime('now') WHERE user_id = ?").run(userId);
 }
 
 /** Whether the user has opted in to sharing anonymous usage counters. */
-export function isStatsSharingEnabled(): boolean {
-  const row = getDb().query("SELECT share_usage_stats FROM lumihub_link LIMIT 1").get() as
+export function isStatsSharingEnabled(userId: string): boolean {
+  const row = getDb().query("SELECT share_usage_stats FROM lumihub_link WHERE user_id = ? LIMIT 1").get(userId) as
     | { share_usage_stats: number }
     | null;
   return row?.share_usage_stats === 1;
 }
 
 /** Enable/disable sharing anonymous usage counters with the linked hub. */
-export function setStatsSharing(enabled: boolean): void {
-  getDb().query("UPDATE lumihub_link SET share_usage_stats = ?").run(enabled ? 1 : 0);
+export function setStatsSharing(userId: string, enabled: boolean): void {
+  getDb().query("UPDATE lumihub_link SET share_usage_stats = ? WHERE user_id = ?").run(enabled ? 1 : 0, userId);
 }
 
 /** Generate a PKCE code_verifier and code_challenge (S256). */

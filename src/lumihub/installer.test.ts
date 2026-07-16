@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { createPreset, getPreset, updatePreset } from "../services/presets.service";
 import { validateInstallPresetPayload } from "./payload-validation";
-import { installPreset } from "./installer";
+import { installPreset as installPresetForUser } from "./installer";
 import type { InstallPresetPayload } from "./types";
 
 const USER_ID = "owner-1";
+const TENANT_USER_ID = "tenant-1";
+
+function installPreset(requestId: string, payload: InstallPresetPayload, userId = USER_ID) {
+  return installPresetForUser(requestId, userId, payload);
+}
 
 function initInstallerTestDb(): void {
   closeDatabase();
@@ -16,6 +21,7 @@ function initInstallerTestDb(): void {
     createdAt INTEGER NOT NULL
   )`);
   db.run(`INSERT INTO "user" (id, createdAt) VALUES (?, ?)` , [USER_ID, 1]);
+  db.run(`INSERT INTO "user" (id, createdAt) VALUES (?, ?)` , [TENANT_USER_ID, 2]);
   db.run(`CREATE TABLE presets (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -414,5 +420,16 @@ describe("LumiHub preset installer metadata", () => {
     expect(installed.presetId).not.toBe(local.id);
     const count = getDb().query("SELECT COUNT(*) AS count FROM presets WHERE user_id = ?").get(USER_ID) as { count: number };
     expect(count.count).toBe(2);
+  });
+
+  test("installs into the linked tenant user's library instead of the owner library", async () => {
+    const installed = await installPreset("request-tenant", installPayload("hub-tenant", {
+      name: "Tenant preset",
+      blocks: [],
+    }), TENANT_USER_ID);
+
+    expect(installed.success).toBe(true);
+    expect(getPreset(TENANT_USER_ID, installed.presetId!)).not.toBeNull();
+    expect(getPreset(USER_ID, installed.presetId!)).toBeNull();
   });
 });
