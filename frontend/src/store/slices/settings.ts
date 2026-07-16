@@ -58,6 +58,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'contextFilters',
   'activeProfileId',
   'activePersonaId',
+  'recentPersonaIds',
   'activeLoomPresetId',
   // Character browser preferences
   'favorites',

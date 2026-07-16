@@ -117,6 +117,17 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
       imageGenProfilesVersion,
     })
     if (appliedRecentChats) landingPreloadHandled = true
+
+    if (
+      !errors['personas']
+      && payload.personas.total > payload.personas.data.length
+    ) {
+      personasApi.listAll()
+        .then((personas) => {
+          if (isCurrent()) useStore.getState().setPersonas(personas)
+        })
+        .catch(() => {})
+    }
   }
   if (payload && !errors['startupSettings']) {
     void loadFullSettings(isCurrent)
@@ -303,9 +314,9 @@ async function runFallbacks(
   }
 
   if (errors['personas']) {
-    personasApi.list({ limit: 200 })
-      .then((res) => {
-        if (isCurrent()) store.setPersonas(res.data)
+    personasApi.listAll()
+      .then((personas) => {
+        if (isCurrent()) store.setPersonas(personas)
       })
       .catch(() => {})
   }

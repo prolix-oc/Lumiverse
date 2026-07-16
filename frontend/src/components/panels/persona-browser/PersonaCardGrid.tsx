@@ -1,6 +1,6 @@
 import { Fragment, memo, useRef, useState, useEffect, useCallback, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { User, UserCheck, Crown, Link2 } from 'lucide-react'
+import { User, UserCheck, Crown, Link2, Check } from 'lucide-react'
 import { getPersonaAvatarThumbUrl } from '@/lib/avatarUrls'
 import LazyImage from '@/components/shared/LazyImage'
 import type { Persona } from '@/types/api'
@@ -14,6 +14,9 @@ interface PersonaCardGridProps {
   onSelect: (id: string | null) => void
   onDoubleClick: (id: string) => void
   renderEditor?: (personaId: string) => ReactNode
+  batchMode?: boolean
+  batchSelectedIds?: Set<string>
+  onToggleBatch?: (id: string) => void
 }
 
 const PersonaCard = memo(function PersonaCard({
@@ -22,30 +25,46 @@ const PersonaCard = memo(function PersonaCard({
   isActive,
   onSelect,
   onDoubleClick,
+  batchMode,
+  isBatchSelected,
+  onToggleBatch,
 }: {
   persona: Persona
   isSelected: boolean
   isActive: boolean
   onSelect: (id: string | null) => void
   onDoubleClick: (id: string) => void
+  batchMode?: boolean
+  isBatchSelected?: boolean
+  onToggleBatch?: (id: string) => void
 }) {
   const { t } = useTranslation('panels', { keyPrefix: 'personaManager.badges' })
   return (
     <div
       className={clsx(
         styles.card,
-        isSelected && styles.cardSelected,
+        (isSelected || isBatchSelected) && styles.cardSelected,
         isActive && styles.cardActive
       )}
       role="button"
       tabIndex={0}
-      onClick={() => onSelect(isSelected ? null : persona.id)}
-      onDoubleClick={() => onDoubleClick(persona.id)}
+      aria-pressed={batchMode ? !!isBatchSelected : isSelected}
+      onClick={() => batchMode ? onToggleBatch?.(persona.id) : onSelect(isSelected ? null : persona.id)}
+      onDoubleClick={() => { if (!batchMode) onDoubleClick(persona.id) }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onSelect(isSelected ? null : persona.id)
+        if (e.key === 'Enter' || (batchMode && e.key === ' ')) {
+          e.preventDefault()
+          if (batchMode) onToggleBatch?.(persona.id)
+          else onSelect(isSelected ? null : persona.id)
+        }
       }}
     >
       <div className={styles.avatarWrap}>
+        {batchMode && (
+          <span className={clsx(styles.batchCheck, isBatchSelected && styles.batchCheckSelected)}>
+            {isBatchSelected && <Check size={12} />}
+          </span>
+        )}
         <LazyImage
           src={getPersonaAvatarThumbUrl(persona) || ''}
           alt={persona.name}
@@ -90,6 +109,9 @@ export default function PersonaCardGrid({
   onSelect,
   onDoubleClick,
   renderEditor,
+  batchMode = false,
+  batchSelectedIds = new Set(),
+  onToggleBatch,
 }: PersonaCardGridProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'personaManager' })
   const gridRef = useRef<HTMLDivElement>(null)
@@ -130,8 +152,11 @@ export default function PersonaCardGrid({
             isActive={activeId === persona.id}
             onSelect={onSelect}
             onDoubleClick={onDoubleClick}
+            batchMode={batchMode}
+            isBatchSelected={batchSelectedIds.has(persona.id)}
+            onToggleBatch={onToggleBatch}
           />
-          {renderEditor && selectedId && i === editorAfterIdx && (
+          {!batchMode && renderEditor && selectedId && i === editorAfterIdx && (
             <div className={styles.inlineEditor}>
               {renderEditor(selectedId)}
             </div>

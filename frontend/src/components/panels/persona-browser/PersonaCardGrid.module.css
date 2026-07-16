@@ -48,6 +48,27 @@
   flex-shrink: 0;
 }
 
+.batchCheck {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  color: white;
+}
+
+.batchCheckSelected {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary);
+}
+
 .avatarImg {
   width: 72px;
   height: 72px;

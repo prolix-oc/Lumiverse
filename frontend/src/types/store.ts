@@ -171,7 +171,7 @@ export interface CharactersSlice {
 
 // ---- Personas Slice ----
 export type PersonaFilterType = 'all' | 'default' | 'connected'
-export type PersonaSortField = 'name' | 'created'
+export type PersonaSortField = 'name' | 'created' | 'updated_at'
 export type PersonaSortDirection = 'asc' | 'desc'
 export type PersonaViewMode = 'grid' | 'list'
 export type PersonaTagBindingMode = 'any' | 'all'
@@ -193,6 +193,8 @@ export interface ResolvedPersonaBinding {
 export interface PersonasSlice {
   personas: Persona[]
   activePersonaId: string | null
+  /** Persona ids ordered by most recent activation, independent of edit timestamps. */
+  recentPersonaIds: string[]
   /** Map of characterId → personaId or binding object */
   characterPersonaBindings: Record<string, string | import('@/types/api').CharacterPersonaBinding>
   /** Map of personaId → tag-based auto-switch binding */

@@ -371,6 +371,32 @@
       "default": "Default",
       "connected": "Connected"
     },
+    "recentlyUsed": "Recently used",
+    "bulk": {
+      "selected": "{{selected}} of {{total}} selected",
+      "selectAll": "Select all",
+      "deselectAll": "Deselect all",
+      "exit": "Exit bulk selection",
+      "action": "Bulk action…",
+      "move": "Move to folder",
+      "attachLorebook": "Attach lorebook",
+      "removeLorebook": "Remove lorebook",
+      "toggleNarrator": "Toggle narrator",
+      "export": "Export",
+      "delete": "Delete",
+      "folder": "Destination folder",
+      "uncategorized": "Uncategorized (or type a folder)",
+      "lorebook": "Lorebook",
+      "chooseLorebook": "Choose a lorebook…",
+      "apply": "Apply",
+      "working": "Working…",
+      "updated": "Updated {{count}} personas",
+      "exported": "Exported {{count}} personas",
+      "deleted": "Deleted {{count}} personas",
+      "deleteTitle": "Delete personas",
+      "deleteMessage": "Delete {{count}} selected personas? This cannot be undone.",
+      "failed": "Bulk persona action failed"
+    },
     "folderName": "Folder name",
     "confirmRename": "Confirm rename",
     "cancelRename": "Cancel rename",
@@ -2755,13 +2781,16 @@
     "sortBy": "Sort by {{field}}",
     "sort": {
       "name": "Name",
-      "created": "Created"
+      "created": "Created",
+      "updatedAt": "Last edited"
     },
     "ascending": "Ascending",
     "descending": "Descending",
     "switchToList": "Switch to list",
     "switchToGrid": "Switch to grid",
-    "globalAddonsLibrary": "Global add-ons library"
+    "globalAddonsLibrary": "Global add-ons library",
+    "batchSelect": "Bulk select",
+    "exitBatchMode": "Exit bulk selection"
   },
   "databankPanel": {
     "status": {

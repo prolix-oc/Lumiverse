@@ -35,7 +35,7 @@ export interface CreatePersonaInput {
   folder?: string;
   is_default?: boolean;
   is_narrator?: boolean;
-  attached_world_book_id?: string;
+  attached_world_book_id?: string | null;
   metadata?: Record<string, any>;
 }
 

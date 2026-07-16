@@ -188,6 +188,44 @@ export function deletePersonaFolder(userId: string, name: string): Persona[] {
   return updated;
 }
 
+export function isPersonaAvatarPathReferenced(userId: string, avatarPath: string): boolean {
+  return !!getDb()
+    .query("SELECT 1 FROM personas WHERE user_id = ? AND avatar_path = ? LIMIT 1")
+    .get(userId, avatarPath);
+}
+
+export interface BulkPersonaUpdateInput {
+  folder?: string;
+  attached_world_book_id?: string | null;
+  toggle_narrator?: boolean;
+}
+
+export function bulkUpdatePersonas(
+  userId: string,
+  ids: string[],
+  input: BulkPersonaUpdateInput
+): Persona[] {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const updated: Persona[] = [];
+
+  for (const id of uniqueIds) {
+    const existing = getPersona(userId, id);
+    if (!existing) continue;
+
+    const patch: UpdatePersonaInput = {};
+    if (input.folder !== undefined) patch.folder = input.folder.trim();
+    if (input.attached_world_book_id !== undefined) {
+      patch.attached_world_book_id = input.attached_world_book_id;
+    }
+    if (input.toggle_narrator) patch.is_narrator = !existing.is_narrator;
+
+    const persona = updatePersona(userId, id, patch);
+    if (persona) updated.push(persona);
+  }
+
+  return updated;
+}
+
 export function setPersonaAvatar(userId: string, id: string, avatarPath: string): boolean {
   const result = getDb()
     .query("UPDATE personas SET avatar_path = ?, updated_at = ? WHERE id = ? AND user_id = ?")

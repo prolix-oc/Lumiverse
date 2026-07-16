@@ -63,6 +63,59 @@ app.post("/folders/delete", async (c) => {
   return c.json({ updated, count: updated.length });
 });
 
+app.post("/bulk-update", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{
+    ids?: unknown;
+    folder?: unknown;
+    attached_world_book_id?: unknown;
+    toggle_narrator?: unknown;
+  }>();
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 1000) {
+    return c.json({ error: "ids must be a non-empty array with at most 1000 items" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return c.json({ error: "ids must contain persona ids" }, 400);
+
+  const input: svc.BulkPersonaUpdateInput = {};
+  if (typeof body.folder === "string") input.folder = body.folder;
+  if (body.attached_world_book_id === null || typeof body.attached_world_book_id === "string") {
+    input.attached_world_book_id = body.attached_world_book_id;
+  }
+  if (body.toggle_narrator === true) input.toggle_narrator = true;
+  if (Object.keys(input).length === 0) return c.json({ error: "No bulk update action supplied" }, 400);
+
+  const updated = svc.bulkUpdatePersonas(userId, ids, input);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown }>();
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 1000) {
+    return c.json({ error: "ids must be a non-empty array with at most 1000 items" }, 400);
+  }
+
+  const ids = [...new Set(body.ids.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  const personas = ids
+    .map((id) => svc.getPersona(userId, id))
+    .filter((persona): persona is NonNullable<typeof persona> => !!persona);
+  const deleted: string[] = [];
+  for (const persona of personas) {
+    if (svc.deletePersona(userId, persona.id)) deleted.push(persona.id);
+  }
+
+  const imageIds = new Set(personas.flatMap(collectPersonaImageIds));
+  for (const imageId of imageIds) images.deleteImageIfUnreferenced(userId, imageId);
+
+  const avatarPaths = new Set(personas.map((persona) => persona.avatar_path).filter((path): path is string => !!path));
+  for (const avatarPath of avatarPaths) {
+    if (!svc.isPersonaAvatarPathReferenced(userId, avatarPath)) await files.deleteAvatar(avatarPath);
+  }
+
+  return c.json({ deleted, count: deleted.length });
+});
+
 app.get("/:id", (c) => {
   const userId = c.get("userId");
   const persona = svc.getPersona(userId, c.req.param("id"));

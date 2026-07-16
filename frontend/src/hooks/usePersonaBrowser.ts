@@ -29,6 +29,7 @@ export function usePersonaBrowser() {
   const updatePersonaInStore = useStore((s) => s.updatePersona)
   const removePersona = useStore((s) => s.removePersona)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
   const setActivePersona = useStore((s) => s.setActivePersona)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatMetadata = useStore((s) => s.activeChatMetadata)
@@ -70,8 +71,7 @@ export function usePersonaBrowser() {
   const loadPersonas = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await personasApi.list({ limit: 200 })
-      setPersonas(result.data)
+      setPersonas(await personasApi.listAll())
     } catch (err) {
       console.error('[PersonaBrowser] Failed to load:', err)
     } finally {
@@ -130,7 +130,10 @@ export function usePersonaBrowser() {
           cmp = a.name.localeCompare(b.name)
           break
         case 'created':
-          cmp = (b.created_at || 0) - (a.created_at || 0)
+          cmp = (a.created_at || 0) - (b.created_at || 0)
+          break
+        case 'updated_at':
+          cmp = (a.updated_at || 0) - (b.updated_at || 0)
           break
       }
       return sortDirection === 'desc' ? -cmp : cmp
@@ -139,18 +142,34 @@ export function usePersonaBrowser() {
     return result
   }, [personas, filterType, debouncedQuery, fuse, sortField, sortDirection])
 
+  const recentPersonas = useMemo(() => {
+    const filteredById = new Map(filteredPersonas.map((persona) => [persona.id, persona]))
+    return recentPersonaIds
+      .map((id) => filteredById.get(id))
+      .filter((persona): persona is Persona => !!persona)
+  }, [filteredPersonas, recentPersonaIds])
+
+  const recentPersonaIdSet = useMemo(
+    () => new Set(recentPersonas.map((persona) => persona.id)),
+    [recentPersonas],
+  )
+  const regularPersonas = useMemo(
+    () => filteredPersonas.filter((persona) => !recentPersonaIdSet.has(persona.id)),
+    [filteredPersonas, recentPersonaIdSet],
+  )
+
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
   }, [filterType, debouncedQuery, sortField, sortDirection])
 
   // Paginate filtered results
-  const totalPages = Math.max(1, Math.ceil(filteredPersonas.length / personasPerPage))
+  const totalPages = Math.max(1, Math.ceil(regularPersonas.length / personasPerPage))
   const safePage = Math.min(currentPage, totalPages)
   const paginatedPersonas = useMemo(() => {
     const start = (safePage - 1) * personasPerPage
-    return filteredPersonas.slice(start, start + personasPerPage)
-  }, [filteredPersonas, safePage, personasPerPage])
+    return regularPersonas.slice(start, start + personasPerPage)
+  }, [regularPersonas, safePage, personasPerPage])
 
   // Group paginated personas by folder
   const groupedPersonas = useMemo(() => {
@@ -233,6 +252,32 @@ export function usePersonaBrowser() {
       removePersona(id)
     },
     [removePersona]
+  )
+
+  const bulkUpdatePersonas = useCallback(
+    async (ids: string[], input: {
+      folder?: string
+      attached_world_book_id?: string | null
+      toggle_narrator?: boolean
+    }) => {
+      const result = await personasApi.bulkUpdate(ids, input)
+      if (result.updated.length > 0) {
+        const updatedById = new Map(result.updated.map((persona) => [persona.id, persona]))
+        const currentPersonas = useStore.getState().personas
+        setPersonas(currentPersonas.map((persona) => updatedById.get(persona.id) ?? persona))
+      }
+      return result
+    },
+    [setPersonas],
+  )
+
+  const bulkDeletePersonas = useCallback(
+    async (ids: string[]) => {
+      const result = await personasApi.bulkDelete(ids)
+      for (const id of result.deleted) removePersona(id)
+      return result
+    },
+    [removePersona],
   )
 
   const duplicatePersona = useCallback(
@@ -375,8 +420,7 @@ export function usePersonaBrowser() {
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await personasApi.list({ limit: 200 })
-      setPersonas(result.data)
+      setPersonas(await personasApi.listAll())
     } catch (err) {
       console.error('[PersonaBrowser] Failed to refresh:', err)
     } finally {
@@ -388,6 +432,8 @@ export function usePersonaBrowser() {
     // State
     personas: paginatedPersonas,
     groupedPersonas,
+    recentPersonas: safePage === 1 ? recentPersonas : [],
+    allFilteredPersonas: filteredPersonas,
     allPersonas: personas,
     allFolders,
     totalFiltered: filteredPersonas.length,
@@ -419,6 +465,8 @@ export function usePersonaBrowser() {
     renameFolder,
     deleteFolder,
     deletePersona,
+    bulkUpdatePersonas,
+    bulkDeletePersonas,
     duplicatePersona,
     uploadAvatar,
     toggleDefault,

@@ -23,6 +23,15 @@
   gap: 6px;
 }
 
+.recentHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 4px;
+  color: var(--lumiverse-primary-muted);
+}
+
 .folderHeader {
   display: flex;
   align-items: center;
