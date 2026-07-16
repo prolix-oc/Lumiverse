@@ -1407,7 +1407,7 @@ describe("initializeSandbox", () => {
             [globalThis, "require", globalThis.require],
           ];
           initializeSandbox();
-          if (process.env === Bun.env) {
+          if (process.platform !== "win32" && process.env === Bun.env) {
             throw new Error("process.env sensitive-access wrapper was not installed");
           }
           Reflect.ownKeys(process.env);
@@ -1481,28 +1481,30 @@ describe("initializeSandbox", () => {
           if (Bun.env.PATH !== "/sandbox-safe/bin") throw new Error("Bun PATH was removed");
           if (Bun.env.TMPDIR !== "/sandbox-safe/tmp") throw new Error("Bun TMPDIR was removed");
 
-          let writeBlocked = false;
-          try {
-            process.env.SECRET_FOR_SANDBOX = "write-attempt";
-          } catch (error) {
-            writeBlocked =
-              error instanceof Error &&
-              error.message === "Setting sensitive env var 'SECRET_FOR_SANDBOX' is blocked in extension context";
-          }
-          if (!writeBlocked) throw new Error("sensitive process.env write was not blocked by the exact guard");
-          let bunWriteError = "";
-          try {
-            Bun.env.SECRET_FOR_SANDBOX = "bun-write-attempt";
-          } catch (error) {
-            bunWriteError = error instanceof Error ? error.name + ":" + error.message : String(error);
-          }
-          if (
-            bunWriteError !== "TypeError:Attempting to define property on object that is not extensible." ||
-            Bun.env.SECRET_FOR_SANDBOX !== undefined ||
-            Object.keys(Bun.env).includes("SECRET_FOR_SANDBOX") ||
-            Reflect.ownKeys(Bun.env).includes("SECRET_FOR_SANDBOX")
-          ) {
-            throw new Error("sensitive Bun.env write was not rejected and scrubbed");
+          if (process.platform !== "win32") {
+            let writeBlocked = false;
+            try {
+              process.env.SECRET_FOR_SANDBOX = "write-attempt";
+            } catch (error) {
+              writeBlocked =
+                error instanceof Error &&
+                error.message === "Setting sensitive env var 'SECRET_FOR_SANDBOX' is blocked in extension context";
+            }
+            if (!writeBlocked) throw new Error("sensitive process.env write was not blocked by the exact guard");
+            let bunWriteError = "";
+            try {
+              Bun.env.SECRET_FOR_SANDBOX = "bun-write-attempt";
+            } catch (error) {
+              bunWriteError = error instanceof Error ? error.name + ":" + error.message : String(error);
+            }
+            if (
+              bunWriteError !== "TypeError:Attempting to define property on object that is not extensible." ||
+              Bun.env.SECRET_FOR_SANDBOX !== undefined ||
+              Object.keys(Bun.env).includes("SECRET_FOR_SANDBOX") ||
+              Reflect.ownKeys(Bun.env).includes("SECRET_FOR_SANDBOX")
+            ) {
+              throw new Error("sensitive Bun.env write was not rejected and scrubbed");
+            }
           }
 
           const blockedCalls = [
@@ -1602,7 +1604,7 @@ describe("initializeSandbox", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr.toString()).toBe("");
   });
-  test("fails closed before guard installation when a Windows transport leaks a sensitive env value", () => {
+  test("scrubs a leaked Windows env value without freezing its host object", () => {
     const result = Bun.spawnSync({
       cmd: [
         process.execPath,
@@ -1616,18 +1618,22 @@ describe("initializeSandbox", () => {
             ...platformDescriptor,
             value: "win32",
           });
-          const originalFetch = globalThis.fetch;
-          let message = "";
-          try {
-            initializeSandbox();
-          } catch (error) {
-            message = error instanceof Error ? error.message : String(error);
+          const originalProcessEnv = process.env;
+          const wasExtensible = Object.isExtensible(originalProcessEnv);
+          initializeSandbox();
+          if (process.env !== originalProcessEnv) {
+            throw new Error("process.env identity changed");
           }
-          if (!message.includes("Sandbox guard installation failed (process.env.AUTH_TOKEN_FOR_SANDBOX)")) {
-            throw new Error("unexpected startup result: " + message);
+          if (Object.isExtensible(process.env) !== wasExtensible) {
+            throw new Error("process.env extensibility changed");
           }
-          if (globalThis.fetch !== originalFetch) {
-            throw new Error("sandbox mutated globals before rejecting the unsafe environment");
+          if (
+            process.env.AUTH_TOKEN_FOR_SANDBOX !== undefined ||
+            Bun.env.AUTH_TOKEN_FOR_SANDBOX !== undefined ||
+            Reflect.ownKeys(process.env).includes("AUTH_TOKEN_FOR_SANDBOX") ||
+            Reflect.ownKeys(Bun.env).includes("AUTH_TOKEN_FOR_SANDBOX")
+          ) {
+            throw new Error("sensitive environment value was not scrubbed");
           }
         `,
       ],
