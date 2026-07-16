@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { unlink } from "node:fs/promises";
 
+import { buildSafeEnvironment } from "./dangerous-runtime-policy";
+
 describe("initializeSandbox", () => {
   test("preserves Function prototype helpers while blocking constructor use", () => {
     const result = Bun.spawnSync({
@@ -1538,6 +1540,101 @@ describe("initializeSandbox", () => {
           }
         `,
       ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  });
+  test("leaves Bun's Windows environment object untouched after transport sanitization", () => {
+    const safeEnv = buildSafeEnvironment(process.env);
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--eval",
+        `
+          import { initializeSandbox } from "./src/spindle/worker-runtime-sandbox.ts";
+
+          const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+          if (!platformDescriptor) throw new Error("process.platform descriptor is unavailable");
+          Object.defineProperty(process, "platform", {
+            ...platformDescriptor,
+            value: "win32",
+          });
+
+          const originalProcessEnv = process.env;
+          const originalBunEnv = Bun.env;
+          const processEnvDescriptor = Object.getOwnPropertyDescriptor(process, "env");
+          const bunEnvDescriptor = Object.getOwnPropertyDescriptor(Bun, "env");
+          const processEnvExtensible = Object.isExtensible(originalProcessEnv);
+          const bunEnvExtensible = Object.isExtensible(originalBunEnv);
+
+          initializeSandbox();
+
+          if (process.env !== originalProcessEnv) throw new Error("process.env identity changed");
+          if (Bun.env !== originalBunEnv) throw new Error("Bun.env identity changed");
+          if (Object.isExtensible(process.env) !== processEnvExtensible) {
+            throw new Error("process.env extensibility changed");
+          }
+          if (Object.isExtensible(Bun.env) !== bunEnvExtensible) {
+            throw new Error("Bun.env extensibility changed");
+          }
+          const nextProcessEnvDescriptor = Object.getOwnPropertyDescriptor(process, "env");
+          const nextBunEnvDescriptor = Object.getOwnPropertyDescriptor(Bun, "env");
+          for (const property of ["value", "writable", "enumerable", "configurable", "get", "set"]) {
+            if (nextProcessEnvDescriptor?.[property] !== processEnvDescriptor?.[property]) {
+              throw new Error("process.env descriptor changed");
+            }
+            if (nextBunEnvDescriptor?.[property] !== bunEnvDescriptor?.[property]) {
+              throw new Error("Bun.env descriptor changed");
+            }
+          }
+          Reflect.ownKeys(process.env);
+          Reflect.ownKeys(Bun.env);
+        `,
+      ],
+      env: safeEnv,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  });
+  test("fails closed before guard installation when a Windows transport leaks a sensitive env value", () => {
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "--eval",
+        `
+          import { initializeSandbox } from "./src/spindle/worker-runtime-sandbox.ts";
+
+          const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+          if (!platformDescriptor) throw new Error("process.platform descriptor is unavailable");
+          Object.defineProperty(process, "platform", {
+            ...platformDescriptor,
+            value: "win32",
+          });
+          const originalFetch = globalThis.fetch;
+          let message = "";
+          try {
+            initializeSandbox();
+          } catch (error) {
+            message = error instanceof Error ? error.message : String(error);
+          }
+          if (!message.includes("Sandbox guard installation failed (process.env.AUTH_TOKEN_FOR_SANDBOX)")) {
+            throw new Error("unexpected startup result: " + message);
+          }
+          if (globalThis.fetch !== originalFetch) {
+            throw new Error("sandbox mutated globals before rejecting the unsafe environment");
+          }
+        `,
+      ],
+      env: {
+        ...buildSafeEnvironment(process.env),
+        AUTH_TOKEN_FOR_SANDBOX: "must-not-reach-extension",
+      },
       stdout: "pipe",
       stderr: "pipe",
     });

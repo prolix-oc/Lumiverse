@@ -1498,16 +1498,39 @@ function preflightEnvironmentValues(
   }
 }
 
+function assertEnvironmentIsSanitized(
+  rawEnv: NodeJS.ProcessEnv,
+  surface: string,
+): void {
+  let current: RuntimeObject | null = rawEnv;
+  while (current) {
+    for (const key of SAFE_REFLECT_OWN_KEYS(current)) {
+      if (typeof key === "string" && isSensitiveEnvironmentKey(key)) {
+        throw sandboxSurfaceError(`${surface}.${key}`);
+      }
+    }
+    current = SAFE_OBJECT_GET_PROTOTYPE_OF(current);
+  }
+}
+
 function preflightEnvironmentSurfaces(): void {
   if (typeof process === "undefined") return;
   const rawProcessEnv = readDataSurface(process, "env", "process.env");
   if (isRuntimeObject(rawProcessEnv)) {
-    preflightEnvironmentValues(rawProcessEnv as NodeJS.ProcessEnv, "process.env");
+    if (process.platform === "win32") {
+      assertEnvironmentIsSanitized(rawProcessEnv as NodeJS.ProcessEnv, "process.env");
+    } else {
+      preflightEnvironmentValues(rawProcessEnv as NodeJS.ProcessEnv, "process.env");
+    }
   }
   if (typeof Bun !== "undefined") {
     const bunEnv = readDataSurface(Bun, "env", "Bun.env");
     if (isRuntimeObject(bunEnv)) {
-      preflightEnvironmentValues(bunEnv as NodeJS.ProcessEnv, "Bun.env");
+      if (process.platform === "win32") {
+        assertEnvironmentIsSanitized(bunEnv as NodeJS.ProcessEnv, "Bun.env");
+      } else {
+        preflightEnvironmentValues(bunEnv as NodeJS.ProcessEnv, "Bun.env");
+      }
     }
   }
 }
@@ -1583,6 +1606,13 @@ function installProcessSurfaces(): void {
 
 function installEnvironmentSurfaces(): void {
   if (typeof process === "undefined") return;
+  // Runtime transports already construct Windows workers/subprocesses with a
+  // safe environment projection. Do not freeze or Proxy-wrap Bun's live
+  // Windows environment object: it has host-managed keys and does not obey
+  // ordinary-object invariants after preventExtensions(). Preflight above
+  // verifies that transport sanitization happened and fails closed if not.
+  if (process.platform === "win32") return;
+
   const rawProcessEnvValue = readDataSurface(process, "env", "process.env");
   if (!isRuntimeObject(rawProcessEnvValue)) {
     throw sandboxSurfaceError("process.env");
