@@ -25,6 +25,21 @@ export const worldBooksApi = {
     return get<PaginatedResult<WorldBook>>('/world-books', params)
   },
 
+  async listAll() {
+    const pageSize = 200
+    const data: WorldBook[] = []
+    let offset = 0
+    let total = Number.POSITIVE_INFINITY
+    while (offset < total) {
+      const page = await get<PaginatedResult<WorldBook>>('/world-books', { limit: pageSize, offset })
+      data.push(...page.data)
+      total = page.total
+      if (page.data.length === 0) break
+      offset += page.data.length
+    }
+    return data
+  },
+
   get(id: string) {
     return get<WorldBook>(`/world-books/${id}`)
   },

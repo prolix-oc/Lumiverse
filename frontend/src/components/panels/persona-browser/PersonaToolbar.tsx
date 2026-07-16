@@ -15,6 +15,7 @@ import {
   Check,
   RefreshCw,
   Globe,
+  CheckSquare,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import type { PersonaFilterType, PersonaSortField, PersonaSortDirection, PersonaViewMode } from '@/types/store'
@@ -38,11 +39,14 @@ interface PersonaToolbarProps {
   onGlobalLibraryClick: () => void
   filteredCount: number
   totalCount: number
+  batchMode: boolean
+  onBatchModeChange: (enabled: boolean) => void
 }
 
 const SORT_OPTION_KEYS: { value: PersonaSortField; labelKey: string }[] = [
   { value: 'name', labelKey: 'sort.name' },
   { value: 'created', labelKey: 'sort.created' },
+  { value: 'updated_at', labelKey: 'sort.updatedAt' },
 ]
 
 export default function PersonaToolbar({
@@ -62,6 +66,8 @@ export default function PersonaToolbar({
   onGlobalLibraryClick,
   filteredCount,
   totalCount,
+  batchMode,
+  onBatchModeChange,
 }: PersonaToolbarProps) {
   const { t: tc } = useTranslation('common')
   const { t } = useTranslation('panels')
@@ -278,6 +284,15 @@ export default function PersonaToolbar({
           title={t('personaToolbar.globalAddonsLibrary')}
         >
           <Globe size={14} />
+        </button>
+
+        <button
+          type="button"
+          className={clsx(styles.iconBtn, batchMode && styles.iconBtnActive)}
+          onClick={() => onBatchModeChange(!batchMode)}
+          title={batchMode ? t('personaToolbar.exitBatchMode') : t('personaToolbar.batchSelect')}
+        >
+          <CheckSquare size={14} />
         </button>
 
         <button

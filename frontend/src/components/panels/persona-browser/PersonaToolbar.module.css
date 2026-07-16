@@ -143,6 +143,12 @@
   color: var(--lumiverse-text);
 }
 
+.iconBtnActive {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+}
+
 .count {
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);

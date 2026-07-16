@@ -6,6 +6,23 @@ export const personasApi = {
     return get<PaginatedResult<Persona>>('/personas', params)
   },
 
+  async listAll() {
+    const pageSize = 200
+    const data: Persona[] = []
+    let offset = 0
+    let total = Number.POSITIVE_INFINITY
+
+    while (offset < total) {
+      const page = await get<PaginatedResult<Persona>>('/personas', { limit: pageSize, offset })
+      data.push(...page.data)
+      total = page.total
+      if (page.data.length === 0) break
+      offset += page.data.length
+    }
+
+    return data
+  },
+
   get(id: string) {
     return get<Persona>(`/personas/${id}`)
   },
@@ -31,6 +48,18 @@ export const personasApi = {
 
   delete(id: string) {
     return del<void>(`/personas/${id}`)
+  },
+
+  bulkUpdate(ids: string[], input: {
+    folder?: string
+    attached_world_book_id?: string | null
+    toggle_narrator?: boolean
+  }) {
+    return post<{ updated: Persona[]; count: number }>('/personas/bulk-update', { ids, ...input })
+  },
+
+  bulkDelete(ids: string[]) {
+    return post<{ deleted: string[]; count: number }>('/personas/bulk-delete', { ids })
   },
 
   duplicate(id: string) {

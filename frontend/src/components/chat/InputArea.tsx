@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, Search } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
@@ -208,10 +208,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
+  const [personaSearch, setPersonaSearch] = useState('')
   const [personaList, setPersonaList] = useState<Array<{
     id: string
     name: string
     title: string
+    description: string
+    folder: string
     avatar_path: string | null
     image_id: string | null
     metadata?: Record<string, any>
@@ -291,6 +294,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const guidedGenerations = useStore((s) => s.guidedGenerations)
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
+  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const messages = useStore((s) => s.messages)
@@ -603,6 +607,49 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     () => getPersistedChatPersonaId(activeChatMetadata),
     [activeChatMetadata],
   )
+
+  const personaPickerGroups = useMemo(() => {
+    const query = personaSearch.trim().toLocaleLowerCase()
+    const matching = query
+      ? personaList.filter((persona) => [persona.name, persona.title, persona.description, persona.folder]
+          .some((value) => value.toLocaleLowerCase().includes(query)))
+      : personaList
+    const matchingById = new Map(matching.map((persona) => [persona.id, persona]))
+    const recent = recentPersonaIds
+      .map((id) => matchingById.get(id))
+      .filter((persona): persona is (typeof personaList)[number] => !!persona)
+    const recentIds = new Set(recent.map((persona) => persona.id))
+    const folders = new Map<string, typeof personaList>()
+
+    for (const persona of matching) {
+      if (recentIds.has(persona.id)) continue
+      const folder = persona.folder.trim()
+      const items = folders.get(folder) ?? []
+      items.push(persona)
+      folders.set(folder, items)
+    }
+
+    const groups: Array<{
+      key: string
+      folder: string
+      recent: boolean
+      personas: typeof personaList
+    }> = []
+    if (recent.length > 0) groups.push({ key: '__recent', folder: '', recent: true, personas: recent })
+    for (const [folder, items] of [...folders.entries()].sort(([a], [b]) => {
+      if (!a) return 1
+      if (!b) return -1
+      return a.localeCompare(b)
+    })) {
+      groups.push({
+        key: folder || '__uncategorized',
+        folder,
+        recent: false,
+        personas: items.sort((a, b) => a.name.localeCompare(b.name)),
+      })
+    }
+    return groups
+  }, [personaList, personaSearch, recentPersonaIds])
 
   const persistChatPersonaSelection = useCallback(async (personaId: string | null) => {
     if (!chatId || isTemporaryChat) return false
@@ -1211,23 +1258,30 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
   useEffect(() => {
-    if (openPopover !== 'persona') return
+    if (openPopover !== 'persona') {
+      setPersonaSearch('')
+      return
+    }
     if (personas.length > 0) {
       setPersonaList(personas.map((p) => ({
         id: p.id,
         name: p.name,
         title: p.title || '',
+        description: p.description || '',
+        folder: p.folder || '',
         avatar_path: p.avatar_path,
         image_id: p.image_id,
         metadata: p.metadata,
       })))
       return
     }
-    personasApi.list({ limit: 200 }).then((res) => {
-      setPersonaList(res.data.map((p) => ({
+    personasApi.listAll().then((allPersonas) => {
+      setPersonaList(allPersonas.map((p) => ({
         id: p.id,
         name: p.name,
         title: p.title || '',
+        description: p.description || '',
+        folder: p.folder || '',
         avatar_path: p.avatar_path,
         image_id: p.image_id,
         metadata: p.metadata,
@@ -2718,6 +2772,29 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
           {renderPopover === 'persona' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              <label className={styles.personaSearch}>
+                <Search size={13} />
+                <input
+                  type="search"
+                  value={personaSearch}
+                  onChange={(event) => setPersonaSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && personaSearch) {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setPersonaSearch('')
+                    }
+                  }}
+                  placeholder={t('quickMenu.searchPersonas')}
+                  aria-label={t('quickMenu.searchPersonas')}
+                  autoFocus
+                />
+                {personaSearch && (
+                  <button type="button" onClick={() => setPersonaSearch('')} aria-label={t('quickMenu.searchPersonas')}>
+                    <X size={12} />
+                  </button>
+                )}
+              </label>
               {persistedChatPersonaId && (
                 <button
                   type="button"
@@ -2730,36 +2807,46 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                   {t('quickMenu.clearOneShotPersona')}
                 </button>
               )}
-              {personaList.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noPersonas')}</div>}
-              {personaList.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={clsx(styles.popRowBtn, activePersonaId === p.id && styles.popRowBtnActive)}
-                  onClick={() => {
-                    void persistChatPersonaSelection(p.id)
-                    setOpenPopover(null)
-                  }}
-                >
-                  <span className={styles.personaMain}>
-                    <span className={styles.personaAvatar}>
-                      {p.avatar_path || p.image_id ? (
-                        <img
-                          className={styles.personaAvatarImg}
-                          src={getPersonaAvatarThumbUrl(p) || undefined}
-                          alt={p.name}
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className={styles.personaFallback}>{p.name.slice(0, 1).toUpperCase()}</span>
-                      )}
-                    </span>
-                    <span className={styles.personaNameGroup}>
-                      <span>{p.name}</span>
-                      {p.title && <span className={styles.personaTitle}>{p.title}</span>}
-                    </span>
-                  </span>
-                </button>
+              {personaPickerGroups.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noPersonas')}</div>}
+              {personaPickerGroups.map((group) => (
+                <div key={group.key} className={styles.personaGroup}>
+                  <div className={styles.personaGroupHeader}>
+                    <span>{group.recent
+                      ? t('quickMenu.recentPersonas')
+                      : group.folder || t('quickMenu.uncategorizedPersonas')}</span>
+                    <span>{group.personas.length}</span>
+                  </div>
+                  {group.personas.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={clsx(styles.popRowBtn, activePersonaId === p.id && styles.popRowBtnActive)}
+                      onClick={() => {
+                        void persistChatPersonaSelection(p.id)
+                        setOpenPopover(null)
+                      }}
+                    >
+                      <span className={styles.personaMain}>
+                        <span className={styles.personaAvatar}>
+                          {p.avatar_path || p.image_id ? (
+                            <img
+                              className={styles.personaAvatarImg}
+                              src={getPersonaAvatarThumbUrl(p) || undefined}
+                              alt={p.name}
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className={styles.personaFallback}>{p.name.slice(0, 1).toUpperCase()}</span>
+                          )}
+                        </span>
+                        <span className={styles.personaNameGroup}>
+                          <span>{p.name}</span>
+                          {p.title && <span className={styles.personaTitle}>{p.title}</span>}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
           )}

@@ -3,6 +3,16 @@ import type { CharacterPersonaBinding, Persona } from '@/types/api'
 import type { PersonaTagBinding, PersonasSlice, ResolvedPersonaBinding } from '@/types/store'
 import { settingsApi } from '@/api/settings'
 
+export const MAX_RECENT_PERSONAS = 5
+
+export function updateRecentPersonaIds(
+  recentIds: string[],
+  personaId: string,
+  maxItems = MAX_RECENT_PERSONAS,
+): string[] {
+  return [personaId, ...recentIds.filter((id) => id !== personaId)].slice(0, maxItems)
+}
+
 /** Normalize a binding value to the object form. */
 export function resolveBinding(val: string | CharacterPersonaBinding): CharacterPersonaBinding {
   return typeof val === 'string' ? { personaId: val } : val
@@ -111,6 +121,7 @@ export function resolveAutoPersonaBinding(params: {
 export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
   personas: [],
   activePersonaId: null,
+  recentPersonaIds: [],
   characterPersonaBindings: {},
   personaTagBindings: {},
   personaSearchQuery: '',
@@ -129,11 +140,21 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
         settingsApi.put('activePersonaId', activePersonaId).catch(() => {})
       }
 
-      return { personas, activePersonaId }
+      const personaIds = new Set(personas.map((persona) => persona.id))
+      const recentPersonaIds = s.recentPersonaIds.filter((id) => personaIds.has(id)).slice(0, MAX_RECENT_PERSONAS)
+      if (recentPersonaIds.length !== s.recentPersonaIds.length) {
+        settingsApi.put('recentPersonaIds', recentPersonaIds).catch(() => {})
+      }
+
+      return { personas, activePersonaId, recentPersonaIds }
     }),
   setActivePersona: (id) => {
-    set({ activePersonaId: id })
+    const recentPersonaIds = id
+      ? updateRecentPersonaIds(get().recentPersonaIds, id)
+      : get().recentPersonaIds
+    set({ activePersonaId: id, recentPersonaIds })
     settingsApi.put('activePersonaId', id).catch(() => {})
+    if (id) settingsApi.put('recentPersonaIds', recentPersonaIds).catch(() => {})
   },
   setCharacterPersonaBinding: (characterId, personaId, addonStates) => {
     const bindings = { ...get().characterPersonaBindings }
@@ -201,10 +222,16 @@ export const createPersonasSlice: StateCreator<PersonasSlice> = (set, get) => ({
         settingsApi.put('personaTagBindings', personaTagBindings).catch(() => {})
       }
 
+      const recentPersonaIds = s.recentPersonaIds.filter((personaId) => personaId !== id)
+      if (recentPersonaIds.length !== s.recentPersonaIds.length) {
+        settingsApi.put('recentPersonaIds', recentPersonaIds).catch(() => {})
+      }
+
       return {
         personas,
         selectedPersonaId,
         activePersonaId,
+        recentPersonaIds,
         ...(characterBindingsChanged ? { characterPersonaBindings: characterBindings } : {}),
         ...(tagBindingsChanged ? { personaTagBindings } : {}),
       }
