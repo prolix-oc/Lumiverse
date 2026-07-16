@@ -86,6 +86,8 @@ type ScannableSource = {
   context: ScannerContext;
 };
 
+const GLOBAL_ALIAS_SCOPE_LIMIT = 4096;
+
 function getMaskedSource(source: ScannableSource): string {
   const cached = source.context.maskedText;
   if (cached !== undefined) return cached;
@@ -151,6 +153,19 @@ const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
 const warnedWindowsSpindleBunFallback = new Set<string>();
 
 function normalizeJavaScriptForSafetyScan(content: string): string {
+  // Bun's transpiler becomes pathologically slow on nesting beyond the
+  // scanner's own bounded-provenance limit. The raw source is still scanned
+  // and that over-limit region is failed closed, so avoid feeding it through
+  // a redundant normalization pass.
+  let nesting = 0;
+  for (const char of content) {
+    if (char === "(" || char === "[" || char === "{") {
+      nesting += 1;
+      if (nesting > GLOBAL_ALIAS_SCOPE_LIMIT) return content;
+    } else if (char === ")" || char === "]" || char === "}") {
+      nesting = Math.max(0, nesting - 1);
+    }
+  }
   try {
     return new Bun.Transpiler({ loader: "js" }).transformSync(content);
   } catch {
@@ -1995,8 +2010,6 @@ function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void 
 
 const DYNAMIC_GLOBAL_API_LABEL = "dynamic global API access";
 const GLOBAL_API_KEY_MAX_LENGTH = 300;
-const GLOBAL_ALIAS_SCOPE_LIMIT = 4096;
-
 function addGlobalApiHits(source: ScannableSource, hits: Set<string>): void {
   if (!hasAnySourceToken(source, ["globalThis", "self", "global", "Reflect", "Object"])) return;
   const lexical = getScannerLexicalContext(source);
@@ -2224,6 +2237,20 @@ function addPropertyAccessHits(
         ? null
         : resolveStrictStaticStringExpression(source.text.slice(opening + 1, closing));
     mark(scannerRootValues(source, match[1], match.index), property, match.index);
+  }
+  const destructuring =
+    /(?:\b(?:const|let|var)\s*|\(\s*)\{([^}\n]{1,4096})\}\s*=\s*([A-Za-z_$][\w$]*)\b/g;
+  for (const match of matchOutsideIgnored(source, destructuring)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[2], match.index);
+    for (const entry of splitTopLevelExpressionList(match[1]) ?? match[1].split(",")) {
+      const colon = entry.indexOf(":");
+      const rawKey = (colon < 0 ? entry : entry.slice(0, colon)).trim();
+      const property = rawKey.startsWith("[")
+        ? resolveStrictStaticStringExpression(rawKey.slice(1, -1))
+        : rawKey.split(/\s*=/, 1)[0]?.trim() ?? "";
+      mark(values, property || null, match.index);
+    }
   }
   const memberValueCall =
     /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\(/g;

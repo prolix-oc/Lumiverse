@@ -15,11 +15,14 @@ if (!("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env)) {
 }
 
 // ── Bun version gate ────────────────────────────────────────────────────────
-// CompressionStream (Brotli) and other APIs we depend on require Bun >= 1.3.3.
-const [_bunMaj = 0, _bunMin = 0, _bunPat = 0] = Bun.version.split(".").map(Number);
-if (_bunMaj < 1 || (_bunMaj === 1 && (_bunMin < 3 || (_bunMin === 3 && _bunPat < 3)))) {
-  console.error(`[startup] Bun ${Bun.version} is too old — Lumiverse requires Bun >= 1.3.3.`);
-  console.error("[startup] Update Bun: curl -fsSL https://bun.sh/install | bash");
+// Bun 1.3.10-1.3.12 can panic on occupied Windows IPC named pipes during
+// runner/extension restarts; 1.3.13 contains the upstream fix.
+const [_bunMaj = 0, _bunMin = 0, _bunPat = 0] = Bun.version
+  .split(".")
+  .map((part) => Number.parseInt(part, 10) || 0);
+if (_bunMaj < 1 || (_bunMaj === 1 && (_bunMin < 3 || (_bunMin === 3 && _bunPat < 13)))) {
+  console.error(`[startup] Bun ${Bun.version} is too old — Lumiverse requires Bun >= 1.3.13.`);
+  console.error(`[startup] Update with ${process.platform === "win32" ? ".\\start.ps1" : "./start.sh"}.`);
   process.exit(1);
 }
 

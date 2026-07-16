@@ -112,10 +112,14 @@ test("process transport receives only the safe environment projection", async ()
       if (typeof process.send !== "function") throw new Error("IPC is unavailable");
       const env = Object.fromEntries(${JSON.stringify(ENV_KEYS_TO_CHECK)}.map((name) => [name, process.env[name]]));
       const ownKeys = Reflect.ownKeys(process.env).filter((key) => typeof key === "string");
-      const descriptorKeys = ${JSON.stringify(ENV_KEYS_TO_CHECK)}.filter((name) => Object.getOwnPropertyDescriptor(process.env, name) !== undefined);
+      const descriptorKeys = ownKeys.filter((name) => Object.getOwnPropertyDescriptor(process.env, name) !== undefined);
       const spreadKeys = Object.keys({ ...process.env });
       process.send({ env, ownKeys, descriptorKeys, spreadKeys });
-      process.exitCode = Number(process.env.TRANSPORT_PROBE_EXIT_CODE ?? "0");
+      process.on("message", (message) => {
+        if (message?.type === "transport-probe-ack") {
+          process.exit(Number(process.env.TRANSPORT_PROBE_EXIT_CODE ?? "0"));
+        }
+      });
     `,
     "utf8",
   );
@@ -156,6 +160,7 @@ test("process transport receives only the safe environment projection", async ()
             reject(new Error("transport probe returned an invalid payload"));
             return;
           }
+          transport?.postMessage({ type: "transport-probe-ack" });
           payloadSettled = true;
           resolve(message);
         },
@@ -200,14 +205,18 @@ test("process transport receives only the safe environment projection", async ()
       expect(received.env[key], `${key} must be scrubbed from transport`).toBeUndefined();
     }
     expect(received.ownKeys.every((key) => !isSensitiveEnvironmentKey(key))).toBe(true);
-    expect(received.descriptorKeys).toEqual(["PATH", "TMPDIR"]);
+    expect(received.descriptorKeys.every((key) => !isSensitiveEnvironmentKey(key))).toBe(true);
+    const descriptorKeys = new Set(received.descriptorKeys.map((key) => key.toUpperCase()));
+    expect(descriptorKeys.has("PATH")).toBe(true);
+    expect(descriptorKeys.has("TMPDIR")).toBe(true);
     expect(received.spreadKeys.every((key) => !isSensitiveEnvironmentKey(key))).toBe(true);
     process.env.TRANSPORT_PROBE_EXIT_CODE = "7";
     let abnormalPayloadReceived = false;
     let abnormalExitRejected = false;
+    let abnormalTransport: RuntimeTransport | undefined;
     try {
       await new Promise<void>((resolve, reject) => {
-        createRuntimeTransport({
+        abnormalTransport = createRuntimeTransport({
           runtimePath,
           extensionIdentifier: "transport-abnormal-exit-test",
           repoPath: directory,
@@ -215,6 +224,7 @@ test("process transport receives only the safe environment projection", async ()
           mode: "process",
           onMessage(message) {
             abnormalPayloadReceived = isTransportProbe(message);
+            abnormalTransport?.postMessage({ type: "transport-probe-ack" });
           },
           onError(message) {
             reject(new Error(message));

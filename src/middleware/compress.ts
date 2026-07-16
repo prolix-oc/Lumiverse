@@ -23,6 +23,21 @@ const COMPRESSIBLE =
 const MIN_SIZE = 1024;
 
 /**
+ * Bun 1.3.14 can corrupt the HTTP response sink when a client aborts an
+ * asynchronously streamed response (oven-sh/bun#32111, fixed by #32120).
+ * The crash was observed in Lumiverse on Windows when this middleware wrapped
+ * the frontend bundle in a compression stream. Keep the workaround scoped to
+ * that affected stable runtime so other platforms and fixed releases retain
+ * streaming compression.
+ */
+export function shouldBypassStreamingCompression(
+  platform: NodeJS.Platform = process.platform,
+  bunVersion: string = Bun.version,
+): boolean {
+  return platform === "win32" && /^1\.3\.14(?:$|-)/.test(bunVersion);
+}
+
+/**
  * Pick the best mutually-supported encoding from Accept-Encoding.
  * Tie-break order when quality values are equal: br > gzip > deflate.
  */
@@ -82,6 +97,8 @@ function compressStream(body: ReadableStream, encoding: Encoding): ReadableStrea
 export function compress() {
   return createMiddleware(async (c, next) => {
     await next();
+
+    if (shouldBypassStreamingCompression()) return;
 
     const res = c.res;
 

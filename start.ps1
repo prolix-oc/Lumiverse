@@ -38,6 +38,9 @@
 
 .PARAMETER UpgradeBunCanary
     Upgrade Bun to the latest canary build before continuing
+
+.NOTES
+    Bun versions older than 1.3.13 are automatically upgraded to latest stable.
 #>
 
 param(
@@ -65,6 +68,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$MinimumBunVersion = [version]"1.3.13"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -149,6 +153,17 @@ function Ensure-Bun {
 # ─── Bun channel upgrade (optional) ─────────────────────────────────────────
 # Honors -UpgradeBun / -UpgradeBunCanary. Runs after Ensure-Bun so the binary
 # exists; `bun upgrade [--canary|--stable]` swaps the binary in-place.
+function Invoke-BunUpgrade {
+    param([ValidateSet("stable", "canary")][string]$Channel)
+
+    # Windows PowerShell 5 may promote native stderr output to a terminating
+    # NativeCommandError. Merge it into stdout and use the real exit code.
+    & bun upgrade "--$Channel" 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        throw "bun upgrade exited with code $LASTEXITCODE"
+    }
+}
+
 function Update-BunChannel {
     if (-not $UpgradeBun -and -not $UpgradeBunCanary) { return }
 
@@ -156,7 +171,9 @@ function Update-BunChannel {
 
     if ($UpgradeBunCanary) {
         Write-Info "Upgrading Bun to latest canary (current: $before)..."
-        try { & bun upgrade --canary } catch {
+        try {
+            Invoke-BunUpgrade "canary"
+        } catch {
             Write-Err "Bun canary upgrade failed: $_"
             Write-Warn "Continuing with the existing $before binary."
             return
@@ -165,7 +182,9 @@ function Update-BunChannel {
         Write-Info "Upgrading Bun to latest stable (current: $before)..."
         # --stable is a no-op for users already on stable but forces a switch
         # back from canary for anyone who previously opted in.
-        try { & bun upgrade --stable } catch {
+        try {
+            Invoke-BunUpgrade "stable"
+        } catch {
             Write-Err "Bun stable upgrade failed: $_"
             Write-Warn "Continuing with the existing $before binary."
             return
@@ -174,6 +193,40 @@ function Update-BunChannel {
 
     $after = try { & bun --version } catch { "unknown" }
     Write-Ok "Bun upgraded: $before -> $after"
+}
+
+function Get-BunSemanticVersion {
+    try {
+        $raw = (& bun --version | Select-Object -First 1).Trim()
+        return [version](($raw -split '-', 2)[0])
+    } catch {
+        return $null
+    }
+}
+
+function Ensure-MinimumBunVersion {
+    $current = Get-BunSemanticVersion
+    if ($current -and $current -ge $MinimumBunVersion) { return }
+
+    $display = if ($current) { $current.ToString() } else { "unknown" }
+    Write-Warn "Bun $display is below Lumiverse's minimum $MinimumBunVersion."
+    Write-Info "Automatically upgrading Bun to the latest stable release..."
+    try {
+        Invoke-BunUpgrade "stable"
+    } catch {
+        Write-Err "Automatic Bun upgrade failed: $_"
+    }
+
+    $current = Get-BunSemanticVersion
+    if ($current -and $current -ge $MinimumBunVersion) {
+        Write-Ok "Bun $current satisfies the minimum supported version"
+        return
+    }
+
+    $display = if ($current) { $current.ToString() } else { "unknown" }
+    Write-Err "Bun $display is still below the required $MinimumBunVersion."
+    Write-Err "Install the latest stable Bun release from https://bun.sh, then retry."
+    exit 1
 }
 
 # ─── First-run setup wizard ─────────────────────────────────────────────────
@@ -362,6 +415,7 @@ Write-Host ""
 
 Ensure-Bun
 Update-BunChannel
+Ensure-MinimumBunVersion
 
 # Allow switches as shorthand for -Mode
 if ($MigrateST) { $Mode = "migrate-st" }

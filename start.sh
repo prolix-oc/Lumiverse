@@ -18,6 +18,8 @@ set -euo pipefail
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
 #   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
+# Bun versions older than 1.3.13 are automatically upgraded to latest stable.
+#
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -149,6 +151,7 @@ USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
 BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
+MINIMUM_BUN_VERSION="1.3.13"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
@@ -464,16 +467,16 @@ ensure_bun() {
   exit 1
 }
 
-# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
-# Honors --upgrade-bun / --upgrade-bun-canary. Runs after ensure_bun so the
-# binary exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
+# ─── Bun channel upgrades and minimum-version recovery ──────────────────────
+# Honors --upgrade-bun / --upgrade-bun-canary and also upgrades versions below
+# MINIMUM_BUN_VERSION to latest stable. Runs after ensure_bun so the binary
+# exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
 # at $BUN_INSTALL/bin/bun. On native Termux we cannot use `bun upgrade` —
 # Bun's built-in updater probes for `ld` and aborts ("unsupported on systems
 # without ld") because Termux uses bionic, not glibc. Instead we rebuild the
 # bun-termux wrapper, which is the source of truth for Bun on Termux.
-upgrade_bun_if_requested() {
-  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
-
+upgrade_bun_channel() {
+  local channel="$1"
   local before
   before="$(_bun --version 2>/dev/null || echo unknown)"
 
@@ -481,7 +484,7 @@ upgrade_bun_if_requested() {
   # proot-distro (IS_PROOT) is a real glibc env, so it falls through to the
   # standard `bun upgrade` path below.
   if [[ "$IS_TERMUX" == true ]]; then
-    if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+    if [[ "$channel" == "canary" ]]; then
       warn "Bun canary builds are not supported on native Termux — the bun-termux"
       warn "wrapper only packages stable releases. Skipping upgrade; continuing"
       warn "with the existing $before binary."
@@ -489,15 +492,8 @@ upgrade_bun_if_requested() {
       return 0
     fi
 
-    info "Updating bun-termux wrapper (current Bun: $before)..."
-    if [[ ! -d "$HOME/.bun-termux" ]]; then
-      warn "bun-termux directory not found at \$HOME/.bun-termux."
-      warn "  Reinstall it: rm -rf \$HOME/.bun-termux && ./start.sh"
-      warn "Continuing with the existing $before binary."
-      return 0
-    fi
-
-    if ! (cd "$HOME/.bun-termux" && git pull && make && make install); then
+    info "Updating Bun to latest Termux stable (current: $before)..."
+    if ! rebuild_bun_termux_wrapper; then
       err "bun-termux rebuild failed. Continuing with the existing $before binary."
       return 0
     fi
@@ -512,7 +508,7 @@ upgrade_bun_if_requested() {
   fi
 
   # ── Standard path (macOS, Linux, proot-distro, WSL, etc.) ─────────────────
-  if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+  if [[ "$channel" == "canary" ]]; then
     info "Upgrading Bun to latest canary (current: $before)..."
     if ! _bun upgrade --canary; then
       err "Bun canary upgrade failed. Continuing with the existing $before binary."
@@ -531,6 +527,59 @@ upgrade_bun_if_requested() {
   local after
   after="$(_bun --version 2>/dev/null || echo unknown)"
   ok "Bun upgraded: $before -> $after"
+}
+
+upgrade_bun_if_requested() {
+  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
+  upgrade_bun_channel "$BUN_UPGRADE_CHANNEL"
+}
+
+bun_version_at_least() {
+  local current="${1%%-*}"
+  local required="${2%%-*}"
+  local current_major=0 current_minor=0 current_patch=0
+  local required_major=0 required_minor=0 required_patch=0
+
+  IFS=. read -r current_major current_minor current_patch <<< "$current"
+  IFS=. read -r required_major required_minor required_patch <<< "$required"
+  [[ "$current_major" =~ ^[0-9]+$ ]] || return 1
+  [[ "$current_minor" =~ ^[0-9]+$ ]] || return 1
+  [[ "$current_patch" =~ ^[0-9]+$ ]] || return 1
+
+  if (( current_major != required_major )); then
+    (( current_major > required_major ))
+  elif (( current_minor != required_minor )); then
+    (( current_minor > required_minor ))
+  else
+    (( current_patch >= required_patch ))
+  fi
+}
+
+ensure_minimum_bun_version() {
+  local current
+  current="$(_bun --version 2>/dev/null | head -1 || echo unknown)"
+  if bun_version_at_least "$current" "$MINIMUM_BUN_VERSION"; then
+    return 0
+  fi
+
+  warn "Bun $current is below Lumiverse's minimum $MINIMUM_BUN_VERSION."
+  info "Automatically upgrading Bun to the latest stable release..."
+  upgrade_bun_channel "stable"
+
+  _resolve_bun || true
+  current="$(_bun --version 2>/dev/null | head -1 || echo unknown)"
+  if bun_version_at_least "$current" "$MINIMUM_BUN_VERSION"; then
+    ok "Bun $current satisfies the minimum supported version"
+    return 0
+  fi
+
+  err "Bun $current is still below the required $MINIMUM_BUN_VERSION."
+  if [[ "$IS_TERMUX" == true ]]; then
+    err "Update bun-termux to a release containing Bun >= $MINIMUM_BUN_VERSION, then retry."
+  else
+    err "Install the latest stable Bun release from https://bun.sh, then retry."
+  fi
+  exit 1
 }
 
 # ─── First-run setup wizard ─────────────────────────────────────────────────
@@ -814,6 +863,7 @@ fi
 setup_proot_aliases
 ensure_bun
 upgrade_bun_if_requested
+ensure_minimum_bun_version
 export_termux_bun_env
 
 case "$MODE" in

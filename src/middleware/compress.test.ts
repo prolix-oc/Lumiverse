@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
-import { compress } from "./compress";
+import { compress, shouldBypassStreamingCompression } from "./compress";
 
 const app = new Hono();
 app.use("*", compress());
@@ -37,5 +37,18 @@ describe("compression cache variants", () => {
     expect(response.headers.get("content-encoding")).toBeNull();
     expect(response.headers.get("etag")).toBe('W/"preset-1"');
     expect(response.headers.get("vary")).toBe("Cookie, Accept-Encoding");
+  });
+});
+
+describe("Bun streaming-response compatibility", () => {
+  test("bypasses only the affected Windows stable runtime", () => {
+    expect(shouldBypassStreamingCompression("win32", "1.3.14")).toBe(true);
+    expect(shouldBypassStreamingCompression("win32", "1.3.14-debug")).toBe(true);
+
+    expect(shouldBypassStreamingCompression("darwin", "1.3.14")).toBe(false);
+    expect(shouldBypassStreamingCompression("linux", "1.3.14")).toBe(false);
+    expect(shouldBypassStreamingCompression("win32", "1.3.13")).toBe(false);
+    expect(shouldBypassStreamingCompression("win32", "1.3.15")).toBe(false);
+    expect(shouldBypassStreamingCompression("win32", "1.4.0")).toBe(false);
   });
 });
