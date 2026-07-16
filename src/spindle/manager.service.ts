@@ -3101,7 +3101,13 @@ function storageDir(identifier: string): string {
 }
 function trustedRepoDir(identifier: string, label: string): string {
   const extensionRoot = resolveWithin(extensionsDir(), identifier, `${label} extension`);
-  return resolveWithin(extensionRoot, "repo", label);
+  // `repo` may intentionally be a symlink for import-local development. Its
+  // canonical directory becomes the trust root for every subsequent path.
+  const resolvedRepo = realpathSync(join(extensionRoot, "repo"));
+  if (!statSync(resolvedRepo).isDirectory()) {
+    throw new Error(`${label} repo is not a directory`);
+  }
+  return resolvedRepo;
 }
 
 function trustedStorageDir(identifier: string, label: string): string {
@@ -3134,8 +3140,11 @@ function moveSync(from: string, to: string): void {
 
 // ─── Manifest parsing ────────────────────────────────────────────────────
 
-async function readManifest(identifier: string): Promise<SpindleManifest> {
-  const repo = trustedRepoDir(identifier, "manifest");
+async function readManifest(
+  identifier: string,
+  trustedRepo?: string,
+): Promise<SpindleManifest> {
+  const repo = trustedRepo ?? trustedRepoDir(identifier, "manifest");
   const candidates = ["spindle.json", "spindlefile", "spindlefile.json"] as const;
   let manifestPath: string | undefined;
   for (const candidateName of candidates) {
@@ -3456,12 +3465,16 @@ function resolveWithin(base: string, requestedPath: string, label: string): stri
   }
 }
 
-export function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void {
+export function applyStorageSeeds(
+  identifier: string,
+  manifest: SpindleManifest,
+  trustedRepo?: string,
+): void {
   const seeds = Array.isArray(manifest.storage_seed_files)
     ? manifest.storage_seed_files
     : [];
 
-  const repo = trustedRepoDir(identifier, "storage seed source");
+  const repo = trustedRepo ?? trustedRepoDir(identifier, "storage seed source");
   const storagePath = storageDir(identifier);
   mkdirSync(storagePath, { recursive: true });
   const storage = trustedStorageDir(identifier, "storage seed destination");
@@ -3612,9 +3625,12 @@ function formatCommandFailure(
 
 // ─── Build ───────────────────────────────────────────────────────────────
 
-export async function buildExtension(identifier: string): Promise<void> {
-  const repo = trustedRepoDir(identifier, "extension build");
-  const manifest = await readManifest(identifier);
+async function buildExtensionFromTrustedRepo(
+  identifier: string,
+  repo: string,
+  trustedManifest?: SpindleManifest,
+): Promise<void> {
+  const manifest = trustedManifest ?? await readManifest(identifier, repo);
 
   const backendEntry = manifest.entry_backend || "dist/backend.js";
   const frontendEntry = manifest.entry_frontend || "dist/frontend.js";
@@ -3688,6 +3704,11 @@ export async function buildExtension(identifier: string): Promise<void> {
   }
 
   await assertSafeBackendBundle(identifier, backendOut, declaredCaps);
+}
+
+export async function buildExtension(identifier: string): Promise<void> {
+  const repo = trustedRepoDir(identifier, "extension build");
+  await buildExtensionFromTrustedRepo(identifier, repo);
 }
 
 // ─── Install ─────────────────────────────────────────────────────────────
@@ -3833,16 +3854,17 @@ export async function install(
 // ─── Update ──────────────────────────────────────────────────────────────
 
 export async function update(identifier: string): Promise<ExtensionInfo> {
-  const repo = repoDir(identifier);
-  if (!existsSync(repo)) {
+  const repoPath = repoDir(identifier);
+  if (!existsSync(repoPath)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  const repo = trustedRepoDir(identifier, "extension update");
 
   // Read manifest up-front so we can honor `dev_mode` before touching the
   // working tree. Extensions with `dev_mode: true` keep their local repo
   // contents intact — we skip the git checkout/clean/pull and just rebuild
   // + relaunch from whatever the developer has on disk.
-  const initialManifest = await readManifest(identifier);
+  const initialManifest = await readManifest(identifier, repo);
   const devMode = (initialManifest as { dev_mode?: boolean }).dev_mode === true;
 
   if (!devMode) {
@@ -3862,7 +3884,7 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
 
   // Re-read manifest — in non-dev mode the pull may have modified it; in
   // dev mode we already have the current version.
-  const manifest = devMode ? initialManifest : await readManifest(identifier);
+  const manifest = devMode ? initialManifest : await readManifest(identifier, repo);
 
   const db = getDb();
   const existing = db
@@ -3890,8 +3912,8 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
       }
     }
   }
-  await buildExtension(identifier);
-  applyStorageSeeds(identifier, manifest);
+  await buildExtensionFromTrustedRepo(identifier, repo, manifest);
+  applyStorageSeeds(identifier, manifest, repo);
 
   // Update DB
   db.run(
@@ -4121,9 +4143,9 @@ export function getEnabledExtensionIdentifiers(): string[] {
 }
 
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
-  const manifest = await readManifest(identifier);
-  const entry = manifest.entry_frontend || "dist/frontend.js";
   const repo = trustedRepoDir(identifier, "frontend entry");
+  const manifest = await readManifest(identifier, repo);
+  const entry = manifest.entry_frontend || "dist/frontend.js";
   const bundlePath = resolveWithin(repo, entry, "entry_frontend");
   return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
 }
@@ -4141,9 +4163,9 @@ export async function getFrontendBundleCacheKey(identifier: string): Promise<str
 }
 
 export async function getBackendEntryPath(identifier: string): Promise<string | null> {
-  const manifest = await readManifest(identifier);
-  const entry = manifest.entry_backend || "dist/backend.js";
   const repo = trustedRepoDir(identifier, "backend entry");
+  const manifest = await readManifest(identifier, repo);
+  const entry = manifest.entry_backend || "dist/backend.js";
   const entryPath = resolveWithin(repo, entry, "entry_backend");
   if (!(await Bun.file(entryPath).exists())) return null;
   return validateBackendModuleGraph(
@@ -4160,7 +4182,7 @@ export function getStoragePath(identifier: string): string {
 }
 
 export function getRepoPath(identifier: string): string {
-  return repoDir(identifier);
+  return trustedRepoDir(identifier, "extension repo");
 }
 
 export function getStoragePathForExtension(extension: ExtensionInfo): string {
@@ -4201,14 +4223,16 @@ export async function importLocalExtensions(): Promise<{
 
     try {
       const trustedCandidateRoot = resolveWithin(base, dirName, "local extension");
-      const nestedRepo = resolveWithin(
-        trustedCandidateRoot,
-        "repo",
-        "local extension repo",
-      );
-      const hasNestedRepo = existsSync(nestedRepo) && statSync(nestedRepo).isDirectory();
+      // The documented local-development layout intentionally symlinks `repo`
+      // to a source checkout outside data/extensions. Treat that resolved repo
+      // as the trust root, while still containing every selected manifest to it.
+      const nestedRepoPath = join(trustedCandidateRoot, "repo");
+      const nestedRepo = existsSync(nestedRepoPath)
+        ? realpathSync(nestedRepoPath)
+        : null;
+      const hasNestedRepo = nestedRepo !== null && statSync(nestedRepo).isDirectory();
       const candidates = [
-        ...(hasNestedRepo
+        ...(nestedRepo !== null && hasNestedRepo
           ? [
               { base: nestedRepo, name: "spindle.json", nested: true },
               { base: nestedRepo, name: "spindlefile", nested: true },
@@ -4247,6 +4271,9 @@ export async function importLocalExtensions(): Promise<{
       const manifest = await readManifestFromPath(selected.path, selected.trustedRoot, {
         allowMissingGithub: true,
       });
+      const selectedRepoIdentity = selected.nested && lstatSync(nestedRepoPath).isSymbolicLink()
+        ? statSync(selected.trustedRoot)
+        : null;
 
       // If user dropped the repo directly under extensions/<folder>, normalize layout
       if (!selected.nested) {
@@ -4276,9 +4303,19 @@ export async function importLocalExtensions(): Promise<{
         }
       }
 
+      const importedRepo = trustedRepoDir(manifest.identifier, "local extension import");
+      if (selectedRepoIdentity) {
+        const importedRepoIdentity = statSync(importedRepo);
+        if (
+          importedRepoIdentity.dev !== selectedRepoIdentity.dev
+          || importedRepoIdentity.ino !== selectedRepoIdentity.ino
+        ) {
+          throw new Error(`Local extension repo changed during import: ${manifest.identifier}`);
+        }
+      }
       mkdirSync(storageDir(manifest.identifier), { recursive: true });
-      await buildExtension(manifest.identifier);
-      applyStorageSeeds(manifest.identifier, manifest);
+      await buildExtensionFromTrustedRepo(manifest.identifier, importedRepo, manifest);
+      applyStorageSeeds(manifest.identifier, manifest, importedRepo);
       insertExtensionFromManifest(manifest);
 
       const ext = await getExtensionByIdentifier(manifest.identifier);
@@ -4314,10 +4351,11 @@ export function listRemoteBranches(githubUrl: string): string[] {
 
 /** List branches for an already-installed extension by querying its remote. */
 export function getBranches(identifier: string): { current: string | null; branches: string[] } {
-  const repo = repoDir(identifier);
-  if (!existsSync(repo)) {
+  const repoPath = repoDir(identifier);
+  if (!existsSync(repoPath)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  const repo = trustedRepoDir(identifier, "extension branches");
 
   // Get current branch
   const headProc = Bun.spawnSync({
@@ -4351,10 +4389,11 @@ export async function switchBranch(
   identifier: string,
   branch: string
 ): Promise<ExtensionInfo> {
-  const repo = repoDir(identifier);
-  if (!existsSync(repo)) {
+  const repoPath = repoDir(identifier);
+  if (!existsSync(repoPath)) {
     throw new Error(`Extension repo not found: ${identifier}`);
   }
+  const repo = trustedRepoDir(identifier, "extension branch switch");
 
   const runGitStep = async (
     cmd: string[],
@@ -4402,7 +4441,7 @@ export async function switchBranch(
   });
 
   // Re-read manifest
-  const manifest = await readManifest(identifier);
+  const manifest = await readManifest(identifier, repo);
 
   const db = getDb();
   const existing = db
@@ -4429,8 +4468,8 @@ export async function switchBranch(
       }
     }
   }
-  await buildExtension(identifier);
-  applyStorageSeeds(identifier, manifest);
+  await buildExtensionFromTrustedRepo(identifier, repo, manifest);
+  applyStorageSeeds(identifier, manifest, repo);
 
   // Update DB
   db.run(

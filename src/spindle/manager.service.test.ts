@@ -6,7 +6,9 @@ import {
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
   detectSerializedHandlerModuleAccess,
+  getFrontendBundlePath,
   getManifest,
+  getRepoPath,
   importLocalExtensions,
   PRIVILEGED_PERMISSIONS,
   shouldUseWindowsSpindleBunSyncFallback,
@@ -16,6 +18,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -2330,6 +2333,47 @@ describe("manifest path boundaries", () => {
         ]),
       );
     } finally {
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("imports and builds the documented external repo symlink layout", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-import-symlink-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const identifier = "local_symlink_test";
+    const candidateRoot = join(root, "extensions", identifier);
+    const sourceRepo = join(root, "source-repo");
+    mkdirSync(candidateRoot, { recursive: true });
+    mkdirSync(join(sourceRepo, "src"), { recursive: true });
+    writeFileSync(
+      join(sourceRepo, "spindle.json"),
+      JSON.stringify({
+        identifier,
+        version: "1.0.0",
+        name: "Local symlink manifest",
+        author: "Test author",
+        entry_frontend: "dist/frontend.js",
+      }),
+    );
+    writeFileSync(join(sourceRepo, "src", "frontend.ts"), "export default 42;\n");
+    symlinkSync(sourceRepo, join(candidateRoot, "repo"), "dir");
+
+    closeDatabase();
+    const db = initDatabase(":memory:");
+    try {
+      await runMigrations(db);
+      const result = await importLocalExtensions();
+      expect(result.skipped).toEqual([]);
+      expect(result.imported).toHaveLength(1);
+      expect(result.imported[0]?.identifier).toBe(identifier);
+      expect(getRepoPath(identifier)).toBe(realpathSync(sourceRepo));
+      expect(await getFrontendBundlePath(identifier)).toBe(realpathSync(join(sourceRepo, "dist", "frontend.js")));
+      expect(readFileSync(join(sourceRepo, "dist", "frontend.js"), "utf8")).toContain("42");
+    } finally {
+      closeDatabase();
       env.dataDir = previousDataDir;
       rmSync(root, { recursive: true, force: true });
     }
