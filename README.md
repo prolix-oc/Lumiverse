@@ -6,6 +6,8 @@ The full stack suite for Lumiverse, a full-featured AI chat application. Provide
 
 Join the conversation on [Discord](https://discord.gg/28rBWVFfCu) for help, updates, and discussion.
 
+Please also review the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Documentation
 
 - [User guides](https://lumiverse.chat/guides)

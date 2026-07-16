@@ -72,6 +72,8 @@ frontend/src/lib/generatedComponentCss.ts
 !README.md
 !SECURITY.md
 !CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!.github/ISSUE_TEMPLATE/**/*.md
 scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh
