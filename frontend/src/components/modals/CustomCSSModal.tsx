@@ -23,6 +23,7 @@ import CssVariablesReference from './CssVariablesReference'
 import ComponentCssReference from './ComponentCssReference'
 import styles from './CustomCSSModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type EditorTab = 'css' | 'tsx'
 
@@ -481,12 +482,20 @@ export default function CustomCSSModal() {
         <div className={styles.body}>
           {/* ── Sidebar ────────────────────────────────────────── */}
           <div className={clsx(styles.sidebar, !sidebarOpen && styles.sidebarCollapsed)}>
-            <input
-              className={styles.searchInput}
-              placeholder={t('searchPlaceholder')}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <div className={styles.sidebarSearch}>
+              <input
+                className={styles.searchInput}
+                placeholder={t('searchPlaceholder')}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
+              />
+              {search && (
+                <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
             <div className={styles.componentList}>
               {/* Global entry */}
               {(!search.trim() || 'global'.includes(search.toLowerCase())) && (

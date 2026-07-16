@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Search, MessageSquare, Pencil, Download, Upload, Trash2,
-  ArrowRight, Check, SortAsc, FileText, Clock, Plus, Gamepad2,
+  ArrowRight, Check, SortAsc, FileText, Clock, Plus, Gamepad2, X,
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { CloseButton } from '@/components/shared/CloseButton'
@@ -18,6 +18,7 @@ import clsx from 'clsx'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { previewText } from '@/lib/previewText'
 import styles from './ManageChatsModal.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface ChatSummary {
   id: string
@@ -345,14 +346,20 @@ export default function ManageChatsModal() {
 
           <div className={styles.toolbar}>
             <div className={styles.searchWrap}>
-              <Search size={14} />
+              <Search size={14} className={styles.searchIcon} />
               <input
                 type="text"
                 className={styles.searchInput}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
                 placeholder={t('searchPlaceholder')}
               />
+              {search && (
+                <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                  <X size={13} />
+                </button>
+              )}
             </div>
             <Button size="sm" icon={<SortAsc size={13} />} onClick={cycleSortMode}>
               {sortLabel}

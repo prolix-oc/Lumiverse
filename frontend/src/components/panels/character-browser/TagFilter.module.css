@@ -62,14 +62,37 @@
   overflow: hidden;
 }
 
+.searchWrap {
+  position: relative;
+}
+
 .search {
-  padding: 8px 10px;
+  width: 100%;
+  padding: 8px 32px 8px 10px;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--lumiverse-border);
   outline: none;
   color: var(--lumiverse-text);
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.searchClear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
 }
 
 .search::placeholder {

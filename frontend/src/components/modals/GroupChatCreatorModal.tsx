@@ -13,6 +13,7 @@ import Pagination from '@/components/shared/Pagination'
 import type { Character } from '@/types/api'
 import styles from './GroupChatCreatorModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type Step = 'characters' | 'greeting' | 'settings'
 type GroupCardMode = 'swap' | 'merge_ignore_muted' | 'merge'
@@ -265,8 +266,14 @@ export default function GroupChatCreatorModal() {
                     className={styles.searchInput}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
                     placeholder={t('searchPlaceholder')}
                   />
+                  {search && (
+                    <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 <div className={styles.charGrid}>

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, FolderOpen, Plus, Check, X } from 'lucide-react'
 import clsx from 'clsx'
 import styles from './FolderDropdown.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface FolderDropdownProps {
   folders: string[]
@@ -81,13 +82,21 @@ export default function FolderDropdown({
       {open && (
         <div className={styles.dropdown}>
           {folders.length > 5 && (
-            <input
-              className={styles.searchInput}
-              placeholder={t('searchFolders')}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              autoFocus
-            />
+            <div className={styles.searchBox}>
+              <input
+                className={styles.searchInput}
+                placeholder={t('searchFolders')}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
+                autoFocus
+              />
+              {search && (
+                <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={t('searchFolders')}>
+                  <X size={12} />
+                </button>
+              )}
+            </div>
           )}
 
           <button

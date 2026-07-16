@@ -700,6 +700,26 @@
   white-space: pre-wrap;
 }
 
+.searchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
 .queryPreviewScroll {
   max-height: clamp(220px, 38vh, 420px);
   overscroll-behavior: contain;
