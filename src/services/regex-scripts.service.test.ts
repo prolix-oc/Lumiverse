@@ -441,6 +441,7 @@ describe("regex JSON overwrite imports", () => {
         name: "Updated",
         script_id: "shared_import",
         find_regex: "new",
+        preset_id: "stale-exported-preset",
         disabled: false,
       }],
     }, { activePresetId: "preset-1" });
@@ -481,6 +482,8 @@ describe("regex JSON overwrite imports", () => {
 
     toggleRegexScript(USER_ID, updated.id, true, { activePresetId: "new-preset" });
     expect(mustGetScript(updated.id).disabled).toBe(true);
+    toggleRegexScript(USER_ID, updated.id, false, { activePresetId: "new-preset" });
+    expect(mustGetScript(updated.id).disabled).toBe(false);
   });
 });
 
