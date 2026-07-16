@@ -7,6 +7,7 @@ import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
 import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
+import { bindImportedRegexesToPreset } from '@/lib/loom/preset-regex-import'
 import { flushPresetForGeneration, presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { beginActiveLoomPresetSelection, transitionActiveLoomPreset } from '@/lib/loom/preset-selection-coordinator'
 import { getMacroCatalog } from '@/api/macros'
@@ -508,7 +509,10 @@ export function useLoomBuilder() {
       if (Array.isArray(embeddedRegex) && embeddedRegex.length > 0) {
         try {
           const regexResult = await enqueuePresetRegexOperation(() => regexApi.importScripts({
-            scripts: embeddedRegex,
+            // Imported scripts may carry their source preset_id. Force the new
+            // ownership here; otherwise the backend treats them as inactive
+            // source-preset scripts and their toggles become no-ops.
+            scripts: bindImportedRegexesToPreset(embeddedRegex, created.id),
             folder: loom.name,
             preset_id: created.id,
             active_preset_id: created.id,
