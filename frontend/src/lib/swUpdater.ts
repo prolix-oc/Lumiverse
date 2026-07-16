@@ -1,4 +1,5 @@
 import { useStore } from '@/store'
+import { isServiceWorkerReplacement } from './swUpdatePolicy'
 
 /**
  * Module-level handle to the active service worker registration. Held outside
@@ -49,7 +50,10 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
     // A first-time service-worker install also emits updatefound. It is not an
     // application update and must not put a freshly loaded page behind the
     // blocking update overlay.
-    if (!reg.active && !navigator.serviceWorker.controller) return
+    if (!isServiceWorkerReplacement(
+      Boolean(reg.active),
+      Boolean(navigator.serviceWorker.controller),
+    )) return
     setBundleUpdatePending(true)
 
     // If the new worker fails to install (e.g. precache fetch fails), clear
