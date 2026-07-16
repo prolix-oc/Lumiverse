@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import type { SpindleManifest } from 'lumiverse-spindle-types'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 type FakeRoot = {
   parentElement: object | null
@@ -28,7 +31,9 @@ const uiEventDestroyPermissionCalls: Array<{ extensionId: string; permission: st
 let permissionPromise: Promise<PermissionResult> = Promise.resolve({ granted: [] })
 let uuidSequence = 0
 const macroCatalogMessages: unknown[] = []
+const frontendProcessEvents: unknown[] = []
 let objectUrlSequence = 0
+const moduleDirectory = mkdtempSync(join(import.meta.dir, '.loader-lifecycle-'))
 let accessCreations = 0
 const presetEditorSubscribers = new Set<(state: unknown) => void>()
 let presetEditorUnderlyingUnsubscribeCalls = 0
@@ -124,7 +129,9 @@ Object.defineProperty(URL, 'createObjectURL', {
   value: () => {
     objectUrlSequence += 1
     const source = String(lifecycleGlobals.__lifecycleModuleSource ?? '')
-    return `data:text/javascript,${encodeURIComponent(source)}?${objectUrlSequence}`
+    const modulePath = join(moduleDirectory, `frontend-${objectUrlSequence}.mjs`)
+    writeFileSync(modulePath, source)
+    return pathToFileURL(modulePath).href
   },
 })
 Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} })
@@ -150,6 +157,14 @@ const wsClientMock = {
     return () => handlers.delete(handler)
   },
   send(payload: unknown) {
+    if (
+      typeof payload === 'object' &&
+      payload !== null &&
+      'type' in payload &&
+      payload.type === 'SPINDLE_FRONTEND_PROCESS_EVENT'
+    ) {
+      frontendProcessEvents.push(payload)
+    }
     macroCatalogMessages.push(payload)
   },
 }
@@ -268,6 +283,8 @@ const lifecycleModuleSource = `
   export function setup(context) {
     globalThis["__lifecycleContext"] = context;
     if (globalThis["__lifecycleRegisterPresetEditor"]) globalThis["__lifecycleRegisterPresetEditor"](context);
+    if (globalThis["__lifecycleRegisterProcess"]) globalThis["__lifecycleRegisterProcess"](context);
+    if (globalThis["__lifecycleExerciseSetup"]) globalThis["__lifecycleExerciseSetup"](context);
     if (globalThis["__lifecycleRequestCatalog"]) {
       const provider = globalThis["__catalogProvider"];
       globalThis["__catalogPromise"] = provider();
@@ -277,6 +294,7 @@ const lifecycleModuleSource = `
     if (globalThis["__lifecycleReturnStaticTeardown"] && result && typeof result["then"] === 'function') {
       return result["then"](() => teardown);
     }
+    if (globalThis["__lifecycleThrowSetup"]) throw new Error("sync setup failure");
     return result;
   }
 `
@@ -286,7 +304,7 @@ globalThis.fetch = (async () => new Response(lifecycleModuleSource)) as unknown 
 
 
 
-const { getLoadedExtensions, loadFrontendExtension, unloadFrontendExtension, routeBackendMessage } = await import('./loader')
+const { getLoadedExtensions, loadFrontendExtension, unloadFrontendExtension, routeBackendMessage, routeFrontendProcessEvent } = await import('./loader')
 mock.restore()
 trackWindowHandlers = true
 
@@ -301,6 +319,7 @@ const manifest: SpindleManifest = {
 }
 
 type LifecycleContext = {
+  ready(): void
   ui: {
     mount(point: string): FakeRoot
     presetEditor: {
@@ -310,11 +329,21 @@ type LifecycleContext = {
       }
     }
   }
+  processes: {
+    register(kind: string, handler: (process: ProcessContext) => void | (() => void)): () => void
+  }
   permissions: {
     request(permissions: string[]): Promise<string[]>
   }
 }
+type ProcessContext = {
+  processId: string
+  ready(): void
+  onMessage(handler: (payload: unknown) => void): () => void
+  onStop(handler: (detail: { reason?: string }) => void): () => void
+}
 
+type LifecycleProcessRegistration = (context: LifecycleContext) => void
 lifecycleGlobals.__lifecycleRegisterPresetEditor = (context: LifecycleContext) => {
   if (!lifecycleGlobals.__lifecycleCaptureHelper && !lifecycleGlobals.__lifecycleSubscribePresetEditor) return
   const helper = context.ui.presetEditor.extension
@@ -354,6 +383,7 @@ function assertNoTrackedWindowHandlers(): void {
 function resetHarness(): void {
   permissionPromise = Promise.resolve({ granted: [] })
   lifecycleGlobals.__lifecycleSetupResult = undefined
+  lifecycleGlobals.__lifecycleModuleSource = lifecycleModuleSource
   lifecycleGlobals.__lifecycleContext = undefined
   lifecycleGlobals.__lifecycleCaptureHelper = false
   lifecycleGlobals.__lifecycleSubscribePresetEditor = false
@@ -363,7 +393,10 @@ function resetHarness(): void {
   lifecycleGlobals.__lifecycleMount = false
   lifecycleGlobals.__lifecycleReturnStaticTeardown = false
   lifecycleGlobals.__lifecycleRequestCatalog = false
+  lifecycleGlobals.__lifecycleExerciseSetup = undefined
+  lifecycleGlobals.__lifecycleThrowSetup = false
   lifecycleGlobals.__catalogProvider = undefined
+lifecycleGlobals.__lifecycleRegisterProcess = undefined
   lifecycleGlobals.__catalogPromise = undefined
   lifecycleGlobals.__lifecycleTeardownCalls = 0
   lifecycleGlobals.__presetEditorUnderlyingUnsubscribeCalls = 0
@@ -373,6 +406,7 @@ function resetHarness(): void {
   uuidSequence = 0
   macroCatalogMessages.splice(0)
   removedRoots.splice(0)
+  frontendProcessEvents.splice(0)
   placementDestroyCalls.splice(0)
   uiEventDestroyAllCalls.splice(0)
   uiEventDestroyPermissionCalls.splice(0)
@@ -384,6 +418,46 @@ async function flushLifecycleTasks(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
   await Promise.resolve()
+}
+function assertFailedLoadCleanup(extensionId: string, expectResources: boolean): void {
+  expect(getLoadedExtensions().has(extensionId)).toBe(false)
+  expect([...wsHandlers.values()].every((handlers) => handlers.size === 0)).toBe(true)
+  expect([...windowHandlers.values()].every((handlers) => handlers.size === 0)).toBe(true)
+  expect([...presetEditorSubscribers]).toEqual([])
+  if (expectResources) {
+    expect(removedRoots.length).toBeGreaterThan(0)
+    expect(removedRoots.every((root) => root.removed)).toBe(true)
+    expect(placementDestroyCalls).toContain(extensionId)
+  } else {
+    expect(removedRoots).toEqual([])
+  }
+}
+
+function installFailureResources(
+  extensionId: string,
+  processId: string,
+  processCleanupCalls: { value: number },
+): void {
+  lifecycleGlobals.__lifecycleExerciseSetup = (context: LifecycleContext) => {
+    context.ui.mount('main')
+    context.ui.presetEditor.extension.onChange(() => {})
+    void context.permissions.request(['ui_panels']).catch(() => {})
+    context.processes.register('failure-process', (process) => {
+      process.ready()
+      process.onMessage(() => {})
+      process.onStop(() => {})
+      return () => {
+        processCleanupCalls.value += 1
+      }
+    })
+    context.ready()
+    routeFrontendProcessEvent(extensionId, {
+      action: 'spawn',
+      processId,
+      kind: 'failure-process',
+      payload: { source: 'failure-contract' },
+    })
+  }
 }
 
 beforeAll(() => resetHarness())
@@ -419,10 +493,128 @@ afterAll(async () => {
   expect(globalThis.Node).toBe(originalGlobals.Node)
   expect(globalThis.MutationObserver).toBe(originalGlobals.MutationObserver)
   expect(globalThis.fetch).toBe(originalGlobals.fetch)
+  rmSync(moduleDirectory, { recursive: true, force: true })
   dom.window.close()
 })
 
 describe('loader lifecycle orchestration', () => {
+  test('force-stop cleans up when onStop returns without completing', async () => {
+    const extensionId = 'stalled_stop'
+    let stopCalls = 0
+    let cleanupCalls = 0
+    let messageCalls = 0
+    lifecycleGlobals.__lifecycleRegisterProcess = ((context: LifecycleContext) => {
+      context.processes.register('stalled-stop', (process) => {
+        process.ready()
+        process.onMessage(() => {
+          messageCalls += 1
+        })
+        // onStop is synchronous and void; returning without process.complete models no acknowledgement.
+        // An infinite synchronous handler would block later browser events, so a non-completing return is the testable watchdog case.
+        process.onStop(() => {
+          stopCalls += 1
+        })
+        return () => {
+          cleanupCalls += 1
+        }
+      })
+    }) as LifecycleProcessRegistration
+
+    await loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
+    routeFrontendProcessEvent(extensionId, {
+      action: 'spawn',
+      processId: 'stalled-process',
+      kind: 'stalled-stop',
+      payload: { source: 'test' },
+    })
+    await flushLifecycleTasks()
+    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has('stalled-process')).toBe(true)
+    expect(frontendProcessEvents).toContainEqual({
+      type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+      extensionId,
+      processId: 'stalled-process',
+      event: 'ready',
+    })
+
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId: 'stalled-process',
+      reason: 'graceful-stop',
+    })
+    await flushLifecycleTasks()
+    expect(stopCalls).toBe(1)
+    expect(cleanupCalls).toBe(0)
+    expect(frontendProcessEvents.filter((event) =>
+      typeof event === 'object' &&
+      event !== null &&
+      'processId' in event &&
+      event.processId === 'stalled-process' &&
+      'event' in event &&
+      event.event === 'complete',
+    )).toHaveLength(0)
+
+    routeFrontendProcessEvent(extensionId, {
+      action: 'message',
+      processId: 'stalled-process',
+      payload: { stillActive: true },
+    })
+    expect(messageCalls).toBe(1)
+
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId: 'stalled-process',
+      reason: 'Frontend process force-stopped after stop timeout',
+      force: true,
+    })
+    await flushLifecycleTasks()
+    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has('stalled-process')).toBe(false)
+    expect(cleanupCalls).toBe(1)
+    expect(frontendProcessEvents.filter((event) =>
+      typeof event === 'object' &&
+      event !== null &&
+      'processId' in event &&
+      event.processId === 'stalled-process' &&
+      'event' in event &&
+      event.event === 'complete',
+    )).toEqual([
+      {
+        type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+        extensionId,
+        processId: 'stalled-process',
+        event: 'complete',
+      },
+    ])
+
+    routeFrontendProcessEvent(extensionId, {
+      action: 'message',
+      processId: 'stalled-process',
+      payload: { late: true },
+    })
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId: 'stalled-process',
+      reason: 'late-graceful-stop',
+    })
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId: 'stalled-process',
+      reason: 'late-force-stop',
+      force: true,
+    })
+    await flushLifecycleTasks()
+    expect(messageCalls).toBe(1)
+    expect(stopCalls).toBe(1)
+    expect(cleanupCalls).toBe(1)
+    expect(frontendProcessEvents.filter((event) =>
+      typeof event === 'object' &&
+      event !== null &&
+      'processId' in event &&
+      event.processId === 'stalled-process' &&
+      'event' in event &&
+      event.event === 'complete',
+    )).toHaveLength(1)
+    await unloadFrontendExtension(extensionId)
+  })
   test('revocation observed before GET resolution wins, then a WS regrant creates fresh access', async () => {
     let resolvePermissions!: (result: PermissionResult) => void
     permissionPromise = new Promise<PermissionResult>((resolve) => {
@@ -671,5 +863,138 @@ describe('loader lifecycle orchestration', () => {
     })
     await expect(second).resolves.toEqual({ categories: [] })
     await unloadFrontendExtension('catalog_reload')
+  })
+  test('HTTP load failure resolves without leaving lifecycle residue', async () => {
+    const extensionId = 'http_failure'
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('unavailable', { status: 503 })) as unknown as typeof fetch
+    try {
+      await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+      assertFailedLoadCleanup(extensionId, false)
+
+      const eventCount = frontendProcessEvents.length
+      routeFrontendProcessEvent(extensionId, {
+        action: 'message',
+        processId: 'late-process',
+        payload: { late: true },
+      })
+      routeFrontendProcessEvent(extensionId, {
+        action: 'stop',
+        processId: 'late-process',
+        reason: 'late-stop',
+      })
+      await flushLifecycleTasks()
+      expect(frontendProcessEvents).toHaveLength(eventCount)
+    } finally {
+      globalThis.fetch = previousFetch
+    }
+  })
+
+  test('missing and invalid setup exports resolve without leaving lifecycle residue', async () => {
+    const cases = [
+      ['missing_setup', 'export const value = 1;'],
+      ['invalid_setup', 'export const setup = 42;'],
+    ] as const
+    const previousSource = lifecycleGlobals.__lifecycleModuleSource
+    try {
+      for (const [suffix, source] of cases) {
+        const extensionId = `setup_export_${suffix}`
+        lifecycleGlobals.__lifecycleModuleSource = source
+        await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+        assertFailedLoadCleanup(extensionId, false)
+
+        const eventCount = frontendProcessEvents.length
+        routeFrontendProcessEvent(extensionId, {
+          action: 'spawn',
+          processId: 'late-process',
+          kind: 'late-kind',
+          payload: {},
+        })
+        await flushLifecycleTasks()
+        expect(frontendProcessEvents).toHaveLength(eventCount)
+      }
+    } finally {
+      lifecycleGlobals.__lifecycleModuleSource = previousSource
+    }
+  })
+
+  test('synchronous setup throw resolves after cleaning every owned resource', async () => {
+    const extensionId = 'sync_setup_failure'
+    const processId = 'sync-failure-process'
+    const processCleanupCalls = { value: 0 }
+    permissionPromise = Promise.resolve({ granted: ['presets'] })
+    installFailureResources(extensionId, processId, processCleanupCalls)
+    lifecycleGlobals.__lifecycleThrowSetup = true
+
+    await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+    await flushLifecycleTasks()
+
+    assertFailedLoadCleanup(extensionId, true)
+    expect(processCleanupCalls.value).toBe(1)
+    expect(frontendProcessEvents).toContainEqual({
+      type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+      extensionId,
+      processId,
+      event: 'frontend_unloaded',
+    })
+
+    const eventCount = frontendProcessEvents.length
+    routeFrontendProcessEvent(extensionId, {
+      action: 'message',
+      processId,
+      payload: { late: true },
+    })
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId,
+      reason: 'late-stop',
+    })
+    await flushLifecycleTasks()
+    expect(frontendProcessEvents).toHaveLength(eventCount)
+  })
+
+  test('asynchronous setup rejection unloads a resolved generation and every owned resource', async () => {
+    const extensionId = 'async_setup_failure'
+    const processId = 'async-failure-process'
+    const processCleanupCalls = { value: 0 }
+    let rejectSetup!: (error: Error) => void
+    permissionPromise = Promise.resolve({ granted: ['presets'] })
+    lifecycleGlobals.__lifecycleSetupResult = new Promise<unknown>((_resolve, reject) => {
+      rejectSetup = reject
+    })
+    installFailureResources(extensionId, processId, processCleanupCalls)
+
+    await loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
+    await flushLifecycleTasks()
+    expect(getLoadedExtensions().has(extensionId)).toBe(true)
+    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has(processId)).toBe(true)
+    expect([...presetEditorSubscribers]).not.toEqual([])
+    expect(windowHandlers.get('spindle:permission-resolved')?.size ?? 0).toBe(1)
+
+    rejectSetup(new Error('async setup failure'))
+    await flushLifecycleTasks()
+
+    assertFailedLoadCleanup(extensionId, true)
+    expect(processCleanupCalls.value).toBe(1)
+    expect(frontendProcessEvents).toContainEqual({
+      type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+      extensionId,
+      processId,
+      event: 'frontend_unloaded',
+    })
+
+    const eventCount = frontendProcessEvents.length
+    routeFrontendProcessEvent(extensionId, {
+      action: 'message',
+      processId,
+      payload: { late: true },
+    })
+    routeFrontendProcessEvent(extensionId, {
+      action: 'stop',
+      processId,
+      reason: 'late-stop',
+    })
+    await flushLifecycleTasks()
+    expect(frontendProcessEvents).toHaveLength(eventCount)
   })
 })

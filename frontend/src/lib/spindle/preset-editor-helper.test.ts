@@ -141,7 +141,7 @@ describe('scoped preset editor helper', () => {
       async flush() {},
     })
 
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -164,7 +164,7 @@ describe('scoped preset editor helper', () => {
     helper.setMetadata({ mode: 'parallel' }, { immediate: true })
     expect(current.metadata).toEqual({
       another_extension: { preserved: true },
-      agentic_preset_composer: { mode: 'parallel' },
+      fixture_extension: { mode: 'parallel' },
     })
 
     helper.activateBuiltinTab('blocks')
@@ -227,7 +227,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -307,7 +307,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -353,7 +353,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -422,7 +422,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -463,7 +463,7 @@ describe('scoped preset editor helper', () => {
       updatePreset(mutator) { current = mutator(current) },
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -558,7 +558,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -599,7 +599,7 @@ describe('scoped preset editor helper', () => {
       updatePreset(mutator) { current = mutator(current) },
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -662,7 +662,7 @@ describe('scoped preset editor helper', () => {
       updatePreset(mutator) { current = mutator(current) },
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -743,7 +743,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -803,7 +803,7 @@ describe('scoped preset editor helper', () => {
       async flush() {},
     })
 
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -901,7 +901,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -948,7 +948,7 @@ describe('scoped preset editor helper', () => {
       updatePreset() {},
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -977,14 +977,14 @@ describe('scoped preset editor helper', () => {
       updatePreset(mutator) { current = mutator(current) },
       async flush() {},
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
 
     open = false
     expect(() => helper.setMetadata({ mode: 'stale' })).toThrow('PRESET_EDITOR_CLOSED')
-    expect(current.metadata.agentic_preset_composer).toBeUndefined()
+    expect(current.metadata.fixture_extension).toBeUndefined()
   })
 
   test('publishes a closed state before exposing the next selected preset', () => {
@@ -1034,7 +1034,7 @@ describe('scoped preset editor helper', () => {
       activeTabId: 'preset',
       preset: first,
     })
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -1073,7 +1073,7 @@ describe('scoped preset editor helper', () => {
   })
 
   test('rejects non-JSON extension metadata before it reaches coordinator state', () => {
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {},
       trackSubscription(unsubscribe) { return trackPresetSubscription(unsubscribe) },
     })
@@ -1131,7 +1131,7 @@ describe('scoped preset editor helper', () => {
 
   test('rejects use after a permission revocation invalidates access', () => {
     let active = false
-    const helper = createPresetEditorScopedHelper('agentic_preset_composer', {
+    const helper = createPresetEditorScopedHelper('fixture_extension', {
       assertActive() {
         if (!active) throw new Error('PRESET_EDITOR_REVOKED')
       },
@@ -1158,7 +1158,7 @@ describe('scoped preset editor helper', () => {
       async flush() {},
     })
     const access = createPresetEditorAccess(
-      'agentic_preset_composer',
+      'fixture_extension',
       () => permissions,
       (unsubscribe) => unsubscribe,
     )
@@ -1172,12 +1172,12 @@ describe('scoped preset editor helper', () => {
 
     const reacquired = access.acquire()
     reacquired.setMetadata({ mode: 'parallel' })
-    expect(current.metadata.agentic_preset_composer).toEqual({ mode: 'parallel' })
+    expect(current.metadata.fixture_extension).toEqual({ mode: 'parallel' })
 
   })
   test('permanently invalidates helpers when the extension frontend unloads', () => {
     const access = createPresetEditorAccess(
-      'agentic_preset_composer',
+      'fixture_extension',
       () => ['presets'],
       (unsubscribe) => unsubscribe,
     )

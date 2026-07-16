@@ -8,7 +8,7 @@ import type {
 import type { SpindlePlacementSlice } from '@/types/store'
 
 import { JSDOM } from 'jsdom'
-import { clearLiveRootsForExtension } from './live-root-registry'
+import { clearLiveRootsForExtension, getLiveRootRecordExact, registerLiveRoot, unregisterLiveRoot } from './live-root-registry'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' })
 const originalWindow = globalThis.window
@@ -84,6 +84,7 @@ const {
   clearTabMobilityHandle,
   createTabMobilityHandle,
   destroyAllPlacementsForExtension,
+  destroyPlacementsForExtensionPermission,
   createPresetEditorTabHandle,
   createPresetEditorToolbarItemHandle,
   destroyPresetEditorPlacementsForExtension,
@@ -274,6 +275,292 @@ describe('non-preset placement lifecycle', () => {
       expect.objectContaining({ extensionId: otherId }),
     ])
   })
+  test('removes reparented drawer and character roots on explicit destroy', () => {
+    const hostId = 'placement-reparented-explicit'
+    const drawer = createDrawerTabHandle(hostId, { id: 'drawer', title: 'Drawer' }, undefined, generation)
+    const character = createCharacterEditorTabHandle(hostId, {
+      id: 'character',
+      title: 'Character',
+    }, undefined, generation)
+    placementHandles.push(drawer, character)
+
+    const container = originalCreateElement('section')
+    document.body.append(container)
+    for (const root of [drawer.root, character.root]) {
+      container.append(root)
+      const trackedRemove = root.remove
+      root.remove = () => {
+        trackedRemove.call(root)
+        dom.window.Element.prototype.remove.call(root)
+      }
+    }
+
+    drawer.destroy()
+    character.destroy()
+
+    expect(container.contains(drawer.root)).toBe(false)
+    expect(container.contains(character.root)).toBe(false)
+    expect(createdRoots.find((entry) => entry.root === drawer.root)?.removed).toBe(true)
+    expect(createdRoots.find((entry) => entry.root === character.root)?.removed).toBe(true)
+    expect(getLiveRootRecordExact(hostId, drawer.root, generation)).toBeNull()
+    expect(getLiveRootRecordExact(hostId, character.root, generation)).toBeNull()
+    expect(placementStore.getState().drawerTabs).toHaveLength(0)
+    expect(placementStore.getState().characterEditorTabs).toHaveLength(0)
+    dom.window.Element.prototype.remove.call(container)
+  })
+
+  test('permission cleanup removes reparented character roots and protects newer generations', () => {
+    const hostId = 'placement-reparented-character-permission'
+    const character = createCharacterEditorTabHandle(hostId, {
+      id: 'character',
+      title: 'Character',
+    }, undefined, generation)
+    placementHandles.push(character)
+
+    const container = originalCreateElement('section')
+    document.body.append(container)
+    container.append(character.root)
+    const trackedRemove = character.root.remove
+    character.root.remove = () => {
+      trackedRemove.call(character.root)
+      dom.window.Element.prototype.remove.call(character.root)
+    }
+
+    destroyPlacementsForExtensionPermission(hostId, 'characters')
+
+    expect(container.contains(character.root)).toBe(false)
+    expect(createdRoots.find((entry) => entry.root === character.root)?.removed).toBe(true)
+    expect(getLiveRootRecordExact(hostId, character.root, generation)).toBeNull()
+    expect(placementStore.getState().characterEditorTabs).toHaveLength(0)
+
+    const staleHostId = 'placement-reparented-character-stale'
+    const staleCharacter = createCharacterEditorTabHandle(staleHostId, {
+      id: 'character',
+      title: 'Character',
+    }, undefined, generation)
+    placementHandles.push(staleCharacter)
+    const newerContainer = originalCreateElement('section')
+    document.body.append(newerContainer)
+    newerContainer.append(staleCharacter.root)
+    const staleTrackedRemove = staleCharacter.root.remove
+    staleCharacter.root.remove = () => {
+      staleTrackedRemove.call(staleCharacter.root)
+      dom.window.Element.prototype.remove.call(staleCharacter.root)
+    }
+    unregisterLiveRoot(staleCharacter.root, staleHostId, generation)
+    registerLiveRoot(staleHostId, staleCharacter.root, 'characters', generation + 1)
+
+    destroyPlacementsForExtensionPermission(staleHostId, 'characters', generation)
+
+    expect(newerContainer.contains(staleCharacter.root)).toBe(true)
+    expect(createdRoots.find((entry) => entry.root === staleCharacter.root)?.removed).toBe(false)
+    expect(getLiveRootRecordExact(staleHostId, staleCharacter.root, generation + 1)).not.toBeNull()
+    expect(placementStore.getState().characterEditorTabs).toHaveLength(0)
+
+    unregisterLiveRoot(staleCharacter.root, staleHostId, generation + 1)
+    dom.window.Element.prototype.remove.call(staleCharacter.root)
+    dom.window.Element.prototype.remove.call(container)
+    dom.window.Element.prototype.remove.call(newerContainer)
+  })
+
+  test('revokes only matching privileged placements while free entries survive and same-permission reentry is blocked', () => {
+    const hostId = 'placement-permission-matrix'
+    const store = placementStore.getState()
+    const originalUnregisterFloatWidget = store.unregisterFloatWidget
+    let samePermissionReentryBlocked = false
+    spyOn(store, 'unregisterFloatWidget').mockImplementation((widgetId) => {
+      try {
+        createFloatWidgetHandle(hostId, undefined, undefined, generation)
+      } catch (error) {
+        samePermissionReentryBlocked = error instanceof Error && error.message.includes('PLACEMENT_DESTROYED')
+      }
+      originalUnregisterFloatWidget(widgetId)
+    })
+
+    const drawer = createDrawerTabHandle(hostId, { id: 'drawer', title: 'Drawer' }, undefined, generation)
+    const action = createInputBarActionHandle(hostId, 'Matrix', {
+      id: 'action',
+      label: 'Action',
+    }, undefined, generation)
+    const character = createCharacterEditorTabHandle(hostId, {
+      id: 'character',
+      title: 'Character',
+    }, undefined, generation)
+    const float = createFloatWidgetHandle(hostId, undefined, undefined, generation)
+    const dock = createDockPanelHandle(hostId, {
+      edge: 'left',
+      title: 'Dock',
+      size: 240,
+    }, undefined, generation)
+    const app = createAppMountHandle(hostId, undefined, undefined, generation)
+    const preset = createPresetEditorTabHandle(hostId, {
+      id: 'preset',
+      title: 'Preset',
+    }, () => {}, generation)
+    const toolbar = createPresetEditorToolbarItemHandle(hostId, {
+      id: 'toolbar',
+      ariaLabel: 'Toolbar',
+    }, () => {}, generation)
+    placementHandles.push(drawer, action, character, float, dock, app)
+    handles.push(preset)
+    toolbarHandles.push(toolbar)
+
+    destroyPlacementsForExtensionPermission(hostId, 'ui_panels', generation)
+    expect(samePermissionReentryBlocked).toBe(true)
+    expect(placementStore.getState().floatWidgets).toHaveLength(0)
+    expect(placementStore.getState().dockPanels).toHaveLength(0)
+    expect(placementStore.getState().drawerTabs).toHaveLength(1)
+    expect(placementStore.getState().inputBarActions).toHaveLength(1)
+    expect(placementStore.getState().characterEditorTabs).toHaveLength(1)
+    expect(placementStore.getState().appMounts).toHaveLength(1)
+    expect(placementStore.getState().presetEditorTabs).toHaveLength(1)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(1)
+
+    destroyPlacementsForExtensionPermission(hostId, 'app_manipulation', generation)
+    expect(placementStore.getState().appMounts).toHaveLength(0)
+    expect(placementStore.getState().drawerTabs).toHaveLength(1)
+    expect(placementStore.getState().inputBarActions).toHaveLength(1)
+
+    destroyPlacementsForExtensionPermission(hostId, 'characters', generation)
+    expect(placementStore.getState().characterEditorTabs).toHaveLength(0)
+    destroyPlacementsForExtensionPermission(hostId, 'presets', generation)
+    expect(placementStore.getState().presetEditorTabs).toHaveLength(0)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(0)
+
+    destroyAllPlacementsForExtension(hostId, generation)
+    expect(placementStore.getState().drawerTabs).toHaveLength(0)
+    expect(placementStore.getState().inputBarActions).toHaveLength(0)
+  })
+  test('scoped unload clears current-generation input action handlers and preserves newer actions', () => {
+    const hostId = 'placement-input-action-generation'
+    const current = createInputBarActionHandle(hostId, 'Current', {
+      id: 'current',
+      label: 'Current action',
+    }, undefined, generation)
+    placementHandles.push(current)
+    let currentClicks = 0
+    current.onClick(() => { currentClicks += 1 })
+    const currentState = placementStore.getState().inputBarActions[0]
+    if (!currentState) throw new Error('Expected current input action')
+    expect(currentState.clickHandlers).toHaveLength(1)
+
+    destroyAllPlacementsForExtension(hostId, generation)
+
+    expect(currentState.clickHandlers).toHaveLength(0)
+    expect(currentClicks).toBe(0)
+    expect(placementStore.getState().inputBarActions).toHaveLength(0)
+
+    const newer = createInputBarActionHandle(hostId, 'Newer', {
+      id: 'newer',
+      label: 'Newer action',
+    }, undefined, generation + 1)
+    placementHandles.push(newer)
+    let newerClicks = 0
+    newer.onClick(() => { newerClicks += 1 })
+    const newerState = placementStore.getState().inputBarActions[0]
+    if (!newerState) throw new Error('Expected newer input action')
+    expect(newerState.clickHandlers).toHaveLength(1)
+
+    destroyAllPlacementsForExtension(hostId, generation)
+
+    expect(placementStore.getState().inputBarActions).toEqual([newerState])
+    expect(newerState.clickHandlers).toHaveLength(1)
+    for (const handler of newerState.clickHandlers) handler()
+    expect(newerClicks).toBe(1)
+  })
+
+
+  test('does not remove foreign owner or newer generation roots during scoped unload', () => {
+    const hostId = 'placement-scoped-unload'
+    const foreignOwner = 'placement-foreign-owner'
+    const foreignRoot = document.createElement('section')
+    const newerRoot = document.createElement('section')
+    foreignRoot.setAttribute('data-spindle-extension-root', foreignOwner)
+    newerRoot.setAttribute('data-spindle-extension-root', hostId)
+    registerLiveRoot(foreignOwner, foreignRoot, null, generation)
+    registerLiveRoot(hostId, newerRoot, null, generation + 1)
+    placementStore.getState().registerDrawerTab({
+      id: 'foreign-root-state',
+      extensionId: hostId,
+      title: 'Foreign root',
+      badge: null,
+      root: foreignRoot,
+    })
+    placementStore.getState().registerDrawerTab({
+      id: 'newer-root-state',
+      extensionId: hostId,
+      title: 'Newer root',
+      badge: null,
+      root: newerRoot,
+    })
+
+    destroyAllPlacementsForExtension(hostId, generation)
+
+    expect(getLiveRootRecordExact(foreignOwner, foreignRoot, generation)?.root).toBe(foreignRoot)
+    expect(getLiveRootRecordExact(hostId, newerRoot, generation + 1)?.root).toBe(newerRoot)
+    expect(createdRoots.find((entry) => entry.root === foreignRoot)?.removed).toBe(false)
+    expect(createdRoots.find((entry) => entry.root === newerRoot)?.removed).toBe(false)
+    expect(placementStore.getState().drawerTabs.map((tab) => tab.id)).toEqual([
+      'foreign-root-state',
+      'newer-root-state',
+    ])
+
+    unregisterLiveRoot(foreignRoot, foreignOwner, generation)
+    unregisterLiveRoot(newerRoot, hostId, generation + 1)
+  })
+
+  test('destroyAllPlacementsForExtension clears drawer mobility state before same-ID re-registration', () => {
+    const removedExtensionId = 'destroyed-drawer-extension'
+    const survivingExtensionId = 'surviving-drawer-extension'
+    const placementKey = 'recycled-drawer-tab'
+    const removed = createDrawerTabHandle(removedExtensionId, {
+      id: placementKey,
+      title: 'Removed',
+    }, undefined, generation)
+    const surviving = createDrawerTabHandle(survivingExtensionId, {
+      id: 'surviving-drawer-tab',
+      title: 'Surviving',
+    }, undefined, generation)
+    placementHandles.push(removed, surviving)
+
+    const removedMobility = createTabMobilityHandle(removedExtensionId)
+    const survivingMobility = createTabMobilityHandle(survivingExtensionId)
+    survivingMobility.requestTabLocation(surviving.tabId, {
+      kind: 'container',
+      containerId: 'surviving-container',
+    })
+    removedMobility.requestTabLocation(removed.tabId, {
+      kind: 'container',
+      containerId: 'removed-container',
+    })
+
+    expect(placementStore.getState().tabLocations).toEqual({
+      [surviving.tabId]: { kind: 'container', containerId: 'surviving-container' },
+      [removed.tabId]: { kind: 'container', containerId: 'removed-container' },
+    })
+    expect(placementStore.getState().pendingActiveTabReset).toBe(removed.tabId)
+
+    destroyAllPlacementsForExtension(removedExtensionId)
+
+    expect(placementStore.getState().drawerTabs.map((tab) => tab.id)).toEqual([surviving.tabId])
+    expect(placementStore.getState().tabLocations).toEqual({
+      [surviving.tabId]: { kind: 'container', containerId: 'surviving-container' },
+    })
+    expect(placementStore.getState().pendingActiveTabReset).toBeNull()
+    expect(createdRoots.find((entry) => entry.root === removed.root)?.removed).toBe(true)
+    expect(() => removed.setTitle('closed')).toThrow('PLACEMENT_DESTROYED')
+
+    survivingMobility.requestTabLocation(surviving.tabId, { kind: 'main-drawer' })
+    expect(placementStore.getState().tabLocations[surviving.tabId]).toEqual({ kind: 'main-drawer' })
+
+    const reRegistered = createDrawerTabHandle(removedExtensionId, {
+      id: placementKey,
+      title: 'Re-registered',
+    }, undefined, generation)
+    placementHandles.push(reRegistered)
+    expect(placementStore.getState().tabLocations[reRegistered.tabId]).toBeUndefined()
+    expect(placementStore.getState().pendingActiveTabReset).toBeNull()
+  })
 
   test('rejects placements registered synchronously during unload', () => {
     const hostId = 'placement-reentrant-host'
@@ -416,15 +703,21 @@ describe('closed placement handles and mobility', () => {
     expect(placementStore.getState().inputBarActions).toHaveLength(0)
   })
 
-  test('invalidates already-issued tab mobility handles on clear', () => {
+  test('invalidates only the matching tab mobility generation on clear', () => {
     const store = placementStore.getState()
     const moveTabTo = spyOn(store, 'moveTabTo')
-    const handle = createTabMobilityHandle('mobility-extension')
+    const extensionId = 'mobility-extension'
+    const stale = createTabMobilityHandle(extensionId, generation)
+    const current = createTabMobilityHandle(extensionId, generation + 1)
 
-    clearTabMobilityHandle('mobility-extension')
-    handle.requestTabLocation('profile', { kind: 'main-drawer' })
+    clearTabMobilityHandle(extensionId, generation)
+    stale.requestTabLocation('profile', { kind: 'main-drawer' })
+    current.requestTabLocation('profile', { kind: 'main-drawer' })
+    expect(moveTabTo).toHaveBeenCalledTimes(1)
 
-    expect(moveTabTo).not.toHaveBeenCalled()
+    clearTabMobilityHandle(extensionId, generation + 1)
+    current.requestTabLocation('profile', { kind: 'main-drawer' })
+    expect(moveTabTo).toHaveBeenCalledTimes(1)
   })
 })
 

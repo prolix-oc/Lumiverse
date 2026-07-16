@@ -18,10 +18,13 @@ import {
   readdirSync,
   renameSync,
   statSync,
+  lstatSync,
+  realpathSync,
   copyFileSync,
   cpSync,
+  type Stats,
 } from "fs";
-import { join, resolve, dirname, sep } from "path";
+import { join, resolve, dirname, sep, extname } from "path";
 import { getUserExtensionPath } from "../auth/provision";
 import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import {
@@ -39,7 +42,80 @@ function isManagedPermission(permission: string): permission is SpindlePermissio
 }
 
 type SourceSpan = { start: number; end: number };
-type ScannableSource = { text: string; ignoredSpans: SourceSpan[] };
+type ScannerOrigin = string;
+type ScannerBindingUpdate = { position: number; values: Set<ScannerOrigin> };
+type ScannerBinding = {
+  updates: ScannerBindingUpdate[];
+};
+type ScannerBindingScope = {
+  start: number;
+  end: number;
+  parent: ScannerBindingScope | null;
+  children: ScannerBindingScope[];
+  bindings: Map<string, ScannerBinding>;
+  functionBoundary: boolean;
+  id: number;
+};
+type ScannerLexicalContext = {
+  root: ScannerBindingScope;
+  scopes: ScannerBindingScope[];
+  scopeIds: Int32Array;
+  overflowSpans: SourceSpan[];
+  parameterSpans: SourceSpan[];
+  resolveValues: (name: string, position: number) => Set<ScannerOrigin>;
+  resolveExpression: (raw: string, position: number) => Set<ScannerOrigin>;
+  scopeAt: (position: number) => ScannerBindingScope;
+  isOverflowed: (position: number) => boolean;
+};
+type ScannerBindingChecker = (name: string, position: number) => boolean;
+type ScannerDelimiterMap = {
+  openingToClosing: Map<number, number>;
+  closingToOpening: Map<number, number>;
+};
+type ScannerContext = {
+  maskedText?: string;
+  delimiterMap?: ScannerDelimiterMap;
+  bindingChecker?: ScannerBindingChecker;
+  lexical?: ScannerLexicalContext;
+  tokenPresence: Map<string, boolean>;
+  aliasSets: Map<string, Set<string>>;
+};
+type ScannableSource = {
+  text: string;
+  ignoredSpans: SourceSpan[];
+  context: ScannerContext;
+};
+
+function getMaskedSource(source: ScannableSource): string {
+  const cached = source.context.maskedText;
+  if (cached !== undefined) return cached;
+  const masked = maskIgnoredSpans(source.text, source.ignoredSpans);
+  source.context.maskedText = masked;
+  return masked;
+}
+
+function hasSourceToken(source: ScannableSource, token: string): boolean {
+  const cached = source.context.tokenPresence.get(token);
+  if (cached !== undefined) return cached;
+  const present = source.text.includes(token);
+  source.context.tokenPresence.set(token, present);
+  return present;
+}
+
+function hasAnySourceToken(source: ScannableSource, tokens: readonly string[]): boolean {
+  for (const token of tokens) {
+    if (hasSourceToken(source, token)) return true;
+  }
+  return false;
+}
+
+function getDelimiterMap(source: ScannableSource): ScannerDelimiterMap {
+  const cached = source.context.delimiterMap;
+  if (cached) return cached;
+  const delimiterMap = buildDelimiterMap(source);
+  source.context.delimiterMap = delimiterMap;
+  return delimiterMap;
+}
 
 
 const EXECUTABLE_MODULE_SPECIFIER_LABEL = "module loading";
@@ -53,9 +129,14 @@ function isExecutableModuleSpecifier(specifier: string): boolean {
     /^[A-Za-z]:[\\/]/.test(trimmed)
   );
 }
+function isNativeAddonModuleSpecifier(specifier: string): boolean {
+  const withoutQueryOrHash = specifier.trim().split(/[?#]/, 1)[0] ?? "";
+  return /\.node$/i.test(withoutQueryOrHash);
+}
+
 
 function addModuleSpecifierHit(specifier: string, hits: Set<string>): void {
-  if (isExecutableModuleSpecifier(specifier)) {
+  if (isExecutableModuleSpecifier(specifier) || isNativeAddonModuleSpecifier(specifier)) {
     hits.add(EXECUTABLE_MODULE_SPECIFIER_LABEL);
   }
   const label = BLOCKED_MODULE_SPECIFIER_LABELS.get(specifier.trim());
@@ -141,6 +222,59 @@ function collectIgnoredSpans(source: string): SourceSpan[] {
     "return", "typeof", "delete", "void", "throw", "new",
     "in", "of", "instanceof", "case", "do", "else", "yield", "await",
   ]);
+  const previousCodeIndex = (from: number): number => {
+    let index = from;
+    while (index >= 0) {
+      const ignored = ignoredSpanAt(index, spans);
+      if (ignored) {
+        index = ignored.start - 1;
+        continue;
+      }
+      if (/\s/.test(source[index] ?? "")) {
+        index -= 1;
+        continue;
+      }
+      return index;
+    }
+    return -1;
+  };
+  const isObjectLiteralOpening = (opening: number): boolean => {
+    const previous = previousCodeIndex(opening - 1);
+    if (previous < 0) return false;
+    const previousChar = source[previous];
+    if (previousChar === ">") {
+      return source[previous - 1] !== "=";
+    }
+    if ("=(:,[!?&|+-*%^~<>".includes(previousChar)) return true;
+    if (/[A-Za-z0-9_$)\]}]/.test(previousChar ?? "")) {
+      let end = previous;
+      while (end >= 0 && /[A-Za-z0-9_$]/.test(source[end] ?? "")) end -= 1;
+      const word = source.slice(end + 1, previous + 1);
+      return new Set(["return", "throw", "yield", "await"]).has(word);
+    }
+    return false;
+  };
+  const isObjectLiteralClosing = (closing: number): boolean => {
+    let depth = 0;
+    let index = closing;
+    while (index >= 0) {
+      const ignored = ignoredSpanAt(index, spans);
+      if (ignored) {
+        index = ignored.start - 1;
+        continue;
+      }
+      const char = source[index];
+      if (char === "}") {
+        depth += 1;
+      } else if (char === "{") {
+        depth -= 1;
+        if (depth === 0) return isObjectLiteralOpening(index);
+      }
+      index -= 1;
+    }
+    return false;
+  };
+
 
   /**
    * Find the last non-whitespace, non-comment character before `pos` and
@@ -159,11 +293,12 @@ function collectIgnoredSpans(source: string): SourceSpan[] {
     while (j >= 0 && /\s/.test(source[j])) j -= 1;
     if (j < 0) return true;
     const ch = source[j];
+    if (ch === "}") return !isObjectLiteralClosing(j);
     if (REGEX_CONTEXT_CHARS.has(ch)) return true;
     // Identifier scan — keyword or value?
     if (/[A-Za-z_$]/.test(ch)) {
       let k = j;
-      while (k >= 0 && /[A-Za-z0-9_$]/.test(source[k])) k -= 1;
+      while (k >= 0 && /[A-Za-z0-9_$]/.test(source[k] ?? "")) k -= 1;
       const word = source.slice(k + 1, j + 1);
       if (REGEX_CONTEXT_KEYWORDS.has(word)) return true;
       return false;
@@ -260,8 +395,11 @@ function collectIgnoredSpans(source: string): SourceSpan[] {
 }
 
 function isIgnoredIndex(index: number | undefined, spans: SourceSpan[]): boolean {
-  if (index === undefined || index < 0) return false;
+  return ignoredSpanAt(index, spans) !== null;
+}
 
+function ignoredSpanAt(index: number | undefined, spans: SourceSpan[]): SourceSpan | null {
+  if (index === undefined || index < 0) return null;
   let low = 0;
   let high = spans.length - 1;
   while (low <= high) {
@@ -272,16 +410,39 @@ function isIgnoredIndex(index: number | undefined, spans: SourceSpan[]): boolean
     } else if (index >= span.end) {
       low = middle + 1;
     } else {
-      return true;
+      return span;
     }
   }
-  return false;
+  return null;
+}
+function maskIgnoredSpans(text: string, spans: SourceSpan[]): string {
+  const characters = text.split("");
+  for (const span of spans) {
+    for (let index = span.start; index < span.end; index += 1) {
+      if (characters[index] !== "\n" && characters[index] !== "\r") characters[index] = " ";
+    }
+  }
+  return characters.join("");
 }
 
+let lastScannableContent: string | undefined;
+let lastScannableSources: ScannableSource[] | undefined;
+
 function createScannableSources(content: string): ScannableSource[] {
+  if (content === lastScannableContent && lastScannableSources) return lastScannableSources;
   const normalized = normalizeJavaScriptForSafetyScan(content);
   const texts = normalized === content ? [content] : [content, normalized];
-  return texts.map((text) => ({ text, ignoredSpans: collectIgnoredSpans(text) }));
+  const sources = texts.map((text) => ({
+    text,
+    ignoredSpans: collectIgnoredSpans(text),
+    context: {
+      tokenPresence: new Map<string, boolean>(),
+      aliasSets: new Map<string, Set<string>>(),
+    },
+  }));
+  lastScannableContent = content;
+  lastScannableSources = sources;
+  return sources;
 }
 
 function matchOutsideIgnored(source: ScannableSource, regex: RegExp): RegExpMatchArray[] {
@@ -294,20 +455,83 @@ function matchOutsideIgnored(source: ScannableSource, regex: RegExp): RegExpMatc
   return matches;
 }
 
-function decodeQuotedLiteral(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)$/.test(trimmed)) return null;
-  const quote = trimmed[0];
-  const body = trimmed.slice(1, -1);
-  if (quote === "`") return body.replace(/\$\{[^}]*\}/g, "");
-  if (quote === '"') {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return body;
+function decodeJavaScriptStringBody(body: string): string | null {
+  let decoded = "";
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char !== "\\") {
+      decoded += char;
+      continue;
+    }
+    if (index + 1 >= body.length) return null;
+    const escaped = body[++index];
+    switch (escaped) {
+      case "b":
+        decoded += "\b";
+        break;
+      case "f":
+        decoded += "\f";
+        break;
+      case "n":
+        decoded += "\n";
+        break;
+      case "r":
+        decoded += "\r";
+        break;
+      case "t":
+        decoded += "\t";
+        break;
+      case "v":
+        decoded += "\v";
+        break;
+      case "0":
+        decoded += "\0";
+        if (/[0-9]/.test(body[index + 1] ?? "")) decoded += body[++index];
+        break;
+      case "x": {
+        const hex = body.slice(index + 1, index + 3);
+        if (!/^[\da-fA-F]{2}$/.test(hex)) return null;
+        decoded += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 2;
+        break;
+      }
+      case "u": {
+        if (body[index + 1] === "{") {
+          const close = body.indexOf("}", index + 2);
+          if (close < 0) return null;
+          const codePoint = body.slice(index + 2, close);
+          if (!/^[\da-fA-F]{1,6}$/.test(codePoint)) return null;
+          const value = Number.parseInt(codePoint, 16);
+          if (value > 0x10ffff) return null;
+          decoded += String.fromCodePoint(value);
+          index = close;
+          break;
+        }
+        const hex = body.slice(index + 1, index + 5);
+        if (!/^[\da-fA-F]{4}$/.test(hex)) return null;
+        decoded += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 4;
+        break;
+      }
+      case "\n":
+        break;
+      case "\r":
+        if (body[index + 1] === "\n") index += 1;
+        break;
+      default:
+        decoded += escaped;
+        break;
     }
   }
-  return body.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+  return decoded;
+}
+
+function decodeQuotedLiteral(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)$/.test(trimmed)) {
+    return null;
+  }
+  return decodeJavaScriptStringBody(trimmed.slice(1, -1));
 }
 
 function decodeSimpleStringExpression(raw: string): string | null {
@@ -468,6 +692,29 @@ function resolveStrictStaticStringExpression(raw: string): string | null {
   }
   return matchedAny ? value : null;
 }
+function normalizeIdentifierExpression(raw: string): string | null {
+  const withoutComments = stripModuleExpressionComments(raw);
+  if (withoutComments === null) return null;
+  let value = withoutComments.trim();
+  for (let pass = 0; pass < 8 && value.startsWith("(") && value.endsWith(")"); pass += 1) {
+    let depth = 0;
+    let outerClose = -1;
+    for (let index = 0; index < value.length; index += 1) {
+      if (value[index] === "(") depth += 1;
+      else if (value[index] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          outerClose = index;
+          break;
+        }
+        if (depth < 0) break;
+      }
+    }
+    if (outerClose !== value.length - 1) break;
+    value = value.slice(1, -1).trim();
+  }
+  return /^[A-Za-z_$][\w$]*$/.test(value) ? value : null;
+}
 const MODULE_LITERAL_RE =
   /(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:[^`\\$]|\\.|\$(?!\{))*`)/;
 const STATIC_MODULE_IMPORT_RE = new RegExp(
@@ -477,20 +724,11 @@ const STATIC_MODULE_IMPORT_RE = new RegExp(
 const MODULE_CALL_ARGUMENT_MAX_LENGTH = 65_536;
 const MODULE_CALL_ARGUMENT_FRAGMENT =
   `((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\)){1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}}?)`;
-const SERIALIZED_MODULE_CALL_PREFIX_RE = new RegExp(
-  `\\b(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(`,
-  "g",
-);
 const BARE_MODULE_CALL_PREFIX_RE = new RegExp(
   `(?<![.\\w$])(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(`,
   "g",
 );
-const SERIALIZED_REQUIRE_REFERENCE_RE = /(?<![\w$])require\b(?!\s*:)/g;
 
-const MODULE_CALL_RE = new RegExp(
-  `\\b(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
-  "g",
-);
 const BARE_MODULE_CALL_RE = new RegExp(
   `(?<![.\\w$])(?:import${MODULE_COMMENT_GAP}|require${MODULE_COMMENT_GAP}(?:\\?\\.${MODULE_COMMENT_GAP})?)\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
   "g",
@@ -519,6 +757,7 @@ const IMPORT_META_CALL_RE = new RegExp(
 
 // `import.meta.require` is a module loader; every other metadata escape fails closed.
 function addImportMetaRequireHits(source: ScannableSource, hits: Set<string>): void {
+  if (!hasSourceToken(source, "import")) return;
   for (const match of matchOutsideIgnored(source, IMPORT_META_RE)) {
     if (match.index === undefined) continue;
     const tail = source.text.slice(match.index + match[0].length);
@@ -561,6 +800,7 @@ function addImportMetaRequireHits(source: ScannableSource, hits: Set<string>): v
 }
 
 function addStaticModuleHits(source: ScannableSource, hits: Set<string>): void {
+  if (!hasAnySourceToken(source, ["import", "export"])) return;
   for (const match of matchOutsideIgnored(source, STATIC_MODULE_IMPORT_RE)) {
     const specifier = decodeQuotedLiteral(match[1]);
     if (specifier !== null) addModuleSpecifierHit(specifier, hits);
@@ -568,121 +808,1186 @@ function addStaticModuleHits(source: ScannableSource, hits: Set<string>): void {
 }
 
 function addReachableModuleRequireHits(source: ScannableSource, hits: Set<string>): void {
-  const moduleObjects = new Set(["module", "globalThis.module"]);
-  for (const match of matchOutsideIgnored(
-    source,
-    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:module|globalThis\s*\.\s*module)\b/,
-  )) {
-    moduleObjects.add(match[1]);
-  }
-
-  for (const objectName of moduleObjects) {
-    const escapedObject = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const directCalls = new RegExp(
-      `\\b${escapedObject}${MODULE_COMMENT_GAP}\\.${MODULE_COMMENT_GAP}require${MODULE_COMMENT_GAP}\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
-      "g",
+  if (!hasSourceToken(source, "require")) return;
+  const requireMeta = new RegExp(
+    `\\brequire${MODULE_COMMENT_GAP}(?:\\.|\\[)\\s*(?:main|cache)`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, requireMeta)) {
+    if (match.index === undefined || scannerIsLocal(source, "require", match.index)) continue;
+    const tail = source.text.slice(match.index + match[0].length);
+    const directRequire = new RegExp(
+      `^${MODULE_COMMENT_GAP}(?:\\[[^\\]]+\\]${MODULE_COMMENT_GAP})?\\.${MODULE_COMMENT_GAP}require`,
     );
-    for (const match of matchOutsideIgnored(source, directCalls)) {
-      const resolved = resolveStaticModuleSpecifier(match[1]);
-      if (resolved === null) {
-        hits.add("dynamic module access");
-      } else {
-        addModuleSpecifierHit(resolved, hits);
-      }
-    }
-
-    const computedCalls = new RegExp(
-      `\\b${escapedObject}${MODULE_COMMENT_GAP}\\[([^\\]]{1,100})\\]${MODULE_COMMENT_GAP}\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
-      "g",
-    );
-    for (const match of matchOutsideIgnored(source, computedCalls)) {
-      if (decodeSimpleStringExpression(match[1]) !== "require") continue;
-      const resolved = resolveStaticModuleSpecifier(match[2]);
-      if (resolved === null) {
-        hits.add("dynamic module access");
-      } else {
-        addModuleSpecifierHit(resolved, hits);
-      }
-    }
-
-    const memberAccess = new RegExp(
-      `\\b${escapedObject}${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}require|\\[([^\\]]{1,100})\\])`,
-      "g",
-    );
-    for (const match of matchOutsideIgnored(source, memberAccess)) {
-      if (match[1] !== undefined && decodeSimpleStringExpression(match[1]) !== "require") continue;
-      const after = source.text.slice((match.index ?? 0) + match[0].length);
-      if (/^\s*\(/.test(after)) continue;
-      hits.add("dynamic module access");
-    }
-  }
-
-  // `require.main` and `require.cache` expose Module instances whose
-  // `.require(...)` methods bypass the guarded top-level require function.
-  if (
-    matchOutsideIgnored(
-      source,
-      /\brequire\s*(?:\.\s*(?:main|cache)|\[\s*["'`](?:main|cache)["'`]\s*\])/,
-    ).length > 0
-  ) {
+    if (directRequire.test(tail)) continue;
     hits.add("dynamic module access");
   }
+  const indirectRequire = new RegExp(
+    `(?<![.\\w$])require${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}(?:main|cache)|\\[\\s*["'\\x60](?:main|cache)["'\\x60]\\s*\\])${MODULE_COMMENT_GAP}(?:\\[[^\\]]{1,300}\\]${MODULE_COMMENT_GAP})?\\.${MODULE_COMMENT_GAP}require${MODULE_COMMENT_GAP}\\(${MODULE_CALL_ARGUMENT_FRAGMENT}\\)`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, indirectRequire)) {
+    if (match.index === undefined || scannerIsLocal(source, "require", match.index)) continue;
+    const resolved = resolveStaticModuleSpecifier(match[1]);
+    if (resolved === null) hits.add("dynamic module access");
+    else addModuleSpecifierHit(resolved, hits);
+  }
+}
 
+const MODULE_CONSTRUCTOR_LOADER_LABEL = "module loading";
+
+function createScannerBindingChecker(
+  source: ScannableSource,
+): ScannerBindingChecker {
+  const cached = source.context.bindingChecker;
+  if (cached) return cached;
+  const masked = getMaskedSource(source);
+  const root: ScannerBindingScope = {
+    start: 0,
+    end: masked.length,
+    parent: null,
+    children: [],
+    bindings: new Map(),
+    functionBoundary: true,
+    id: 0,
+  };
+  const scopes: ScannerBindingScope[] = [root];
+  const scopeIds = new Int32Array(masked.length);
+  const stack: ScannerBindingScope[] = [root];
+  const overflowSpans: SourceSpan[] = [];
+  let overflowDepth = 0;
+  let overflowStart = -1;
+  const scopeLimit = GLOBAL_ALIAS_SCOPE_LIMIT;
+
+  for (let index = 0; index < masked.length; index += 1) {
+    scopeIds[index] = stack[stack.length - 1]?.id ?? 0;
+    const char = masked[index];
+    if (char === "{") {
+      if (overflowDepth > 0) {
+        overflowDepth += 1;
+        continue;
+      }
+      if (scopes.length >= scopeLimit) {
+        overflowDepth = 1;
+        overflowStart = index;
+        continue;
+      }
+      const parent = stack[stack.length - 1] ?? root;
+      const child: ScannerBindingScope = {
+        start: index,
+        end: masked.length,
+        parent,
+        children: [],
+        bindings: new Map(),
+        functionBoundary: false,
+        id: scopes.length,
+      };
+      parent.children.push(child);
+      scopes.push(child);
+      stack.push(child);
+    } else if (char === "}") {
+      if (overflowDepth > 0) {
+        overflowDepth -= 1;
+        if (overflowDepth === 0 && overflowStart >= 0) {
+          overflowSpans.push({ start: overflowStart, end: index + 1 });
+          overflowStart = -1;
+        }
+      } else if (stack.length > 1) {
+        const closed = stack.pop();
+        if (closed) closed.end = index + 1;
+      }
+    }
+  }
+  if (overflowDepth > 0 && overflowStart >= 0) {
+    overflowSpans.push({ start: overflowStart, end: masked.length });
+  }
+  root.end = masked.length;
+
+  const expressionScopes: ScannerBindingScope[] = [];
+  const scopeAt = (position: number): ScannerBindingScope => {
+    const bounded = Math.max(0, Math.min(scopeIds.length - 1, position));
+    let current = scopes[scopeIds[bounded] ?? 0] ?? root;
+    let low = 0;
+    let high = expressionScopes.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const candidate = expressionScopes[middle];
+      if (position < candidate.start) {
+        high = middle - 1;
+      } else if (position >= candidate.end) {
+        low = middle + 1;
+      } else {
+        current = candidate;
+        break;
+      }
+    }
+    return current;
+  };
+  const isOverflowed = (position: number): boolean => {
+    let low = 0;
+    let high = overflowSpans.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const span = overflowSpans[middle];
+      if (position < span.start) high = middle - 1;
+      else if (position >= span.end) low = middle + 1;
+      else return true;
+    }
+    return false;
+  };
+  const cloneValues = (values: Iterable<ScannerOrigin>): Set<ScannerOrigin> =>
+    new Set<ScannerOrigin>(values);
+  const updateBinding = (
+    scope: ScannerBindingScope,
+    name: string,
+    position: number,
+    values: Iterable<ScannerOrigin>,
+  ): void => {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return;
+    let binding = scope.bindings.get(name);
+    if (!binding) {
+      binding = { updates: [] };
+      scope.bindings.set(name, binding);
+    }
+    const next = cloneValues(values);
+    const existing = binding.updates.find((update) => update.position === position);
+    if (existing) {
+      existing.values = next;
+    } else {
+      binding.updates.push({ position, values: next });
+      binding.updates.sort((left, right) => left.position - right.position);
+    }
+  };
+  const declareBinding = (
+    scope: ScannerBindingScope,
+    name: string,
+    position: number,
+  ): void => {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name)) return;
+    if (!scope.bindings.has(name)) updateBinding(scope, name, position, []);
+  };
+  const nearestFunctionScope = (scope: ScannerBindingScope): ScannerBindingScope => {
+    let current = scope;
+    while (current.parent && !current.functionBoundary) current = current.parent;
+    return current;
+  };
+  const findBinding = (
+    name: string,
+    position: number,
+  ): { scope: ScannerBindingScope; binding: ScannerBinding } | null => {
+    let current: ScannerBindingScope | null = scopeAt(position);
+    while (current) {
+      const binding = current.bindings.get(name);
+      if (binding) return { scope: current, binding };
+      current = current.parent;
+    }
+    return null;
+  };
+  const valuesAt = (binding: ScannerBinding, position: number): Set<ScannerOrigin> => {
+    let low = 0;
+    let high = binding.updates.length - 1;
+    let selected: Set<ScannerOrigin> | undefined;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const update = binding.updates[middle];
+      if (update.position <= position) {
+        selected = update.values;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return cloneValues(selected ?? []);
+  };
+  const intrinsic = (name: string): Set<ScannerOrigin> => {
+    switch (name) {
+      case "globalThis":
+      case "self":
+      case "global":
+        return new Set(["global"]);
+      case "module":
+        return new Set(["module"]);
+      case "require":
+        return new Set(["module:require"]);
+      case "eval":
+        return new Set(["eval"]);
+      case "Bun":
+        return new Set(["bun"]);
+      case "process":
+        return new Set(["process"]);
+      case "Reflect":
+        return new Set(["reflect"]);
+      case "Object":
+        return new Set(["object"]);
+      case "Function":
+        return new Set(["function"]);
+      case "AsyncFunction":
+        return new Set(["asyncFunction"]);
+      case "GeneratorFunction":
+        return new Set(["generatorFunction"]);
+      case "AsyncGeneratorFunction":
+        return new Set(["asyncGeneratorFunction"]);
+      default:
+        return new Set();
+    }
+  };
+  const resolveValues = (name: string, position: number): Set<ScannerOrigin> => {
+    const found = findBinding(name, position);
+    return found ? valuesAt(found.binding, position) : intrinsic(name);
+  };
+  const stripOuterParens = (raw: string): string => {
+    let value = raw.trim();
+    for (let pass = 0; pass < 8 && value.startsWith("(") && value.endsWith(")"); pass += 1) {
+      let depth = 0;
+      let closesAt = -1;
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === "(") depth += 1;
+        else if (value[index] === ")" && --depth === 0) {
+          closesAt = index;
+          break;
+        }
+      }
+      if (closesAt !== value.length - 1) break;
+      value = value.slice(1, -1).trim();
+    }
+    return value;
+  };
+  const parseMemberPath = (raw: string): { root: string; properties: (string | null)[] } | null => {
+    const stripped = stripOuterParens(stripModuleExpressionComments(raw) ?? raw);
+    const rootMatch = stripped.match(/^([A-Za-z_$][\w$]*)/);
+    if (!rootMatch) return null;
+    const properties: (string | null)[] = [];
+    let cursor = rootMatch[0].length;
+    while (cursor < stripped.length) {
+      while (/\s/.test(stripped[cursor] ?? "")) cursor += 1;
+      let computed = false;
+      if (stripped.startsWith("?.", cursor)) {
+        cursor += 2;
+        while (/\s/.test(stripped[cursor] ?? "")) cursor += 1;
+        if (stripped[cursor] === "[") {
+          computed = true;
+          cursor += 1;
+        }
+      } else if (stripped[cursor] === ".") {
+        cursor += 1;
+      } else if (stripped[cursor] === "[") {
+        computed = true;
+        cursor += 1;
+      } else {
+        return null;
+      }
+      while (/\s/.test(stripped[cursor] ?? "")) cursor += 1;
+      if (!computed) {
+        const propertyMatch = stripped.slice(cursor).match(/^([A-Za-z_$][\w$]*)/);
+        if (!propertyMatch) return null;
+        properties.push(propertyMatch[1]);
+        cursor += propertyMatch[0].length;
+        continue;
+      }
+      let depth = 1;
+      let closing = -1;
+      for (let index = cursor; index < stripped.length; index += 1) {
+        if (stripped[index] === "[") depth += 1;
+        else if (stripped[index] === "]" && --depth === 0) {
+          closing = index;
+          break;
+        }
+      }
+      if (closing < 0) return null;
+      properties.push(resolveStrictStaticStringExpression(stripped.slice(cursor, closing)));
+      cursor = closing + 1;
+    }
+    return { root: rootMatch[1], properties };
+  };
+  const propertyValues = (
+    values: Set<ScannerOrigin>,
+    property: string | null,
+  ): Set<ScannerOrigin> => {
+    const output = new Set<ScannerOrigin>();
+    for (const value of values) {
+      if (property === null) {
+        if (value === "global") output.add("global:*");
+        else if (value === "module") output.add("module:*");
+        else if (value === "bun") output.add("bun:*");
+        else if (value === "process") output.add("process:*");
+        else if (value === "reflect") output.add("reflect:*");
+        else if (value === "object") output.add("object:*");
+        else if (value === "module:require:meta") output.add("module:require");
+        else output.add(`${value}:*`);
+        continue;
+      }
+      if (value === "global") {
+        if (property === "module" || property === "globalThis" || property === "self" || property === "global") {
+          output.add(property === "module" ? "module" : "global");
+        } else {
+          output.add(`global:${property}`);
+        }
+      } else if (value === "module") {
+        output.add(
+          property === "constructor"
+            ? "module:constructor"
+            : property === "createRequire"
+              ? "module:createRequire"
+              : property === "require" || property === "_load"
+                ? "module:require"
+                : `module:${property}`,
+        );
+      } else if (value === "module:constructor") {
+        output.add(
+          property === "_load" || property === "createRequire" || property === "require"
+            ? "module:constructor"
+            : "module:*",
+        );
+      } else if (value === "module:require") {
+        if (property === "main" || property === "cache") {
+          output.add("module:require:meta");
+        } else if (property === "require") {
+          output.add("module:require");
+        } else {
+          output.add("module:*");
+        }
+      } else if (value === "module:require:meta") {
+        if (property === "require") output.add("module:require");
+        else output.add("module:*");
+      } else if (value === "bun") {
+        output.add(`bun:${property}`);
+      } else if (value === "process") {
+        output.add(`process:${property}`);
+      } else if (value === "reflect") {
+        output.add(`reflect:${property}`);
+      } else if (value === "object") {
+        output.add(`object:${property}`);
+      } else if (value === "eval" || value === "function" || value.endsWith("Function")) {
+        output.add(value);
+      } else if (value === "global:*" || value === "module:*") {
+        output.add(value);
+      } else if (
+        value.startsWith("global:") ||
+        value.startsWith("reflect:") ||
+        value.startsWith("object:")
+      ) {
+        output.add(value);
+      } else {
+        output.add(`${value}:${property}`);
+      }
+    }
+    return output;
+  };
+  const resolveExpression = (raw: string, position: number): Set<ScannerOrigin> => {
+    const cleaned = stripOuterParens(stripModuleExpressionComments(raw) ?? raw);
+    if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
+      const values = new Set<ScannerOrigin>();
+      for (const entry of splitTopLevelExpressionList(cleaned.slice(1, -1)) ?? []) {
+        for (const value of resolveExpression(entry, position)) values.add(value);
+      }
+      return values;
+    }
+    const reflected = cleaned.match(
+      /^([A-Za-z_$][\w$]*)\s*(?:\.\s*|\[\s*["'`](get|getOwnPropertyDescriptor)["'`]\s*\]\s*)\s*(get|getOwnPropertyDescriptor)?\s*\(([^,]+),([\s\S]*)\)(?:\s*\.\s*value)?$/,
+    );
+    if (reflected) {
+      const rootValues = resolveValues(reflected[1], position);
+      const method = reflected[2] ?? reflected[3];
+      if (
+        method === "get" ||
+        method === "getOwnPropertyDescriptor"
+      ) {
+        const receiverValues = resolveExpression(reflected[4], position);
+        const property = resolveStrictStaticStringExpression(reflected[5]);
+        if (scannerOriginHas(rootValues, "reflect") || scannerOriginHas(rootValues, "object")) {
+          return propertyValues(receiverValues, property);
+        }
+      }
+    }
+    const path = parseMemberPath(cleaned);
+    if (!path) return new Set();
+    let values = resolveValues(path.root, position);
+    const shadowedString =
+      /\bString\s*\.\s*fromCharCode\s*\(/.test(cleaned) &&
+      scannerIsLocal(source, "String", position);
+    for (const property of path.properties) {
+      values = propertyValues(values, shadowedString ? null : property);
+    }
+    return values;
+  };
+  const pending: Array<{
+    pattern: string;
+    rhs: string;
+    position: number;
+    scope: ScannerBindingScope;
+  }> = [];
+  const splitPattern = (raw: string): string[] =>
+    splitTopLevelExpressionList(stripModuleExpressionComments(raw) ?? raw) ?? raw.split(",");
+  const topLevelIndex = (raw: string, wanted: string): number => {
+    const value = stripModuleExpressionComments(raw) ?? raw;
+    const stack: string[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const char = value[index];
+      if ("([{".includes(char)) stack.push(char);
+      else if (")]}".includes(char)) stack.pop();
+      else if (char === wanted && stack.length === 0) return index;
+    }
+    return -1;
+  };
+  const patternEntries = (
+    raw: string,
+    defaultValues: Set<ScannerOrigin> = new Set(),
+  ): Array<{ name: string; values: Set<ScannerOrigin> }> => {
+    let pattern = (stripModuleExpressionComments(raw) ?? raw).trim();
+    while (pattern.startsWith("...")) pattern = pattern.slice(3).trim();
+    const defaultAt = topLevelIndex(pattern, "=");
+    if (defaultAt >= 0) {
+      const defaultRaw = pattern.slice(defaultAt + 1).trim();
+      const resolvedDefault = resolveExpression(defaultRaw, 0);
+      return patternEntries(pattern.slice(0, defaultAt), resolvedDefault);
+    }
+    if (pattern.startsWith("{") && pattern.endsWith("}")) {
+      const result: Array<{ name: string; values: Set<ScannerOrigin> }> = [];
+      for (const entry of splitPattern(pattern.slice(1, -1))) {
+        const colon = topLevelIndex(entry, ":");
+        result.push(
+          ...patternEntries(colon >= 0 ? entry.slice(colon + 1) : entry, defaultValues),
+        );
+      }
+      return result;
+    }
+    if (pattern.startsWith("[") && pattern.endsWith("]")) {
+      return splitPattern(pattern.slice(1, -1)).flatMap((entry) => patternEntries(entry, defaultValues));
+    }
+    const name = pattern.match(/^([A-Za-z_$][\w$]*)$/)?.[1];
+    return name ? [{ name, values: cloneValues(defaultValues) }] : [];
+  };
+  const mapPatternValues = (
+    raw: string,
+    values: Set<ScannerOrigin>,
+    position: number,
+  ): Array<{ name: string; values: Set<ScannerOrigin> }> => {
+    let pattern = (stripModuleExpressionComments(raw) ?? raw).trim();
+    while (pattern.startsWith("...")) pattern = pattern.slice(3).trim();
+    const defaultAt = topLevelIndex(pattern, "=");
+    if (defaultAt >= 0) {
+      const combined = cloneValues(values);
+      for (const value of resolveExpression(pattern.slice(defaultAt + 1), position)) {
+        combined.add(value);
+      }
+      return mapPatternValues(pattern.slice(0, defaultAt), combined, position);
+    }
+    if (pattern.startsWith("{") && pattern.endsWith("}")) {
+      const result: Array<{ name: string; values: Set<ScannerOrigin> }> = [];
+      for (const entry of splitPattern(pattern.slice(1, -1))) {
+        const colon = topLevelIndex(entry, ":");
+        const rawKey = (colon < 0 ? entry : entry.slice(0, colon)).trim();
+        const child = colon < 0 ? entry : entry.slice(colon + 1);
+        const childDefaultAt = colon < 0 ? topLevelIndex(child, "=") : -1;
+        const bindingPattern =
+          childDefaultAt >= 0 ? child.slice(0, childDefaultAt).trim() : child;
+        const key = rawKey.startsWith("[")
+          ? resolveStrictStaticStringExpression(rawKey.slice(1, -1))
+          : rawKey.split(/\s*=/, 1)[0]?.trim() ?? "";
+        const propertyBase = propertyValues(values, key || null);
+        if (childDefaultAt >= 0) {
+          const defaultValues = resolveExpression(
+            child.slice(childDefaultAt + 1),
+            position,
+          );
+          for (const value of defaultValues) propertyBase.add(value);
+        }
+        result.push(...mapPatternValues(bindingPattern, propertyBase, position));
+      }
+      return result;
+    }
+    if (pattern.startsWith("[") && pattern.endsWith("]")) {
+      return splitPattern(pattern.slice(1, -1)).flatMap((entry) =>
+        mapPatternValues(entry, propertyValues(values, null), position),
+      );
+    }
+    const name = pattern.match(/^([A-Za-z_$][\w$]*)$/)?.[1];
+    return name ? [{ name, values: cloneValues(values) }] : [];
+  };
+  const declarePattern = (
+    raw: string,
+    scope: ScannerBindingScope,
+    position: number,
+  ): void => {
+    for (const { name } of patternEntries(raw)) declareBinding(scope, name, position);
+  };
+  const nextCode = (start: number): number => {
+    let index = start;
+    while (index < masked.length && /\s/.test(masked[index] ?? "")) index += 1;
+    return index;
+  };
+  const nearestBody = (start: number): number => {
+    const index = nextCode(start);
+    return masked[index] === "{" ? index : -1;
+  };
+  const declareVariable = (
+    kind: string,
+    pattern: string,
+    position: number,
+    rhs: string | undefined,
+  ): void => {
+    let scope = scopeAt(position);
+    const before = masked.slice(Math.max(0, position - 24), position);
+    const isForHeader = /\bfor\s*\([^)]*$/.test(before);
+    if (isForHeader) {
+      const close = getDelimiterMap(source).openingToClosing.get(masked.lastIndexOf("(", position));
+      const body = close === undefined ? -1 : nearestBody(close + 1);
+      if (body >= 0) scope = scopeAt(body + 1);
+    }
+    if (kind === "var") scope = nearestFunctionScope(scope);
+    declarePattern(pattern, scope, position);
+    if (rhs !== undefined) pending.push({ pattern, rhs, position, scope });
+  };
+  const readRhs = (start: number): string => {
+    let depth = 0;
+    for (let index = start; index < masked.length; index += 1) {
+      const char = masked[index];
+      if (depth === 0 && char === ")") return masked.slice(start, index).trim();
+      if ("([{".includes(char)) depth += 1;
+      else if (")]}".includes(char)) depth = Math.max(0, depth - 1);
+      else if (depth === 0 && (char === ";" || char === "\n" || char === ",")) {
+        return masked.slice(start, index).trim();
+      }
+    }
+    return masked.slice(start).trim();
+  };
+  const declarationRe =
+    /\b(const|let|var)\s+(\{[^}\n]{0,4096}\}|\[[^\]\n]{0,4096}\]|[A-Za-z_$][\w$]*)(?:\s*=\s*)?/g;
+  for (const match of matchOutsideIgnored(source, declarationRe)) {
+    if (match.index === undefined) continue;
+    const after = match.index + match[0].length;
+    const hasEquals = /=\s*$/.test(match[0]);
+    let rhs: string | undefined;
+    if (hasEquals) {
+      rhs = readRhs(after);
+    } else {
+      const iteration = masked.slice(after).match(/^\s+(?:of|in)\s+/);
+      if (iteration) rhs = readRhs(after + iteration[0].length);
+    }
+    declareVariable(match[1], match[2], match.index, rhs);
+  }
+  const declarationStatementRe = /\b(const|let|var)\s+([^;\n]+)/g;
+  for (const match of matchOutsideIgnored(source, declarationStatementRe)) {
+    if (match.index === undefined) continue;
+    const parts = splitTopLevelExpressionList(match[2]);
+    if (!parts || parts.length < 2) continue;
+    let offset = match.index + match[0].indexOf(match[2]);
+    for (const part of parts) {
+      const equals = topLevelIndex(part, "=");
+      if (equals < 0) {
+        offset += part.length + 1;
+        continue;
+      }
+      const pattern = part.slice(0, equals).trim();
+      const rhs = part.slice(equals + 1).trim();
+      declareVariable(match[1], pattern, offset + part.indexOf(pattern), rhs);
+      offset += part.length + 1;
+    }
+  }
+
+  for (const match of matchOutsideIgnored(source, /\b(?:class|function)\s+([A-Za-z_$][\w$]*)\b/g)) {
+    if (match.index === undefined) continue;
+
+    const before = masked.slice(0, match.index).trimEnd();
+    const expressionName =
+      /(?:=>|[=(:,{[!&|?+\-*\/%~])\s*$/.test(before) ||
+      /\b(?:void|typeof|delete|new|return|throw|yield|await|instanceof|in|of|case)\s*$/.test(before);
+    if (!expressionName) declareBinding(scopeAt(match.index), match[1], match.index);
+    const body = masked.indexOf("{", match.index + match[0].length);
+    if (body >= 0) declareBinding(scopeAt(body + 1), match[1], body);
+  }
+  const importRe =
+    /\bimport\s+(?:\{([^}\n]*)\}|\*\s+as\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*))\s+from\b/g;
+  for (const match of matchOutsideIgnored(source, importRe)) {
+    if (match.index === undefined) continue;
+    const scope = scopeAt(match.index);
+    if (match[1] !== undefined) {
+      for (const entry of splitPattern(match[1])) {
+        const name =
+          entry.trim().match(/\bas\s+([A-Za-z_$][\w$]*)\s*$/)?.[1] ??
+          entry.trim().match(/([A-Za-z_$][\w$]*)\s*$/)?.[1];
+        if (name) declareBinding(scope, name, match.index);
+      }
+    } else {
+      declareBinding(scope, match[2] ?? match[3] ?? "", match.index);
+    }
+  }
+  const parameterSpans: SourceSpan[] = [];
+  const bindParameters = (
+    raw: string,
+    bodyStart: number,
+    functionBoundary = true,
+  ): void => {
+    if (bodyStart < 0) return;
+    const scope = scopeAt(bodyStart + 1);
+    if (functionBoundary) scope.functionBoundary = true;
+    for (const part of splitPattern(raw)) {
+      for (const { name, values } of patternEntries(part)) {
+        declareBinding(scope, name, bodyStart);
+        if (values.size > 0) updateBinding(scope, name, bodyStart, values);
+      }
+    }
+    for (const part of splitPattern(raw)) {
+      const defaultAt = topLevelIndex(part, "=");
+      if (defaultAt >= 0) {
+        pending.push({
+          pattern: part.slice(0, defaultAt),
+          rhs: part.slice(defaultAt + 1),
+          position: bodyStart,
+          scope,
+        });
+      }
+    }
+  };
   for (const match of matchOutsideIgnored(
     source,
-    /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:module|globalThis\s*\.\s*module)\b/,
+    /\bfunction(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\(/g,
   )) {
-    for (const entry of match[1].split(",")) {
-      const key = entry.trim().split(/\s*:/, 1)[0]?.trim();
-      if (key === "require" || /^\[\s*["'`]require["'`]\s*\]$/.test(key ?? "")) {
-        hits.add("dynamic module access");
+    if (match.index === undefined) continue;
+    const opening = masked.indexOf("(", match.index + match[0].length - 1);
+    const closing = getDelimiterMap(source).openingToClosing.get(opening) ?? -1;
+    const body = closing < 0 ? -1 : nearestBody(closing + 1);
+    if (body >= 0) parameterSpans.push({ start: opening + 1, end: closing });
+    if (body >= 0) bindParameters(masked.slice(opening + 1, closing), body);
+  }
+  for (const match of matchOutsideIgnored(source, /\bcatch\s*\(/g)) {
+    if (match.index === undefined) continue;
+    const opening = masked.indexOf("(", match.index + match[0].length - 1);
+    const closing = getDelimiterMap(source).openingToClosing.get(opening) ?? -1;
+    const body = closing < 0 ? -1 : nearestBody(closing + 1);
+    if (body >= 0) parameterSpans.push({ start: opening + 1, end: closing });
+    if (body >= 0) bindParameters(masked.slice(opening + 1, closing), body, false);
+  }
+  const expressionEnd = (start: number): number => {
+    const delimiters: string[] = [];
+    for (let index = start; index < masked.length; index += 1) {
+      const char = masked[index];
+      if ("([{".includes(char)) delimiters.push(char);
+      else if (")]}".includes(char)) {
+        if (delimiters.length === 0) return index;
+        delimiters.pop();
+      } else if (delimiters.length === 0 && (char === ";" || char === ",")) {
+        return index + 1;
+      } else if (delimiters.length === 0 && (char === "\n" || char === "\r")) {
+        let next = index + 1;
+        while (next < masked.length && /\s/.test(masked[next] ?? "")) next += 1;
+        let sourceNext = index + 1;
+        while (sourceNext < source.text.length && /\s/.test(source.text[sourceNext] ?? "")) {
+          sourceNext += 1;
+        }
+        let previous = index - 1;
+        while (previous >= start && /\s/.test(masked[previous] ?? "")) previous -= 1;
+        const previousChar = masked[previous] ?? "";
+        const nextChar = masked[next] ?? "";
+        const nextWordContinues =
+          /^(?:instanceof|in|of)\b/.test(masked.slice(next));
+        const nextStartsTemplate = source.text[sourceNext] === "`";
+        if (
+          !nextWordContinues &&
+          !nextStartsTemplate &&
+          !/[+\-*/%&|?:.<>=([{\[]/.test(previousChar) &&
+          !/[+\-*/%&|?:.<>=([{\[]/.test(nextChar)
+        ) {
+          return index + 1;
+        }
+      }
+    }
+    return masked.length;
+  };
+  for (const match of matchOutsideIgnored(source, /=>/g)) {
+    if (match.index === undefined) continue;
+    let cursor = match.index - 1;
+    while (cursor >= 0 && /\s/.test(masked[cursor] ?? "")) cursor -= 1;
+    let raw = "";
+    if (masked[cursor] === ")") {
+      const opening = getDelimiterMap(source).closingToOpening.get(cursor) ?? -1;
+      if (opening < 0) continue;
+      parameterSpans.push({ start: opening + 1, end: cursor });
+      raw = masked.slice(opening + 1, cursor);
+    } else {
+      const identifier = masked.slice(0, match.index).match(/[A-Za-z_$][\w$]*\s*$/);
+      if (!identifier) continue;
+      raw = identifier[0].trim();
+    }
+    const body = nextCode(match.index + 2);
+    if (masked[body] === "{") {
+      bindParameters(raw, body);
+    } else {
+      const expressionScope: ScannerBindingScope = {
+        start: body,
+        end: expressionEnd(body),
+        parent: scopeAt(match.index),
+        children: [],
+        bindings: new Map(),
+        functionBoundary: false,
+        id: scopes.length + expressionScopes.length,
+      };
+      expressionScopes.push(expressionScope);
+      for (const part of splitPattern(raw)) {
+        for (const { name, values } of patternEntries(part)) {
+          declareBinding(expressionScope, name, body);
+          if (values.size > 0) updateBinding(expressionScope, name, body, values);
+        }
+      }
+      for (const part of splitPattern(raw)) {
+        const defaultAt = topLevelIndex(part, "=");
+        if (defaultAt >= 0) {
+          pending.push({
+            pattern: part.slice(0, defaultAt),
+            rhs: part.slice(defaultAt + 1),
+            position: body,
+            scope: expressionScope,
+          });
+        }
+      }
+    }
+  }
+  const controlHeaders = new Set(["if", "for", "while", "switch", "catch", "with"]);
+  const methodRe =
+    /(?:^|[;{},])\s*(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+|\*\s*)?(#?[A-Za-z_$][\w$]*|\[[^\]]+\])\s*\(/g;
+  for (const match of matchOutsideIgnored(source, methodRe)) {
+    if (match.index === undefined || controlHeaders.has(match[1])) continue;
+    const opening = masked.indexOf("(", match.index + match[0].length - 1);
+    const closing = getDelimiterMap(source).openingToClosing.get(opening) ?? -1;
+    const body = closing < 0 ? -1 : nearestBody(closing + 1);
+    if (body >= 0) parameterSpans.push({ start: opening + 1, end: closing });
+    if (body >= 0) bindParameters(masked.slice(opening + 1, closing), body);
+  }
+
+  const assignments: Array<{ name: string; rhs: string; position: number }> = [];
+  const assignmentRe = /(?<![.\w$=!<>])([A-Za-z_$][\w$]*)\s*=\s*(?!=|>)/g;
+  for (const match of matchOutsideIgnored(source, assignmentRe)) {
+    if (match.index === undefined || isOverflowed(match.index)) continue;
+    const declarationPrefix = masked.slice(Math.max(0, match.index - 12), match.index);
+    if (/\b(?:const|let|var)\s*$/.test(declarationPrefix)) continue;
+    assignments.push({
+      name: match[1],
+      rhs: readRhs(match.index + match[0].length),
+      position: match.index,
+    });
+  }
+  const destructuringAssignmentRe =
+    /(?:^|[;,(])\s*(\{[^}\n]{1,4096}\}|\[[^\]\n]{1,4096}\])\s*=\s*(?!=|>)/g;
+  for (const match of matchOutsideIgnored(source, destructuringAssignmentRe)) {
+    if (match.index === undefined || isOverflowed(match.index)) continue;
+    const scope = scopeAt(match.index);
+    pending.push({
+      pattern: match[1],
+      rhs: readRhs(match.index + match[0].length),
+      position: match.index,
+      scope,
+    });
+  }
+  const applyPending = (): boolean => {
+    let changed = false;
+    for (const item of pending) {
+      const values = resolveExpression(item.rhs, item.position);
+      for (const { name, values: next } of mapPatternValues(
+        item.pattern,
+        values,
+        item.position,
+      )) {
+        const localBinding = item.scope.bindings.get(name);
+        const found = localBinding
+          ? { scope: item.scope, binding: localBinding }
+          : findBinding(name, item.position);
+        if (!found) continue;
+        const before = valuesAt(found.binding, item.position);
+        if (before.size !== next.size || [...before].some((value) => !next.has(value))) {
+          updateBinding(found.scope, name, item.position, next);
+          changed = true;
+        }
+      }
+    }
+    for (const assignment of assignments) {
+      const found = findBinding(assignment.name, assignment.position);
+      if (!found) continue;
+      const next = resolveExpression(assignment.rhs, assignment.position);
+      const before = valuesAt(found.binding, assignment.position);
+      const assignmentScope = scopeAt(assignment.position);
+      if (assignmentScope !== found.scope) {
+        for (const value of before) next.add(value);
+      }
+      if (next.size !== before.size || [...before].some((value) => !next.has(value))) {
+        const firstBindingPosition = found.binding.updates[0]?.position ?? assignment.position;
+        const updatePosition = assignmentScope === found.scope
+          ? assignment.position
+          : Math.min(assignment.position, firstBindingPosition + 1);
+        updateBinding(found.scope, assignment.name, updatePosition, next);
+        changed = true;
+      }
+    }
+    return changed;
+  };
+  let aliasConverged = false;
+  for (let pass = 0; pass < 8; pass += 1) {
+    if (!applyPending()) {
+      aliasConverged = true;
+      break;
+    }
+  }
+  if (!aliasConverged) {
+    overflowSpans.push({ start: 0, end: masked.length });
+  }
+  overflowSpans.sort((left, right) => left.start - right.start);
+  expressionScopes.sort((left, right) => left.start - right.start);
+  const lexical: ScannerLexicalContext = {
+    root,
+    scopes,
+    scopeIds,
+    overflowSpans,
+    parameterSpans,
+    resolveValues,
+    resolveExpression,
+    scopeAt,
+    isOverflowed,
+  };
+  const checker: ScannerBindingChecker = (name: string, position: number): boolean =>
+    findBinding(name, position) !== null;
+  source.context.lexical = lexical;
+  source.context.bindingChecker = checker;
+  return checker;
+}
+function getScannerLexicalContext(source: ScannableSource): ScannerLexicalContext {
+  if (!source.context.lexical) createScannerBindingChecker(source);
+  return source.context.lexical as ScannerLexicalContext;
+}
+
+function scannerOriginHas(values: Set<ScannerOrigin>, origin: string): boolean {
+  return values.has(origin) || [...values].some((value) => value.startsWith(`${origin}:`));
+}
+
+function scannerRootValues(
+  source: ScannableSource,
+  name: string,
+  position: number,
+): Set<ScannerOrigin> {
+  return getScannerLexicalContext(source).resolveValues(name, position);
+}
+
+function scannerExpressionValues(
+  source: ScannableSource,
+  raw: string,
+  position: number,
+): Set<ScannerOrigin> {
+  return getScannerLexicalContext(source).resolveExpression(raw, position);
+}
+
+function scannerIsLocal(source: ScannableSource, name: string, position: number): boolean {
+  return source.context.bindingChecker?.(name, position) ?? false;
+}
+
+function scannerGlobalPropertyLabel(property: string | null): string | undefined {
+  if (property === null) return DYNAMIC_GLOBAL_API_LABEL;
+  return BLOCKED_GLOBAL_API_LABELS.get(property);
+}
+
+function scannerProcessPropertyLabel(property: string | null): string {
+  return property === null || DANGEROUS_PROCESS_PROPERTIES.has(property)
+    ? "dangerous process API usage"
+    : "";
+}
+
+function scannerBunPropertyLabel(property: string | null): string {
+  if (property === null) return "dangerous Bun system API usage";
+  return DANGEROUS_BUN_PROPERTIES.get(property) ?? "";
+}
+
+function scannerModuleTarget(raw: string | undefined): string | null {
+  return raw === undefined ? null : resolveStaticModuleSpecifier(raw);
+}
+
+function addModuleConstructorLoaderHits(
+  source: ScannableSource,
+  hits: Set<string>,
+  dynamicLabel = "dynamic module access",
+): void {
+  if (
+    !hasAnySourceToken(source, [
+      "module",
+      "globalThis",
+      "self",
+      "global",
+      "Reflect",
+      "Object",
+      "require",
+      "import",
+      "createRequire",
+    ])
+  ) {
+    return;
+  }
+  const lexical = getScannerLexicalContext(source);
+  const addTarget = (raw: string | undefined, fromCreateRequire = false): void => {
+    const resolved = scannerModuleTarget(raw);
+    if (dynamicLabel === SERIALIZED_HANDLER_MODULE_LABEL) {
+      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+      return;
+    }
+    if (resolved === null) {
+      hits.add(dynamicLabel);
+      return;
+    }
+    if (fromCreateRequire && isNativeAddonModuleSpecifier(resolved)) hits.add(dynamicLabel);
+    addModuleSpecifierHit(resolved, hits);
+  };
+  const addLoader = (values: Set<ScannerOrigin>, args: string[] | null): boolean => {
+    const constructorLoader = [...values].some(
+      (value) =>
+        value === "module:constructor" ||
+        value === "module:createRequire" ||
+        value === "global:createRequire",
+    );
+    const loader = [...values].some(
+      (value) =>
+        value === "module:require" ||
+        value === "global:require" ||
+        value === "global:import",
+    );
+    const unknownModuleLoader = values.has("module:*");
+    const unknownGlobalLoader = values.has("global:*");
+    if (!loader && !constructorLoader && !unknownModuleLoader && !unknownGlobalLoader) return false;
+    if ((unknownModuleLoader || unknownGlobalLoader) && !loader && !constructorLoader) {
+      if (
+        unknownModuleLoader ||
+        dynamicLabel === SERIALIZED_HANDLER_MODULE_LABEL ||
+        Boolean(args?.[0]?.trim())
+      ) {
+        hits.add(dynamicLabel);
+      }
+      return true;
+    }
+    if (constructorLoader) {
+      hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
+      return true;
+    }
+    if (args === null || args[0] === undefined) hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
+    addTarget(args?.[0]);
+    return true;
+  };
+  const dispatchLoader = (
+    values: Set<ScannerOrigin>,
+    mode: string | undefined,
+    args: string[] | null,
+    opening: number,
+  ): void => {
+    const addReturnedTarget = (): void => {
+      const closing = getDelimiterMap(source).openingToClosing.get(opening) ?? -1;
+      const nextOpen = closing < 0 ? -1 : source.text.indexOf("(", closing + 1);
+      if (nextOpen >= 0 && /^\s*\(/.test(source.text.slice(closing + 1))) {
+        addTarget(readCallArguments(source, nextOpen)?.[0], true);
+      }
+    };
+    if (!mode) {
+      if (addLoader(values, args)) addReturnedTarget();
+      return;
+    }
+    const baseValues = values;
+    let target: string | undefined;
+    if (mode === "apply") {
+      const applied = args?.[1]?.trim() ?? "";
+      const valuesList =
+        applied.startsWith("[") && applied.endsWith("]")
+          ? splitTopLevelExpressionList(applied.slice(1, -1))
+          : null;
+      target = valuesList?.[0];
+    } else {
+      target = args?.[1];
+    }
+    if (addLoader(baseValues, target === undefined ? null : [target])) {
+      addReturnedTarget();
+    }
+  };
+
+  const callPattern =
+    /(?<![\w$.])([A-Za-z_$][\w$]*(?:(?:\s*\??\.\s*[A-Za-z_$][\w$]*)|\s*\[[^\]]{0,300}\])*)\s*\(/g;
+  for (const match of matchOutsideIgnored(source, callPattern)) {
+    if (match.index === undefined) continue;
+    const opening = match.index + match[0].lastIndexOf("(");
+    const args = readCallArguments(source, opening);
+    const rawPath = match[1];
+    const compactPath = (stripModuleExpressionComments(rawPath) ?? rawPath).replace(/\s+/g, "");
+    const modeMatch = compactPath.match(
+      /(?:\.(call|apply|bind)|\[["'`](call|apply|bind)["'`]\])$/,
+    );
+    const mode = modeMatch?.[1] ?? modeMatch?.[2];
+    const basePath = mode
+      ? compactPath.replace(new RegExp(`(?:\\.${mode}|\\[["'\`]${mode}["'\`]\\])$`), "")
+      : compactPath;
+    let values = scannerExpressionValues(source, basePath, match.index);
+    if (
+      values.size === 0 &&
+      basePath === "createRequire" &&
+      !scannerIsLocal(source, "createRequire", match.index)
+    ) {
+      values = new Set(["module:createRequire"]);
+    }
+    if (basePath !== "import" && basePath !== "require") {
+      dispatchLoader(values, mode, args, opening);
+    } else if (mode) {
+      dispatchLoader(values, mode, args, opening);
+    }
+    if (
+      values.has("module:constructor") ||
+      values.has("module:createRequire") ||
+      values.has("global:require") ||
+      values.has("global:import") ||
+      values.has("global:createRequire")
+    ) {
+      hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
+    } else if (
+      values.has("module:*") ||
+      (values.has("global:*") && (
+        dynamicLabel === SERIALIZED_HANDLER_MODULE_LABEL || Boolean(args?.[0]?.trim())
+      ))
+    ) {
+      hits.add(dynamicLabel);
+    }
+  }
+
+  const reflectApplyLoader =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*apply\s*\(/g;
+  for (const match of matchOutsideIgnored(source, reflectApplyLoader)) {
+    if (match.index === undefined) continue;
+    const rootValues = scannerRootValues(source, match[1], match.index);
+    if (!rootValues.has("reflect")) continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    const applied = args?.[2]?.trim() ?? "";
+    const list =
+      applied.startsWith("[") && applied.endsWith("]")
+        ? splitTopLevelExpressionList(applied.slice(1, -1))
+        : null;
+    if (!args || !list) continue;
+    addLoader(scannerExpressionValues(source, args[0] ?? "", match.index), list);
+  }
+
+  const reflective = getDelimiterMap(source).openingToClosing;
+  for (const call of parseReflectivePropertyCalls(source, source, reflective)) {
+    if (call.method !== "get" && call.method !== "getOwnPropertyDescriptor") continue;
+    const head = source.text.slice(call.position, call.opening).replace(/\s+/g, "");
+    const root = head.match(/^([A-Za-z_$][\w$]*)/)?.[1];
+    if (!root) continue;
+    const rootValues = scannerRootValues(source, root, call.position);
+    if (!scannerOriginHas(rootValues, "reflect") && !scannerOriginHas(rootValues, "object")) continue;
+    if (!call.args) continue;
+    let receiver: string | undefined;
+    let property: string | undefined;
+    if (call.mode === "call") {
+      receiver = call.args[1];
+      property = call.args[2];
+    } else if (call.mode === "apply") {
+      const applied = call.args[1]?.trim() ?? "";
+      const valuesList =
+        applied.startsWith("[") && applied.endsWith("]")
+          ? splitTopLevelExpressionList(applied.slice(1, -1))
+          : null;
+      receiver = valuesList?.[0];
+      property = valuesList?.[1];
+    } else if (call.mode === "bind") {
+      receiver = call.args[1];
+      property = call.args[2];
+    } else {
+      receiver = call.args[0];
+      property = call.args[1];
+    }
+    const receiverValues = receiver
+      ? scannerExpressionValues(source, receiver, call.position)
+      : new Set<ScannerOrigin>();
+    const resolvedProperty =
+      property === undefined ? null : resolveStrictStaticStringExpression(property);
+    const moduleValue = receiverValues.has("module");
+    const globalValue = receiverValues.has("global");
+    const tailClosing = reflective.get(call.opening) ?? -1;
+    const tail = tailClosing < 0 ? "" : source.text.slice(tailClosing + 1);
+    if (moduleValue) {
+      if (
+        resolvedProperty === "constructor" ||
+        resolvedProperty === "require" ||
+        resolvedProperty === "createRequire" ||
+        resolvedProperty === "_load"
+      ) {
+        hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
+        const targetCall = tail.match(/^\s*(?:\.\s*value)?\s*\(/);
+        if (targetCall) {
+          const opening = tailClosing + 1 + targetCall[0].lastIndexOf("(");
+          addTarget(readCallArguments(source, opening)?.[0]);
+        }
+      } else if (resolvedProperty === null) {
+        hits.add(dynamicLabel);
+      }
+    } else if (globalValue) {
+      if (resolvedProperty === null) {
+        hits.add(dynamicLabel);
+      } else if (
+        resolvedProperty === "require" ||
+        resolvedProperty === "import" ||
+        resolvedProperty === "createRequire"
+      ) {
+        hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
+        const targetCall = tail.match(/^\s*(?:\.\s*value)?\s*\(/);
+        if (targetCall) {
+          const opening = tailClosing + 1 + targetCall[0].lastIndexOf("(");
+          addTarget(readCallArguments(source, opening)?.[0]);
+        }
+      }
+    }
+  }
+
+  const unresolvedReflective =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\[([^\]]{1,300})\]\s*\(/g;
+  for (const match of matchOutsideIgnored(source, unresolvedReflective)) {
+    if (match.index === undefined) continue;
+    const roots = scannerRootValues(source, match[1], match.index);
+    if (!roots.has("reflect") && !roots.has("object")) continue;
+    const property = resolveStrictStaticStringExpression(match[2]);
+    if (property === "get" || property === "getOwnPropertyDescriptor") continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    if (!args) continue;
+    const receiver = scannerExpressionValues(source, args[0] ?? "", match.index);
+    if (receiver.has("module") || receiver.has("global")) hits.add(dynamicLabel);
+  }
+
+  if (lexical.overflowSpans.length > 0) {
+    for (const span of lexical.overflowSpans) {
+      if (
+        source.text
+          .slice(span.start, span.end)
+          .match(/\b(?:module|globalThis|self|global|require)\b/)
+      ) {
+        hits.add(dynamicLabel);
       }
     }
   }
 }
 
 function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void {
-  for (const match of matchOutsideIgnored(source, MODULE_CALL_RE)) {
-    if (match.index !== undefined) {
-      const tail = source.text.slice(match.index + match[0].length);
-      if (/^\s*\{/.test(tail)) continue; // `require(name) { … }` — a definition
-    }
-    const resolved = resolveStaticModuleSpecifier(match[1]);
-    if (resolved !== null) addModuleSpecifierHit(resolved, hits);
-  }
-
-  // Only the BARE dynamic-import operator `import(…)` and the global
-  // `require(…)` are real module-load surfaces. Member calls (`x.require(…)`,
-  // `ns.import(…)`) and shorthand method definitions (`require(name) { … }`)
-  // are unrelated: extensions routinely ship a scripting API whose methods are
-  // literally named `require`/`import` (e.g. RisuAI-compat layers). The
-  // negative lookbehind `(?<![.\w$])` drops member access and identifier-
-  // prefixed names; the trailing-`{` check below drops method definitions.
-  // Constant specifiers on ANY receiver were resolved through the shared map
-  // above; unresolved bare calls fail closed because they could name a blocked
-  // builtin at runtime.
+  if (!hasAnySourceToken(source, ["import", "require"])) return;
+  const lexical = getScannerLexicalContext(source);
   for (const match of matchOutsideIgnored(source, BARE_MODULE_CALL_RE)) {
-    if (match.index !== undefined) {
-      const tail = source.text.slice(match.index + match[0].length);
-      if (/^\s*\{/.test(tail)) continue; // `require(name) { … }` — a definition
-    }
-    if (resolveStaticModuleSpecifier(match[1]) === null) {
-      // Specifier is not a provable constant — fail closed. We cannot tell
-      // whether it resolves to `node:fs`, `child_process`, etc., so block it.
-      hits.add("dynamic module access");
-    }
+    if (match.index === undefined) continue;
+    const tail = source.text.slice(match.index + match[0].length);
+    if (/^\s*\{/.test(tail)) continue;
+    const isImport = match[0].trimStart().startsWith("import");
+    if (!isImport && scannerIsLocal(source, "require", match.index)) continue;
+    const resolved = resolveStaticModuleSpecifier(match[1]);
+    if (resolved === null) hits.add("dynamic module access");
+    else addModuleSpecifierHit(resolved, hits);
   }
-  // A bare call whose arguments exceed the bounded extractor cannot be
-  // resolved safely. Member calls are intentionally excluded by this prefix,
-  // preserving unrelated receiver methods.
-  const boundedBareCallStarts = new Set(
+  const boundedStarts = new Set(
     matchOutsideIgnored(source, BARE_MODULE_CALL_RE)
       .map((match) => match.index)
       .filter((index): index is number => index !== undefined),
   );
   for (const prefix of matchOutsideIgnored(source, BARE_MODULE_CALL_PREFIX_RE)) {
-    if (prefix.index !== undefined && !boundedBareCallStarts.has(prefix.index)) {
-      hits.add("dynamic module access");
+    if (prefix.index !== undefined && !boundedStarts.has(prefix.index)) {
+      if (
+        !scannerIsLocal(source, "require", prefix.index) &&
+        !lexical.isOverflowed(prefix.index)
+      ) {
+        hits.add("dynamic module access");
+      }
     }
   }
 }
@@ -690,645 +1995,163 @@ function addDynamicModuleHits(source: ScannableSource, hits: Set<string>): void 
 
 const DYNAMIC_GLOBAL_API_LABEL = "dynamic global API access";
 const GLOBAL_API_KEY_MAX_LENGTH = 300;
-const GLOBAL_OBJECT_NAMES = ["globalThis", "self", "global"] as const;
 const GLOBAL_ALIAS_SCOPE_LIMIT = 4096;
 
-type GlobalAliasScope = {
-  start: number;
-  end: number;
-  parent: GlobalAliasScope | null;
-  children: GlobalAliasScope[];
-  bindings: Map<string, boolean>;
-  functionBoundary: boolean;
-};
-
 function addGlobalApiHits(source: ScannableSource, hits: Set<string>): void {
-  /*
-   * Track only identifier bindings whose current value is one of the three
-   * intrinsic global objects. Scope-local provenance prevents an ordinary
-   * nested object or a later reassignment from inheriting an outer alias.
-   * The scope model is intentionally bounded and lexical; it does not attempt
-   * to evaluate arbitrary expressions, calls, or control-flow joins.
-   */
-  const rootScope: GlobalAliasScope = {
-    start: 0,
-    end: source.text.length,
-    parent: null,
-    children: [],
-    bindings: new Map(),
-    functionBoundary: true,
-  };
-  const scopes: GlobalAliasScope[] = [rootScope];
-  const scopeStack: GlobalAliasScope[] = [rootScope];
-  const overflowSpans: SourceSpan[] = [];
-  let overflowDepth = 0;
-  let overflowStart = -1;
-  let ignoredSpanIndex = 0;
-  for (let index = 0; index < source.text.length; index += 1) {
-    while (
-      ignoredSpanIndex < source.ignoredSpans.length &&
-      source.ignoredSpans[ignoredSpanIndex].end <= index
-    ) {
-      ignoredSpanIndex += 1;
-    }
-    const ignored = source.ignoredSpans[ignoredSpanIndex];
-    if (ignored && index >= ignored.start && index < ignored.end) {
-      index = ignored.end - 1;
-      continue;
-    }
-    if (source.text[index] === "{") {
-      if (overflowDepth > 0 || scopes.length >= GLOBAL_ALIAS_SCOPE_LIMIT) {
-        if (overflowDepth === 0) overflowStart = index;
-        overflowDepth += 1;
-        continue;
-      }
-      const parent = scopeStack[scopeStack.length - 1] ?? rootScope;
-      const child: GlobalAliasScope = {
-        start: index,
-        end: source.text.length,
-        parent,
-        children: [],
-        bindings: new Map(),
-        functionBoundary: false,
-      };
-      parent.children.push(child);
-      scopes.push(child);
-      scopeStack.push(child);
-    } else if (source.text[index] === "}") {
-      if (overflowDepth > 0) {
-        overflowDepth -= 1;
-        if (overflowDepth === 0 && overflowStart >= 0) {
-          overflowSpans.push({ start: overflowStart, end: index + 1 });
-          overflowStart = -1;
-        }
-      } else if (scopeStack.length > 1) {
-        const closed = scopeStack.pop();
-        if (closed) closed.end = index + 1;
-      }
-    }
-  }
-  if (overflowDepth > 0 && overflowStart >= 0) {
-    overflowSpans.push({ start: overflowStart, end: source.text.length });
-  }
-  rootScope.end = source.text.length;
-
-  const scopeAt = (position: number): GlobalAliasScope => {
-    let current = rootScope;
-    let descended = true;
-    while (descended) {
-      descended = false;
-      for (const child of current.children) {
-        if (position >= child.start && position < child.end) {
-          current = child;
-          descended = true;
-          break;
-        }
-      }
-    }
-    return current;
-  };
-  const findBindingScope = (name: string, scope: GlobalAliasScope): GlobalAliasScope => {
-    let current: GlobalAliasScope | null = scope;
-    while (current) {
-      if (current.bindings.has(name)) return current;
-      current = current.parent;
-    }
-    return scope;
-  };
-  const isIntrinsicGlobal = (name: string): boolean =>
-    (GLOBAL_OBJECT_NAMES as readonly string[]).includes(name);
-  const bindingHistory = new Map<
-    GlobalAliasScope,
-    Map<string, Array<{ position: number; value: boolean }>>
-  >();
-  const possibleGlobalBindings = new Map<GlobalAliasScope, Set<string>>();
-  const markPossibleGlobal = (scope: GlobalAliasScope, name: string): void => {
-    let names = possibleGlobalBindings.get(scope);
-    if (!names) {
-      names = new Set();
-      possibleGlobalBindings.set(scope, names);
-    }
-    names.add(name);
-  };
-  const resolveCurrentBinding = (name: string, position: number): boolean => {
-    let current: GlobalAliasScope | null = scopeAt(position);
-    while (current) {
-      if (possibleGlobalBindings.get(current)?.has(name)) return true;
-      const value = current.bindings.get(name);
-      if (value !== undefined) return value;
-      current = current.parent;
-    }
-    return isIntrinsicGlobal(name);
-  };
-  const resolveBinding = (name: string, position: number): boolean => {
-    let current: GlobalAliasScope | null = scopeAt(position);
-    while (current) {
-      if (possibleGlobalBindings.get(current)?.has(name)) return true;
-      const history = bindingHistory.get(current)?.get(name);
-      if (history && history.length > 0) {
-        for (let index = history.length - 1; index >= 0; index -= 1) {
-          if (history[index].position <= position) return history[index].value;
-        }
-        // A synthetic nested binding created by a later assignment does not
-        // shadow the outer value before that assignment.
-        current = current.parent;
-        continue;
-      }
-      const binding = current.bindings.get(name);
-      if (binding !== undefined) return binding;
-      current = current.parent;
-    }
-    return isIntrinsicGlobal(name);
-  };
-  const isOverflowedPosition = (position: number): boolean =>
-    overflowSpans.some((span) => position >= span.start && position < span.end);
-  const bindDeclaration = (name: string, position: number, isVar = false): void => {
-    if (!/^[A-Za-z_$][\w$]*$/.test(name) || isOverflowedPosition(position)) return;
-    let scope = scopeAt(position);
-    const forHeader = source.text.slice(0, position).match(/\bfor\s*\([^)]*$/);
-    if (forHeader) {
-      const close = source.text.indexOf(")", position);
-      const bodyStart = close < 0 ? -1 : source.text.indexOf("{", close + 1);
-      if (bodyStart >= 0) scope = scopeAt(bodyStart + 1);
-    }
-    if (isVar) {
-      while (scope.parent && !scope.functionBoundary) scope = scope.parent;
-    }
-    scope.bindings.set(name, false);
-  };
-  const CONTROL_FLOW_HEADERS = new Set(["if", "for", "while", "switch", "with", "catch"]);
-  const markFunctionBody = (bodyStart: number): void => {
-    if (bodyStart < 0) return;
-    const bodyScope = scopeAt(bodyStart + 1);
-    bodyScope.functionBoundary = true;
-  };
-  for (const match of matchOutsideIgnored(
-    source,
-    /\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\(/g,
-  )) {
-    markFunctionBody(source.text.indexOf("{", (match.index ?? 0) + match[0].length));
-  }
-  for (const match of matchOutsideIgnored(source, /(?<![\w$])(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g)) {
-    markFunctionBody(source.text.indexOf("{", (match.index ?? 0) + match[0].length));
-  }
-  for (const match of matchOutsideIgnored(
-    source,
-    /(?<![\w$])([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g,
-  )) {
-    if (!CONTROL_FLOW_HEADERS.has(match[1])) {
-      markFunctionBody(source.text.lastIndexOf("{", (match.index ?? 0) + match[0].length));
-    }
-  }
-  // Pre-bind declarations so uses before a declaration do not accidentally
-  // resolve to the intrinsic global object.
-  for (const match of matchOutsideIgnored(
-    source,
-    /\b(const|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
-  )) {
-    bindDeclaration(match[2], match.index ?? 0, match[1] === "var");
-  }
-  const namedDeclarations = /\b(function|class)\s+([A-Za-z_$][\w$]*)\b/g;
-  for (const match of matchOutsideIgnored(source, namedDeclarations)) {
-    const before = source.text.slice(0, match.index ?? 0).trimEnd();
-    const beforeWithoutComments = (stripModuleExpressionComments(before) ?? before).trimEnd();
-    const isExpressionName =
-      /(?:=>|[=(:,{[!&|?+\-*\/%~])\s*$/.test(beforeWithoutComments) ||
-      /\b(?:void|typeof|delete|new|return|throw|yield|await|instanceof|in|of|case)\s*$/.test(beforeWithoutComments);
-    if (!isExpressionName) bindDeclaration(match[2], match.index ?? 0);
-    const bodyStart = source.text.indexOf("{", (match.index ?? 0) + match[0].length);
-    if (bodyStart >= 0) {
-      const bodyScope = scopeAt(bodyStart + 1);
-      bodyScope.bindings.set(match[2], false);
-      if (match[1] === "function") bodyScope.functionBoundary = true;
-    }
-  }
-  const destructuringDeclaration = /\b(const|let|var)\s*\{([^}]*)\}/g;
-  for (const match of matchOutsideIgnored(source, destructuringDeclaration)) {
-    for (const entry of match[2].split(",")) {
-      const trimmed = entry.trim();
-      if (!trimmed || trimmed.startsWith("...")) continue;
-      const binding = trimmed.includes(":")
-        ? trimmed.split(/\s*:/).slice(1).join(":").trim()
-        : trimmed;
-      const name = binding.split(/\s*=/, 1)[0]?.trim() ?? "";
-      bindDeclaration(name, match.index ?? 0, match[1] === "var");
-    }
-  }
-  const importDeclaration =
-    /\bimport\s+(?:\{([^}]*)\}|\*\s+as\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*))\s+from\b/g;
-  for (const match of matchOutsideIgnored(source, importDeclaration)) {
-    if (match[1] !== undefined) {
-      for (const entry of match[1].split(",")) {
-        const name = (entry.trim().match(/\bas\s+([A-Za-z_$][\w$]*)\s*$/)?.[1] ??
-          entry.trim().match(/([A-Za-z_$][\w$]*)\s*$/)?.[1]) ?? "";
-        bindDeclaration(name, match.index ?? 0);
-      }
-    } else {
-      bindDeclaration(match[2] ?? match[3] ?? "", match.index ?? 0);
-    }
-  }
-
-  const parameterBindings = (raw: string): Map<string, boolean> => {
-    const result = new Map<string, boolean>();
-    const splitTopLevel = (value: string): string[] => {
-      const parts: string[] = [];
-      let start = 0;
-      let braces = 0;
-      let brackets = 0;
-      let parens = 0;
-      for (let index = 0; index < value.length; index += 1) {
-        if (value[index] === "{") braces += 1;
-        else if (value[index] === "}") braces = Math.max(0, braces - 1);
-        else if (value[index] === "[") brackets += 1;
-        else if (value[index] === "]") brackets = Math.max(0, brackets - 1);
-        else if (value[index] === "(") parens += 1;
-        else if (value[index] === ")") parens = Math.max(0, parens - 1);
-        else if (value[index] === "," && braces === 0 && brackets === 0 && parens === 0) {
-          parts.push(value.slice(start, index));
-          start = index + 1;
-        }
-      }
-      parts.push(value.slice(start));
-      return parts;
-    };
-    const topLevelIndex = (value: string, wanted: string): number => {
-      let braces = 0;
-      let brackets = 0;
-      let parens = 0;
-      for (let index = 0; index < value.length; index += 1) {
-        if (value[index] === "{") braces += 1;
-        else if (value[index] === "}") braces = Math.max(0, braces - 1);
-        else if (value[index] === "[") brackets += 1;
-        else if (value[index] === "]") brackets = Math.max(0, brackets - 1);
-        else if (value[index] === "(") parens += 1;
-        else if (value[index] === ")") parens = Math.max(0, parens - 1);
-        else if (value[index] === wanted && braces === 0 && brackets === 0 && parens === 0) {
-          return index;
-        }
-      }
-      return -1;
-    };
-    const collect = (value: string): void => {
-      const trimmed = value.trim();
-      if (!trimmed) return;
-      const defaultIndex = topLevelIndex(trimmed, "=");
-      const pattern = defaultIndex >= 0 ? trimmed.slice(0, defaultIndex).trim() : trimmed;
-      const defaultValue = defaultIndex >= 0 ? trimmed.slice(defaultIndex + 1).trim() : "";
-      const hasGlobalDefault = /^(?:globalThis|self|global)$/.test(defaultValue);
-      if (pattern.startsWith("...")) {
-        collect(pattern.slice(3));
-        return;
-      }
-      if (pattern.startsWith("{") && pattern.endsWith("}")) {
-        for (const entry of splitTopLevel(pattern.slice(1, -1))) {
-          const colon = topLevelIndex(entry, ":");
-          collect(colon >= 0 ? entry.slice(colon + 1) : entry);
-        }
-        return;
-      }
-      if (pattern.startsWith("[") && pattern.endsWith("]")) {
-        for (const entry of splitTopLevel(pattern.slice(1, -1))) collect(entry);
-        return;
-      }
-      if (/^[A-Za-z_$][\w$]*$/.test(pattern)) result.set(pattern, hasGlobalDefault);
-    };
-    const cleaned = stripModuleExpressionComments(raw) ?? raw;
-    collect(cleaned);
-    return result;
-  };
-  const bindParameters = (raw: string, position: number, bodyStart?: number): void => {
-    const scope = bodyStart === undefined ? scopeAt(position) : scopeAt(bodyStart + 1);
-    if (bodyStart !== undefined) scope.functionBoundary = true;
-    for (const [name, isGlobal] of parameterBindings(raw)) {
-      scope.bindings.set(name, isGlobal);
-    }
-  };
-  const parameterSpans: SourceSpan[] = [];
-  const rememberParameterSpan = (start: number, end: number): void => {
-    if (start >= 0 && end > start) parameterSpans.push({ start, end });
-  };
-  const isInParameterSpan = (position: number): boolean =>
-    parameterSpans.some((span) => position >= span.start && position < span.end);
-  const findClosingParen = (opening: number): number => {
-    let depth = 0;
-    let ignoredIndex = 0;
-    for (let index = opening; index < source.text.length; index += 1) {
-      while (
-        ignoredIndex < source.ignoredSpans.length &&
-        source.ignoredSpans[ignoredIndex].end <= index
-      ) {
-        ignoredIndex += 1;
-      }
-      const ignored = source.ignoredSpans[ignoredIndex];
-      if (ignored && index >= ignored.start && index < ignored.end) {
-        index = ignored.end - 1;
-        continue;
-      }
-      if (source.text[index] === "(") depth += 1;
-      else if (source.text[index] === ")" && --depth === 0) return index;
-    }
-    return -1;
-  };
-  const findOpeningParen = (closing: number): number => {
-    let depth = 0;
-    for (let index = closing; index >= 0; index -= 1) {
-      if (isIgnoredIndex(index, source.ignoredSpans)) {
-        const span = source.ignoredSpans.find(
-          (candidate) => index >= candidate.start && index < candidate.end,
-        );
-        index = (span?.start ?? index) - 1;
-        continue;
-      }
-      if (source.text[index] === ")") depth += 1;
-      else if (source.text[index] === "(" && --depth === 0) return index;
-    }
-    return -1;
-  };
-  const findNextCodeIndex = (start: number): number => {
-    let index = start;
-    while (index < source.text.length) {
-      const ignored = source.ignoredSpans.find(
-        (candidate) => index >= candidate.start && index < candidate.end,
-      );
-      if (ignored) {
-        index = ignored.end;
-        continue;
-      }
-      if (!/\s/.test(source.text[index])) return index;
-      index += 1;
-    }
-    return -1;
-  };
-
-  // Re-scan headers with balanced parentheses. The bounded regex passes above
-  // still mark ordinary functions, while this pass keeps nested defaults and
-  // destructuring parameters in the correct function scope.
-  for (const match of matchOutsideIgnored(
-    source,
-    /\bfunction(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\(/g,
-  )) {
-    if (match.index === undefined) continue;
-    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
-    const closing = findClosingParen(opening);
-    if (opening < 0 || closing < 0) continue;
-    rememberParameterSpan(opening + 1, closing);
-    const bodyStart = findNextCodeIndex(closing + 1);
-    bindParameters(
-      source.text.slice(opening + 1, closing),
-      match.index,
-      bodyStart >= 0 && source.text[bodyStart] === "{" ? bodyStart : undefined,
-    );
-  }
-  for (const match of matchOutsideIgnored(source, /\bcatch\s*\(/g)) {
-    if (match.index === undefined) continue;
-    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
-    const closing = findClosingParen(opening);
-    if (opening < 0 || closing < 0) continue;
-    rememberParameterSpan(opening + 1, closing);
-    const bodyStart = findNextCodeIndex(closing + 1);
-    bindParameters(
-      source.text.slice(opening + 1, closing),
-      match.index,
-      bodyStart >= 0 && source.text[bodyStart] === "{" ? bodyStart : undefined,
-    );
-  }
-  for (const match of matchOutsideIgnored(source, /=>/g)) {
-    if (match.index === undefined) continue;
-    const arrowIndex = match.index;
-    const previous = arrowIndex - 1;
-    let cursor = previous;
-    while (cursor >= 0 && /\s/.test(source.text[cursor])) cursor -= 1;
-    let opening = -1;
-    let closing = -1;
-    let raw = "";
-    if (cursor >= 0 && source.text[cursor] === ")") {
-      closing = cursor;
-      opening = findOpeningParen(closing);
-      if (opening < 0) continue;
-      raw = source.text.slice(opening + 1, closing);
-      rememberParameterSpan(opening + 1, closing);
-    } else {
-      const identifier = source.text.slice(0, arrowIndex).match(/[A-Za-z_$][\w$]*\s*$/);
-      if (!identifier) continue;
-      raw = identifier[0].trim();
-    }
-    const bodyStart = findNextCodeIndex(arrowIndex + 2);
-    if (bodyStart >= 0 && source.text[bodyStart] === "{") {
-      bindParameters(raw, arrowIndex, bodyStart);
-      continue;
-    }
-    const parent = scopeAt(arrowIndex);
-    const semicolon = source.text.indexOf(";", arrowIndex + 2);
-    const newline = source.text.indexOf("\n", arrowIndex + 2);
-    const candidates = [semicolon, newline, source.text.length].filter((value) => value >= 0);
-    const end = Math.min(...candidates) + 1;
-    const expressionScope: GlobalAliasScope = {
-      start: opening >= 0 ? opening : arrowIndex,
-      end,
-      parent,
-      children: [],
-      bindings: new Map(),
-      functionBoundary: false,
-    };
-    parent.children.push(expressionScope);
-    parent.children.sort((a, b) => a.start - b.start);
-    for (const [name, isGlobal] of parameterBindings(raw)) {
-      expressionScope.bindings.set(name, isGlobal);
-    }
-  }
-  // Object/class methods and constructors have no `function` keyword. A
-  // balanced pass also covers computed method names and nested defaults.
-  for (const match of matchOutsideIgnored(
-    source,
-    /(?<![\w$])(?:\basync\s+)?(?:\*\s*)?(?:[A-Za-z_$][\w$]*|\[[^\]]+\])\s*\(/g,
-  )) {
-    if (match.index === undefined) continue;
-    const name = match[0].match(/(?:[A-Za-z_$][\w$]*|\[[^\]]+\])\s*\(/)?.[0] ?? "";
-    const methodName = name.replace(/\s*\($/, "").trim();
-    if (CONTROL_FLOW_HEADERS.has(methodName)) continue;
-    const opening = source.text.lastIndexOf("(", match.index + match[0].length);
-    const closing = findClosingParen(opening);
-    if (opening < 0 || closing < 0) continue;
-    const bodyStart = findNextCodeIndex(closing + 1);
-    if (bodyStart < 0 || source.text[bodyStart] !== "{") continue;
-    rememberParameterSpan(opening + 1, closing);
-    bindParameters(source.text.slice(opening + 1, closing), match.index, bodyStart);
-  }
-  const nearestFunctionScope = (scope: GlobalAliasScope): GlobalAliasScope => {
-    let current = scope;
-    while (current.parent && !current.functionBoundary) current = current.parent;
-    return current;
-  };
-  const recordBindingUpdate = (
-    scope: GlobalAliasScope,
-    name: string,
+  if (!hasAnySourceToken(source, ["globalThis", "self", "global", "Reflect", "Object"])) return;
+  const lexical = getScannerLexicalContext(source);
+  const markGlobalProperty = (
+    values: Set<ScannerOrigin>,
+    property: string | null,
     position: number,
-    value: boolean,
   ): void => {
-    scope.bindings.set(name, value);
-    let byName = bindingHistory.get(scope);
-    if (!byName) {
-      byName = new Map();
-      bindingHistory.set(scope, byName);
+    if (lexical.isOverflowed(position)) {
+      hits.add(DYNAMIC_GLOBAL_API_LABEL);
+      return;
     }
-    let history = byName.get(name);
-    if (!history) {
-      history = [];
-      byName.set(name, history);
+    if (!values.has("global")) return;
+    const label = scannerGlobalPropertyLabel(property);
+    if (label) hits.add(label);
+    if (property === "module" || property === "require" || property === "import" || property === "createRequire") {
+      hits.add(MODULE_CONSTRUCTOR_LOADER_LABEL);
     }
-    history.push({ position, value });
   };
-
-  for (const match of matchOutsideIgnored(
-    source,
-    /\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s+([\s\S]*?)\)/g,
-  )) {
+  const dotAccess =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
+  for (const match of matchOutsideIgnored(source, dotAccess)) {
     if (match.index === undefined) continue;
-    const opening = source.text.indexOf("(", match.index);
-    const closing = findClosingParen(opening);
-    if (opening < 0 || closing < 0) continue;
-    const bodyStart = findNextCodeIndex(closing + 1);
-    if (bodyStart < 0 || source.text[bodyStart] !== "{") continue;
-    const header = source.text.slice(opening + 1, closing);
-    const declaration = header.match(
-      /^\s*(const|let|var)\s+([A-Za-z_$][\w$]*)\s+([\s\S]*)$/,
+    markGlobalProperty(
+      scannerRootValues(source, match[1], match.index),
+      match[2],
+      match.index,
     );
-    if (!declaration || declaration[1] === "var") continue;
-    const remainder = declaration[3];
-    const initializer =
-      remainder.match(/^=\s*([^;]*)/)?.[1] ??
-      remainder.match(/^(?:of|in)\s+([\s\S]*)/)?.[1] ??
-      "";
-    const globalReference = initializer.match(/\b(globalThis|self|global)\b/)?.[1];
-    if (globalReference && resolveCurrentBinding(globalReference, match.index)) {
-      scopeAt(bodyStart + 1).bindings.set(declaration[2], true);
-    }
   }
-  const assignmentStarts = matchOutsideIgnored(
-    source,
-    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*=\s*/g,
-  ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  for (const match of assignmentStarts) {
+  const computedAccess =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
+  const delimiters = getDelimiterMap(source);
+  for (const match of matchOutsideIgnored(source, computedAccess)) {
     if (match.index === undefined) continue;
-    if (isInParameterSpan(match.index)) continue;
-    const rhsStart = match.index + match[0].length;
-    if (source.text[rhsStart] === "=" || source.text[rhsStart] === ">") continue;
-    const lhs = match[1];
-    const rhs = source.text.slice(rhsStart);
-    const rhsToken = rhs.match(/^([A-Za-z_$][\w$]*)\b/);
-    const rhsName = rhsToken?.[1];
-    const remainder = rhsToken ? rhs.slice(rhsToken[0].length) : rhs;
-    const isSimpleReference =
-      rhsName !== undefined &&
-      !/^\s*(?:[.[?(`+\-*/%&|^<>=!:])/.test(remainder);
-    const currentScope = scopeAt(match.index);
-    const targetScope = findBindingScope(lhs, currentScope);
-    const value =
-      isSimpleReference &&
-      rhsName !== undefined &&
-      resolveCurrentBinding(rhsName, match.index);
-    if (isOverflowedPosition(match.index)) {
-      continue;
-    }
-    const functionScope = nearestFunctionScope(currentScope);
-    const nestedFunctionWrite = functionScope !== rootScope && targetScope !== functionScope;
-    if (nestedFunctionWrite) {
-      recordBindingUpdate(functionScope, lhs, match.index, value);
-      if (value) markPossibleGlobal(targetScope, lhs);
-    } else if (targetScope !== currentScope) {
-      // A block/loop write may not execute. Preserve a possible-global outer
-      // value and keep the definite write local to this lexical scope.
-      if (value) recordBindingUpdate(targetScope, lhs, match.index, true);
-      recordBindingUpdate(currentScope, lhs, match.index, value);
-    } else {
-      recordBindingUpdate(targetScope, lhs, match.index, value);
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!values.has("global")) continue;
+    const opening = source.text.indexOf("[", match.index + match[0].length - 1);
+    const closing = delimiters.openingToClosing.get(opening) ?? -1;
+    const keyExpression = opening < 0 || closing < 0
+      ? null
+      : source.text.slice(opening + 1, closing);
+    const property = keyExpression === null || keyExpression.length > GLOBAL_API_KEY_MAX_LENGTH
+      ? null
+      : resolveStrictStaticStringExpression(keyExpression);
+    markGlobalProperty(values, property, match.index);
+  }
+  const callPath =
+    /(?<![\w$.])([A-Za-z_$][\w$]*(?:(?:\s*\??\.\s*[A-Za-z_$][\w$]*)|\s*\[[^\]]{0,300}\])*)\s*\(/g;
+  for (const match of matchOutsideIgnored(source, callPath)) {
+    if (match.index === undefined) continue;
+    const values = scannerExpressionValues(source, match[1], match.index);
+    for (const value of values) {
+      if (!value.startsWith("global:")) continue;
+      const property = value.slice("global:".length);
+      markGlobalProperty(new Set(["global"]), property === "*" ? null : property, match.index);
     }
   }
-
-  const isOverflowed = (position: number): boolean =>
-    overflowSpans.some((span) => position >= span.start && position < span.end);
-  const scanGlobalPropertyAccesses = (): void => {
-    const dotAccess = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
-    for (const match of matchOutsideIgnored(source, dotAccess)) {
-      if (match.index !== undefined && isOverflowed(match.index)) {
-        hits.add(DYNAMIC_GLOBAL_API_LABEL);
-        continue;
-      }
-      if (!resolveBinding(match[1], match.index ?? 0)) continue;
-      const label = BLOCKED_GLOBAL_API_LABELS.get(match[2]);
-      if (label) hits.add(label);
+  const destructuring =
+    /(?:\b(?:const|let|var)\s*|\(\s*)\{([^}\n]{1,4096})\}\s*=\s*([A-Za-z_$][\w$]*)\b/g;
+  for (const match of matchOutsideIgnored(source, destructuring)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[2], match.index);
+    if (!values.has("global")) continue;
+    for (const entry of splitTopLevelExpressionList(match[1]) ?? match[1].split(",")) {
+      const colon = entry.indexOf(":");
+      const rawKey = (colon < 0 ? entry : entry.slice(0, colon)).trim();
+      const property = rawKey.startsWith("[")
+        ? resolveStrictStaticStringExpression(rawKey.slice(1, -1))
+        : rawKey.split(/\s*=/, 1)[0]?.trim() ?? "";
+      markGlobalProperty(values, property || null, match.index);
     }
-
-    const computedOpen = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
-    for (const match of matchOutsideIgnored(source, computedOpen)) {
-      if (match.index !== undefined && isOverflowed(match.index)) {
-        hits.add(DYNAMIC_GLOBAL_API_LABEL);
-        continue;
+  }
+  for (const call of parseReflectivePropertyCalls(source, source, delimiters.openingToClosing)) {
+    if (call.method !== "get" && call.method !== "getOwnPropertyDescriptor") continue;
+    const head = source.text.slice(call.position, call.opening).replace(/\s+/g, "");
+    const root = head.match(/^([A-Za-z_$][\w$]*)/)?.[1];
+    if (!root || !call.args) continue;
+    let callArgs = call.args;
+    let callMode = call.mode;
+    if (callMode === "bind" && callArgs.length < 3) {
+      const closing = delimiters.openingToClosing.get(call.opening) ?? -1;
+      const nextOpen = closing < 0 ? -1 : source.text.indexOf("(", closing + 1);
+      if (nextOpen >= 0 && /^\s*\(/.test(source.text.slice(closing + 1))) {
+        const deferredArgs = readCallArguments(source, nextOpen);
+        if (deferredArgs) {
+          callArgs = deferredArgs;
+          callMode = undefined;
+        }
       }
-      if (!resolveBinding(match[1], match.index ?? 0)) continue;
-
-      if (match.index === undefined) continue;
-      const opening = source.text.indexOf("[", match.index + match[0].length - 1);
-      const closing = opening < 0 ? -1 : source.text.indexOf("]", opening + 1);
+    }
+    const rootValues = scannerRootValues(source, root, call.position);
+    if (!scannerOriginHas(rootValues, "reflect") && !scannerOriginHas(rootValues, "object")) continue;
+    let receiver: string | undefined;
+    let property: string | undefined;
+    if (callMode === "call") {
+      receiver = callArgs[1];
+      property = callArgs[2];
+    } else if (callMode === "apply") {
+      const applied = callArgs[1]?.trim() ?? "";
+      const values =
+        applied.startsWith("[") && applied.endsWith("]")
+          ? splitTopLevelExpressionList(applied.slice(1, -1))
+          : null;
+      receiver = values?.[0];
+      property = values?.[1];
+    } else if (callMode === "bind") {
+      receiver = callArgs[1];
+      property = callArgs[2];
+    } else {
+      receiver = callArgs[0];
+      property = callArgs[1];
+    }
+    const receiverValues = receiver
+      ? scannerExpressionValues(source, receiver, call.position)
+      : new Set<ScannerOrigin>();
+    const resolvedProperty =
+      property === undefined ? null : resolveStrictStaticStringExpression(property);
+    if (receiverValues.has("global")) {
+      markGlobalProperty(receiverValues, resolvedProperty, call.position);
+    } else {
+      const receiverName = receiver?.trim() ?? "";
       if (
-        opening < 0 ||
-        closing < 0 ||
-        closing - opening - 1 > GLOBAL_API_KEY_MAX_LENGTH
+        receiverValues.size === 0 &&
+        /^[A-Za-z_$][\w$]*$/.test(receiverName) &&
+        !scannerIsLocal(source, receiverName, call.position)
       ) {
         hits.add(DYNAMIC_GLOBAL_API_LABEL);
-        continue;
       }
-      const property = resolveStrictStaticStringExpression(
-        source.text.slice(opening + 1, closing),
-      );
-      if (property === null) {
-        hits.add(DYNAMIC_GLOBAL_API_LABEL);
-        continue;
-      }
-      const label = BLOCKED_GLOBAL_API_LABELS.get(property);
-      if (label) hits.add(label);
     }
-  };
-  scanGlobalPropertyAccesses();
+  }
+  const reflectiveAliasCall =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g;
+  for (const match of matchOutsideIgnored(source, reflectiveAliasCall)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    const method = [...values].find(
+      (value) => value === "reflect:get" || value === "object:getOwnPropertyDescriptor",
+    );
+    if (!method) continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    if (!args) continue;
+    const receiverValues = scannerExpressionValues(source, args[0] ?? "", match.index);
+    const property = resolveStrictStaticStringExpression(args[1] ?? "");
+    if (receiverValues.has("global")) {
+      markGlobalProperty(receiverValues, property, match.index);
+    } else if (
+      receiverValues.size === 0 &&
+      /^[A-Za-z_$][\w$]*$/.test(args[0] ?? "") &&
+      !scannerIsLocal(source, args[0] ?? "", match.index)
+    ) {
+      hits.add(DYNAMIC_GLOBAL_API_LABEL);
+    }
+  }
 
-  const recordDestructuredGlobalApiHits = (entries: string): void => {
-    for (const entry of entries.split(",")) {
-      const trimmed = entry.trim();
-      const key = trimmed.split(/\s*:/, 1)[0]?.trim().split(/\s*=/, 1)[0]?.trim() ?? "";
-      if (!key || key.startsWith("...")) continue;
-      const computed = key.startsWith("[");
-      const normalized = computed ? key.replace(/^\[\s*|\s*\]$/g, "") : key;
-      const property = computed
-        ? resolveStrictStaticStringExpression(normalized)
-        : decodeSimpleStringExpression(normalized) ?? normalized;
-      if (computed && property === null) {
-        hits.add(DYNAMIC_GLOBAL_API_LABEL);
-        continue;
-      }
-      const label = property === null ? undefined : BLOCKED_GLOBAL_API_LABELS.get(property);
-      if (label) hits.add(label);
-    }
-  };
-  const declaration = new RegExp(
-    `\\b(?:const|let|var)${MODULE_COMMENT_GAP}\\{([^}]+)\\}${MODULE_COMMENT_GAP}=${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)\\b`,
-    "g",
-  );
-  for (const match of matchOutsideIgnored(source, declaration)) {
-    if (!resolveBinding(match[2], match.index ?? 0)) continue;
-    const tail = source.text.slice((match.index ?? 0) + match[0].length);
-    if (/^\s*(?:[.?]|\[)/.test(tail)) continue;
-    recordDestructuredGlobalApiHits(match[1]);
-  }
-  const assignment = new RegExp(
-    `\\(${MODULE_COMMENT_GAP}\\{([^}]+)\\}${MODULE_COMMENT_GAP}=${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)\\b`,
-    "g",
-  );
-  for (const match of matchOutsideIgnored(source, assignment)) {
-    if (!resolveBinding(match[2], match.index ?? 0)) continue;
-    const tail = source.text.slice((match.index ?? 0) + match[0].length);
-    if (/^\s*(?:[.?]|\[)/.test(tail)) continue;
-    recordDestructuredGlobalApiHits(match[1]);
-  }
 }
 
 function addPropertyAccessHits(
@@ -1336,75 +2159,369 @@ function addPropertyAccessHits(
   objectName: string,
   propertyLabels: ReadonlyMap<string, string>,
   hits: Set<string>,
+  unknownPropertyLabel?: string,
 ): void {
-  const escapedObject = objectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const dotAccess = new RegExp(`\\b${escapedObject}\\s*\\.\\s*([A-Za-z_$][\\w$]*)`, "g");
+  if (!hasSourceToken(source, objectName)) return;
+  const expected =
+    objectName === "Bun"
+      ? "bun"
+      : objectName === "process"
+        ? "process"
+        : ["globalThis", "self", "global"].includes(objectName)
+          ? "global"
+          : objectName;
+  const lexical = getScannerLexicalContext(source);
+  const mark = (values: Set<ScannerOrigin>, property: string | null, position: number): void => {
+    if (lexical.isOverflowed(position)) {
+      const label = expected === "bun"
+        ? "dangerous Bun system API usage"
+        : expected === "process"
+          ? "dangerous process API usage"
+          : unknownPropertyLabel;
+      if (label) hits.add(label);
+      return;
+    }
+    const direct = values.has(expected);
+    const aliased = [...values].some((value) => value.startsWith(`${expected}:`));
+    if (!direct && !aliased) return;
+    if (aliased) {
+      for (const value of values) {
+        if (!value.startsWith(`${expected}:`)) continue;
+        const member = value.slice(expected.length + 1);
+        const label = propertyLabels.get(member);
+        if (label) hits.add(label);
+      }
+    }
+    if (direct) {
+      const label = property === null
+        ? expected === "bun"
+          ? "dangerous Bun system API usage"
+          : expected === "process"
+            ? "dangerous process API usage"
+            : unknownPropertyLabel
+        : propertyLabels.get(property);
+      if (label) hits.add(label);
+    }
+  };
+  const dotAccess =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
   for (const match of matchOutsideIgnored(source, dotAccess)) {
-    const label = propertyLabels.get(match[1]);
-    if (label) hits.add(label);
-  }
-
-  const computedAccess = new RegExp(
-    `\\b${escapedObject}\\s*\\[([^\\]]{1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}})\\]`,
-    "g",
-  );
-  for (const match of matchOutsideIgnored(source, computedAccess)) {
-    const property = decodeSimpleStringExpression(match[1]);
-    const label = property === null ? undefined : propertyLabels.get(property);
-    if (label) hits.add(label);
-  }
-}
-
-function addAliasPropertyHits(source: ScannableSource, hits: Set<string>): void {
-  const aliases = new Map<string, "Bun" | "process">();
-  for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(Bun|process)\b/)) {
-    aliases.set(match[1], match[2] as "Bun" | "process");
-  }
-
-  for (const [alias, aliasSource] of aliases) {
-    addPropertyAccessHits(
-      source,
-      alias,
-      aliasSource === "Bun" ? DANGEROUS_BUN_PROPERTIES : DANGEROUS_PROCESS_PROPERTIES,
-      hits,
+    if (match.index !== undefined) mark(
+      scannerRootValues(source, match[1], match.index),
+      match[2],
+      match.index,
     );
   }
-}
-
-function addDestructuringHits(source: ScannableSource, hits: Set<string>): void {
-  for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*Bun\b/)) {
-    for (const prop of match[1].split(",")) {
-      const name = prop.trim().split(/\s*:/, 1)[0]?.trim();
-      const label = DANGEROUS_BUN_PROPERTIES.get(name);
+  const computedAccess =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
+  const delimiters = getDelimiterMap(source);
+  for (const match of matchOutsideIgnored(source, computedAccess)) {
+    if (match.index === undefined) continue;
+    const opening = source.text.indexOf("[", match.index + match[0].length - 1);
+    const closing = delimiters.openingToClosing.get(opening) ?? -1;
+    const property =
+      opening < 0 || closing < 0
+        ? null
+        : resolveStrictStaticStringExpression(source.text.slice(opening + 1, closing));
+    mark(scannerRootValues(source, match[1], match.index), property, match.index);
+  }
+  const memberValueCall =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\(/g;
+  for (const match of matchOutsideIgnored(source, memberValueCall)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    for (const value of values) {
+      if (!value.startsWith(`${expected}:`)) continue;
+      const member = value.slice(expected.length + 1);
+      const label = propertyLabels.get(member);
       if (label) hits.add(label);
     }
   }
+}
+function addReflectiveProcessPropertyHits(source: ScannableSource, hits: Set<string>): void {
+  if (!hasAnySourceToken(source, ["process", "Reflect", "Object"])) return;
+  const lexical = getScannerLexicalContext(source);
+  const markProcess = (
+    receiver: string | undefined,
+    property: string | undefined,
+    position: number,
+  ): void => {
+    const values = receiver
+      ? scannerExpressionValues(source, receiver, position)
+      : new Set<ScannerOrigin>();
+    if (lexical.isOverflowed(position)) {
+      if (values.has("process") || [...values].some((value) => value.startsWith("process:"))) {
+        hits.add("dangerous process API usage");
+      }
+      return;
+    }
+    const direct = values.has("process");
+    const aliases = [...values].filter((value) => value.startsWith("process:"));
+    if (!direct && aliases.length === 0) return;
+    if (aliases.length > 0) {
+      hits.add("dangerous process API usage");
+      return;
+    }
+    const resolved =
+      property === undefined ? null : resolveStrictStaticStringExpression(property);
+    const label = scannerProcessPropertyLabel(resolved);
+    if (label) hits.add(label);
+  };
+  const delimiters = getDelimiterMap(source);
+  for (const call of parseReflectivePropertyCalls(source, source, delimiters.openingToClosing)) {
+    if (call.method !== "get" && call.method !== "getOwnPropertyDescriptor") continue;
+    if (!call.args) continue;
+    const head = source.text.slice(call.position, call.opening).replace(/\s+/g, "");
+    const root = head.match(/^([A-Za-z_$][\w$]*)/)?.[1];
+    if (!root) continue;
+    const rootValues = scannerRootValues(source, root, call.position);
+    if (!scannerOriginHas(rootValues, "reflect") && !scannerOriginHas(rootValues, "object")) continue;
+    let receiver: string | undefined;
+    let property: string | undefined;
+    if (call.mode === "call") {
+      receiver = call.args[1];
+      property = call.args[2];
+    } else if (call.mode === "apply") {
+      const applied = call.args[1]?.trim() ?? "";
+      const values =
+        applied.startsWith("[") && applied.endsWith("]")
+          ? splitTopLevelExpressionList(applied.slice(1, -1))
+          : null;
+      receiver = values?.[0];
+      property = values?.[1];
+    } else if (call.mode === "bind") {
+      receiver = call.args[1];
+      property = call.args[2];
+    } else {
+      receiver = call.args[0];
+      property = call.args[1];
+    }
+    markProcess(receiver, property, call.position);
+  }
+  const reflectApply =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*apply\s*\(/g;
+  for (const match of matchOutsideIgnored(source, reflectApply)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!scannerOriginHas(values, "reflect")) continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    if (!args) continue;
+    const target = (stripModuleExpressionComments(args[0]) ?? args[0]).replace(/\s+/g, "");
+    if (!/(?:^|\.)(?:get|getOwnPropertyDescriptor)$/.test(target)) continue;
+    const applied = args[2]?.trim() ?? "";
+    const valuesList =
+      applied.startsWith("[") && applied.endsWith("]")
+        ? splitTopLevelExpressionList(applied.slice(1, -1))
+        : null;
+    if (valuesList) markProcess(valuesList[0], valuesList[1], match.index);
+  }
+  const reflectiveAliasCall =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(/g;
+  for (const match of matchOutsideIgnored(source, reflectiveAliasCall)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    const method = [...values].find(
+      (value) => value === "reflect:get" || value === "object:getOwnPropertyDescriptor",
+    );
+    if (!method) continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    if (!args) continue;
+    markProcess(args[0], args[1], match.index);
+  }
 
-  for (const match of matchOutsideIgnored(source, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\b/)) {
-    for (const prop of match[1].split(",")) {
-      const name = prop.trim().split(/\s*:/, 1)[0]?.trim();
-      const label = DANGEROUS_PROCESS_PROPERTIES.get(name);
-      if (label) hits.add(label);
+}
+
+function splitTopLevelExpressionList(raw: string): string[] | null {
+  const spans = collectIgnoredSpans(raw);
+  const parts: string[] = [];
+  let start = 0;
+  const stack: string[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
+    if (isIgnoredIndex(index, spans)) {
+      const span = ignoredSpanAt(index, spans);
+      if (span) index = span.end - 1;
+      continue;
+    }
+    const char = raw[index];
+    if (char === "(" || char === "[" || char === "{") {
+      stack.push(char);
+      continue;
+    }
+    if (char === ")" || char === "]" || char === "}") {
+      const expected = char === ")" ? "(" : char === "]" ? "[" : "{";
+      if (stack.pop() !== expected) return null;
+      continue;
+    }
+    if (char === "," && stack.length === 0) {
+      parts.push(raw.slice(start, index).trim());
+      start = index + 1;
     }
   }
+  if (stack.length > 0) return null;
+  parts.push(raw.slice(start).trim());
+  return parts;
 }
+
+function readCallArguments(source: ScannableSource, opening: number): string[] | null {
+  const parts: string[] = [];
+  const stack: string[] = ["("];
+  let start = opening + 1;
+  for (let index = opening + 1; index < source.text.length; index += 1) {
+    if (isIgnoredIndex(index, source.ignoredSpans)) {
+      const span = ignoredSpanAt(index, source.ignoredSpans);
+      if (span) index = span.end - 1;
+      continue;
+    }
+    const char = source.text[index];
+    if (char === "(" || char === "[" || char === "{") {
+      stack.push(char);
+      continue;
+    }
+    if (char === ")" || char === "]" || char === "}") {
+      const expected = char === ")" ? "(" : char === "]" ? "[" : "{";
+      if (stack.pop() !== expected) return null;
+      if (stack.length === 0) {
+        parts.push(source.text.slice(start, index).trim());
+        return parts;
+      }
+      continue;
+    }
+    if (char === "," && stack.length === 1) {
+      parts.push(source.text.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  return null;
+}
+type ReflectivePropertyCall = {
+  method: string | null;
+  mode: "call" | "apply" | "bind" | "unknown" | undefined,
+  args: string[] | null;
+  position: number;
+  opening: number;
+};
+
+function buildDelimiterMap(source: ScannableSource): ScannerDelimiterMap {
+  const openingToClosing = new Map<number, number>();
+  const closingToOpening = new Map<number, number>();
+  const stack: Array<{ opener: string; index: number }> = [];
+  const closingFor: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  for (let index = 0; index < source.text.length; index += 1) {
+    if (isIgnoredIndex(index, source.ignoredSpans)) continue;
+    const char = source.text[index];
+    if (char === "(" || char === "[" || char === "{") {
+      stack.push({ opener: char, index });
+    } else if (char === ")" || char === "]" || char === "}") {
+      const top = stack[stack.length - 1];
+      if (top?.opener === closingFor[char]) {
+        stack.pop();
+        openingToClosing.set(top.index, index);
+        closingToOpening.set(index, top.index);
+      }
+    }
+  }
+  return { openingToClosing, closingToOpening };
+}
+
+function parseReflectivePropertyCalls(
+  source: ScannableSource,
+  originalSource: ScannableSource,
+  openingToClosing: ReadonlyMap<number, number>,
+): ReflectivePropertyCall[] {
+  const calls: ReflectivePropertyCall[] = [];
+  const reflectiveRoots = new Set(["Reflect", "Object"]);
+  const aliasDeclaration = new RegExp(
+    `\\b(?:const|let|var)${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)${MODULE_COMMENT_GAP}=${MODULE_COMMENT_GAP}([A-Za-z_$][\\w$]*)\\b`,
+    "g",
+  );
+  for (let pass = 0; pass < 8; pass += 1) {
+    const before = reflectiveRoots.size;
+    for (const alias of matchOutsideIgnored(source, aliasDeclaration)) {
+      if (reflectiveRoots.has(alias[2])) reflectiveRoots.add(alias[1]);
+    }
+    if (reflectiveRoots.size === before) break;
+  }
+  const escapedRoots = [...reflectiveRoots]
+    .sort((left, right) => right.length - left.length)
+    .map((root) => root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const reflectedMethod = new RegExp(
+    `\\b(?:${escapedRoots})${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}(get|getOwnPropertyDescriptor)|\\[\\s*([^\\]]{0,300})\\s*\\])${MODULE_COMMENT_GAP}(?:(?:\\.${MODULE_COMMENT_GAP}(call|apply|bind))|(?:\\[\\s*([^\\]]{0,300})\\s*\\]))?\\(`,
+    "g",
+  );
+  for (const match of matchOutsideIgnored(source, reflectedMethod)) {
+    if (match.index === undefined) continue;
+    const matchIndex = match.index;
+    const computedBrackets: number[] = [];
+    for (let offset = 0; offset < match[0].length; offset += 1) {
+      if (match[0][offset] === "[") computedBrackets.push(matchIndex + offset);
+    }
+    const resolveComputedKey = (bracket: number | undefined): string | null => {
+      if (bracket === undefined) return null;
+      const closing = openingToClosing.get(bracket) ?? -1;
+      return closing < 0
+        ? null
+        : resolveStrictStaticStringExpression(
+            originalSource.text.slice(bracket + 1, closing),
+          );
+    };
+    const method =
+      match[1] ?? resolveComputedKey(computedBrackets[0]);
+    const modeKey =
+      match[3] ??
+      (match[4] !== undefined
+        ? resolveComputedKey(match[2] !== undefined ? computedBrackets[1] : computedBrackets[0])
+        : null);
+    const hasModeSuffix = match[3] !== undefined || match[4] !== undefined;
+    const mode =
+      modeKey === "call" || modeKey === "apply" || modeKey === "bind"
+        ? modeKey
+        : hasModeSuffix
+          ? "unknown"
+          : undefined;
+    const opening = matchIndex + match[0].length - 1;
+    if (!openingToClosing.has(opening)) continue;
+    let args = readCallArguments(originalSource, opening);
+    if (mode === "bind" && (args?.length ?? 0) < 3) {
+      const closing = openingToClosing.get(opening) ?? -1;
+      const masked = getMaskedSource(originalSource);
+      let invocation = closing + 1;
+      while (invocation < masked.length && /\s/.test(masked[invocation] ?? "")) invocation += 1;
+      if (masked[invocation] === "(" && openingToClosing.has(invocation)) {
+        args = [args?.[0] ?? "", ...(readCallArguments(originalSource, invocation) ?? [])];
+      }
+    }
+    calls.push({
+      method,
+      mode,
+      args,
+      position: matchIndex,
+      opening,
+    });
+  }
+  return calls;
+}
+
+
 
 function addSerializedModuleDestructuringHits(source: ScannableSource, hits: Set<string>): void {
-  const roots = "(?:globalThis|self|global)";
-  const destructuring = new RegExp(
-    `\\b(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${roots}\\b`,
-  );
+  if (!hasAnySourceToken(source, ["globalThis", "self", "global"])) return;
+  const destructuring =
+    /\b(?:const|let|var)\s*\{([^}\n]{1,4096})\}\s*=\s*([A-Za-z_$][\w$]*)\b/g;
   for (const match of matchOutsideIgnored(source, destructuring)) {
-    for (const entry of match[1].split(",")) {
-      const rawKey = entry.trim().split(/\s*:/, 1)[0]?.trim() ?? "";
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[2], match.index);
+    if (!values.has("global")) continue;
+    for (const entry of splitTopLevelExpressionList(match[1]) ?? match[1].split(",")) {
+      const colon = entry.indexOf(":");
+      const rawKey = (colon < 0 ? entry : entry.slice(0, colon)).trim();
       const keyExpression = rawKey.split(/\s*=/, 1)[0]?.trim() ?? "";
-      if (/^[A-Za-z_$][\w$]*$/.test(keyExpression)) {
-        if (keyExpression === "require") hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
-        continue;
-      }
-      const key = keyExpression.replace(/^\[\s*|\s*\]$/g, "");
-      const property = resolveStrictStaticStringExpression(key);
-      if (property === null || property === "require") {
+      const property = keyExpression.startsWith("[")
+        ? resolveStrictStaticStringExpression(keyExpression.slice(1, -1))
+        : keyExpression;
+      if (property === null || property === "require" || property === "import") {
         hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
       }
     }
@@ -1412,14 +2529,21 @@ function addSerializedModuleDestructuringHits(source: ScannableSource, hits: Set
 }
 
 function addSerializedComputedModuleAccessHits(source: ScannableSource, hits: Set<string>): void {
-  const roots = "(?:globalThis|self|global)";
-  const computedAccess = new RegExp(
-    `\\b${roots}${MODULE_COMMENT_GAP}\\[([^\\]]{1,${MODULE_CALL_ARGUMENT_MAX_LENGTH}})\\]`,
-    "g",
-  );
+  if (!hasAnySourceToken(source, ["globalThis", "self", "global"])) return;
+  const computedAccess =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
+  const delimiters = getDelimiterMap(source);
   for (const match of matchOutsideIgnored(source, computedAccess)) {
-    const property = resolveStrictStaticStringExpression(match[1]);
-    if (property === null || property === "require") {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!values.has("global")) continue;
+    const opening = source.text.indexOf("[", match.index + match[0].length - 1);
+    const closing = delimiters.openingToClosing.get(opening) ?? -1;
+    const property =
+      opening < 0 || closing < 0
+        ? null
+        : resolveStrictStaticStringExpression(source.text.slice(opening + 1, closing));
+    if (property === null || property === "require" || property === "import") {
       hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
     }
   }
@@ -1456,8 +2580,27 @@ const EMPTY_FUNCTION_PROBE_RE = /\bFunction\s*\(\s*(?:""|''|``|)\s*\)/g;
 const SERIALIZED_HANDLER_MODULE_LABEL = "module loading";
 const SERIALIZED_MODULE_PROPERTY_LABELS: ReadonlyMap<string, string> = new Map([
   ["require", SERIALIZED_HANDLER_MODULE_LABEL],
+  ["import", SERIALIZED_HANDLER_MODULE_LABEL],
+  ["createRequire", SERIALIZED_HANDLER_MODULE_LABEL],
 ]);
 const SERIALIZED_GLOBAL_MODULE_OBJECTS = ["globalThis", "self", "global"] as const;
+const SERIALIZED_SCANNER_HINTS = [
+  "module",
+  "globalThis",
+  "self",
+  "global",
+  "require",
+  "import",
+  "createRequire",
+  "Reflect",
+  "Object",
+  "constructor",
+  "eval",
+  "Function",
+  "AsyncFunction",
+  "GeneratorFunction",
+  "AsyncGeneratorFunction",
+] as const;
 
 /**
  * Serialized macro handlers execute inside a worker but are not extension
@@ -1469,41 +2612,63 @@ const SERIALIZED_GLOBAL_MODULE_OBJECTS = ["globalThis", "self", "global"] as con
 export function detectSerializedHandlerModuleAccess(content: string): string[] {
   const hits = new Set<string>();
   for (const source of createScannableSources(content)) {
+    if (!SERIALIZED_SCANNER_HINTS.some((token) => source.text.includes(token))) continue;
+    const lexical = getScannerLexicalContext(source);
+    addModuleConstructorLoaderHits(source, hits, SERIALIZED_HANDLER_MODULE_LABEL);
+    addDynamicCodeExecutionHits(source, hits, { ignoreEmptyFunctionProbe: false });
     if (matchOutsideIgnored(source, STATIC_MODULE_IMPORT_RE).length > 0) {
       hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
     }
-    if (matchOutsideIgnored(source, SERIALIZED_MODULE_CALL_PREFIX_RE).length > 0) {
+    for (const match of matchOutsideIgnored(source, BARE_MODULE_CALL_RE)) {
+      if (match.index === undefined) continue;
+      const isImport = match[0].trimStart().startsWith("import");
+      if (isImport || !scannerIsLocal(source, "require", match.index)) {
+        hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+      }
+    }
+    const unresolvedImportCall = new RegExp(
+      `(?<![\\w$.])import${MODULE_COMMENT_GAP}\\(`,
+      "g",
+    );
+    if (matchOutsideIgnored(source, unresolvedImportCall).length > 0) {
       hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
     }
-    if (matchOutsideIgnored(source, SERIALIZED_REQUIRE_REFERENCE_RE).length > 0) {
-      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+
+    const requireReference = new RegExp(
+      `(?<![\\w$])require${MODULE_COMMENT_GAP}(?!:)`,
+      "g",
+    );
+    for (const match of matchOutsideIgnored(source, requireReference)) {
+      if (
+        match.index !== undefined &&
+        !lexical.parameterSpans.some(
+          (span) => match.index !== undefined && match.index >= span.start && match.index < span.end,
+        ) &&
+        !scannerIsLocal(source, "require", match.index)
+      ) {
+        hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
+      }
     }
     for (const objectName of SERIALIZED_GLOBAL_MODULE_OBJECTS) {
-      addPropertyAccessHits(source, objectName, SERIALIZED_MODULE_PROPERTY_LABELS, hits);
+      addPropertyAccessHits(
+        source,
+        objectName,
+        SERIALIZED_MODULE_PROPERTY_LABELS,
+        hits,
+        SERIALIZED_HANDLER_MODULE_LABEL,
+      );
     }
     addSerializedComputedModuleAccessHits(source, hits);
     addSerializedModuleDestructuringHits(source, hits);
+    const requireMeta = new RegExp(
+      `\\brequire${MODULE_COMMENT_GAP}(?:\\.|\\[)\\s*(?:main|cache)`,
+      "g",
+    );
     if (
-      matchOutsideIgnored(
-        source,
-        new RegExp(
-          `\\b(?:module|globalThis${MODULE_COMMENT_GAP}\\.module)${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}require|\\[\\s*["'\\x60]require["'\\x60]\\s*\\])`,
-        ),
-      ).length > 0
+      matchOutsideIgnored(source, requireMeta).some(
+        (match) => match.index !== undefined && !scannerIsLocal(source, "require", match.index),
+      )
     ) {
-      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
-    }
-    if (
-      matchOutsideIgnored(
-        source,
-        new RegExp(
-          `\\brequire${MODULE_COMMENT_GAP}(?:\\.${MODULE_COMMENT_GAP}(?:main|cache)|\\[\\s*["'\\x60](?:main|cache)["'\\x60]\\s*\\])`,
-        ),
-      ).length > 0
-    ) {
-      hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
-    }
-    if (matchOutsideIgnored(source, new RegExp(`\\bcreateRequire${MODULE_COMMENT_GAP}\\(`)).length > 0) {
       hits.add(SERIALIZED_HANDLER_MODULE_LABEL);
     }
   }
@@ -1521,6 +2686,139 @@ function isEmptyFunctionProbe(source: ScannableSource, matchIndex: number): bool
   }
   return false;
 }
+function addDynamicCodeExecutionHits(
+  source: ScannableSource,
+  hits: Set<string>,
+  options: { ignoreEmptyFunctionProbe: boolean },
+): void {
+  if (
+    !hasAnySourceToken(source, [
+      "eval",
+      "Function",
+      "AsyncFunction",
+      "GeneratorFunction",
+      "constructor",
+      "Reflect",
+      "globalThis",
+      "self",
+      "global",
+      "[",
+    ])
+  ) {
+    return;
+  }
+  const lexical = getScannerLexicalContext(source);
+  const dynamicOrigins = new Set([
+    "eval",
+    "function",
+    "asyncFunction",
+    "generatorFunction",
+    "asyncGeneratorFunction",
+  ]);
+  const callPath =
+    /(?<![\w$.])([A-Za-z_$][\w$]*(?:(?:\s*\??\.\s*[A-Za-z_$][\w$]*)|\s*\[[^\]]{0,300}\])*)\s*\(/g;
+  for (const match of matchOutsideIgnored(source, callPath)) {
+    if (match.index === undefined) continue;
+    const values = scannerExpressionValues(source, match[1], match.index);
+    let dangerous = false;
+    for (const value of values) {
+      if (dynamicOrigins.has(value) || value === "global:Function" || value === "global:eval") {
+        dangerous = true;
+        break;
+      }
+    }
+    const directFunction = /(?:^|[.\]])Function$/.test(match[1].replace(/\s+/g, ""));
+    if (
+      dangerous &&
+      options.ignoreEmptyFunctionProbe &&
+      directFunction &&
+      isEmptyFunctionProbe(source, match.index + match[1].lastIndexOf("Function"))
+    ) {
+      dangerous = false;
+    }
+    if (dangerous) {
+      hits.add("dynamic code execution");
+      break;
+    }
+  }
+  const globalProperties =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
+  for (const match of matchOutsideIgnored(source, globalProperties)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!values.has("global")) continue;
+    if (dynamicOrigins.has(match[2]) && !options.ignoreEmptyFunctionProbe) {
+      hits.add("dynamic code execution");
+      break;
+    }
+  }
+  const computedProperties =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.)?\s*\[/g;
+  const delimiters = getDelimiterMap(source);
+  for (const match of matchOutsideIgnored(source, computedProperties)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!values.has("global")) continue;
+    const opening = source.text.indexOf("[", match.index + match[0].length - 1);
+    const closing = delimiters.openingToClosing.get(opening) ?? -1;
+    const property =
+      opening < 0 || closing < 0
+        ? null
+        : resolveStrictStaticStringExpression(source.text.slice(opening + 1, closing));
+    if (property !== null && dynamicOrigins.has(property)) {
+      hits.add("dynamic code execution");
+      break;
+    }
+  }
+  const computedConstructorCall = new RegExp(
+    `\\[\\s*([^\\]]{1,${GLOBAL_API_KEY_MAX_LENGTH}})\\s*\\]\\s*(?:\\?\\.\\s*)?(?:\\.\\s*(?:call|apply|bind)\\s*)?\\(`,
+    "g",
+  );
+  if (
+    matchOutsideIgnored(source, computedConstructorCall).some(
+      (match) => resolveStrictStaticStringExpression(match[1]) === "constructor",
+    )
+  ) {
+    hits.add("dynamic code execution");
+  }
+  const memberConstructorCall =
+    /\.\s*constructor\b\s*(?:(?:\?\.\s*)?\(|(?:\?\.|\.)\s*(?:call|apply|bind)\s*\(|(?:\?\.\s*)?\[\s*["'`](?:call|apply|bind)["'`]\s*\]\s*\()/g;
+  if (matchOutsideIgnored(source, memberConstructorCall).length > 0) {
+    hits.add("dynamic code execution");
+  }
+  const reflectiveConstructorCall =
+    /(?<![\w$.])([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*(construct|apply)\s*\(/g;
+  const isDynamicConstructorTarget = (target: string, position: number): boolean => {
+    const spans = collectIgnoredSpans(target);
+    const constructorReference = /(?:^|[.?])constructor\b/g;
+    if (
+      matchOutsideIgnored({ ...source, text: target, ignoredSpans: spans }, constructorReference)
+        .length > 0
+    ) {
+      return true;
+    }
+    return [...scannerExpressionValues(source, target, position)].some(
+      (value) =>
+        dynamicOrigins.has(value) ||
+        value === "global:Function" ||
+        value === "global:eval",
+    );
+  };
+  for (const match of matchOutsideIgnored(source, reflectiveConstructorCall)) {
+    if (match.index === undefined) continue;
+    const values = scannerRootValues(source, match[1], match.index);
+    if (!values.has("reflect")) continue;
+    const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+    const args = opening < 0 ? null : readCallArguments(source, opening);
+    if (!args || !isDynamicConstructorTarget(args[0] ?? "", match.index)) continue;
+    hits.add("dynamic code execution");
+    break;
+  }
+
+  if (lexical.overflowSpans.length > 0) {
+    hits.add("dynamic code execution");
+  }
+}
 
 export function detectDangerousBackendCapabilities(
   content: string,
@@ -1530,53 +2828,15 @@ export function detectDangerousBackendCapabilities(
   for (const source of createScannableSources(content)) {
     addStaticModuleHits(source, hits);
     addReachableModuleRequireHits(source, hits);
+    addModuleConstructorLoaderHits(source, hits);
     addDynamicModuleHits(source, hits);
     addImportMetaRequireHits(source, hits);
     addGlobalApiHits(source, hits);
     addPropertyAccessHits(source, "Bun", DANGEROUS_BUN_PROPERTIES, hits);
     addPropertyAccessHits(source, "process", DANGEROUS_PROCESS_PROPERTIES, hits);
-    addAliasPropertyHits(source, hits);
-    addDestructuringHits(source, hits);
-    if (matchOutsideIgnored(source, /\bObject\.getOwnPropertyDescriptor\s*\(\s*process\s*,\s*["'`]env["'`]/).length > 0) {
-      hits.add("dangerous process API usage");
-    }
+    addReflectiveProcessPropertyHits(source, hits);
 
-    // Dynamic code execution — direct `eval(` / `Function(` calls and common
-    // `.constructor(...)` indirections available from function objects. The
-    // empty-body Function probe (`new Function("")`) is excluded as a known
-    // feature-detect pattern with no execution capability. The worker sandbox
-    // independently seals all dynamic-function prototype constructors.
-    const reflectConstructorMatches = matchOutsideIgnored(
-      source,
-      /\bReflect\.(?:construct|apply)\s*\(\s*[^,\n;]{0,512}(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])/,
-    ).filter((match) => {
-      if (match.index === undefined) return false;
-      for (const token of match[0].matchAll(
-        /(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])/g,
-      )) {
-        if (
-          token.index !== undefined &&
-          !isIgnoredIndex(match.index + token.index, source.ignoredSpans)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
-    const dynExecMatches = [
-      ...matchOutsideIgnored(
-        source,
-        /\beval\s*\(|\bFunction\s*\(|(?:\.constructor|\[\s*["'`]constructor["'`]\s*\])\s*(?:\?\.\s*)?(?:\.\s*(?:call|apply|bind)\s*)?\(/,
-      ),
-      ...reflectConstructorMatches,
-    ];
-    for (const match of dynExecMatches) {
-      if (match.index === undefined) continue;
-      const matchedText = match[0];
-      if (matchedText.startsWith("Function") && isEmptyFunctionProbe(source, match.index)) continue;
-      hits.add("dynamic code execution");
-      break;
-    }
+    addDynamicCodeExecutionHits(source, hits, { ignoreEmptyFunctionProbe: true });
 
     // Base64 decoding — `Buffer.from(..., "base64")`. Split from
     // dynamic-execution so it carries its own capability and can be
@@ -1611,22 +2871,199 @@ export function declaredCapabilitiesFromManifest(
   return declared;
 }
 
+const BACKEND_MODULE_EXTENSIONS = [".js", ".mjs", ".cjs", ".json", ".ts", ".tsx"] as const;
+
+function isRelativeBackendModuleSpecifier(specifier: string): boolean {
+  return /^(?:\.{1,2})(?:[\\/]|$)/.test(specifier);
+}
+
+function resolveBackendModuleDependency(
+  repo: string,
+  importer: string,
+  rawSpecifier: string,
+): string | null {
+  const specifier = rawSpecifier.trim().replace(/\\/g, "/");
+  if (!isRelativeBackendModuleSpecifier(specifier)) {
+    if (/^(?:[A-Za-z]:|\/)/.test(specifier)) {
+      throw new Error(`Backend module escapes extension repo: ${rawSpecifier}`);
+    }
+    throw new Error(
+      `External backend module "${rawSpecifier}" must be bundled into the extension`,
+    );
+  }
+  if (specifier.includes("\0") || /[?#]/.test(specifier)) {
+    throw new Error(`Unsupported local backend module specifier "${rawSpecifier}"`);
+  }
+
+  const candidate = resolve(dirname(importer), specifier);
+  const attempts = [candidate];
+  if (!extname(candidate)) {
+    for (const extension of BACKEND_MODULE_EXTENSIONS) {
+      attempts.push(`${candidate}${extension}`);
+    }
+  }
+
+  for (const attempt of attempts) {
+    const checked = resolveWithin(repo, attempt, "backend module dependency");
+    let entryStat: Stats;
+    try {
+      entryStat = lstatSync(checked);
+    } catch {
+      continue;
+    }
+    if (entryStat.isFile()) {
+      const fileExtension = extname(checked).toLowerCase();
+      if (
+        fileExtension &&
+        !BACKEND_MODULE_EXTENSIONS.some((extension) => extension === fileExtension)
+      ) {
+        throw new Error(`Unsupported local backend module "${rawSpecifier}"`);
+      }
+      return checked;
+    }
+    if (!entryStat.isDirectory()) continue;
+    for (const extension of BACKEND_MODULE_EXTENSIONS) {
+      const indexPath = resolveWithin(repo, join(checked, `index${extension}`), "backend module dependency");
+      try {
+        const indexStat = lstatSync(indexPath);
+        if (indexStat.isFile()) return indexPath;
+      } catch {
+        // Keep looking through the supported index extensions.
+      }
+    }
+  }
+  throw new Error(`Unresolved local backend module "${rawSpecifier}" imported by ${importer}`);
+}
+
+function collectBackendModuleSpecifiers(content: string): string[] {
+  const specifiers = new Set<string>();
+  for (const source of createScannableSources(content)) {
+    for (const match of matchOutsideIgnored(source, STATIC_MODULE_IMPORT_RE)) {
+      const specifier = decodeQuotedLiteral(match[1]);
+      if (specifier === null) {
+        throw new Error("Unable to decode a static backend module specifier");
+      }
+      specifiers.add(specifier);
+    }
+
+    for (const match of matchOutsideIgnored(source, BARE_MODULE_CALL_RE)) {
+      if (match.index === undefined) continue;
+      const tail = source.text.slice(match.index + match[0].length);
+      if (/^\s*\{/.test(tail)) continue;
+      const isImport = match[0].trimStart().startsWith("import");
+      if (!isImport && scannerIsLocal(source, "require", match.index)) continue;
+      const specifier = resolveStaticModuleSpecifier(match[1]);
+      if (specifier === null) {
+        throw new Error("Unable to resolve a dynamic backend module specifier");
+      }
+      specifiers.add(specifier);
+    }
+
+    const metaRequire = new RegExp(
+      `\\bimport${MODULE_COMMENT_GAP}\\.${MODULE_COMMENT_GAP}meta${MODULE_COMMENT_GAP}\\.${MODULE_COMMENT_GAP}require${MODULE_COMMENT_GAP}\\(`,
+      "g",
+    );
+    for (const match of matchOutsideIgnored(source, metaRequire)) {
+      if (match.index === undefined) continue;
+      const opening = source.text.indexOf("(", match.index + match[0].length - 1);
+      const args = opening < 0 ? null : readCallArguments(source, opening);
+      const specifier = resolveStaticModuleSpecifier(args?.[0] ?? "");
+      if (specifier === null) {
+        throw new Error("Unable to resolve a dynamic backend module specifier");
+      }
+      specifiers.add(specifier);
+    }
+
+    const callPath =
+      /(?<![\w$.])([A-Za-z_$][\w$]*(?:(?:\s*\??\.\s*[A-Za-z_$][\w$]*)|\s*\[[^\]]{0,300}\])*)\s*\(/g;
+    for (const match of matchOutsideIgnored(source, callPath)) {
+      if (match.index === undefined) continue;
+      const compactPath = (stripModuleExpressionComments(match[1]) ?? match[1]).replace(/\s+/g, "");
+      if (compactPath === "import" || compactPath === "require") continue;
+      const modeMatch = compactPath.match(
+        /(?:\.(call|apply|bind)|\[["'`](call|apply|bind)["'`]\])$/,
+      );
+      const mode = modeMatch?.[1] ?? modeMatch?.[2];
+      const basePath = mode
+        ? compactPath.replace(new RegExp(`(?:\\.${mode}|\\[["'\`]${mode}["'\`\\]])$`), "")
+        : compactPath;
+      const values = scannerExpressionValues(source, basePath, match.index);
+      const loader = [...values].some(
+        (value) =>
+          value === "module:require" ||
+          value.startsWith("module:require:") ||
+          value === "global:require" ||
+          value === "global:import",
+      );
+      if (!loader) continue;
+      const opening = match.index + match[0].lastIndexOf("(");
+      const args = readCallArguments(source, opening);
+      const specifier = resolveStaticModuleSpecifier(args?.[0] ?? "");
+      if (specifier === null) {
+        throw new Error("Unable to resolve a dynamic backend module specifier");
+      }
+      specifiers.add(specifier);
+    }
+  }
+  return [...specifiers];
+}
+
+export async function validateBackendModuleGraph(
+  identifier: string,
+  entryPath: string,
+  declared: ReadonlySet<SpindleCapability> = new Set(),
+): Promise<string> {
+  const repo = trustedRepoDir(identifier, "backend repository");
+  const canonicalEntry = resolveWithin(repo, entryPath, "entry_backend");
+  if (!(await Bun.file(canonicalEntry).exists())) {
+    throw new Error(`Backend entry not found for extension "${identifier}"`);
+  }
+
+  const pending = [canonicalEntry];
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current || visited.has(current)) continue;
+    visited.add(current);
+    let currentStat: Stats;
+    const currentExtension = extname(current).toLowerCase();
+    if (
+      currentExtension &&
+      !BACKEND_MODULE_EXTENSIONS.some((extension) => extension === currentExtension)
+    ) {
+      throw new Error(`Unsupported backend module: ${current}`);
+    }
+    try {
+      currentStat = lstatSync(current);
+    } catch {
+      throw new Error(`Backend module disappeared during validation: ${current}`);
+    }
+    if (!currentStat.isFile()) {
+      throw new Error(`Backend module is not a regular file: ${current}`);
+    }
+
+    const content = await Bun.file(current).text();
+    const blocked = detectDangerousBackendCapabilities(content, declared);
+    if (blocked.length > 0) {
+      throw new Error(
+        `Extension "${identifier}" uses blocked backend capabilities: ${blocked.join(", ")}`,
+      );
+    }
+    for (const specifier of collectBackendModuleSpecifiers(content)) {
+      const dependency = resolveBackendModuleDependency(repo, current, specifier);
+      if (dependency && !visited.has(dependency)) pending.push(dependency);
+    }
+  }
+  return canonicalEntry;
+}
+
 async function assertSafeBackendBundle(
   identifier: string,
   backendPath: string,
   declared: ReadonlySet<SpindleCapability> = new Set(),
 ): Promise<void> {
   if (!(await Bun.file(backendPath).exists())) return;
-
-  const blocked = detectDangerousBackendCapabilities(
-    await Bun.file(backendPath).text(),
-    declared,
-  );
-  if (blocked.length === 0) return;
-
-  throw new Error(
-    `Extension "${identifier}" uses blocked backend capabilities: ${blocked.join(", ")}`
-  );
+  await validateBackendModuleGraph(identifier, backendPath, declared);
 }
 
 /**
@@ -1662,6 +3099,15 @@ function repoDir(identifier: string): string {
 function storageDir(identifier: string): string {
   return join(extensionDir(identifier), "storage");
 }
+function trustedRepoDir(identifier: string, label: string): string {
+  const extensionRoot = resolveWithin(extensionsDir(), identifier, `${label} extension`);
+  return resolveWithin(extensionRoot, "repo", label);
+}
+
+function trustedStorageDir(identifier: string, label: string): string {
+  const extensionRoot = resolveWithin(extensionsDir(), identifier, `${label} extension`);
+  return resolveWithin(extensionRoot, "storage", label);
+}
 
 /**
  * Cross-platform move. On Windows, freshly-cloned directories frequently hit
@@ -1689,16 +3135,13 @@ function moveSync(from: string, to: string): void {
 // ─── Manifest parsing ────────────────────────────────────────────────────
 
 async function readManifest(identifier: string): Promise<SpindleManifest> {
-  const repo = repoDir(identifier);
-  const candidates = [
-    join(repo, "spindle.json"),
-    join(repo, "spindlefile"),
-    join(repo, "spindlefile.json"),
-  ];
+  const repo = trustedRepoDir(identifier, "manifest");
+  const candidates = ["spindle.json", "spindlefile", "spindlefile.json"] as const;
   let manifestPath: string | undefined;
-  for (const p of candidates) {
-    if (await Bun.file(p).exists()) {
-      manifestPath = p;
+  for (const candidateName of candidates) {
+    const candidatePath = resolveWithin(repo, candidateName, "manifest");
+    if (await Bun.file(candidatePath).exists()) {
+      manifestPath = candidatePath;
       break;
     }
   }
@@ -1725,13 +3168,15 @@ async function readManifest(identifier: string): Promise<SpindleManifest> {
 
 async function readManifestFromPath(
   manifestPath: string,
+  trustedRoot: string,
   options?: { allowMissingGithub?: boolean }
 ): Promise<SpindleManifest> {
-  if (!(await Bun.file(manifestPath).exists())) {
+  const checkedManifestPath = resolveWithin(trustedRoot, manifestPath, "manifest");
+  if (!(await Bun.file(checkedManifestPath).exists())) {
     throw new Error(`spindle.json not found at ${manifestPath}`);
   }
 
-  const raw = await Bun.file(manifestPath).text();
+  const raw = await Bun.file(checkedManifestPath).text();
   const manifest: SpindleManifest = JSON.parse(raw);
 
   if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
@@ -1954,24 +3399,72 @@ export async function syncManifestToDb(identifier: string): Promise<void> {
 }
 
 function resolveWithin(base: string, requestedPath: string, label: string): string {
+  if (typeof requestedPath !== "string") {
+    throw new Error(`Path must be a string for ${label}`);
+  }
   const baseAbs = resolve(base);
   const resolved = resolve(baseAbs, requestedPath);
-  const inside = resolved === baseAbs || resolved.startsWith(`${baseAbs}${sep}`);
-  if (!inside) {
-    throw new Error(`Path traversal detected in ${label}: ${requestedPath}`);
+  const insideLexically =
+    resolved === baseAbs || resolved.startsWith(`${baseAbs}${sep}`);
+
+  let baseReal: string;
+  try {
+    baseReal = realpathSync(baseAbs);
+  } catch {
+    throw new Error(`Path base does not exist for ${label}: ${base}`);
   }
-  return resolved;
+
+  let probe = resolved;
+  while (true) {
+    let exists = false;
+    try {
+      lstatSync(probe);
+      exists = true;
+    } catch (error: unknown) {
+      if (
+        !(
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+      ) {
+        throw new Error(`Unable to validate ${label}: ${requestedPath}`);
+      }
+    }
+    if (exists) {
+      let probeReal: string;
+      try {
+        probeReal = realpathSync(probe);
+      } catch {
+        throw new Error(`Unable to resolve ${label}: ${requestedPath}`);
+      }
+      const insideReal =
+        probeReal === baseReal || probeReal.startsWith(`${baseReal}${sep}`);
+      if (!insideReal) {
+        throw new Error(
+          `${insideLexically ? "Symlink escapes extension root" : "Path traversal detected"} in ${label}: ${requestedPath}`,
+        );
+      }
+      return probe === resolved ? probeReal : resolved;
+    }
+    const parent = dirname(probe);
+    if (parent === probe) {
+      throw new Error(`Path target cannot be resolved for ${label}: ${requestedPath}`);
+    }
+    probe = parent;
+  }
 }
 
-function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void {
+export function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void {
   const seeds = Array.isArray(manifest.storage_seed_files)
     ? manifest.storage_seed_files
     : [];
-  if (seeds.length === 0) return;
 
-  const repo = repoDir(identifier);
-  const storage = storageDir(identifier);
-  mkdirSync(storage, { recursive: true });
+  const repo = trustedRepoDir(identifier, "storage seed source");
+  const storagePath = storageDir(identifier);
+  mkdirSync(storagePath, { recursive: true });
+  const storage = trustedStorageDir(identifier, "storage seed destination");
 
   for (const seed of seeds) {
     if (!seed || typeof seed !== "object") continue;
@@ -2120,7 +3613,7 @@ function formatCommandFailure(
 // ─── Build ───────────────────────────────────────────────────────────────
 
 export async function buildExtension(identifier: string): Promise<void> {
-  const repo = repoDir(identifier);
+  const repo = trustedRepoDir(identifier, "extension build");
   const manifest = await readManifest(identifier);
 
   const backendEntry = manifest.entry_backend || "dist/backend.js";
@@ -2630,7 +4123,7 @@ export function getEnabledExtensionIdentifiers(): string[] {
 export async function getFrontendBundlePath(identifier: string): Promise<string | null> {
   const manifest = await readManifest(identifier);
   const entry = manifest.entry_frontend || "dist/frontend.js";
-  const repo = repoDir(identifier);
+  const repo = trustedRepoDir(identifier, "frontend entry");
   const bundlePath = resolveWithin(repo, entry, "entry_frontend");
   return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
 }
@@ -2650,11 +4143,14 @@ export async function getFrontendBundleCacheKey(identifier: string): Promise<str
 export async function getBackendEntryPath(identifier: string): Promise<string | null> {
   const manifest = await readManifest(identifier);
   const entry = manifest.entry_backend || "dist/backend.js";
-  const repo = repoDir(identifier);
+  const repo = trustedRepoDir(identifier, "backend entry");
   const entryPath = resolveWithin(repo, entry, "entry_backend");
   if (!(await Bun.file(entryPath).exists())) return null;
-  await assertSafeBackendBundle(identifier, entryPath, declaredCapabilitiesFromManifest(manifest));
-  return entryPath;
+  return validateBackendModuleGraph(
+    identifier,
+    entryPath,
+    declaredCapabilitiesFromManifest(manifest),
+  );
 }
 
 export function getStoragePath(identifier: string): string {
@@ -2704,21 +4200,43 @@ export async function importLocalExtensions(): Promise<{
     const candidateRoot = join(base, dirName);
 
     try {
-      const nestedManifestPath = join(candidateRoot, "repo", "spindle.json");
-      const nestedSpindleFilePath = join(candidateRoot, "repo", "spindlefile");
-      const nestedSpindleFileJsonPath = join(candidateRoot, "repo", "spindlefile.json");
-      const rootManifestPath = join(candidateRoot, "spindle.json");
-      const rootSpindleFilePath = join(candidateRoot, "spindlefile");
-      const rootSpindleFileJsonPath = join(candidateRoot, "spindlefile.json");
+      const trustedCandidateRoot = resolveWithin(base, dirName, "local extension");
+      const nestedRepo = resolveWithin(
+        trustedCandidateRoot,
+        "repo",
+        "local extension repo",
+      );
+      const hasNestedRepo = existsSync(nestedRepo) && statSync(nestedRepo).isDirectory();
+      const candidates = [
+        ...(hasNestedRepo
+          ? [
+              { base: nestedRepo, name: "spindle.json", nested: true },
+              { base: nestedRepo, name: "spindlefile", nested: true },
+              { base: nestedRepo, name: "spindlefile.json", nested: true },
+            ]
+          : []),
+        { base: trustedCandidateRoot, name: "spindle.json", nested: false },
+        { base: trustedCandidateRoot, name: "spindlefile", nested: false },
+        { base: trustedCandidateRoot, name: "spindlefile.json", nested: false },
+      ];
 
-      let manifestPath: string | null = null;
-      if (await Bun.file(nestedManifestPath).exists()) manifestPath = nestedManifestPath;
-      else if (await Bun.file(nestedSpindleFilePath).exists()) manifestPath = nestedSpindleFilePath;
-      else if (await Bun.file(nestedSpindleFileJsonPath).exists()) manifestPath = nestedSpindleFileJsonPath;
-      else if (await Bun.file(rootManifestPath).exists()) manifestPath = rootManifestPath;
-      else if (await Bun.file(rootSpindleFilePath).exists()) manifestPath = rootSpindleFilePath;
-      else if (await Bun.file(rootSpindleFileJsonPath).exists()) manifestPath = rootSpindleFileJsonPath;
-      else {
+      let selected: {
+        path: string;
+        trustedRoot: string;
+        nested: boolean;
+      } | null = null;
+      for (const candidate of candidates) {
+        const manifestPath = resolveWithin(candidate.base, candidate.name, "manifest");
+        if (await Bun.file(manifestPath).exists()) {
+          selected = {
+            path: manifestPath,
+            trustedRoot: candidate.base,
+            nested: candidate.nested,
+          };
+          break;
+        }
+      }
+      if (!selected) {
         skipped.push({
           path: candidateRoot,
           reason: "No spindle manifest found (spindle.json/spindlefile)",
@@ -2726,16 +4244,12 @@ export async function importLocalExtensions(): Promise<{
         continue;
       }
 
-      const manifest = await readManifestFromPath(manifestPath, {
+      const manifest = await readManifestFromPath(selected.path, selected.trustedRoot, {
         allowMissingGithub: true,
       });
 
       // If user dropped the repo directly under extensions/<folder>, normalize layout
-      if (
-        manifestPath === rootManifestPath ||
-        manifestPath === rootSpindleFilePath ||
-        manifestPath === rootSpindleFileJsonPath
-      ) {
+      if (!selected.nested) {
         const desiredRoot = extensionDir(manifest.identifier);
 
         // If folder name differs from manifest identifier, move folder first
@@ -2769,17 +4283,16 @@ export async function importLocalExtensions(): Promise<{
 
       const ext = await getExtensionByIdentifier(manifest.identifier);
       if (ext) imported.push(ext);
-    } catch (err: any) {
+    } catch (err: unknown) {
       skipped.push({
         path: candidateRoot,
-        reason: err?.message || "Unknown error",
+        reason: err instanceof Error ? err.message : "Unknown error",
       });
     }
   }
 
   return { imported, skipped };
 }
-
 // ─── Branch Management ────────────────────────────────────────────────────
 
 /** List remote branches from a GitHub URL (pre-install discovery). */

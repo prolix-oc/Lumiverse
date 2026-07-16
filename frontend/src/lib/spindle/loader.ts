@@ -211,6 +211,7 @@ type FrontendProcessWirePayload =
       action: 'stop'
       processId: string
       reason?: string
+      force?: boolean
     }
 
 type PendingStartupItem =
@@ -521,8 +522,8 @@ async function doLoadFrontendExtension(
     for (const permission of resourcePermissions) {
       if (previous.includes(permission) && !next.includes(permission)) {
         if (permission === 'characters') clearCharacterEditorSubscriptions()
-        destroyComponentsForExtensionPermission(extensionId, permission)
-        destroyPlacementsForExtensionPermission(extensionId, permission)
+        destroyComponentsForExtensionPermission(extensionId, permission, generation)
+        destroyPlacementsForExtensionPermission(extensionId, permission, generation)
         destroyUIEventBindingsForExtensionPermission(extensionId, permission)
       }
     }
@@ -985,10 +986,10 @@ async function doLoadFrontendExtension(
         requestTabLocation(tabId: string, location: TabLocation) {
           assertFrontendActive()
           const granted = cachedGrantedPermissions
-          if (!granted.includes('app_manipulation')) {
-            throw new Error('PERMISSION_DENIED:app_manipulation — requestTabLocation requires the app_manipulation permission')
+          if (!granted.includes('app_manipulation') && !granted.includes('ui_panels')) {
+            throw new Error('PERMISSION_DENIED:app_manipulation|ui_panels — requestTabLocation requires app_manipulation or ui_panels')
           }
-          createTabMobilityHandle(extensionId).requestTabLocation(tabId, location)
+          createTabMobilityHandle(extensionId, generation).requestTabLocation(tabId, location)
         },
         getBuiltInTabTitle(tabId: string): string | undefined {
           assertFrontendActive()
@@ -1542,8 +1543,8 @@ async function doLoadFrontendExtension(
       clearPresetEditorSubscriptions,
       destroyPlacements: () => {
         destroyAllUIEventBindingsForExtension(extensionId)
-        destroyAllComponentsForExtension(extensionId)
-        destroyAllPlacementsForExtension(extensionId)
+        destroyAllComponentsForExtension(extensionId, generation)
+        destroyAllPlacementsForExtension(extensionId, generation)
       },
       cleanupProcesses: () => {
         for (const process of Array.from(loaded.activeProcesses.values())) {
@@ -1656,9 +1657,9 @@ async function doLoadFrontendExtension(
         unregisterDisplayResolver(loaded.identifier)
         removeMessageWidgetsByExtension(extensionId)
         destroyAllUIEventBindingsForExtension(extensionId)
-        destroyAllComponentsForExtension(extensionId)
+        destroyAllComponentsForExtension(extensionId, generation)
         clearLiveRootsForExtension(extensionId, generation)
-        clearTabMobilityHandle(extensionId)
+        clearTabMobilityHandle(extensionId, generation)
 
         if (loadedExtensions.get(extensionId) === loaded) {
           loadedExtensions.delete(extensionId)
@@ -2008,6 +2009,22 @@ function deliverFrontendProcessEvent(loaded: LoadedExtension, payload: FrontendP
   }
 
   if (payload.action === 'stop') {
+    if (payload.force === true) {
+      if (process.terminal) return
+      process.terminal = true
+      loaded.activeProcesses.delete(process.processId)
+      runProcessCleanupOnce(process)
+      process.messageHandlers.clear()
+      process.stopHandlers.clear()
+      wsClient.send({
+        type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
+        extensionId,
+        processId: payload.processId,
+        event: 'complete',
+      })
+      return
+    }
+
     if (process.stopHandlers.size === 0) {
       process.terminal = true
       loaded.activeProcesses.delete(process.processId)
@@ -2066,70 +2083,4 @@ export async function unloadAllFrontendExtensions(): Promise<void> {
   for (const [id] of loadedExtensions) {
     await unloadFrontendExtension(id)
   }
-}
-
-// ── window.spindle global bridge ──
-// Provides a runtime API surface for extensions (e.g. Canvas) that cannot
-// import from lumiverse-spindle-types directly. Defined lazily via getter
-// so the store is fully initialised by the time any extension reads the bridge.
-//
-// This bridge is a system-level API — it does NOT enforce extension
-// permissions. Use `ctx.ui.*` from the extension context for permission-
-// gated access.
-if (typeof window !== 'undefined') {
-  Object.defineProperty(window, 'spindle', {
-    configurable: true,
-    get() {
-      const api = {
-        ui: {
-          getBuiltInTabTitle(tabId: string): string | undefined {
-            const tab = DRAWER_TABS.find((t) => t.id === tabId)
-            return tab ? (tab.tabHeaderTitle ?? tab.tabName) : undefined
-          },
-          getBuiltInTabRoot(tabId: string): HTMLElement | undefined {
-            return ensureRegistryRoot(tabId)
-          },
-          requestTabLocation(tabId: string, location: TabLocation) {
-            useStore.getState().moveTabTo(tabId, location)
-          },
-          getTabLocation(tabId: string): TabLocation {
-            return (useStore.getState().tabLocations[tabId] ?? { kind: 'main-drawer' }) as TabLocation
-          },
-          /**
-           * Get the backend message bus for a loaded extension. Used by
-           * Canvas's secondary-drawer re-executor: when an extension bundle
-           * is re-executed in the secondary drawer, its `setup(ctx)` calls
-           * `ctx.sendToBackend(...)` and `ctx.onBackendMessage(...)`. If
-           * those were bound to canvas_ext's own context, the messages
-           * would be routed to canvas_ext's worker (wrong worker) and
-           * responses from the target extension's worker would never be
-           * received. This helper returns the target extension's actual
-           * bus so the re-executed setup() can talk to the right worker.
-           *
-           * Returns null if the extension is not loaded.
-           */
-          getExtensionBackend(extensionId: string): {
-            sendToBackend: (payload: unknown) => void
-            onBackendMessage: (handler: (payload: unknown) => void) => () => void
-          } | null {
-            const loaded = loadedExtensions.get(extensionId)
-            if (!loaded) return null
-            return {
-              sendToBackend: loaded.context.sendToBackend.bind(loaded.context),
-              onBackendMessage: loaded.context.onBackendMessage.bind(loaded.context),
-            }
-          },
-        },
-        containers: {
-          registerContainer: (opts: { id: string; side: string; element: HTMLElement }) =>
-            useStore.getState().registerContainer(opts as any),
-          unregisterContainer: (id: string) =>
-            useStore.getState().unregisterContainer(id),
-        },
-      }
-      // Cache so subsequent reads don't re-invoke the getter
-      Object.defineProperty(window, 'spindle', { value: api, configurable: true })
-      return api
-    },
-  })
 }

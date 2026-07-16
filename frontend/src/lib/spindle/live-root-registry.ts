@@ -89,6 +89,27 @@ export function clearLiveRootsForExtension(extensionId: string, generation?: num
     unregisterLiveRoot(root, extensionId, generation)
   }
 }
+/**
+ * Return the currently registered roots for one extension. The returned
+ * collection is detached from the registry and frozen so callers cannot
+ * mutate registry bookkeeping or a live record through this read-only view.
+ */
+export function getLiveRootRecords(
+  extensionId: string,
+  expectedGeneration?: number,
+): readonly LiveRootRecord[] {
+  const roots = recordsByExtension.get(extensionId)
+  if (!roots) return Object.freeze([])
+  const result: LiveRootRecord[] = []
+  for (const root of roots) {
+    const record = records.get(root)
+    if (!record) continue
+    if (expectedGeneration !== undefined && record.generation !== expectedGeneration) continue
+    result.push(record)
+  }
+  return Object.freeze(result)
+}
+
 
 /**
  * Resolve the nearest registered root owned by `extensionId`. If

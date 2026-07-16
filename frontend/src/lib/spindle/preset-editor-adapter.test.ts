@@ -7,14 +7,14 @@ describe('preset editor draft adapter', () => {
   test('applies extension metadata while retaining native preset fields', () => {
     const current = createNewLoomPreset('Original', 'Native description')
     const draft = toPresetEditorDraft(current)
-    draft.metadata.agentic_preset_composer = { mode: 'multi' }
+    draft.metadata.fixture_extension = { mode: 'multi' }
     draft.blocks[0].content = 'Updated by extension'
 
     const next = applyPresetEditorDraft(current, draft)
     const raw = marshalUpdate(next)
     expect(next.description).toBe('Native description')
     expect(next.blocks[0].content).toBe('Updated by extension')
-    expect(raw.metadata?.agentic_preset_composer).toEqual({ mode: 'multi' })
+    expect(raw.metadata?.fixture_extension).toEqual({ mode: 'multi' })
   })
 
   test('accepts published drafts without promptVariables and reconciles current values', () => {

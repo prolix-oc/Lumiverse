@@ -163,6 +163,19 @@ function suggestedSealedBlockKey(block: PromptBlock, name: string) {
   return fromTitle || sanitizeSealedBlockKey(block.id).toLowerCase() || block.id.toLowerCase()
 }
 
+function reportLoomCallbackFailure(error: unknown): void {
+  console.error('[Spindle] Loom onChange callback failed', error)
+}
+
+function observeLoomCallbackResult(result: unknown): void {
+  if (result === null || (typeof result !== 'object' && typeof result !== 'function')) return
+  try {
+    void Promise.resolve(result).catch(reportLoomCallbackFailure)
+  } catch (error) {
+    reportLoomCallbackFailure(error)
+  }
+}
+
 function inferGroupAtIndex(blocks: PromptBlock[], index: number) {
   const target = blocks[index]
   if (!target || target.marker === 'category') return null
@@ -511,7 +524,7 @@ export function BlockEditor({
   availableMacros,
   refreshMacros,
   compact,
-  trustedHostFeatures = true,
+  trustedHostFeatures = false,
 }: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
@@ -877,7 +890,7 @@ export function BlockEditor({
 export interface ControlledLoomBlockEditorProps {
   blocks: PromptBlock[]
   promptVariables: PromptVariableValues
-  onChange: (blocks: PromptBlock[]) => boolean
+  onChange: (blocks: PromptBlock[]) => boolean | void | Promise<unknown>
   availableMacros: MacroGroup[]
   refreshMacros?: () => void
   readOnly?: boolean
@@ -898,7 +911,7 @@ export function ControlledLoomBlockEditor({
   refreshMacros,
   readOnly = false,
   compact = true,
-  trustedHostFeatures = true,
+  trustedHostFeatures = false,
 }: ControlledLoomBlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
@@ -926,18 +939,20 @@ export function ControlledLoomBlockEditor({
           const nextBlocks = blocks.map((block) => (
             block.id === editingBlock.id ? { ...block, ...updates } : block
           ))
-          let accepted = false
+          const callbackBlocks = structuredClone(nextBlocks)
+          let callbackResult: unknown = undefined
           try {
-            accepted = onChange(nextBlocks) === true
-          } catch {
-            accepted = false
+            callbackResult = onChange(callbackBlocks) as unknown
+          } catch (error) {
+            reportLoomCallbackFailure(error)
           }
-          if (accepted) {
-            setValidationError(null)
-            setEditingBlockId(null)
-          } else {
+          observeLoomCallbackResult(callbackResult)
+          if (callbackResult === false) {
             setValidationError(t('blockEditor.validationFailed'))
+            return
           }
+          setValidationError(null)
+          setEditingBlockId(null)
         }}
         onBack={() => {
           setValidationError(null)
@@ -2339,6 +2354,7 @@ export default function LoomBuilder({
           availableMacros={availableMacros}
           refreshMacros={refreshMacros}
           compact={compact}
+          trustedHostFeatures={true}
         />
       </>
     )

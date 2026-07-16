@@ -58,7 +58,11 @@ import { Spinner } from '@/components/shared/Spinner'
 import { CloseButton } from '@/components/shared/CloseButton'
 import Pagination from '@/components/shared/Pagination'
 import CollapsibleSection from '@/components/shared/CollapsibleSection'
-import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
+import SearchableSelect, {
+  PORTAL_OWNER_ACTIVE_ATTRIBUTE,
+  PORTAL_OWNER_ACTIVITY_EVENT,
+  type SearchableSelectOption,
+} from '@/components/shared/SearchableSelect'
 import FolderDropdown from '@/components/shared/FolderDropdown'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { ControlledLoomBlockEditor } from '@/components/panels/LoomBuilder'
@@ -78,12 +82,18 @@ import { imageGenConnectionsApi } from '@/api/image-gen-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import {
   getLiveRootRecord,
-  getLiveRootRecordExact,
+  getLiveRootRecords,
   subscribeLiveRoot,
   type LiveRootPermission,
 } from './live-root-registry'
 
 // ── Tracking & lifecycle ──────────────────────────────────────────────────
+
+interface PortalNodeState {
+  readonly hiddenAttribute: string | null
+  readonly inertAttribute: string | null
+  readonly styleAttribute: string | null
+}
 
 interface TrackedMount {
   root: Root
@@ -91,6 +101,7 @@ interface TrackedMount {
   target: HTMLElement
   portalOwnerId: string
   portalNodes: Set<HTMLElement>
+  portalNodeStates: Map<HTMLElement, PortalNodeState>
   generation: number
   requiredPermission: LiveRootPermission
   destroyed: boolean
@@ -184,36 +195,40 @@ function resolveTarget(
   const selectorTarget = typeof target === 'string'
   let resolved: Element | null
   if (selectorTarget) {
-    let matches: NodeListOf<Element>
+    const ownedMatches = new Set<Element>()
     try {
-      matches = document.querySelectorAll(target)
+      for (const element of document.querySelectorAll(target)) ownedMatches.add(element)
+      for (const record of getLiveRootRecords(extensionId, expectedGeneration)) {
+        if (record.root.matches(target)) ownedMatches.add(record.root)
+        for (const element of record.root.querySelectorAll(target)) ownedMatches.add(element)
+      }
     } catch {
       throw new Error(`components.mount*(): invalid target selector: ${target}`)
     }
-    const ownedMatches = [...matches].filter((element) =>
-      isConnectedToDocument(element)
-      && isOwnedByExtension(extensionId, element)
+    const validMatches = [...ownedMatches].filter((element) =>
+      isOwnedByExtension(extensionId, element)
       && registeredPlacementRoot(extensionId, element, expectedGeneration) !== null,
     )
-    if (ownedMatches.length !== 1) {
+    if (validMatches.length !== 1) {
       throw new Error(
-        ownedMatches.length === 0
+        validMatches.length === 0
           ? `components.mount*(): target not found: ${target}`
           : `components.mount*(): target selector is ambiguous: ${target}`,
       )
     }
-    resolved = ownedMatches[0] ?? null
+    resolved = validMatches[0] ?? null
   } else {
     resolved = target
   }
 
-  if (!(resolved instanceof HTMLElement) || !isConnectedToDocument(resolved)) {
-    throw new Error('components.mount*(): target must resolve to a connected HTMLElement')
+  if (!(resolved instanceof HTMLElement)) {
+    throw new Error('components.mount*(): target must resolve to an HTMLElement')
   }
+  const ownerRecord = getPlacementRootRecord(extensionId, resolved, expectedGeneration)
   if (!isOwnedByExtension(extensionId, resolved)) {
     throw new Error('components.mount*(): target must be inside DOM owned by the current extension')
   }
-  if (!registeredPlacementRoot(extensionId, resolved, expectedGeneration)) {
+  if (!ownerRecord) {
     throw new Error('components.mount*(): target must be inside a registered placement owned by the current extension')
   }
   return resolved
@@ -221,19 +236,72 @@ function resolveTarget(
 
 function isMountLive(extensionId: string, mount: TrackedMount): boolean {
   if (mount.destroyed || mount.generation !== currentGeneration(extensionId)) return false
-  if (!isConnectedToDocument(mount.target)) return false
-  if (!isConnectedToDocument(mount.ownerRoot) || !mount.ownerRoot.contains(mount.target)) return false
+  if (!mount.ownerRoot.contains(mount.target)) return false
   const boundary = ownershipBoundary(mount.target)
-  if (!boundary || !isConnectedToDocument(boundary)) return false
-  if (!getLiveRootRecordExact(extensionId, mount.ownerRoot, mount.generation)) return false
+  if (!boundary) return false
+  const targetRecord = getLiveRootRecord(extensionId, mount.target, mount.generation)
+  if (!targetRecord || targetRecord.root !== mount.ownerRoot) return false
   return boundary.getAttribute('data-spindle-extension-root') === extensionId
     || boundary.getAttribute('data-spindle-ext') === extensionId
+}
+
+function rememberPortalNode(mount: TrackedMount, node: HTMLElement): void {
+  if (mount.portalNodes.has(node)) return
+  mount.portalNodes.add(node)
+  mount.portalNodeStates.set(node, {
+    hiddenAttribute: node.getAttribute('hidden'),
+    inertAttribute: node.getAttribute('inert'),
+    styleAttribute: node.getAttribute('style'),
+  })
+}
+
+function restorePortalNode(node: HTMLElement, state: PortalNodeState): void {
+  if (state.hiddenAttribute === null) node.removeAttribute('hidden')
+  else node.setAttribute('hidden', state.hiddenAttribute)
+  if (state.inertAttribute === null) node.removeAttribute('inert')
+  else node.setAttribute('inert', state.inertAttribute)
+  if (state.styleAttribute === null) node.removeAttribute('style')
+  else node.setAttribute('style', state.styleAttribute)
+}
+
+function setPortalOwnerActivity(node: HTMLElement, active: boolean): void {
+  const value = active ? 'true' : 'false'
+  if (node.getAttribute(PORTAL_OWNER_ACTIVE_ATTRIBUTE) === value) return
+  node.setAttribute(PORTAL_OWNER_ACTIVE_ATTRIBUTE, value)
+  const event = node.ownerDocument.createEvent('Event')
+  event.initEvent(PORTAL_OWNER_ACTIVITY_EVENT, false, false)
+  node.dispatchEvent(event)
+}
+
+function syncPortalVisibility(mount: TrackedMount): void {
+  const ownerDetached = !isConnectedToDocument(mount.ownerRoot)
+  for (const node of mount.portalNodes) {
+    if (ownerDetached) {
+      node.setAttribute('hidden', '')
+      node.setAttribute('inert', '')
+      setPortalOwnerActivity(node, false)
+    } else {
+      const state = mount.portalNodeStates.get(node)
+      if (state) restorePortalNode(node, state)
+      setPortalOwnerActivity(node, true)
+    }
+  }
+}
+
+function prunePortalNodes(mount: TrackedMount): void {
+  for (const node of mount.portalNodes) {
+    if (node.isConnected && document.body?.contains(node)) continue
+    mount.portalNodes.delete(node)
+    mount.portalNodeStates.delete(node)
+  }
 }
 
 function indexPortalNodes(
   mounts: readonly TrackedMount[],
 ): void {
-  if (!document.body || mounts.length === 0) return
+  if (mounts.length === 0) return
+  for (const mount of mounts) prunePortalNodes(mount)
+  if (!document.body) return
   const mountsByPortalOwner = new Map<string, TrackedMount>(
     mounts.map((mount) => [mount.portalOwnerId, mount]),
   )
@@ -241,39 +309,49 @@ function indexPortalNodes(
     if (!(node instanceof HTMLElement)) continue
     const ownerId = node.getAttribute('data-spindle-component-portal')
     if (!ownerId) continue
-    mountsByPortalOwner.get(ownerId)?.portalNodes.add(node)
+    const mount = mountsByPortalOwner.get(ownerId)
+    if (!mount) continue
+    rememberPortalNode(mount, node)
   }
+  for (const mount of mounts) syncPortalVisibility(mount)
 }
 
 function collectPortalNodes(mount: TrackedMount): void {
+  prunePortalNodes(mount)
   if (!document.body) return
-  const selector = `[data-spindle-component-portal="${mount.portalOwnerId}"]`
-  for (const node of document.body.querySelectorAll(selector)) {
-    if (node instanceof HTMLElement) mount.portalNodes.add(node)
+  for (const node of document.body.querySelectorAll('[data-spindle-component-portal]')) {
+    if (!(node instanceof HTMLElement)) continue
+    if (node.getAttribute('data-spindle-component-portal') !== mount.portalOwnerId) continue
+    rememberPortalNode(mount, node)
   }
 }
 
-function observeExtensionMounts(extensionId: string): void {
-  if (lifecycleObservers.has(extensionId)) return
-  if (typeof MutationObserver === 'undefined' || !document.documentElement) return
-  const observer = new MutationObserver(() => {
-    const set = mountsByExtension.get(extensionId)
-    if (!set) return
-    const mounts = [...set]
-    const staleMounts: TrackedMount[] = []
-    for (const mount of mounts) {
-      if (!isMountLive(extensionId, mount)) {
-        staleMounts.push(mount)
-        continue
+function observeExtensionMounts(extensionId: string, ownerRoot?: Element): void {
+  let observer = lifecycleObservers.get(extensionId)
+  if (!observer) {
+    if (typeof MutationObserver === 'undefined') return
+    observer = new MutationObserver(() => {
+      const set = mountsByExtension.get(extensionId)
+      if (!set) return
+      const mounts = [...set]
+      const staleMounts: TrackedMount[] = []
+      const liveMounts: TrackedMount[] = []
+      for (const mount of mounts) {
+        if (!isMountLive(extensionId, mount)) staleMounts.push(mount)
+        else liveMounts.push(mount)
       }
+      indexPortalNodes(mounts)
+      for (const mount of liveMounts) syncPortalVisibility(mount)
+      for (const mount of staleMounts) {
+        try { mount.destroyAfterPortalIndex() } catch { /* no-op */ }
+      }
+    })
+    lifecycleObservers.set(extensionId, observer)
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { childList: true, subtree: true })
     }
-    indexPortalNodes(mounts)
-    for (const mount of staleMounts) {
-      try { mount.destroyAfterPortalIndex() } catch { /* no-op */ }
-    }
-  })
-  observer.observe(document.documentElement, { childList: true, subtree: true })
-  lifecycleObservers.set(extensionId, observer)
+  }
+  if (ownerRoot) observer.observe(ownerRoot, { childList: true, subtree: true })
 }
 
 function track(extensionId: string, mount: TrackedMount): void {
@@ -284,7 +362,9 @@ function track(extensionId: string, mount: TrackedMount): void {
     mountsByExtension.set(extensionId, set)
   }
   set.add(mount)
-  observeExtensionMounts(extensionId)
+  observeExtensionMounts(extensionId, mount.ownerRoot)
+  collectPortalNodes(mount)
+  syncPortalVisibility(mount)
 }
 
 function untrack(extensionId: string, mount: TrackedMount): void {
@@ -316,6 +396,7 @@ export function destroyComponentsForTarget(target: Element): void {
 export function destroyComponentsForExtensionPermission(
   extensionId: string,
   permission: ComponentPermission,
+  generation?: number,
 ): void {
   const set = mountsByExtension.get(extensionId)
   if (!set) return
@@ -323,6 +404,7 @@ export function destroyComponentsForExtensionPermission(
   try {
     for (const mount of [...set]) {
       if (mount.requiredPermission !== permission) continue
+      if (generation !== undefined && mount.generation !== generation) continue
       try { mount.destroy() } catch { /* no-op */ }
     }
   } finally {
@@ -330,22 +412,21 @@ export function destroyComponentsForExtensionPermission(
   }
 }
 
-export function destroyAllComponentsForExtension(extensionId: string): void {
+export function destroyAllComponentsForExtension(
+  extensionId: string,
+  generation?: number,
+): void {
   if (componentCleanupInProgress.has(extensionId)) return
   componentCleanupInProgress.add(extensionId)
-  nextExtensionGeneration(extensionId)
+  if (generation === undefined) nextExtensionGeneration(extensionId)
   try {
     const set = mountsByExtension.get(extensionId)
     if (set) {
       for (const mount of [...set]) {
+        if (generation !== undefined && mount.generation !== generation) continue
         try { mount.destroy() } catch { /* no-op */ }
       }
     }
-    if (mountsByExtension.get(extensionId) === set) {
-      mountsByExtension.delete(extensionId)
-    }
-    lifecycleObservers.get(extensionId)?.disconnect()
-    lifecycleObservers.delete(extensionId)
   } finally {
     componentCleanupInProgress.delete(extensionId)
   }
@@ -413,16 +494,17 @@ function buildHandle<TOptions, TValue>(
     tracked.destroyed = true
     unsubscribeOwner()
     if (!skipPortalScan) collectPortalNodes(tracked)
-    for (const portal of [...tracked.portalNodes]) {
-      try { portal.remove() } catch { /* no-op */ }
-    }
-    tracked.portalNodes.clear()
     try {
       mount.bridge.invalidate?.()
     } catch { /* no-op */ }
     try {
       mount.root.unmount()
     } catch { /* no-op */ }
+    for (const portal of [...tracked.portalNodes]) {
+      try { portal.remove() } catch { /* no-op */ }
+    }
+    tracked.portalNodes.clear()
+    tracked.portalNodeStates.clear()
     untrack(extensionId, tracked)
   }
   tracked = {
@@ -431,6 +513,7 @@ function buildHandle<TOptions, TValue>(
     target,
     portalOwnerId: mount.portalOwnerId,
     portalNodes: new Set(),
+    portalNodeStates: new Map(),
     generation,
     requiredPermission,
     destroyed: false,
@@ -495,6 +578,34 @@ function buildHandle<TOptions, TValue>(
 
 function cloneBridgeValue<TValue>(value: TValue): TValue {
   return Array.isArray(value) ? ([...value] as TValue) : value
+}
+function reportComponentCallbackFailure(label: string, error: unknown): void {
+  console.error(`[Spindle] ${label} onChange callback failed`, error)
+}
+
+function observeComponentCallbackResult(label: string, result: unknown): void {
+  if (result === null || (typeof result !== 'object' && typeof result !== 'function')) return
+  try {
+    void Promise.resolve(result).catch((error) => reportComponentCallbackFailure(label, error))
+  } catch (error) {
+    reportComponentCallbackFailure(label, error)
+  }
+}
+
+function notifyComponentOnChange<TValue>(
+  label: string,
+  callback: ((value: TValue) => unknown) | undefined,
+  value: TValue,
+): unknown {
+  if (!callback) return undefined
+  try {
+    const result = callback(value)
+    observeComponentCallbackResult(label, result)
+    return result
+  } catch (error) {
+    reportComponentCallbackFailure(label, error)
+    return undefined
+  }
 }
 
 // Hook that wires a bridge's update/getValue to local state.
@@ -753,7 +864,7 @@ function TextInputBridge({ initial, bridge }: { initial: SpindleTextInputOptions
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('TextInput', props.onChange, committed)
       }}
       placeholder={props.placeholder}
       autoFocus={props.autoFocus}
@@ -780,7 +891,7 @@ function TextAreaBridge({ initial, bridge }: { initial: SpindleTextAreaOptions; 
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('TextArea', props.onChange, committed)
       }}
       placeholder={props.placeholder}
       rows={props.rows}
@@ -801,7 +912,7 @@ function NumericInputBridge({ initial, bridge }: { initial: SpindleNumericInputO
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('NumericInput', props.onChange, committed)
       }}
       allowEmpty={props.allowEmpty}
       integer={props.integer}
@@ -825,7 +936,7 @@ function NumberStepperBridge({ initial, bridge }: { initial: SpindleNumberSteppe
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('NumberStepper', props.onChange, committed)
       }}
       min={props.min}
       max={props.max}
@@ -901,7 +1012,7 @@ function CheckboxBridge({ initial, bridge }: { initial: SpindleCheckboxOptions; 
       checked={checked}
       onChange={(b) => {
         const committed = commitValue(b)
-        props.onChange?.(committed)
+        notifyComponentOnChange('Checkbox', props.onChange, committed)
       }}
       label={props.label}
       hint={props.hint}
@@ -920,7 +1031,7 @@ function SwitchBridge({ initial, bridge }: { initial: SpindleSwitchOptions; brid
       checked={checked}
       onChange={(b) => {
         const committed = commitValue(b)
-        props.onChange?.(committed)
+        notifyComponentOnChange('Switch', props.onChange, committed)
       }}
       size={props.size}
       disabled={props.disabled}
@@ -938,7 +1049,7 @@ function SelectBridge({ initial, bridge }: { initial: SpindleSelectOptions; brid
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('Select', props.onChange, committed)
       }}
       options={adaptSelectOptions(props.options)}
       placeholder={props.placeholder}
@@ -950,7 +1061,8 @@ function SelectBridge({ initial, bridge }: { initial: SpindleSelectOptions; brid
       triggerIcon={renderLeading(props.triggerIcon)}
       triggerClassName={props.triggerClassName}
       ariaLabel={props.ariaLabel}
-      portal={props.portal}
+      portal={props.portal ?? true}
+      portalOwnerId={bridge.portalOwnerId}
       align={props.align}
       maxHeight={props.maxHeight}
       minWidth={props.minWidth}
@@ -972,7 +1084,7 @@ function MultiSelectBridge({ initial, bridge }: { initial: SpindleMultiSelectOpt
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('MultiSelect', props.onChange, committed)
       }}
       options={adaptSelectOptions(props.options)}
       placeholder={props.placeholder}
@@ -984,7 +1096,8 @@ function MultiSelectBridge({ initial, bridge }: { initial: SpindleMultiSelectOpt
       triggerIcon={renderLeading(props.triggerIcon)}
       triggerClassName={props.triggerClassName}
       ariaLabel={props.ariaLabel}
-      portal={props.portal}
+      portal={props.portal ?? true}
+      portalOwnerId={bridge.portalOwnerId}
       align={props.align}
       maxHeight={props.maxHeight}
       minWidth={props.minWidth}
@@ -1015,7 +1128,7 @@ function ModelComboboxBridge({ initial, bridge }: { initial: SpindleModelCombobo
       value={value}
       onChange={(v) => {
         const committed = commitValue(v)
-        props.onChange?.(committed)
+        notifyComponentOnChange('ModelCombobox', props.onChange, committed)
       }}
       models={models}
       modelLabels={modelLabels}
@@ -1043,7 +1156,7 @@ function FolderDropdownBridge({ initial, bridge }: { initial: SpindleFolderDropd
       selectedFolder={value}
       onSelect={(f) => {
         const committed = commitValue(f)
-        props.onChange?.(committed)
+        notifyComponentOnChange('FolderDropdown', props.onChange, committed)
       }}
       onCreateFolder={(name) => props.onCreateFolder?.(name)}
       placeholder={props.placeholder}
@@ -1156,7 +1269,6 @@ function LoomBlockEditorBridge({
   const propsRef = useRef(initial)
   const valueRef = useRef(initial.value)
   const aliveRef = useRef(true)
-  const revisionRef = useRef(0)
   const refreshTailRef = useRef<Promise<void>>(Promise.resolve())
   const refreshEpochRef = useRef(0)
   const refreshWaitersRef = useRef(new Set<{
@@ -1192,8 +1304,7 @@ function LoomBlockEditorBridge({
           if (!aliveRef.current || epoch !== refreshEpochRef.current) {
             throw COMPONENT_DESTROYED_ERROR
           }
-          // Preserve the current catalog when the live catalog is unavailable.
-          return
+          throw error
         }
         const apiCategories = new Set(groups.map((group) => group.category))
         setAvailableMacros([
@@ -1236,37 +1347,18 @@ function LoomBlockEditorBridge({
     }
 
     const nextProps = { ...previousProps, value: cloned }
-    const committedRevision = ++revisionRef.current
     propsRef.current = nextProps
     valueRef.current = cloned
     setProps(nextProps)
     setValueState(cloned)
 
-    const rollback = () => {
-      if (revisionRef.current !== committedRevision) return
-      propsRef.current = previousProps
-      valueRef.current = previousValue
-      setProps(previousProps)
-      setValueState(previousValue)
-    }
-
-    try {
-      const callbackResult = nextProps.onChange?.(cloneLoomValue(cloned)) as unknown
-      if (callbackResult === false) {
-        rollback()
-        return false
-      }
-    } catch {
-      rollback()
-      return false
-    }
+    notifyComponentOnChange('Loom', nextProps.onChange, cloneLoomValue(cloned))
     return true
   }
 
   useLayoutEffect(() => {
     bridge.update = (patch) => {
       const nextProps = patchLoomOptions(propsRef.current, patch)
-      revisionRef.current += 1
       propsRef.current = nextProps
       valueRef.current = nextProps.value
       setProps(nextProps)

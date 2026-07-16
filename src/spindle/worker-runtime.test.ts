@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type RuntimeMessage = {
   type?: string;
@@ -54,7 +57,7 @@ function waitForMessage(
 
 async function startRuntime(
   entrySource: string,
-  requestedCapabilities: readonly string[] = [],
+  requestedCapabilities: unknown = [],
 ): Promise<{
   worker: Worker;
   messages: RuntimeMessage[];
@@ -113,22 +116,102 @@ async function startRuntime(
   }
 }
 
+async function startChildRuntime(
+  entrySource: string,
+  requestedCapabilities: unknown = [],
+) {
+  const messages: RuntimeMessage[] = [];
+  const waiters: Waiter[] = [];
+  const entryDirectory = mkdtempSync(join(tmpdir(), "lumiverse-worker-runtime-"));
+  const entry = join(entryDirectory, "entry.mjs");
+  writeFileSync(entry, entrySource);
+  const cleanupEntry = (): void => {
+    rmSync(entryDirectory, { recursive: true, force: true });
+  };
+  let subprocess = null as ReturnType<typeof Bun.spawn> | null;
+  try {
+    subprocess = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "--eval",
+        `import(${JSON.stringify(new URL("./worker-runtime.ts", import.meta.url).href)});`,
+      ],
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+      serialization: "advanced",
+      ipc(message) {
+        const runtimeMessage = message as RuntimeMessage;
+        const waiterIndex = waiters.findIndex((waiter) => waiter.predicate(runtimeMessage));
+        if (waiterIndex !== -1) {
+          const waiter = waiters.splice(waiterIndex, 1)[0];
+          waiter.resolve(runtimeMessage);
+        } else {
+          messages.push(runtimeMessage);
+        }
+      },
+    });
+    subprocess.send({
+      type: "init",
+      manifest: {
+        identifier: "child-process-facade-test",
+        name: "Child process facade test",
+        version: "1.0.0",
+        entry_backend: entry,
+        requested_capabilities: requestedCapabilities,
+      },
+      storagePath: "/tmp/child-process-facade-test",
+    });
+    const permissionRequest = await waitForMessage(
+      messages,
+      waiters,
+      (message) => message.type === "permissions_get_granted",
+    );
+    subprocess.send({ type: "response", requestId: permissionRequest.requestId, result: [] });
+    await waitForMessage(
+      messages,
+      waiters,
+      (message) => message.type === "log" && message.message === "__worker_ready__",
+    );
+    return { subprocess, messages, waiters, cleanupEntry };
+  } catch (error) {
+    if (subprocess) {
+      try {
+        subprocess.kill();
+      } catch {
+        // The child may have exited while the startup waiter was pending.
+      }
+      await subprocess.exited;
+    }
+    for (const waiter of waiters.splice(0)) {
+      waiter.reject(error);
+    }
+    cleanupEntry();
+    throw error;
+  }
+}
+
 describe("worker sandbox dynamic-code capability", () => {
   test("keeps constructors blocked by default and for unrelated capabilities", async () => {
     for (const capabilities of [[], ["base64_decode"]]) {
-      const { worker, messages } = await startRuntime(`
+      const { worker, messages, waiters } = await startRuntime(`
         const value = new Function("return 7")();
         spindle.registerMacro({ name: "dynamic", handler: "return '" + value + "';" });
       `, capabilities);
       try {
+        const failure = await waitForMessage(
+          messages,
+          waiters,
+          (message) =>
+            message.type === "log" &&
+            message.message?.includes("Failed to load extension") === true,
+        );
+        expect(failure.message).toContain("Failed to load extension");
         expect(
           messages.some(
-            (message) =>
-              message.type === "log" &&
-              message.message?.includes("Failed to load extension") === true &&
-              message.message?.includes("Function constructor is disabled in extension context") === true,
+            (message) => message.type === "register_macro" && message.definition?.name === "dynamic",
           ),
-        ).toBe(true);
+        ).toBe(false);
       } finally {
         worker.terminate();
       }
@@ -151,7 +234,277 @@ describe("worker sandbox dynamic-code capability", () => {
       worker.terminate();
     }
   }, { timeout: 30_000 });
+  test("does not grant dynamic code or crash for malformed capability declarations", async () => {
+    for (const capabilities of [
+      "dynamic_code_execution",
+      { includes: "dynamic_code_execution" },
+    ]) {
+      const { worker, messages } = await startRuntime(`
+        const value = new Function("return 7")();
+        spindle.registerMacro({ name: "malformed-capability", handler: "return '" + value + "';" });
+      `, capabilities);
+      try {
+        expect(
+          messages.some(
+            (message) =>
+              message.type === "log" &&
+              message.message?.includes("Failed to load extension") === true,
+          ),
+        ).toBe(true);
+        expect(
+          messages.some(
+            (message) =>
+              message.type === "register_macro" &&
+              message.definition?.name === "malformed-capability",
+          ),
+        ).toBe(false);
+      } finally {
+        worker.terminate();
+      }
+    }
+  }, { timeout: 30_000 });
 });
+
+describe("worker extension entry imports", () => {
+  test("does not retry a NameTooLong error thrown after an extension side effect", async () => {
+    const { worker, messages, waiters } = await startRuntime(`
+      spindle.registerMacro({ name: "name-too-long-side-effect", handler: "return 'once';" });
+      throw new Error("NameTooLong deliberate extension failure");
+    `);
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "register_macro" &&
+          message.definition?.name === "name-too-long-side-effect",
+      );
+      expect(registration.definition?.name).toBe("name-too-long-side-effect");
+      await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "log" &&
+          message.message?.includes("NameTooLong deliberate extension failure") === true,
+      );
+      expect(
+        messages.filter(
+          (message) =>
+            message.type === "register_macro" &&
+            message.definition?.name === "name-too-long-side-effect",
+        ),
+      ).toHaveLength(0);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+
+  test("loads a long data entry once", async () => {
+    const source = [
+      `spindle.registerMacro({ name: "long-data-entry", handler: "return 'loaded';" });`,
+      `/*${"x".repeat(2_000)}*/`,
+    ].join("\n");
+    const { worker, messages, waiters } = await startRuntime(source);
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "register_macro" &&
+          message.definition?.name === "long-data-entry",
+      );
+      expect(registration.definition?.name).toBe("long-data-entry");
+      expect(
+        messages.filter(
+          (message) =>
+            message.type === "register_macro" &&
+            message.definition?.name === "long-data-entry",
+        ),
+      ).toHaveLength(0);
+      expect(
+        messages.some(
+          (message) =>
+            message.type === "log" &&
+            message.message?.startsWith("Failed to load extension") === true,
+        ),
+      ).toBe(false);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+});
+
+
+describe("worker transport lifecycle", () => {
+  test("does not start an unconsumed generation stream", async () => {
+    const { worker, messages, waiters } = await startRuntime(`
+      spindle.generate.rawStream({ messages: [] });
+    `);
+    try {
+      worker.postMessage({ type: "shutdown" });
+      await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "log" && message.message === "__worker_shutdown_ack__",
+      );
+      expect(messages.some((message) => message.type === "request_generation_stream")).toBe(false);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+
+  test("rejects every request when structured-clone transport setup throws", async () => {
+    const names = [
+      "request-transport",
+      "generation-transport",
+      "assembly-transport",
+      "stream-transport",
+    ];
+    const { worker, messages, waiters } = await startRuntime(`
+      const report = (name) => () => spindle.registerMacro({
+        name,
+        handler: "return " + JSON.stringify(name) + ";",
+      });
+      const uncloneable = () => {};
+      spindle.storage.write("bad", uncloneable).catch(report("request-transport"));
+      spindle.generate.raw({ input: uncloneable }).catch(report("generation-transport"));
+      spindle.assemble({ blocks: uncloneable, chatId: "bad" }).catch(report("assembly-transport"));
+      spindle.generate.rawStream({ input: uncloneable }).next().catch(report("stream-transport"));
+    `);
+    try {
+      for (const name of names) {
+        const registration = await waitForMessage(
+          messages,
+          waiters,
+          (message) => message.type === "register_macro" && message.definition?.name === name,
+        );
+        expect(registration.definition?.handler).toBe(`return "${name}";`);
+      }
+      expect(messages.filter((message) => message.type === "cancel_generation").length).toBeGreaterThanOrEqual(3);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+  test("cleans tracked signals after synchronous request setup throws", async () => {
+    const expectedNames = [
+      "request-sync",
+      "generation-sync-0",
+      "assembly-sync-0",
+      "stream-sync-0",
+    ];
+    const { worker, messages, waiters } = await startRuntime(`
+      const t=()=>({aborted:false,listeners:0,addEventListener(){this.listeners++},removeEventListener(){this.listeners--}}),r=(p,s)=>()=>spindle.registerMacro({name:p+"-"+s.listeners,handler:""}),f=()=>{},q=()=>spindle.registerMacro({name:"request-sync",handler:""});
+      spindle.storage.write("b",f).catch(q);
+      const g=t();spindle.generate.raw({input:f,signal:g}).catch(r("generation-sync",g));
+      const a=t();spindle.assemble({blocks:f,chatId:"b",signal:a}).catch(r("assembly-sync",a));
+      const s=t();spindle.generate.rawStream({input:f,signal:s}).next().catch(r("stream-sync",s));
+    `);
+    try {
+      for (const name of expectedNames) {
+        const registration = await waitForMessage(
+          messages,
+          waiters,
+          (message) => message.type === "register_macro" && message.definition?.name === name,
+        );
+        expect(registration.definition?.handler).toBe("");
+      }
+      expect(messages.filter((message) => message.type === "cancel_generation").length).toBe(3);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+
+  test("cleans tracked signals when abandoned streams receive done or error", async () => {
+    const { worker, messages, waiters } = await startRuntime(`
+      const tracked = () => ({
+        aborted: false,
+        listeners: 0,
+        addEventListener() { this.listeners += 1; },
+        removeEventListener() { this.listeners -= 1; },
+      });
+      const doneSignal = tracked();
+      const errorSignal = tracked();
+      spindle.generate.rawStream({ messages: [], signal: doneSignal }).next()
+        .then(() => spindle.registerMacro({ name: "stream-done-" + doneSignal.listeners, handler: "" }));
+      spindle.generate.rawStream({ messages: [], signal: errorSignal }).next()
+        .catch(() => spindle.registerMacro({ name: "stream-error-" + errorSignal.listeners, handler: "" }));
+    `);
+    try {
+      const first = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "request_generation_stream",
+      );
+      const second = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "request_generation_stream",
+      );
+      worker.postMessage({
+        type: "generation_stream_chunk",
+        requestId: first.requestId,
+        chunk: { type: "done" },
+      });
+      worker.postMessage({
+        type: "generation_stream_error",
+        requestId: second.requestId,
+        error: "terminal stream failure",
+      });
+      for (const name of ["stream-done-0", "stream-error-0"]) {
+        const registration = await waitForMessage(
+          messages,
+          waiters,
+          (message) => message.type === "register_macro" && message.definition?.name === name,
+        );
+        expect(registration.definition?.handler).toBe("");
+      }
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+
+
+  test("rejects pending requests and removes signal listeners on shutdown", async () => {
+    const names = ["shutdown-generation", "shutdown-assembly", "shutdown-stream"];
+    const { worker, messages, waiters } = await startRuntime(`
+      const signal = {
+        aborted: false,
+        listeners: 0,
+        addEventListener() { this.listeners += 1; },
+        removeEventListener() { this.listeners -= 1; },
+      };
+      const report = (name) => () => spindle.registerMacro({
+        name,
+        handler: "return " + JSON.stringify(String(signal.listeners)) + ";",
+      });
+      spindle.generate.raw({ messages: [], signal }).catch(report("shutdown-generation"));
+      spindle.assemble({ blocks: [], chatId: "pending", signal }).catch(report("shutdown-assembly"));
+      spindle.generate.rawStream({ messages: [], signal }).next().catch(report("shutdown-stream"));
+    `);
+    try {
+      await waitForMessage(messages, waiters, (message) => message.type === "request_generation");
+      await waitForMessage(messages, waiters, (message) => message.type === "assemble_prompt");
+      await waitForMessage(messages, waiters, (message) => message.type === "request_generation_stream");
+      worker.postMessage({ type: "shutdown" });
+      await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "log" && message.message === "__worker_shutdown_ack__",
+      );
+      for (const name of names) {
+        const registration = await waitForMessage(
+          messages,
+          waiters,
+          (message) => message.type === "register_macro" && message.definition?.name === name,
+        );
+        expect(registration.definition?.handler).toBe(`return "0";`);
+      }
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+});
+
 
 describe("worker macro registration races", () => {
   test("unregistering a pending alias cancels its late acknowledgement", async () => {
@@ -950,6 +1303,384 @@ describe("worker serialized macro sandbox bindings", () => {
       );
     } finally {
       worker.terminate();
+    }
+  }, { timeout: 30_000 });
+  test("keeps direct host controls unavailable for accepted serialized handlers", async () => {
+    const guardedBody = `const outcomes=[typeof postMessage,typeof close,typeof setTimeout,typeof setInterval,typeof setImmediate,typeof queueMicrotask],probe=(name,fn)=>{try{fn();outcomes.push(name+"-called")}catch{outcomes.push(name+"-blocked")}};probe("postMessage",()=>postMessage({type:"macro_raw_host_escape"}));probe("close",()=>close());probe("setTimeout",()=>setTimeout(function(){this.close()}));probe("setInterval",()=>setInterval(()=>{},1e6));probe("setImmediate",()=>setImmediate(()=>{}));probe("queueMicrotask",()=>queueMicrotask(()=>{}));probe("cache",()=>spindle.updateMacroValue("guarded","preview-poison"));return JSON.stringify({outcomes,value:ctx.args.value});`;
+    const { worker, messages, waiters } = await startRuntime(`
+      spindle.registerMacro({
+        name: "guarded",
+        handler: ${JSON.stringify(guardedBody)},
+      });
+      spindle.registerMacro({
+        name: "ordinary",
+        handler: ${JSON.stringify(`return "ordinary:" + ctx.args.value;`)},
+      });
+    `);
+    try {
+      const guardedRegistration = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "register_macro" && message.definition?.name === "guarded",
+      );
+      const ordinaryRegistration = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "register_macro" && message.definition?.name === "ordinary",
+      );
+      expect(typeof guardedRegistration.definition?.registrationId).toBe("string");
+      expect(typeof ordinaryRegistration.definition?.registrationId).toBe("string");
+
+      for (const registration of [guardedRegistration, ordinaryRegistration]) {
+        worker.postMessage({
+          type: "event",
+          event: "__macro_registration_result__",
+          payload: {
+            registrationId: registration.definition?.registrationId,
+            accepted: true,
+          },
+        });
+      }
+
+      worker.postMessage({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "guarded-preview",
+          name: "guarded",
+          context: { commit: false, args: { value: "preview-survives" } },
+        },
+      });
+      const guardedResult = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "guarded-preview",
+      );
+      expect(guardedResult.error).toBeUndefined();
+      expect(JSON.parse(guardedResult.result ?? "")).toEqual({
+        outcomes: [
+          "undefined",
+          "undefined",
+          "undefined",
+          "undefined",
+          "undefined",
+          "undefined",
+          "postMessage-blocked",
+          "close-blocked",
+          "setTimeout-blocked",
+          "setInterval-blocked",
+          "setImmediate-blocked",
+          "queueMicrotask-blocked",
+          "cache-blocked",
+        ],
+        value: "preview-survives",
+      });
+
+      worker.postMessage({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "ordinary-result",
+          name: "ordinary",
+          context: { args: { value: "ctx-survives" } },
+        },
+      });
+      const ordinaryResult = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "ordinary-result",
+      );
+      expect(ordinaryResult.error).toBeUndefined();
+      expect(ordinaryResult.result).toBe("ordinary:ctx-survives");
+
+      expect(
+        messages.filter(
+          (message) =>
+            message.type === "macro_raw_host_escape" ||
+            message.type === "update_macro_value",
+        ),
+      ).toEqual([]);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+  test("isolates recovered worker controls while captured bridge transport stays responsive", async () => {
+    const expectedBridgeResult =
+      "onmessage:blocked|onmessageerror:blocked|onerror:blocked|listener:blocked|removeListener:blocked|postMessage:blocked|managed-process:blocked|dispatchEvent:blocked|close:blocked";
+    const expectedBridgeState = { setup: expectedBridgeResult, listener: false };
+    const { worker, messages, waiters } = await startRuntime(
+      `
+        const g=new Function("return globalThis")(),l=()=>{g.__forged_listener_called=true},o=[],p=(n,f)=>{try{f();o.push(n+":called")}catch{o.push(n+":blocked")}};p("onmessage",()=>g.onmessage=l);p("onmessageerror",()=>g.onmessageerror=l);p("onerror",()=>g.onerror=l);p("listener",()=>g.addEventListener("message",l));p("removeListener",()=>g.removeEventListener("message",l));p("postMessage",()=>g.postMessage({type:"register_macro"}));p("managed-process",()=>g.postMessage({type:"backend_process_spawn"}));p("dispatchEvent",()=>g.dispatchEvent(new Event("message")));p("close",()=>g.close());g.__forged_setup=o.join("|");spindle.registerMacro({name:"bridge-alive",handler:()=>JSON.stringify({setup:g.__forged_setup,listener:g.__forged_listener_called===true})});
+      `,
+      ["dynamic_code_execution"],
+    );
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.type === "register_macro" && message.definition?.name === "bridge-alive",
+      );
+      expect(registration.definition?.handler).toBe("");
+
+      worker.postMessage({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: { registrationId: registration.definition?.registrationId, accepted: true },
+      });
+      worker.postMessage({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "bridge-alive-result",
+          name: "bridge-alive",
+          context: {},
+        },
+      });
+      const result = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "bridge-alive-result",
+      );
+      expect(result.error).toBeUndefined();
+      expect(JSON.parse(result.result ?? "")).toEqual(expectedBridgeState);
+      worker.postMessage({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "bridge-alive-barrier",
+          name: "bridge-alive",
+          context: {},
+        },
+      });
+      const barrier = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "bridge-alive-barrier",
+      );
+      expect(barrier.error).toBeUndefined();
+      expect(JSON.parse(barrier.result ?? "")).toEqual(expectedBridgeState);
+      await Promise.resolve();
+
+      expect(
+        messages.some((message) => message.type === "register_macro"),
+      ).toBe(false);
+      expect(messages.some((message) => message.type === "backend_process_spawn")).toBe(false);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+  test("keeps ordinary EventTarget and AbortSignal usable while global controls reject", async () => {
+    const expected = {
+      ordinaryHits: 1,
+      signalHits: 1,
+      outcomes: [
+        "direct-add:blocked",
+        "direct-remove:blocked",
+        "direct-dispatch:blocked",
+        "prototype-add:blocked",
+        "prototype-remove:blocked",
+        "prototype-dispatch:blocked",
+      ],
+    };
+    const { worker, messages, waiters } = await startRuntime(`
+      const g=globalThis,o=new EventTarget(),c=new AbortController();let a=0,b=0,x=()=>a++,y=()=>b++;o.addEventListener("o",x);c.signal.addEventListener("abort",y);o.dispatchEvent(new Event("o"));o.removeEventListener("o",x);o.dispatchEvent(new Event("o"));c.abort();c.signal.removeEventListener("abort",y);const z=[],p=(n,f)=>{try{f();z.push(n+":called")}catch{z.push(n+":blocked")}},t=EventTarget.prototype;p("direct-add",()=>g.addEventListener("message",()=>{}));p("direct-remove",()=>g.removeEventListener("message",()=>{}));p("direct-dispatch",()=>g.dispatchEvent(new Event("message")));p("prototype-add",()=>t.addEventListener.call(g,"message",()=>{}));p("prototype-remove",()=>t.removeEventListener.call(g,"message",()=>{}));p("prototype-dispatch",()=>t.dispatchEvent.call(g,new Event("message")));spindle.registerMacro({name:"event-target-receiver",handler:()=>JSON.stringify({ordinaryHits:a,signalHits:b,outcomes:z})});
+    `);
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "register_macro" &&
+          message.definition?.name === "event-target-receiver",
+      );
+      expect(registration.definition?.handler).toBe("");
+      worker.postMessage({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: { registrationId: registration.definition?.registrationId, accepted: true },
+      });
+      worker.postMessage({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: { requestId: "event-target-receiver-result", name: "event-target-receiver", context: {} },
+      });
+      const result = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "event-target-receiver-result",
+      );
+      expect(result.error).toBeUndefined();
+      expect(JSON.parse(result.result ?? "")).toEqual(expected);
+    } finally {
+      worker.terminate();
+    }
+  }, { timeout: 30_000 });
+});
+
+describe("child process runtime transport", () => {
+  test("blocks raw process IPC controls while preserving the host bridge", async () => {
+    const expectedControls = [
+      "send:blocked",
+      "on:blocked",
+      "addListener:blocked",
+      "once:blocked",
+      "prependListener:blocked",
+      "prependOnceListener:blocked",
+      "removeListener:blocked",
+      "off:blocked",
+      "removeAllListeners:blocked",
+      "emit:blocked",
+      "disconnect:blocked",
+      "channel:blocked",
+    ];
+    const { subprocess, messages, waiters, cleanupEntry } = await startChildRuntime(`
+      const outcomes = [];
+      const probe = (name, action) => {
+        try {
+          action();
+          outcomes.push(name + ":called");
+        } catch {
+          outcomes.push(name + ":blocked");
+        }
+      };
+      const listener = () => {};
+      probe("send", () => process.send({ type: "raw_process_escape" }));
+      probe("on", () => process.on("message", listener));
+      probe("addListener", () => process.addListener("message", listener));
+      probe("once", () => process.once("message", listener));
+      probe("prependListener", () => process.prependListener("message", listener));
+      probe("prependOnceListener", () => process.prependOnceListener("message", listener));
+      probe("removeListener", () => process.removeListener("message", listener));
+      probe("off", () => process.off("message", listener));
+      probe("removeAllListeners", () => process.removeAllListeners("message"));
+      probe("emit", () => process.emit("message", { type: "raw_process_escape" }));
+      probe("disconnect", () => process.disconnect());
+      probe("channel", () => {
+        const channel = process.channel;
+        if (!channel || typeof channel.ref !== "function") throw new Error("channel unavailable");
+        channel.ref();
+      });
+      spindle.registerMacro({
+        name: "child-process-facade",
+        handler: "return " + JSON.stringify(JSON.stringify(outcomes)) + ";",
+      });
+    `);
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "register_macro" &&
+          message.definition?.name === "child-process-facade",
+      );
+      expect(typeof registration.definition?.registrationId).toBe("string");
+      expect(messages.some((message) => message.type === "raw_process_escape")).toBe(false);
+
+      subprocess.send({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: {
+          registrationId: registration.definition?.registrationId,
+          accepted: true,
+        },
+      });
+      subprocess.send({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "child-process-facade-result",
+          name: "child-process-facade",
+          context: {},
+        },
+      });
+      const result = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "child-process-facade-result",
+      );
+      expect(result.error).toBeUndefined();
+      expect(JSON.parse(result.result ?? "")).toEqual(expectedControls);
+      expect(messages.some((message) => message.type === "raw_process_escape")).toBe(false);
+    } finally {
+      for (const waiter of waiters.splice(0)) {
+        waiter.reject(new Error("Child runtime test cleanup"));
+      }
+      subprocess.kill();
+      await subprocess.exited;
+      cleanupEntry();
+    }
+  }, { timeout: 30_000 });
+  test("blocks WorkerGlobalScope controls in a hybrid process transport", async () => {
+    const expectedControls = [
+      "postMessage:blocked",
+      "close:blocked",
+      "addEventListener:blocked",
+      "removeEventListener:blocked",
+      "dispatchEvent:blocked",
+    ];
+    const { subprocess, messages, waiters, cleanupEntry } = await startChildRuntime(`
+      const workerGlobal = globalThis.self;
+      const outcomes = [];
+      const probe = (name, action) => {
+        try {
+          action();
+          outcomes.push(name + ":called");
+        } catch {
+          outcomes.push(name + ":blocked");
+        }
+      };
+      probe("postMessage", () => workerGlobal.postMessage({ type: "raw_worker_escape" }));
+      probe("close", () => workerGlobal.close());
+      probe("addEventListener", () => workerGlobal.addEventListener("message", () => {}));
+      probe("removeEventListener", () => workerGlobal.removeEventListener("message", () => {}));
+      probe("dispatchEvent", () => workerGlobal.dispatchEvent(new Event("message")));
+      spindle.registerMacro({
+        name: "hybrid-worker-controls",
+        handler: "return " + JSON.stringify(JSON.stringify(outcomes)) + ";",
+      });
+    `);
+    try {
+      const registration = await waitForMessage(
+        messages,
+        waiters,
+        (message) =>
+          message.type === "register_macro" &&
+          message.definition?.name === "hybrid-worker-controls",
+      );
+      expect(typeof registration.definition?.registrationId).toBe("string");
+      expect(messages.some((message) => message.type === "raw_worker_escape")).toBe(false);
+
+      subprocess.send({
+        type: "event",
+        event: "__macro_registration_result__",
+        payload: {
+          registrationId: registration.definition?.registrationId,
+          accepted: true,
+        },
+      });
+      subprocess.send({
+        type: "event",
+        event: "__macro_invoke__",
+        payload: {
+          requestId: "hybrid-worker-controls-result",
+          name: "hybrid-worker-controls",
+          context: {},
+        },
+      });
+      const result = await waitForMessage(
+        messages,
+        waiters,
+        (message) => message.requestId === "hybrid-worker-controls-result",
+      );
+      expect(result.error).toBeUndefined();
+      expect(JSON.parse(result.result ?? "")).toEqual(expectedControls);
+    } finally {
+      for (const waiter of waiters.splice(0)) {
+        waiter.reject(new Error("Child runtime test cleanup"));
+      }
+      subprocess.kill();
+      await subprocess.exited;
+      cleanupEntry();
     }
   }, { timeout: 30_000 });
 });

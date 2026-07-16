@@ -242,4 +242,66 @@ describe("MacroRegistry ownership", () => {
     expect(JSON.stringify(catalog)).not.toContain("builtIn");
     expect(JSON.stringify(catalog)).not.toContain("generation");
   });
+  test("rolls back a failed generation to the incumbent without accepting forged tokens", () => {
+    const registry = new MacroRegistry();
+    const incumbent: MacroOwner = { extensionId: "weather", generation: "incumbent" };
+    const replacement: MacroOwner = { extensionId: "weather", generation: "replacement" };
+    const forgedPreviousOwner: MacroOwner = { extensionId: "other-extension", generation: "forged" };
+    registry.activateExtensionGeneration(incumbent);
+    expect(registry.registerExtensionMacro(definition("incumbentMacro", "weather", "incumbent"), incumbent)).toBe(true);
+    expect(registry.isActiveOwner(forgedPreviousOwner)).toBe(false);
+    expect(registry.getMacro("incumbentMacro")?.handler({} as never)).toBe("incumbent");
+
+    const activation = registry.beginExtensionGeneration(replacement);
+    expect(activation).not.toBeNull();
+    expect(registry.isActiveOwner(replacement)).toBe(true);
+    expect(registry.isActiveOwner(incumbent)).toBe(false);
+
+    const forged = {
+      owner: replacement,
+      previousOwner: forgedPreviousOwner,
+    };
+    expect(registry.rollbackExtensionGeneration(forged)).toBe(false);
+    expect(registry.isActiveOwner(forgedPreviousOwner)).toBe(false);
+    expect(registry.isActiveOwner(replacement)).toBe(true);
+    expect(registry.isActiveOwner(incumbent)).toBe(false);
+    expect(registry.getMacro("incumbentMacro")?.handler({} as never)).toBe("incumbent");
+    const forgedSameExtension = {
+      owner: replacement,
+      previousOwner: { extensionId: "weather", generation: "incumbent" },
+    };
+    expect(registry.rollbackExtensionGeneration(forgedSameExtension)).toBe(false);
+    expect(registry.isActiveOwner(replacement)).toBe(true);
+    expect(registry.isActiveOwner(incumbent)).toBe(false);
+    expect(registry.getMacro("incumbentMacro")?.handler({} as never)).toBe("incumbent");
+    expect(registry.rollbackExtensionGeneration({ owner: {}, previousOwner: null })).toBe(false);
+    expect(registry.isActiveOwner(replacement)).toBe(true);
+
+    if (!activation) throw new Error("generation activation was unexpectedly null");
+    expect(registry.rollbackExtensionGeneration(activation)).toBe(true);
+    expect(registry.isActiveOwner(incumbent)).toBe(true);
+    expect(registry.isActiveOwner(replacement)).toBe(false);
+    expect(registry.registerExtensionMacro(definition("restoredMacro", "weather", "restored"), incumbent)).toBe(true);
+    expect(registry.getMacro("restoredMacro")?.handler({} as never)).toBe("restored");
+  });
+
+  test("does not let a stale rollback overwrite a newer concurrent generation", () => {
+    const registry = new MacroRegistry();
+    const incumbent: MacroOwner = { extensionId: "weather", generation: "incumbent" };
+    const replacement: MacroOwner = { extensionId: "weather", generation: "replacement" };
+    const concurrent: MacroOwner = { extensionId: "weather", generation: "concurrent" };
+    registry.activateExtensionGeneration(incumbent);
+    const activation = registry.beginExtensionGeneration(replacement);
+    if (!activation) throw new Error("replacement activation was unexpectedly null");
+    expect(registry.beginExtensionGeneration(concurrent)).not.toBeNull();
+    expect(registry.registerExtensionMacro(definition("concurrentMacro", "weather", "concurrent"), concurrent)).toBe(true);
+    expect(registry.getMacro("concurrentMacro")?.handler({} as never)).toBe("concurrent");
+    expect(registry.rollbackExtensionGeneration(activation)).toBe(false);
+    expect(registry.isActiveOwner(concurrent)).toBe(true);
+    expect(registry.isActiveOwner(replacement)).toBe(false);
+    expect(registry.isActiveOwner(incumbent)).toBe(false);
+    expect(registry.isOwnedMacro("concurrentMacro", concurrent)).toBe(true);
+    expect(registry.isOwnedMacro("concurrentMacro", replacement)).toBe(false);
+    expect(registry.getMacro("concurrentMacro")?.handler({} as never)).toBe("concurrent");
+  });
 });

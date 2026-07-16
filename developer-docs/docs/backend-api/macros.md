@@ -51,7 +51,7 @@ spindle.unregisterMacro('weather')
 
 ## Pull Model (legacy)
 
-If `updateMacroValue()` has never been called for a macro, the host falls back to invoking the handler via RPC at generation time. This is the original behavior and still works, but adds latency to prompt assembly (up to the 5-second timeout per macro). The public `handler` is an async JavaScript **function body** serialized as a string; the worker compiles it in strict mode with one `ctx` parameter. It is not an expression or a function literal, and it cannot close over variables from the extension module. The serialized body is limited to 65,536 UTF-8 bytes. Handler source receives only `ctx`; ambient module, network, and runtime globals such as `require`, `process`, `Bun`, and `fetch` are unavailable. Fetch or compute external data in extension code and push it with `updateMacroValue()`. Before registration becomes visible, the host applies the same capability scan used for installed backend source, including declared `dynamic_code_execution` and `base64_decode` capabilities and hard-blocked runtime modules.
+If `updateMacroValue()` has never been called for a macro, the host falls back to invoking the handler via RPC at generation time. This is the original behavior and still works, but adds latency to prompt assembly (up to the 5-second timeout per macro). The public `handler` is an async JavaScript function body serialized as a string. The worker compiles it in strict mode with one `ctx` parameter. It is not an expression or function literal, cannot close over variables from the extension module, and is limited to 65,536 UTF-8 bytes. The handler source receives only `ctx`; direct lexical names for module, network, and runtime access (`require`, `module`, `process`, `Bun`, `fetch`, and related globals), worker transport/events (`postMessage`, `onmessage`, `addEventListener`, and related controls), and timer scheduling (`setTimeout`, `setInterval`, `setImmediate`, `queueMicrotask`, and their clear operations) are masked. This is cooperative containment in the same extension worker, not a separate security realm or OS-level isolation. `dynamic_code_execution` permits guarded `eval`/`Function` behavior for string-body execution; it does not make the handler an isolation boundary. Fetch or compute external data in extension code and push it with `updateMacroValue()`. Before a string-body registration becomes visible, the host applies the same capability scan used for installed backend source, including declared `dynamic_code_execution` and `base64_decode` capabilities and hard-blocked runtime modules.
 
 ```ts
 spindle.registerMacro({
@@ -88,7 +88,7 @@ The `returns` and `aliases` rows are host compatibility-envelope fields accepted
 | Description | 4096 B |
 | Host compatibility-envelope: `returns` metadata | 1024 B |
 | Host compatibility-envelope: `aliases` | 32 aliases; 128 B each |
-| Arguments | 64 args; each name 128 B and description 1024 B |
+| Arguments | 32 args; each name 128 B and description 1024 B |
 | Serialized handler body | 65536 B |
 | Pushed cached value / pull result | 262144 B each |
 
@@ -103,7 +103,7 @@ Oversize registration payloads and `updateMacroValue()` updates are rejected ato
 | `description` | `string` | Shown in the macro reference panel |
 | `returnType` | `"string" \| "integer" \| "number" \| "boolean"` | Optional. Default: `"string"` |
 | `args` | `Array<{ name, description?, required? }>` | Optional argument definitions |
-| `handler` | `string` | Serialized async JavaScript function body with one `ctx` parameter (maximum 65,536 UTF-8 bytes). Use `return ...` for pull-model macros, or an empty/whitespace-only string as the push-model/no-handler sentinel. The host applies the extension capability scan before registration, and the body executes inside the extension worker. |
+| `handler` | `string` | Pull handler source: an async JavaScript function body (maximum 65,536 UTF-8 bytes) compiled in strict mode with one `ctx` parameter. Use `return ...` for pull-model macros, or an empty/whitespace-only string as the push-model/no-handler sentinel. The host applies capability scanning and direct lexical masks before execution. |
 | `volatile` | `boolean` | Optional. Default: `false`. Set `true` when output is nondeterministic or stateful; resolutions that include the macro bypass the display-regex cache. |
 
 !!! note "Reading variables inside a handler"
@@ -130,7 +130,7 @@ Oversize registration payloads and `updateMacroValue()` updates are rejected ato
 
 ## Resolving Macros Programmatically
 
-Resolve `{{macro}}` placeholders in arbitrary text using the full Lumiverse macro engine. Useful for extensions that build their own prompts and want to support the same macro syntax users are familiar with.
+Resolve `{{macro}}` placeholders in caller-provided text using the full Lumiverse macro engine. Useful for extensions that build their own prompts and want to support the same macro syntax users are familiar with.
 
 ### `spindle.macros.resolve(template, options?)`
 

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { createElement, type ComponentType } from 'react'
+import { createStore } from 'zustand/vanilla'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import type {
@@ -11,7 +12,9 @@ import type {
   PresetEditorTabState,
   PresetEditorToolbarItemState,
 } from '@/store/slices/spindle-placement'
-import { clearLiveRootsForExtension, registerLiveRoot } from '@/lib/spindle/live-root-registry'
+import { clearLiveRootsForExtension, registerLiveRoot, type LiveRootPermission } from '@/lib/spindle/live-root-registry'
+import { createSpindlePlacementSlice } from '../../store/slices/spindle-placement'
+import type { SpindlePlacementSlice } from '@/types/store'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -95,6 +98,7 @@ type Consumer = {
   Component: ComponentType<any>
   props: Record<string, unknown>
   root: HTMLElement
+  permission: LiveRootPermission
 }
 
 const extensionId = 'deferred-placement-extension'
@@ -129,6 +133,7 @@ function consumers(prefix: string): Consumer[] {
         mount: { extensionId, root: appRoot, id: `${prefix}-app-mount`, position: 'end', visible: true } satisfies Partial<AppMountState>,
       },
       root: appRoot,
+      permission: 'app_manipulation',
     },
     {
       name: 'character tab',
@@ -137,6 +142,7 @@ function consumers(prefix: string): Consumer[] {
         tab: { extensionId, root: characterRoot, id: `${prefix}-character-tab`, title: 'Character' } satisfies Partial<CharacterEditorTabState>,
       },
       root: characterRoot,
+      permission: 'characters',
     },
     {
       name: 'dock panel',
@@ -156,6 +162,7 @@ function consumers(prefix: string): Consumer[] {
         } satisfies Partial<DockPanelState>,
       },
       root: dockRoot,
+      permission: 'ui_panels',
     },
     {
       name: 'float widget',
@@ -178,6 +185,7 @@ function consumers(prefix: string): Consumer[] {
         } satisfies Partial<FloatWidgetState>,
       },
       root: floatRoot,
+      permission: 'ui_panels',
     },
     {
       name: 'preset tab',
@@ -186,6 +194,7 @@ function consumers(prefix: string): Consumer[] {
         tab: { extensionId, root: presetTabRoot, id: `${prefix}-preset-tab`, title: 'Preset' } satisfies Partial<PresetEditorTabState>,
       },
       root: presetTabRoot,
+      permission: 'presets',
     },
     {
       name: 'preset toolbar',
@@ -194,6 +203,7 @@ function consumers(prefix: string): Consumer[] {
         item: { extensionId, root: toolbarRoot, id: `${prefix}-toolbar`, ariaLabel: 'Toolbar', visible: true } satisfies Partial<PresetEditorToolbarItemState>,
       },
       root: toolbarRoot,
+      permission: 'presets',
     },
   ]
 }
@@ -238,7 +248,7 @@ afterAll(async () => {
 describe('deferred placement paint ownership', () => {
   test('attaches every registered detached root exactly once after its queued paint', () => {
     const entries = consumers('live')
-    for (const entry of entries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, null, generation))
+    for (const entry of entries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, entry.permission, generation))
 
     renderConsumers(entries)
     runQueuedPaint()
@@ -250,7 +260,7 @@ describe('deferred placement paint ownership', () => {
 
   test('does not reattach any root unregistered before its queued paint', () => {
     const entries = consumers('stale')
-    for (const entry of entries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, null, generation))
+    for (const entry of entries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, entry.permission, generation))
 
     renderConsumers(entries)
     for (const unregister of unregisterRoots.splice(0)) unregister()
@@ -266,7 +276,7 @@ describe('deferred placement paint ownership', () => {
     const liveEntries = consumers('mixed-live')
     const staleEntries = consumers('mixed-stale')
     const allEntries = [...liveEntries, ...staleEntries]
-    for (const entry of liveEntries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, null, generation))
+    for (const entry of liveEntries) unregisterRoots.push(registerLiveRoot(extensionId, entry.root, entry.permission, generation))
 
     const attachCounts = new Map<HTMLElement, number>()
     const originalReplaceChildren = Element.prototype.replaceChildren
@@ -290,5 +300,78 @@ describe('deferred placement paint ownership', () => {
     } finally {
       Element.prototype.replaceChildren = originalReplaceChildren
     }
+  })
+})
+
+describe('drawer tab mobility cleanup', () => {
+  test('clears a removed tab location and pending reset before re-registration', () => {
+    const store = createStore<SpindlePlacementSlice>(createSpindlePlacementSlice)
+    const extensionId = 'removed-drawer-extension'
+    const tabId = 'recycled-drawer-tab'
+
+    store.getState().registerDrawerTab({
+      id: tabId,
+      extensionId,
+      title: 'Removed',
+      badge: null,
+      root: document.createElement('div'),
+    })
+    store.getState().moveTabTo(tabId, { kind: 'container', containerId: 'removed-container' })
+    expect(store.getState().tabLocations[tabId]).toEqual({
+      kind: 'container',
+      containerId: 'removed-container',
+    })
+    expect(store.getState().pendingActiveTabReset).toBe(tabId)
+
+    store.getState().removeAllByExtension(extensionId)
+
+    expect(store.getState().drawerTabs).toEqual([])
+    expect(store.getState().tabLocations).toEqual({})
+    expect(store.getState().pendingActiveTabReset).toBeNull()
+
+    store.getState().registerDrawerTab({
+      id: tabId,
+      extensionId,
+      title: 'Re-registered',
+      badge: null,
+      root: document.createElement('div'),
+    })
+    expect(store.getState().tabLocations[tabId]).toBeUndefined()
+    expect(store.getState().pendingActiveTabReset).toBeNull()
+  })
+
+  test('preserves another extension location and pending reset during cleanup', () => {
+    const store = createStore<SpindlePlacementSlice>(createSpindlePlacementSlice)
+    const removedExtensionId = 'removed-drawer-extension'
+    const survivingExtensionId = 'surviving-drawer-extension'
+    const removedTabId = 'removed-drawer-tab'
+    const survivingTabId = 'surviving-drawer-tab'
+
+    store.getState().registerDrawerTab({
+      id: removedTabId,
+      extensionId: removedExtensionId,
+      title: 'Removed',
+      badge: null,
+      root: document.createElement('div'),
+    })
+    store.getState().registerDrawerTab({
+      id: survivingTabId,
+      extensionId: survivingExtensionId,
+      title: 'Surviving',
+      badge: null,
+      root: document.createElement('div'),
+    })
+
+    store.getState().moveTabTo(removedTabId, { kind: 'container', containerId: 'removed-container' })
+    store.getState().moveTabTo(survivingTabId, { kind: 'container', containerId: 'surviving-container' })
+    expect(store.getState().pendingActiveTabReset).toBe(survivingTabId)
+
+    store.getState().removeAllByExtension(removedExtensionId)
+
+    expect(store.getState().drawerTabs.map((tab) => tab.id)).toEqual([survivingTabId])
+    expect(store.getState().tabLocations).toEqual({
+      [survivingTabId]: { kind: 'container', containerId: 'surviving-container' },
+    })
+    expect(store.getState().pendingActiveTabReset).toBe(survivingTabId)
   })
 })

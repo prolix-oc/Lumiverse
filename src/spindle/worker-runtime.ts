@@ -94,10 +94,72 @@ import {
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
 import type { LumiaDlcCatalog } from "../types/pack";
 
-const nativeProcessExit = process.exit.bind(process);
+const nativeProcess = process;
+const nativeProcessExit = nativeProcess.exit.bind(nativeProcess);
+const nativeObjectDefineProperty = Object.defineProperty;
+const nativeObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+const nativeObjectIsExtensible = Object.isExtensible;
+const nativeObjectGetPrototypeOf = Object.getPrototypeOf;
+type WorkerPostMessage = (message: unknown) => void;
+type WorkerAddEventListener = (type: string, listener: (event: Event) => void) => void;
+type WorkerEventHandler = (event: Event) => unknown;
+type ProcessSend = (message: unknown) => void;
+type ProcessOn = (event: string, listener: (message: unknown) => void) => unknown;
+
+function captureNativeWorkerMethod(target: object | null, key: PropertyKey): Function | null {
+  let current = target;
+  while (current) {
+    const descriptor = nativeObjectGetOwnPropertyDescriptor(current, key);
+    if (descriptor) {
+      if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+        return null;
+      }
+      return descriptor.value;
+    }
+    current = nativeObjectGetPrototypeOf(current);
+  }
+  return null;
+}
+
+const nativeWorkerGlobal =
+  typeof self === "undefined" ? null : self;
+const nativeWorkerPostMessage: WorkerPostMessage | null =
+  captureNativeWorkerMethod(nativeWorkerGlobal, "postMessage")?.bind(nativeWorkerGlobal) as
+    | WorkerPostMessage
+    | null;
+const nativeWorkerAddEventListener: WorkerAddEventListener | null =
+  captureNativeWorkerMethod(nativeWorkerGlobal, "addEventListener")?.bind(nativeWorkerGlobal) as
+    | WorkerAddEventListener
+    | null;
+const nativeProcessSend: ProcessSend | null =
+  captureNativeWorkerMethod(nativeProcess, "send")?.bind(nativeProcess) as
+    | ProcessSend
+    | null;
+const nativeProcessOn: ProcessOn | null =
+  captureNativeWorkerMethod(nativeProcess, "on")?.bind(nativeProcess) as
+    | ProcessOn
+    | null;
+const nativeReflectApply = Reflect.apply;
+const nativeEventTargetPrototype =
+  typeof EventTarget === "function" ? (EventTarget.prototype as unknown as object) : null;
+const nativeEventTargetAddEventListener = captureNativeWorkerMethod(
+  nativeEventTargetPrototype,
+  "addEventListener",
+);
+const nativeEventTargetRemoveEventListener = captureNativeWorkerMethod(
+  nativeEventTargetPrototype,
+  "removeEventListener",
+);
+const nativeEventTargetDispatchEvent = captureNativeWorkerMethod(
+  nativeEventTargetPrototype,
+  "dispatchEvent",
+);
 
 type TokenModelSource = "main" | "sidecar" | "explicit";
 
@@ -775,16 +837,21 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
 
 let manifest: SpindleManifest;
 let storagePath: string;
+let runtimeShuttingDown = false;
 
 const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) => void>>();
-const pendingResponses = new Map<
-  string,
-  { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
->();
-const streamingGenerations = new Map<
-  string,
-  { push: (chunk: StreamChunkDTO) => void; fail: (reason: unknown) => void }
->();
+type PendingResponse = {
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  cleanup?: () => void;
+};
+type StreamingGeneration = {
+  push: (chunk: StreamChunkDTO) => void;
+  fail: (reason: unknown) => void;
+  cleanup: () => void;
+};
+const pendingResponses = new Map<string, PendingResponse>();
+const streamingGenerations = new Map<string, StreamingGeneration>();
 let interceptHandler:
   | ((
       messages: LlmMessageDTO[],
@@ -844,17 +911,51 @@ const BLOCKED_MACRO_PARAMETER_NAMES = Object.freeze([
   "Worker",
   "SharedWorker",
   "BroadcastChannel",
+  // Keep worker transport controls out of serialized macro lexical scope.
+  // globalThis/self/global are shadowed above, but these aliases are direct
+  // WorkerGlobalScope escape surfaces.
+  "postMessage",
+  "close",
+  "onmessage",
+  "onmessageerror",
+  "onerror",
+  "addEventListener",
+  "removeEventListener",
+  "dispatchEvent",
+  // Timer callbacks in Bun receive a worker-global `this`; keep scheduling
+  // names local as well so handlers cannot recover bridge controls indirectly.
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "setImmediate",
+  "clearImmediate",
+  "queueMicrotask",
 ]);
+const DYNAMIC_CODE_MACRO_PARAMETER_NAMES = Object.freeze(
+  BLOCKED_MACRO_PARAMETER_NAMES.filter((name) => name !== "Function"),
+);
 const nativeAsyncFunctionConstructor = Object.getPrototypeOf(
   async function () {},
 ).constructor as AsyncFunctionConstructor;
 const nativeReflectConstruct = Reflect.construct;
 
+function hasRequestedDynamicCodeCapability(): boolean {
+  const capabilities = manifest?.requested_capabilities;
+  return Array.isArray(capabilities) && capabilities.includes("dynamic_code_execution");
+}
+
 function compileMacroHandler(body: string): ExtensionMacroHandler {
   try {
     return nativeReflectConstruct(
       nativeAsyncFunctionConstructor,
-      ["ctx", ...BLOCKED_MACRO_PARAMETER_NAMES, `"use strict"; return await (async () => {\n${body}\n})();`],
+      [
+        "ctx",
+        ...(hasRequestedDynamicCodeCapability()
+          ? DYNAMIC_CODE_MACRO_PARAMETER_NAMES
+          : BLOCKED_MACRO_PARAMETER_NAMES),
+        `"use strict"; return await (async () => {\n${body}\n})();`,
+      ],
     ) as ExtensionMacroHandler;
   } catch {
     throw new Error("Macro handler body is not valid JavaScript");
@@ -997,19 +1098,357 @@ function post(msg: RuntimeWorkerToHost): void {
   if (scope) {
     (msg as any).rpcPermissionScopeId = scope.id;
   }
-  if (typeof process.send === "function") {
-    process.send(msg);
+  if (nativeProcessSend) {
+    nativeProcessSend(msg);
     return;
   }
-  self.postMessage(msg);
+  if (!nativeWorkerPostMessage) {
+    throw new Error("Worker transport is unavailable in extension runtime");
+  }
+  nativeWorkerPostMessage(msg);
+}
+
+const WORKER_CONTROL_ERROR = "Worker control is disabled in extension context";
+const WORKER_LISTENER_ERROR = "Worker message listeners are managed by the runtime";
+
+function workerControlFailure(control: string): Error {
+  return new Error(`${WORKER_CONTROL_ERROR}: ${control}`);
+}
+
+type WorkerControlReplacement = (...args: unknown[]) => unknown;
+
+function createWorkerControlGuard(control: string): WorkerControlReplacement {
+  const guard = function (): never {
+    throw workerControlFailure(control);
+  };
+  return Object.freeze(guard);
+}
+
+function createReceiverAwareEventTargetGuard(
+  control: string,
+  nativeMethod: Function | null,
+): WorkerControlReplacement {
+  const guard = function (this: unknown, ...args: unknown[]): unknown {
+    if (this === nativeWorkerGlobal || !nativeMethod) {
+      throw workerControlFailure(control);
+    }
+    return nativeReflectApply(nativeMethod, this, args);
+  };
+  return Object.freeze(guard);
+}
+
+function assertWorkerControlInstallable(
+  target: object,
+  key: PropertyKey,
+  control: string,
+): void {
+  const descriptor = nativeObjectGetOwnPropertyDescriptor(target, key);
+  if (
+    !descriptor ||
+    descriptor.configurable ||
+    ("value" in descriptor && descriptor.writable)
+  ) {
+    return;
+  }
+  throw workerControlFailure(control);
+}
+
+function installWorkerControl(
+  target: object,
+  key: PropertyKey,
+  control: string,
+  replacement: WorkerControlReplacement = createWorkerControlGuard(control),
+): void {
+  try {
+    nativeObjectDefineProperty(target, key, {
+      value: replacement,
+      writable: false,
+      configurable: false,
+      enumerable: nativeObjectGetOwnPropertyDescriptor(target, key)?.enumerable === true,
+    });
+  } catch (error) {
+    throw new Error(`${WORKER_CONTROL_ERROR}: ${control}`, { cause: error });
+  }
+  const descriptor = nativeObjectGetOwnPropertyDescriptor(target, key);
+  if (
+    !descriptor ||
+    !("value" in descriptor) ||
+    descriptor.value !== replacement ||
+    descriptor.writable !== false ||
+    descriptor.configurable !== false
+  ) {
+    throw workerControlFailure(control);
+  }
+}
+
+function installWorkerListenerGuard(
+  target: object,
+  key: "onmessage" | "onmessageerror" | "onerror",
+): void {
+  try {
+    nativeObjectDefineProperty(target, key, {
+      get: () => null,
+      set: () => {
+        throw new Error(WORKER_LISTENER_ERROR);
+      },
+      configurable: false,
+      enumerable: nativeObjectGetOwnPropertyDescriptor(target, key)?.enumerable === true,
+    });
+  } catch (error) {
+    throw new Error(`${WORKER_LISTENER_ERROR}: ${key}`, { cause: error });
+  }
+  const descriptor = nativeObjectGetOwnPropertyDescriptor(target, key);
+  if (
+    !descriptor ||
+    descriptor.configurable !== false ||
+    typeof descriptor.get !== "function" ||
+    typeof descriptor.set !== "function"
+  ) {
+    throw new Error(`${WORKER_LISTENER_ERROR}: ${key}`);
+  }
+}
+
+function installProcessIpcFacade(): void {
+  const globalProcessDescriptor = nativeObjectGetOwnPropertyDescriptor(globalThis, "process");
+  if (
+    globalProcessDescriptor &&
+    !globalProcessDescriptor.configurable &&
+    (!("value" in globalProcessDescriptor) || !globalProcessDescriptor.writable)
+  ) {
+    throw workerControlFailure("process");
+  }
+  const facade = Object.create(null) as object;
+  const envDescriptor = nativeObjectGetOwnPropertyDescriptor(nativeProcess, "env");
+  if (envDescriptor && "value" in envDescriptor) {
+    nativeObjectDefineProperty(facade, "env", {
+      value: envDescriptor.value,
+      writable: false,
+      configurable: false,
+      enumerable: envDescriptor.enumerable === true,
+    });
+  }
+  for (const control of [
+    "send",
+    "on",
+    "addListener",
+    "once",
+    "prependListener",
+    "prependOnceListener",
+    "removeListener",
+    "off",
+    "removeAllListeners",
+    "emit",
+    "disconnect",
+    "ref",
+    "unref",
+    "channel",
+    "connected",
+  ]) {
+    installWorkerControl(facade, control, `process.${control}`);
+  }
+  try {
+    nativeObjectDefineProperty(globalThis, "process", {
+      value: facade,
+      writable: false,
+      configurable: false,
+      enumerable: globalProcessDescriptor?.enumerable === true,
+    });
+  } catch (error) {
+    throw new Error(`${WORKER_CONTROL_ERROR}: process`, { cause: error });
+  }
+  const installedDescriptor = nativeObjectGetOwnPropertyDescriptor(globalThis, "process");
+  if (
+    !installedDescriptor ||
+    !("value" in installedDescriptor) ||
+    installedDescriptor.value !== facade ||
+    installedDescriptor.writable !== false ||
+    installedDescriptor.configurable !== false
+  ) {
+    throw workerControlFailure("process");
+  }
+}
+function getWorkerControlTargets(target: object): object[] {
+  const targets: object[] = [];
+  const seen = new Set<object>();
+  const keys = [
+    "postMessage",
+    "close",
+    "addEventListener",
+    "removeEventListener",
+    "dispatchEvent",
+    "onmessage",
+    "onmessageerror",
+    "onerror",
+  ];
+  let current: object | null = target;
+  while (current) {
+    if (
+      current === target ||
+      keys.some((key) => nativeObjectGetOwnPropertyDescriptor(current, key))
+    ) {
+      if (!seen.has(current)) {
+        seen.add(current);
+        targets.push(current);
+      }
+    }
+    current = nativeObjectGetPrototypeOf(current) as object | null;
+  }
+  if (
+    nativeEventTargetPrototype &&
+    keys.some((key) => nativeObjectGetOwnPropertyDescriptor(nativeEventTargetPrototype, key)) &&
+    !seen.has(nativeEventTargetPrototype)
+  ) {
+    targets.push(nativeEventTargetPrototype);
+  }
+  return targets;
+}
+
+function shouldInstallWorkerListenerGuard(
+  target: object,
+  key: "onmessage" | "onmessageerror" | "onerror",
+): boolean {
+  return (
+    nativeObjectGetOwnPropertyDescriptor(target, key) !== undefined ||
+    (target === nativeWorkerGlobal && nativeObjectIsExtensible(target))
+  );
+}
+
+function hardenWorkerControls(): void {
+  if (nativeProcessSend && !nativeProcessOn) {
+    throw new Error("Worker transport listener is unavailable in extension runtime");
+  }
+  const hasProcessTransport = nativeProcessSend !== null;
+  const hasWorkerTransport =
+
+    nativeWorkerPostMessage !== null && nativeWorkerAddEventListener !== null;
+  if (!hasProcessTransport && !hasWorkerTransport) {
+    throw new Error("Worker transport is unavailable in extension runtime");
+  }
+  if (!nativeWorkerGlobal) return;
+
+  const controls = [
+    ["postMessage", "postMessage"],
+    ["close", "close"],
+    ["addEventListener", "addEventListener"],
+    ["removeEventListener", "removeEventListener"],
+    ["dispatchEvent", "dispatchEvent"],
+  ] as const;
+  const targets = getWorkerControlTargets(nativeWorkerGlobal);
+  const listenerKeys = ["onmessage", "onmessageerror", "onerror"] as const;
+
+  // Preflight only the controls that actually exist. This preserves partial
+  // worker surfaces without inventing aliases and keeps a failed startup from
+  // leaving a half-hardened global behind.
+  for (const target of targets) {
+    for (const [key, control] of controls) {
+      if (nativeObjectGetOwnPropertyDescriptor(target, key)) {
+        assertWorkerControlInstallable(target, key, control);
+      }
+    }
+    for (const key of listenerKeys) {
+      if (shouldInstallWorkerListenerGuard(target, key)) {
+        assertWorkerControlInstallable(target, key, key);
+      }
+    }
+  }
+
+  const preservedListeners: Array<readonly [string, WorkerEventHandler]> = [];
+  for (const target of targets) {
+    for (const [key, eventType] of [
+      ["onmessage", "message"],
+      ["onmessageerror", "messageerror"],
+      ["onerror", "error"],
+    ] as const) {
+      const descriptor = nativeObjectGetOwnPropertyDescriptor(target, key);
+      if (descriptor && "value" in descriptor && typeof descriptor.value === "function") {
+        preservedListeners.push([eventType, descriptor.value as WorkerEventHandler]);
+      }
+    }
+  }
+  if (nativeWorkerAddEventListener) {
+    for (const [eventType, listener] of preservedListeners) {
+      nativeWorkerAddEventListener(eventType, (event) => {
+        void listener(event);
+      });
+    }
+  }
+
+  for (const target of targets) {
+    for (const [key, control] of controls) {
+      if (!nativeObjectGetOwnPropertyDescriptor(target, key)) continue;
+      let replacement: WorkerControlReplacement | undefined;
+      if (key === "addEventListener") {
+        replacement = createReceiverAwareEventTargetGuard(
+          control,
+          nativeEventTargetAddEventListener,
+        );
+      } else if (key === "removeEventListener") {
+        replacement = createReceiverAwareEventTargetGuard(
+          control,
+          nativeEventTargetRemoveEventListener,
+        );
+      } else if (key === "dispatchEvent") {
+        replacement = createReceiverAwareEventTargetGuard(
+          control,
+          nativeEventTargetDispatchEvent,
+        );
+      }
+      installWorkerControl(target, key, control, replacement);
+    }
+    for (const key of listenerKeys) {
+      if (shouldInstallWorkerListenerGuard(target, key)) {
+        installWorkerListenerGuard(target, key);
+      }
+    }
+  }
+}
+
+function removePendingResponse(requestId: string, pending: PendingResponse): boolean {
+  if (pendingResponses.get(requestId) !== pending) return false;
+  pendingResponses.delete(requestId);
+  return true;
+}
+
+function removeAbortListener(signal: AbortSignal | undefined, listener: () => void): void {
+  if (!signal) return;
+  try {
+    signal.removeEventListener("abort", listener);
+  } catch {
+    // A hostile signal must not prevent request cleanup.
+  }
+}
+
+function tryCancelGeneration(requestId: string): void {
+  try {
+    post({ type: "cancel_generation", requestId });
+  } catch {
+    // The transport may be the failure being cleaned up.
+  }
+}
+
+const RUNTIME_SHUTDOWN_ERROR = "Worker runtime is shutting down";
+
+function makeRuntimeShutdownError(): Error {
+  return new Error(RUNTIME_SHUTDOWN_ERROR);
 }
 
 function request(msg: RuntimeWorkerToHost & { requestId: string }): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    pendingResponses.set(msg.requestId, { resolve, reject });
+  if (runtimeShuttingDown) {
+    return Promise.reject(makeRuntimeShutdownError());
+  }
+  const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+  const pending: PendingResponse = { resolve, reject };
+  pendingResponses.set(msg.requestId, pending);
+  try {
     post(msg);
-  });
+  } catch (error) {
+    if (removePendingResponse(msg.requestId, pending)) {
+      reject(error);
+    }
+  }
+  return promise;
 }
+
 
 function normalizeOwnedRpcPoolEndpoint(endpoint: string): string {
   return normalizeOwnedSharedRpcEndpoint(manifest.identifier, endpoint);
@@ -1117,6 +1556,9 @@ function makeAbortError(reason?: unknown): Error {
  * bothering the host.
  */
 function requestGeneration(input: any): Promise<unknown> {
+  if (runtimeShuttingDown) {
+    return Promise.reject(makeRuntimeShutdownError());
+  }
   const signal: AbortSignal | undefined = input?.signal;
   const { signal: _omit, ...payload } = input ?? {};
   void _omit;
@@ -1127,31 +1569,42 @@ function requestGeneration(input: any): Promise<unknown> {
 
   const requestId = crypto.randomUUID();
 
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      // Tell the host to tear down the upstream LLM request. The host will
-      // still respond with an `AbortError`-prefixed error which the
-      // `response` handler converts into a DOMException when rejecting.
+  const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+  const onAbort = () => {
+    try {
       post({ type: "cancel_generation", requestId });
-    };
-
-    pendingResponses.set(requestId, {
-      resolve: (value) => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      reject: (reason) => {
-        signal?.removeEventListener("abort", onAbort);
-        reject(reason);
-      },
-    });
-
-    if (signal) {
-      signal.addEventListener("abort", onAbort, { once: true });
+    } catch (error) {
+      const pending = pendingResponses.get(requestId);
+      if (pending && removePendingResponse(requestId, pending)) {
+        removeAbortListener(signal, onAbort);
+        reject(error);
+      }
     }
+  };
+  const pending: PendingResponse = {
+    resolve: (value) => {
+      removeAbortListener(signal, onAbort);
+      resolve(value);
+    },
+    reject: (reason) => {
+      removeAbortListener(signal, onAbort);
+      reject(reason);
+    },
+    cleanup: () => removeAbortListener(signal, onAbort),
+  };
 
+  pendingResponses.set(requestId, pending);
+  try {
+    signal?.addEventListener("abort", onAbort, { once: true });
     post({ type: "request_generation", requestId, input: payload });
-  });
+  } catch (error) {
+    if (removePendingResponse(requestId, pending)) {
+      pending.cleanup?.();
+      tryCancelGeneration(requestId);
+      reject(error);
+    }
+  }
+  return promise;
 }
 
 /** Assembly uses the generation cancellation channel but never invokes a provider. */
@@ -1159,102 +1612,145 @@ function requestAssembly(input: AssembleRequest, userId?: string): Promise<Assem
   const signal = input?.signal;
   const { signal: _omit, ...payload } = input ?? {};
   void _omit;
+  if (runtimeShuttingDown) {
+    return Promise.reject(makeRuntimeShutdownError());
+  }
 
   if (signal?.aborted) {
     return Promise.reject(makeAbortError((signal.reason as any)?.message ?? "Assembly aborted"));
   }
 
   const requestId = crypto.randomUUID();
-  return new Promise((resolve, reject) => {
-    const onAbort = () => post({ type: "cancel_generation", requestId });
-    pendingResponses.set(requestId, {
-      resolve: (value) => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve(value as AssembleResult);
-      },
-      reject: (reason) => {
-        signal?.removeEventListener("abort", onAbort);
-        reject(reason);
-      },
-    });
+  const { promise, resolve, reject } = Promise.withResolvers<AssembleResult>();
+  const onAbort = () => {
+    try {
+      post({ type: "cancel_generation", requestId });
+    } catch (error) {
+      const pending = pendingResponses.get(requestId);
+      if (pending && removePendingResponse(requestId, pending)) {
+        removeAbortListener(signal, onAbort);
+        reject(error);
+      }
+    }
+  };
+  const pending: PendingResponse = {
+    resolve: (value) => {
+      removeAbortListener(signal, onAbort);
+      resolve(value as AssembleResult);
+    },
+    reject: (reason) => {
+      removeAbortListener(signal, onAbort);
+      reject(reason);
+    },
+    cleanup: () => removeAbortListener(signal, onAbort),
+  };
+
+  pendingResponses.set(requestId, pending);
+  try {
     signal?.addEventListener("abort", onAbort, { once: true });
     post({ type: "assemble_prompt", requestId, input: payload, userId });
-  });
+  } catch (error) {
+    if (removePendingResponse(requestId, pending)) {
+      pending.cleanup?.();
+      tryCancelGeneration(requestId);
+      reject(error);
+    }
+  }
+  return promise;
 }
 
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
- * that yields `StreamChunkDTO` values as the host forwards them. The
- * generator throws on `generation_stream_error` (with `AbortError` shape
- * preserved) and returns after the terminal `done` chunk.
- *
- * If the consumer breaks out of the `for await` loop early, the generator's
- * `finally` posts a `cancel_generation` message so the host can tear down
- * the upstream LLM request — this mirrors the explicit `AbortSignal` path.
+ * that yields `StreamChunkDTO` values as the host forwards them. The host
+ * request is started only once iteration begins.
  */
 function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, void, void> {
   const signal: AbortSignal | undefined = input?.signal;
   const { signal: _omit, ...payload } = input ?? {};
   void _omit;
 
-  if (signal?.aborted) {
-    const err = makeAbortError((signal.reason as any)?.message);
-    return (async function* (): AsyncGenerator<StreamChunkDTO, void, void> {
-      throw err;
-    })();
-  }
-
-  const requestId = crypto.randomUUID();
-
-  type QueueItem =
-    | { kind: "chunk"; chunk: StreamChunkDTO }
-    | { kind: "error"; error: unknown };
-
-  const queue: QueueItem[] = [];
-  let waiter: ((item: QueueItem) => void) | null = null;
-  let terminated = false;
-
-  const push = (chunk: StreamChunkDTO) => {
-    if (terminated) return;
-    if (chunk.type === "done") terminated = true;
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w({ kind: "chunk", chunk });
-    } else {
-      queue.push({ kind: "chunk", chunk });
-    }
-  };
-
-  const fail = (err: unknown) => {
-    if (terminated) return;
-    terminated = true;
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w({ kind: "error", error: err });
-    } else {
-      queue.push({ kind: "error", error: err });
-    }
-  };
-
-  streamingGenerations.set(requestId, { push, fail });
-
-  const onAbort = () => {
-    post({ type: "cancel_generation", requestId });
-  };
-  if (signal) {
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-
-  post({ type: "request_generation_stream", requestId, input: payload });
-
   return (async function* (): AsyncGenerator<StreamChunkDTO, void, void> {
+    if (runtimeShuttingDown) {
+      throw makeRuntimeShutdownError();
+    }
+    if (signal?.aborted) {
+      throw makeAbortError((signal.reason as any)?.message);
+    }
+
+    const requestId = crypto.randomUUID();
+    type QueueItem =
+      | { kind: "chunk"; chunk: StreamChunkDTO }
+      | { kind: "error"; error: unknown };
+
+    const queue: QueueItem[] = [];
+    let waiter: ((item: QueueItem) => void) | null = null;
+    let terminated = false;
+    let cleaned = false;
+
+    const push = (chunk: StreamChunkDTO) => {
+      if (terminated) return;
+      if (chunk.type === "done") terminated = true;
+      if (waiter) {
+        const w = waiter;
+        waiter = null;
+        w({ kind: "chunk", chunk });
+      } else {
+        queue.push({ kind: "chunk", chunk });
+      }
+      if (chunk.type === "done") cleanup();
+    };
+
+    const fail = (err: unknown) => {
+      if (terminated) return;
+      terminated = true;
+      if (waiter) {
+        const w = waiter;
+        waiter = null;
+        w({ kind: "error", error: err });
+      } else {
+        queue.push({ kind: "error", error: err });
+      }
+      cleanup();
+    };
+
+    let record: StreamingGeneration;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (streamingGenerations.get(requestId) === record) {
+        streamingGenerations.delete(requestId);
+      }
+      removeAbortListener(signal, onAbort);
+    };
+    const onAbort = () => {
+      try {
+        post({ type: "cancel_generation", requestId });
+      } catch (error) {
+        fail(error);
+        cleanup();
+      }
+    };
+    record = { push, fail, cleanup };
+
+    try {
+      streamingGenerations.set(requestId, record);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      post({ type: "request_generation_stream", requestId, input: payload });
+    } catch (error) {
+      cleanup();
+      tryCancelGeneration(requestId);
+      throw error;
+    }
+
     try {
       while (true) {
         const item = queue.length > 0
           ? queue.shift()!
-          : await new Promise<QueueItem>((resolve) => { waiter = resolve; });
+          : await (() => {
+              const { promise, resolve } = Promise.withResolvers<QueueItem>();
+              waiter = resolve;
+              return promise;
+            })();
 
         if (item.kind === "error") throw item.error;
 
@@ -1262,15 +1758,37 @@ function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, voi
         if (item.chunk.type === "done") return;
       }
     } finally {
-      streamingGenerations.delete(requestId);
-      signal?.removeEventListener("abort", onAbort);
+      cleanup();
       // If the consumer broke out before the terminal `done`/error chunk,
       // tell the host to abort the upstream LLM request.
       if (!terminated) {
-        post({ type: "cancel_generation", requestId });
+        tryCancelGeneration(requestId);
       }
     }
   })();
+}
+
+function rejectAndClearPendingState(reason: unknown): void {
+  for (const pending of pendingResponses.values()) {
+    try {
+      pending.reject(reason);
+    } catch {
+      // Promise rejection handlers are not expected to throw synchronously.
+    }
+  }
+  pendingResponses.clear();
+
+  for (const stream of streamingGenerations.values()) {
+    try {
+      stream.fail(reason);
+    } catch {
+      // Keep clearing the remaining streams if one hostile waiter throws.
+    } finally {
+      stream.cleanup();
+    }
+  }
+  streamingGenerations.clear();
+  pendingMacroRegistrations.clear();
 }
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
@@ -3936,13 +4454,51 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 };
 
+// Bun resolves data URLs as package names and rejects sufficiently long names
+// before evaluation. Select the file fallback conservatively before importing
+// so a module that throws the same error text is never evaluated twice.
+const DATA_JAVASCRIPT_URL_PREFIX = "data:text/javascript,";
+const MAX_DIRECT_DATA_JAVASCRIPT_URL_LENGTH = 1536;
+
+function shouldImportDataJavascriptViaTemporaryFile(entryPath: string): boolean {
+  return (
+    entryPath.startsWith(DATA_JAVASCRIPT_URL_PREFIX) &&
+    entryPath.length > MAX_DIRECT_DATA_JAVASCRIPT_URL_LENGTH
+  );
+}
+
+async function importExtensionEntry(entryPath: string): Promise<void> {
+  const temporaryPath = shouldImportDataJavascriptViaTemporaryFile(entryPath)
+    ? join(tmpdir(), `spindle-extension-${crypto.randomUUID()}.mjs`)
+    : undefined;
+  const importPath = temporaryPath ?? entryPath;
+
+  try {
+    if (temporaryPath) {
+      const source = decodeURIComponent(entryPath.slice(DATA_JAVASCRIPT_URL_PREFIX.length));
+      await writeFile(temporaryPath, source, { encoding: "utf8", mode: 0o600 });
+    }
+    await import(importPath);
+  } finally {
+    if (temporaryPath) {
+      await rm(temporaryPath, { force: true });
+    }
+  }
+}
+
 // ─── Message handler (host → worker) ─────────────────────────────────────
 
 async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
   switch (msg.type) {
     case "init": {
-      manifest = msg.manifest;
+      const manifestInput = msg.manifest as unknown as Record<string, unknown>;
+      manifest = {
+        ...msg.manifest,
+        requested_capabilities: Array.isArray(manifestInput.requested_capabilities)
+          ? manifestInput.requested_capabilities as SpindleManifest["requested_capabilities"]
+          : [],
+      };
       storagePath = msg.storagePath;
 
       // Expose the API globally
@@ -3966,14 +4522,32 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       // the static scan (detectDangerousBackendCapabilities, run before this
       // entry is loaded) and, when enabled, by the OS-level sandbox (sandbox
       // mode). The sandbox here is a cooperative speed bump, not the boundary.
-      initializeSandbox({
-        allowDynamicCode: manifest.requested_capabilities?.includes("dynamic_code_execution") === true,
-      });
+      try {
+        initializeSandbox({
+          allowDynamicCode: hasRequestedDynamicCodeCapability(),
+        });
+        // Preserve the runtime listener through captured native transport,
+        // then remove extension-visible controls before importing untrusted code.
+        hardenWorkerControls();
+        installProcessIpcFacade();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          post({
+            type: "log",
+            level: "error",
+            message: `Sandbox startup failed: ${message}`,
+          });
+        } finally {
+          setTimeout(() => nativeProcessExit(1), 0);
+        }
+        return;
+      }
 
       // Dynamically import the extension's backend entry
       try {
         const entryPath = manifest.entry_backend || "dist/backend.js";
-        await import(entryPath);
+        await importExtensionEntry(entryPath);
       } catch (err: any) {
         post({
           type: "log",
@@ -4536,6 +5110,9 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "shutdown": {
+      if (runtimeShuttingDown) break;
+      runtimeShuttingDown = true;
+      rejectAndClearPendingState(makeAbortError("Worker runtime is shutting down"));
       // Signal the host so it doesn't have to wait for the 5s fallback
       // timeout in WorkerHost.stop(). Posting via the existing log channel
       // matches the __worker_ready__ pattern and avoids touching the
@@ -4545,19 +5122,28 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       } catch {
         // If posting fails, the host's 5s fallback terminates us anyway.
       }
-      // Allow extension to clean up
-      nativeProcessExit(0);
+      // Allow extension to clean up after pending promises observe shutdown.
+      queueMicrotask(() => nativeProcessExit(0));
       break;
     }
   }
 }
 
-if (typeof process.send === "function") {
-  process.on("message", (message) => {
+const runtimeHostMessageHandler = (event: Event): void => {
+  const messageEvent = event as MessageEvent<RuntimeHostToWorker>;
+  void handleHostMessage(messageEvent.data);
+};
+
+if (nativeProcessSend) {
+  if (!nativeProcessOn) {
+    throw new Error("Worker transport listener is unavailable in extension runtime");
+  }
+  nativeProcessOn("message", (message) => {
     void handleHostMessage(message as RuntimeHostToWorker);
   });
 } else {
-  self.onmessage = (event: MessageEvent<RuntimeHostToWorker>) => {
-    void handleHostMessage(event.data);
-  };
+  if (!nativeWorkerAddEventListener) {
+    throw new Error("Worker transport is unavailable in extension runtime");
+  }
+  nativeWorkerAddEventListener("message", runtimeHostMessageHandler);
 }

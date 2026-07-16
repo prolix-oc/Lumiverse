@@ -1,13 +1,30 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  applyStorageSeeds,
   bunInstallCmd,
   declaredCapabilitiesFromManifest,
   detectDangerousBackendCapabilities,
   detectSerializedHandlerModuleAccess,
+  getManifest,
+  importLocalExtensions,
   PRIVILEGED_PERMISSIONS,
   shouldUseWindowsSpindleBunSyncFallback,
+  validateBackendModuleGraph,
 } from "./manager.service";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { closeDatabase, initDatabase } from "../db/connection";
+import { runMigrations } from "../db/migrate";
+import { env } from "../env";
 import type { SpindleCapability, SpindleManifest } from "lumiverse-spindle-types";
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
@@ -408,6 +425,174 @@ describe("detectDangerousBackendCapabilities", () => {
     }
   });
 
+  test("flags global Reflect/Object property access through static call forms", () => {
+    const blocked: Array<{ name: string; source: string; label: string }> = [
+      {
+        name: "Reflect.get direct globalThis fetch",
+        source: 'Reflect.get(globalThis, "fetch")',
+        label: "direct network API usage",
+      },
+      {
+        name: "Reflect.get computed global WebSocket",
+        source: 'Reflect["get"](global, "WebSocket")',
+        label: "direct network API usage",
+      },
+      {
+        name: "Object descriptor self Worker",
+        source: 'Object.getOwnPropertyDescriptor(self, "Worker")',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "Object computed descriptor globalThis BroadcastChannel",
+        source: 'Object["getOwnPropertyDescriptor"](globalThis, "BroadcastChannel")',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "Object descriptor BroadcastChannel value",
+        source: 'Object.getOwnPropertyDescriptor(globalThis, "BroadcastChannel").value',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "comment-separated Reflect alias",
+        source: 'Reflect /* gap */ . /* gap */ get(/* receiver */ globalThis, /* key */ "fetch")',
+        label: "direct network API usage",
+      },
+      {
+        name: "Reflect.get call dispatch",
+        source: 'Reflect.get.call(null, globalThis, "fetch")',
+        label: "direct network API usage",
+      },
+      {
+        name: "Reflect computed get apply dispatch",
+        source: 'Reflect["get"].apply(null, [global, "WebSocket"])',
+        label: "direct network API usage",
+      },
+      {
+        name: "Object descriptor bind dispatch",
+        source: 'Object.getOwnPropertyDescriptor.bind(null)(self, "Worker")',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "global fetch call dispatch",
+        source: "globalThis.fetch.call(undefined, request)",
+        label: "direct network API usage",
+      },
+      {
+        name: "self WebSocket apply dispatch",
+        source: "self.WebSocket.apply(undefined, [url])",
+        label: "direct network API usage",
+      },
+      {
+        name: "global Worker bind dispatch",
+        source: "global.Worker.bind(undefined)",
+        label: "worker runtime API usage",
+      },
+      {
+        name: "global alias Reflect descriptor",
+        source:
+          'const host = global; Object.getOwnPropertyDescriptor(host, "BroadcastChannel")',
+        label: "worker runtime API usage",
+      },
+    ];
+
+    for (const { name, source, label } of blocked) {
+      expect(detectDangerousBackendCapabilities(source), name).toEqual([label]);
+    }
+  });
+
+  test("fails closed for unresolved global Reflect/Object receivers or keys", () => {
+    const dynamic = [
+      'Reflect.get(receiver, "fetch")',
+      'Reflect.get(globalThis, propertyName)',
+      'Object.getOwnPropertyDescriptor(receiver, "WebSocket")',
+      'Object["getOwnPropertyDescriptor"](global, propertyName)',
+      'Reflect.get.call(null, globalThis, propertyName)',
+    ];
+
+    for (const source of dynamic) {
+      expect(detectDangerousBackendCapabilities(source), source).toContain(
+        "dynamic global API access",
+      );
+    }
+  });
+
+  test("does not classify local or unrelated Reflect/Object receivers", () => {
+    const safe = `
+      const local = {
+        fetch: 1,
+        WebSocket: 2,
+        Worker: 3,
+        BroadcastChannel: 4,
+      };
+      const globalThis = local;
+      Reflect.get(local, "fetch");
+      Reflect.get(local, "WebSocket");
+      Object.getOwnPropertyDescriptor(local, "Worker");
+      Object["getOwnPropertyDescriptor"](local, "BroadcastChannel");
+      local.fetch.call(undefined);
+      globalThis.WebSocket;
+    `;
+
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+
+  test("rejects static native-addon module targets across loader forms", () => {
+    const blocked: Array<{ name: string; source: string }> = [
+      { name: "static import", source: 'import addon from "./native.node"; void addon;' },
+      { name: "static bare ESM import", source: 'import "native.node";' },
+      { name: "dynamic relative import", source: 'await import("./native.node");' },
+      { name: "dynamic concatenated import", source: 'await import("./" + "native.node");' },
+      { name: "bare require", source: 'require("native.node");' },
+      { name: "case-insensitive query/hash require", source: 'require("./native.NODE?abi=1#arm64");' },
+      { name: "relative import.meta.require", source: 'import.meta.require("./native.node");' },
+      { name: "bare import.meta.require", source: 'import.meta.require("native.node");' },
+      {
+        name: "relative createRequire",
+        source: 'createRequire(import.meta.url)("./native.node");',
+      },
+      {
+        name: "bare createRequire with query/hash",
+        source: 'createRequire(import.meta.url)("native.node?abi=1#x");',
+      },
+      { name: "module.require", source: 'module.require("./native.node");' },
+    ];
+
+    for (const { name, source } of blocked) {
+      const expected = name.includes("createRequire")
+        ? ["module loading", "dynamic module access"]
+        : ["module loading"];
+      expect(detectDangerousBackendCapabilities(source), name).toEqual(expected);
+    }
+  });
+
+  test("does not reject native-addon text or non-loader controls", () => {
+    const safe = `
+      const suffix = ".node";
+      const mention = "native.node?abi=1#x";
+      const ordinary = await import("./native.js");
+      const version = require("native.node.txt");
+      const source = import.meta.url;
+      fetch("native.node");
+      void suffix; void mention; void ordinary; void version; void source;
+    `;
+
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+
+  test("keeps exact classification after thousands of expression arrows", () => {
+    const arrows = Array.from(
+      { length: 2_048 },
+      (_, index) => `(value${index}) => value${index}`,
+    ).join(",\n");
+    const source = `const handlers = [\n${arrows}\n];\nReflect.get(process, "env");`;
+
+    // Structural load, not a wall-clock benchmark: every arrow contributes a
+    // delimiter boundary and the final reflective access is the only hit.
+    expect(detectDangerousBackendCapabilities(source)).toEqual([
+      "dangerous process API usage",
+    ]);
+  });
+
 
   test("flags common evasions for native backend capabilities", () => {
     const samples: Array<[string, string]> = [
@@ -603,10 +788,475 @@ describe("detectDangerousBackendCapabilities", () => {
       "base64_decode",
     ]);
     for (const code of dynamicLoaders) {
-      expect(detectDangerousBackendCapabilities(code, allOptIns)).toContain(
+      expect(detectDangerousBackendCapabilities(code, allOptIns)).toEqual([
         "dangerous process API usage",
-      );
+      ]);
     }
+    const reflectiveLoaders: Array<{ name: string; source: string }> = [
+      {
+        name: "Reflect.get direct binding",
+        source: 'Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "Reflect.get direct _linkedBinding",
+        source: 'Reflect.get(process, "_linkedBinding")("fs")',
+      },
+      {
+        name: "Reflect.get computed static binding",
+        source: 'Reflect.get(process, "bi" + "nding")("fs")',
+      },
+      {
+        name: "Reflect.get computed static _linkedBinding",
+        source: 'Reflect.get(process, "_link" + "edBinding")("fs")',
+      },
+      {
+        name: "Reflect.get through a simple process alias",
+        source: 'const p = process; Reflect.get(p, "binding")("fs")',
+      },
+      {
+        name: "Reflect.get through a simple process _linkedBinding alias",
+        source: 'const p = process; Reflect.get(p, "_linkedBinding")("fs")',
+      },
+      {
+        name: "nested local process does not suppress global process",
+        source:
+          'function local() { const process = {}; Reflect.get(process, "binding")("fs"); } Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "expression arrow keeps global process visible",
+        source: 'const f = () => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "multiline parenthesized expression keeps global process visible",
+        source: `const f = () => (
+          Reflect.get(process, "binding")("fs")
+        )`,
+      },
+      {
+        name: "arrow process parameter leaves outside process global",
+        source:
+          'const f = (process) => Reflect.get(process, "binding")("fs"); Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "process parameter does not shadow an outer global process alias",
+        source: 'const p = process; ((process) => Reflect.get(p, "binding")("fs"))',
+      },
+      {
+        name: "comma expression after process parameter arrow keeps global process dangerous",
+        source:
+          '((process) => Reflect.get(process, "binding")("fs"), Reflect.get(process, "binding")("fs"))',
+      },
+      {
+        name: "destructured process property alias does not bind global process",
+        source: 'const f = ({ process: local }) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "comment-separated direct process receiver",
+        source: 'Reflect.get(/*x*/ process, "binding")("fs")',
+      },
+      {
+        name: "comment-separated global process alias receiver",
+        source: 'const p = process; Reflect.get(/*x*/ p, "binding")("fs")',
+      },
+      {
+        name: "comment-separated Reflect method",
+        source: 'Reflect/*gap*/.get(process, "binding")("fs")',
+      },
+      {
+        name: "comment-separated Object descriptor method",
+        source: 'Object/*gap*/.getOwnPropertyDescriptor(process, "binding").value("fs")',
+      },
+      {
+        name: "comment-separated process alias initializer",
+        source: 'const p = /*gap*/ process; Reflect.get(p, "binding")("fs")',
+      },
+      {
+        name: "completed process parameter arrow then newline global process statement",
+        source: `const f = (process) =>
+          Reflect.get(process, "binding")("fs");
+        Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "completed increment arrow then global process statement",
+        source: `const f = (process) => counter++
+        Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "completed call arrow then global process statement",
+        source: `const f = (process) => foo()
+        Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "completed index arrow then global process statement",
+        source: `const f = (process) => x[y]
+        Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "static computed Reflect.get method",
+        source: 'Reflect["get"](process, "binding")("fs")',
+      },
+      {
+        name: "static computed Reflect.get call",
+        source: 'Reflect["get"].call(Reflect, process, "binding")("fs")',
+      },
+      {
+        name: "static computed Reflect.get apply",
+        source: 'Reflect["get"].apply(Reflect, [process, "binding"])("fs")',
+      },
+      {
+        name: "static computed Reflect.get bind",
+        source: 'Reflect["get"].bind(Reflect, process, "binding")("fs")',
+      },
+      {
+        name: "static computed Object descriptor method",
+        source: 'Object["getOwnPropertyDescriptor"](process, "binding").value("fs")',
+      },
+      {
+        name: "global instanceof continuation control",
+        source: `const f = () =>
+          value
+          instanceof Reflect.get(process, "binding")`,
+      },
+      {
+        name: "global in continuation control",
+        source: `const f = () =>
+          process
+          in Reflect.get(process, "binding")`,
+      },
+      {
+        name: "global tagged-template continuation control",
+        source: `const f = () =>
+          tag
+          \`value \${Reflect.get(process, "binding")("fs")}\``,
+      },
+      {
+        name: "no-param commented arrow body keeps global process dangerous",
+        source: `const f = () => /* comment before body */
+          Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "Object descriptor through a simple process alias",
+        source: 'const p = process; Object.getOwnPropertyDescriptor(p, "binding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor through a simple process alias",
+        source: 'const p = process; Reflect.getOwnPropertyDescriptor(p, "binding").value("fs")',
+      },
+      {
+        name: "Reflect.get binding call",
+        source: 'Reflect.get(process, "binding").call(process, "fs")',
+      },
+      {
+        name: "Reflect.get binding apply",
+        source: 'Reflect.get(process, "binding").apply(process, ["fs"])',
+      },
+      {
+        name: "Reflect.get binding bind",
+        source: 'Reflect.get(process, "binding").bind(process)("fs")',
+      },
+      {
+        name: "Reflect.apply on a reflected binding",
+        source: 'Reflect.apply(Reflect.get(process, "binding"), process, ["fs"])',
+      },
+      {
+        name: "Reflect.get _linkedBinding call",
+        source: 'Reflect.get(process, "_linkedBinding").call(process, "fs")',
+      },
+      {
+        name: "Reflect.get _linkedBinding apply",
+        source: 'Reflect.get(process, "_linkedBinding").apply(process, ["fs"])',
+      },
+      {
+        name: "Reflect.get _linkedBinding bind",
+        source: 'Reflect.get(process, "_linkedBinding").bind(process)("fs")',
+      },
+      {
+        name: "Reflect.apply on a reflected _linkedBinding",
+        source: 'Reflect.apply(Reflect.get(process, "_linkedBinding"), process, ["fs"])',
+      },
+      {
+        name: "Object descriptor binding value",
+        source: 'Object.getOwnPropertyDescriptor(process, "binding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor binding value",
+        source: 'Reflect.getOwnPropertyDescriptor(process, "binding").value("fs")',
+      },
+      {
+        name: "Object descriptor _linkedBinding value",
+        source: 'Object.getOwnPropertyDescriptor(process, "_linkedBinding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor _linkedBinding value",
+        source: 'Reflect.getOwnPropertyDescriptor(process, "_linkedBinding").value("fs")',
+      },
+      {
+        name: "Object descriptor computed static binding",
+        source: 'Object.getOwnPropertyDescriptor(process, "bi" + "nding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor computed static binding",
+        source: 'Reflect.getOwnPropertyDescriptor(process, "bi" + "nding").value("fs")',
+      },
+      {
+        name: "Object descriptor computed static _linkedBinding",
+        source: 'Object.getOwnPropertyDescriptor(process, "_link" + "edBinding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor computed static _linkedBinding",
+        source: 'Reflect.getOwnPropertyDescriptor(process, "_link" + "edBinding").value("fs")',
+      },
+      {
+        name: "Object descriptor through a simple process _linkedBinding alias",
+        source:
+          'const p = process; Object.getOwnPropertyDescriptor(p, "_linkedBinding").value("fs")',
+      },
+      {
+        name: "Reflect descriptor through a simple process _linkedBinding alias",
+        source:
+          'const p = process; Reflect.getOwnPropertyDescriptor(p, "_linkedBinding").value("fs")',
+      },
+    ];
+    for (const member of ["binding", "_linkedBinding"]) {
+      for (const descriptor of ["Object.getOwnPropertyDescriptor", "Reflect.getOwnPropertyDescriptor"]) {
+        const target = `${descriptor}(process, "${member}")`;
+        reflectiveLoaders.push(
+          {
+            name: `${descriptor} ${member} call`,
+            source: `${target}.value.call(process, "fs")`,
+          },
+          {
+            name: `${descriptor} ${member} apply`,
+            source: `${target}.value.apply(process, ["fs"])`,
+          },
+          {
+            name: `${descriptor} ${member} bind`,
+            source: `${target}.value.bind(process)("fs")`,
+          },
+          {
+            name: `Reflect.apply on ${descriptor} ${member}`,
+            source: `Reflect.apply(${target}.value, process, ["fs"])`,
+          },
+        );
+      }
+    }
+    reflectiveLoaders.push(
+      {
+        name: "unresolved Reflect.get process key fails closed",
+        source: 'Reflect.get(process, key)("fs")',
+      },
+      {
+        name: "unresolved descriptor process key fails closed",
+        source: "Object.getOwnPropertyDescriptor(process, key).value('fs')",
+      },
+      {
+        name: "unresolved Reflect descriptor process key fails closed",
+        source: "Reflect.getOwnPropertyDescriptor(process, key).value('fs')",
+      },
+    );
+    for (const { name, source } of reflectiveLoaders) {
+      expect(detectDangerousBackendCapabilities(source, allOptIns), name).toEqual([
+        "dangerous process API usage",
+      ]);
+    }
+
+    const safeReflectiveReceivers = [
+      {
+        name: "unrelated object with binding property",
+        source: 'const object = { binding() {} }; Reflect.get(object, "binding")("fs")',
+      },
+      {
+        name: "unrelated simple alias with binding property",
+        source: 'const p = {}; Reflect.get(p, "binding")("fs")',
+      },
+      {
+        name: "unrelated object descriptor with binding property",
+        source: 'const object = { binding() {} }; Object.getOwnPropertyDescriptor(object, "binding").value("fs")',
+      },
+      {
+        name: "unrelated object Reflect descriptor with binding property",
+        source: 'const object = { binding() {} }; Reflect.getOwnPropertyDescriptor(object, "binding").value("fs")',
+      },
+      {
+        name: "unrelated simple alias with _linkedBinding property",
+        source: 'const p = {}; Reflect.get(p, "_linkedBinding")("fs")',
+      },
+      {
+        name: "unrelated simple alias Object descriptor _linkedBinding",
+        source: 'const p = {}; Object.getOwnPropertyDescriptor(p, "_linkedBinding").value("fs")',
+      },
+      {
+        name: "unrelated simple alias Reflect descriptor _linkedBinding",
+        source: 'const p = {}; Reflect.getOwnPropertyDescriptor(p, "_linkedBinding").value("fs")',
+      },
+      {
+        name: "lexically shadowed process parameter",
+        source: 'function use(process) { Reflect.get(process, "binding")("fs"); }',
+      },
+      {
+        name: "expression arrow process parameter is shadowed",
+        source: 'const f = (process) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "commented direct process parameter",
+        source:
+          'const f = (/* leading */ process /* trailing */) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "comment-separated process arrow header",
+        source:
+          'const f = (process) /*gap*/ => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "multiline parenthesized expression process parameter is shadowed",
+        source: `const f = (process) => (
+          Reflect.get(process, "binding")("fs")
+        )`,
+      },
+      {
+        name: "destructured process parameter",
+        source: 'const f = ({ process }) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "renamed destructured process parameter",
+        source: 'const f = ({ x: process }) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "array destructured process parameter",
+        source: 'const f = ([process]) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "commented destructured process parameter",
+        source:
+          'const f = ({ /* leading */ process /* trailing */ }) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "commented multiline process parameter body",
+        source: `const f = (process) => /* comment before body */
+          Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "block-body destructured process parameter",
+        source: 'const f = ({ process }) => { Reflect.get(process, "binding")("fs"); }',
+      },
+      {
+        name: "block-body array process parameter",
+        source: 'const f = ([process]) => { Reflect.get(process, "binding")("fs"); }',
+      },
+      {
+        name: "local instanceof continuation",
+        source: `const f = (process) =>
+          value
+          instanceof Reflect.get(process, "binding")`,
+      },
+      {
+        name: "local in continuation",
+        source: `const f = (process) =>
+          process
+          in Reflect.get(process, "binding")`,
+      },
+      {
+        name: "local tagged-template continuation",
+        source: `const f = (process) =>
+          tag
+          \`value \${Reflect.get(process, "binding")("fs")}\``,
+      },
+      {
+        name: "default process parameter shadows global process",
+        source: 'const f = (process = {}) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "rest process parameter shadows global process",
+        source: 'const f = (...process) => Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "continued process parameter arrow body stays local",
+        source: `const f = (process) =>
+          Reflect.get(process, "binding")("fs") ||
+          Reflect.get(process, "binding")("fs")`,
+      },
+      {
+        name: "comment-separated local process receiver stays shadowed",
+        source: 'const f = (process) => Reflect.get(/*x*/ process, "binding")("fs")',
+      },
+      {
+        name: "lexically shadowed process descriptor",
+        source: 'function use(process) { Object.getOwnPropertyDescriptor(process, "binding").value("fs"); }',
+      },
+      {
+        name: "lexically shadowed process Reflect descriptor",
+        source: 'function use(process) { Reflect.getOwnPropertyDescriptor(process, "binding").value("fs"); }',
+      },
+      {
+        name: "local process object",
+        source: 'const process = { binding() {} }; Reflect.get(process, "binding")("fs")',
+      },
+      {
+        name: "local process descriptor",
+        source: 'const process = { binding() {} }; Object.getOwnPropertyDescriptor(process, "binding").value("fs")',
+      },
+      {
+        name: "local process Reflect descriptor",
+        source: 'const process = { binding() {} }; Reflect.getOwnPropertyDescriptor(process, "binding").value("fs")',
+      },
+      {
+        name: "simple alias to unrelated descriptor receiver",
+        source: 'const p = {}; Object.getOwnPropertyDescriptor(p, "binding").value("fs")',
+      },
+      {
+        name: "simple alias to unrelated Reflect descriptor receiver",
+        source: 'const p = {}; Reflect.getOwnPropertyDescriptor(p, "binding").value("fs")',
+      },
+    ];
+    const continuedArrowBodyCases = [
+      [
+        "logical AND",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs") &&
+          Reflect.get(process, "binding")("fs")`,
+      ],
+      [
+        "nullish coalescing",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs") ??
+          Reflect.get(process, "binding")("fs")`,
+      ],
+      [
+        "addition",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs") +
+          Reflect.get(process, "binding")("fs")`,
+      ],
+      [
+        "conditional",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs")
+            ? Reflect.get(process, "binding")("fs")
+            : Reflect.get(process, "binding")("fs")`,
+      ],
+      [
+        "computed member",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs")
+          [Reflect.get(process, "binding")("fs")]`,
+      ],
+      [
+        "call continuation",
+        `const f = (process) =>
+          Reflect.get(process, "binding")("fs")
+          (Reflect.get(process, "binding")("fs"))`,
+      ],
+    ] as const;
+    for (const [name, source] of continuedArrowBodyCases) {
+      safeReflectiveReceivers.push({
+        name: `continued process parameter arrow body (${name})`,
+        source,
+      });
+    }
+    for (const { name, source } of safeReflectiveReceivers) {
+      expect(detectDangerousBackendCapabilities(source), name).toEqual([]);
+    }
+
 
     const safe = String.raw`
       // process.binding(variable); process._linkedBinding(variable);
@@ -1098,6 +1748,628 @@ describe("detectDangerousBackendCapabilities", () => {
     const code = 'const message = `value: ${process.env.SECRET}`; void message;';
 
     expect(detectDangerousBackendCapabilities(code)).toContain("dangerous process API usage");
+  });
+  test("classifies Module constructor loader acquisition and unresolved keys conservatively", () => {
+    const cases: Array<{ name: string; source: string; label: string }> = [
+      {
+        name: "direct _load",
+        source: 'module.constructor._load("node:fs");',
+        label: "module loading",
+      },
+      {
+        name: "direct createRequire",
+        source: 'module.constructor.createRequire("/tmp/extension.js");',
+        label: "module loading",
+      },
+      {
+        name: "static computed constructor",
+        source: 'module["constructor"]["_load"]("node:fs");',
+        label: "module loading",
+      },
+      {
+        name: "simple module alias",
+        source: 'const mod = module; mod.constructor.createRequire("/tmp/extension.js");',
+        label: "module loading",
+      },
+      {
+        name: "global module alias",
+        source: 'const mod = globalThis.module; mod.constructor._load("node:fs");',
+        label: "module loading",
+      },
+      {
+        name: "Reflect.get constructor",
+        source: 'Reflect.get(module, "constructor")._load("node:fs");',
+        label: "module loading",
+      },
+      {
+        name: "unresolved computed constructor key",
+        source: 'const key = getKey(); module[key]._load("node:fs");',
+        label: "dynamic module access",
+      },
+    ];
+
+    for (const { name, source, label } of cases) {
+      expect(detectDangerousBackendCapabilities(source), name).toContain(label);
+    }
+    expect(
+      detectDangerousBackendCapabilities(
+        'const unrelated = { constructor: { _load(value) { return value; } } }; unrelated.constructor._load("node:fs");',
+      ),
+    ).toEqual([]);
+  });
+  test("flags Reflect/Object aliases through computed call/apply/bind dispatch", () => {
+    const blocked: Array<{ name: string; source: string; label: string }> = [
+      {
+        name: "computed Reflect alias call",
+        source: 'const R = Reflect; R["get"]["call"](null, globalThis, "fetch");',
+        label: "direct network API usage",
+      },
+      {
+        name: "computed Object alias apply",
+        source:
+          'const O = Object; O["getOwnPropertyDescriptor"]["apply"](null, [global, "Worker"]);',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "computed Reflect alias bind",
+        source:
+          'const R = Reflect; R["get"]["bind"](null, self, "WebSocket")();',
+        label: "direct network API usage",
+      },
+      {
+        name: "computed Object alias call",
+        source:
+          'const O = Object; O["getOwnPropertyDescriptor"]["call"](null, globalThis, "BroadcastChannel");',
+        label: "worker runtime API usage",
+      },
+    ];
+
+    for (const { name, source, label } of blocked) {
+      expect(detectDangerousBackendCapabilities(source), name).toEqual([label]);
+    }
+
+    const safe = `
+      const local = {};
+      const R = Reflect;
+      const O = Object;
+      R["get"].call(null, local, "fetch");
+      O["getOwnPropertyDescriptor"].apply(null, [local, "Worker"]);
+      R["get"](globalThis, "setTimeout");
+      O["getOwnPropertyDescriptor"](globalThis, "toString");
+    `;
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+
+  test("classifies parenthesized global receivers without labeling safe locals", () => {
+    const blocked: Array<{ name: string; source: string; label: string }> = [
+      {
+        name: "parenthesized globalThis fetch",
+        source: "(globalThis).fetch(request);",
+        label: "direct network API usage",
+      },
+      {
+        name: "parenthesized self Worker",
+        source: '(self)["Worker"]("worker.js");',
+        label: "worker runtime API usage",
+      },
+      {
+        name: "parenthesized global WebSocket",
+        source: "(global).WebSocket(url);",
+        label: "direct network API usage",
+      },
+    ];
+
+    for (const { name, source, label } of blocked) {
+      expect(detectDangerousBackendCapabilities(source), name).toEqual([label]);
+    }
+
+    const safe = `
+      const local = {};
+      const globalThis = local;
+      (local).fetch(request);
+      (globalThis)["Worker"]("worker.js");
+      (local).WebSocket(url);
+    `;
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+
+  test("fails closed for unknown serialized computed aliases while ignoring local objects", () => {
+    const blocked = [
+      'const root = globalThis; const key = getKey(); root[key]("zod");',
+      'const root = self; const key = getKey(); root[key]("zod");',
+      'const { [getKey()]: load } = globalThis; load("zod");',
+    ];
+    for (const source of blocked) {
+      expect(detectSerializedHandlerModuleAccess(source), source).toEqual(["module loading"]);
+    }
+
+    const safe = `
+      const local = {};
+      const alias = local;
+      const key = getKey();
+      alias[key]("zod");
+      local["fetch"]("zod");
+      globalThis["fetch"]("zod");
+    `;
+    expect(detectSerializedHandlerModuleAccess(safe)).toEqual([]);
+  });
+
+  test("flags aliases of every dynamic function constructor", () => {
+    const blocked = [
+      'const F = Function; F("return 1");',
+      'const AF = AsyncFunction; AF("return 1");',
+      'const GF = GeneratorFunction; GF("yield 1");',
+      'const AGF = AsyncGeneratorFunction; AGF("yield 1");',
+    ];
+    for (const source of blocked) {
+      expect(detectDangerousBackendCapabilities(source), source).toEqual([
+        "dynamic code execution",
+      ]);
+    }
+
+    const safe = `
+      const local = {};
+      const F = local["Function"];
+      const AF = local["AsyncFunction"];
+      F("return 1");
+      AF("return 1");
+    `;
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+
+  test("classifies computed module.createRequire access with exact loader labels", () => {
+    const blocked: Array<{ name: string; source: string; expected: string[] }> = [
+      {
+        name: "computed module createRequire native addon",
+        source: 'module["createRequire"](import.meta.url)("./native.node");',
+        expected: ["module loading", "dynamic module access"],
+      },
+      {
+        name: "fully computed global module createRequire filesystem",
+        source: 'globalThis["module"]["createRequire"](import.meta.url)("node:fs");',
+        expected: ["module loading", "filesystem module access"],
+      },
+      {
+        name: "computed module alias createRequire",
+        source:
+          'const mod = module; mod["createRequire"](import.meta.url)("node:child_process");',
+        expected: ["module loading", "subprocess module access"],
+      },
+    ];
+
+    for (const { name, source, expected } of blocked) {
+      expect(detectDangerousBackendCapabilities(source), name).toEqual(expected);
+    }
+
+    const safe = `
+      const local = {};
+      local["createRequire"]?.(import.meta.url);
+      module["require"]("./local.js");
+    `;
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+  });
+  test("reconciles bounded provenance for loader and runtime alias classes", () => {
+    const positives: Array<{ name: string; source: string; label: string }> = [
+      {
+        name: "direct module require",
+        source: 'module.require("node:fs");',
+        label: "filesystem module access",
+      },
+      {
+        name: "computed module require",
+        source: 'module["require"]("node:child_process");',
+        label: "subprocess module access",
+      },
+      {
+        name: "transitive module require alias",
+        source: 'const mod = module; const req = mod.require; req("node:fs");',
+        label: "filesystem module access",
+      },
+      {
+        name: "Reflect module loader",
+        source: 'Reflect.get(module, "require")("node:fs");',
+        label: "filesystem module access",
+      },
+      {
+        name: "Object module descriptor",
+        source:
+          'Object.getOwnPropertyDescriptor(module, "require").value("node:fs");',
+        label: "filesystem module access",
+      },
+      {
+        name: "global require member",
+        source: 'globalThis.require("node:fs");',
+        label: "filesystem module access",
+      },
+      {
+        name: "computed global import member",
+        source: 'globalThis["import"]("node:child_process");',
+        label: "subprocess module access",
+      },
+      {
+        name: "transitive Bun alias",
+        source: 'const b = Bun; const b2 = b; b2.spawn(["id"]);',
+        label: "dangerous Bun system API usage",
+      },
+      {
+        name: "transitive process alias",
+        source: 'const p = process; const p2 = p; p2.env.SECRET;',
+        label: "dangerous process API usage",
+      },
+      {
+        name: "transitive global alias",
+        source: 'const g = globalThis; const g2 = g; g2.fetch(url);',
+        label: "direct network API usage",
+      },
+      {
+        name: "default RHS global alias",
+        source: 'function use(root = globalThis) { root.fetch(url); }',
+        label: "direct network API usage",
+      },
+      {
+        name: "control header leaves process global",
+        source: 'if (process) { Reflect.get(process, "env"); }',
+        label: "dangerous process API usage",
+      },
+    ];
+    for (const { name, source, label } of positives) {
+      expect(detectDangerousBackendCapabilities(source), name).toContain(label);
+    }
+
+    const safeNegatives = [
+      'const module = {}; module.require("node:fs");',
+      'const Bun = {}; Bun.spawn(["id"]);',
+      'function use(process) { process.env.SECRET; }',
+      'const Reflect = {}; Reflect.get(globalThis, "fetch");',
+      'const Object = {}; Object.getOwnPropertyDescriptor(globalThis, "Worker");',
+      'function use(Function, globalThis) { Function("return 1"); globalThis.fetch(url); }',
+      'const local = {}; const key = getKey(); local[key]("node:fs");',
+      'if (process) { const process = {}; process.env.SECRET; }',
+    ];
+    for (const source of safeNegatives) {
+      expect(detectDangerousBackendCapabilities(source), source).toEqual([]);
+    }
+  });
+
+  test("fails closed for unresolved loader keys and serialized computed import", () => {
+    const unresolved = [
+      'const mod = module; const key = getKey(); mod[key]("node:fs");',
+      'const root = globalThis; const key = getKey(); root[key]("node:fs");',
+      'Reflect.get(module, key)("node:fs");',
+      'Object.getOwnPropertyDescriptor(globalThis, key).value("node:fs");',
+    ];
+    for (const source of unresolved) {
+      expect(detectDangerousBackendCapabilities(source), source).toContain(
+        "dynamic module access",
+      );
+    }
+
+    const serializedBlocked = [
+      'const root = globalThis; const key = getKey(); root[key]("zod");',
+      'const root = self; root["im" + "port"]("zod");',
+      'const root = global; const load = root.require; load("zod");',
+    ];
+    for (const source of serializedBlocked) {
+      expect(detectSerializedHandlerModuleAccess(source), source).toContain(
+        "module loading",
+      );
+    }
+
+    const serializedSafe = [
+      'const globalThis = {}; const key = getKey(); globalThis[key]("zod");',
+      'const local = {}; local["import"]("zod");',
+      'function use(require) { require("zod"); }',
+    ];
+    for (const source of serializedSafe) {
+      expect(detectSerializedHandlerModuleAccess(source), source).toEqual([]);
+    }
+  });
+  test("decodes escaped module specifiers and preserves object-literal division", () => {
+    const blocked: Array<[string, string]> = [
+      ['require("node:\\x66s")', "filesystem module access"],
+      ['require("node:\\u0066s")', "filesystem module access"],
+      ['require("node:\\u{66}s")', "filesystem module access"],
+      ["await import(`node:\\x66s`)", "filesystem module access"],
+      ["await import(`node:\\u0066s`)", "filesystem module access"],
+      ["await import(`node:\\u{66}s`)", "filesystem module access"],
+      ['require("node:\\x63hild_process")', "subprocess module access"],
+    ];
+    for (const [source, label] of blocked) {
+      expect(detectDangerousBackendCapabilities(source), source).toContain(label);
+    }
+
+    expect(
+      detectDangerousBackendCapabilities("const object = {} / globalThis.fetch(url) / 1;"),
+    ).toContain("direct network API usage");
+    expect(
+      detectDangerousBackendCapabilities(
+        "const object = { require(value) { return value; } } / require(\"node:fs\") / 1;",
+      ),
+    ).toContain("filesystem module access");
+
+    const safeMethods = [
+      "const methods = { require(value) { return value; }, import(value) { return value; } }; methods.require(name);",
+      "const methods = { fetch(value) { return value; } }; methods.fetch(url);",
+    ];
+    for (const source of safeMethods) {
+      expect(detectDangerousBackendCapabilities(source), source).toEqual([]);
+    }
+  });
+
+  test("tracks require.main and require.cache loader aliases", () => {
+    const staticAliases = [
+      'const load = require.main.require; load("node:fs");',
+      'const load = require.cache[id].require; load("node:fs");',
+    ];
+    for (const source of staticAliases) {
+      expect(detectDangerousBackendCapabilities(source), source).toContain(
+        "filesystem module access",
+      );
+    }
+
+    const dynamicAliases = [
+      "const load = require.main.require; load(specifier);",
+      "const load = require.cache[id].require; load(specifier);",
+    ];
+    for (const source of dynamicAliases) {
+      expect(detectDangerousBackendCapabilities(source), source).toContain(
+        "dynamic module access",
+      );
+    }
+  });
+
+  test("blocks overflowed provenance while preserving large nested safe regions", () => {
+    const depth = 4_100;
+    const blocked = `${"{".repeat(depth)}globalThis.fetch(url)${"}".repeat(depth)}`;
+    expect(detectDangerousBackendCapabilities(blocked)).toContain(
+      "dynamic global API access",
+    );
+
+    const safe = `${"{".repeat(depth)}const local = {}; local.fetch(url);${"}".repeat(depth)}`;
+    expect(detectDangerousBackendCapabilities(safe)).toEqual([]);
+
+    const arrows = Array.from(
+      { length: 2_048 },
+      (_, index) => `(value${index}) => value${index}`,
+    ).join(",\n");
+    expect(
+      detectDangerousBackendCapabilities(
+        `const handlers = [${arrows}]; const g = globalThis; g["f" + "etch"](url);`,
+      ),
+    ).toEqual(["direct network API usage"]);
+  });
+
+});
+describe("backend module and path boundaries", () => {
+  test("rejects symlink escapes and recursively validates local helpers", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-path-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const identifier = "manager_path_test";
+    const repo = join(root, "extensions", identifier, "repo");
+    const dist = join(repo, "dist");
+    const storage = join(root, "extensions", identifier, "storage");
+    mkdirSync(dist, { recursive: true });
+    mkdirSync(storage, { recursive: true });
+
+    try {
+      writeFileSync(join(dist, "backend.js"), 'import "./helper";');
+      writeFileSync(join(dist, "helper.js"), "export const safe = true;");
+      const canonical = await validateBackendModuleGraph(identifier, "dist/backend.js");
+      expect(canonical.endsWith("/dist/backend.js")).toBe(true);
+
+      writeFileSync(join(dist, "helper.js"), "process.env.SECRET;");
+      await expect(
+        validateBackendModuleGraph(identifier, "dist/backend.js"),
+      ).rejects.toThrow("dangerous process API usage");
+
+      writeFileSync(join(dist, "helper.js"), "export const safe = true;");
+      writeFileSync(join(dist, "backend.js"), 'import "./missing";');
+      await expect(
+        validateBackendModuleGraph(identifier, "dist/backend.js"),
+      ).rejects.toThrow("Unresolved local backend module");
+
+      const outsideEntry = join(root, "outside-entry.js");
+      writeFileSync(outsideEntry, "export const outside = true;");
+      rmSync(join(dist, "backend.js"));
+      symlinkSync(outsideEntry, join(dist, "backend.js"));
+      await expect(
+        validateBackendModuleGraph(identifier, join(dist, "backend.js")),
+      ).rejects.toThrow(/Symlink escapes|Path traversal detected/);
+
+      writeFileSync(join(repo, "seed.txt"), "seed");
+      const outsideSeed = join(root, "outside-seed.txt");
+      writeFileSync(outsideSeed, "outside");
+      rmSync(join(dist, "backend.js"));
+      writeFileSync(join(dist, "backend.js"), "export const safe = true;");
+      symlinkSync(outsideSeed, join(repo, "seed-link.txt"));
+      expect(() =>
+        applyStorageSeeds(
+          identifier,
+          {
+            storage_seed_files: [{ from: "seed-link.txt", to: "seed.txt" }],
+          } as unknown as SpindleManifest,
+        ),
+      ).toThrow("Symlink escapes");
+
+      const outsideStorage = join(root, "outside-storage");
+      mkdirSync(outsideStorage);
+      rmSync(join(repo, "seed-link.txt"));
+      symlinkSync(outsideStorage, join(storage, "escape"));
+      expect(() =>
+        applyStorageSeeds(
+          identifier,
+          {
+            storage_seed_files: [{ from: "seed.txt", to: "escape/copied.txt" }],
+          } as unknown as SpindleManifest,
+        ),
+      ).toThrow("Symlink escapes");
+
+      rmSync(join(storage, "escape"));
+      applyStorageSeeds(
+        identifier,
+        {
+          storage_seed_files: [{ from: "seed.txt", to: "new/copied.txt" }],
+        } as unknown as SpindleManifest,
+      );
+      expect(readFileSync(join(storage, "new/copied.txt"), "utf8")).toBe("seed");
+    } finally {
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("rejects external package imports from entry and nested local modules", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-package-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const identifier = "manager_package_test";
+    const repo = join(root, "extensions", identifier, "repo");
+    const dist = join(repo, "dist");
+    mkdirSync(dist, { recursive: true });
+
+    try {
+      writeFileSync(join(dist, "backend.js"), 'import "package-name";');
+      await expect(
+        validateBackendModuleGraph(identifier, "dist/backend.js"),
+      ).rejects.toThrow(/External backend module.*package-name.*bundled/);
+
+      writeFileSync(join(dist, "backend.js"), 'import "./helper";');
+      writeFileSync(join(dist, "helper.js"), 'require("package-name");');
+      await expect(
+        validateBackendModuleGraph(identifier, "dist/backend.js"),
+      ).rejects.toThrow(/External backend module.*package-name.*bundled/);
+    } finally {
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("manifest path boundaries", () => {
+  test("rejects installed manifest symlink escapes while preserving normal reads", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-manifest-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const identifier = "manager_manifest_test";
+    const repo = join(root, "extensions", identifier, "repo");
+    const outsideManifest = join(root, "outside-spindle.json");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(
+      outsideManifest,
+      JSON.stringify({
+        identifier,
+        version: "1.0.0",
+        name: "Outside manifest",
+        author: "Test author",
+        github: "https://github.com/example/outside",
+        homepage: "https://example.com/outside",
+      }),
+    );
+
+    try {
+      symlinkSync(outsideManifest, join(repo, "spindle.json"));
+      await expect(getManifest(identifier)).rejects.toThrow("Symlink escapes");
+
+      rmSync(join(repo, "spindle.json"));
+      writeFileSync(
+        join(repo, "spindlefile"),
+        JSON.stringify({
+          identifier,
+          version: "1.0.1",
+          name: "Installed manifest",
+          author: "Test author",
+          github: "https://github.com/example/installed",
+          homepage: "https://example.com/installed",
+        }),
+      );
+      await expect(getManifest(identifier)).resolves.toMatchObject({
+        identifier,
+        version: "1.0.1",
+        name: "Installed manifest",
+      });
+    } finally {
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects import-local manifest symlink escapes before reading", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-import-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const candidateRoot = join(root, "extensions", "local_candidate");
+    const repo = join(candidateRoot, "repo");
+    const outsideManifest = join(root, "outside-local-spindle.json");
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(
+      outsideManifest,
+      JSON.stringify({
+        identifier: "local_candidate",
+        version: "1.0.0",
+        name: "Outside local manifest",
+        author: "Test author",
+        github: "https://github.com/example/local",
+        homepage: "https://example.com/local",
+      }),
+    );
+
+    try {
+      symlinkSync(outsideManifest, join(repo, "spindle.json"));
+      const result = await importLocalExtensions();
+      expect(result.imported).toEqual([]);
+      expect(result.skipped).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: candidateRoot,
+            reason: expect.stringContaining("Symlink escapes"),
+          }),
+        ]),
+      );
+    } finally {
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("imports an ordinary root-layout local manifest and normalizes it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "spindle-manager-import-normal-"));
+    const previousDataDir = env.dataDir;
+    env.dataDir = root;
+    const identifier = "local_manifest_test";
+    const candidateRoot = join(root, "extensions", identifier);
+    mkdirSync(candidateRoot, { recursive: true });
+    writeFileSync(
+      join(candidateRoot, "spindlefile.json"),
+      JSON.stringify({
+        identifier,
+        version: "1.0.0",
+        name: "Local manifest",
+        author: "Test author",
+        github: "https://github.com/example/local",
+        homepage: "https://example.com/local",
+      }),
+    );
+
+    closeDatabase();
+    const db = initDatabase(":memory:");
+    try {
+      await runMigrations(db);
+      const result = await importLocalExtensions();
+      expect(result.skipped).toEqual([]);
+      expect(result.imported).toHaveLength(1);
+      expect(result.imported[0]?.identifier).toBe(identifier);
+      expect(readFileSync(join(candidateRoot, "repo", "spindlefile.json"), "utf8")).toContain(
+        '"identifier":"local_manifest_test"',
+      );
+    } finally {
+      closeDatabase();
+      env.dataDir = previousDataDir;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

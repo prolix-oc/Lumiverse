@@ -3,6 +3,7 @@
 Lumiverse's first-party React components — model pickers, form atoms, searchable selects, pagination, collapsible sections — are exposed to extensions via `ctx.components.*`. The host renders the real component into a DOM node you control. You never need to depend on React, ship the component CSS, or replicate the look in plain HTML.
 
 Mounted components automatically inherit the active Lumiverse theme (accent color, glass mode, dark/light, density), so they visually match the rest of the host UI without any styling work on your part.
+Shared components are inert by default: they add no DOM or UI until an extension explicitly mounts one through `ctx.components.*` into an extension-owned target under a registered placement root.
 
 ```ts
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
@@ -49,11 +50,11 @@ export function setup(ctx: SpindleFrontendContext) {
 
 Every `mountX(target, options)` call:
 
-1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string scoped to your extension's DOM.
+1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string. Selectors are evaluated across the current extension's live registered placement roots, including roots temporarily detached while their tab or panel is inactive; the selector must resolve exactly one target.
 2. **Renders the real component** into that element.
-3. **Returns a handle** with `update()`, `getValue()`, `destroy()`, and component-specific helpers.
+3. **Returns a handle** with `update()`, `destroy()`, and component-specific helpers such as `getValue()` where documented.
 
-The handle is the only thing you need to keep alive. Mounted components are auto-destroyed when your extension is disabled or unloaded — but you should still call `destroy()` yourself when you reuse the target for something else, to avoid leaking memory.
+The handle is the only thing you need to keep alive. A registered root may be temporarily detached without losing mounted component state; any body-ported component UI is hidden and made inert until the root is attached again. Removing or reparenting the target, or unregistering its placement root, destroys the mount. The host also destroys mounts when your extension is disabled or unloaded — but you should still call `destroy()` yourself when you reuse the target for something else, to avoid leaking memory.
 
 ### Shared handle shape
 
@@ -83,7 +84,7 @@ You do **not** need to mirror state into your own variables and call `update()` 
 
 ### `onChange` ordering and detached snapshots
 
-For form components, the host commits the next value before invoking `onChange`, so `handle.getValue()` inside the callback already returns that next value. If the callback calls `handle.update({ value })`, that programmatic update is applied afterward and wins. Values passed to callbacks and returned by `getValue()` are detached snapshots; mutating a mutable array (for example, a multiselect value) or a Loom editor snapshot cannot mutate host state.
+For form components, the host commits the next value before invoking `onChange`, so `handle.getValue()` inside the callback already returns that next value. If the callback calls `handle.update({ value })`, that programmatic update is applied afterward and wins. Callback return values — including `false` or a thenable that resolves to `false` — are notifications only and never roll state back. Synchronous throws and rejected thenables are logged without undoing the committed value. Values passed to callbacks and returned by `getValue()` are detached snapshots; mutating a mutable array (for example, a multiselect value) or a Loom editor snapshot cannot mutate host state.
 
 
 ## Component catalog
@@ -110,7 +111,7 @@ For form components, the host commits the next value before invoking `onChange`,
 
 ## Loom block editor
 
-`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still be connected inside a live, currently registered placement root owned by the calling extension (the same target rules as every shared component apply). A detached element with only an ownership attribute is not a valid target.
+`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still be inside a live, currently registered placement root owned by the calling extension (the same target rules as every shared component apply). A registered placement root may be temporarily detached while its tab or panel is inactive; an arbitrary detached element with only an ownership attribute is not a valid target.
 
 The public value is deliberately closed:
 
@@ -381,7 +382,7 @@ const picker = ctx.components.mountSelect(target, {
 | `triggerIcon` | `SpindleSelectOptionLeading` | — | Custom icon shown on the trigger |
 | `triggerClassName` | `string` | — | Additional CSS class on the trigger button |
 | `ariaLabel` | `string` | — | Accessible label for the trigger |
-| `portal` | `boolean` | `true` | Render the dropdown into `document.body` so it escapes `overflow:hidden` ancestors |
+| `portal` | `boolean` | `true` | Render the dropdown into `document.body` so it escapes `overflow:hidden` ancestors. Extension bridges opt into this default; set `false` to keep the dropdown inline. |
 | `align` | `'left' \| 'right'` | `'left'` | Dropdown horizontal alignment relative to the trigger |
 | `maxHeight` | `number` | — | Maximum dropdown height in CSS pixels |
 | `minWidth` | `number` | — | Minimum dropdown width in CSS pixels |
@@ -715,8 +716,9 @@ Pagination is fully controlled — call `pager.update({ currentPage: next })` af
 
 | Event | What the host does |
 |---|---|
-| You call `handle.destroy()` | The React tree is unmounted. The target element remains in place. |
+| You call `handle.destroy()` | The React tree is unmounted. The target element remains in place, and any owned body portals are removed. |
 | You replace the target's contents (e.g. `el.innerHTML = ''`) | **Don't.** Destroy the handle first. Replacing the DOM under React's feet leaks memory. |
+| A registered placement root is temporarily detached | Mounted state is retained. Any owned body portals are hidden with an author-level `display: none` rule and inert while the root is detached; outside-pointer, scroll, resize, and reposition effects are suspended without closing or clearing the select. Reattachment restores the prior `hidden`, `inert`, and inline `style` state, then resumes positioning. |
 | Your extension is disabled / unloaded | All mounted components are destroyed automatically as part of cleanup, alongside drawer tabs, dock panels, and other placements. |
 | The extension reloads (dev/manifest change) | New mounts are created against fresh targets. Stale handles from the previous load are unmounted by the host. |
 

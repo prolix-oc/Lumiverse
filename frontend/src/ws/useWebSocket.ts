@@ -1423,6 +1423,7 @@ export function useWebSocket() {
             action: 'stop',
             processId: payload.processId,
             reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+            ...(payload.force === true ? { force: true } : {}),
           })
         }
       }),

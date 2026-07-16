@@ -10,6 +10,11 @@ export interface MacroOwner {
   readonly generation: string;
 }
 
+export interface MacroGenerationActivation {
+  readonly owner: MacroOwner;
+  readonly previousOwner: MacroOwner | null;
+}
+
 export type MacroSource = "core-public" | "extension-owned";
 
 export interface MacroRegistration {
@@ -53,10 +58,11 @@ function canonicalExtensionId(extensionId: string): string {
   return typeof extensionId === "string" ? extensionId.trim() : "";
 }
 
-function normalizeOwner(owner: MacroOwner): MacroOwner | null {
+function normalizeOwner(owner: unknown): MacroOwner | null {
   if (!owner || typeof owner !== "object") return null;
-  const extensionId = canonicalExtensionId(owner.extensionId);
-  const generation = typeof owner.generation === "string" ? owner.generation.trim() : "";
+  const candidate = owner as Partial<MacroOwner>;
+  const extensionId = canonicalExtensionId(candidate.extensionId ?? "");
+  const generation = typeof candidate.generation === "string" ? candidate.generation.trim() : "";
   if (!extensionId || !generation) return null;
   return { extensionId, generation };
 }
@@ -110,7 +116,7 @@ export class MacroRegistry {
   private aliases = new Map<string, string>();
   private registrations = new Map<string, MacroRegistration>();
   private activeGenerations = new Map<string, string>();
-
+  private activationTokens = new WeakSet<object>();
   /**
    * Register a trusted core definition. Core definitions are immutable from
    * the extension-facing APIs and are stamped as built-ins here rather than
@@ -121,16 +127,67 @@ export class MacroRegistry {
   }
 
   /**
-   * Activate a worker generation before it can register macros. Replacing an
-   * active generation does not remove the old generation's entries; its
-   * eventual cleanup removes only entries bearing that exact owner token.
+   * Begin activating a worker generation and retain the incumbent for a
+   * compare-and-swap rollback if transport construction fails.
    */
-  activateExtensionGeneration(owner: MacroOwner): boolean {
+  beginExtensionGeneration(owner: MacroOwner): MacroGenerationActivation | null {
     const normalized = normalizeOwner(owner);
-    if (!normalized) return false;
+    if (!normalized) return null;
+    const previousGeneration = this.activeGenerations.get(normalized.extensionId);
+    const previousOwner = previousGeneration
+      ? Object.freeze({ extensionId: normalized.extensionId, generation: previousGeneration })
+      : null;
     this.activeGenerations.set(normalized.extensionId, normalized.generation);
+    const activation = Object.freeze({
+      owner: Object.freeze(copyOwner(normalized)),
+      previousOwner,
+    });
+    this.activationTokens.add(activation);
+    return activation;
+  }
+
+  /**
+   * Preserve a newer concurrent activation: rollback only when this
+   * transaction still owns the active generation slot.
+   */
+  rollbackExtensionGeneration(activation: unknown): boolean {
+    if (activation === null || typeof activation !== "object" || !this.activationTokens.has(activation)) {
+      return false;
+    }
+    this.activationTokens.delete(activation);
+    const candidate = activation as MacroGenerationActivation;
+    const normalized = normalizeOwner(candidate.owner);
+    if (!normalized || this.activeGenerations.get(normalized.extensionId) !== normalized.generation) {
+      return false;
+    }
+    const previousOwner = candidate.previousOwner === null
+      ? null
+      : normalizeOwner(candidate.previousOwner);
+    if (candidate.previousOwner !== null && !previousOwner) return false;
+    if (previousOwner && previousOwner.extensionId !== normalized.extensionId) return false;
+    if (previousOwner) {
+      this.activeGenerations.set(normalized.extensionId, previousOwner.generation);
+    } else {
+      this.activeGenerations.delete(normalized.extensionId);
+    }
     return true;
   }
+
+  commitExtensionGeneration(activation: unknown): boolean {
+    if (activation === null || typeof activation !== "object" || !this.activationTokens.has(activation)) {
+      return false;
+    }
+    this.activationTokens.delete(activation);
+    const candidate = activation as MacroGenerationActivation;
+    const normalized = normalizeOwner(candidate.owner);
+    return !!normalized && this.activeGenerations.get(normalized.extensionId) === normalized.generation;
+  }
+  activateExtensionGeneration(owner: MacroOwner): boolean {
+    const activation = this.beginExtensionGeneration(owner);
+    if (!activation) return false;
+    return this.commitExtensionGeneration(activation);
+  }
+
 
   deactivateExtensionGeneration(owner: MacroOwner): boolean {
     const normalized = normalizeOwner(owner);

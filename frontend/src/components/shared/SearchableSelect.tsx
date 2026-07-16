@@ -26,6 +26,10 @@ export interface SearchableSelectOption {
 }
 
 const UNCATEGORIZED_KEY = '__uncategorized__'
+/** Internal host signal shared with component bridges for body-portal ownership. */
+export const PORTAL_OWNER_ACTIVE_ATTRIBUTE = 'data-spindle-component-portal-owner-active'
+export const PORTAL_OWNER_ACTIVITY_EVENT = 'spindle:component-portal-owner-activity'
+
 
 function getGroupKey(opt: SearchableSelectOption): string {
   const trimmed = (opt.group ?? '').trim()
@@ -68,6 +72,8 @@ type CommonProps = {
   ariaLabel?: string
   /** Render the popover inside document.body (useful for overflow-hidden containers). */
   portal?: boolean
+  /** Host-only ownership marker for extension-owned body portals. */
+  portalOwnerId?: string
   /** Horizontal alignment of popover relative to trigger. Default 'left'. */
   align?: 'left' | 'right'
   /** Max height of the popover in px. Default 280. */
@@ -97,6 +103,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     leadingClassName,
     ariaLabel,
     portal = false,
+    portalOwnerId,
     align = 'left',
     maxHeight = 280,
     minWidth,
@@ -112,6 +119,12 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const isPortalOwnerActive = useCallback(() => {
+    if (!portal || !portalOwnerId) return true
+    const popover = popoverRef.current
+    return !popover || popover.getAttribute(PORTAL_OWNER_ACTIVE_ATTRIBUTE) !== 'false'
+  }, [portal, portalOwnerId])
+
 
   const needle = search.trim().toLowerCase()
   const hasGroups = useMemo(
@@ -214,6 +227,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       const popover = popoverRef.current
       const inTrigger = !!trigger && (trigger.contains(target) || path.includes(trigger))
       const inPopover = !!popover && (popover.contains(target) || path.includes(popover))
+      if (!isPortalOwnerActive()) return
       if (!inTrigger && !inPopover) {
         setOpen(false)
         setSearch('')
@@ -221,7 +235,7 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     }
     document.addEventListener('pointerdown', handle)
     return () => document.removeEventListener('pointerdown', handle)
-  }, [open])
+  }, [open, isPortalOwnerActive])
 
   const reposition = useCallback(() => {
     if (!triggerRef.current) return
@@ -280,11 +294,12 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   useEffect(() => {
     if (!open) return
     const handleScroll = (e: Event) => {
-      if (!portal) return
+      if (!portal || !isPortalOwnerActive()) return
       if (popoverRef.current && popoverRef.current.contains(e.target as Node)) return
       reposition()
     }
     const handleResize = () => {
+      if (!isPortalOwnerActive()) return
       lastViewportChangeRef.current = performance.now()
       if (portal) reposition()
     }
@@ -296,12 +311,24 @@ export default function SearchableSelect(props: SearchableSelectProps) {
       window.removeEventListener('scroll', handleScroll, true)
       window.visualViewport?.removeEventListener('resize', handleResize)
     }
-  }, [open, portal, reposition])
+  }, [open, portal, isPortalOwnerActive, reposition])
+
+  useEffect(() => {
+    if (!open || !portal || !portalOwnerId) return
+    const popover = popoverRef.current
+    if (!popover) return
+    const handleOwnerActivity = () => {
+      if (isPortalOwnerActive()) reposition()
+    }
+    popover.addEventListener(PORTAL_OWNER_ACTIVITY_EVENT, handleOwnerActivity)
+    return () => popover.removeEventListener(PORTAL_OWNER_ACTIVITY_EVENT, handleOwnerActivity)
+  }, [open, portal, portalOwnerId, isPortalOwnerActive, reposition])
+
 
   useLayoutEffect(() => {
-    if (!open || !portal) return
+    if (!open || !portal || !isPortalOwnerActive()) return
     reposition()
-  }, [open, portal, reposition])
+  }, [open, portal, isPortalOwnerActive, reposition])
 
   // Focus search input when opened
   useEffect(() => {
@@ -384,6 +411,10 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     <div
       ref={popoverRef}
       className={clsx(styles.popover, portal && styles.popoverPortal)}
+      data-spindle-component-portal={portal && portalOwnerId ? portalOwnerId : undefined}
+      data-spindle-component-portal-owner-active={
+        portal && portalOwnerId ? 'true' : undefined
+      }
       role="listbox"
       aria-multiselectable={isMulti || undefined}
       style={{
