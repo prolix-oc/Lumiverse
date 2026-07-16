@@ -29,8 +29,8 @@ Every extension needs a `spindle.json` at the repository root.
 | `github` | Yes | GitHub repository URL |
 | `homepage` | Yes | Extension homepage or docs URL |
 | `description` | No | Short description shown in the Extensions panel |
-| `permissions` | Yes | Array of gated permissions this extension requires (can be `[]`) |
-| `requested_capabilities` | No | Array of declared backend capabilities that suppress specific install-time scanner blocks. See [Backend Capabilities](capabilities.md) |
+| `permissions` | Yes | Array of permission names this extension requests (can be `[]`); non-privileged permissions are granted automatically and privileged permissions require approval |
+| `requested_capabilities` | No | Array of declared backend capabilities. These suppress specific scanner blocks; `dynamic_code_execution` also enables guarded constructors in backend runtimes and backend-process children. See [Backend Capabilities](capabilities.md) |
 | `entry_backend` | No | Path to backend entry. Default: `"dist/backend.js"` |
 | `entry_frontend` | No | Path to frontend entry. Default: `"dist/frontend.js"` |
 | `minimum_lumiverse_version` | No | Minimum Lumiverse version required |
@@ -39,7 +39,7 @@ Every extension needs a `spindle.json` at the repository root.
 
 ## Requested Capabilities
 
-`requested_capabilities` is distinct from `permissions`. Permissions gate runtime API surfaces (`spindle.generate`, `spindle.chats`, etc.). Capabilities suppress install-time **scanner blocks** for code patterns the extension legitimately needs — usually because a bundled dependency (Zod, Handlebars) or your own helper trips a heuristic that's looking for malware-style obfuscation.
+`requested_capabilities` is distinct from `permissions`. Permissions gate runtime API surfaces (`spindle.generate`, `spindle.chats`, etc.). Capabilities suppress declared **scanner blocks** for code patterns the extension legitimately needs. `dynamic_code_execution` additionally enables guarded `eval` and Function-family constructors in backend runtimes and extension-owned backend-process children; it does not enable frontend evaluation, module loading, or any host API.
 
 ```json
 {
@@ -51,10 +51,12 @@ Available capabilities:
 
 | Capability | Suppresses |
 |---|---|
-| `"dynamic_code_execution"` | The `dynamic code execution` block. Required when the bundled backend contains `eval(` or `Function(` / `new Function(` — including inside vendored libraries (Zod feature-detect probes), inside `RegExp` literals whose source mentions `Function\s*\(`, or as part of a sandboxed in-extension script runner |
+| `"dynamic_code_execution"` | The `dynamic code execution` scanner block, plus guarded `eval` and Function-family constructors in backend runtimes and backend-process children. Required when the bundled backend contains `eval(` or `Function(` / `new Function(` — including inside vendored libraries (Zod feature-detect probes), inside `RegExp` literals whose source mentions `Function\s*\(`, or as part of a sandboxed in-extension script runner |
 | `"base64_decode"` | The `base64 decoding` block. Required when the bundled backend uses `Buffer.from(value, "base64")` — common for binary asset I/O and image helpers |
 
 Only declare capabilities you actually need. A full description of each, plus the list of patterns that **cannot** be opted out of, is in [Backend Capabilities](capabilities.md).
+
+The declaration is evaluated while installing or updating the extension and when a backend runtime starts. A running extension keeps the loaded manifest until it is reloaded/restarted, so changing `requested_capabilities` is not a hot update. Unresolved or dynamic **bare** `import(specifier)` / `require(specifier)` expressions visible in scanned backend source fail closed rather than being treated as safe. The separate privileged `unsafe_eval` permission only enables `allowEval: true` for host-managed frontend sandbox frames created with `ctx.dom.createSandboxFrame`; it does not enable general frontend or backend evaluation.
 
 ## Storage Seed Files
 

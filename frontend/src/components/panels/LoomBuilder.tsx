@@ -163,6 +163,19 @@ function suggestedSealedBlockKey(block: PromptBlock, name: string) {
   return fromTitle || sanitizeSealedBlockKey(block.id).toLowerCase() || block.id.toLowerCase()
 }
 
+function reportLoomCallbackFailure(error: unknown): void {
+  console.error('[Spindle] Loom onChange callback failed', error)
+}
+
+function observeLoomCallbackResult(result: unknown): void {
+  if (result === null || (typeof result !== 'object' && typeof result !== 'function')) return
+  try {
+    void Promise.resolve(result).catch(reportLoomCallbackFailure)
+  } catch (error) {
+    reportLoomCallbackFailure(error)
+  }
+}
+
 function inferGroupAtIndex(blocks: PromptBlock[], index: number) {
   const target = blocks[index]
   if (!target || target.marker === 'category') return null
@@ -365,22 +378,158 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDi
 // BLOCK EDITOR
 // ============================================================================
 
+interface TrustedMacroPreviewControlsProps {
+  blockId: string
+  blocks: PromptBlock[]
+  promptVariables: PromptVariableValues
+  content: string
+  role: PromptBlock['role']
+  position: PromptBlock['position']
+  depth: number
+  variables: PromptVariableDef[]
+}
+
+function TrustedMacroPreviewControls({
+  blockId,
+  blocks,
+  promptVariables,
+  content,
+  role,
+  position,
+  depth,
+  variables,
+}: TrustedMacroPreviewControlsProps) {
+  const { t } = useLb()
+  const [showPreview, setShowPreview] = useState(false)
+  const [previewText, setPreviewText] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewDiagnostics, setPreviewDiagnostics] = useState<{ level: string; message: string }[]>([])
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeChatId = __contextMeterStore((state) => state.activeChatId)
+  const activeCharacterId = __contextMeterStore((state) => state.activeCharacterId)
+  const activeGroupCharacterId = __contextMeterStore((state) => state.activeGroupCharacterId)
+
+  useEffect(() => {
+    if (!showPreview || !content.trim()) {
+      setPreviewText('')
+      setPreviewDiagnostics([])
+      return
+    }
+    clearTimeout(previewTimerRef.current)
+    previewTimerRef.current = setTimeout(() => {
+      setPreviewLoading(true)
+      const isAppend = role === 'user_append' || role === 'assistant_append'
+      const previewBlocks = blocks.map((candidate) =>
+        candidate.id === blockId
+          ? { ...candidate, content, role, position, depth, variables, enabled: true }
+          : candidate,
+      )
+      resolveMacrosApi({
+        template: content,
+        trim: !isAppend,
+        prompt_blocks: previewBlocks,
+        prompt_variables: promptVariables,
+        ...(activeChatId ? { chat_id: activeChatId } : {}),
+        ...(activeGroupCharacterId || activeCharacterId
+          ? { character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined }
+          : {}),
+      })
+        .then((response) => {
+          setPreviewText(response.text)
+          setPreviewDiagnostics(response.diagnostics)
+        })
+        .catch(() => {
+          setPreviewText(t('blockEditor.previewUnavailable'))
+          setPreviewDiagnostics([])
+        })
+        .finally(() => setPreviewLoading(false))
+    }, 500)
+    return () => {
+      clearTimeout(previewTimerRef.current)
+    }
+  }, [
+    activeCharacterId,
+    activeChatId,
+    activeGroupCharacterId,
+    blockId,
+    blocks,
+    content,
+    depth,
+    position,
+    promptVariables,
+    role,
+    t,
+    variables,
+    showPreview,
+  ])
+
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+        <button
+          className={clsx(s.btn, s.btnSmall, showPreview && s.btnPrimary)}
+          onClick={() => setShowPreview(!showPreview)}
+          type="button"
+        >
+          <Eye size={12} /> {showPreview ? t('blockEditor.hidePreview') : t('blockEditor.preview')}
+        </button>
+        {showPreview && previewLoading && (
+          <span style={{ fontSize: 'calc(10px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)' }}>
+            {t('blockEditor.resolving')}
+          </span>
+        )}
+      </div>
+      {showPreview && (
+        <div className={s.previewPanel}>
+          {previewDiagnostics.length > 0 && (
+            <div className={s.previewDiagnostics}>
+              {previewDiagnostics.map((diagnostic, index) => (
+                <div key={index} className={diagnostic.level === 'error' ? s.previewDiagError : s.previewDiagWarn}>
+                  <AlertTriangle size={10} /> {diagnostic.message}
+                </div>
+              ))}
+            </div>
+          )}
+          <pre className={s.previewContent}>
+            {previewLoading
+              ? t('blockEditor.resolving')
+              : (previewText === '' && content ? t('blockEditor.emptyOutput') : previewText || t('blockEditor.noPreview'))}
+          </pre>
+        </div>
+      )}
+    </>
+  )
+}
+
 interface BlockEditorProps {
   block: PromptBlock
   blocks: PromptBlock[]
   promptVariables: PromptVariableValues
-  onSave: (updates: Partial<PromptBlock>) => void
+  onSave: (updates: Partial<PromptBlock>) => boolean | void
   onBack: () => void
+  validationError?: string | null
   availableMacros: MacroGroup[]
   refreshMacros?: () => void
   compact: boolean
+  trustedHostFeatures?: boolean
 }
 
-export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, availableMacros, refreshMacros, compact }: BlockEditorProps) {
+export function BlockEditor({
+  block,
+  blocks,
+  promptVariables,
+  onSave,
+  onBack,
+  validationError,
+  availableMacros,
+  refreshMacros,
+  compact,
+  trustedHostFeatures = false,
+}: BlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { injectionTriggerTypes, injectionTriggerLabel } = useLoomOptionLabels()
-  const isInstalledLumiHubSealed = block.sealedSource === 'lumihub'
+  const isInstalledLumiHubSealed = trustedHostFeatures && block.sealedSource === 'lumihub'
   const [name, setName] = useState(block.name)
   const [role, setRole] = useState<PromptBlock['role']>(block.role || 'system')
   const [content, setContent] = useState(block.content || '')
@@ -399,58 +548,8 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
   )
   const [showMacros, setShowMacros] = useState(false)
   const [macroSearch, setMacroSearch] = useState('')
-  const [showPreview, setShowPreview] = useState(false)
-  const [previewText, setPreviewText] = useState('')
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [previewDiagnostics, setPreviewDiagnostics] = useState<{ level: string; message: string }[]>([])
   const [showExpandedEditor, setShowExpandedEditor] = useState(false)
-  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const activeChatId = __contextMeterStore((s) => s.activeChatId)
-  const activeCharacterId = __contextMeterStore((s) => s.activeCharacterId)
-  const activeGroupCharacterId = __contextMeterStore((s) => s.activeGroupCharacterId)
-
-  // Debounced macro preview resolution
-  useEffect(() => {
-    if (!showPreview || !content.trim()) {
-      setPreviewText('')
-      setPreviewDiagnostics([])
-      return
-    }
-    if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
-    previewTimerRef.current = setTimeout(() => {
-      setPreviewLoading(true)
-      // Trim the preview to match the dry run: the assembly strips
-      // leading/trailing whitespace from each resolved block, except append
-      // roles, where it preserves whitespace for inter-append spacing.
-      const isAppend = role === 'user_append' || role === 'assistant_append'
-      const previewBlocks = blocks.map((b) =>
-        b.id === block.id
-          ? { ...b, content, role, position, depth, variables, enabled: true }
-          : b,
-      )
-      resolveMacrosApi({
-        template: content,
-        trim: !isAppend,
-        prompt_blocks: previewBlocks,
-        prompt_variables: promptVariables,
-        ...(activeChatId ? { chat_id: activeChatId } : {}),
-        ...(activeGroupCharacterId || activeCharacterId
-          ? { character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined }
-          : {}),
-      })
-        .then((res) => {
-          setPreviewText(res.text)
-          setPreviewDiagnostics(res.diagnostics)
-        })
-        .catch(() => {
-          setPreviewText(t('blockEditor.previewUnavailable'))
-          setPreviewDiagnostics([])
-        })
-        .finally(() => setPreviewLoading(false))
-    }, 500)
-    return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
-  }, [content, showPreview, activeChatId, activeCharacterId, activeGroupCharacterId, role, blocks, block.id, position, depth, variables, promptVariables])
 
   const handlePositionChange = (newPosition: string) => {
     const pos = newPosition as PromptBlock['position']
@@ -462,22 +561,29 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
 
   const handleSave = () => {
     const isAppend = role === 'user_append' || role === 'assistant_append'
-    const cleanedVariables = variables.filter((v) => v && v.name?.trim().length > 0)
-    const cleanSealedKey = sanitizeSealedBlockKey(sealedKey || block.sealedKey || block.id)
-    const shouldSeal = isInstalledLumiHubSealed || (sealed && !!cleanSealedKey)
+    const cleanedVariables = variables.filter((variable) => variable && variable.name?.trim().length > 0)
     const cleanedCharacterTagTrigger = sanitizeCharacterTagTrigger(characterTagTrigger)
+    const trustedUpdates: Partial<PromptBlock> = {}
+    if (trustedHostFeatures) {
+      const cleanSealedKey = sanitizeSealedBlockKey(sealedKey || block.sealedKey || block.id)
+      const shouldSeal = isInstalledLumiHubSealed || (sealed && !!cleanSealedKey)
+      trustedUpdates.sealed = shouldSeal ? true : undefined
+      trustedUpdates.sealedKey = shouldSeal ? cleanSealedKey : undefined
+      trustedUpdates.sealedSource = isInstalledLumiHubSealed ? block.sealedSource : undefined
+      trustedUpdates.sealedOriginPresetId = isInstalledLumiHubSealed ? block.sealedOriginPresetId : undefined
+      trustedUpdates.sealedOriginVersion = isInstalledLumiHubSealed ? block.sealedOriginVersion : undefined
+      trustedUpdates.sealedSha256 = isInstalledLumiHubSealed ? block.sealedSha256 : undefined
+    }
     onSave({
-      name, role, content,
+      name,
+      role,
+      content,
       position: isAppend ? 'pre_history' : position,
       depth: (position === 'in_history' || isAppend) ? depth : 0,
-      isLocked, injectionTrigger,
+      isLocked,
+      injectionTrigger,
       characterTagTrigger: cleanedCharacterTagTrigger.length > 0 ? cleanedCharacterTagTrigger : undefined,
-      sealed: shouldSeal ? true : undefined,
-      sealedKey: shouldSeal ? cleanSealedKey : undefined,
-      sealedSource: isInstalledLumiHubSealed ? block.sealedSource : undefined,
-      sealedOriginPresetId: isInstalledLumiHubSealed ? block.sealedOriginPresetId : undefined,
-      sealedOriginVersion: isInstalledLumiHubSealed ? block.sealedOriginVersion : undefined,
-      sealedSha256: isInstalledLumiHubSealed ? block.sealedSha256 : undefined,
+      ...trustedUpdates,
       categoryMode: block.marker === 'category' ? categoryMode : null,
       variables: cleanedVariables.length ? cleanedVariables : undefined,
     })
@@ -542,6 +648,7 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
       )}
       <div className={s.scrollArea}>
         <div className={s.form}>
+          {validationError && <div role="alert" className={s.jsonError}>{validationError}</div>}
           <div className={s.formGroup}>
             <label className={s.label}>{t('blockEditor.name')}</label>
             <input className={s.input} value={name} onChange={e => setName(e.target.value)} placeholder={t('blockEditor.namePlaceholder')} />
@@ -615,25 +722,17 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
               </div>
             )}
             <textarea ref={textareaRef} className={s.textarea} value={content} onChange={e => setContent(e.target.value)} placeholder={t('blockEditor.contentPlaceholder')} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-              <button className={clsx(s.btn, s.btnSmall, showPreview && s.btnPrimary)} onClick={() => setShowPreview(!showPreview)} type="button">
-                <Eye size={12} /> {showPreview ? t('blockEditor.hidePreview') : t('blockEditor.preview')}
-              </button>
-              {showPreview && previewLoading && <span style={{ fontSize: 'calc(10px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)' }}>{t('blockEditor.resolving')}</span>}
-            </div>
-            {showPreview && (
-              <div className={s.previewPanel}>
-                {previewDiagnostics.length > 0 && (
-                  <div className={s.previewDiagnostics}>
-                    {previewDiagnostics.map((d, i) => (
-                      <div key={i} className={d.level === 'error' ? s.previewDiagError : s.previewDiagWarn}>
-                        <AlertTriangle size={10} /> {d.message}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <pre className={s.previewContent}>{previewLoading ? t('blockEditor.resolving') : (previewText === '' && content ? t('blockEditor.emptyOutput') : previewText || t('blockEditor.noPreview'))}</pre>
-              </div>
+            {trustedHostFeatures && (
+              <TrustedMacroPreviewControls
+                blockId={block.id}
+                blocks={blocks}
+                promptVariables={promptVariables}
+                content={content}
+                role={role}
+                position={position}
+                depth={depth}
+                variables={variables}
+              />
             )}
           </div>
 
@@ -641,7 +740,7 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
             <Toggle.Checkbox checked={isLocked} onChange={setIsLocked} label={<><Lock size={14} /> {t('blockEditor.lockBlock')}</>} />
           </div>
 
-          {!block.marker && (
+          {trustedHostFeatures && !block.marker && (
             <div className={clsx(s.sealedBlockPanel, sealed && s.sealedBlockPanelActive)}>
               <button
                 className={s.sealedBlockReveal}
@@ -791,11 +890,12 @@ export function BlockEditor({ block, blocks, promptVariables, onSave, onBack, av
 export interface ControlledLoomBlockEditorProps {
   blocks: PromptBlock[]
   promptVariables: PromptVariableValues
-  onChange: (blocks: PromptBlock[]) => void
+  onChange: (blocks: PromptBlock[]) => boolean | void | Promise<unknown>
   availableMacros: MacroGroup[]
   refreshMacros?: () => void
   readOnly?: boolean
   compact?: boolean
+  trustedHostFeatures?: boolean
 }
 
 /**
@@ -811,10 +911,12 @@ export function ControlledLoomBlockEditor({
   refreshMacros,
   readOnly = false,
   compact = true,
+  trustedHostFeatures = false,
 }: ControlledLoomBlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const editingBlock = editingBlockId
     ? blocks.find((block) => block.id === editingBlockId) ?? null
     : null
@@ -832,16 +934,34 @@ export function ControlledLoomBlockEditor({
         block={editingBlock}
         blocks={blocks}
         promptVariables={promptVariables}
+        validationError={validationError}
         onSave={(updates) => {
-          onChange(blocks.map((block) => (
+          const nextBlocks = blocks.map((block) => (
             block.id === editingBlock.id ? { ...block, ...updates } : block
-          )))
+          ))
+          const callbackBlocks = structuredClone(nextBlocks)
+          let callbackResult: unknown = undefined
+          try {
+            callbackResult = onChange(callbackBlocks) as unknown
+          } catch (error) {
+            reportLoomCallbackFailure(error)
+          }
+          observeLoomCallbackResult(callbackResult)
+          if (callbackResult === false) {
+            setValidationError(t('blockEditor.validationFailed'))
+            return
+          }
+          setValidationError(null)
           setEditingBlockId(null)
         }}
-        onBack={() => setEditingBlockId(null)}
+        onBack={() => {
+          setValidationError(null)
+          setEditingBlockId(null)
+        }}
         availableMacros={availableMacros}
         refreshMacros={refreshMacros}
         compact={compact}
+        trustedHostFeatures={trustedHostFeatures}
       />
     )
   }
@@ -876,7 +996,10 @@ export function ControlledLoomBlockEditor({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  onClick={() => setEditingBlockId(block.id)}
+                  onClick={() => {
+                    setValidationError(null)
+                    setEditingBlockId(block.id)
+                  }}
                   title={tc('actions.edit')}
                 >
                   <Edit2 size={14} />
@@ -1728,6 +1851,7 @@ export default function LoomBuilder({
   const [view, setView] = useState<'list' | 'edit'>('list')
   const [activePresetEditorTab, setActivePresetEditorTab] = useState('preset')
   const [editingBlock, setEditingBlock] = useState<PromptBlock | null>(null)
+  const [blockValidationError, setBlockValidationError] = useState<string | null>(null)
   const [promptMenuOpen, setPromptMenuOpen] = useState(false)
   const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -1768,6 +1892,12 @@ export default function LoomBuilder({
           preset: toPresetEditorDraft(preset),
         }
       },
+      getPromptVariableValues: () => {
+        const preset = activePresetRef.current
+        return preset && preset.id === __contextMeterStore.getState().activeLoomPresetId
+          ? preset.promptVariables
+          : {}
+      },
       setActiveTab: (tabId) => {
         setView('list')
         setEditingBlock(null)
@@ -1790,7 +1920,7 @@ export default function LoomBuilder({
         presetId: null,
         activeTabId: activePresetEditorTab,
         preset: null,
-      })
+      }, {})
       return
     }
     syncPresetEditorState({
@@ -1798,7 +1928,7 @@ export default function LoomBuilder({
       presetId: activePreset.id,
       activeTabId: activePresetEditorTab,
       preset: toPresetEditorDraft(activePreset),
-    })
+    }, activePreset.promptVariables)
   }, [activePreset, activePresetEditorTab, activePresetId])
 
   useEffect(() => {
@@ -2087,15 +2217,23 @@ export default function LoomBuilder({
   }, [])
 
   const handleEdit = useCallback((block: PromptBlock) => {
+    setBlockValidationError(null)
     setEditingBlock(block)
     setView('edit')
   }, [])
 
-  const handleEditSave = useCallback((updates: Partial<PromptBlock>) => {
-    if (editingBlock) updateBlock(editingBlock.id, updates)
+  const handleEditSave = useCallback((updates: Partial<PromptBlock>): boolean => {
+    if (!editingBlock) return false
+    const accepted = updateBlock(editingBlock.id, updates)
+    if (!accepted) {
+      setBlockValidationError(lb('blockEditor.validationFailed'))
+      return false
+    }
+    setBlockValidationError(null)
     setView('list')
     setEditingBlock(null)
-  }, [editingBlock, updateBlock])
+    return true
+  }, [editingBlock, lb, updateBlock])
 
   const handleAddTemplate = useCallback((template: { name: string; content: string; role: string }) => {
     addBlock(createBlock({ name: template.name, content: template.content, role: template.role as PromptBlock['role'] }))
@@ -2206,11 +2344,17 @@ export default function LoomBuilder({
           block={editingBlock}
           blocks={activePreset?.blocks ?? []}
           promptVariables={activePreset?.promptVariables ?? {}}
+          validationError={blockValidationError}
           onSave={handleEditSave}
-          onBack={() => { setView('list'); setEditingBlock(null) }}
+          onBack={() => {
+            setBlockValidationError(null)
+            setView('list')
+            setEditingBlock(null)
+          }}
           availableMacros={availableMacros}
           refreshMacros={refreshMacros}
           compact={compact}
+          trustedHostFeatures={true}
         />
       </>
     )

@@ -9,6 +9,7 @@ If a placement needs an isolated child document with inline scripts, create and 
 ## Drawer Tabs (free — no permission needed)
 
 Register a tab in the ViewportDrawer sidebar. Max 4 per extension, 8 global.
+Drawer tabs are free: registering or updating one does not require `ui_panels`, and revoking `ui_panels` does not remove it.
 
 Drawer tabs are managed by Lumiverse's central tab registry. When you register a tab, it automatically appears in the sidebar **and** the command palette (`Ctrl+K`). The metadata you provide controls how the tab looks and how users find it.
 
@@ -183,7 +184,7 @@ const tab = ctx.ui.registerPresetEditorTab({
 const render = () => {
   const { preset } = ctx.ui.presetEditor.getState()
   tab.root.textContent = preset
-    ? JSON.stringify(preset.metadata.agentic_preset_composer ?? {}, null, 2)
+    ? JSON.stringify(preset.metadata.my_extension ?? {}, null, 2)
     : 'Select a preset'
 }
 
@@ -194,7 +195,7 @@ ctx.ui.presetEditor.updatePreset((preset) => ({
   ...preset,
   metadata: {
     ...preset.metadata,
-    agentic_preset_composer: graph,
+    my_extension: graph,
   },
 }), { immediate: true })
 ```
@@ -246,7 +247,7 @@ tab, Main blocks, prompt-variable values, and the raw value at
 replace only the calling extension's top-level passthrough key. Manifest
 identifiers colliding with Loom-owned metadata keys, including `source` and
 `description`, are rejected rather than allowed to mutate Main-owned fields.
-`activateBuiltinTab('blocks')` selects the host's stable native Blocks tab.
+`activateBuiltinTab('blocks')` activates the host's stable native preset-editor view. The visible tab label is the localized `Preset` translation; `blocks` is the API identifier, not a literal label.
 
 The helper is cooperative least-authority API design, **not** isolation against
 hostile same-origin extension code. It shares Loom's one per-preset serialized
@@ -305,16 +306,16 @@ widget.destroy()
 | `tooltip` | `string` | — | Hover tooltip text |
 | `chromeless` | `boolean` | `false` | Strip the default container chrome (border, background, shadow, border-radius). The extension fully owns the visual presentation. |
 
-## Tab Mobility (requires `app_manipulation` or `ui_panels`)
+## Tab Mobility (requires one of `app_manipulation` or `ui_panels`, depending on the operation)
 
-Move any built-in or extension drawer tab between the main drawer and any registered container. Built-in tabs (like `'profile'`, `'connections'`, etc.) are addressable by their stable id. Extension tabs are addressable by the id assigned at registration time.
+Move a supported built-in or your own extension drawer tab between the main drawer and any registered container. Extension tabs are addressable by the id assigned at registration time. `requestTabLocation` accepts either `app_manipulation` or `ui_panels`; mounting a built-in tab's root requires `ui_panels`.
 
 ```ts
 // Move a tab to a registered container (by container id)
-ctx.ui.requestTabLocation('connections', { kind: 'container', containerId: 'canvas-secondary' })
+ctx.ui.requestTabLocation('profile', { kind: 'container', containerId: 'canvas-secondary' })
 
 // Move it back to the main drawer
-ctx.ui.requestTabLocation('connections', { kind: 'main-drawer' })
+ctx.ui.requestTabLocation('profile', { kind: 'main-drawer' })
 
 // Query current location
 const loc = ctx.ui.getTabLocation('profile')
@@ -341,9 +342,9 @@ ctx.ui.requestTabLocation(tabId, location): void
 
 ### Notes
 
-- Built-in tabs are addressable by their id (`'profile'`, `'connections'`, `'presets'`, etc.). Extension tabs use the id assigned at registration time.
+- Supported built-in ids include `'profile'`, `'presets'`, `'loom'`, `'characters'`, `'personas'`, `'branches'`, `'spindle'`, `'theme'`, and `'lorebook'`. Extension tabs use the id assigned at registration time; other extensions' tabs are not dispatchable.
 - When a tab is routed to a container id that has no matching registered entry, `ContainerTabContent` automatically resets the tab to `{ kind: 'main-drawer' }` so it remains visible.
-- `requestTabLocation` requires the `app_manipulation` permission; `getBuiltInTabRoot` requires the `ui_panels` permission; `getTabLocation` is a read-only query and is free.
+- `requestTabLocation` accepts either `app_manipulation` or `ui_panels`; `getBuiltInTabRoot` requires `ui_panels`; `getTabLocation` is a read-only query and is free.
 
 ### Method: `getBuiltInTabRoot`
 
@@ -745,7 +746,7 @@ resetBtn.addEventListener('click', async () => {
 | Input Bar Action | 4 | 12 |
 | Modal | 2 stacked | — |
 
-Exceeding limits throws an error. All placements are automatically cleaned up when an extension is disabled or removed.
+Exceeding limits throws an error. All placements are automatically cleaned up when an extension is disabled, removed, updated, or reloaded. A placement that requires a permission is also removed immediately when that permission is revoked; its stale handle remains closed.
 
 ## User Control
 

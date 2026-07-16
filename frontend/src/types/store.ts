@@ -1140,7 +1140,7 @@ import type {
   InputBarActionState,
   ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]

@@ -2988,6 +2988,7 @@
       "backToList": "Torna alla lista",
       "title": "Modifica blocco",
       "save": "Salva",
+      "validationFailed": "Impossibile applicare questa modifica al blocco. Controlla i valori e riprova.",
       "name": "Nome",
       "namePlaceholder": "Nome del blocco",
       "role": "Ruolo",

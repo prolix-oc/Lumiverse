@@ -1,8 +1,14 @@
+import { initializeSandbox } from "./worker-runtime-sandbox";
+
+const nativeProcessExit = process.exit.bind(process);
+
 type BackendProcessInit = {
   processId: string;
   entry: string;
   kind: string;
   entryPath: string;
+  /** Host-derived capability; extension input never controls this flag. */
+  allowDynamicCode?: boolean;
   key?: string;
   payload?: unknown;
   metadata?: Record<string, unknown>;
@@ -33,7 +39,7 @@ type BackendProcessContext = {
   entry: string;
   kind: string;
   key?: string;
-  payload: unknown;
+  payload?: unknown;
   metadata?: Record<string, unknown>;
   userId?: string;
   ready(): void;
@@ -55,6 +61,41 @@ type ActiveBackendProcess = {
 };
 
 let activeProcess: ActiveBackendProcess | null = null;
+let runtimeTerminal = false;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readProcessInit(message: unknown): BackendProcessInit {
+  if (
+    !isRecord(message) ||
+    !Object.hasOwn(message, "process") ||
+    !isRecord(message.process)
+  ) {
+    throw new Error("Invalid backend process init payload");
+  }
+
+  const processInit = message.process;
+  if (
+    !Object.hasOwn(processInit, "processId") ||
+    !Object.hasOwn(processInit, "entry") ||
+    !Object.hasOwn(processInit, "kind") ||
+    !Object.hasOwn(processInit, "entryPath") ||
+    typeof processInit.processId !== "string" ||
+    typeof processInit.entry !== "string" ||
+    typeof processInit.kind !== "string" ||
+    typeof processInit.entryPath !== "string" ||
+    (processInit.allowDynamicCode !== undefined && typeof processInit.allowDynamicCode !== "boolean") ||
+    (processInit.key !== undefined && typeof processInit.key !== "string") ||
+    (processInit.metadata !== undefined && !isRecord(processInit.metadata)) ||
+    (processInit.userId !== undefined && typeof processInit.userId !== "string")
+  ) {
+    throw new Error("Invalid backend process init payload");
+  }
+
+  return processInit as BackendProcessInit;
+}
 
 function post(message: BackendProcessToHost): void {
   if (typeof process.send === "function") {
@@ -66,7 +107,9 @@ function post(message: BackendProcessToHost): void {
 
 function shutdown(kind: "complete" | "fail" | "stopped", error?: string): void {
   const processState = activeProcess;
-  if (processState?.terminal) return;
+  if (runtimeTerminal || processState?.terminal) return;
+  runtimeTerminal = true;
+
   if (processState) {
     processState.terminal = true;
 
@@ -81,19 +124,37 @@ function shutdown(kind: "complete" | "fail" | "stopped", error?: string): void {
     activeProcess = null;
   }
 
-  if (kind === "fail") {
-    post({ type: "fail", error: error?.trim() || "Backend process failed" });
-    process.exit(1);
-    return;
+  try {
+    if (kind === "fail") {
+      post({ type: "fail", error: error?.trim() || "Backend process failed" });
+    } else {
+      post({ type: kind });
+    }
+  } catch (err) {
+    console.error("[Spindle backend process] Terminal post failed:", err);
+  } finally {
+    nativeProcessExit(kind === "fail" ? 1 : 0);
   }
-
-  post({ type: kind });
-  process.exit(0);
 }
 
-async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>): Promise<void> {
+async function handleInit(msg: unknown): Promise<void> {
+  let processState: ActiveBackendProcess | null = null;
+
   try {
-    const mod = await import(msg.process.entryPath);
+    if (runtimeTerminal) return;
+    const processInit = readProcessInit(msg);
+    processState = {
+      processId: processInit.processId,
+      terminal: false,
+      readySent: false,
+      messageHandlers: new Set(),
+      stopHandlers: new Set(),
+    };
+    activeProcess = processState;
+
+    initializeSandbox({ allowDynamicCode: processInit.allowDynamicCode === true });
+    const mod = await import(processInit.entryPath);
+    if (runtimeTerminal || activeProcess !== processState || processState.terminal) return;
     const handler = typeof mod.default === "function"
       ? (mod.default as BackendProcessHandler)
       : typeof mod.run === "function"
@@ -103,28 +164,19 @@ async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>):
     if (!handler) {
       shutdown(
         "fail",
-        `Backend process entry \"${msg.process.entry}\" must export a default function or named \"run\" function`
+        `Backend process entry \"${processInit.entry}\" must export a default function or named \"run\" function`
       );
       return;
     }
 
-    const processState: ActiveBackendProcess = {
-      processId: msg.process.processId,
-      terminal: false,
-      readySent: false,
-      messageHandlers: new Set(),
-      stopHandlers: new Set(),
-    };
-    activeProcess = processState;
-
     const ctx: BackendProcessContext = {
-      processId: msg.process.processId,
-      entry: msg.process.entry,
-      kind: msg.process.kind,
-      ...(msg.process.key ? { key: msg.process.key } : {}),
-      payload: msg.process.payload,
-      ...(msg.process.metadata ? { metadata: msg.process.metadata } : {}),
-      ...(msg.process.userId ? { userId: msg.process.userId } : {}),
+      processId: processInit.processId,
+      entry: processInit.entry,
+      kind: processInit.kind,
+      ...(processInit.key ? { key: processInit.key } : {}),
+      ...(Object.hasOwn(processInit, "payload") ? { payload: processInit.payload } : {}),
+      ...(Object.hasOwn(processInit, "metadata") ? { metadata: processInit.metadata } : {}),
+      ...(processInit.userId ? { userId: processInit.userId } : {}),
       ready() {
         if (!activeProcess || activeProcess.terminal || activeProcess.readySent) return;
         activeProcess.readySent = true;
@@ -159,10 +211,18 @@ async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>):
     };
 
     const cleanup = await handler(ctx);
-    if (typeof cleanup === "function" && activeProcess) {
-      activeProcess.cleanup = cleanup;
+    if (
+      typeof cleanup === "function" &&
+      activeProcess === processState &&
+      !processState.terminal &&
+      !runtimeTerminal
+    ) {
+      processState.cleanup = cleanup;
     }
   } catch (err) {
+    if (runtimeTerminal || (processState && (activeProcess !== processState || processState.terminal))) {
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     shutdown("fail", message);
   }
@@ -170,9 +230,9 @@ async function handleInit(msg: Extract<HostToBackendProcess, { type: "init" }>):
 
 function handleStop(reason?: string): void {
   const processState = activeProcess;
-  if (!processState || processState.terminal) return;
+  if (runtimeTerminal || processState?.terminal) return;
 
-  if (processState.stopHandlers.size === 0) {
+  if (!processState || processState.stopHandlers.size === 0) {
     shutdown("stopped");
     return;
   }
@@ -199,26 +259,44 @@ function handleMessage(payload: unknown): void {
   }
 }
 
-function onHostMessage(message: HostToBackendProcess): void {
+function onHostMessage(message: unknown): void {
+  if (!isRecord(message)) {
+    shutdown("fail", "Invalid backend process message");
+    return;
+  }
+
   switch (message.type) {
     case "init":
       void handleInit(message);
       break;
-    case "stop":
-      handleStop(message.reason);
+    case "stop": {
+      const reason = message.reason;
+      if (reason !== undefined && typeof reason !== "string") {
+        shutdown("fail", "Invalid backend process message");
+        break;
+      }
+      handleStop(reason);
       break;
+    }
     case "message":
+      if (!Object.hasOwn(message, "payload")) {
+        shutdown("fail", "Invalid backend process message");
+        break;
+      }
       handleMessage(message.payload);
+      break;
+    default:
+      shutdown("fail", "Invalid backend process message");
       break;
   }
 }
 
 if (typeof process.send === "function") {
   process.on("message", (message) => {
-    onHostMessage(message as HostToBackendProcess);
+    onHostMessage(message);
   });
 } else {
-  self.onmessage = (event: MessageEvent<HostToBackendProcess>) => {
+  self.onmessage = (event: MessageEvent<unknown>) => {
     onHostMessage(event.data);
   };
 }

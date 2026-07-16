@@ -1,4 +1,9 @@
-import type { PromptBlockDTO, PromptVariableValuesDTO, SpindleFrontendContext } from 'lumiverse-spindle-types'
+import type {
+  PromptBlockDTO,
+  PromptVariableValuesDTO,
+  SpindleFrontendContext,
+  SpindlePresetEditorDraft as PublishedSpindlePresetEditorDraft,
+} from 'lumiverse-spindle-types'
 
 export interface SpindlePresetEditorTabOptions {
   id: string
@@ -28,16 +33,7 @@ export interface SpindlePresetEditorToolbarItemHandle {
   destroy(): void
 }
 
-export interface SpindlePresetEditorDraft {
-  id: string
-  name: string
-  blocks: PromptBlockDTO[]
-  parameters: Record<string, unknown>
-  prompts: Record<string, unknown>
-  metadata: Record<string, unknown>
-  createdAt: number
-  updatedAt: number
-}
+export type SpindlePresetEditorDraft = PublishedSpindlePresetEditorDraft
 
 export interface SpindlePresetEditorState {
   open: boolean

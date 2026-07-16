@@ -3170,6 +3170,7 @@
       "backToList": "Back to list",
       "title": "Edit Block",
       "save": "Save",
+      "validationFailed": "Unable to apply this block change. Check the values and try again.",
       "name": "Name",
       "namePlaceholder": "Block name",
       "role": "Role",

@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react'
 import { useStore } from '@/store'
 import { ensureRegistryRoot } from '@/lib/drawer-tab-registry'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 interface Props {
   tabId: string

@@ -2980,6 +2980,7 @@
       "backToList": "返回列表",
       "title": "编辑块",
       "save": "保存",
+      "validationFailed": "无法应用此区块更改。请检查数值后重试。",
       "name": "名称",
       "namePlaceholder": "块名称",
       "role": "角色",

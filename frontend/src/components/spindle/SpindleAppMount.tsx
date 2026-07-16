@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { AppMountState } from '@/store/slices/spindle-placement'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
 import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 
 interface Props {
@@ -22,6 +23,7 @@ export default function SpindleAppMount({ mount }: Props) {
     container.style.display = mount.visible ? '' : 'none'
 
     const cancel = scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(mount.extensionId, mount.root)) return
       if (!container.isConnected && !document.body.isConnected) return
 
       if (!container.contains(mount.root)) {

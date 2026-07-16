@@ -145,6 +145,12 @@
     linear-gradient(var(--lumiverse-bg, rgba(28, 24, 38, 0.95)), var(--lumiverse-bg, rgba(28, 24, 38, 0.95))),
     var(--lumiverse-bg-deep, #0a0812);
 }
+.popoverPortal[data-spindle-component-portal-owner-active='false'] {
+  /* Extension-owned portals are hidden while their placement is detached.
+     This author rule is needed because .popover's display:flex overrides
+     the browser's user-agent [hidden] rule. */
+  display: none !important;
+}
 
 /* Search */
 

@@ -2980,6 +2980,7 @@
       "backToList": "リストに戻る",
       "title": "ブロックを編集",
       "save": "保存",
+      "validationFailed": "ブロックの変更を適用できません。値を確認してもう一度お試しください。",
       "name": "名前",
       "namePlaceholder": "ブロック名",
       "role": "役割",

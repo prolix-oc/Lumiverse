@@ -4,12 +4,14 @@ import type {
   SpindlePresetEditorScopedHelper,
   SpindlePresetEditorState,
 } from './preset-editor-types'
-import { isLoomOwnedPresetMetadataKey } from '@/lib/loom/service'
+import type { PromptVariableValueDTO, PromptVariableValuesDTO } from 'lumiverse-spindle-types'
+import { isLoomOwnedPresetMetadataKey, projectPublicPromptBlocks, pruneOrphanPromptVariables } from '@/lib/loom/service'
 
 type PresetMutator = (preset: SpindlePresetEditorDraft) => SpindlePresetEditorDraft
 
 interface PresetEditorController {
   getState(): SpindlePresetEditorState
+  getPromptVariableValues?(): PromptVariableValuesDTO
   setActiveTab(tabId: string): void
   updatePreset(mutator: PresetMutator, immediate: boolean): void
   flush(): Promise<void>
@@ -29,7 +31,12 @@ const DEFAULT_STATE: SpindlePresetEditorState = {
 
 let controller: PresetEditorController | null = null
 let snapshot: SpindlePresetEditorState = DEFAULT_STATE
-let publishingDepth = 0
+let privatePromptVariableSnapshot: PromptVariableValuesDTO = {}
+interface PublicationFrame {
+  state: SpindlePresetEditorState
+  promptVariableValues: PromptVariableValuesDTO
+}
+const publicationFrames: PublicationFrame[] = []
 const listeners = new Set<(state: SpindlePresetEditorState) => void>()
 
 function clone<T>(value: T): T {
@@ -42,6 +49,13 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function clonePublicDraft(draft: SpindlePresetEditorDraft): SpindlePresetEditorDraft {
+  const cloned = clone(draft) as SpindlePresetEditorDraft & { promptVariables?: unknown }
+  delete cloned.promptVariables
+  if (isRecord(cloned.metadata)) delete cloned.metadata.promptVariables
+  return cloned
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -92,25 +106,43 @@ function cloneState(state: SpindlePresetEditorState): SpindlePresetEditorState {
     open: state.open,
     presetId: state.presetId,
     activeTabId: state.activeTabId,
-    preset: state.preset ? clone(state.preset) : null,
+    preset: state.preset ? clonePublicDraft(state.preset) : null,
   }
 }
 
-function publishState(next: SpindlePresetEditorState): void {
+function publishState(
+  next: SpindlePresetEditorState,
+  promptVariableValues: PromptVariableValuesDTO = {},
+): void {
   const published = cloneState(next)
+  const publishedPromptVariableValues = published.open && published.presetId && published.preset
+    ? clonePublicPromptVariableValues(promptVariableValues) as PromptVariableValuesDTO
+    : {}
+  privatePromptVariableSnapshot = publishedPromptVariableValues
   snapshot = published
-  publishingDepth += 1
+  const frame = { state: published, promptVariableValues: publishedPromptVariableValues }
+  publicationFrames.push(frame)
   try {
     for (const handler of listeners) {
       try { handler(cloneState(published)) } catch { /* no-op */ }
     }
   } finally {
-    publishingDepth -= 1
+    publicationFrames.pop()
   }
 }
 
 function getCurrentState(): SpindlePresetEditorState {
-  return publishingDepth > 0 || !controller ? snapshot : controller.getState()
+  const frame = publicationFrames[publicationFrames.length - 1]
+  return frame ? frame.state : !controller ? snapshot : controller.getState()
+}
+
+function getCurrentPromptVariableValues(): PromptVariableValuesDTO {
+  const frame = publicationFrames[publicationFrames.length - 1]
+  if (frame) return frame.promptVariableValues
+  if (!controller) return privatePromptVariableSnapshot
+  const state = controller.getState()
+  if (!state.open || !state.presetId || !state.preset || !controller.getPromptVariableValues) return {}
+  return controller.getPromptVariableValues()
 }
 
 function assertOpenController(): PresetEditorController {
@@ -123,10 +155,15 @@ function assertOpenController(): PresetEditorController {
 
 export function setPresetEditorController(next: PresetEditorController | null): void {
   controller = next
-  publishState(next ? next.getState() : DEFAULT_STATE)
+  const state = next?.getState() ?? DEFAULT_STATE
+  const promptVariableValues = next?.getPromptVariableValues?.() ?? {}
+  syncPresetEditorState(state, promptVariableValues)
 }
 
-export function syncPresetEditorState(next: SpindlePresetEditorState): void {
+export function syncPresetEditorState(
+  next: SpindlePresetEditorState,
+  promptVariableValues?: PromptVariableValuesDTO,
+): void {
   if (
     snapshot.open
     && snapshot.presetId
@@ -136,7 +173,10 @@ export function syncPresetEditorState(next: SpindlePresetEditorState): void {
   ) {
     publishState(DEFAULT_STATE)
   }
-  publishState(next)
+  const values = next.open && next.presetId && next.preset
+    ? promptVariableValues ?? controller?.getPromptVariableValues?.() ?? {}
+    : {}
+  publishState(next, values)
 }
 
 export function getPresetEditorState(): SpindlePresetEditorState {
@@ -152,14 +192,15 @@ export function subscribePresetEditorState(
 }
 
 export function updatePresetEditorDraft(mutator: PresetMutator, immediate = false): void {
-  assertOpenController().updatePreset((draft) => mutator(clone(draft)), immediate)
+  assertOpenController().updatePreset((draft) => mutator(clonePublicDraft(draft)), immediate)
 }
 
 export async function flushPresetEditorDraft(): Promise<void> {
   const activeController = assertOpenController()
   await activeController.flush()
   if (controller === activeController) {
-    syncPresetEditorState(activeController.getState())
+    const state = activeController.getState()
+    syncPresetEditorState(state, activeController.getPromptVariableValues?.() ?? {})
   }
 }
 
@@ -167,23 +208,145 @@ export function setPresetEditorActiveTab(tabId: string): void {
   assertOpenController().setActiveTab(tabId)
 }
 
+
+function cloneDenseStringArray(value: unknown): string[] | undefined {
+  try {
+    if (!Array.isArray(value)) return undefined
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (
+      !lengthDescriptor
+      || !Object.hasOwn(lengthDescriptor, 'value')
+      || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0
+    ) return undefined
+    const length = lengthDescriptor.value
+    const ownKeys = Reflect.ownKeys(value)
+    if (ownKeys.length !== length + 1) return undefined
+    for (const key of ownKeys) {
+      if (key === 'length') continue
+      if (typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key)) return undefined
+      const index = Number(key)
+      if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
+        return undefined
+      }
+    }
+    const output: string[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (
+        !descriptor
+        || !descriptor.enumerable
+        || !Object.hasOwn(descriptor, 'value')
+        || typeof descriptor.value !== 'string'
+      ) return undefined
+      output.push(descriptor.value)
+    }
+    return output
+  } catch {
+    return undefined
+  }
+}
+
+function clonePublicPromptVariableValues(
+  value: unknown,
+): SpindlePresetEditorExtensionState['promptVariableValues'] {
+  const output = Object.create(null) as Record<string, Record<string, PromptVariableValueDTO>>
+  try {
+    if (!isPlainObject(value)) return output
+    const blockKeys = Reflect.ownKeys(value)
+    for (const blockKey of blockKeys) {
+      if (typeof blockKey !== 'string') continue
+      const blockId = blockKey
+      let bucketDescriptor: PropertyDescriptor | undefined
+      try {
+        bucketDescriptor = Object.getOwnPropertyDescriptor(value, blockId)
+      } catch {
+        continue
+      }
+      if (!bucketDescriptor || !bucketDescriptor.enumerable || !('value' in bucketDescriptor)) continue
+      let bucket: Record<string, unknown>
+      try {
+        if (!isPlainObject(bucketDescriptor.value)) continue
+        bucket = bucketDescriptor.value
+      } catch {
+        continue
+      }
+      let bucketKeys: PropertyKey[]
+      try {
+        bucketKeys = Reflect.ownKeys(bucket)
+      } catch {
+        continue
+      }
+      const bucketOutput = Object.create(null) as Record<string, PromptVariableValueDTO>
+      for (const bucketKey of bucketKeys) {
+        if (typeof bucketKey !== 'string') continue
+        const name = bucketKey
+        let valueDescriptor: PropertyDescriptor | undefined
+        try {
+          valueDescriptor = Object.getOwnPropertyDescriptor(bucket, name)
+        } catch {
+          continue
+        }
+        if (!valueDescriptor || !valueDescriptor.enumerable || !('value' in valueDescriptor)) continue
+        let clonedValue: PromptVariableValueDTO | undefined
+        if (typeof valueDescriptor.value === 'string') {
+          clonedValue = valueDescriptor.value
+        } else if (
+          typeof valueDescriptor.value === 'number'
+          && Number.isFinite(valueDescriptor.value)
+          && !Object.is(valueDescriptor.value, -0)
+        ) {
+          clonedValue = valueDescriptor.value
+        } else {
+          const clonedArray = cloneDenseStringArray(valueDescriptor.value)
+          if (clonedArray !== undefined) clonedValue = clonedArray
+        }
+        if (clonedValue === undefined) continue
+        Object.defineProperty(bucketOutput, name, {
+          value: clonedValue,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        })
+      }
+      if (Object.keys(bucketOutput).length > 0) {
+        Object.defineProperty(output, blockId, {
+          value: bucketOutput,
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        })
+      }
+    }
+  } catch {
+    return Object.create(null) as SpindlePresetEditorExtensionState['promptVariableValues']
+  }
+  return output as SpindlePresetEditorExtensionState['promptVariableValues']
+}
+
 function cloneExtensionState(
   state: SpindlePresetEditorState,
   extensionIdentifier: string,
+  promptVariableValues: PromptVariableValuesDTO,
 ): SpindlePresetEditorExtensionState {
   const draft = state.preset
   const metadata = draft && Object.hasOwn(draft.metadata, extensionIdentifier)
     ? clone(draft.metadata[extensionIdentifier])
     : undefined
-  const promptVariableValues = draft?.metadata.promptVariables
+  const publicBlocks = draft ? projectPublicPromptBlocks(draft.blocks) : []
+  const safePromptVariableValues = clonePublicPromptVariableValues(promptVariableValues)
+  const prunedPromptVariableValues = draft
+    ? pruneOrphanPromptVariables(
+      safePromptVariableValues as unknown as Parameters<typeof pruneOrphanPromptVariables>[0],
+      publicBlocks as unknown as Parameters<typeof pruneOrphanPromptVariables>[1],
+    )
+    : {}
   return {
     open: state.open,
     presetId: state.presetId,
     activeTabId: state.activeTabId,
-    blocks: draft ? clone(draft.blocks) : [],
-    promptVariableValues: promptVariableValues && typeof promptVariableValues === 'object'
-      ? clone(promptVariableValues) as SpindlePresetEditorExtensionState['promptVariableValues']
-      : {},
+    blocks: publicBlocks,
+    promptVariableValues: clonePublicPromptVariableValues(prunedPromptVariableValues),
     metadata,
   }
 }
@@ -231,12 +394,13 @@ export function createPresetEditorScopedHelper(
   return {
     getState(): SpindlePresetEditorExtensionState {
       access.assertActive()
-      return cloneExtensionState(getPresetEditorState(), extensionIdentifier)
+      const state = getPresetEditorState()
+      return cloneExtensionState(state, extensionIdentifier, getCurrentPromptVariableValues())
     },
     onChange(handler: (state: SpindlePresetEditorExtensionState) => void): () => void {
       access.assertActive()
       const unsubscribe = subscribePresetEditorState((state) => {
-        handler(cloneExtensionState(state, extensionIdentifier))
+        handler(cloneExtensionState(state, extensionIdentifier, getCurrentPromptVariableValues()))
       })
       return access.trackSubscription(unsubscribe)
     },

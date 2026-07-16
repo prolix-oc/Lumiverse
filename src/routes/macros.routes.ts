@@ -123,35 +123,14 @@ app.post("/resolve-batch", async (c) => {
 });
 
 /**
- * GET /
- * Return the full macro catalog grouped by category.
+ * Return the trusted Main macro catalog grouped by category. Main's native
+ * Loom editor may browse active extension registrations; public extension
+ * mounts receive an owner-filtered catalog through their local worker bridge.
  */
 app.get("/", (c) => {
-  const categories = registry.getCategories().map((cat) => ({
-    category: cat.category,
-    macros: cat.macros.map((m) => ({
-      name: m.name,
-      syntax: formatSyntax(m),
-      description: m.description,
-      args: m.args?.map((a) => ({ name: a.name, optional: a.optional ?? false })),
-      returns: m.returns || m.returnType,
-      category: m.category,
-    })),
-  }));
-
-  return c.json({ categories });
+  return c.json(registry.getMainCatalog());
 });
 
-function formatSyntax(m: { name: string; args?: { name: string; optional?: boolean }[] }): string {
-  let syntax = `{{${m.name}`;
-  if (m.args?.length) {
-    for (const arg of m.args) {
-      syntax += `::${arg.optional ? `[${arg.name}]` : arg.name}`;
-    }
-  }
-  syntax += "}}";
-  return syntax;
-}
 
 async function buildEnvFromIds(userId: string, body: {
   chat_id?: string;
