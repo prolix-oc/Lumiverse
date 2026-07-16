@@ -22,6 +22,7 @@ import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/cha
 import { applyCharxModulesAndAssets } from "../services/charx-import.service";
 import { resolveSealedPresetBlocksForInstall, type SealedManifest } from "./sealed-presets";
 import { cloneSafePlainJsonObject } from "./payload-validation";
+import type { PromptBlock, PromptVariableDef, PromptVariableValue } from "../types/preset";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -654,11 +655,6 @@ export async function installPreset(
       return { requestId, success: false, error: "Preset export is missing preset data" };
     }
     const p = preset as Record<string, any>;
-    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
-    const existingPassthroughMetadata = existing
-      ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
-      : {};
-    const passthroughMetadata = extractPresetPassthroughMetadata(p);
     const name = typeof p.name === "string" && p.name.trim() ? p.name : payload.presetName;
     const blocks = Array.isArray(p.blocks) ? p.blocks : [];
 
@@ -669,15 +665,42 @@ export async function installPreset(
       : null;
     const presetSlug = typeof payload.presetSlug === "string" ? payload.presetSlug : null;
     const presetCreator = typeof payload.presetCreator === "string" ? payload.presetCreator : null;
+    // LumiHub detects installed presets by canonical creator/name slug. Prefer
+    // the immutable Hub id, then use that same slug identity as a constrained
+    // fallback so a re-created/migrated Hub listing still updates the installed
+    // row instead of producing a second local copy.
+    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId)
+      ?? (presetSlug ? presetsSvc.findLumihubPresetBySlug(userId, presetSlug) : null);
+    const existingPassthroughMetadata = existing
+      ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
+      : {};
+    const passthroughMetadata = extractPresetPassthroughMetadata(p);
     const sealedPreset = isPlainObject(payload.sealedPreset) ? payload.sealedPreset as SealedManifest : null;
     const materializedBlocks = await materializeSealedPresetBlocks(blocks, payload.presetId, presetVersion, sealedPreset);
+    const incomingSamplerOverrides = isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {};
+    const incomingCustomBody = isPlainObject(p.customBody) ? p.customBody : {};
+    const incomingPromptVariables = isPlainObject(p.promptVariables) ? p.promptVariables : {};
+    const samplerOverrides = existing && isPlainObject(existing.parameters?.samplerOverrides)
+      ? existing.parameters.samplerOverrides
+      : incomingSamplerOverrides;
+    const customBody = existing && isPlainObject(existing.parameters?.customBody)
+      ? existing.parameters.customBody
+      : incomingCustomBody;
+    const promptVariables = existing
+      ? mergePromptVariableSelections(
+          existing.prompt_order,
+          materializedBlocks,
+          existing.metadata?.promptVariables,
+          incomingPromptVariables,
+        )
+      : incomingPromptVariables;
 
     const presetInput = {
       name,
       provider: "loom",
       parameters: {
-        samplerOverrides: isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {},
-        customBody: isPlainObject(p.customBody) ? p.customBody : {},
+        samplerOverrides,
+        customBody,
       },
       prompt_order: materializedBlocks,
       prompts: {
@@ -694,7 +717,7 @@ export async function installPreset(
         description: typeof p.description === "string" ? p.description : "",
         isDefault: !!p.isDefault,
         lastProfileKey: typeof p.lastProfileKey === "string" ? p.lastProfileKey : null,
-        promptVariables: isPlainObject(p.promptVariables) ? p.promptVariables : {},
+        promptVariables,
         compatibility: isPlainObject(exported.compatibility) ? exported.compatibility : {},
         coverUrl: typeof exported.cover_url === "string" ? exported.cover_url : null,
         _lumiverse_install_source: "lumihub",
@@ -800,6 +823,138 @@ function clonePresetMetadata(value: unknown, fieldName: string): Record<string, 
   } catch {
     throw new Error(`Preset export has invalid ${fieldName}`);
   }
+}
+
+/**
+ * Carry user-selected variable values into the updated published definition.
+ * Blocks are matched by stable block id; variables prefer their stable id and
+ * fall back to name for older exports. Incompatible type changes fall back to
+ * the publisher's new value/default, while modest range/option drift is adapted.
+ */
+function mergePromptVariableSelections(
+  existingBlocksValue: unknown,
+  updatedBlocksValue: unknown,
+  existingValuesValue: unknown,
+  incomingValuesValue: unknown,
+): Record<string, Record<string, PromptVariableValue>> {
+  const existingBlocks = Array.isArray(existingBlocksValue) ? existingBlocksValue as PromptBlock[] : [];
+  const updatedBlocks = Array.isArray(updatedBlocksValue) ? updatedBlocksValue as PromptBlock[] : [];
+  const existingValues = isPlainObject(existingValuesValue) ? existingValuesValue : {};
+  const incomingValues = isPlainObject(incomingValuesValue) ? incomingValuesValue : {};
+  const merged: Record<string, Record<string, PromptVariableValue>> = {};
+
+  for (const [blockId, bucket] of Object.entries(incomingValues)) {
+    if (isPlainObject(bucket)) merged[blockId] = { ...bucket } as Record<string, PromptVariableValue>;
+  }
+
+  const existingBlockById = new Map(
+    existingBlocks
+      .filter((block) => isPlainObject(block) && typeof block.id === "string")
+      .map((block) => [block.id, block]),
+  );
+
+  for (const updatedBlock of updatedBlocks) {
+    if (!isPlainObject(updatedBlock) || typeof updatedBlock.id !== "string" || !Array.isArray(updatedBlock.variables)) continue;
+    const existingBlock = existingBlockById.get(updatedBlock.id);
+    if (!existingBlock || !Array.isArray(existingBlock.variables)) continue;
+    const existingBucket = existingValues[updatedBlock.id];
+    if (!isPlainObject(existingBucket)) continue;
+
+    const oldDefs = existingBlock.variables.filter(isPromptVariableDef);
+    const oldDefById = new Map(oldDefs.map((def) => [def.id, def]));
+    const oldDefByName = new Map(oldDefs.map((def) => [def.name, def]));
+    const nextBucket = merged[updatedBlock.id] ?? {};
+
+    for (const updatedDef of updatedBlock.variables) {
+      if (!isPromptVariableDef(updatedDef)) continue;
+      const oldDef = oldDefById.get(updatedDef.id) ?? oldDefByName.get(updatedDef.name);
+      if (!oldDef || !Object.hasOwn(existingBucket, oldDef.name)) continue;
+      const retained = adaptPromptVariableSelection(oldDef, updatedDef, existingBucket[oldDef.name]);
+      if (retained !== undefined) nextBucket[updatedDef.name] = retained;
+    }
+
+    if (Object.keys(nextBucket).length > 0) merged[updatedBlock.id] = nextBucket;
+  }
+
+  return merged;
+}
+
+function isPromptVariableDef(value: unknown): value is PromptVariableDef {
+  if (!isPlainObject(value) || typeof value.id !== "string" || typeof value.name !== "string") return false;
+  switch (value.type) {
+    case "text":
+    case "textarea":
+    case "number":
+    case "slider":
+    case "switch":
+      return true;
+    case "select":
+    case "multiselect":
+      return Array.isArray(value.options);
+    default:
+      return false;
+  }
+}
+
+function adaptPromptVariableSelection(
+  oldDef: PromptVariableDef,
+  updatedDef: PromptVariableDef,
+  value: unknown,
+): PromptVariableValue | undefined {
+  const oldFamily = promptVariableFamily(oldDef.type);
+  const updatedFamily = promptVariableFamily(updatedDef.type);
+  if (oldFamily !== updatedFamily) return undefined;
+
+  switch (updatedFamily) {
+    case "text":
+      return typeof value === "string" ? value : undefined;
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+      const min = "min" in updatedDef && typeof updatedDef.min === "number" ? updatedDef.min : undefined;
+      const max = "max" in updatedDef && typeof updatedDef.max === "number" ? updatedDef.max : undefined;
+      return Math.min(max ?? Infinity, Math.max(min ?? -Infinity, value));
+    }
+    case "switch":
+      return value === 0 || value === 1 ? value : undefined;
+    case "select": {
+      if (updatedDef.type !== "select" || oldDef.type !== "select" || typeof value !== "string") return undefined;
+      return mapPromptOptionId(oldDef, updatedDef, value);
+    }
+    case "multiselect": {
+      if (updatedDef.type !== "multiselect" || oldDef.type !== "multiselect" || !Array.isArray(value)) return undefined;
+      const retained = value
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => mapPromptOptionId(oldDef, updatedDef, id))
+        .filter((id): id is string => typeof id === "string");
+      return retained.length > 0 || value.length === 0 ? [...new Set(retained)] : undefined;
+    }
+  }
+}
+
+function promptVariableFamily(type: PromptVariableDef["type"]): "text" | "number" | "switch" | "select" | "multiselect" {
+  if (type === "text" || type === "textarea") return "text";
+  if (type === "number" || type === "slider") return "number";
+  return type;
+}
+
+function mapPromptOptionId(
+  oldDef: Extract<PromptVariableDef, { type: "select" | "multiselect" }>,
+  updatedDef: Extract<PromptVariableDef, { type: "select" | "multiselect" }>,
+  selectedId: string,
+): string | undefined {
+  const updatedOptions = updatedDef.options.filter(isPromptVariableOption);
+  const oldOptions = oldDef.options.filter(isPromptVariableOption);
+  if (updatedOptions.some((option) => option.id === selectedId)) return selectedId;
+  const oldValue = oldOptions.find((option) => option.id === selectedId)?.value;
+  if (oldValue === undefined) return undefined;
+  return updatedOptions.find((option) => option.value === oldValue)?.id;
+}
+
+function isPromptVariableOption(value: unknown): value is { id: string; label: string; value: string } {
+  return isPlainObject(value)
+    && typeof value.id === "string"
+    && typeof value.label === "string"
+    && typeof value.value === "string";
 }
 
 async function materializeSealedPresetBlocks(

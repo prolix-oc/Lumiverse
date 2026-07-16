@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getPreset } from "../services/presets.service";
+import { createPreset, getPreset, updatePreset } from "../services/presets.service";
 import { validateInstallPresetPayload } from "./payload-validation";
 import { installPreset } from "./installer";
 import type { InstallPresetPayload } from "./types";
@@ -193,5 +193,226 @@ describe("LumiHub preset installer metadata", () => {
       passthroughMetadata: metadata,
     }));
     expect(validation.ok).toBe(false);
+  });
+
+  test("updates the installed row while retaining user configuration", async () => {
+    const first = await installPreset("request-config-1", installPayload("hub-config", {
+      name: "Configurable preset",
+      samplerOverrides: { enabled: true, temperature: 0.2 },
+      customBody: { enabled: false, rawJson: "{}" },
+      blocks: [
+        {
+          id: "category-old",
+          name: "Old category",
+          content: "",
+          marker: "category",
+          categoryMode: "checkbox",
+        },
+        {
+          id: "block-1",
+          name: "Original prompt",
+          content: "Original content",
+          group: "category-old",
+          variables: [
+            { id: "var-text", name: "instruction", label: "Instruction", type: "text", defaultValue: "Default" },
+            { id: "var-number", name: "creativity", label: "Creativity", type: "number", defaultValue: 2, min: 0, max: 10 },
+            {
+              id: "var-select",
+              name: "style",
+              label: "Style",
+              type: "select",
+              defaultValue: "warm-old",
+              options: [{ id: "warm-old", label: "Warm", value: "Warm style" }],
+            },
+            {
+              id: "var-multi",
+              name: "guides",
+              label: "Guides",
+              type: "multiselect",
+              defaultValue: [],
+              options: [
+                { id: "concise-old", label: "Concise", value: "Be concise" },
+                { id: "polite-old", label: "Polite", value: "Be polite" },
+              ],
+            },
+            { id: "var-switch", name: "legacyToggle", label: "Toggle", type: "switch", defaultValue: 0 },
+          ],
+        },
+      ],
+      promptVariables: {},
+    }));
+    expect(first.success).toBe(true);
+
+    const installed = getPreset(USER_ID, first.presetId!)!;
+    const userSamplerOverrides = { enabled: true, temperature: 0.83, topP: 0.91 };
+    const userCustomBody = { enabled: true, rawJson: "{\"provider_setting\":true}" };
+    updatePreset(USER_ID, installed.id, {
+      parameters: {
+        samplerOverrides: userSamplerOverrides,
+        customBody: userCustomBody,
+      },
+      metadata: {
+        ...installed.metadata,
+        promptVariables: {
+          "block-1": {
+            instruction: "User instruction",
+            creativity: 8,
+            style: "warm-old",
+            guides: ["concise-old", "polite-old"],
+            legacyToggle: 1,
+          },
+        },
+      },
+    });
+    const binding = {
+      preset_id: installed.id,
+      block_states: { "block-1": false },
+      captured_at: 123,
+    };
+    getDb().query(
+      "INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)",
+    ).run("presetProfileDefaults:" + installed.id, JSON.stringify(binding), USER_ID, 123);
+
+    const second = await installPreset("request-config-2", installPayload("hub-config", {
+      name: "Configurable preset v2",
+      samplerOverrides: { enabled: true, temperature: 0.4 },
+      customBody: { enabled: false, rawJson: "{\"publisher\":true}" },
+      blocks: [
+        {
+          id: "category-new",
+          name: "Adjusted category",
+          content: "",
+          marker: "category",
+          categoryMode: "radio",
+        },
+        {
+          id: "block-1",
+          name: "Updated prompt",
+          content: "Updated content",
+          group: "category-new",
+          variables: [
+            { id: "var-text", name: "directive", label: "Directive", type: "textarea", defaultValue: "New default" },
+            { id: "var-number", name: "creativity", label: "Creativity", type: "slider", defaultValue: 2, min: 0, max: 5 },
+            {
+              id: "var-select",
+              name: "style",
+              label: "Style",
+              type: "select",
+              defaultValue: "warm-new",
+              options: [{ id: "warm-new", label: "Warm", value: "Warm style" }],
+            },
+            {
+              id: "var-multi",
+              name: "guides",
+              label: "Guides",
+              type: "multiselect",
+              defaultValue: [],
+              options: [{ id: "concise-new", label: "Concise", value: "Be concise" }],
+            },
+            {
+              id: "var-switch",
+              name: "mode",
+              label: "Mode",
+              type: "select",
+              defaultValue: "publisher-mode",
+              options: [{ id: "publisher-mode", label: "Publisher", value: "Publisher" }],
+            },
+          ],
+        },
+        {
+          id: "block-2",
+          name: "New prompt",
+          content: "New block content",
+          group: "category-new",
+          variables: [
+            { id: "var-new", name: "newVariable", label: "New", type: "text", defaultValue: "new" },
+          ],
+        },
+      ],
+      promptVariables: {
+        "block-1": {
+          directive: "Publisher instruction",
+          creativity: 2,
+          style: "warm-new",
+          guides: [],
+          mode: "publisher-mode",
+        },
+        "block-2": { newVariable: "Publisher new value" },
+      },
+    }));
+
+    expect(second.success).toBe(true);
+    expect(second.presetId).toBe(first.presetId);
+    const updated = getPreset(USER_ID, first.presetId!)!;
+    expect(updated.name).toBe("Configurable preset v2");
+    expect(updated.parameters).toEqual({
+      samplerOverrides: userSamplerOverrides,
+      customBody: userCustomBody,
+    });
+    expect(updated.prompt_order.map((block) => ({
+      id: block.id,
+      name: block.name,
+      content: block.content,
+      group: block.group,
+      categoryMode: block.categoryMode,
+    }))).toEqual([
+      { id: "category-new", name: "Adjusted category", content: "", group: undefined, categoryMode: "radio" },
+      { id: "block-1", name: "Updated prompt", content: "Updated content", group: "category-new", categoryMode: undefined },
+      { id: "block-2", name: "New prompt", content: "New block content", group: "category-new", categoryMode: undefined },
+    ]);
+    expect(updated.metadata.promptVariables).toEqual({
+      "block-1": {
+        directive: "User instruction",
+        creativity: 5,
+        style: "warm-new",
+        guides: ["concise-new"],
+        mode: "publisher-mode",
+      },
+      "block-2": { newVariable: "Publisher new value" },
+    });
+    const savedBinding = getDb().query(
+      "SELECT value FROM settings WHERE key = ? AND user_id = ?",
+    ).get("presetProfileDefaults:" + installed.id, USER_ID) as { value: string };
+    expect(JSON.parse(savedBinding.value)).toEqual(binding);
+  });
+
+  test("uses the manifest slug to update a LumiHub install whose Hub id changed", async () => {
+    const first = await installPreset("request-identity-1", installPayload("old-hub-id", {
+      name: "Hub preset",
+      blocks: [],
+    }));
+    expect(first.success).toBe(true);
+
+    const second = await installPreset("request-identity-2", installPayload("new-hub-id", {
+      name: "Hub preset migrated",
+      blocks: [],
+    }));
+
+    expect(second.success).toBe(true);
+    expect(second.presetId).toBe(first.presetId);
+    expect(getPreset(USER_ID, first.presetId!)?.metadata._lumiverse_lumihub_id).toBe("new-hub-id");
+    const count = getDb().query("SELECT COUNT(*) AS count FROM presets WHERE user_id = ?").get(USER_ID) as { count: number };
+    expect(count.count).toBe(1);
+  });
+
+  test("does not claim a local preset that happens to share the manifest slug", async () => {
+    const local = createPreset(USER_ID, {
+      name: "Local lookalike",
+      provider: "loom",
+      metadata: {
+        _lumiverse_install_source: "local",
+        _lumiverse_preset_slug: "creator/hub-preset",
+      },
+    });
+
+    const installed = await installPreset("request-local-lookalike", installPayload("hub-lookalike", {
+      name: "Hub preset",
+      blocks: [],
+    }));
+
+    expect(installed.success).toBe(true);
+    expect(installed.presetId).not.toBe(local.id);
+    const count = getDb().query("SELECT COUNT(*) AS count FROM presets WHERE user_id = ?").get(USER_ID) as { count: number };
+    expect(count.count).toBe(2);
   });
 });

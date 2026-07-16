@@ -194,6 +194,24 @@ export function findPresetByLumihubId(userId: string, lumihubId: string): Preset
   return row ? rowToPreset(row) : null;
 }
 
+/**
+ * Resolve an installed LumiHub preset by the canonical slug used by the Hub's
+ * install manifest. This is the identity fallback for listings whose Hub row
+ * id changed while their creator/name identity stayed the same.
+ */
+export function findLumihubPresetBySlug(userId: string, slug: string): Preset | null {
+  const row = getDb()
+    .query(
+      `SELECT * FROM presets
+       WHERE user_id = ?
+         AND json_extract(metadata, '$._lumiverse_install_source') = 'lumihub'
+         AND json_extract(metadata, '$._lumiverse_preset_slug') = ?
+       LIMIT 1`
+    )
+    .get(userId, slug) as any;
+  return row ? rowToPreset(row) : null;
+}
+
 export function findPresetBySlug(userId: string, slug: string): Preset | null {
   const row = getDb()
     .query(
