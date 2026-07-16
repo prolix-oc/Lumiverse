@@ -5,7 +5,6 @@ import { join, resolve } from "path";
 import { env } from "../env";
 import { shouldUseBunWorkers, warnBunWorkerFallback } from "../utils/bun-worker-guard";
 import { bunCmd } from "../utils/bun-cmd";
-import { buildSafeEnvironment } from "./dangerous-runtime-policy";
 
 export type RuntimeTransportMode = "worker" | "process" | "sandbox";
 
@@ -97,10 +96,7 @@ function resolveRuntimeMode(modeOverride?: RuntimeTransportMode): RuntimeTranspo
 }
 
 function createWorkerTransport(opts: CreateRuntimeTransportOptions): RuntimeTransport {
-  const worker = new Worker(opts.runtimePath, {
-    type: "module",
-    env: buildSafeEnvironment(process.env),
-  });
+  const worker = new Worker(opts.runtimePath, { type: "module" });
   worker.onmessage = (event) => {
     opts.onMessage(event.data);
   };
@@ -120,32 +116,51 @@ function createWorkerTransport(opts: CreateRuntimeTransportOptions): RuntimeTran
   };
 }
 
-function buildRestrictedEnv(): Record<string, string> {
-  return buildSafeEnvironment(process.env);
+function buildRestrictedEnv(): Record<string, string | undefined> {
+  const restricted: Record<string, string | undefined> = {};
+  const strip = [
+    // Credentials / secrets
+    "LUMIVERSE_OWNER_PASSWORD",
+    "LUMIVERSE_AUTH_SECRET",
+    "LUMIVERSE_ENCRYPTION_KEY",
+    "OWNER_PASSWORD",
+    "AUTH_SECRET",
+    "ENCRYPTION_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    // SSH agent socket (could be used for key exfil)
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_LAUNCHER",
+  ];
+  for (const key of Object.keys(process.env)) {
+    if (strip.includes(key)) {
+      restricted[key] = undefined;
+    } else {
+      restricted[key] = process.env[key];
+    }
+  }
+  return restricted;
 }
 
 function createSubprocessTransport(
   opts: CreateRuntimeTransportOptions,
   mode: Extract<RuntimeTransportMode, "process" | "sandbox">
 ): RuntimeTransport {
-  const sandboxExecPath = "/usr/bin/sandbox-exec";
-  if (mode === "sandbox" && (process.platform !== "darwin" || !existsSync(sandboxExecPath))) {
-    throw new Error(
-      `Sandbox runtime requested for "${opts.extensionIdentifier}", but ${sandboxExecPath} is unavailable on ` +
-        `${process.platform}. Sandbox mode requires macOS with ${sandboxExecPath}; refusing to downgrade to process mode.`,
-    );
-  }
-
   const runtimeCmd = bunCmd(opts.runtimePath, "--spindle-subprocess");
-  const cmd =
-    mode === "sandbox"
-      ? [
-          sandboxExecPath,
-          "-f",
-          writeSandboxProfile(opts.extensionIdentifier, opts.repoPath, opts.storagePath),
-          ...runtimeCmd,
-        ]
-      : runtimeCmd;
+  const sandboxExecPath = "/usr/bin/sandbox-exec";
+  const sandboxAvailable =
+    mode === "sandbox" && process.platform === "darwin" && existsSync(sandboxExecPath);
+  const effectiveMode: Extract<RuntimeTransportMode, "process" | "sandbox"> =
+    sandboxAvailable ? "sandbox" : "process";
+  const cmd = sandboxAvailable
+    ? [
+        sandboxExecPath,
+        "-f",
+        writeSandboxProfile(opts.extensionIdentifier, opts.repoPath, opts.storagePath),
+        ...runtimeCmd,
+      ]
+    : runtimeCmd;
 
   const proc = Bun.spawn({
     cmd,
@@ -164,7 +179,7 @@ function createSubprocessTransport(
   });
 
   return {
-    mode,
+    mode: effectiveMode,
     pid: proc.pid,
     postMessage(message: unknown): void {
       proc.send(message);

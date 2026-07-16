@@ -6,7 +6,7 @@ import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
-import { rememberRegistration } from './lib/swUpdater'
+import { isBundleUpdateInProgress, rememberRegistration } from './lib/swUpdater'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
@@ -40,7 +40,10 @@ registerSW({
 let reloading = false
 const hadController = !!navigator.serviceWorker?.controller
 navigator.serviceWorker?.addEventListener('controllerchange', () => {
-  if (!hadController || reloading) return
+  // `hadController` can be false during an early reload even though this
+  // controllerchange belongs to a real replacement already tracked by the
+  // updater. In that case the update flag is the authoritative signal.
+  if ((!hadController && !isBundleUpdateInProgress()) || reloading) return
   reloading = true
   window.location.reload()
 })

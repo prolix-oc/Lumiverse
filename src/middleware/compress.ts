@@ -10,7 +10,7 @@
  */
 
 import { createMiddleware } from "hono/factory";
-import { createBrotliCompress, constants } from "node:zlib";
+import { createBrotliCompress, constants, gzip as gzipCallback } from "node:zlib";
 import { Readable } from "node:stream";
 
 type Encoding = "br" | "gzip" | "deflate";
@@ -21,14 +21,16 @@ const COMPRESSIBLE =
 
 /** Don't bother compressing responses smaller than this (bytes). */
 const MIN_SIZE = 1024;
+const BUFFERED_ASSET_CACHE_LIMIT = 64;
+const bufferedAssetCache = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
 
 /**
  * Bun 1.3.14 can corrupt the HTTP response sink when a client aborts an
  * asynchronously streamed response (oven-sh/bun#32111, fixed by #32120).
  * The crash was observed in Lumiverse on Windows when this middleware wrapped
- * the frontend bundle in a compression stream. Keep the workaround scoped to
- * that affected stable runtime so other platforms and fixed releases retain
- * streaming compression.
+ * the frontend bundle in a compression stream. On that runtime we buffer gzip
+ * before returning the response, preserving transfer performance without
+ * exposing Bun's HTTP server to an asynchronously pulled response body.
  */
 export function shouldBypassStreamingCompression(
   platform: NodeJS.Platform = process.platform,
@@ -41,7 +43,10 @@ export function shouldBypassStreamingCompression(
  * Pick the best mutually-supported encoding from Accept-Encoding.
  * Tie-break order when quality values are equal: br > gzip > deflate.
  */
-function negotiate(header: string): Encoding | null {
+function negotiate(
+  header: string,
+  allowed?: ReadonlySet<Encoding>,
+): Encoding | null {
   let best: Encoding | null = null;
   let bestScore = -1;
   const PRIO: Record<string, number> = { br: 3, gzip: 2, deflate: 1 };
@@ -50,6 +55,7 @@ function negotiate(header: string): Encoding | null {
     const [raw, ...params] = part.trim().split(";");
     const name = raw?.trim().toLowerCase();
     if (!name || !(name in PRIO)) continue;
+    if (allowed && !allowed.has(name as Encoding)) continue;
 
     let q = 1;
     for (const p of params) {
@@ -66,6 +72,71 @@ function negotiate(header: string): Encoding | null {
     }
   }
   return best;
+}
+
+function gzipBytes(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  return new Promise((resolve, reject) => {
+    gzipCallback(bytes, { level: 4 }, (error, result) => {
+      if (error) reject(error);
+      else resolve(Uint8Array.from(result));
+    });
+  });
+}
+
+function cacheBufferedAsset(
+  key: string,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const existing = bufferedAssetCache.get(key);
+  if (existing) return existing;
+
+  const compressed = gzipBytes(bytes).catch((error) => {
+    bufferedAssetCache.delete(key);
+    throw error;
+  });
+  bufferedAssetCache.set(key, compressed);
+  if (bufferedAssetCache.size > BUFFERED_ASSET_CACHE_LIMIT) {
+    const oldest = bufferedAssetCache.keys().next().value;
+    if (oldest !== undefined) bufferedAssetCache.delete(oldest);
+  }
+  return compressed;
+}
+
+async function bufferedGzipResponse(
+  response: Response,
+  cacheKey?: string,
+): Promise<Response> {
+  const cached = cacheKey ? bufferedAssetCache.get(cacheKey) : undefined;
+  if (cached) {
+    try {
+      const compressed = await cached;
+      const result = new Response(compressed, response);
+      result.headers.set("Content-Encoding", "gzip");
+      result.headers.delete("Content-Length");
+      appendVary(result.headers, "Accept-Encoding");
+      return result;
+    } catch {
+      return response;
+    }
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let compressed: Uint8Array<ArrayBuffer>;
+  try {
+    compressed = cacheKey
+      ? await cacheBufferedAsset(cacheKey, bytes)
+      : await gzipBytes(bytes);
+  } catch {
+    // The original stream has been consumed, so reconstruct the uncompressed
+    // response rather than turning a compression failure into a failed request.
+    return new Response(bytes, response);
+  }
+
+  const result = new Response(compressed, response);
+  result.headers.set("Content-Encoding", "gzip");
+  result.headers.delete("Content-Length");
+  appendVary(result.headers, "Accept-Encoding");
+  return result;
 }
 
 function appendVary(headers: Headers, field: string): void {
@@ -94,11 +165,12 @@ function compressStream(body: ReadableStream, encoding: Encoding): ReadableStrea
   return body.pipeThrough(new CompressionStream(encoding));
 }
 
-export function compress() {
+export function compress(runtime?: {
+  platform?: NodeJS.Platform;
+  bunVersion?: string;
+}) {
   return createMiddleware(async (c, next) => {
     await next();
-
-    if (shouldBypassStreamingCompression()) return;
 
     const res = c.res;
 
@@ -118,8 +190,34 @@ export function compress() {
     // Negotiate encoding from client's Accept-Encoding
     const accept = c.req.header("Accept-Encoding");
     if (!accept) return;
-    const encoding = negotiate(accept);
+    const useBufferedFallback = shouldBypassStreamingCompression(
+      runtime?.platform,
+      runtime?.bunVersion,
+    );
+    const encoding = negotiate(
+      accept,
+      useBufferedFallback ? new Set<Encoding>(["gzip"]) : undefined,
+    );
     if (!encoding) return;
+
+    if (useBufferedFallback) {
+      const cacheableBundle = c.req.path.startsWith("/assets/") ||
+        /^\/api\/v1\/spindle\/[^/]+\/frontend$/.test(c.req.path);
+      const cacheKey = cacheableBundle
+        ? [
+            c.req.path,
+            res.headers.get("ETag") ?? "",
+            res.headers.get("Last-Modified") ?? "",
+            res.headers.get("Content-Length") ?? "",
+          ].join("\u0000")
+        : undefined;
+      c.res = await bufferedGzipResponse(res, cacheKey);
+      if (c.res.headers.get("Content-Encoding") === "gzip") {
+        c.res.headers.delete("Content-Length");
+        appendVary(c.res.headers, "Accept-Encoding");
+      }
+      return;
+    }
 
     c.res = new Response(compressStream(res.body, encoding), res);
     c.res.headers.set("Content-Encoding", encoding);

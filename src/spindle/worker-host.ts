@@ -40,8 +40,7 @@ import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { registry as macroRegistry, canonicalMacroName, type MacroOwner } from "../macros/MacroRegistry";
-import type { MacroDefinition } from "../macros/types";
+import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
 import { contextHandlerChain } from "./context-handler";
 import {
@@ -165,24 +164,7 @@ type PresetConflictWorkerError = {
   actualCacheRevision?: number;
 };
 const EPHEMERAL_MAX_FILES = 250;
-const MAX_MACRO_REGISTRATIONS = 128;
-const MAX_MACRO_NAME_BYTES = 128;
-const MAX_MACRO_CATEGORY_BYTES = 256;
-const MAX_MACRO_DESCRIPTION_BYTES = 4_096;
-const MAX_MACRO_RETURNS_BYTES = 1_024;
-const MAX_MACRO_ALIASES = 32;
-const MAX_MACRO_ALIAS_BYTES = 128;
-const MAX_MACRO_ARGS = 32;
-const MAX_MACRO_ARG_NAME_BYTES = 128;
-const MAX_MACRO_ARG_DESCRIPTION_BYTES = 1_024;
-const MAX_MACRO_HANDLER_BYTES = 65_536;
-const MAX_MACRO_CACHED_VALUE_BYTES = 262_144;
-const MAX_MACRO_PULL_RESULT_BYTES = 262_144;
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
-
-function exceedsUtf8Limit(value: string, maxBytes: number): boolean {
-  return Buffer.byteLength(value, "utf8") > maxBytes;
-}
 
 type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
 type TokenModelSource = "main" | "sidecar" | "explicit";
@@ -266,10 +248,8 @@ type FrontendProcessLifecycleEvent = {
 
 type FrontendProcessRecord = FrontendProcessInfo & {
   requestId: string;
-  spawnResponseSettled: boolean;
   startupTimer: ReturnType<typeof setTimeout> | null;
   heartbeatTimer: ReturnType<typeof setTimeout> | null;
-  stopTimer: ReturnType<typeof setTimeout> | null;
   startupTimeoutMs: number;
   heartbeatTimeoutMs: number;
   stopReason?: string;
@@ -324,7 +304,6 @@ type BackendProcessLifecycleEvent = {
 
 type BackendProcessRecord = BackendProcessInfo & {
   requestId: string;
-  spawnResponseSettled: boolean;
   runtime: RuntimeTransport;
   startupTimer: ReturnType<typeof setTimeout> | null;
   heartbeatTimer: ReturnType<typeof setTimeout> | null;
@@ -343,7 +322,6 @@ type BackendProcessRuntimeInit = {
   payload?: unknown;
   metadata?: Record<string, unknown>;
   userId?: string;
-  allowDynamicCode?: boolean;
 };
 
 type SpindleUserRole = "operator" | "admin" | "user";
@@ -360,409 +338,6 @@ type BackendProcessRuntimeToHost =
   | { type: "complete" }
   | { type: "fail"; error: string }
   | { type: "stopped" };
-type WorkerStartCancellation = {
-  promise: Promise<never>;
-  cancel: () => void;
-};
-
-function createWorkerStartCancellation(identifier: string): WorkerStartCancellation {
-  let cancelled = false;
-  let rejectCancellation!: (reason?: unknown) => void;
-  const promise = new Promise<never>((_, reject) => {
-    rejectCancellation = reject;
-  });
-  return {
-    promise,
-    cancel: () => {
-      if (cancelled) return;
-      cancelled = true;
-      rejectCancellation(new Error(`Extension worker start cancelled for ${identifier}`));
-    },
-  };
-}
-const managedGetOwnPropertyDescriptor = Reflect.getOwnPropertyDescriptor;
-const managedOwnKeys = Reflect.ownKeys;
-const managedGetPrototypeOf = Object.getPrototypeOf;
-const managedIsArray = Array.isArray;
-const managedNumberIsFinite = Number.isFinite;
-// Aggregate UTF-8 bytes of all string values and own string keys in one
-// payload/metadata traversal; this is a wire-value budget, not serialized size.
-const MANAGED_PROCESS_MAX_BYTES = 256 * 1024;
-const MANAGED_PROCESS_MAX_NODES = 10_000;
-const MANAGED_PROCESS_MAX_DEPTH = 32;
-const MANAGED_PROCESS_MAX_COLLECTION_ENTRIES = 1_000;
-const MANAGED_PROCESS_MAX_STRING_BYTES = 256 * 1024;
-const MANAGED_PROCESS_MAX_DIAGNOSTIC_PATH_CHARS = 1_024;
-const MAX_INCUMBENT_CALLBACK_MESSAGES = 256;
-const MAX_INCUMBENT_CALLBACK_BYTES = MANAGED_PROCESS_MAX_BYTES;
-
-function estimateRuntimeMessageUtf8Bytes(value: unknown, maxBytes: number): number {
-  let bytes = 0;
-  const seen = new WeakSet<object>();
-  const addBytes = (amount: number): boolean => {
-    if (!Number.isFinite(amount) || amount < 0 || amount > maxBytes - bytes) {
-      bytes = maxBytes + 1;
-      return false;
-    }
-    bytes += amount;
-    return true;
-  };
-  const visit = (current: unknown): boolean => {
-    if (bytes > maxBytes) return false;
-    if (current === null) return addBytes(1);
-    switch (typeof current) {
-      case "string":
-        return addBytes(Buffer.byteLength(current, "utf8"));
-      case "boolean":
-        return addBytes(1);
-      case "number":
-        return addBytes(8);
-      case "bigint":
-      case "symbol":
-      case "undefined":
-      case "function":
-        return addBytes(16);
-      case "object":
-        break;
-      default:
-        return false;
-    }
-
-    const objectValue = current as object;
-    if (seen.has(objectValue)) return true;
-    seen.add(objectValue);
-    if (objectValue instanceof ArrayBuffer) {
-      return addBytes(objectValue.byteLength);
-    }
-    if (ArrayBuffer.isView(objectValue)) {
-      return addBytes(objectValue.byteLength);
-    }
-
-    let keys: PropertyKey[];
-    try {
-      keys = managedOwnKeys(objectValue);
-    } catch {
-      bytes = maxBytes + 1;
-      return false;
-    }
-    for (const key of keys) {
-      if (typeof key !== "string") {
-        if (!addBytes(16)) return false;
-        continue;
-      }
-      const descriptor = managedGetOwnPropertyDescriptor(objectValue, key);
-      if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) continue;
-      if (!addBytes(Buffer.byteLength(key, "utf8")) || !visit(descriptor.value)) return false;
-    }
-    return true;
-  };
-
-  visit(value);
-  return bytes;
-}
-
-
-export const MANAGED_PROCESS_MAX_KIND_BYTES = 128;
-export const MANAGED_PROCESS_MAX_KEY_BYTES = 256;
-export const MANAGED_PROCESS_MAX_ENTRY_BYTES = 4_096;
-export const MANAGED_PROCESS_MAX_PROCESS_ID_BYTES = 128;
-export const MANAGED_PROCESS_MAX_REASON_BYTES = 4_096;
-export const MANAGED_PROCESS_MAX_ERROR_BYTES = 4_096;
-
-type ManagedProcessEnvelopeLabel =
-  | "spawn payload"
-  | "spawn metadata"
-  | "frontend message"
-  | "backend message";
-
-type ManagedProcessRoot = {
-  value: unknown;
-  label: ManagedProcessEnvelopeLabel;
-};
-
-type ManagedOwnProperty = {
-  present: boolean;
-  accessor: boolean;
-  value: unknown;
-};
-
-function inspectManagedOwnProperty(value: unknown, key: PropertyKey): ManagedOwnProperty {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
-    return { present: false, accessor: false, value: undefined };
-  }
-  let descriptor: PropertyDescriptor | undefined;
-  try {
-    descriptor = managedGetOwnPropertyDescriptor(value, key);
-  } catch {
-    return { present: true, accessor: true, value: undefined };
-  }
-  if (!descriptor) return { present: false, accessor: false, value: undefined };
-  if (!("value" in descriptor)) return { present: true, accessor: true, value: undefined };
-  return { present: true, accessor: false, value: descriptor.value };
-}
-
-function validateManagedProcessString(
-  value: unknown,
-  field: string,
-  maxBytes: number,
-  optional = false,
-): string | null {
-  if (value === undefined && optional) return null;
-  if (typeof value !== "string") return `${field} must be a string`;
-  if (Buffer.byteLength(value, "utf8") > maxBytes) {
-    return `${field} exceeds ${maxBytes} UTF-8 bytes`;
-  }
-  return null;
-}
-function boundedManagedProcessError(error: unknown): string {
-  let message: string;
-  try {
-    message = error instanceof Error ? error.message : String(error);
-  } catch {
-    message = "Managed process request failed";
-  }
-  return validateManagedProcessString(message, "error", MANAGED_PROCESS_MAX_ERROR_BYTES) === null
-    ? message
-    : "Managed process request failed";
-}
-
-/**
- * Validate managed-process values without invoking extension-owned accessors
- * or allocating a second serialized graph. Structured clone performs the
- * actual copy after this bounded descriptor walk succeeds.
- */
-function validateManagedProcessValues(...roots: ManagedProcessRoot[]): string | null {
-  let stringBytes = 0;
-  let nodes = 0;
-  let failure: string | null = null;
-  const seen = new WeakSet<object>();
-  const visiting = new WeakSet<object>();
-
-  const pathForKey = (path: string, key: string): string => {
-    const keyBytes = Buffer.byteLength(key, "utf8");
-    const suffix =
-      keyBytes <= MANAGED_PROCESS_MAX_DIAGNOSTIC_PATH_CHARS &&
-      /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
-        ? `.${key}`
-        : keyBytes <= MANAGED_PROCESS_MAX_DIAGNOSTIC_PATH_CHARS
-          ? `[${JSON.stringify(key) ?? "<key omitted>"}]`
-          : "[<key omitted>]";
-    return `${path}${suffix}`.slice(0, MANAGED_PROCESS_MAX_DIAGNOSTIC_PATH_CHARS);
-  };
-
-  const fail = (label: ManagedProcessEnvelopeLabel, reason: string, path: string): boolean => {
-    if (!failure) failure = `Managed process ${label} ${reason} at ${path}`;
-    return false;
-  };
-
-  const addStringBytes = (
-    value: string,
-    label: ManagedProcessEnvelopeLabel,
-    path: string,
-  ): boolean => {
-    const valueBytes = Buffer.byteLength(value, "utf8");
-    if (valueBytes > MANAGED_PROCESS_MAX_STRING_BYTES) {
-      return fail(label, `string value exceeds ${MANAGED_PROCESS_MAX_STRING_BYTES} UTF-8 bytes`, path);
-    }
-    if (stringBytes > MANAGED_PROCESS_MAX_BYTES - valueBytes) {
-      return fail(label, `exceeds max UTF-8 value bytes (${MANAGED_PROCESS_MAX_BYTES})`, path);
-    }
-    stringBytes += valueBytes;
-    return true;
-  };
-  const addKeyBytes = (
-    key: string,
-    label: ManagedProcessEnvelopeLabel,
-    path: string,
-  ): boolean => {
-    const keyBytes = Buffer.byteLength(key, "utf8");
-    if (keyBytes > MANAGED_PROCESS_MAX_STRING_BYTES) {
-      return fail(label, `string key exceeds ${MANAGED_PROCESS_MAX_STRING_BYTES} UTF-8 bytes`, path);
-    }
-    if (stringBytes > MANAGED_PROCESS_MAX_BYTES - keyBytes) {
-      return fail(label, `exceeds max UTF-8 value/key bytes (${MANAGED_PROCESS_MAX_BYTES})`, path);
-    }
-    stringBytes += keyBytes;
-    return true;
-  };
-
-  const addNode = (label: ManagedProcessEnvelopeLabel, path: string): boolean => {
-    nodes += 1;
-    if (nodes > MANAGED_PROCESS_MAX_NODES) {
-      return fail(label, `exceeds max visited values (${MANAGED_PROCESS_MAX_NODES})`, path);
-    }
-    return true;
-  };
-
-  const visit = (
-    current: unknown,
-    depth: number,
-    label: ManagedProcessEnvelopeLabel,
-    path: string,
-  ): boolean => {
-    if (depth > MANAGED_PROCESS_MAX_DEPTH) {
-      return fail(label, `exceeds max depth (${MANAGED_PROCESS_MAX_DEPTH})`, path);
-    }
-
-    const currentType = typeof current;
-    if (current === undefined) {
-      return fail(label, "contains unsupported undefined", path);
-    }
-    if (current === null) return addNode(label, path);
-    if (currentType === "string") {
-      if (!addNode(label, path)) return false;
-      return addStringBytes(current as string, label, path);
-    }
-    if (currentType === "boolean") return addNode(label, path);
-    if (currentType === "number") {
-      if (!managedNumberIsFinite(current)) return fail(label, "contains non-finite number", path);
-      return addNode(label, path);
-    }
-    if (currentType !== "object") {
-      return fail(label, `contains unsupported ${currentType}`, path);
-    }
-
-    const objectValue = current as object;
-    if (visiting.has(objectValue)) return fail(label, "contains a cycle", path);
-    if (seen.has(objectValue)) return true;
-    seen.add(objectValue);
-    visiting.add(objectValue);
-    if (!addNode(label, path)) {
-      visiting.delete(objectValue);
-      return false;
-    }
-
-    let prototype: object | null;
-    let keys: PropertyKey[];
-    try {
-      prototype = managedGetPrototypeOf(objectValue);
-      keys = managedOwnKeys(objectValue);
-    } catch {
-      visiting.delete(objectValue);
-      return fail(label, "could not inspect value", path);
-    }
-    const isArray = managedIsArray(objectValue);
-    if (
-      (!isArray && prototype !== Object.prototype && prototype !== null) ||
-      (isArray && prototype !== Array.prototype)
-    ) {
-      visiting.delete(objectValue);
-      return fail(label, "contains unsupported non-plain object", path);
-    }
-
-    let entryCount = 0;
-    let arrayLength = 0;
-    if (isArray) {
-      const lengthDescriptor = managedGetOwnPropertyDescriptor(objectValue, "length");
-      const lengthValue = lengthDescriptor?.value;
-      if (
-        !lengthDescriptor ||
-        !("value" in lengthDescriptor) ||
-        typeof lengthValue !== "number" ||
-        !Number.isSafeInteger(lengthValue) ||
-        lengthValue > MANAGED_PROCESS_MAX_COLLECTION_ENTRIES
-      ) {
-        visiting.delete(objectValue);
-        return fail(label, `exceeds max collection entries (${MANAGED_PROCESS_MAX_COLLECTION_ENTRIES})`, path);
-      }
-      arrayLength = lengthValue;
-    }
-
-    for (const key of keys) {
-      if (typeof key !== "string") {
-        visiting.delete(objectValue);
-        return fail(label, "contains symbol-keyed property", path);
-      }
-      if (!addKeyBytes(key, label, pathForKey(path, key))) {
-        visiting.delete(objectValue);
-        return false;
-      }
-    }
-
-    for (const key of keys) {
-      if (typeof key !== "string") {
-        visiting.delete(objectValue);
-        return fail(label, "contains symbol-keyed property", path);
-      }
-      const descriptor = managedGetOwnPropertyDescriptor(objectValue, key);
-      if (!descriptor) {
-        visiting.delete(objectValue);
-        return fail(label, "could not inspect value", path);
-      }
-      if (isArray && key === "length") {
-        if (descriptor.enumerable || !("value" in descriptor)) {
-          visiting.delete(objectValue);
-          return fail(label, "contains invalid array length property", path);
-        }
-        continue;
-      }
-      if (!descriptor.enumerable) {
-        visiting.delete(objectValue);
-        return fail(label, "contains non-enumerable own property", pathForKey(path, key));
-      }
-      if (!("value" in descriptor)) {
-        visiting.delete(objectValue);
-        return fail(label, "contains accessor property", pathForKey(path, key));
-      }
-      if (isArray && !/^(?:0|[1-9][0-9]*)$/.test(key)) {
-        visiting.delete(objectValue);
-        return fail(label, "contains unsupported array property", pathForKey(path, key));
-      }
-      if (isArray) {
-        const index = Number(key);
-        if (!Number.isSafeInteger(index) || index >= arrayLength) {
-          visiting.delete(objectValue);
-          return fail(label, "contains unsupported array property", pathForKey(path, key));
-        }
-      }
-      entryCount += 1;
-      if (entryCount > MANAGED_PROCESS_MAX_COLLECTION_ENTRIES) {
-        visiting.delete(objectValue);
-        return fail(label, `exceeds max collection entries (${MANAGED_PROCESS_MAX_COLLECTION_ENTRIES})`, path);
-      }
-      const childPath = pathForKey(path, key);
-      if (!visit(descriptor.value, depth + 1, label, childPath)) {
-        visiting.delete(objectValue);
-        return false;
-      }
-    }
-    if (isArray && entryCount !== arrayLength) {
-      visiting.delete(objectValue);
-      return fail(label, "contains a sparse array", path);
-    }
-    visiting.delete(objectValue);
-    return true;
-  };
-
-  for (const root of roots) {
-    if (!visit(root.value, 0, root.label, "$")) return failure;
-  }
-  return failure;
-}
-
-function validateManagedProcessValue(
-  value: unknown,
-  label: ManagedProcessEnvelopeLabel,
-): string | null {
-  return validateManagedProcessValues({ value, label });
-}
-
-function validateManagedProcessMetadataRoot(value: unknown): string | null {
-  if (value === null || typeof value !== "object" || managedIsArray(value)) {
-    return "spawn metadata must be a non-null plain object";
-  }
-  let prototype: object | null;
-  try {
-    prototype = managedGetPrototypeOf(value);
-  } catch {
-    return "spawn metadata must be a non-null plain object";
-  }
-  if (prototype !== Object.prototype && prototype !== null) {
-    return "spawn metadata must be a non-null plain object";
-  }
-  return null;
-}
-
 
 type RuntimeWorkerToHost =
   | WorkerToHost
@@ -1284,18 +859,6 @@ const THINKING_DISPLAY_VALUES = new Set<ThinkingDisplayDTO>([
   "omitted",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isWorkerShutdownAckMessage(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.type === "log" &&
-    value.message === "__worker_shutdown_ack__"
-  );
-}
-
 function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -1382,19 +945,6 @@ export class WorkerHost {
     "--lumiverse-transition-fast",
   ]);
   private runtime: RuntimeTransport | null = null;
-  private runtimeTransportToken: { epoch: number } | null = null;
-  private nextRuntimeTransportEpoch = 0;
-  private runtimeReplacement: {
-    provisionalToken: { epoch: number };
-    provisionalRuntime: RuntimeTransport | null;
-    incumbentToken: { epoch: number } | null;
-    incumbentExit: Error | null;
-    incumbentError: Error | null;
-    incumbentBufferOverflow: Error | null;
-    incumbentShutdownAck: boolean;
-    incumbentMessages: unknown[];
-    incumbentMessageBytes: number;
-  } | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
     string,
@@ -1412,7 +962,6 @@ export class WorkerHost {
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
   private worldInfoInterceptorUnregister: (() => void) | null = null;
-  private readonly macroOwner: MacroOwner;
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
   private toastTimestamps: number[] = [];
@@ -1421,42 +970,26 @@ export class WorkerHost {
   private registeredCommands: SpindleCommandDTO[] = [];
   private static readonly MAX_COMMANDS_PER_EXTENSION = 20;
   private static readonly MAX_BACKEND_PROCESSES = 16;
-  private static readonly MAX_FRONTEND_PROCESSES = 16;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
   private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
-  private onWorkerReady: ((error?: Error) => void) | null = null;
-  private stopRequested = false;
-  private startCancellation: WorkerStartCancellation | null = null;
+  private onWorkerReady: (() => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
   private onRuntimeExit: (() => void) | null = null;
   private runtimeExitPromise: Promise<void> | null = null;
   private runtimeStopping = false;
   private runtimeStatsInterval: ReturnType<typeof setInterval> | null = null;
-  private startPromise: Promise<void> | null = null;
-  private stopPromise: Promise<void> | null = null;
-  private pendingPermissionChanges: Array<{
-    permission: string;
-    granted: boolean;
-    allGranted: string[];
-  }> = [];
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
   private frontendProcesses = new Map<string, FrontendProcessRecord>();
   private frontendProcessKeyIndex = new Map<string, string>();
   private backendProcesses = new Map<string, BackendProcessRecord>();
   private backendProcessKeyIndex = new Map<string, string>();
-  private backendProcessReservations = 0;
   private sharedRpcPermissionScopes = new Map<string, Set<string>>();
 
-  /**
-   * `generation` is intentionally injectable only for deterministic lifecycle
-   * tests. Production callers omit it so each host receives a fresh token.
-   */
   constructor(
     public readonly extensionId: string,
     public readonly manifest: SpindleManifest,
-    extensionInfo: ExtensionInfo,
-    generation?: string,
+    extensionInfo: ExtensionInfo
   ) {
     const metadata = (extensionInfo.metadata || {}) as Record<string, unknown>;
     this.installScope = metadata.install_scope === "user" ? "user" : "operator";
@@ -1464,14 +997,6 @@ export class WorkerHost {
       typeof metadata.installed_by_user_id === "string" && metadata.installed_by_user_id.trim()
         ? metadata.installed_by_user_id
         : null;
-    const macroGeneration =
-      typeof generation === "string" && generation.trim()
-        ? generation.trim()
-        : crypto.randomUUID();
-    this.macroOwner = {
-      extensionId: this.manifest.identifier.trim(),
-      generation: macroGeneration,
-    };
   }
 
   private getScopedUserId(): string | null {
@@ -1533,7 +1058,7 @@ export class WorkerHost {
       ...(record.key ? { key: record.key } : {}),
       state: record.state,
       ...(record.userId ? { userId: record.userId } : {}),
-      ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+      ...(record.metadata ? { metadata: record.metadata } : {}),
       startedAt: record.startedAt,
       ...(record.readyAt ? { readyAt: record.readyAt } : {}),
       ...(record.lastHeartbeatAt ? { lastHeartbeatAt: record.lastHeartbeatAt } : {}),
@@ -1552,69 +1077,12 @@ export class WorkerHost {
       clearTimeout(record.heartbeatTimer);
       record.heartbeatTimer = null;
     }
-    if (record.stopTimer) {
-      clearTimeout(record.stopTimer);
-      record.stopTimer = null;
-    }
-  }
-
-  private settleProcessSpawn(
-    record: { requestId: string; spawnResponseSettled: boolean },
-    result?: unknown,
-    error?: unknown,
-  ): void {
-    if (record.spawnResponseSettled) return;
-    record.spawnResponseSettled = true;
-    if (error !== undefined) {
-      this.postToWorker({
-        type: "response",
-        requestId: record.requestId,
-        error: boundedManagedProcessError(error),
-      });
-      return;
-    }
-    this.postToWorker({
-      type: "response",
-      requestId: record.requestId,
-      result,
-    });
   }
 
   private emitFrontendProcessLifecycle(
     record: FrontendProcessRecord,
     previousState?: FrontendProcessState
   ): void {
-    const processIdError = validateManagedProcessString(
-      record.processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    const kindError = validateManagedProcessString(
-      record.kind,
-      "kind",
-      MANAGED_PROCESS_MAX_KIND_BYTES,
-    );
-    const keyError = validateManagedProcessString(
-      record.key,
-      "key",
-      MANAGED_PROCESS_MAX_KEY_BYTES,
-      true,
-    );
-    const errorError = validateManagedProcessString(
-      record.error,
-      "error",
-      MANAGED_PROCESS_MAX_ERROR_BYTES,
-      true,
-    );
-    const metadataError =
-      record.metadata === undefined
-        ? null
-        : validateManagedProcessValue(record.metadata, "spawn metadata");
-    const fieldError = processIdError ?? kindError ?? keyError ?? errorError ?? metadataError;
-    if (fieldError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping frontend process lifecycle: ${fieldError}`);
-      return;
-    }
     this.postToWorker({
       type: "frontend_process_lifecycle",
       event: {
@@ -1627,23 +1095,9 @@ export class WorkerHost {
         at: record.endedAt ?? record.lastHeartbeatAt ?? record.readyAt ?? record.startedAt,
         ...(record.exitReason ? { exitReason: record.exitReason } : {}),
         ...(record.error ? { error: record.error } : {}),
-        ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+        ...(record.metadata ? { metadata: record.metadata } : {}),
       },
     });
-  }
-
-  private armFrontendStartupTimer(record: FrontendProcessRecord): void {
-    if (record.startupTimer) clearTimeout(record.startupTimer);
-    record.startupTimer = setTimeout(() => {
-      const latest = this.frontendProcesses.get(record.processId);
-      if (!latest || latest.state !== "starting") return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armFrontendStartupTimer(latest);
-        return;
-      }
-      this.requestFrontendProcessStop(latest, "timed_out", true);
-      this.finalizeFrontendProcess(latest, "timed_out", "timed_out", "Frontend process startup timed out");
-    }, record.startupTimeoutMs);
   }
 
   private armFrontendHeartbeatTimer(record: FrontendProcessRecord): void {
@@ -1652,52 +1106,12 @@ export class WorkerHost {
     record.heartbeatTimer = setTimeout(() => {
       const latest = this.frontendProcesses.get(record.processId);
       if (!latest) return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armFrontendHeartbeatTimer(latest);
-        return;
-      }
-      this.requestFrontendProcessStop(latest, "timed_out", true);
+      this.requestFrontendProcessStop(latest, "timed_out");
       this.finalizeFrontendProcess(latest, "timed_out", "timed_out", "Frontend process heartbeat timed out");
     }, record.heartbeatTimeoutMs);
   }
-  private armFrontendStopTimer(record: FrontendProcessRecord): void {
-    clearTimeout(record.stopTimer ?? undefined);
-    record.stopTimer = setTimeout(() => {
-      const latest = this.frontendProcesses.get(record.processId);
-      if (!latest) return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armFrontendStopTimer(latest);
-        return;
-      }
-      this.requestFrontendProcessStop(
-        latest,
-        "Frontend process force-stopped after stop timeout",
-        true,
-      );
-      this.finalizeFrontendProcess(
-        latest,
-        "stopped",
-        "stopped",
-        "Frontend process force-stopped after stop timeout",
-      );
-    }, 5_000);
-  }
 
-  private requestFrontendProcessStop(
-    record: FrontendProcessRecord,
-    reason?: string,
-    force = false,
-  ): void {
-    const reasonError = validateManagedProcessString(
-      reason,
-      "reason",
-      MANAGED_PROCESS_MAX_REASON_BYTES,
-      true,
-    );
-    if (reasonError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping frontend process stop: ${reasonError}`);
-      return;
-    }
+  private requestFrontendProcessStop(record: FrontendProcessRecord, reason?: string): void {
     eventBus.emit(
       EventType.SPINDLE_FRONTEND_PROCESS,
       {
@@ -1706,7 +1120,6 @@ export class WorkerHost {
         action: "stop",
         processId: record.processId,
         ...(reason ? { reason } : {}),
-        ...(force ? { force: true } : {}),
       },
       record.userId,
     );
@@ -1735,27 +1148,18 @@ export class WorkerHost {
     state: Extract<FrontendProcessState, "stopped" | "completed" | "failed" | "timed_out">,
     exitReason: FrontendProcessExitReason,
     error?: string,
-    spawnError?: string,
   ): void {
-    if (this.frontendProcesses.get(record.processId) !== record) return;
     this.clearFrontendProcessTimers(record);
-    this.frontendProcesses.delete(record.processId);
-    if (record.key) {
-      this.frontendProcessKeyIndex.delete(
-        this.buildFrontendProcessKey(record.userId ?? "", record.kind, record.key)
-      );
-    }
     this.transitionFrontendProcess(record, state, {
       endedAt: new Date().toISOString(),
       exitReason,
       ...(error ? { error } : { error: undefined }),
     });
-    if (!record.spawnResponseSettled) {
-      const fallback =
-        state === "timed_out"
-          ? "Frontend process startup timed out"
-          : `Frontend process ${state} before it became ready`;
-      this.settleProcessSpawn(record, undefined, spawnError ?? error ?? fallback);
+    this.frontendProcesses.delete(record.processId);
+    if (record.key) {
+      this.frontendProcessKeyIndex.delete(
+        this.buildFrontendProcessKey(record.userId ?? "", record.kind, record.key)
+      );
     }
   }
 
@@ -1772,19 +1176,12 @@ export class WorkerHost {
 
   private stopAllFrontendProcesses(exitReason: FrontendProcessExitReason): void {
     for (const record of Array.from(this.frontendProcesses.values())) {
+      this.requestFrontendProcessStop(record, exitReason);
       this.clearFrontendProcessTimers(record);
-      if (record.state === "starting" || record.state === "running") {
-        this.transitionFrontendProcess(record, "stopping");
-      }
-      try {
-        this.requestFrontendProcessStop(record, exitReason, true);
-      } finally {
-        this.finalizeFrontendProcess(
-          record,
-          "stopped",
-          exitReason,
-          undefined,
-          `Frontend process stopped because the extension worker ${exitReason.replace(/_/g, " ")} before it became ready`,
+      this.frontendProcesses.delete(record.processId);
+      if (record.key) {
+        this.frontendProcessKeyIndex.delete(
+          this.buildFrontendProcessKey(record.userId ?? "", record.kind, record.key)
         );
       }
     }
@@ -1807,7 +1204,7 @@ export class WorkerHost {
       ...(record.key ? { key: record.key } : {}),
       state: record.state,
       ...(record.userId ? { userId: record.userId } : {}),
-      ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+      ...(record.metadata ? { metadata: record.metadata } : {}),
       startedAt: record.startedAt,
       ...(record.readyAt ? { readyAt: record.readyAt } : {}),
       ...(record.lastHeartbeatAt ? { lastHeartbeatAt: record.lastHeartbeatAt } : {}),
@@ -1831,55 +1228,11 @@ export class WorkerHost {
       record.stopTimer = null;
     }
   }
-  private forceTerminateBackendProcess(record: BackendProcessRecord): void {
-    try {
-      record.runtime.terminate(true);
-    } catch {
-      // Runtime termination is best-effort after a failed or timed-out lifecycle.
-    }
-  }
 
   private emitBackendProcessLifecycle(
     record: BackendProcessRecord,
     previousState?: BackendProcessState
   ): void {
-    const processIdError = validateManagedProcessString(
-      record.processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    const entryError = validateManagedProcessString(
-      record.entry,
-      "entry",
-      MANAGED_PROCESS_MAX_ENTRY_BYTES,
-    );
-    const kindError = validateManagedProcessString(
-      record.kind,
-      "kind",
-      MANAGED_PROCESS_MAX_KIND_BYTES,
-    );
-    const keyError = validateManagedProcessString(
-      record.key,
-      "key",
-      MANAGED_PROCESS_MAX_KEY_BYTES,
-      true,
-    );
-    const errorError = validateManagedProcessString(
-      record.error,
-      "error",
-      MANAGED_PROCESS_MAX_ERROR_BYTES,
-      true,
-    );
-    const metadataError =
-      record.metadata === undefined
-        ? null
-        : validateManagedProcessValue(record.metadata, "spawn metadata");
-    const fieldError =
-      processIdError ?? entryError ?? kindError ?? keyError ?? errorError ?? metadataError;
-    if (fieldError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping backend process lifecycle: ${fieldError}`);
-      return;
-    }
     this.postToWorker({
       type: "backend_process_lifecycle",
       event: {
@@ -1893,22 +1246,9 @@ export class WorkerHost {
         at: record.endedAt ?? record.lastHeartbeatAt ?? record.readyAt ?? record.startedAt,
         ...(record.exitReason ? { exitReason: record.exitReason } : {}),
         ...(record.error ? { error: record.error } : {}),
-        ...(record.metadata !== undefined ? { metadata: record.metadata } : {}),
+        ...(record.metadata ? { metadata: record.metadata } : {}),
       },
     });
-  }
-  private armBackendStartupTimer(record: BackendProcessRecord): void {
-    if (record.startupTimer) clearTimeout(record.startupTimer);
-    record.startupTimer = setTimeout(() => {
-      const latest = this.backendProcesses.get(record.processId);
-      if (!latest || latest.state !== "starting") return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armBackendStartupTimer(latest);
-        return;
-      }
-      this.forceTerminateBackendProcess(latest);
-      this.finalizeBackendProcess(latest, "timed_out", "timed_out", "Backend process startup timed out");
-    }, record.startupTimeoutMs);
   }
 
   private armBackendHeartbeatTimer(record: BackendProcessRecord): void {
@@ -1916,12 +1256,12 @@ export class WorkerHost {
     if (record.heartbeatTimer) clearTimeout(record.heartbeatTimer);
     record.heartbeatTimer = setTimeout(() => {
       const latest = this.backendProcesses.get(record.processId);
-      if (!latest || latest.state !== "running") return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armBackendHeartbeatTimer(latest);
-        return;
+      if (!latest) return;
+      try {
+        latest.runtime.terminate(true);
+      } catch {
+        // ignore
       }
-      this.forceTerminateBackendProcess(latest);
       this.finalizeBackendProcess(latest, "timed_out", "timed_out", "Backend process heartbeat timed out");
     }, record.heartbeatTimeoutMs);
   }
@@ -1931,11 +1271,11 @@ export class WorkerHost {
     record.stopTimer = setTimeout(() => {
       const latest = this.backendProcesses.get(record.processId);
       if (!latest) return;
-      if (this.isRuntimeReplacementActive()) {
-        this.armBackendStopTimer(latest);
-        return;
+      try {
+        latest.runtime.terminate(true);
+      } catch {
+        // ignore
       }
-      this.forceTerminateBackendProcess(latest);
       this.finalizeBackendProcess(latest, "stopped", "stopped", "Backend process force-stopped after stop timeout");
     }, 5_000);
   }
@@ -1963,30 +1303,18 @@ export class WorkerHost {
     state: Extract<BackendProcessState, "stopped" | "completed" | "failed" | "timed_out">,
     exitReason: BackendProcessExitReason,
     error?: string,
-    spawnError?: string,
   ): void {
-    if (this.backendProcesses.get(record.processId) !== record) {
-      this.clearBackendProcessTimers(record);
-      return;
-    }
     this.clearBackendProcessTimers(record);
-    this.backendProcesses.delete(record.processId);
-    if (record.key) {
-      this.backendProcessKeyIndex.delete(
-        this.buildBackendProcessKey(record.userId ?? "", record.kind, record.key)
-      );
-    }
     this.transitionBackendProcess(record, state, {
       endedAt: new Date().toISOString(),
       exitReason,
       ...(error ? { error } : { error: undefined }),
     });
-    if (!record.spawnResponseSettled) {
-      const fallback =
-        state === "timed_out"
-          ? "Backend process startup timed out"
-          : `Backend process ${state} before it became ready`;
-      this.settleProcessSpawn(record, undefined, spawnError ?? error ?? fallback);
+    this.backendProcesses.delete(record.processId);
+    if (record.key) {
+      this.backendProcessKeyIndex.delete(
+        this.buildBackendProcessKey(record.userId ?? "", record.kind, record.key)
+      );
     }
   }
 
@@ -2008,31 +1336,33 @@ export class WorkerHost {
     }
 
     const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
-    const entryPath = resolve(repoPath, normalized);
-    return managerSvc.validateBackendModuleGraph(
-      this.manifest.identifier,
-      entryPath,
+    const repoAbs = resolve(repoPath);
+    const entryPath = resolve(repoAbs, normalized);
+    const insideRepo = entryPath === repoAbs || entryPath.startsWith(`${repoAbs}${sep}`);
+    if (!insideRepo) {
+      throw new Error(`Path traversal detected in backend process entry: ${entry}`);
+    }
+    if (!(await Bun.file(entryPath).exists())) {
+      throw new Error(`Backend process entry not found: ${normalized}`);
+    }
+
+    const blocked = managerSvc.detectDangerousBackendCapabilities(
+      await Bun.file(entryPath).text(),
       managerSvc.declaredCapabilitiesFromManifest(this.manifest),
     );
+    if (blocked.length > 0) {
+      throw new Error(
+        `Backend process entry \"${normalized}\" uses blocked backend capabilities: ${blocked.join(", ")}`
+      );
+    }
+
+    return entryPath;
   }
 
   private handleBackendProcessRuntimeMessage(
     processId: string,
     message: BackendProcessRuntimeToHost
   ): void {
-    if (!message || typeof message !== "object") {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping malformed backend process event`);
-      return;
-    }
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    if (processIdError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping backend process event: ${processIdError}`);
-      return;
-    }
     const record = this.backendProcesses.get(processId);
     if (!record) return;
 
@@ -2049,7 +1379,11 @@ export class WorkerHost {
           lastHeartbeatAt: now,
         });
         this.armBackendHeartbeatTimer(record);
-        this.settleProcessSpawn(record, this.snapshotBackendProcess(record));
+        this.postToWorker({
+          type: "response",
+          requestId: record.requestId,
+          result: this.snapshotBackendProcess(record),
+        });
         return;
       }
 
@@ -2062,11 +1396,6 @@ export class WorkerHost {
       }
 
       case "message": {
-        const validationError = validateManagedProcessValue(message.payload, "backend message");
-        if (validationError) {
-          console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${validationError}`);
-          return;
-        }
         this.postToWorker({
           type: "backend_process_message",
           processId: record.processId,
@@ -2077,40 +1406,27 @@ export class WorkerHost {
       }
 
       case "complete": {
-        this.finalizeBackendProcess(
-          record,
-          "completed",
-          "completed",
-          undefined,
-          "Backend process completed before it became ready",
-        );
+        if (record.state === "starting") {
+          this.rejectRequest(record.requestId, new Error("Backend process completed before it became ready"));
+        }
+        this.finalizeBackendProcess(record, "completed", "completed");
         return;
       }
 
       case "fail": {
-        const errorError = validateManagedProcessString(
-          message.error,
-          "error",
-          MANAGED_PROCESS_MAX_ERROR_BYTES,
-        );
-        if (errorError) {
-          console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${errorError}`);
-          this.finalizeBackendProcess(record, "failed", "failed", "Backend process failed");
-          return;
+        const error = message.error?.trim() || "Backend process failed";
+        if (record.state === "starting") {
+          this.rejectRequest(record.requestId, new Error(error));
         }
-        const error = message.error.trim() || "Backend process failed";
         this.finalizeBackendProcess(record, "failed", "failed", error);
         return;
       }
 
       case "stopped": {
-        this.finalizeBackendProcess(
-          record,
-          "stopped",
-          "stopped",
-          undefined,
-          "Backend process stopped before it became ready",
-        );
+        if (record.state === "starting") {
+          this.rejectRequest(record.requestId, new Error("Backend process stopped before it became ready"));
+        }
+        this.finalizeBackendProcess(record, "stopped", "stopped");
         return;
       }
     }
@@ -2122,33 +1438,17 @@ export class WorkerHost {
     signalCode: number | null,
     error?: Error,
   ): void {
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    if (processIdError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping backend process exit: ${processIdError}`);
-      return;
-    }
-    const errorError = validateManagedProcessString(
-      error?.message,
-      "error",
-      MANAGED_PROCESS_MAX_ERROR_BYTES,
-      true,
-    );
     const record = this.backendProcesses.get(processId);
     if (!record) return;
 
-    const details = errorError
-      ? "Backend process exited"
-      : error?.message || `Backend process exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
+    const details = error?.message || `Backend process exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
     if (record.state === "starting") {
+      this.rejectRequest(record.requestId, new Error(details));
       this.finalizeBackendProcess(record, "failed", "failed", details);
       return;
     }
     if (record.state === "stopping") {
-      this.finalizeBackendProcess(record, "stopped", "stopped", undefined, details);
+      this.finalizeBackendProcess(record, "stopped", "stopped");
       return;
     }
     this.finalizeBackendProcess(record, "failed", "failed", details);
@@ -2156,14 +1456,22 @@ export class WorkerHost {
 
   private stopAllBackendProcesses(exitReason: BackendProcessExitReason): void {
     for (const record of Array.from(this.backendProcesses.values())) {
-      this.forceTerminateBackendProcess(record);
-      this.finalizeBackendProcess(
-        record,
-        "stopped",
+      this.clearBackendProcessTimers(record);
+      try {
+        record.runtime.terminate(true);
+      } catch {
+        // ignore
+      }
+      this.transitionBackendProcess(record, "stopped", {
+        endedAt: new Date().toISOString(),
         exitReason,
-        undefined,
-        `Backend process stopped because the extension worker ${exitReason.replace(/_/g, " ")} before it became ready`,
-      );
+      });
+      this.backendProcesses.delete(record.processId);
+      if (record.key) {
+        this.backendProcessKeyIndex.delete(
+          this.buildBackendProcessKey(record.userId ?? "", record.kind, record.key)
+        );
+      }
     }
   }
 
@@ -2249,517 +1557,108 @@ export class WorkerHost {
     clearInterval(this.runtimeStatsInterval);
     this.runtimeStatsInterval = null;
   }
-  private flushPendingPermissionChanges(): void {
-    if (this.pendingPermissionChanges.length === 0) return;
-    const pending = this.pendingPermissionChanges.splice(0);
-    for (const change of pending) {
-      this.postToWorker({
-        type: "permission_changed",
-        extensionId: this.manifest.identifier,
-        permission: change.permission,
-        granted: change.granted,
-        allGranted: change.allGranted,
-      });
-    }
-  }
-
-  private isRuntimeReplacementActive(
-    replacement: NonNullable<WorkerHost["runtimeReplacement"]> | null = this.runtimeReplacement,
-  ): boolean {
-    if (!replacement) return false;
-    return (
-      replacement.provisionalToken === this.runtimeTransportToken ||
-      (replacement.provisionalRuntime !== null &&
-        replacement.provisionalRuntime === this.runtime)
-    );
-  }
-
-  private bufferIncumbentMessage(
-    replacement: NonNullable<WorkerHost["runtimeReplacement"]>,
-    message: unknown,
-  ): void {
-    if (replacement.incumbentBufferOverflow) return;
-    const messageBytes = estimateRuntimeMessageUtf8Bytes(
-      message,
-      MAX_INCUMBENT_CALLBACK_BYTES,
-    );
-    if (
-      replacement.incumbentMessages.length >= MAX_INCUMBENT_CALLBACK_MESSAGES ||
-      messageBytes > MAX_INCUMBENT_CALLBACK_BYTES ||
-      replacement.incumbentMessageBytes > MAX_INCUMBENT_CALLBACK_BYTES - messageBytes
-    ) {
-      const overflow = new Error(
-        `Incumbent runtime callback buffer exceeded ${MAX_INCUMBENT_CALLBACK_MESSAGES} messages or ` +
-          `${MAX_INCUMBENT_CALLBACK_BYTES} UTF-8 bytes`,
-      );
-      replacement.incumbentBufferOverflow = overflow;
-      replacement.incumbentError = overflow;
-      replacement.incumbentMessages.length = 0;
-      replacement.incumbentMessageBytes = 0;
-      try {
-        replacement.provisionalRuntime?.terminate(true);
-      } catch {
-        // Replacement teardown is best-effort; startTransaction remains fail-closed.
-      }
-      return;
-    }
-    replacement.incumbentMessages.push(message);
-    replacement.incumbentMessageBytes += messageBytes;
-  }
-
-  private handleIncumbentShutdownAck(runtimeToken: { epoch: number }): boolean {
-    const replacement = this.runtimeReplacement;
-    if (
-      !replacement ||
-      !this.isRuntimeReplacementActive(replacement) ||
-      replacement.incumbentToken !== runtimeToken
-    ) {
-      return false;
-    }
-    replacement.incumbentShutdownAck = true;
-    if (
-      this.stopRequested &&
-      replacement.provisionalRuntime !== this.runtime
-    ) {
-      this.onWorkerShutdownAck?.();
-      this.onWorkerShutdownAck = null;
-    }
-    return true;
-  }
-
-  private handleIncumbentRuntimeExit(
-    runtimeToken: { epoch: number },
-    details: string,
-  ): boolean {
-    const replacement = this.runtimeReplacement;
-    if (
-      !replacement ||
-      !this.isRuntimeReplacementActive(replacement) ||
-      replacement.incumbentToken !== runtimeToken
-    ) {
-      return false;
-    }
-    replacement.incumbentExit = new Error(details);
-    if (
-      this.stopRequested &&
-      replacement.provisionalRuntime !== this.runtime
-    ) {
-      this.onWorkerShutdownAck?.();
-      this.onWorkerShutdownAck = null;
-      this.onRuntimeExit?.();
-      this.onRuntimeExit = null;
-    }
-    return true;
-  }
 
   async start(): Promise<void> {
-    const pendingStart = this.startPromise;
-    if (pendingStart) {
-      await pendingStart;
-      while (this.stopPromise) {
-        await this.stopPromise;
-      }
+    const entryPath = await managerSvc.getBackendEntryPath(this.manifest.identifier);
+    if (!entryPath) {
+      console.log(
+        `[Spindle:${this.manifest.identifier}] No backend entry, skipping worker`
+      );
       return;
     }
-    while (this.stopPromise) {
-      await this.stopPromise;
-    }
-    this.stopRequested = false;
-    const transaction = this.startTransaction();
-    this.startPromise = transaction;
-    try {
-      await transaction;
-    } finally {
-      if (this.startPromise === transaction) this.startPromise = null;
-    }
-  }
-  private async startTransaction(): Promise<void> {
-    const startCancellation = createWorkerStartCancellation(this.manifest.identifier);
-    this.startCancellation = startCancellation;
-    const previousRuntime = this.runtime;
-    const previousRuntimeTransportToken = this.runtimeTransportToken;
-    const previousRuntimeStopping = this.runtimeStopping;
-    const provisionalToken = { epoch: this.nextRuntimeTransportEpoch + 1 };
-    const runtimeToken = { epoch: provisionalToken.epoch };
-    this.nextRuntimeTransportEpoch = provisionalToken.epoch;
-    // Invalidate the incumbent before any await or setup lookup. Incumbent
-    // callbacks compare their captured token and are dropped until this
-    // generation has been completely bound.
-    const runtimeReplacement = {
-      provisionalToken,
-      provisionalRuntime: null as RuntimeTransport | null,
-      incumbentToken: previousRuntimeTransportToken,
-      incumbentExit: null as Error | null,
-      incumbentError: null as Error | null,
-      incumbentBufferOverflow: null as Error | null,
-      incumbentShutdownAck: false,
-      incumbentMessages: [] as unknown[],
-      incumbentMessageBytes: 0,
-    };
-    this.runtimeReplacement = runtimeReplacement;
-    this.runtimeTransportToken = provisionalToken;
-    this.runtimeStopping = true;
+
+    const runtimePath = join(import.meta.dir, "worker-runtime.ts");
+    const storagePath = this.getStorageRootPath(this.manifest.identifier);
+    const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
+    this.runtimeStopping = false;
+    this.runtimeExitPromise = new Promise<void>((resolve) => {
+      this.onRuntimeExit = resolve;
+    });
     const startTime = performance.now();
 
-    let activation: unknown = null;
-    let previousOwner: MacroOwner | null = null;
-    let activationRolledBack = false;
-    let runtime: RuntimeTransport | undefined;
-    let activationCommitted = false;
-    let incumbentRetired = false;
-    let transportBound = false;
-    let transportExitBeforeBinding: Error | null = null;
-    let transportErrorBeforeBinding: Error | null = null;
-    const bufferedMessages: unknown[] = [];
-
-    const restoreIncumbent = (): boolean => {
-      if (this.runtimeTransportToken !== provisionalToken) return false;
-      if (
-        runtimeReplacement.incumbentExit ||
-        runtimeReplacement.incumbentError ||
-        runtimeReplacement.incumbentBufferOverflow
-      ) {
-        return false;
-      }
-      const incumbentMessages = runtimeReplacement.incumbentMessages.splice(0);
-      runtimeReplacement.incumbentMessageBytes = 0;
-      const replayIncumbent = Boolean(
-        previousRuntime &&
-          previousRuntimeTransportToken &&
-          !this.stopRequested,
-      );
-      this.runtimeTransportToken = previousRuntimeTransportToken;
-      this.runtime = previousRuntime;
-      this.runtimeStopping = this.stopRequested || previousRuntimeStopping;
-      if (this.runtimeReplacement === runtimeReplacement) this.runtimeReplacement = null;
-      if (replayIncumbent) {
-        for (const message of incumbentMessages) {
-          this.handleMessage(message as RuntimeWorkerToHost);
-        }
-        this.flushPendingPermissionChanges();
-      } else {
-        this.pendingPermissionChanges.length = 0;
-      }
-      return true;
-    };
-
-    try {
-      const entryPath = await Promise.race([
-        managerSvc.getBackendEntryPath(this.manifest.identifier),
-        startCancellation.promise,
-      ]);
-      if (runtimeReplacement.incumbentBufferOverflow) {
-        throw runtimeReplacement.incumbentBufferOverflow;
-      }
-      if (this.stopRequested) {
-        throw new Error(`Extension worker start cancelled for ${this.manifest.identifier}`);
-      }
-      if (!entryPath) {
-        if (!restoreIncumbent()) {
-          throw runtimeReplacement.incumbentExit ??
-            runtimeReplacement.incumbentError ??
-            new Error(`Incumbent runtime changed while starting ${this.manifest.identifier}`);
-        }
-        console.log(
-          `[Spindle:${this.manifest.identifier}] No backend entry, skipping worker`
-        );
-        return;
-      }
-
-      activation = macroRegistry.beginExtensionGeneration(this.macroOwner);
-      if (!activation) {
-        throw new Error(`Invalid macro owner for ${this.manifest.identifier}`);
-      }
-      if (isRecord(activation) && isRecord(activation.previousOwner)) {
-        const candidate = activation.previousOwner;
-        if (
-          typeof candidate.extensionId === "string" &&
-          typeof candidate.generation === "string"
-        ) {
-          previousOwner = {
-            extensionId: candidate.extensionId,
-            generation: candidate.generation,
-          };
-        }
-      }
-
-      const runtimePath = join(import.meta.dir, "worker-runtime.ts");
-      const storagePath = this.getStorageRootPath(this.manifest.identifier);
-      const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
-
-      runtime = createRuntimeTransport({
-        runtimePath,
-        extensionIdentifier: this.manifest.identifier,
-        repoPath,
-        storagePath,
-        onMessage: (message) => {
-          if (!transportBound) {
-            if (!transportExitBeforeBinding) bufferedMessages.push(message);
-            return;
-          }
-          if (this.runtimeTransportToken !== runtimeToken) {
-            if (
-              isWorkerShutdownAckMessage(message) &&
-              this.handleIncumbentShutdownAck(runtimeToken)
-            ) {
-              return;
-            }
-            const replacement = this.runtimeReplacement;
-            if (
-              replacement &&
-              this.isRuntimeReplacementActive(replacement) &&
-              replacement.incumbentToken === runtimeToken
-            ) {
-              this.bufferIncumbentMessage(replacement, message);
-            }
-            return;
-          }
-          this.handleMessage(message as RuntimeWorkerToHost);
-        },
-        onError: (message) => {
-          if (!transportBound) {
-            transportErrorBeforeBinding = new Error(message);
-            return;
-          }
-          if (this.runtimeTransportToken !== runtimeToken) {
-            const replacement = this.runtimeReplacement;
-            if (
-              replacement &&
-              this.isRuntimeReplacementActive(replacement) &&
-              replacement.incumbentToken === runtimeToken
-            ) {
-              replacement.incumbentError = new Error(message);
-            }
-            return;
-          }
-          console.error(
-            `[Spindle:${this.manifest.identifier}] Worker error:`,
-            message
-          );
-          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-            extensionId: this.extensionId,
-            identifier: this.manifest.identifier,
-            error: message,
-          });
-          try {
-            this.runtime?.postMessage({ type: "ping" });
-          } catch {
-            console.warn(
-              `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
-            );
-            this.cleanup();
-          }
-        },
-        onExit: (exitCode, signalCode, error) => {
-          const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
-          if (!transportBound) {
-            transportExitBeforeBinding = new Error(details);
-            return;
-          }
-          if (this.runtimeTransportToken !== runtimeToken) {
-            if (this.handleIncumbentRuntimeExit(runtimeToken, details)) return;
-            return;
-          }
-          const wasStopping = this.runtimeStopping;
-          this.onWorkerShutdownAck?.();
-          this.onWorkerShutdownAck = null;
-          this.onWorkerReady?.(new Error(details));
-          this.onWorkerReady = null;
-          this.onRuntimeExit?.();
-          this.onRuntimeExit = null;
-          if (wasStopping) {
-            this.cleanup();
-            return;
-          }
-          console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
-          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-            extensionId: this.extensionId,
-            identifier: this.manifest.identifier,
-            error: details,
-          });
-          this.cleanup();
-        },
-      });
-
-      if (!runtime) {
-        throw new Error(`Extension worker transport was not created for ${this.manifest.identifier}`);
-      }
-      runtimeReplacement.provisionalRuntime = runtime;
-      if (runtimeReplacement.incumbentBufferOverflow) {
-        throw runtimeReplacement.incumbentBufferOverflow;
-      }
-      if (transportExitBeforeBinding) throw transportExitBeforeBinding;
-      if (transportErrorBeforeBinding) throw transportErrorBeforeBinding;
-      if (this.stopRequested) {
-        throw new Error(`Extension worker start cancelled for ${this.manifest.identifier}`);
-      }
-      if (!macroRegistry.commitExtensionGeneration(activation)) {
-        throw new Error(`Extension worker generation was superseded for ${this.manifest.identifier}`);
-      }
-      activationCommitted = true;
-
-      // Retire incumbent host-owned state while the new transport is still
-      // unbound. A failure after this point is fail-closed rather than
-      // restoring a partially retired generation.
-      incumbentRetired = true;
-      this.retireGenerationState(previousOwner);
-      if (this.stopRequested) {
-        throw new Error(`Extension worker start cancelled for ${this.manifest.identifier}`);
-      }
-
-      const readyPromise = new Promise<void>((resolve, reject) => {
-        let settled = false;
-        let readyTimeout: ReturnType<typeof setTimeout>;
-        const readyCallback = (error?: Error) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(readyTimeout);
-          if (this.onWorkerReady === readyCallback) this.onWorkerReady = null;
-          if (error) reject(error);
-          else resolve();
-        };
-        this.onWorkerReady = readyCallback;
-        readyTimeout = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          if (this.onWorkerReady === readyCallback) this.onWorkerReady = null;
-          console.warn(
-            `[Spindle:${this.manifest.identifier}] Worker ready timeout (10s) — proceeding`
-          );
-          resolve();
-        }, 10_000);
-      });
-      this.runtimeExitPromise = new Promise<void>((resolve) => {
-        this.onRuntimeExit = resolve;
-      });
-      this.runtime = runtime;
-      this.runtimeStopping = false;
-      transportBound = true;
-      // Publish only after runtime, exit promise, and ready callback are all
-      // bound. Messages from this runtime are replayed only after publication.
-      this.runtimeTransportToken = runtimeToken;
-
-      for (const message of bufferedMessages) {
+    this.runtime = createRuntimeTransport({
+      runtimePath,
+      extensionIdentifier: this.manifest.identifier,
+      repoPath,
+      storagePath,
+      onMessage: (message) => {
         this.handleMessage(message as RuntimeWorkerToHost);
-      }
-      bufferedMessages.length = 0;
+      },
+      onError: (message) => {
+        console.error(
+          `[Spindle:${this.manifest.identifier}] Worker error:`,
+          message
+        );
+        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+          extensionId: this.extensionId,
+          identifier: this.manifest.identifier,
+          error: message,
+        });
 
-      if (previousRuntime && previousRuntime !== runtime) {
         try {
-          previousRuntime.terminate(true);
+          this.runtime?.postMessage({ type: "ping" } as any);
         } catch {
-          // ignore — old generation retirement is best-effort
+          console.warn(
+            `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
+          );
+          this.cleanup();
         }
-      }
-
-      // Send init message with the extension's backend entry path
-      this.postToWorker({
-        type: "init",
-        manifest: { ...this.manifest, entry_backend: entryPath },
-        storagePath,
-      });
-
-      await readyPromise;
-      if (runtimeReplacement.incumbentBufferOverflow) {
-        throw runtimeReplacement.incumbentBufferOverflow;
-      }
-      if (
-        this.stopRequested ||
-        this.runtime !== runtime ||
-        this.runtimeTransportToken !== runtimeToken ||
-        this.runtimeReplacement !== runtimeReplacement
-      ) {
-        throw new Error(`Extension worker start cancelled for ${this.manifest.identifier}`);
-      }
-      runtimeReplacement.incumbentMessages.length = 0;
-      runtimeReplacement.incumbentMessageBytes = 0;
-      this.runtimeReplacement = null;
-      this.flushPendingPermissionChanges();
-      await this.emitRuntimeStats("startup", performance.now() - startTime);
-      if (this.stopRequested || this.runtime !== runtime) {
-        throw new Error(`Extension worker start cancelled for ${this.manifest.identifier}`);
-      }
-      this.startRuntimeStatsSampling();
-    } catch (error) {
-      if (activation && !activationCommitted) {
-        activationRolledBack = macroRegistry.rollbackExtensionGeneration(activation);
-      }
-      try {
-        runtime?.terminate(true);
-      } catch {
-        // ignore — failed generation transports are disposable
-      }
-      const restored =
-        !incumbentRetired &&
-        (!activation || activationRolledBack) &&
-        restoreIncumbent();
-      if (!restored) {
-        if (!runtimeReplacement.incumbentExit) {
-          try {
-            previousRuntime?.terminate(true);
-          } catch {
-            // ignore — a failed replacement must not retain the incumbent
-          }
+      },
+      onExit: (exitCode, signalCode, error) => {
+        const wasStopping = this.runtimeStopping;
+        this.onWorkerShutdownAck?.();
+        this.onWorkerShutdownAck = null;
+        this.onRuntimeExit?.();
+        this.onRuntimeExit = null;
+        if (wasStopping) {
+          this.cleanup();
+          return;
         }
-        if (!transportBound && this.runtime === null && runtime) this.runtime = runtime;
+        const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
+        console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
+        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+          extensionId: this.extensionId,
+          identifier: this.manifest.identifier,
+          error: details,
+        });
         this.cleanup();
-        if (previousOwner) this.clearMacroRegistrations(previousOwner);
-      }
-      throw error;
-    } finally {
-      if (this.startCancellation === startCancellation) {
-        this.startCancellation = null;
-      }
-    }
+      },
+    });
+
+    // Wait for the worker to finish loading the extension and registering
+    // all macros/interceptors before resolving, so callers know the
+    // extension is ready.
+    const readyPromise = new Promise<void>((resolve) => {
+      const readyTimeout = setTimeout(() => {
+        console.warn(
+          `[Spindle:${this.manifest.identifier}] Worker ready timeout (10s) — proceeding`
+        );
+        resolve();
+      }, 10_000);
+
+      this.onWorkerReady = () => {
+        clearTimeout(readyTimeout);
+        resolve();
+      };
+    });
+
+    // Send init message with the extension's backend entry path
+    this.postToWorker({
+      type: "init",
+      manifest: { ...this.manifest, entry_backend: entryPath },
+      storagePath,
+    });
+
+    await readyPromise;
+    await this.emitRuntimeStats("startup", performance.now() - startTime);
+    this.startRuntimeStatsSampling();
   }
 
   async stop(): Promise<void> {
-    if (this.stopPromise) {
-      await this.stopPromise;
-      return;
-    }
-    this.stopRequested = true;
-    let resolveStop!: () => void;
-    let rejectStop!: (reason: unknown) => void;
-    const transaction = new Promise<void>((resolve, reject) => {
-      resolveStop = resolve;
-      rejectStop = reject;
-    });
-    this.stopPromise = transaction;
-    try {
-      WorkerHost.prototype.stopTransaction.call(this).then(resolveStop, rejectStop);
-      await transaction;
-    } finally {
-      if (this.stopPromise === transaction) this.stopPromise = null;
-    }
-  }
-
-  private async stopTransaction(): Promise<void> {
-    const pendingStart = this.startPromise;
-    const pendingStartCancellation = this.startCancellation;
-    pendingStartCancellation?.cancel();
-    if (!this.runtime) {
-      this.runtimeStopping = true;
-      this.clearMacroRegistrations();
-      this.rejectPendingRequests();
-      if (pendingStart && pendingStartCancellation) {
-        await pendingStart.catch(() => {});
-      }
-      return;
-    }
+    if (!this.runtime) return;
     const runtime = this.runtime;
     const runtimeExitPromise = this.runtimeExitPromise;
-    const replacementAtStop = this.runtimeReplacement;
-    const stoppingIncumbent =
-      replacementAtStop &&
-      replacementAtStop.provisionalToken === this.runtimeTransportToken &&
-      replacementAtStop.incumbentToken !== null &&
-      replacementAtStop.provisionalRuntime !== runtime
-        ? replacementAtStop
-        : null;
     this.runtimeStopping = true;
-    this.clearMacroRegistrations();
-    this.rejectPendingRequests();
     this.stopRuntimeStatsSampling();
     this.stopAllFrontendProcesses("backend_unloaded");
     this.stopAllBackendProcesses("backend_unloaded");
@@ -2782,7 +1681,6 @@ export class WorkerHost {
       this.onWorkerShutdownAck = finish;
 
       const timer = setTimeout(() => {
-        if (settled) return;
         // Fallback: worker never acknowledged. Force-terminate.
         try {
           runtime.terminate();
@@ -2791,14 +1689,6 @@ export class WorkerHost {
         }
         finish();
       }, 5000);
-      if (stoppingIncumbent?.incumbentExit) {
-        const incumbentExit = this.onRuntimeExit;
-        this.onRuntimeExit = null;
-        incumbentExit?.();
-      }
-      if (stoppingIncumbent?.incumbentShutdownAck || stoppingIncumbent?.incumbentExit) {
-        finish();
-      }
 
       // Actually send the shutdown after the listener is installed so we
       // can never miss the ack due to a fast worker exit.
@@ -2808,18 +1698,11 @@ export class WorkerHost {
         // Worker already gone — finish immediately.
         finish();
       }
-      if (!this.runtime) finish();
     });
 
     if (runtime.mode === "worker") {
-      try {
-        runtime.terminate();
-      } catch {
-        // ignore — terminate is best-effort
-      }
       await this.emitRuntimeStats("shutdown");
       this.cleanup();
-      if (pendingStart) await pendingStart.catch(() => {});
       return;
     }
 
@@ -2849,35 +1732,13 @@ export class WorkerHost {
         void runtimeExitPromise.finally(finish);
       });
     }
-    // Fail-closed: if the transport onExit callback never fired (wedged
-    // subprocess, missing exit report), cleanup still runs.  On normal exit
-    // the onExit callback already called cleanup() and nulled this.runtime,
-    // so the guard avoids a redundant second pass.
-    if (this.runtime) this.cleanup();
-    if (pendingStart) await pendingStart.catch(() => {});
   }
 
-  private clearMacroRegistrations(owner: MacroOwner = this.macroOwner): void {
-    macroRegistry.unregisterOwner(owner);
-    macroRegistry.deactivateExtensionGeneration(owner);
-    this.registeredMacroNames.clear();
-    this.macroValueCache.clear();
-  }
-
-  private rejectPendingRequests(): void {
-    for (const [, pending] of this.pendingRequests) {
-      pending.reject(new Error("Extension worker stopped"));
-    }
-    this.pendingRequests.clear();
-  }
-
-  private cleanupGenerationState(macroOwner: MacroOwner | null = this.macroOwner): void {
+  private cleanup(): void {
     this.stopRuntimeStatsSampling();
     this.stopAllFrontendProcesses("backend_unloaded");
     this.stopAllBackendProcesses("backend_unloaded");
-    const workerReady = this.onWorkerReady;
     this.onWorkerReady = null;
-    workerReady?.(new Error("Extension worker generation stopped"));
     this.onWorkerShutdownAck = null;
     this.onRuntimeExit?.();
     this.onRuntimeExit = null;
@@ -2912,13 +1773,12 @@ export class WorkerHost {
     // Drop any prompt-regex ownership claims so the host resumes its own pass
     clearPromptRegexOwner(this.extensionId);
 
-    // Remove only registrations and caches belonging to the retired generation.
-    if (macroOwner) {
-      this.clearMacroRegistrations(macroOwner);
-    } else {
-      this.registeredMacroNames.clear();
-      this.macroValueCache.clear();
+    // Unregister all macros registered by this extension
+    for (const macroName of this.registeredMacroNames) {
+      macroRegistry.unregisterMacro(macroName);
     }
+    this.registeredMacroNames.clear();
+    this.macroValueCache.clear();
     this.toastTimestamps = [];
 
     // Clear commands and broadcast removal
@@ -2943,7 +1803,10 @@ export class WorkerHost {
     unregisterSharedRpcEndpointsByOwner(this.manifest.identifier);
 
     // Reject pending requests
-    this.rejectPendingRequests();
+    for (const [, pending] of this.pendingRequests) {
+      pending.reject(new Error("Extension worker stopped"));
+    }
+    this.pendingRequests.clear();
 
     // Abort any in-flight generations so upstream HTTP requests don't leak
     // past the extension's lifetime.
@@ -2951,42 +1814,11 @@ export class WorkerHost {
       controller.abort();
     }
     this.generationAbortControllers.clear();
-  }
 
-  private retireGenerationState(previousOwner: MacroOwner | null): void {
-    const previousReady = this.onWorkerReady;
-    const previousShutdownAck = this.onWorkerShutdownAck;
-    const previousRuntimeExit = this.onRuntimeExit;
-    this.onWorkerReady = null;
-    this.onWorkerShutdownAck = null;
-    this.onRuntimeExit = null;
-    previousReady?.(new Error("Extension worker generation was replaced"));
-    previousShutdownAck?.();
-    previousRuntimeExit?.();
-
-    if (
-      previousOwner &&
-      previousOwner.extensionId === this.macroOwner.extensionId &&
-      previousOwner.generation === this.macroOwner.generation
-    ) {
-      // A repeated start on one host reuses its owner token. Retire the old
-      // definitions without deactivating the token needed by the replacement.
-      macroRegistry.unregisterOwner(previousOwner);
-      this.cleanupGenerationState(null);
-      return;
-    }
-    this.cleanupGenerationState(previousOwner);
-  }
-
-  private cleanup(): void {
-    this.runtimeReplacement = null;
-    this.runtimeTransportToken = null;
-    this.nextRuntimeTransportEpoch += 1;
-    this.cleanupGenerationState();
-    this.pendingPermissionChanges.length = 0;
     this.runtime = null;
     this.runtimeStopping = false;
   }
+
   private handleRuntimeTransportFailure(error: unknown): void {
     // Already torn down by an earlier failure on this stack, bail before recursing.
     if (!this.runtime) return;
@@ -3008,33 +1840,6 @@ export class WorkerHost {
   }
 
   sendFrontendMessage(payload: unknown, userId: string): void {
-    if (this.runtimeStopping) return;
-    if (isRecord(payload) && payload.type === "__loom_macro_catalog_request") {
-      const requestId = payload.requestId;
-      if (typeof requestId !== "string" || !requestId.trim()) return;
-      const normalizedUserId = typeof userId === "string" ? userId.trim() : "";
-      const normalizedOwnerId =
-        typeof this.installedByUserId === "string" ? this.installedByUserId.trim() : "";
-      const targetUserId =
-        this.installScope === "user"
-          ? normalizedOwnerId
-          : normalizedUserId;
-      if (!targetUserId) return;
-      eventBus.emit(
-        EventType.SPINDLE_FRONTEND_MSG,
-        {
-          extensionId: this.extensionId,
-          identifier: this.manifest.identifier,
-          data: {
-            type: "__loom_macro_catalog_response",
-            requestId,
-            catalog: macroRegistry.getPublicCatalog(this.macroOwner),
-          },
-        },
-        targetUserId,
-      );
-      return;
-    }
     this.postToWorker({ type: "frontend_message", payload, userId });
   }
 
@@ -3042,95 +1847,6 @@ export class WorkerHost {
     userId: string,
     payload: Record<string, unknown>,
   ): void {
-    const action = payload.action;
-    const processIdField = inspectManagedOwnProperty(payload, "processId");
-    const kindField = inspectManagedOwnProperty(payload, "kind");
-    const keyField = inspectManagedOwnProperty(payload, "key");
-    const reasonField = inspectManagedOwnProperty(payload, "reason");
-    const errorField = inspectManagedOwnProperty(payload, "error");
-    const valueField = inspectManagedOwnProperty(payload, "payload");
-    const metadataField = inspectManagedOwnProperty(payload, "metadata");
-    const processIdError = processIdField.accessor
-      ? "processId must be a data property"
-      : validateManagedProcessString(
-          processIdField.value,
-          "processId",
-          MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-          !processIdField.present,
-        );
-    const kindError = kindField.accessor
-      ? "kind must be a data property"
-      : validateManagedProcessString(
-          kindField.value,
-          "kind",
-          MANAGED_PROCESS_MAX_KIND_BYTES,
-          action !== "spawn" && !kindField.present,
-        );
-    const keyError = keyField.accessor
-      ? "key must be a data property"
-      : validateManagedProcessString(
-          keyField.value,
-          "key",
-          MANAGED_PROCESS_MAX_KEY_BYTES,
-          !keyField.present,
-        );
-    const reasonError = reasonField.accessor
-      ? "reason must be a data property"
-      : validateManagedProcessString(
-          reasonField.value,
-          "reason",
-          MANAGED_PROCESS_MAX_REASON_BYTES,
-          !reasonField.present,
-        );
-    const errorError = errorField.accessor
-      ? "error must be a data property"
-      : validateManagedProcessString(
-          errorField.value,
-          "error",
-          MANAGED_PROCESS_MAX_ERROR_BYTES,
-          !errorField.present,
-        );
-    const valueError = valueField.accessor
-      ? "payload must be a data property"
-      : action === "spawn" && !valueField.present
-        ? null
-        : valueField.present
-          ? null
-          : null;
-    const metadataRootError =
-      action === "spawn" && metadataField.present
-        ? validateManagedProcessMetadataRoot(metadataField.value)
-        : null;
-    const metadataError = metadataField.accessor
-      ? "metadata must be a data property"
-      : metadataRootError;
-    const aggregateValueError =
-      !valueError && !metadataError
-        ? validateManagedProcessValues(
-            ...[
-              ...(action === "spawn" && !valueField.present
-                ? []
-                : valueField.present
-                  ? [{ value: valueField.value, label: "frontend message" as const }]
-                  : []),
-              ...(metadataField.present
-                ? [{ value: metadataField.value, label: "spawn metadata" as const }]
-                : []),
-            ],
-          )
-        : null;
-    const fieldError =
-      processIdError ??
-      kindError ??
-      keyError ??
-      reasonError ??
-      errorError ??
-      valueError ??
-      metadataError ?? aggregateValueError;
-    if (fieldError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping frontend process event: ${fieldError}`);
-      return;
-    }
     eventBus.emit(
       EventType.SPINDLE_FRONTEND_PROCESS,
       {
@@ -3148,23 +1864,6 @@ export class WorkerHost {
     event: "ready" | "heartbeat" | "complete" | "fail" | "frontend_unloaded",
     error?: string,
   ): void {
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    const errorError = validateManagedProcessString(
-      error,
-      "error",
-      MANAGED_PROCESS_MAX_ERROR_BYTES,
-      true,
-    );
-    if (processIdError || errorError) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Dropping frontend process event: ${processIdError ?? errorError}`,
-      );
-      return;
-    }
     const record = this.getFrontendProcessForUser(processId, userId);
     if (!record) return;
 
@@ -3182,11 +1881,11 @@ export class WorkerHost {
           error: undefined,
         });
         this.armFrontendHeartbeatTimer(record);
-        this.settleProcessSpawn(record, this.snapshotFrontendProcess(record));
+        this.resolveRequest(record.requestId, this.snapshotFrontendProcess(record));
         break;
       }
       case "heartbeat": {
-        if (record.state !== "running") return;
+        if (record.state !== "running" && record.state !== "stopping") return;
         const now = new Date().toISOString();
         record.lastHeartbeatAt = now;
         this.armFrontendHeartbeatTimer(record);
@@ -3196,13 +1895,10 @@ export class WorkerHost {
         if (record.state === "completed" || record.state === "failed" || record.state === "timed_out" || record.state === "stopped") {
           return;
         }
-        const wasStarting = record.state === "starting";
         this.finalizeFrontendProcess(
           record,
           record.state === "stopping" ? "stopped" : "completed",
           record.state === "stopping" ? "stopped" : "completed",
-          undefined,
-          wasStarting ? "Frontend process completed before it became ready" : undefined,
         );
         break;
       }
@@ -3210,20 +1906,22 @@ export class WorkerHost {
         if (record.state === "completed" || record.state === "failed" || record.state === "timed_out" || record.state === "stopped") {
           return;
         }
-        const stopping = record.state === "stopping";
         const message = error?.trim() || "Frontend process failed";
-        this.finalizeFrontendProcess(
-          record,
-          stopping ? "stopped" : "failed",
-          stopping ? "stopped" : "failed",
-          message,
-        );
+        if (record.state === "starting") {
+          this.clearFrontendProcessTimers(record);
+          this.finalizeFrontendProcess(record, "failed", "failed", message);
+          this.rejectRequest(processId, new Error(message));
+        } else {
+          this.finalizeFrontendProcess(record, "failed", "failed", message);
+        }
         break;
       }
       case "frontend_unloaded": {
         if (record.state === "starting") {
           const message = "Frontend extension unloaded before the process became ready";
+          this.clearFrontendProcessTimers(record);
           this.finalizeFrontendProcess(record, "failed", "frontend_unloaded", message);
+          this.rejectRequest(processId, new Error(message));
           return;
         }
         this.finalizeFrontendProcess(record, "stopped", "frontend_unloaded", error);
@@ -3235,20 +1933,6 @@ export class WorkerHost {
   handleFrontendProcessMessage(processId: string, userId: string, payload: unknown): void {
     const record = this.getFrontendProcessForUser(processId, userId);
     if (!record) return;
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    if (processIdError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${processIdError}`);
-      return;
-    }
-    const validationError = validateManagedProcessValue(payload, "frontend message");
-    if (validationError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${validationError}`);
-      return;
-    }
     this.postToWorker({ type: "frontend_process_message", processId, payload, userId });
   }
 
@@ -3258,14 +1942,6 @@ export class WorkerHost {
    * no restart needed.
    */
   notifyPermissionChanged(permission: string, granted: boolean, allGranted: string[]): void {
-    if (this.isRuntimeReplacementActive()) {
-      this.pendingPermissionChanges.push({
-        permission,
-        granted,
-        allGranted: [...allGranted],
-      });
-      return;
-    }
     this.postToWorker({
       type: "permission_changed",
       extensionId: this.manifest.identifier,
@@ -3469,13 +2145,11 @@ export class WorkerHost {
     });
   }
 
-  private handleMessage(msg: unknown): void {
-    if (!isRecord(msg) || typeof msg.type !== "string") return
-    const typed = msg as unknown as RuntimeWorkerToHost
-    const scopeId = typeof msg.rpcPermissionScopeId === "string"
-      ? msg.rpcPermissionScopeId
-      : undefined
-    sharedRpcPermissionScope.run(scopeId, () => this.handleMessageInScope(typed))
+  private handleMessage(msg: RuntimeWorkerToHost): void {
+    const scopeId = typeof (msg as any).rpcPermissionScopeId === "string"
+      ? (msg as any).rpcPermissionScopeId
+      : undefined;
+    sharedRpcPermissionScope.run(scopeId, () => this.handleMessageInScope(msg));
   }
 
   private handleMessageInScope(msg: RuntimeWorkerToHost): void {
@@ -3781,26 +2455,17 @@ export class WorkerHost {
         this.handleEnclaveList(msg.requestId, msg.userId);
         break;
       case "frontend_message": {
-        // Messages queued by a worker during teardown must not outlive this host.
-        if (!this.runtime || this.runtimeStopping) break;
         // User-scoped extensions can only ever target their installer; the
         // worker-supplied userId is ignored to prevent cross-user delivery.
         // Operator-scoped extensions may pass an explicit userId to route the
         // message to a single connected user — when omitted we fall back to
         // the legacy broadcast behaviour for backwards compatibility.
-        const normalizedOwnerId =
-          typeof this.installedByUserId === "string" ? this.installedByUserId.trim() : "";
-        if (this.installScope === "user" && !normalizedOwnerId) break;
-        let targetUserId: string | undefined;
-        if (this.installScope === "user") {
-          targetUserId = normalizedOwnerId;
-        } else if (msg.userId === undefined) {
-          targetUserId = undefined;
-        } else if (typeof msg.userId !== "string" || !msg.userId.trim()) {
-          break;
-        } else {
-          targetUserId = msg.userId.trim();
-        }
+        const targetUserId =
+          this.installScope === "user"
+            ? this.installedByUserId ?? undefined
+            : typeof msg.userId === "string" && msg.userId.length > 0
+              ? msg.userId
+              : undefined;
         eventBus.emit(
           EventType.SPINDLE_FRONTEND_MSG,
           {
@@ -4570,261 +3235,74 @@ export class WorkerHost {
 
   // ─── Macro registration ──────────────────────────────────────────────
 
-  private rejectMacroRegistration(
-    registrationId: string,
-    macroName: string,
-    reason: string,
-  ): void {
-    if (registrationId) {
-      this.postToWorker({
-        type: "event",
-        event: "__macro_registration_result__",
-        payload: { registrationId, accepted: false },
-      });
-    }
-    console.warn(
-      "[Spindle:%s] Macro '%s' rejected: %s",
-      this.manifest.identifier,
-      macroName || "<unnamed>",
-      reason,
-    );
-  }
+  private handleRegisterMacro(definition: any): void {
+    const macroName = String(definition.name || "").trim();
+    if (!macroName) return;
 
-  private handleRegisterMacro(definition: unknown): void {
-    if (!isRecord(definition)) return;
-    const payload = definition;
-    const registrationId =
-      typeof payload.registrationId === "string"
-        ? payload.registrationId
-        : "";
-    const rawMacroName = typeof payload.name === "string" ? payload.name : "";
-    if (exceedsUtf8Limit(rawMacroName, MAX_MACRO_NAME_BYTES)) {
-      this.rejectMacroRegistration(registrationId, rawMacroName.trim(), `name exceeds ${MAX_MACRO_NAME_BYTES} UTF-8 bytes`);
-      return;
-    }
-    const macroName = rawMacroName.trim();
-    const macroKey = canonicalMacroName(macroName);
-    if (!macroName || !macroKey) {
-      this.rejectMacroRegistration(registrationId, macroName, "name must be non-empty");
-      return;
-    }
-    if (!this.registeredMacroNames.has(macroKey) && this.registeredMacroNames.size >= MAX_MACRO_REGISTRATIONS) {
-      this.rejectMacroRegistration(registrationId, macroName, `macro registration limit reached (${MAX_MACRO_REGISTRATIONS})`);
-      return;
-    }
-
-    const handlerSource =
-      typeof payload.handler === "string" ? payload.handler : null;
-    if (handlerSource === null) {
-      this.rejectMacroRegistration(
-        registrationId,
-        macroName,
-        "handler must be a serialized function body",
+    // Check if this would overwrite a built-in macro before registering
+    const existing = macroRegistry.getMacro(macroName);
+    if (existing?.builtIn) {
+      console.warn(
+        `[Spindle:${this.manifest.identifier}] Cannot override built-in macro: ${macroName}`
       );
       return;
     }
-    if (exceedsUtf8Limit(handlerSource, MAX_MACRO_HANDLER_BYTES)) {
-      this.rejectMacroRegistration(
-        registrationId,
-        macroName,
-        `handler body exceeds ${MAX_MACRO_HANDLER_BYTES} UTF-8 bytes`,
-      );
-      return;
-    }
-    if (handlerSource) {
-      const moduleAccess = managerSvc.detectSerializedHandlerModuleAccess(handlerSource);
-      if (moduleAccess.length > 0) {
-        this.rejectMacroRegistration(
-          registrationId,
-          macroName,
-          `blocked capabilities: ${moduleAccess.join(", ")}`,
-        );
-        return;
-      }
-      const blocked = managerSvc.detectDangerousBackendCapabilities(
-        `async function __spindleMacroHandler(ctx) {\n${handlerSource}\n}`,
-        managerSvc.declaredCapabilitiesFromManifest(this.manifest),
-      );
-      if (blocked.length > 0) {
-        this.rejectMacroRegistration(
-          registrationId,
-          macroName,
-          `blocked capabilities: ${blocked.join(", ")}`,
-        );
-        return;
-      }
-    }
 
-    const returnTypeValue = payload.returnType;
-    const returnType: MacroDefinition["returnType"] =
-      returnTypeValue === "integer" ||
-      returnTypeValue === "number" ||
-      returnTypeValue === "boolean"
-        ? returnTypeValue
-        : "string";
+    this.registeredMacroNames.add(macroName);
 
-    let args: MacroDefinition["args"];
-    if (payload.args !== undefined) {
-      if (!Array.isArray(payload.args)) {
-        this.rejectMacroRegistration(registrationId, macroName, "args must be an array");
-        return;
-      }
-      if (payload.args.length > MAX_MACRO_ARGS) {
-        this.rejectMacroRegistration(registrationId, macroName, `args exceed ${MAX_MACRO_ARGS} entries`);
-        return;
-      }
-      args = [];
-      for (const arg of payload.args) {
-        if (!isRecord(arg)) continue;
-        const rawArgName = typeof arg.name === "string" ? arg.name : "";
-        if (exceedsUtf8Limit(rawArgName, MAX_MACRO_ARG_NAME_BYTES)) {
-          this.rejectMacroRegistration(registrationId, macroName, `argument name exceeds ${MAX_MACRO_ARG_NAME_BYTES} UTF-8 bytes`);
-          return;
-        }
-        const argName = rawArgName.trim() || "arg";
-        const argDescription =
-          typeof arg.description === "string" ? arg.description : undefined;
-        if (
-          argDescription !== undefined &&
-          exceedsUtf8Limit(argDescription, MAX_MACRO_ARG_DESCRIPTION_BYTES)
-        ) {
-          this.rejectMacroRegistration(
-            registrationId,
-            macroName,
-            `argument description exceeds ${MAX_MACRO_ARG_DESCRIPTION_BYTES} UTF-8 bytes`,
-          );
-          return;
-        }
-        args.push({
-          name: argName,
-          description: argDescription,
-          optional: arg.required === false || arg.optional === true,
-        });
-      }
-    }
-
-    let aliases: string[] | undefined;
-    if (payload.aliases !== undefined) {
-      if (!Array.isArray(payload.aliases)) {
-        this.rejectMacroRegistration(registrationId, macroName, "aliases must be an array");
-        return;
-      }
-      if (payload.aliases.length > MAX_MACRO_ALIASES) {
-        this.rejectMacroRegistration(registrationId, macroName, `aliases exceed ${MAX_MACRO_ALIASES} entries`);
-        return;
-      }
-      aliases = [];
-      for (const alias of payload.aliases) {
-        if (typeof alias !== "string") continue;
-        if (exceedsUtf8Limit(alias, MAX_MACRO_ALIAS_BYTES)) {
-          this.rejectMacroRegistration(registrationId, macroName, `alias exceeds ${MAX_MACRO_ALIAS_BYTES} UTF-8 bytes`);
-          return;
-        }
-        const trimmedAlias = alias.trim();
-        if (trimmedAlias) aliases.push(trimmedAlias);
-      }
-    }
-    const category =
-      typeof payload.category === "string"
-        ? payload.category
-        : `extension:${this.manifest.identifier}`;
-    if (exceedsUtf8Limit(category, MAX_MACRO_CATEGORY_BYTES)) {
-      this.rejectMacroRegistration(registrationId, macroName, `category exceeds ${MAX_MACRO_CATEGORY_BYTES} UTF-8 bytes`);
-      return;
-    }
-    const description = typeof payload.description === "string" ? payload.description : "";
-    if (exceedsUtf8Limit(description, MAX_MACRO_DESCRIPTION_BYTES)) {
-      this.rejectMacroRegistration(registrationId, macroName, `description exceeds ${MAX_MACRO_DESCRIPTION_BYTES} UTF-8 bytes`);
-      return;
-    }
-    const returns = typeof payload.returns === "string" ? payload.returns : undefined;
-    if (returns !== undefined && exceedsUtf8Limit(returns, MAX_MACRO_RETURNS_BYTES)) {
-      this.rejectMacroRegistration(registrationId, macroName, `returns exceeds ${MAX_MACRO_RETURNS_BYTES} UTF-8 bytes`);
-      return;
-    }
-    const extensionDefinition: MacroDefinition = {
+    macroRegistry.registerMacro({
       name: macroName,
-      // Extensions may add a suffix beneath their own namespace, but may not
-      // claim a host category (the registry enforces this again).
-      category,
-      description,
-      returnType,
-      returns,
-      aliases,
-      args,
-      strictArgs: payload.strictArgs === true,
-      delayArgResolution: payload.delayArgResolution === true,
-      terminal: payload.terminal === true,
-      volatile: payload.volatile === true,
+      category: definition.category || `extension:${this.manifest.identifier}`,
+      description: definition.description || "",
+      returnType: definition.returnType || "string",
+      args: Array.isArray(definition.args)
+        ? definition.args.map((arg: any) => ({
+            name: String(arg.name || "arg"),
+            description: arg.description ? String(arg.description) : undefined,
+            optional: arg.required === false,
+          }))
+        : undefined,
       handler: async (ctx) => {
-        // A delayed handler from an old worker must not access the current
-        // generation's cache or transport.
-        if (
-          this.runtimeStopping ||
-          !macroRegistry.isOwnedMacro(macroKey, this.macroOwner) ||
-          !this.runtime
-        ) {
-          console.debug(
-            "[Spindle:%s] Macro '%s' skipped: inactive worker generation",
-            this.manifest.identifier,
-            macroName,
-          );
+        // Bail immediately if the worker is not running — avoids a 5s timeout
+        // that would stall prompt assembly for every extension macro.
+        if (!this.runtime) {
+          console.debug("[Spindle:%s] Macro '%s' skipped: worker not running", this.manifest.identifier, macroName);
           return "";
         }
 
-        const chatId = ctx.env.chat.id;
+        const chatId = ctx?.env?.chat?.id;
         const scopedUserId = this.getScopedUserId();
-        if (scopedUserId && !chatId) {
+        if (scopedUserId && (typeof chatId !== "string" || !chatId)) {
           return "";
         }
-        if (chatId) {
+        if (typeof chatId === "string" && chatId) {
           const ownerUserId = this.getChatOwnerId(chatId);
           this.enforceScopedUser(ownerUserId);
         }
 
         // Push model: if the extension has pushed a cached value via
         // updateMacroValue(), return it immediately — no RPC roundtrip.
-        const cached = this.macroValueCache.get(macroKey);
+        const cached = this.macroValueCache.get(macroName);
         if (cached !== undefined) return cached;
 
         // Pull model (legacy): RPC to the worker and await response
         const requestId = crypto.randomUUID();
         return await new Promise<string>((resolvePromise) => {
+          // Set up a one-time listener for the response
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
-            console.warn(
-              "[Spindle:%s] Macro '%s' timed out after 5s",
-              this.manifest.identifier,
-              macroName,
-            );
+            console.warn("[Spindle:%s] Macro '%s' timed out after 5s", this.manifest.identifier, macroName);
             resolvePromise(`[Spindle:${this.manifest.identifier}] Macro timeout`);
           }, 5000);
 
           this.pendingRequests.set(requestId, {
             resolve: (val) => {
               clearTimeout(timeout);
-              if (
-                typeof val !== "string" ||
-                exceedsUtf8Limit(val, MAX_MACRO_PULL_RESULT_BYTES)
-              ) {
-                console.warn(
-                  "[Spindle:%s] Macro '%s' returned an oversized or invalid result",
-                  this.manifest.identifier,
-                  macroName,
-                );
-                resolvePromise("");
-                return;
-              }
-              resolvePromise(val);
+              resolvePromise(String(val ?? ""));
             },
             reject: (err) => {
               clearTimeout(timeout);
-              console.warn(
-                "[Spindle:%s] Macro '%s' rejected: %s",
-                this.manifest.identifier,
-                macroName,
-                err,
-              );
+              console.warn("[Spindle:%s] Macro '%s' rejected: %s", this.manifest.identifier, macroName, err);
               resolvePromise("");
             },
           });
@@ -4837,11 +3315,7 @@ export class WorkerHost {
             safeExtra = JSON.parse(JSON.stringify(ctx.env.extra));
           } catch {
             // Non-serializable extra — pass an empty object rather than failing
-            console.debug(
-              "[Spindle:%s] Macro '%s': env.extra not serializable, passing empty",
-              this.manifest.identifier,
-              macroName,
-            );
+            console.debug("[Spindle:%s] Macro '%s': env.extra not serializable, passing empty", this.manifest.identifier, macroName);
           }
 
           const safeEnv = {
@@ -4856,8 +3330,8 @@ export class WorkerHost {
             },
             dynamicMacros: Object.fromEntries(
               Object.entries(ctx.env.dynamicMacros).filter(
-                ([, value]) => typeof value === "string",
-              ),
+                ([, v]) => typeof v === "string"
+              )
             ),
             extra: safeExtra,
           };
@@ -4865,7 +3339,7 @@ export class WorkerHost {
           try {
             this.postToWorker({
               type: "event",
-              event: "__macro_invoke__",
+              event: `__macro_invoke__`,
               payload: {
                 requestId,
                 name: macroName,
@@ -4885,72 +3359,32 @@ export class WorkerHost {
           } catch (err) {
             clearTimeout(timeout);
             this.pendingRequests.delete(requestId);
-            console.warn(
-              "[Spindle:%s] Macro '%s' postToWorker failed: %s",
-              this.manifest.identifier,
-              macroName,
-              err,
-            );
+            console.warn("[Spindle:%s] Macro '%s' postToWorker failed: %s", this.manifest.identifier, macroName, err);
             // postMessage failure means the worker is dead — clean up to
-            // prevent all subsequent extension macros from timing out.
+            // prevent all subsequent extension macros from timing out (5s each).
             if (this.runtime) {
-              console.warn(
-                "[Spindle:%s] Worker appears dead, cleaning up registrations",
-                this.manifest.identifier,
-              );
+              console.warn("[Spindle:%s] Worker appears dead, cleaning up registrations", this.manifest.identifier);
               this.cleanup();
             }
             resolvePromise("");
           }
         });
       },
-    };
-    const accepted = macroRegistry.registerExtensionMacro(
-      extensionDefinition,
-      this.macroOwner,
-    );
-    if (registrationId) {
-      this.postToWorker({
-        type: "event",
-        event: "__macro_registration_result__",
-        payload: { registrationId, accepted },
-      });
-    }
-    if (!accepted) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Macro registration rejected: ${macroName}`,
-      );
-      return;
-    }
-    this.macroValueCache.delete(macroKey);
-    this.registeredMacroNames.add(macroKey);
+    });
   }
 
   private handleUnregisterMacro(name: string): void {
-    const macroName = typeof name === "string" ? name.trim() : "";
-    const macroKey = canonicalMacroName(macroName);
-    if (!macroKey) return;
-    const primaryKey = macroRegistry.getPrimaryName(macroKey);
-    if (!primaryKey || !macroRegistry.unregisterMacro(primaryKey, this.macroOwner)) {
-      return;
-    }
-    this.registeredMacroNames.delete(primaryKey);
-    this.macroValueCache.delete(primaryKey);
+    const macroName = String(name || "").trim();
+    if (!macroName) return;
+    macroRegistry.unregisterMacro(macroName);
+    this.registeredMacroNames.delete(macroName);
+    this.macroValueCache.delete(macroName);
   }
 
   private handleUpdateMacroValue(name: string, value: string): void {
-    const macroKey = canonicalMacroName(name);
-    const primaryKey = macroRegistry.getPrimaryName(macroKey);
-    if (!primaryKey || !macroRegistry.isOwnedMacro(primaryKey, this.macroOwner)) {
-      return;
-    }
-    if (typeof value !== "string" || exceedsUtf8Limit(value, MAX_MACRO_CACHED_VALUE_BYTES)) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Macro value update rejected for ${primaryKey}`,
-      );
-      return;
-    }
-    this.macroValueCache.set(primaryKey, value);
+    const macroName = String(name || "").trim();
+    if (!macroName) return;
+    this.macroValueCache.set(macroName, String(value ?? ""));
   }
 
   // ─── Interceptor registration ────────────────────────────────────────
@@ -11901,55 +10335,13 @@ export class WorkerHost {
       replaceExisting?: boolean;
     }
   ): void {
-    let activeRecord: FrontendProcessRecord | null = null;
     try {
-      const kindField = inspectManagedOwnProperty(options, "kind");
-      if (kindField.accessor) throw new Error("kind must be a data property");
-      const rawKind = kindField.value;
-      const kindError = validateManagedProcessString(
-        rawKind,
-        "kind",
-        MANAGED_PROCESS_MAX_KIND_BYTES,
-      );
-      if (kindError || typeof rawKind !== "string") {
-        throw new Error(kindError ?? "kind must be a string");
-      }
-      const kind = rawKind.trim();
+      const kind = typeof options?.kind === "string" ? options.kind.trim() : "";
       if (!kind) throw new Error("kind is required");
-      const keyField = inspectManagedOwnProperty(options, "key");
-      if (keyField.accessor) throw new Error("key must be a data property");
-      const rawKey = keyField.value;
-      const keyError = validateManagedProcessString(
-        rawKey,
-        "key",
-        MANAGED_PROCESS_MAX_KEY_BYTES,
-        !keyField.present,
-      );
-      if (keyError) throw new Error(keyError);
-      const payloadField = inspectManagedOwnProperty(options, "payload");
-      const metadataField = inspectManagedOwnProperty(options, "metadata");
-      if (payloadField.accessor) throw new Error("payload must be a data property");
-      if (metadataField.accessor) throw new Error("metadata must be a data property");
-      if (metadataField.present) {
-        const metadataRootError = validateManagedProcessMetadataRoot(metadataField.value);
-        if (metadataRootError) throw new Error(metadataRootError);
-      }
-      const envelopeError = validateManagedProcessValues(
-        ...(payloadField.present
-          ? [{ value: payloadField.value, label: "spawn payload" as const }]
-          : []),
-        ...(metadataField.present
-          ? [{ value: metadataField.value, label: "spawn metadata" as const }]
-          : []),
-      );
-      if (envelopeError) throw new Error(envelopeError);
 
       const userId = this.resolveFrontendProcessUserId(options?.userId);
-      const key = typeof rawKey === "string" && rawKey.trim() ? rawKey.trim() : undefined;
-      const metadata = metadataField.present
-        ? (metadataField.value as Record<string, unknown>)
-        : undefined;
-
+      const processId = crypto.randomUUID();
+      const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
       const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
       const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));
 
@@ -11962,39 +10354,29 @@ export class WorkerHost {
             if (!options?.replaceExisting) {
               throw new Error(`Frontend process already exists for kind \"${kind}\" and key \"${key}\"`);
             }
-            this.requestFrontendProcessStop(existing, "replaced", true);
-            this.finalizeFrontendProcess(
-              existing,
-              "stopped",
-              "replaced",
-              undefined,
-              "Frontend process was replaced before it became ready",
-            );
+            this.requestFrontendProcessStop(existing, "replaced");
+            if (existing.state === "starting") {
+              this.rejectRequest(existing.requestId, new Error("Frontend process was replaced before it became ready"));
+            }
+            this.finalizeFrontendProcess(existing, "stopped", "replaced");
           }
         }
       }
-      if (this.frontendProcesses.size >= WorkerHost.MAX_FRONTEND_PROCESSES) {
-        throw new Error(`Frontend process limit reached (${WorkerHost.MAX_FRONTEND_PROCESSES})`);
-      }
-      const processId = crypto.randomUUID();
 
       const record: FrontendProcessRecord = {
         requestId,
-        spawnResponseSettled: false,
         processId,
         kind,
         ...(key ? { key } : {}),
         state: "starting",
         userId,
-        ...(metadataField.present ? { metadata } : {}),
+        ...(options?.metadata ? { metadata: options.metadata } : {}),
         startedAt: new Date().toISOString(),
         startupTimer: null,
         heartbeatTimer: null,
-        stopTimer: null,
         startupTimeoutMs,
         heartbeatTimeoutMs,
       };
-      activeRecord = record;
 
       this.frontendProcesses.set(processId, record);
       if (key) {
@@ -12006,23 +10388,24 @@ export class WorkerHost {
 
       this.emitFrontendProcessLifecycle(record);
 
-      this.armFrontendStartupTimer(record);
+      record.startupTimer = setTimeout(() => {
+        const latest = this.frontendProcesses.get(processId);
+        if (!latest || latest.state !== "starting") return;
+        this.requestFrontendProcessStop(latest, "timed_out");
+        this.finalizeFrontendProcess(latest, "timed_out", "timed_out", "Frontend process startup timed out");
+        this.rejectRequest(requestId, new Error("Frontend process startup timed out"));
+      }, startupTimeoutMs);
 
       this.sendFrontendProcessEvent(userId, {
         action: "spawn",
         processId,
         kind,
         ...(key ? { key } : {}),
-        ...(payloadField.present ? { payload: payloadField.value } : {}),
-        ...(metadataField.present ? { metadata: metadataField.value } : {}),
+        payload: options?.payload,
+        ...(options?.metadata ? { metadata: options.metadata } : {}),
       });
-    } catch (err: unknown) {
-      const message = boundedManagedProcessError(err);
-      if (activeRecord) {
-        this.finalizeFrontendProcess(activeRecord, "failed", "failed", message);
-      } else {
-        this.postToWorker({ type: "response", requestId, error: message });
-      }
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
@@ -12048,18 +10431,12 @@ export class WorkerHost {
         .map((record) => this.snapshotFrontendProcess(record));
       this.postToWorker({ type: "response", requestId, result: items });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: boundedManagedProcessError(err) });
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
   private handleFrontendProcessGet(requestId: string, processId: string): void {
     try {
-      const processIdError = validateManagedProcessString(
-        processId,
-        "processId",
-        MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-      );
-      if (processIdError) throw new Error(processIdError);
       const record = this.getFrontendProcessRecord(processId);
       this.postToWorker({
         type: "response",
@@ -12067,7 +10444,7 @@ export class WorkerHost {
         result: record ? this.snapshotFrontendProcess(record) : null,
       });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: boundedManagedProcessError(err) });
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
@@ -12077,23 +10454,6 @@ export class WorkerHost {
     options?: { userId?: string; reason?: string }
   ): void {
     try {
-      const processIdError = validateManagedProcessString(
-        processId,
-        "processId",
-        MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-      );
-      if (processIdError) throw new Error(processIdError);
-      const reasonField = inspectManagedOwnProperty(options, "reason");
-      const reasonError = reasonField.accessor
-        ? "reason must be a data property"
-        : validateManagedProcessString(
-            reasonField.value,
-            "reason",
-            MANAGED_PROCESS_MAX_REASON_BYTES,
-            !reasonField.present,
-          );
-      if (reasonError) throw new Error(reasonError);
-      const reason = typeof reasonField.value === "string" ? reasonField.value : undefined;
       const record = this.getFrontendProcessRecord(processId);
       if (!record) {
         this.postToWorker({ type: "response", requestId, result: undefined });
@@ -12109,36 +10469,24 @@ export class WorkerHost {
         throw new Error("processId does not belong to the requested userId");
       }
       if (record.state === "starting" || record.state === "running") {
-        record.stopReason = reason;
-        this.clearFrontendProcessTimers(record);
+        record.stopReason = options?.reason;
+        if (record.startupTimer) {
+          clearTimeout(record.startupTimer);
+          record.startupTimer = null;
+        }
         this.transitionFrontendProcess(record, "stopping");
-        this.armFrontendStopTimer(record);
       }
-      this.requestFrontendProcessStop(record, reason ?? "stopped");
+      this.requestFrontendProcessStop(record, options?.reason ?? "stopped");
       this.postToWorker({ type: "response", requestId, result: undefined });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: boundedManagedProcessError(err) });
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
   private handleFrontendProcessSend(processId: string, payload: unknown, userId?: string): void {
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    if (processIdError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping managed process send: ${processIdError}`);
-      return;
-    }
     const record = this.getFrontendProcessRecord(processId);
     if (!record) return;
     if (this.installScope === "operator" && userId && record.userId !== userId) return;
-    const validationError = validateManagedProcessValue(payload, "frontend message");
-    if (validationError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${validationError}`);
-      return;
-    }
     this.sendFrontendProcessEvent(record.userId ?? this.resolveFrontendProcessUserId(userId), {
       action: "message",
       processId,
@@ -12160,79 +10508,13 @@ export class WorkerHost {
       replaceExisting?: boolean;
     }
   ): Promise<void> {
-    let activeRecord: BackendProcessRecord | null = null;
-    let reservationHeld = false;
     try {
-      const entryField = inspectManagedOwnProperty(options, "entry");
-      if (entryField.accessor) throw new Error("entry must be a data property");
-      const rawEntry = entryField.value;
-      const entryError = validateManagedProcessString(
-        rawEntry,
-        "entry",
-        MANAGED_PROCESS_MAX_ENTRY_BYTES,
-      );
-      if (entryError || typeof rawEntry !== "string") {
-        throw new Error(entryError ?? "entry must be a string");
-      }
-      const entry = rawEntry.trim().replace(/\\/g, "/");
-      const kindField = inspectManagedOwnProperty(options, "kind");
-      if (kindField.accessor) throw new Error("kind must be a data property");
-      const rawKind = kindField.value;
-      const kindError = validateManagedProcessString(
-        rawKind,
-        "kind",
-        MANAGED_PROCESS_MAX_KIND_BYTES,
-        !kindField.present,
-      );
-      if (kindError) throw new Error(kindError);
-      const keyField = inspectManagedOwnProperty(options, "key");
-      if (keyField.accessor) throw new Error("key must be a data property");
-      const rawKey = keyField.value;
-      const keyError = validateManagedProcessString(
-        rawKey,
-        "key",
-        MANAGED_PROCESS_MAX_KEY_BYTES,
-        !keyField.present,
-      );
-      if (keyError) throw new Error(keyError);
-      const payloadField = inspectManagedOwnProperty(options, "payload");
-      const metadataField = inspectManagedOwnProperty(options, "metadata");
-      if (payloadField.accessor) throw new Error("payload must be a data property");
-      if (metadataField.accessor) throw new Error("metadata must be a data property");
-      if (metadataField.present) {
-        const metadataRootError = validateManagedProcessMetadataRoot(metadataField.value);
-        if (metadataRootError) throw new Error(metadataRootError);
-      }
-      const envelopeError = validateManagedProcessValues(
-        ...(payloadField.present
-          ? [{ value: payloadField.value, label: "spawn payload" as const }]
-          : []),
-        ...(metadataField.present
-          ? [{ value: metadataField.value, label: "spawn metadata" as const }]
-          : []),
-      );
-      if (envelopeError) throw new Error(envelopeError);
-
-      const spawnRuntimeToken = this.runtimeTransportToken;
-      if (!spawnRuntimeToken || !this.runtime || this.runtimeStopping) {
-        throw new Error("Extension worker runtime is not active");
-      }
-
-      const entryPath = await this.resolveBackendProcessEntryPath(entry);
-      if (
-        this.runtimeTransportToken !== spawnRuntimeToken ||
-        !this.runtime ||
-        this.runtimeStopping
-      ) {
-        throw new Error("Extension worker runtime changed while resolving backend process entry");
-      }
-      const kind = typeof rawKind === "string" && rawKind.trim() ? rawKind.trim() : entry;
+      const entryPath = await this.resolveBackendProcessEntryPath(options?.entry ?? "");
+      const entry = typeof options?.entry === "string" ? options.entry.trim().replace(/\\/g, "/") : "";
+      const kind = typeof options?.kind === "string" && options.kind.trim() ? options.kind.trim() : entry;
       const userId = this.resolveFrontendProcessUserId(options?.userId);
       const processId = crypto.randomUUID();
-      const key = typeof rawKey === "string" && rawKey.trim() ? rawKey.trim() : undefined;
-      const metadata = metadataField.present
-        ? (metadataField.value as Record<string, unknown>)
-        : undefined;
+      const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
       const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
       const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));
 
@@ -12245,26 +10527,27 @@ export class WorkerHost {
             if (!options?.replaceExisting) {
               throw new Error(`Backend process already exists for kind \"${kind}\" and key \"${key}\"`);
             }
+            if (existing.state === "starting") {
+              this.rejectRequest(existing.requestId, new Error("Backend process was replaced before it became ready"));
+            }
             this.clearBackendProcessTimers(existing);
-            this.forceTerminateBackendProcess(existing);
-            this.finalizeBackendProcess(
-              existing,
-              "stopped",
-              "replaced",
-              undefined,
-              "Backend process was replaced before it became ready",
-            );
+            try {
+              existing.runtime.terminate(true);
+            } catch {
+              // ignore
+            }
+            this.finalizeBackendProcess(existing, "stopped", "replaced");
           }
         }
       }
+
+      if (this.backendProcesses.size >= WorkerHost.MAX_BACKEND_PROCESSES) {
+        throw new Error(`Backend process limit reached (${WorkerHost.MAX_BACKEND_PROCESSES})`);
+      }
+
       const runtimePath = join(import.meta.dir, "backend-process-runtime.ts");
       const storagePath = this.getStorageRootPath(this.manifest.identifier);
       const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
-      if (this.backendProcesses.size + this.backendProcessReservations >= WorkerHost.MAX_BACKEND_PROCESSES) {
-        throw new Error(`Backend process limit reached (${WorkerHost.MAX_BACKEND_PROCESSES})`);
-      }
-      this.backendProcessReservations += 1;
-      reservationHeld = true;
       const runtime = createRuntimeTransport({
         runtimePath,
         extensionIdentifier: this.manifest.identifier,
@@ -12277,12 +10560,7 @@ export class WorkerHost {
         onError: (message) => {
           const record = this.backendProcesses.get(processId);
           if (!record) return;
-          this.finalizeBackendProcess(
-            record,
-            "failed",
-            "failed",
-            boundedManagedProcessError(message),
-          );
+          this.finalizeBackendProcess(record, "failed", "failed", message);
         },
         onExit: (exitCode, signalCode, error) => {
           this.handleBackendProcessRuntimeExit(processId, exitCode, signalCode, error);
@@ -12291,15 +10569,14 @@ export class WorkerHost {
 
       const record: BackendProcessRecord = {
         requestId,
-        processId,
-        spawnResponseSettled: false,
         runtime,
+        processId,
         entry,
         kind,
         ...(key ? { key } : {}),
         state: "starting",
         userId,
-        ...(metadataField.present ? { metadata } : {}),
+        ...(options?.metadata ? { metadata: options.metadata } : {}),
         startedAt: new Date().toISOString(),
         startupTimer: null,
         heartbeatTimer: null,
@@ -12307,11 +10584,8 @@ export class WorkerHost {
         startupTimeoutMs,
         heartbeatTimeoutMs,
       };
-      activeRecord = record;
 
       this.backendProcesses.set(processId, record);
-      this.backendProcessReservations -= 1;
-      reservationHeld = false;
       if (key) {
         this.backendProcessKeyIndex.set(
           this.buildBackendProcessKey(userId, kind, key),
@@ -12321,7 +10595,17 @@ export class WorkerHost {
 
       this.emitBackendProcessLifecycle(record);
 
-      this.armBackendStartupTimer(record);
+      record.startupTimer = setTimeout(() => {
+        const latest = this.backendProcesses.get(processId);
+        if (!latest || latest.state !== "starting") return;
+        try {
+          latest.runtime.terminate(true);
+        } catch {
+          // ignore
+        }
+        this.finalizeBackendProcess(latest, "timed_out", "timed_out", "Backend process startup timed out");
+        this.rejectRequest(requestId, new Error("Backend process startup timed out"));
+      }, startupTimeoutMs);
 
       runtime.postMessage({
         type: "init",
@@ -12331,26 +10615,13 @@ export class WorkerHost {
           entryPath,
           kind,
           ...(key ? { key } : {}),
-          ...(payloadField.present ? { payload: payloadField.value } : {}),
-          ...(metadataField.present ? { metadata } : {}),
+          payload: options?.payload,
+          ...(options?.metadata ? { metadata: options.metadata } : {}),
           ...(userId ? { userId } : {}),
-          allowDynamicCode:
-            Array.isArray(this.manifest.requested_capabilities) &&
-            this.manifest.requested_capabilities.includes("dynamic_code_execution"),
         },
       } satisfies HostToBackendProcessRuntime);
-    } catch (err: unknown) {
-      const message = boundedManagedProcessError(err);
-      if (reservationHeld) {
-        this.backendProcessReservations -= 1;
-        reservationHeld = false;
-      }
-      if (activeRecord) {
-        this.forceTerminateBackendProcess(activeRecord);
-        this.finalizeBackendProcess(activeRecord, "failed", "failed", message);
-      } else {
-        this.postToWorker({ type: "response", requestId, error: message });
-      }
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
@@ -12376,18 +10647,12 @@ export class WorkerHost {
         .map((record) => this.snapshotBackendProcess(record));
       this.postToWorker({ type: "response", requestId, result: items });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: boundedManagedProcessError(err) });
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
   private handleBackendProcessGet(requestId: string, processId: string): void {
     try {
-      const processIdError = validateManagedProcessString(
-        processId,
-        "processId",
-        MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-      );
-      if (processIdError) throw new Error(processIdError);
       const record = this.getBackendProcessRecord(processId);
       this.postToWorker({
         type: "response",
@@ -12395,7 +10660,7 @@ export class WorkerHost {
         result: record ? this.snapshotBackendProcess(record) : null,
       });
     } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: boundedManagedProcessError(err) });
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
@@ -12404,25 +10669,7 @@ export class WorkerHost {
     processId: string,
     options?: { userId?: string; reason?: string }
   ): void {
-    let activeRecord: BackendProcessRecord | null = null;
     try {
-      const processIdError = validateManagedProcessString(
-        processId,
-        "processId",
-        MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-      );
-      const reasonField = inspectManagedOwnProperty(options, "reason");
-      const reasonError = reasonField.accessor
-        ? "reason must be a data property"
-        : validateManagedProcessString(
-            reasonField.value,
-            "reason",
-            MANAGED_PROCESS_MAX_REASON_BYTES,
-            !reasonField.present,
-          );
-      const reason = typeof reasonField.value === "string" ? reasonField.value : undefined;
-      if (processIdError) throw new Error(processIdError);
-      if (reasonError) throw new Error(reasonError);
       const record = this.getBackendProcessRecord(processId);
       if (!record) {
         this.postToWorker({ type: "response", requestId, result: undefined });
@@ -12437,61 +10684,30 @@ export class WorkerHost {
       if (resolvedUserId && record.userId !== resolvedUserId) {
         throw new Error("processId does not belong to the requested userId");
       }
-      activeRecord = record;
       if (record.state === "starting" || record.state === "running") {
-        record.stopReason = reason;
+        record.stopReason = options?.reason;
         if (record.startupTimer) {
           clearTimeout(record.startupTimer);
           record.startupTimer = null;
-        }
-        if (record.heartbeatTimer) {
-          clearTimeout(record.heartbeatTimer);
-          record.heartbeatTimer = null;
         }
         this.transitionBackendProcess(record, "stopping");
         this.armBackendStopTimer(record);
       }
       record.runtime.postMessage({
         type: "stop",
-        ...(reason ? { reason } : {}),
+        ...(options?.reason ? { reason: options.reason } : {}),
       } satisfies HostToBackendProcessRuntime);
       this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: unknown) {
-      const message = boundedManagedProcessError(err);
-      if (activeRecord) {
-        this.forceTerminateBackendProcess(activeRecord);
-        this.finalizeBackendProcess(activeRecord, "failed", "failed", message);
-      }
-      this.postToWorker({ type: "response", requestId, error: message });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
   private handleBackendProcessSend(processId: string, payload: unknown, userId?: string): void {
-    const processIdError = validateManagedProcessString(
-      processId,
-      "processId",
-      MANAGED_PROCESS_MAX_PROCESS_ID_BYTES,
-    );
-    if (processIdError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping managed process send: ${processIdError}`);
-      return;
-    }
     const record = this.getBackendProcessRecord(processId);
     if (!record) return;
     if (this.installScope === "operator" && userId && record.userId !== userId) return;
-    const validationError = validateManagedProcessValue(payload, "backend message");
-    if (validationError) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Dropping ${validationError}`);
-      return;
-    }
-    try {
-      record.runtime.postMessage({ type: "message", payload } satisfies HostToBackendProcessRuntime);
-    } catch (error) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Dropping backend process message after transport failure:`,
-        error,
-      );
-    }
+    record.runtime.postMessage({ type: "message", payload } satisfies HostToBackendProcessRuntime);
   }
 
   // ─── Version (free tier) ────────────────────────────────────────────

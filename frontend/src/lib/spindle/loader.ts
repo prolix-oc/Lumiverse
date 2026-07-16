@@ -251,6 +251,8 @@ const pendingStartupItems = new Map<string, PendingStartupItem[]>()
 const pendingPermissionBootstraps = new Map<string, () => void>()
 const MAX_PENDING_STARTUP_ITEMS = 100
 const FRONTEND_READY_TIMEOUT_MS = 10_000
+const FRONTEND_BUNDLE_TIMEOUT_MS = 15_000
+const FRONTEND_MODULE_IMPORT_TIMEOUT_MS = 10_000
 const extensionMountPoints = new Map<string, Set<SpindleMountPoint>>()
 const extensionMountPointListeners = new Set<() => void>()
 let extensionMountPointsVersion = 0
@@ -418,6 +420,31 @@ function getFrontendBundleUrl(extensionId: string, manifest: SpindleManifest): s
   return `/api/v1/spindle/${extensionId}/frontend?v=${encodeURIComponent(version)}`
 }
 
+function frontendLoadTimeout(identifier: string, phase: string, timeoutMs: number): Error {
+  return new Error(
+    `SPINDLE_FRONTEND_TIMEOUT: ${identifier} ${phase} exceeded ${timeoutMs}ms`,
+  )
+}
+
+async function importFrontendModule(
+  blobUrl: string,
+  identifier: string,
+): Promise<SpindleFrontendModule> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      import(/* @vite-ignore */ blobUrl) as Promise<SpindleFrontendModule>,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(frontendLoadTimeout(identifier, 'module evaluation', FRONTEND_MODULE_IMPORT_TIMEOUT_MS))
+        }, FRONTEND_MODULE_IMPORT_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 
 async function doLoadFrontendExtension(
   extensionId: string,
@@ -581,27 +608,46 @@ async function doLoadFrontendExtension(
   eventUnsubs.push(unsubPermissionSync)
 
   try {
-    const responsePromise = fetch(bundleUrl)
+    const bundleAbort = new AbortController()
+    const bundleTimeout = setTimeout(() => {
+      bundleAbort.abort(
+        frontendLoadTimeout(manifest.identifier, 'bundle retrieval', FRONTEND_BUNDLE_TIMEOUT_MS),
+      )
+    }, FRONTEND_BUNDLE_TIMEOUT_MS)
+    const responsePromise = fetch(bundleUrl, { signal: bundleAbort.signal })
     const permissionReadVersion = permissionEventVersion
     const permissionsPromise = spindleApi.getPermissions(extensionId)
       .then((permRes) => permRes.granted)
       .catch(() => [] as string[])
     installSpindleNavigationGuards()
 
-    const response = await responsePromise
-    if (!response.ok) {
-      cleanupPermissionBootstrap()
-      return // No frontend bundle
+    let blob: Blob
+    try {
+      const response = await responsePromise
+      if (!response.ok) {
+        cleanupPermissionBootstrap()
+        return // No frontend bundle
+      }
+      blob = await response.blob()
+    } catch (error) {
+      if (bundleAbort.signal.aborted) {
+        throw frontendLoadTimeout(
+          manifest.identifier,
+          'bundle retrieval',
+          FRONTEND_BUNDLE_TIMEOUT_MS,
+        )
+      }
+      throw error
+    } finally {
+      clearTimeout(bundleTimeout)
     }
-
-    const blob = await response.blob()
     const blobUrl = URL.createObjectURL(blob)
     let mod!: SpindleFrontendModule
     try {
       if (currentGeneration()) {
         await yieldToBrowser({ when: 'paint' })
         if (currentGeneration()) {
-          mod = await import(/* @vite-ignore */ blobUrl)
+          mod = await importFrontendModule(blobUrl, manifest.identifier)
         }
       }
     } finally {

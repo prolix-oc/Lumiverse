@@ -9,6 +9,30 @@ import { useStore } from '@/store'
  * supported, `registration` stays null and all operations no-op gracefully.
  */
 let registration: ServiceWorkerRegistration | null = null
+let bundleUpdateInProgress = false
+let updateUiTimeout: ReturnType<typeof setTimeout> | null = null
+const UPDATE_UI_TIMEOUT_MS = 45_000
+
+function setBundleUpdatePending(pending: boolean): void {
+  bundleUpdateInProgress = pending
+  useStore.getState().setWsUpdatePending(pending)
+  if (updateUiTimeout) {
+    clearTimeout(updateUiTimeout)
+    updateUiTimeout = null
+  }
+  if (pending) {
+    updateUiTimeout = setTimeout(() => {
+      bundleUpdateInProgress = false
+      useStore.getState().setWsUpdatePending(false)
+      updateUiTimeout = null
+    }, UPDATE_UI_TIMEOUT_MS)
+  }
+}
+
+/** True while an existing service worker is being replaced. */
+export function isBundleUpdateInProgress(): boolean {
+  return bundleUpdateInProgress
+}
 
 /** Called once from main.tsx with the registration returned by vite-plugin-pwa. */
 export function rememberRegistration(reg: ServiceWorkerRegistration | undefined): void {
@@ -22,7 +46,11 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
   reg.addEventListener('updatefound', () => {
     const installing = reg.installing
     if (!installing) return
-    useStore.getState().setWsUpdatePending(true)
+    // A first-time service-worker install also emits updatefound. It is not an
+    // application update and must not put a freshly loaded page behind the
+    // blocking update overlay.
+    if (!reg.active && !navigator.serviceWorker.controller) return
+    setBundleUpdatePending(true)
 
     // If the new worker fails to install (e.g. precache fetch fails), clear
     // the flag so the user isn't stuck behind a spinner that never resolves.
@@ -30,6 +58,10 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
     // reloads the page and wipes React state anyway.
     installing.addEventListener('statechange', () => {
       if (installing.state === 'redundant') {
+        setBundleUpdatePending(false)
+      } else if (installing.state === 'activated') {
+        // controllerchange normally reloads immediately. Clear the blocking UI
+        // as a fallback for browsers that activate without dispatching it.
         useStore.getState().setWsUpdatePending(false)
       }
     })

@@ -1,20 +1,20 @@
 # Backend Capabilities
 
-`requested_capabilities` is a manifest-fixed declaration in `spindle.json`. It opts an extension out of specific install/update scanner heuristics and, for `dynamic_code_execution`, enables guarded dynamic-code constructors in the extension's backend runtime. It is distinct from `permissions`:
+`requested_capabilities` is an install-time declaration in your `spindle.json` that opts your extension out of specific scanner heuristics. It is distinct from `permissions`:
 
 | | Permissions | Capabilities |
 |---|---|---|
-| **What it does** | Gates runtime API surfaces (`spindle.generate`, `spindle.chats`, …) | Suppresses declared scanner blocks; `dynamic_code_execution` also enables guarded `eval` and Function-family constructors in the backend runtime and extension-owned backend-process runtimes |
-| **Enforced at** | Every API call, in real time | Install/update scanning, backend runtime startup, and backend-process spawn |
-| **Surfaced to user** | At install + can be revoked any time from the Extensions panel | Manifest/source declaration only; not shown as a grant or live toggle |
-| **Changes at runtime?** | Yes (`onChanged` notifications) | No; the loaded manifest fixes the behavior of the current runtime |
+| **What it does** | Gates runtime API surfaces (`spindle.generate`, `spindle.chats`, …) | Suppresses install-time scanner blocks for code patterns Spindle treats as risky by default |
+| **Enforced at** | Every API call, in real time | Install time and backend-process spawn time |
+| **Surfaced to user** | At install + can be revoked any time from the Extensions panel | At install (cannot be revoked without reinstall) |
+| **Changes at runtime?** | Yes (`onChanged` notifications) | No |
 | **Default** | None granted | None declared |
 
-Most extensions don't need any capabilities. Declare one only when the install/update scanner blocks a pattern you have confirmed is legitimate, or when the extension intentionally needs the guarded backend behavior described below.
+Most extensions don't need any capabilities. Declare one only if the install scanner blocks your bundle and you've confirmed the matched pattern is legitimate.
 
-## The install/update scanner
+## The install-time scanner
 
-When Lumiverse installs or updates/rebuilds an extension, it text-scans the bundled backend (`entry_backend`) for patterns that frequently indicate malicious or footgun-prone code:
+When Lumiverse installs or rebuilds an extension, it text-scans the bundled backend (`entry_backend`) for patterns that frequently indicate malicious or footgun-prone code:
 
 - direct filesystem access (`fs`, `node:fs`)
 - subprocess spawning (`child_process`)
@@ -28,13 +28,13 @@ When Lumiverse installs or updates/rebuilds an extension, it text-scans the bund
 
 The scanner is conservative: it tracks strings, comments, regex literals, and a number of evasion patterns (`String.fromCharCode`, computed property access, aliased references) so it doesn't fire on examples in documentation strings or comment-out lines. But two patterns — dynamic code execution and base64 decoding — show up legitimately often enough that they can be declared away.
 
-If your backend bundle hits a non-declarable category, the scanner is telling you the code is genuinely unsafe in a Spindle extension. Refactor or move the work behind a separately supervised process boundary; a capability declaration cannot override a hard block.
+If your bundle hits a non-declarable category, the scanner is telling you the code is genuinely unsafe in a Spindle extension. Refactor or split the work off into a separate process boundary.
 
 ## Available capabilities
 
 ### `dynamic_code_execution`
 
-Suppresses the `dynamic code execution` scanner block (`eval(`, `Function(`, `new Function(`) and enables guarded `eval` and Function-family constructors in the extension's backend runtime and extension-owned backend-process runtimes. It does not enable dynamic code in frontend JavaScript; frontend sandbox-frame evaluation is separately controlled by the privileged `unsafe_eval` permission.
+Suppresses the `dynamic code execution` block (`eval(`, `Function(`, `new Function(`).
 
 Declare this when your bundled backend contains any of:
 
@@ -42,7 +42,7 @@ Declare this when your bundled backend contains any of:
 - **`RegExp` literals whose source mentions `Function\s*\(` or `eval\s*\(`**. Common in extensions that ship their own security check banning the Function constructor in user-supplied code. The scanner skips regex literals, but only when the leading `/` is unambiguously in regex context (after `(`, `,`, `=`, `return`, etc.). Edge-case minified output may still trip.
 - **Intentional sandboxed code execution**. Extensions like LumiScript run user-supplied JavaScript inside an `AsyncFunction` sandbox. The `Function` reference is mandatory for the sandbox to work; the safety story is provided by the sandbox itself, not by Spindle's static scanner.
 
-Declaring this capability does **not** unlock module loading, filesystem, subprocess, network, process, environment, Bun system APIs, or any other category. It is not a frontend switch. The cooperative runtime guard rejects explicit property-level loader aliases such as `globalThis.import`, `globalThis.require`, and `globalThis.module.require`; the scanner handles their statically recognized forms in the backend bundle or backend-process entry and fails closed for unresolved or dynamic **bare** `import(specifier)` / `require(specifier)` expressions in scanned source. Native ESM `import()` is not rewritten by the cooperative runtime guard, so generated code must not use it for module loading; choose a process/OS isolation boundary when untrusted generated code is required. The declaration is read while installing/updating and when a backend runtime starts; changing it requires an extension reload/restart.
+Declaring this capability does **not** unlock filesystem, subprocess, network, or any other category. Each is independently scanned.
 
 ### `base64_decode`
 
@@ -56,22 +56,19 @@ Declare this when your bundle contains base64-to-binary helpers, typically for:
 
 Base64 decode is sometimes used to smuggle code payloads past static scanners (decode → eval), which is why the heuristic exists. Pair this capability with `dynamic_code_execution` **only** if you actually need both, not as a habit.
 
-## Hard-blocked backend patterns (no opt-in)
+## Hard-blocked patterns (no opt-in)
 
-These representative categories have no `requested_capabilities` value. If your bundle matches one, you must refactor:
+These categories have no `requested_capabilities` value. If your bundle matches, you must refactor:
 
-| Block | Representative triggers |
+| Block | Triggered by |
 |---|---|
-| `filesystem module access` | Importing `fs`, `fs/promises`, `node:fs`, or `node:fs/promises` |
-| `subprocess module access` | Importing `child_process` or `node:child_process` |
-| `direct socket module access` | Importing `net`, `tls`, `dgram`, `http`, `https`, `dns`, `http2`, or their `node:` forms |
-| `debugger / worker module access` | Importing `inspector`, `worker_threads`, `cluster`, or their `node:` forms |
-| `module loader access` | Importing `module`, `vm`, `process`, or `bun` (including `node:`/`bun:` forms) |
-| `native FFI loader access` | Importing `bun:ffi` or `node:ffi`, or using native FFI APIs |
-| `direct SQLite module access` | Importing `bun:sqlite`, `node:sqlite`, `sqlite3`, or `better-sqlite3` |
-| `dynamic or unresolved module access` | A dynamic `import(specifier)` / bare `require(specifier)` whose specifier cannot be proven safe; unresolved loaders fail closed |
-| `dangerous Bun or global API usage` | Reading `Bun.file`, `Bun.spawn`, `Bun.serve`, `Bun.connect`, `fetch`, `WebSocket`, or `Worker` (including aliased / destructured / computed-property forms) |
-| `dangerous process API usage` | Reading `process.env`, `process.exit`, `process.kill`, `process.chdir`, `process.dlopen`, or process loader APIs (including aliased / destructured / computed-property forms) |
+| `filesystem module access` | Importing `fs`, `fs/promises`, `node:fs`, `node:fs/promises` |
+| `subprocess module access` | Importing `child_process`, `node:child_process` |
+| `direct socket module access` | Importing `net`, `tls`, `dgram`, `http`, `https`, `node:net`, `node:tls`, `node:dgram`, `node:http`, `node:https` |
+| `worker or cluster module access` | Importing `worker_threads`, `cluster`, `node:worker_threads`, `node:cluster` |
+| `direct SQLite module access` | Importing `bun:sqlite`, `node:sqlite` |
+| `dangerous Bun system API usage` | Reading `Bun.file`, `Bun.write`, `Bun.spawn`, `Bun.spawnSync`, `Bun.serve`, `Bun.connect`, `Bun.listen` (including aliased / destructured / computed-property forms) |
+| `dangerous process API usage` | Reading `process.env`, `process.exit`, `process.kill`, `process.chdir`, `process.dlopen` (including aliased / destructured / computed-property forms) |
 
 Spindle provides scoped equivalents for the legitimate use cases:
 
@@ -95,7 +92,7 @@ If your refactor still hits a hard block, the design is asking too much for the 
 }
 ```
 
-Invalid entries are dropped silently. The scanner still enforces the underlying check — an unrecognised capability value just means no opt-in, and it never bypasses a hard-blocked category.
+Invalid entries are dropped silently. The scanner still enforces the underlying check — an unrecognised capability value just means no opt-in.
 
 ## When to use capabilities, not workarounds
 

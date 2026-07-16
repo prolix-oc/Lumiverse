@@ -41,7 +41,7 @@ describe("compression cache variants", () => {
 });
 
 describe("Bun streaming-response compatibility", () => {
-  test("bypasses only the affected Windows stable runtime", () => {
+  test("uses the buffered fallback only on the affected Windows stable runtime", () => {
     expect(shouldBypassStreamingCompression("win32", "1.3.14")).toBe(true);
     expect(shouldBypassStreamingCompression("win32", "1.3.14-debug")).toBe(true);
 
@@ -50,5 +50,25 @@ describe("Bun streaming-response compatibility", () => {
     expect(shouldBypassStreamingCompression("win32", "1.3.13")).toBe(false);
     expect(shouldBypassStreamingCompression("win32", "1.3.15")).toBe(false);
     expect(shouldBypassStreamingCompression("win32", "1.4.0")).toBe(false);
+  });
+
+  test("returns fixed gzip bytes for affected Windows frontend assets", async () => {
+    const fallbackApp = new Hono();
+    fallbackApp.use("*", compress({ platform: "win32", bunVersion: "1.3.14" }));
+    const source = "const frontendBundle = true;".repeat(128);
+    fallbackApp.get("/assets/frontend.js", (c) => c.newResponse(source, 200, {
+      "Content-Type": "application/javascript",
+      "Content-Length": String(source.length),
+      ETag: '"frontend-test"',
+    }));
+
+    const response = await fallbackApp.request("http://localhost/assets/frontend.js", {
+      headers: { "Accept-Encoding": "br, gzip" },
+    });
+    const compressed = new Uint8Array(await response.arrayBuffer());
+
+    expect(response.headers.get("content-encoding")).toBe("gzip");
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(new TextDecoder().decode(Bun.gunzipSync(compressed))).toBe(source);
   });
 });
