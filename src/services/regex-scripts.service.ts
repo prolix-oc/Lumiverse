@@ -1638,6 +1638,14 @@ export function importRegexScripts(
   for (let i = 0; i < scripts.length; i++) {
     let item = scripts[i];
 
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(`Script ${i}: invalid script`);
+      skipped++;
+      continue;
+    }
+    // Never mutate the parsed import payload supplied by the caller.
+    item = { ...item };
+
     // SillyTavern format conversion
     if (item.scriptName || item.findRegex) {
       const { pattern, flags } = parseRegexLiteral(item.findRegex ?? item.find_regex ?? "");
@@ -1691,8 +1699,9 @@ export function importRegexScripts(
       item.folder = folderOverride;
     }
 
-    // Stamp preset ownership if provided
-    if (presetIdOverride && !item.preset_id) {
+    // A top-level preset binding is authoritative. Imported scripts can carry
+    // their source preset_id, which must not survive an overwrite/re-import.
+    if (presetIdOverride) {
       item.preset_id = presetIdOverride;
     }
 
@@ -1703,8 +1712,39 @@ export function importRegexScripts(
 
     const result = createRegexScript(userId, item, context);
     if (typeof result === "string") {
-      errors.push(`Script "${item.name}": ${result}`);
-      skipped++;
+      // A stable script_id identifies the row an import should overwrite. Keep
+      // ownership fields off ordinary JSON updates so replacing a script does
+      // not silently detach it from its preset/pack/character. A preset import's
+      // explicit top-level binding is the one exception: it intentionally moves
+      // the existing regex to the imported preset.
+      const existing = result === "script_id already exists" && item.script_id
+        ? getRegexScriptByScriptId(userId, item.script_id)
+        : null;
+      if (!existing) {
+        errors.push(`Script "${item.name}": ${result}`);
+        skipped++;
+        continue;
+      }
+
+      const {
+        id: _id,
+        user_id: _userId,
+        pack_id: _packId,
+        preset_id: _importedPresetId,
+        character_id: _characterId,
+        created_at: _createdAt,
+        updated_at: _updatedAt,
+        ...updates
+      } = item;
+      if (presetIdOverride) updates.preset_id = presetIdOverride;
+
+      const overwritten = updateRegexScript(userId, existing.id, updates, context);
+      if (!overwritten || typeof overwritten === "string") {
+        errors.push(`Script "${item.name}": ${overwritten || "overwrite failed"}`);
+        skipped++;
+      } else {
+        imported++;
+      }
     } else {
       imported++;
     }

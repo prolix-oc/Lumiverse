@@ -15,6 +15,7 @@ export default function RegexImportModal() {
 
   const closeModal = useStore((s) => s.closeModal)
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
+  const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
 
   const [tab, setTab] = useState<'file' | 'paste'>('file')
   const [pasteContent, setPasteContent] = useState('')
@@ -26,7 +27,9 @@ export default function RegexImportModal() {
   const doImport = useCallback(async (data: any) => {
     setImporting(true)
     try {
-      const res = await regexApi.importScripts(data)
+      // Pass the active preset so overwriting a bound regex can update its
+      // enabled state without losing or invalidating that binding.
+      const res = await regexApi.importScripts(data, activeLoomPresetId)
       setResult(res)
       if (res.imported > 0) {
         await loadRegexScripts()
@@ -40,7 +43,7 @@ export default function RegexImportModal() {
     } finally {
       setImporting(false)
     }
-  }, [loadRegexScripts, t])
+  }, [activeLoomPresetId, loadRegexScripts, t])
 
   const handleFile = useCallback(async (file: File) => {
     const text = await file.text()

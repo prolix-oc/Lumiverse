@@ -425,6 +425,65 @@ describe("regex performance reporting", () => {
   });
 });
 
+describe("regex JSON overwrite imports", () => {
+  test("standalone imports overwrite content while preserving preset ownership", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Original",
+      script_id: "shared_import",
+      find_regex: "old",
+      preset_id: "preset-1",
+      disabled: true,
+    }, { activePresetId: "preset-1" });
+    expect(typeof created).not.toBe("string");
+
+    const result = importRegexScripts(USER_ID, {
+      scripts: [{
+        name: "Updated",
+        script_id: "shared_import",
+        find_regex: "new",
+        disabled: false,
+      }],
+    }, { activePresetId: "preset-1" });
+
+    expect(result).toEqual({ imported: 1, skipped: 0, errors: [] });
+    const updated = mustGetScript((created as RegexScript).id);
+    expect(updated.name).toBe("Updated");
+    expect(updated.find_regex).toBe("new");
+    expect(updated.preset_id).toBe("preset-1");
+    expect(updated.disabled).toBe(false);
+  });
+
+  test("preset imports overwrite and rebind a colliding regex", () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Old preset regex",
+      script_id: "shared_preset_import",
+      find_regex: "old",
+      preset_id: "old-preset",
+    }, { activePresetId: "old-preset" });
+    expect(typeof created).not.toBe("string");
+
+    const result = importRegexScripts(USER_ID, {
+      preset_id: "new-preset",
+      scripts: [{
+        name: "New preset regex",
+        script_id: "shared_preset_import",
+        find_regex: "new",
+        preset_id: "old-preset",
+        disabled: false,
+      }],
+    }, { activePresetId: "new-preset" });
+
+    expect(result).toEqual({ imported: 1, skipped: 0, errors: [] });
+    const updated = mustGetScript((created as RegexScript).id);
+    expect(updated.find_regex).toBe("new");
+    expect(updated.preset_id).toBe("new-preset");
+    expect(updated.disabled).toBe(false);
+
+    toggleRegexScript(USER_ID, updated.id, true, { activePresetId: "new-preset" });
+    expect(mustGetScript(updated.id).disabled).toBe(true);
+  });
+});
+
 describe("raw capture processing", () => {
   test("applies macros without transferring a 300-group match to the host", async () => {
     const groupCount = 300;

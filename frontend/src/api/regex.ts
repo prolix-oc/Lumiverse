@@ -65,8 +65,13 @@ export const regexApi = {
     return post<RegexScriptExport>('/regex-scripts/export', { ids, ...filters })
   },
 
-  importScripts(payload: any & { active_preset_id?: string | null }) {
-    return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', payload)
+  importScripts(payload: any, activePresetId?: string | null) {
+    const body = activePresetId === undefined
+      ? payload
+      : Array.isArray(payload)
+        ? { scripts: payload, active_preset_id: activePresetId }
+        : { ...payload, active_preset_id: activePresetId }
+    return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', body)
   },
 
   testRegex(params: { find_regex: string; replace_string: string; flags: string; content: string }) {
