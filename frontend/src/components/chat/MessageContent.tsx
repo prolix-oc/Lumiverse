@@ -1212,7 +1212,7 @@ function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolea
     }
   }, [html])
 
-  return <div ref={ref} className={styles.htmlIsland} />
+  return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
 }
 
 /**

@@ -1405,6 +1405,11 @@ describe("initializeSandbox", () => {
             [globalThis, "require", globalThis.require],
           ];
           initializeSandbox();
+          if (process.env === Bun.env) {
+            throw new Error("process.env sensitive-access wrapper was not installed");
+          }
+          Reflect.ownKeys(process.env);
+          Reflect.ownKeys(process.env);
           const importDescriptor = Object.getOwnPropertyDescriptor(globalThis, "import");
           if (
             typeof globalThis.import !== "function" ||

@@ -513,7 +513,9 @@
   max-width: 100%;
   margin: 8px 0;
   border-radius: var(--lcs-radius-sm);
-  overflow: hidden;
+  /* Shadows and transforms contribute visual overflow, not layout bounds.
+     Clipping the shadow host therefore cuts them off at the island rectangle. */
+  overflow: visible;
 }
 
 .youtubeEmbedWrap {

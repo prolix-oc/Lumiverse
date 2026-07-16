@@ -25,6 +25,14 @@
     box-shadow 0.15s ease;
 }
 
+/* The normal card is paint-contained and clipped to keep its glass treatment
+   cheap. Authored HTML islands need visual overflow for box/text shadows and
+   transformed corners, so relax both clips only for cards containing one. */
+.card:has([data-lumiverse-html-island]) {
+  overflow: visible;
+  contain: layout style;
+}
+
 /* Hide accent bars */
 .card::before {
   display: none;

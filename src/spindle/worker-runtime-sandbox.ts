@@ -1116,17 +1116,11 @@ function createMaskedEnv(rawEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       }
       return SAFE_REFLECT_SET(target, prop, value);
     },
-    ownKeys(target) {
-      return SAFE_REFLECT_OWN_KEYS(target).filter((key) => {
-        return typeof key !== "string" || !isSensitiveEnvironmentKey(key);
-      });
-    },
-    getOwnPropertyDescriptor(target, prop) {
-      if (typeof prop === "string" && isSensitiveEnvironmentKey(prop)) {
-        return undefined;
-      }
-      return SAFE_OBJECT_GET_OWN_PROPERTY_DESCRIPTOR(target, prop);
-    },
+    // Deliberately omit ownKeys/getOwnPropertyDescriptor traps. Bun's Windows
+    // environment object has host-managed reflected keys; filtering those
+    // keys in an outer Proxy violates Proxy invariants after the target is
+    // made non-extensible. Sensitive own properties have already been deleted
+    // and verified before this wrapper is installed.
   });
 }
 
@@ -1147,6 +1141,7 @@ function verifyMaskedEnv(
     }
   }
 }
+
 function rejectUnsafeDynamicSource(source: string): void {
   if (containsStaticComputedImportProperty(source)) {
     throw new Error(
