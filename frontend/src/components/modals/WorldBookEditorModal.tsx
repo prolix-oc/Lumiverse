@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type KeyboardEvent } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
-import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square } from 'lucide-react'
+import { Plus, Trash2, BookOpen, Upload, User, FileUp, Search, Download, ArrowUp, ArrowDown, ArrowUpDown, CheckSquare, Square, X } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
@@ -22,6 +22,7 @@ import type { WorldBookExportFormat } from '@/api/world-books'
 
 import styles from './WorldBookEditorModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 const BOOK_SORT_OPTIONS = [
   { value: 'updated', labelKey: 'sortRecent' },
@@ -484,7 +485,18 @@ export default function WorldBookEditorModal() {
                   placeholder={t('searchPlaceholder')}
                   value={searchFilter}
                   onChange={(e) => handleSearchChange(e.target.value)}
+                  onKeyDown={(e) => clearSearchOnEscape(e, searchFilter, () => handleSearchChange(''))}
                 />
+                {searchFilter && (
+                  <button
+                    type="button"
+                    className={styles.searchClear}
+                    onClick={() => handleSearchChange('')}
+                    aria-label={tc('actions.clear')}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className={styles.newBookBtn}

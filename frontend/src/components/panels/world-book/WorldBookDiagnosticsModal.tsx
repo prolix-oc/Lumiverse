@@ -21,6 +21,7 @@ import { worldBooksApi } from '@/api/world-books'
 import type { WorldBook, WorldBookDiagnostics } from '@/types/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './WorldBookDiagnosticsModal.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type DiagnosticVectorEntry = WorldBookDiagnostics['vector_trace'][number]
 type DiagnosticOutcomeCode = DiagnosticVectorEntry['final_outcome_code']
@@ -896,16 +897,28 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                         </div>
                       ) : (
                         <>
-                          <label className={styles.searchField}>
+                          <div className={styles.searchField}>
                             <Search size={14} className={styles.searchIcon} />
                             <input
                               type="text"
                               className={styles.searchInput}
                               value={traceSearch}
                               onChange={(event) => setTraceSearch(event.target.value)}
+                              onKeyDown={(event) => clearSearchOnEscape(event, traceSearch, () => setTraceSearch(''))}
                               placeholder={t('worldBookDiagnostics.sections.searchPlaceholder')}
+                              aria-label={t('worldBookDiagnostics.sections.searchPlaceholder')}
                             />
-                          </label>
+                            {traceSearch && (
+                              <button
+                                type="button"
+                                className={styles.searchClear}
+                                onClick={() => setTraceSearch('')}
+                                aria-label={t('worldBookDiagnostics.sections.searchPlaceholder')}
+                              >
+                                <X size={13} />
+                              </button>
+                            )}
+                          </div>
                           <div className={styles.traceSearchMeta}>
                             {traceSearch.trim()
                               ? t('worldBookDiagnostics.sections.searchMatch', {

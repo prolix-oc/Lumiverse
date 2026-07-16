@@ -182,7 +182,8 @@ export default function CommandPalette() {
       case 'Escape':
         e.preventDefault()
         e.stopPropagation()
-        close()
+        if (query) clearQuery()
+        else close()
         break
       case 'Tab':
         e.preventDefault()

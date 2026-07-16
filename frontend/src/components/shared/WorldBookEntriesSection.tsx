@@ -81,6 +81,7 @@ import type {
   WorldBookEntryPageSize,
 } from '@/types/store'
 import styles from './WorldBookEntriesSection.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 const DEFAULT_PAGE_SIZE = 50 as const
 const CUSTOM_PAGE_SIZE = 200 as const
@@ -1151,20 +1152,40 @@ export default function WorldBookEntriesSection({
       </div>
 
       <div className={clsx(styles.entrySearchRow, isMobile && styles.entrySearchRowMobile)}>
-        <label className={styles.entrySearch}>
+        <div className={styles.entrySearch}>
           <Search size={14} className={styles.entrySearchIcon} />
           <input
             type="text"
             className={styles.entrySearchInput}
             placeholder={te('searchAll')}
+            aria-label={te('searchAll')}
             value={entrySearchFilter}
             onChange={(e) => {
               setEntrySearchFilter(e.target.value)
               setEntryPage(1)
               setSelectedEntryId(null)
             }}
+            onKeyDown={(e) => clearSearchOnEscape(e, entrySearchFilter, () => {
+              setEntrySearchFilter('')
+              setEntryPage(1)
+              setSelectedEntryId(null)
+            })}
           />
-        </label>
+          {entrySearchFilter && (
+            <button
+              type="button"
+              className={styles.entrySearchClear}
+              onClick={() => {
+                setEntrySearchFilter('')
+                setEntryPage(1)
+                setSelectedEntryId(null)
+              }}
+              aria-label={tc('actions.clear')}
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
         {isMobile && (
           <button
             type="button"

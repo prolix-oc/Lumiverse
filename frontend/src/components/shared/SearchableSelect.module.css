@@ -181,6 +181,26 @@
   font-size: inherit;
 }
 
+.searchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
 /* iOS zooms form inputs when font-size < 16px. Force 16px on touch-oriented
    viewports so focusing the search field never triggers a mobile zoom. */
 @media (max-width: 768px), (pointer: coarse) {

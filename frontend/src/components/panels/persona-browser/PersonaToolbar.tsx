@@ -21,6 +21,7 @@ import { useState, useRef, useEffect } from 'react'
 import type { PersonaFilterType, PersonaSortField, PersonaSortDirection, PersonaViewMode } from '@/types/store'
 import styles from './PersonaToolbar.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface PersonaToolbarProps {
   searchQuery: string
@@ -128,10 +129,11 @@ export default function PersonaToolbar({
           className={styles.searchInput}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
+          onKeyDown={(e) => clearSearchOnEscape(e, searchQuery, () => onSearchChange(''))}
           placeholder={t('personaToolbar.searchPersonas')}
         />
         {searchQuery && (
-          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')}>
+          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')} aria-label={tc('actions.clear')}>
             <X size={14} />
           </button>
         )}

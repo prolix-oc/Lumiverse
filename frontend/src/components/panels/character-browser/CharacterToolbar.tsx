@@ -19,6 +19,7 @@ import ImportMenu from './ImportMenu'
 import type { CharacterFilterTab, CharacterSortField, CharacterSortDirection, CharacterViewMode } from '@/types/store'
 import styles from './CharacterToolbar.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface CharacterToolbarProps {
   searchQuery: string
@@ -106,10 +107,11 @@ export default function CharacterToolbar({
           className={styles.searchInput}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
+          onKeyDown={(e) => clearSearchOnEscape(e, searchQuery, () => onSearchChange(''))}
           placeholder={isGroupsTab ? t('characterToolbar.searchGroupChats') : t('characterToolbar.searchCharacters')}
         />
         {searchQuery && (
-          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')}>
+          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')} aria-label={t('actions.clear', { ns: 'common' })}>
             <X size={14} />
           </button>
         )}

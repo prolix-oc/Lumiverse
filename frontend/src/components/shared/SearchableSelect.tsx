@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, Search } from 'lucide-react'
+import { ChevronDown, Search, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useTranslation } from 'react-i18next'
 import styles from './SearchableSelect.module.css'
@@ -326,8 +326,16 @@ export default function SearchableSelect(props: SearchableSelectProps) {
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      if (search) {
+        e.preventDefault()
+        e.stopPropagation()
+        setSearch('')
+        setActiveIdx(0)
+        return
+      }
       if (open) {
         e.preventDefault()
+        e.stopPropagation()
         setOpen(false)
         setSearch('')
         triggerRef.current?.focus()
@@ -410,6 +418,20 @@ export default function SearchableSelect(props: SearchableSelectProps) {
             spellCheck={false}
             aria-label={searchPlaceholder}
           />
+          {search && (
+            <button
+              type="button"
+              className={styles.searchClear}
+              onClick={() => {
+                setSearch('')
+                setActiveIdx(0)
+                searchRef.current?.focus()
+              }}
+              aria-label={t('clearSearch')}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
       )}
       <div className={styles.optionList}>
