@@ -329,7 +329,9 @@ export function validateInstallPresetPayload(
     for (const block of sealed.blocks) {
       if (!isPlainObject(block)) return { ok: false, error: "sealedPreset.blocks entries must be objects" };
       if (!isString(block.key, 256)) return { ok: false, error: "sealedPreset block key must be a string ≤256 chars" };
-      if (!isString(block.sha256, 64)) return { ok: false, error: "sealedPreset block sha256 must be a string ≤64 chars" };
+      if (typeof block.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(block.sha256)) {
+        return { ok: false, error: "sealedPreset block sha256 must be a 64-character hexadecimal digest" };
+      }
     }
   }
 

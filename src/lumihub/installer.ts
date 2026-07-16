@@ -642,6 +642,7 @@ export async function installPreset(
   requestId: string,
   userId: string,
   payload: InstallPresetPayload,
+  dependencies: InstallPresetDependencies = {},
 ): Promise<InstallPresetResultPayload> {
   if (!userId) {
     return { requestId, success: false, error: "No target user configured for this LumiHub install" };
@@ -674,8 +675,16 @@ export async function installPreset(
       ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
       : {};
     const passthroughMetadata = extractPresetPassthroughMetadata(p);
-    const sealedPreset = isPlainObject(payload.sealedPreset) ? payload.sealedPreset as SealedManifest : null;
-    const materializedBlocks = await materializeSealedPresetBlocks(userId, blocks, payload.presetId, presetVersion, sealedPreset);
+    const sealedPreset = resolveInstallSealedManifest(payload);
+    const sealedPresetVersion = typeof sealedPreset?.version === "string" ? sealedPreset.version : presetVersion;
+    const materializedBlocks = await materializeSealedPresetBlocks(
+      userId,
+      blocks,
+      payload.presetId,
+      sealedPresetVersion,
+      sealedPreset,
+      dependencies.resolveSealedBlocks ?? resolveSealedPresetBlocksForInstall,
+    );
     const incomingSamplerOverrides = isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {};
     const incomingCustomBody = isPlainObject(p.customBody) ? p.customBody : {};
     const incomingPromptVariables = isPlainObject(p.promptVariables) ? p.promptVariables : {};
@@ -774,6 +783,57 @@ export async function installPreset(
     console.error("[LumiHub Installer] Preset install error:", err);
     return { requestId, success: false, error: err.message || "Unknown error during preset install" };
   }
+}
+
+export interface InstallPresetDependencies {
+  resolveSealedBlocks?: typeof resolveSealedPresetBlocksForInstall;
+}
+
+/**
+ * Newer hubs send the sealed manifest beside presetData; older/alternate Hub
+ * paths only embed it in compatibility. Accept both representations so a
+ * protocol-version skew cannot turn a sealed placeholder into a successful,
+ * unresolved install.
+ */
+function resolveInstallSealedManifest(payload: InstallPresetPayload): SealedManifest | null {
+  const direct = parseSealedManifest(payload.sealedPreset);
+  const compatibility = isPlainObject(payload.presetData?.compatibility)
+    ? payload.presetData.compatibility
+    : null;
+  const lumiverse = compatibility && isPlainObject(compatibility.lumiverse)
+    ? compatibility.lumiverse
+    : null;
+  const embedded = parseSealedManifest(lumiverse?.sealedPreset);
+
+  if (direct && embedded && !sealedManifestsEqual(direct, embedded)) {
+    throw new Error("LumiHub returned inconsistent sealed preset manifests");
+  }
+  return direct ?? embedded;
+}
+
+function parseSealedManifest(value: unknown): SealedManifest | null {
+  if (!isPlainObject(value) || !Array.isArray(value.blocks) || value.blocks.length > 200) return null;
+  if (value.version !== null && value.version !== undefined && (typeof value.version !== "string" || value.version.length > 64)) {
+    return null;
+  }
+  const blocks: Array<{ key: string; sha256: string }> = [];
+  for (const entry of value.blocks) {
+    if (!isPlainObject(entry) || typeof entry.key !== "string" || !entry.key || entry.key.length > 256) return null;
+    if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.sha256)) return null;
+    blocks.push({ key: entry.key, sha256: entry.sha256.toLowerCase() });
+  }
+  return {
+    version: typeof value.version === "string" ? value.version : null,
+    blocks,
+  };
+}
+
+function sealedManifestsEqual(left: SealedManifest, right: SealedManifest): boolean {
+  if ((left.version ?? null) !== (right.version ?? null)) return false;
+  const normalize = (manifest: SealedManifest) => (manifest.blocks ?? [])
+    .map((block) => `${block.key ?? ""}:${(block.sha256 ?? "").toLowerCase()}`)
+    .sort();
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
 }
 
 function isPlainObject(value: unknown): value is Record<string, any> {
@@ -962,10 +1022,22 @@ async function materializeSealedPresetBlocks(
   hubPresetId: string,
   version: string | null,
   sealedPreset: SealedManifest | null,
+  resolveSealedBlocks: typeof resolveSealedPresetBlocksForInstall,
 ): Promise<any[]> {
-  if (!sealedPreset) return blocks;
+  const placeholderKeys = new Set<string>();
+  for (const block of blocks) {
+    if (!isPlainObject(block) || typeof block.content !== "string") continue;
+    const key = extractExactSealedPlaceholder(block.content);
+    if (key) placeholderKeys.add(key);
+  }
+  if (!placeholderKeys.size) return blocks;
+  if (!sealedPreset) {
+    throw new Error("LumiHub preset contains sealed placeholders but no sealed manifest");
+  }
   const manifestBlocks = Array.isArray(sealedPreset?.blocks) ? sealedPreset.blocks : [];
-  if (!manifestBlocks.length) return blocks;
+  if (!manifestBlocks.length) {
+    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is empty");
+  }
 
   const manifestByKey = new Map<string, { sha256: string }>();
   for (const entry of manifestBlocks) {
@@ -973,18 +1045,18 @@ async function materializeSealedPresetBlocks(
       manifestByKey.set(entry.key, { sha256: entry.sha256 });
     }
   }
-  if (!manifestByKey.size) return blocks;
-
-  const usedKeys = new Set<string>();
-  for (const block of blocks) {
-    if (!isPlainObject(block) || typeof block.content !== "string") continue;
-    const key = extractExactSealedPlaceholder(block.content);
-    if (key && manifestByKey.has(key)) usedKeys.add(key);
+  if (!manifestByKey.size) {
+    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is invalid");
   }
-  if (!usedKeys.size) return blocks;
 
-  const resolved = await resolveSealedPresetBlocksForInstall(userId, hubPresetId, version, sealedPreset);
-  for (const key of usedKeys) {
+  for (const key of placeholderKeys) {
+    if (!manifestByKey.has(key)) {
+      throw new Error(`Sealed preset manifest is missing prompt block: ${key}`);
+    }
+  }
+
+  const resolved = await resolveSealedBlocks(userId, hubPresetId, version, sealedPreset);
+  for (const key of placeholderKeys) {
     if (typeof resolved[key] !== "string") {
       throw new Error(`Unable to fetch or verify sealed preset block: ${key}`);
     }

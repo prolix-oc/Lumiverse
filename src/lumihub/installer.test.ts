@@ -1,15 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { createPreset, getPreset, updatePreset } from "../services/presets.service";
 import { validateInstallPresetPayload } from "./payload-validation";
-import { installPreset as installPresetForUser } from "./installer";
+import { installPreset as installPresetForUser, type InstallPresetDependencies } from "./installer";
 import type { InstallPresetPayload } from "./types";
 
 const USER_ID = "owner-1";
 const TENANT_USER_ID = "tenant-1";
 
-function installPreset(requestId: string, payload: InstallPresetPayload, userId = USER_ID) {
-  return installPresetForUser(requestId, userId, payload);
+function installPreset(
+  requestId: string,
+  payload: InstallPresetPayload,
+  userId = USER_ID,
+  dependencies: InstallPresetDependencies = {},
+) {
+  return installPresetForUser(requestId, userId, payload, dependencies);
 }
 
 function initInstallerTestDb(): void {
@@ -431,5 +437,57 @@ describe("LumiHub preset installer metadata", () => {
     expect(installed.success).toBe(true);
     expect(getPreset(TENANT_USER_ID, installed.presetId!)).not.toBeNull();
     expect(getPreset(USER_ID, installed.presetId!)).toBeNull();
+  });
+
+  test("smoke-tests an embedded manifest through verified sealed-block materialization", async () => {
+    const secret = "Private publisher prompt\nwith exact whitespace.";
+    const digest = createHash("sha256").update(secret, "utf8").digest("hex");
+    const payload = installPayload("hub-sealed", {
+      name: "Sealed preset",
+      blocks: [{ id: "private", name: "Private", content: "{{presetBlock::dialogue.frame}}" }],
+    });
+    payload.sealedPreset = undefined;
+    payload.presetData.compatibility = {
+      lumiverse: {
+        sealedPreset: {
+          version: "1.0.0",
+          blocks: [{ key: "dialogue.frame", sha256: digest }],
+        },
+      },
+    };
+
+    const installed = await installPreset("request-sealed", payload, TENANT_USER_ID, {
+      resolveSealedBlocks: async (userId, presetId, version, manifest) => {
+        expect(userId).toBe(TENANT_USER_ID);
+        expect(presetId).toBe("hub-sealed");
+        expect(version).toBe("1.0.0");
+        expect(manifest.blocks).toEqual([{ key: "dialogue.frame", sha256: digest }]);
+        return { "dialogue.frame": secret };
+      },
+    });
+
+    expect(installed.success).toBe(true);
+    const saved = getPreset(TENANT_USER_ID, installed.presetId!);
+    expect(saved?.prompt_order).toEqual([expect.objectContaining({
+      content: secret,
+      sealed: true,
+      sealedKey: "dialogue.frame",
+      sealedSource: "lumihub",
+      sealedSha256: digest,
+    })]);
+  });
+
+  test("fails closed instead of saving an unresolved sealed placeholder", async () => {
+    const payload = installPayload("hub-broken-sealed", {
+      name: "Broken sealed preset",
+      blocks: [{ id: "private", content: "{{presetBlock::missing.block}}" }],
+    });
+
+    const installed = await installPreset("request-broken-sealed", payload);
+
+    expect(installed.success).toBe(false);
+    expect(installed.error).toContain("no sealed manifest");
+    const count = getDb().query("SELECT COUNT(*) AS count FROM presets WHERE user_id = ?").get(USER_ID) as { count: number };
+    expect(count.count).toBe(0);
   });
 });
