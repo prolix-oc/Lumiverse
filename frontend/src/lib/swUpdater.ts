@@ -10,12 +10,10 @@ import { isServiceWorkerReplacement } from './swUpdatePolicy'
  * supported, `registration` stays null and all operations no-op gracefully.
  */
 let registration: ServiceWorkerRegistration | null = null
-let bundleUpdateInProgress = false
 let updateUiTimeout: ReturnType<typeof setTimeout> | null = null
 const UPDATE_UI_TIMEOUT_MS = 45_000
 
 function setBundleUpdatePending(pending: boolean): void {
-  bundleUpdateInProgress = pending
   useStore.getState().setWsUpdatePending(pending)
   if (updateUiTimeout) {
     clearTimeout(updateUiTimeout)
@@ -23,16 +21,10 @@ function setBundleUpdatePending(pending: boolean): void {
   }
   if (pending) {
     updateUiTimeout = setTimeout(() => {
-      bundleUpdateInProgress = false
       useStore.getState().setWsUpdatePending(false)
       updateUiTimeout = null
     }, UPDATE_UI_TIMEOUT_MS)
   }
-}
-
-/** True while an existing service worker is being replaced. */
-export function isBundleUpdateInProgress(): boolean {
-  return bundleUpdateInProgress
 }
 
 /** Called once from main.tsx with the registration returned by vite-plugin-pwa. */
@@ -43,7 +35,7 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
   // Watch for a new SW being installed. vite-plugin-pwa's autoUpdate mode will
   // immediately skip-waiting the new worker; we just need to flip the store
   // flag so the connection-lost overlay can switch to "Updating…" copy and
-  // stay mounted until the controllerchange listener in main.tsx reloads.
+  // stay mounted until vite-plugin-pwa's onNeedReload callback reloads.
   reg.addEventListener('updatefound', () => {
     const installing = reg.installing
     if (!installing) return
@@ -58,13 +50,13 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
 
     // If the new worker fails to install (e.g. precache fetch fails), clear
     // the flag so the user isn't stuck behind a spinner that never resolves.
-    // The success path runs through controllerchange in main.tsx, which
+    // The success path runs through onNeedReload in main.tsx, which
     // reloads the page and wipes React state anyway.
     installing.addEventListener('statechange', () => {
       if (installing.state === 'redundant') {
         setBundleUpdatePending(false)
       } else if (installing.state === 'activated') {
-        // controllerchange normally reloads immediately. Clear the blocking UI
+        // onNeedReload normally reloads immediately. Clear the blocking UI
         // as a fallback for browsers that activate without dispatching it.
         useStore.getState().setWsUpdatePending(false)
       }

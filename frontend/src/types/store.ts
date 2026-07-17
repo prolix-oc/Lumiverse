@@ -1498,7 +1498,7 @@ export interface ConnectionSlice {
   /**
    * True once a new service worker bundle has been detected (post-reconnect bundle check).
    * Keeps the connection-lost overlay mounted with "Updating…" messaging until the page reloads
-   * — the existing controllerchange handler in main.tsx performs the reload itself.
+   * — vite-plugin-pwa's onNeedReload callback in main.tsx performs the reload itself.
    */
   wsUpdatePending: boolean
   setWsConnected: (connected: boolean) => void

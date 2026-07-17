@@ -31,9 +31,15 @@ export function getSafeInAppNavigationUrl(rawUrl: unknown, fallback: string = '/
 
   const trimmed = rawUrl.trim()
   if (!trimmed) return fallback
-  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) return trimmed
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return fallback
 
-  return fallback
+  // Lumiverse uses a browser router. Older built-in notifications and some
+  // extensions still use the former hash-router form (`/#/chat/:id`), so
+  // canonicalize it before passing it to router.navigate() or openWindow().
+  if (trimmed.startsWith('/#/')) return `/${trimmed.slice(3)}`
+
+  return trimmed
+
 }
 
 export function getSafeHttpsUrl(rawUrl: unknown): string | null {

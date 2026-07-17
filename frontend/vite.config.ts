@@ -50,6 +50,7 @@ export default defineConfig({
     // fails the production build emits no CSS — pin to esbuild so the minify
     // step uses a binding we ship and can rely on across platforms.
     cssMinify: 'esbuild',
+    chunkSizeWarningLimit: 6000,
     rollupOptions: {
       output: {
         manualChunks(id) {
