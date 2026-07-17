@@ -2,7 +2,25 @@ export type RegexPlacement = 'user_input' | 'ai_output' | 'world_info' | 'reason
 export type RegexScope = 'global' | 'character' | 'chat'
 export type RegexTarget = 'prompt' | 'response' | 'display'
 export type RegexMacroMode = 'none' | 'raw' | 'escaped' | 'after'
-export type RegexActionType = 'send' | 'append'
+export type RegexActionType = 'send' | 'append' | 'effects'
+
+export interface RegexActionSetStateEffect {
+  type: 'set_state'
+  key: string
+  value: string
+}
+
+export interface RegexActionDraftEffect {
+  type: 'draft'
+  content: string
+  mode: 'replace' | 'append'
+}
+
+export interface RegexActionForkEffect {
+  type: 'fork'
+}
+
+export type RegexActionEffect = RegexActionSetStateEffect | RegexActionDraftEffect | RegexActionForkEffect
 
 export interface RegexAction {
   id: string
@@ -13,6 +31,7 @@ export interface RegexAction {
   title: string
   subtitle: string
   content: string
+  effects?: RegexActionEffect[]
 }
 
 export interface RegexPerformanceMetadata {

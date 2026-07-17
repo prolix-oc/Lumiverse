@@ -95,13 +95,59 @@ Each action has these fields:
 | **ID** | Connects the action to `data-regex-action` in the replacement HTML. IDs must be unique within the script. |
 | **Type: Send** | Sends visible user content and starts generation immediately. |
 | **Type: Append** | Waits for the user's next message, then adds hidden content to that generation's prompt. |
+| **Type: Effects only** | Claims the choice without sending a message. Use this for state, editable drafts, forks, or combinations of them. |
 | **Multi-select option** | Lets this option be selected independently. Multi-select actions are staged instead of generating immediately, then stacked on the next Send. |
 | **Selection cost** | Numeric cost of a multi-select option. Accepts a literal such as `2` or a capture such as `$3`, allowing the regex creator or generated output to set the price. |
 | **Block cost limit** | Positive total-cost bound for the rendered block. Accepts literals and captures. If options resolve different limits, the lowest positive value is enforced. |
 | **Title / Subtitle** | Labels and hover text for the action. These may contain capture references. |
 | **Content** | The visible message or hidden prompt modifier produced by the action. |
+| **State effects** | Optional chat-variable updates committed when the action is claimed. The key is fixed by the creator; the value may contain capture references. |
 
 Titles, subtitles, content, cost, and limit support the same capture references as the replacement string, including `$1`, `$2`, `$&`, and named captures such as `$<location>`.
+
+### Persistent state effects
+
+Use **Add state effect** to let a choice update a persistent chat variable. State values are available to prompts and later regex scripts through `{{getchatvar::key}}`.
+
+For example, an action matching a named `route` capture can set:
+
+```json
+{
+  "type": "set_state",
+  "key": "adventure.route",
+  "value": "$<route>"
+}
+```
+
+The key is creator-defined and cannot contain captures. Values and drafts are resolved from the stored assistant message when the action is claimed. Actions containing composable effects are disabled in user messages and rejected by the server; editing the browser payload cannot choose a different key, value, draft, or fork point.
+
+Effects are additive and backward compatible. Existing actions without an `effects` field continue to behave exactly as before. A state effect is committed with the action's normal one-shot claim, including batched multi-select claims.
+
+### Draft and fork effects
+
+A **draft** effect places capture-resolved text in the composer without sending it. It can either replace the current draft or append to it, leaving the user free to edit before sending.
+
+A **fork** effect creates and opens a chat branch at the assistant message that rendered the action. Combine it with state and draft effects to build a complete branching choice:
+
+```json
+{
+  "id": "take-rooftops",
+  "type": "effects",
+  "multi_select": false,
+  "cost": "1",
+  "limit": "3",
+  "title": "Take the rooftops",
+  "subtitle": "Create an editable branch",
+  "content": "",
+  "effects": [
+    { "type": "set_state", "key": "adventure.route", "value": "$<route>" },
+    { "type": "fork" },
+    { "type": "draft", "mode": "replace", "content": "Let's take $<route>." }
+  ]
+}
+```
+
+The state update and fork are committed together. The new branch inherits the updated chat state, then opens with the draft waiting in its composer. Draft and fork effects require an **Effects only** action and cannot be multi-select. State effects may also be attached to existing Send or Append actions.
 
 ### One-shot behavior
 

@@ -47,13 +47,16 @@ import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { orderGroupResponseIds, readGroupResponseOrder } from '@/lib/groupResponseOrder'
 import {
   REGEX_ACTION_EVENT,
+  applyRegexActionDraft,
   clearRegexSelectionForSource,
   claimLocalRegexAction,
   claimLocalRegexActions,
   consumeRegexSelections,
+  consumeRegexActionDraft,
   getPendingRegexSelections,
   hasPendingRegexSelectionsForBlock,
   queueRegexSelection,
+  queueRegexActionDraft,
   restoreRegexSelections,
   toggleRegexSelection,
   type PendingRegexSelection,
@@ -982,6 +985,16 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   useEffect(() => {
     setLastImpersonateInput('')
     setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+    const queuedDraft = consumeRegexActionDraft(chatId)
+    if (queuedDraft) {
+      let saved = ''
+      if (saveDraftInput) {
+        try { saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId) || '' } catch {}
+      }
+      setText(applyRegexActionDraft(saved, queuedDraft))
+      requestAnimationFrame(() => resizeTextarea(textareaRef.current))
+      return
+    }
     if (!saveDraftInput) return
     try {
       const saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId)
@@ -989,7 +1002,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setText(saved)
       }
     } catch {}
-  }, [chatId, saveDraftInput])
+  }, [chatId, saveDraftInput, resizeTextarea])
 
   // Debounced save on text change
   useEffect(() => {
@@ -1853,6 +1866,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       const action = (event as CustomEvent<RegexActionActivation>).detail
       if (!action || action.chatId !== chatId) return
       if (!action.messageId || regexActionHandlingRef.current) return
+      if (action.effects?.length && mpRoomId && !mpIsHost) {
+        toast.info(t('toast.regexActionStateHostOnly'))
+        return
+      }
       if (action.multi_select && sendingRef.current) {
         toast.info(t('toast.regexActionSelectionLocked'))
         return
@@ -1889,6 +1906,30 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
             duration: 2500,
           })
           textareaRef.current?.focus()
+          return
+        }
+        if (action.type === 'effects') {
+          const claimed = await messagesApi.claimRegexAction(chatId, action.messageId, {
+            script_id: action.scriptId,
+            action_id: action.id,
+            instance_id: action.instanceId,
+          })
+          updateMessage(claimed.message.id, { extra: claimed.message.extra })
+          const draft = claimed.effects?.find((effect) => effect.type === 'draft')
+          if (claimed.forked_chat) {
+            if (draft) queueRegexActionDraft(claimed.forked_chat.id, draft)
+            navigate(`/chat/${claimed.forked_chat.id}`)
+          } else if (draft) {
+            setText((current) => applyRegexActionDraft(current, draft))
+            requestAnimationFrame(() => {
+              resizeTextarea(textareaRef.current)
+              textareaRef.current?.focus()
+            })
+          }
+          toast.info(action.subtitle || t('toast.regexActionEffectsApplied'), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
           return
         }
         if (action.type === 'append' && hasPendingRegexSelectionsForBlock(action)) {
@@ -1940,7 +1981,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
     window.addEventListener(REGEX_ACTION_EVENT, handleRegexAction)
     return () => window.removeEventListener(REGEX_ACTION_EVENT, handleRegexAction)
-  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, t, updateMessage])
+  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, navigate, resizeTextarea, t, updateMessage])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()

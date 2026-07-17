@@ -557,6 +557,7 @@ describe("associative regex actions", () => {
         title: "Choose $1",
         subtitle: "Next turn",
         content: "The user chose $2",
+        effects: [{ type: "set_state", key: "adventure.route", value: "$2" }],
       }],
     });
     expect(typeof created).not.toBe("string");
@@ -588,6 +589,91 @@ describe("associative regex actions", () => {
       content: "The user chose the trail",
       scriptId: script.id,
       instanceId: `${script.id}:0:17`,
+      effects: [{ type: "set_state", key: "adventure.route", value: "the trail" }],
+    });
+  });
+
+  test("rejects captured state keys while preserving legacy actions without effects", () => {
+    const legacy = createRegexScript(USER_ID, {
+      name: "Legacy choice",
+      find_regex: "choice",
+      actions: [{
+        id: "choose",
+        type: "send",
+        multi_select: false,
+        cost: "1",
+        limit: "3",
+        title: "",
+        subtitle: "",
+        content: "Choose",
+      }],
+    });
+    expect(typeof legacy).not.toBe("string");
+    expect((legacy as RegexScript).actions[0].effects).toBeUndefined();
+
+    const invalid = createRegexScript(USER_ID, {
+      name: "Unsafe state key",
+      find_regex: "choice",
+      actions: [{
+        id: "choose",
+        type: "send",
+        multi_select: false,
+        cost: "1",
+        limit: "3",
+        title: "",
+        subtitle: "",
+        content: "Choose",
+        effects: [{ type: "set_state", key: "$1", value: "$2" }],
+      }],
+    });
+    expect(invalid).toBe("state effect key must start with a letter and contain only letters, numbers, _, :, . or -");
+  });
+
+  test("resolves combined state, draft, and fork effects without a legacy send", async () => {
+    const created = createRegexScript(USER_ID, {
+      name: "Composite branch",
+      find_regex: "\\[route:([^\\]]+)\\]",
+      replace_string: '<button data-regex-action="branch">Branch</button>',
+      placement: ["ai_output"],
+      target: ["display"],
+      actions: [{
+        id: "branch",
+        type: "effects",
+        multi_select: false,
+        cost: "1",
+        limit: "3",
+        title: "Branch via $1",
+        subtitle: "",
+        content: "",
+        effects: [
+          { type: "set_state", key: "adventure.route", value: "$1" },
+          { type: "fork" },
+          { type: "draft", mode: "replace", content: "Let's take $1." },
+        ],
+      }],
+    });
+    expect(typeof created).not.toBe("string");
+    const script = created as RegexScript;
+
+    const output = await applyRegexScripts(
+      "[route:the rooftops]",
+      [script],
+      "ai_output",
+      undefined,
+      undefined,
+      undefined,
+      { source: "display_backend" },
+    );
+    const encoded = output.match(/data-lumiverse-regex-action="([^"]+)"/)?.[1];
+    expect(encoded).toBeTruthy();
+    expect(JSON.parse(decodeURIComponent(encoded!))).toMatchObject({
+      type: "effects",
+      content: "",
+      effects: [
+        { type: "set_state", key: "adventure.route", value: "the rooftops" },
+        { type: "fork" },
+        { type: "draft", mode: "replace", content: "Let's take the rooftops." },
+      ],
     });
   });
 

@@ -72,6 +72,16 @@ function resolveRegexActions(script: RegexScript, match: DisplayRegexMatch, inpu
     content: substituteRegexCaptures(action.content, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
     cost: substituteRegexCaptures(action.cost, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
     limit: substituteRegexCaptures(action.limit, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    ...(action.effects?.length ? {
+      effects: action.effects.map((effect) => ({
+        ...effect,
+        ...(effect.type === 'set_state' ? {
+          value: substituteRegexCaptures(effect.value, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+        } : effect.type === 'draft' ? {
+          content: substituteRegexCaptures(effect.content, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+        } : {}),
+      })),
+    } : {}),
     scriptId: script.id,
     instanceId: `${script.id}:${match.offset}:${match.offset + match.fullMatch.length}`,
   }))

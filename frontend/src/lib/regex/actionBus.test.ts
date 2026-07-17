@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   claimLocalRegexAction,
   claimLocalRegexActions,
+  applyRegexActionDraft,
+  consumeRegexActionDraft,
   consumeRegexSelections,
   getPendingRegexSelections,
   toggleRegexSelection,
+  queueRegexActionDraft,
   type RegexActionActivation,
 } from './actionBus'
 
 const values = new Map<string, string>()
+const sessionValues = new Map<string, string>()
 const localStorageStub: Storage = {
   get length() { return values.size },
   clear: () => values.clear(),
@@ -21,6 +25,18 @@ const localStorageStub: Storage = {
 Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
   value: localStorageStub,
+})
+Object.defineProperty(globalThis, 'sessionStorage', {
+  configurable: true,
+  value: {
+    ...localStorageStub,
+    get length() { return sessionValues.size },
+    clear: () => sessionValues.clear(),
+    getItem: (key: string) => sessionValues.get(key) ?? null,
+    key: (index: number) => [...sessionValues.keys()][index] ?? null,
+    removeItem: (key: string) => { sessionValues.delete(key) },
+    setItem: (key: string, value: string) => { sessionValues.set(key, String(value)) },
+  } satisfies Storage,
 })
 
 function action(id: string, multiSelect = true): RegexActionActivation {
@@ -40,7 +56,10 @@ function action(id: string, multiSelect = true): RegexActionActivation {
   }
 }
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  sessionStorage.clear()
+})
 
 describe('regex action selection state', () => {
   test('stacks distinct multi-select options and consumes them together', () => {
@@ -82,5 +101,18 @@ describe('regex action selection state', () => {
   test('a single-select claim consumes the whole block', () => {
     expect(claimLocalRegexAction(action('confirm', false))).toBe(true)
     expect(toggleRegexSelection(action('north'))).toMatchObject({ selected: false, reason: 'used' })
+  })
+})
+
+describe('regex action drafts', () => {
+  test('replaces or appends composer content predictably', () => {
+    expect(applyRegexActionDraft('Existing', { mode: 'replace', content: 'Suggested' })).toBe('Suggested')
+    expect(applyRegexActionDraft('Existing', { mode: 'append', content: 'Suggested' })).toBe('Existing\n\nSuggested')
+  })
+
+  test('carries a draft across branch navigation exactly once', () => {
+    queueRegexActionDraft('branch-1', { mode: 'replace', content: 'Take the rooftops.' })
+    expect(consumeRegexActionDraft('branch-1')).toEqual({ mode: 'replace', content: 'Take the rooftops.' })
+    expect(consumeRegexActionDraft('branch-1')).toBeNull()
   })
 })

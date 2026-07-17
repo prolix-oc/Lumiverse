@@ -1,4 +1,6 @@
-export type ResolvedRegexActionType = 'send' | 'append'
+import type { RegexActionEffect } from '@/types/regex'
+
+export type ResolvedRegexActionType = 'send' | 'append' | 'effects'
 
 export interface ResolvedRegexActionPayload {
   id: string
@@ -11,6 +13,7 @@ export interface ResolvedRegexActionPayload {
   content: string
   scriptId: string
   instanceId: string
+  effects?: RegexActionEffect[]
 }
 
 export interface RegexActionActivation extends ResolvedRegexActionPayload {
@@ -26,6 +29,38 @@ export const REGEX_ACTION_EVENT = 'lumiverse:regex-action'
 export const REGEX_SELECTIONS_CHANGED_EVENT = 'lumiverse:regex-action-selections-changed'
 const STORAGE_PREFIX = 'lumiverse:regexActionAppend:'
 const USED_STORAGE_PREFIX = 'lumiverse:regexActionUsed:'
+const DRAFT_STORAGE_PREFIX = 'lumiverse:regexActionDraft:'
+
+export interface RegexActionDraft {
+  content: string
+  mode: 'replace' | 'append'
+}
+
+export function applyRegexActionDraft(base: string, draft: RegexActionDraft): string {
+  if (draft.mode === 'replace') return draft.content
+  return [base, draft.content].filter(Boolean).join('\n\n')
+}
+
+/** Carry a one-shot draft across navigation into a newly-created branch. */
+export function queueRegexActionDraft(chatId: string, draft: RegexActionDraft): void {
+  try {
+    sessionStorage.setItem(DRAFT_STORAGE_PREFIX + chatId, JSON.stringify(draft))
+  } catch {}
+}
+
+export function consumeRegexActionDraft(chatId: string): RegexActionDraft | null {
+  try {
+    const key = DRAFT_STORAGE_PREFIX + chatId
+    const raw = sessionStorage.getItem(key)
+    sessionStorage.removeItem(key)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<RegexActionDraft>
+    if (typeof parsed.content !== 'string' || (parsed.mode !== 'replace' && parsed.mode !== 'append')) return null
+    return { content: parsed.content, mode: parsed.mode }
+  } catch {
+    return null
+  }
+}
 
 function selectionKey(action: RegexActionActivation): string {
   const claimKey = action.multi_select ? `${action.instanceId}:${action.id}` : action.instanceId

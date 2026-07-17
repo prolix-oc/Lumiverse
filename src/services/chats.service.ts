@@ -1551,9 +1551,27 @@ export interface AssociativeRegexActionUsage {
   used_at: number;
 }
 
+const ASSOCIATIVE_REGEX_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
+const MAX_ASSOCIATIVE_REGEX_STATE_VALUE_LENGTH = 10_000;
+
+function hasValidAssociativeRegexStateEffects(
+  effects: ReadonlyArray<{ key: string; value: string }> | undefined,
+): boolean {
+  return !effects || (
+    effects.length <= 16 &&
+    effects.every((effect) => (
+      !!effect && typeof effect.key === "string" &&
+      ASSOCIATIVE_REGEX_STATE_KEY_RE.test(effect.key) &&
+      typeof effect.value === "string" &&
+      effect.value.length <= MAX_ASSOCIATIVE_REGEX_STATE_VALUE_LENGTH
+    ))
+  );
+}
+
 export type ClaimAssociativeRegexActionResult =
-  | { status: "claimed"; message: Message; usage: AssociativeRegexActionUsage }
+  | { status: "claimed"; message: Message; usage: AssociativeRegexActionUsage; forkedChat?: Chat }
   | { status: "used"; message: Message; usage: AssociativeRegexActionUsage }
+  | { status: "forbidden" }
   | { status: "not_found" };
 
 export interface AssociativeRegexActionBatchInput {
@@ -1562,11 +1580,13 @@ export interface AssociativeRegexActionBatchInput {
   scriptId: string;
   actionId: string;
   multiSelect: boolean;
+  stateEffects?: Array<{ key: string; value: string }>;
 }
 
 export type ClaimAssociativeRegexActionsResult =
-  | { status: "claimed"; messages: Message[]; usages: AssociativeRegexActionUsage[] }
+  | { status: "claimed"; messages: Message[]; usages: AssociativeRegexActionUsage[]; chat?: Chat }
   | { status: "used"; messages: Message[]; usage: AssociativeRegexActionUsage }
+  | { status: "forbidden"; messages: Message[] }
   | { status: "not_found"; messages: Message[] };
 
 /** Atomically finalize a generation trigger and its provisional selections. */
@@ -1578,13 +1598,17 @@ export function claimAssociativeRegexActions(
   if (inputs.length === 0) return { status: "claimed", messages: [], usages: [] };
   const db = getDb();
   const outcome = db.transaction(() => {
+    const chatBefore = getChat(userId, chatId);
+    if (!chatBefore) return { status: "not_found" as const };
     const messages = new Map<string, Message>();
     const usageMaps = new Map<string, Record<string, AssociativeRegexActionUsage>>();
     const seenClaims = new Set<string>();
 
     for (const input of inputs) {
+      if (!hasValidAssociativeRegexStateEffects(input.stateEffects)) return { status: "forbidden" as const };
       const existing = messages.get(input.messageId) ?? getMessage(userId, input.messageId);
       if (!existing || existing.chat_id !== chatId) return { status: "not_found" as const };
+      if (input.stateEffects?.length && existing.is_user) return { status: "forbidden" as const };
       messages.set(input.messageId, existing);
       if (!usageMaps.has(input.messageId)) {
         const stored = existing.extra?.associative_regex_action_usage;
@@ -1607,6 +1631,10 @@ export function claimAssociativeRegexActions(
     }
 
     const usages: AssociativeRegexActionUsage[] = [];
+    const chatVariables = {
+      ...((chatBefore.metadata?.chat_variables as Record<string, string> | undefined) ?? {}),
+    };
+    let chatStateChanged = false;
     const now = Math.floor(Date.now() / 1000);
     for (const input of inputs) {
       const usageByInstance = usageMaps.get(input.messageId)!;
@@ -1619,6 +1647,11 @@ export function claimAssociativeRegexActions(
       };
       usageByInstance[claimKey] = usage;
       usages.push(usage);
+      for (const effect of input.stateEffects ?? []) {
+        if (chatVariables[effect.key] === effect.value) continue;
+        chatVariables[effect.key] = effect.value;
+        chatStateChanged = true;
+      }
     }
 
     for (const [messageId, usageByInstance] of usageMaps) {
@@ -1631,7 +1664,12 @@ export function claimAssociativeRegexActions(
       db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
         .run(JSON.stringify(nextExtra), messageId, chatId);
     }
-    return { status: "claimed" as const, usages };
+    if (chatStateChanged) {
+      const metadata = { ...(chatBefore.metadata || {}), chat_variables: chatVariables };
+      db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(JSON.stringify(metadata), now, chatId, userId);
+    }
+    return { status: "claimed" as const, usages, chatBefore, chatStateChanged };
   })();
 
   const messageIds = [...new Set(inputs.map((input) => input.messageId))];
@@ -1639,9 +1677,17 @@ export function claimAssociativeRegexActions(
     .map((messageId) => getMessage(userId, messageId))
     .filter((message): message is Message => !!message);
   if (outcome.status === "not_found") return { status: "not_found", messages };
+  if (outcome.status === "forbidden") return { status: "forbidden", messages };
   if (outcome.status === "used") return { ...outcome, messages };
   for (const message of messages) eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message }, userId);
-  return { ...outcome, messages };
+  const chat = outcome.chatStateChanged ? getChat(userId, chatId) ?? undefined : undefined;
+  if (chat) {
+    eventBus.emit(EventType.CHAT_CHANGED, {
+      chat,
+      changedFields: diffChatChangedFields(outcome.chatBefore, chat),
+    }, userId);
+  }
+  return { status: "claimed", usages: outcome.usages, messages, ...(chat ? { chat } : {}) };
 }
 
 /**
@@ -1652,12 +1698,26 @@ export function claimAssociativeRegexAction(
   userId: string,
   chatId: string,
   messageId: string,
-  input: { instanceId: string; scriptId: string; actionId: string; multiSelect?: boolean },
+  input: {
+    instanceId: string;
+    scriptId: string;
+    actionId: string;
+    multiSelect?: boolean;
+    stateEffects?: Array<{ key: string; value: string }>;
+    requiresAssistantSource?: boolean;
+    fork?: boolean;
+  },
 ): ClaimAssociativeRegexActionResult {
   const db = getDb();
   const outcome = db.transaction(() => {
+    if (!hasValidAssociativeRegexStateEffects(input.stateEffects)) return { status: "forbidden" as const };
+    const chatBefore = getChat(userId, chatId);
+    if (!chatBefore) return { status: "not_found" as const };
     const existing = getMessage(userId, messageId);
     if (!existing || existing.chat_id !== chatId) return { status: "not_found" as const };
+    if ((input.requiresAssistantSource || input.stateEffects?.length || input.fork) && existing.is_user) {
+      return { status: "forbidden" as const };
+    }
 
     const stored = existing.extra?.associative_regex_action_usage;
     const usageByInstance: Record<string, AssociativeRegexActionUsage> =
@@ -1687,16 +1747,53 @@ export function claimAssociativeRegexAction(
     );
     db.query("UPDATE messages SET extra = ? WHERE id = ? AND chat_id = ?")
       .run(JSON.stringify(nextExtra), messageId, chatId);
-    return { status: "claimed" as const, usage };
+    const chatVariables = {
+      ...((chatBefore.metadata?.chat_variables as Record<string, string> | undefined) ?? {}),
+    };
+    let chatStateChanged = false;
+    for (const effect of input.stateEffects ?? []) {
+      if (chatVariables[effect.key] === effect.value) continue;
+      chatVariables[effect.key] = effect.value;
+      chatStateChanged = true;
+    }
+    const metadata = chatStateChanged
+      ? { ...(chatBefore.metadata || {}), chat_variables: chatVariables }
+      : chatBefore.metadata;
+    if (chatStateChanged) {
+      db.query("UPDATE chats SET metadata = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+        .run(JSON.stringify(metadata), usage.used_at, chatId, userId);
+    }
+    const branchCreated = input.fork
+      ? createChatBranchRows(userId, { ...chatBefore, metadata }, existing)
+      : undefined;
+    return { status: "claimed" as const, usage, chatBefore, chatStateChanged, branchCreated };
   })();
 
-  if (outcome.status === "not_found") return outcome;
+  if (outcome.status === "not_found" || outcome.status === "forbidden") return outcome;
   const message = getMessage(userId, messageId);
   if (!message) return { status: "not_found" };
+  if (outcome.status === "used") return { status: "used", usage: outcome.usage, message };
   if (outcome.status === "claimed") {
     eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message }, userId);
+    if (outcome.chatStateChanged) {
+      const chat = getChat(userId, chatId);
+      if (chat) {
+        eventBus.emit(EventType.CHAT_CHANGED, {
+          chat,
+          changedFields: diffChatChangedFields(outcome.chatBefore, chat),
+        }, userId);
+      }
+    }
   }
-  return { ...outcome, message };
+  const forkedChat = outcome.branchCreated
+    ? emitCreatedChatBranch(userId, outcome.branchCreated) ?? undefined
+    : undefined;
+  return {
+    status: "claimed",
+    usage: outcome.usage,
+    message,
+    ...(forkedChat ? { forkedChat } : {}),
+  };
 }
 
 export function createMessage(chatId: string, input: CreateMessageInput, userId: string): Message {
@@ -2411,13 +2508,16 @@ export function cycleSwipe(userId: string, messageId: string, direction: "left" 
 
 // --- Branching ---
 
-export function branchChat(userId: string, chatId: string, atMessageId: string): Chat | null {
-  const chat = getChat(userId, chatId);
-  if (!chat) return null;
+interface CreatedChatBranch {
+  sourceChatId: string;
+  newChatId: string;
+  branchId: string;
+  atMessageId: string;
+  atMessageIndex: number;
+}
 
-  const msg = getMessage(userId, atMessageId);
-  if (!msg || msg.chat_id !== chatId) return null;
-
+/** Insert a branch while participating in the caller's current transaction. */
+function createChatBranchRows(userId: string, chat: Chat, msg: Message): CreatedChatBranch {
   const branchId = crypto.randomUUID();
   const newChatId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
@@ -2433,71 +2533,86 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
     .get(userId, `${branchLabel}%`) as { count: number };
   const newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
 
-  const metadata = { ...chat.metadata, branched_from: chatId, branch_at_message: atMessageId };
+  const metadata = { ...chat.metadata, branched_from: chat.id, branch_at_message: msg.id };
 
   const db = getDb();
-  const tx = db.transaction(() => {
-    db.query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(newChatId, userId, chat.character_id, newName, JSON.stringify(metadata), now, now);
+  db.query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(newChatId, userId, chat.character_id, newName, JSON.stringify(metadata), now, now);
 
-    const messages = db
-      .query("SELECT * FROM messages WHERE chat_id = ? AND index_in_chat <= ? ORDER BY index_in_chat ASC")
-      .all(chatId, msg.index_in_chat) as any[];
+  const messages = db
+    .query("SELECT * FROM messages WHERE chat_id = ? AND index_in_chat <= ? ORDER BY index_in_chat ASC")
+    .all(chat.id, msg.index_in_chat) as any[];
 
-    const idMap = new Map<string, string>();
+  const idMap = new Map<string, string>();
 
-    for (const m of messages) {
-      const newMsgId = crypto.randomUUID();
-      idMap.set(m.id, newMsgId);
-      
-      // Relink parent_message_id to the new ID within this branch
-      const parentId = m.parent_message_id ? (idMap.get(m.parent_message_id) || null) : null;
+  for (const m of messages) {
+    const newMsgId = crypto.randomUUID();
+    idMap.set(m.id, newMsgId);
+    const parentId = m.parent_message_id ? (idMap.get(m.parent_message_id) || null) : null;
 
-      db.query(
-        `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(
-        newMsgId,
-        newChatId,
-        m.index_in_chat,
-        m.is_user,
-        m.name,
-        m.content,
-        m.send_date,
-        m.swipe_id,
-        m.swipes,
-        m.swipe_dates,
-        m.extra,
-        parentId,
-        branchId,
-        now
-      );
-    }
-  });
+    db.query(
+      `INSERT INTO messages (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, parent_message_id, branch_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      newMsgId,
+      newChatId,
+      m.index_in_chat,
+      m.is_user,
+      m.name,
+      m.content,
+      m.send_date,
+      m.swipe_id,
+      m.swipes,
+      m.swipe_dates,
+      m.extra,
+      parentId,
+      branchId,
+      now,
+    );
+  }
+
+  return {
+    sourceChatId: chat.id,
+    newChatId,
+    branchId,
+    atMessageId: msg.id,
+    atMessageIndex: msg.index_in_chat,
+  };
+}
+
+function emitCreatedChatBranch(userId: string, created: CreatedChatBranch): Chat | null {
+  const forkedChat = getChat(userId, created.newChatId);
+  if (!forkedChat) return null;
+  eventBus.emit(
+    EventType.CHAT_FORKED,
+    {
+      sourceChatId: created.sourceChatId,
+      forkedChatId: created.newChatId,
+      chat: forkedChat,
+      branchId: created.branchId,
+      forkedAtMessageId: created.atMessageId,
+      forkedAtMessageIndex: created.atMessageIndex,
+    },
+    userId,
+  );
+  return forkedChat;
+}
+
+export function branchChat(userId: string, chatId: string, atMessageId: string): Chat | null {
+  const chat = getChat(userId, chatId);
+  if (!chat) return null;
+  const msg = getMessage(userId, atMessageId);
+  if (!msg || msg.chat_id !== chatId) return null;
+
+  let created: CreatedChatBranch;
 
   try {
-    tx();
+    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg))();
   } catch (err) {
     console.error("[chats] Branch failed:", err);
     return null;
   }
-
-  const forkedChat = getChat(userId, newChatId);
-  if (forkedChat) {
-    eventBus.emit(
-      EventType.CHAT_FORKED,
-      {
-        sourceChatId: chatId,
-        forkedChatId: newChatId,
-        chat: forkedChat,
-        branchId,
-        forkedAtMessageId: atMessageId,
-        forkedAtMessageIndex: msg.index_in_chat,
-      },
-      userId,
-    );
-  }
-  return forkedChat;
+  return emitCreatedChatBranch(userId, created);
 }
 
 // Branch tree

@@ -12,6 +12,7 @@ import type {
   RegexScope,
   RegexTarget,
   RegexAction,
+  RegexActionEffect,
 } from "../types/regex-script";
 import type { MacroEnv } from "../macros/types";
 import { evaluate } from "../macros/MacroEvaluator";
@@ -78,6 +79,7 @@ const MAX_PATTERN_LENGTH = 10_000;
 const MAX_REGEX_ACTIONS = 50;
 const MAX_REGEX_ACTION_FIELD_LENGTH = 10_000;
 const REGEX_ACTION_ID_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,63}$/;
+const REGEX_ACTION_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
 const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
@@ -345,17 +347,50 @@ export function normalizeRegexActions(value: unknown): RegexAction[] {
     if (!raw || typeof raw !== "object") continue;
     const item = raw as Record<string, unknown>;
     const id = typeof item.id === "string" ? item.id.trim() : "";
-    const type = item.type === "append" ? "append" : item.type === "send" ? "send" : null;
+    const type = item.type === "append" || item.type === "send" || item.type === "effects" ? item.type : null;
     if (!REGEX_ACTION_ID_RE.test(id) || !type) continue;
+    const effects = Array.isArray(item.effects)
+      ? item.effects.slice(0, 16).flatMap((rawEffect): RegexActionEffect[] => {
+          if (!rawEffect || typeof rawEffect !== "object") return [];
+          const effect = rawEffect as Record<string, unknown>;
+          if (effect.type === "set_state") {
+            const key = typeof effect.key === "string" ? effect.key.trim() : "";
+            if (!REGEX_ACTION_STATE_KEY_RE.test(key)) return [];
+            return [{
+              type: "set_state",
+              key,
+              value: typeof effect.value === "string"
+                ? effect.value.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH)
+                : "",
+            }];
+          }
+          if (effect.type === "draft") {
+            return [{
+              type: "draft",
+              content: typeof effect.content === "string"
+                ? effect.content.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH)
+                : "",
+              mode: effect.mode === "append" ? "append" : "replace",
+            }];
+          }
+          if (effect.type === "fork") return [{ type: "fork" }];
+          return [];
+        })
+      : [];
+    const compatibleEffects = type === "effects"
+      ? effects
+      : effects.filter((effect) => effect.type === "set_state");
+    if (type === "effects" && compatibleEffects.length === 0) continue;
     actions.push({
       id,
       type,
-      multi_select: item.multi_select === true,
+      multi_select: type === "effects" ? false : item.multi_select === true,
       cost: typeof item.cost === "string" ? item.cost.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "1",
       limit: typeof item.limit === "string" ? item.limit.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "3",
       title: typeof item.title === "string" ? item.title.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
       subtitle: typeof item.subtitle === "string" ? item.subtitle.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
       content: typeof item.content === "string" ? item.content.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      ...(compatibleEffects.length > 0 ? { effects: compatibleEffects } : {}),
     });
   }
   return actions;
@@ -418,7 +453,9 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
       }
       if (ids.has(action.id.trim())) return `duplicate action id: ${action.id.trim()}`;
       ids.add(action.id.trim());
-      if (action.type !== "send" && action.type !== "append") return `Invalid action type: ${action.type}`;
+      if (action.type !== "send" && action.type !== "append" && action.type !== "effects") {
+        return `Invalid action type: ${action.type}`;
+      }
       if (action.multi_select !== undefined && typeof action.multi_select !== "boolean") {
         return "action multi_select must be a boolean";
       }
@@ -426,7 +463,36 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
         if (typeof field !== "string") return "action title, subtitle, content, cost, and limit must be strings";
         if (field.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "action field exceeds maximum length";
       }
-      if (!action.content.trim()) return `action content is required: ${action.id}`;
+      if (action.type !== "effects" && !action.content.trim()) return `action content is required: ${action.id}`;
+      if (action.type === "effects" && action.multi_select) return "effects-only actions cannot be multi-select";
+      if (action.type === "effects" && (!action.effects || action.effects.length === 0)) {
+        return `effects-only action requires at least one effect: ${action.id}`;
+      }
+      if (action.effects !== undefined) {
+        if (!Array.isArray(action.effects)) return "action effects must be an array";
+        if (action.effects.length > 16) return "action effects exceeds maximum length (16)";
+        for (const effect of action.effects) {
+          if (!effect || typeof effect !== "object" || !["set_state", "draft", "fork"].includes(effect.type)) {
+            return "action contains an unsupported effect";
+          }
+          if (effect.type === "set_state") {
+            if (typeof effect.key !== "string" || !REGEX_ACTION_STATE_KEY_RE.test(effect.key.trim())) {
+              return "state effect key must start with a letter and contain only letters, numbers, _, :, . or -";
+            }
+            if (typeof effect.value !== "string") return "state effect value must be a string";
+            if (effect.value.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "state effect value exceeds maximum length";
+          } else if (effect.type === "draft") {
+            if (typeof effect.content !== "string" || !effect.content.trim()) return "draft effect content is required";
+            if (effect.content.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "draft effect content exceeds maximum length";
+            if (effect.mode !== "replace" && effect.mode !== "append") return "draft effect mode must be replace or append";
+          }
+        }
+        if (action.effects.filter((effect) => effect.type === "draft").length > 1) return "an action can contain only one draft effect";
+        if (action.effects.filter((effect) => effect.type === "fork").length > 1) return "an action can contain only one fork effect";
+        if (action.type !== "effects" && action.effects.some((effect) => effect.type === "draft" || effect.type === "fork")) {
+          return "draft and fork effects require an effects-only action";
+        }
+      }
     }
     input.actions = normalizeRegexActions(input.actions);
   }

@@ -23,7 +23,8 @@
 }
 
 .content :global([data-lumiverse-regex-action-used="true"]),
-.content :global([data-lumiverse-regex-action-superseded]) {
+.content :global([data-lumiverse-regex-action-superseded]),
+.content :global([data-lumiverse-regex-action-state-blocked]) {
   cursor: not-allowed;
   opacity: 0.55;
   filter: saturate(0.45);

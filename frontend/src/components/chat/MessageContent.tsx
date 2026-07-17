@@ -1507,13 +1507,13 @@ export default function MessageContent({
       try {
         const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
         if (
-          (payload.type !== 'send' && payload.type !== 'append') ||
+          (payload.type !== 'send' && payload.type !== 'append' && payload.type !== 'effects') ||
           typeof payload.id !== 'string' || typeof payload.scriptId !== 'string' ||
           typeof payload.instanceId !== 'string' ||
           typeof payload.multi_select !== 'boolean' ||
           typeof payload.cost !== 'number' || !Number.isFinite(payload.cost) || payload.cost <= 0 ||
           typeof payload.limit !== 'number' || !Number.isFinite(payload.limit) || payload.limit < 0 ||
-          typeof payload.content !== 'string' || !payload.content.trim()
+          typeof payload.content !== 'string' || (payload.type !== 'effects' && !payload.content.trim())
         ) return
         if (regexActionsSuperseded) {
           event.preventDefault()
@@ -1531,6 +1531,10 @@ export default function MessageContent({
         ) return
         event.preventDefault()
         event.stopPropagation()
+        if (isUser && configured.effects?.length) {
+          toast.info(t('toast.regexActionAssistantOnly'))
+          return
+        }
         const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
         const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
           key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
@@ -1555,6 +1559,7 @@ export default function MessageContent({
           instanceId: payload.instanceId,
           chatId,
           messageId,
+          ...(configured.effects?.length ? { effects: configured.effects } : {}),
         })
       } catch {}
     }
@@ -1565,7 +1570,7 @@ export default function MessageContent({
       container.removeEventListener('click', activate)
       container.removeEventListener('keydown', activate)
     }
-  }, [chatId, messageId, isStreaming, regexScripts, actionUsage, regexActionsSuperseded, t, regexSelectionVersion])
+  }, [chatId, messageId, isUser, isStreaming, regexScripts, actionUsage, regexActionsSuperseded, t, regexSelectionVersion])
 
   useLayoutEffect(() => {
     const container = containerRef.current
@@ -1583,7 +1588,7 @@ export default function MessageContent({
         const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
         if (
           !payload.instanceId || !payload.id || !payload.scriptId ||
-          (payload.type !== 'send' && payload.type !== 'append') ||
+          (payload.type !== 'send' && payload.type !== 'append' && payload.type !== 'effects') ||
           typeof payload.cost !== 'number' || typeof payload.limit !== 'number'
         ) continue
         const configured = regexScripts
@@ -1619,8 +1624,10 @@ export default function MessageContent({
         element.toggleAttribute('data-lumiverse-regex-action-budget-blocked', budgetBlocked)
         if (configured.multi_select) element.setAttribute('aria-pressed', selected ? 'true' : 'false')
         else element.removeAttribute('aria-pressed')
-        const disabled = used || regexActionsSuperseded
+        const stateEffectBlocked = isUser && !!configured.effects?.length
+        const disabled = used || regexActionsSuperseded || stateEffectBlocked
         element.toggleAttribute('data-lumiverse-regex-action-superseded', regexActionsSuperseded)
+        element.toggleAttribute('data-lumiverse-regex-action-state-blocked', stateEffectBlocked)
         if (disabled) {
           element.setAttribute('aria-disabled', 'true')
           element.toggleAttribute('data-lumiverse-regex-action-used', used)
@@ -1656,7 +1663,7 @@ export default function MessageContent({
         }
       } catch {}
     }
-  }, [actionUsage, regexActionsSuperseded, regexScripts, renderContent, regexSelectionVersion, chatId, messageId])
+  }, [actionUsage, regexActionsSuperseded, regexScripts, renderContent, regexSelectionVersion, chatId, isUser, messageId])
 
   // Attach click handler for code copy buttons
   useEffect(() => {

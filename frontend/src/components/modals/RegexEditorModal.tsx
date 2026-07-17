@@ -11,7 +11,7 @@ import { regexApi } from '@/api/regex'
 import { toast } from '@/lib/toast'
 import { useFolders } from '@/hooks/useFolders'
 import FolderDropdown from '@/components/shared/FolderDropdown'
-import type { RegexPlacement, RegexTarget, RegexScope, RegexMacroMode, RegexAction } from '@/types/regex'
+import type { RegexPlacement, RegexTarget, RegexScope, RegexMacroMode, RegexAction, RegexActionEffect } from '@/types/regex'
 import styles from './RegexEditorModal.module.css'
 import clsx from 'clsx'
 
@@ -254,6 +254,45 @@ export default function RegexEditorModal() {
     setActions((current) => current.map((action, i) => i === index ? { ...action, ...updates } : action))
   }
 
+  const addStateEffect = (actionIndex: number) => {
+    setActions((current) => current.map((action, index) => index === actionIndex
+      ? { ...action, effects: [...(action.effects ?? []), { type: 'set_state', key: '', value: '' }] }
+      : action))
+  }
+
+  const addDraftEffect = (actionIndex: number) => {
+    setActions((current) => current.map((action, index) => index === actionIndex
+      ? { ...action, effects: [...(action.effects ?? []), { type: 'draft', content: '', mode: 'replace' }] }
+      : action))
+  }
+
+  const addForkEffect = (actionIndex: number) => {
+    setActions((current) => current.map((action, index) => index === actionIndex
+      ? { ...action, effects: [...(action.effects ?? []), { type: 'fork' }] }
+      : action))
+  }
+
+  const updateActionEffect = (
+    actionIndex: number,
+    effectIndex: number,
+    updates: Partial<{ key: string; value: string; content: string; mode: 'replace' | 'append' }>,
+  ) => {
+    setActions((current) => current.map((action, index) => index === actionIndex
+      ? {
+          ...action,
+          effects: (action.effects ?? []).map((effect, i) => i === effectIndex
+            ? { ...effect, ...updates } as RegexActionEffect
+            : effect),
+        }
+      : action))
+  }
+
+  const removeActionEffect = (actionIndex: number, effectIndex: number) => {
+    setActions((current) => current.map((action, index) => index === actionIndex
+      ? { ...action, effects: (action.effects ?? []).filter((_, i) => i !== effectIndex) }
+      : action))
+  }
+
   return (
     <ModalShell
       isOpen={true}
@@ -442,6 +481,13 @@ export default function RegexEditorModal() {
                         >
                           {tr('actionAppend')}
                         </button>
+                        <button
+                          type="button"
+                          className={clsx(styles.segmentedBtn, action.type === 'effects' && styles.segmentedBtnActive)}
+                          onClick={() => updateAction(index, { type: 'effects', multi_select: false })}
+                        >
+                          {tr('actionEffects')}
+                        </button>
                       </div>
                       <button
                         type="button"
@@ -453,12 +499,14 @@ export default function RegexEditorModal() {
                         <Trash2 size={14} />
                       </button>
                     </div>
-                    <Toggle.Checkbox
-                      checked={action.multi_select}
-                      onChange={(checked) => updateAction(index, { multi_select: checked })}
-                      label={tr('actionMultiSelect')}
-                      hint={tr('actionMultiSelectHint')}
-                    />
+                    {action.type !== 'effects' && (
+                      <Toggle.Checkbox
+                        checked={action.multi_select}
+                        onChange={(checked) => updateAction(index, { multi_select: checked })}
+                        label={tr('actionMultiSelect')}
+                        hint={tr('actionMultiSelectHint')}
+                      />
+                    )}
                     {action.multi_select && (
                       <div className={styles.actionTitleRow}>
                         <div className={styles.field}>
@@ -491,7 +539,7 @@ export default function RegexEditorModal() {
                         <input className={styles.fieldInput} value={action.subtitle} onChange={(event) => updateAction(index, { subtitle: event.target.value })} placeholder={tr('actionSubtitlePlaceholder')} />
                       </div>
                     </div>
-                    <div className={styles.field}>
+                    {action.type !== 'effects' && <div className={styles.field}>
                       <label className={styles.fieldLabel}>
                         {tr('actionContent')}
                         <span className={styles.fieldHint}>{tr(
@@ -508,6 +556,95 @@ export default function RegexEditorModal() {
                         placeholder={tr('actionContentPlaceholder')}
                         rows={2}
                       />
+                    </div>}
+                    {(action.effects ?? []).map((effect, effectIndex) => (
+                      <div className={styles.actionTitleRow} key={`${effect.type}-${effectIndex}`}>
+                        {effect.type === 'set_state' && <>
+                          <div className={styles.field}>
+                          <label className={styles.fieldLabel}>{tr('actionStateKey')}</label>
+                          <input
+                            className={clsx(styles.fieldInput, styles.monoText)}
+                            value={effect.key}
+                            onChange={(event) => updateActionEffect(index, effectIndex, {
+                              key: event.target.value.replace(/^[^A-Za-z]+/, '').replace(/[^A-Za-z0-9_:.-]/g, '').slice(0, 128),
+                            })}
+                            placeholder={tr('actionStateKeyPlaceholder')}
+                          />
+                          </div>
+                          <div className={styles.field}>
+                          <label className={styles.fieldLabel}>{tr('actionStateValue')}</label>
+                          <input
+                            className={clsx(styles.fieldInput, styles.monoText)}
+                            value={effect.value}
+                            onChange={(event) => updateActionEffect(index, effectIndex, { value: event.target.value })}
+                            placeholder={tr('actionStateValuePlaceholder')}
+                          />
+                          </div>
+                        </>}
+                        {effect.type === 'draft' && <>
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>{tr('actionDraftContent')}</label>
+                            <input
+                              className={clsx(styles.fieldInput, styles.monoText)}
+                              value={effect.content}
+                              onChange={(event) => updateActionEffect(index, effectIndex, { content: event.target.value })}
+                              placeholder={tr('actionDraftContentPlaceholder')}
+                            />
+                          </div>
+                          <div className={styles.actionType}>
+                            <button
+                              type="button"
+                              className={clsx(styles.segmentedBtn, effect.mode === 'replace' && styles.segmentedBtnActive)}
+                              onClick={() => updateActionEffect(index, effectIndex, { mode: 'replace' })}
+                            >
+                              {tr('actionDraftReplace')}
+                            </button>
+                            <button
+                              type="button"
+                              className={clsx(styles.segmentedBtn, effect.mode === 'append' && styles.segmentedBtnActive)}
+                              onClick={() => updateActionEffect(index, effectIndex, { mode: 'append' })}
+                            >
+                              {tr('actionDraftAppend')}
+                            </button>
+                          </div>
+                        </>}
+                        {effect.type === 'fork' && (
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>{tr('actionFork')}</label>
+                            <span className={styles.fieldHint}>{tr('actionForkHint')}</span>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          className={styles.removeActionButton}
+                          onClick={() => removeActionEffect(index, effectIndex)}
+                          title={tr('removeEffect')}
+                          aria-label={tr('removeEffect')}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    <div className={styles.actionEffectButtons}>
+                      <button type="button" className={styles.addActionButton} onClick={() => addStateEffect(index)}>
+                        <Plus size={13} /> {tr('addStateEffect')}
+                      </button>
+                      {action.type === 'effects' && <button
+                        type="button"
+                        className={styles.addActionButton}
+                        disabled={(action.effects ?? []).some((effect) => effect.type === 'draft')}
+                        onClick={() => addDraftEffect(index)}
+                      >
+                        <Plus size={13} /> {tr('addDraftEffect')}
+                      </button>}
+                      {action.type === 'effects' && <button
+                        type="button"
+                        className={styles.addActionButton}
+                        disabled={(action.effects ?? []).some((effect) => effect.type === 'fork')}
+                        onClick={() => addForkEffect(index)}
+                      >
+                        <Plus size={13} /> {tr('addForkEffect')}
+                      </button>}
                     </div>
                   </div>
                 ))}

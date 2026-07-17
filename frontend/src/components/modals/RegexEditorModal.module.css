@@ -322,6 +322,17 @@
   color: var(--lumiverse-primary);
 }
 
+.addActionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.actionEffectButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .removeActionButton:hover {
   border-color: var(--lumiverse-danger, #ef4444);
   color: var(--lumiverse-danger, #ef4444);
@@ -360,7 +371,7 @@
 
 .actionType {
   display: flex;
-  min-width: 210px;
+  min-width: 270px;
   border: 1px solid var(--lumiverse-border);
   border-radius: 7px;
   overflow: hidden;

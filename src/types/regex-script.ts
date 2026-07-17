@@ -2,7 +2,28 @@ export type RegexPlacement = "user_input" | "ai_output" | "world_info" | "reason
 export type RegexScope = "global" | "character" | "chat";
 export type RegexTarget = "prompt" | "response" | "display";
 export type RegexMacroMode = "none" | "raw" | "escaped" | "after";
-export type RegexActionType = "send" | "append";
+export type RegexActionType = "send" | "append" | "effects";
+
+export interface RegexActionSetStateEffect {
+  type: "set_state";
+  /** Fixed creator-defined chat-variable key. Capture references are not allowed. */
+  key: string;
+  /** Capture-aware value template resolved from the assistant message match. */
+  value: string;
+}
+
+export interface RegexActionDraftEffect {
+  type: "draft";
+  /** Capture-aware text placed into the composer after the action is claimed. */
+  content: string;
+  mode: "replace" | "append";
+}
+
+export interface RegexActionForkEffect {
+  type: "fork";
+}
+
+export type RegexActionEffect = RegexActionSetStateEffect | RegexActionDraftEffect | RegexActionForkEffect;
 
 export interface RegexAction {
   /** Matches data-regex-action="..." (preferred) or id="..." in replacement HTML. */
@@ -18,6 +39,8 @@ export interface RegexAction {
   subtitle: string;
   /** Visible message text for send, or hidden prompt appendix for append. */
   content: string;
+  /** Optional additive effects. Omitted legacy actions retain their exact behavior. */
+  effects?: RegexActionEffect[];
 }
 
 export interface RegexScript {

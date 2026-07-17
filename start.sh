@@ -102,21 +102,51 @@ _proot_bun() {
   fi
 }
 
-rebuild_bun_termux_wrapper() {
+update_bun_termux_components() {
+  local component="$1"
   local repo="$HOME/.bun-termux"
 
   if [[ -d "$repo" ]]; then
-    info "Rebuilding bun-termux wrapper..."
     if [[ -d "$repo/.git" ]] && ! (cd "$repo" && git pull --ff-only); then
-      warn "Could not update bun-termux checkout — rebuilding the existing copy"
+      warn "Could not update bun-termux checkout — using the existing copy"
     fi
-    (cd "$repo" && make && make install)
-    return
+  else
+    info "Installing bun-termux..."
+    git clone https://github.com/Happ1ness-dev/bun-termux.git "$repo" || return 1
   fi
 
-  info "Installing bun-termux wrapper..."
-  git clone https://github.com/Happ1ness-dev/bun-termux.git "$repo" \
-    && (cd "$repo" && make && make install)
+  local manager="$repo/helper_scripts/bun-termux-manager"
+  if [[ ! -f "$manager" ]]; then
+    err "The bun-termux checkout does not contain its update manager."
+    err "Remove $repo and retry so Lumiverse can install a current checkout."
+    return 1
+  fi
+
+  case "$component" in
+    bun)
+      bash "$manager" update bun
+      ;;
+    wrapper)
+      bash "$manager" update wrapper --source "$repo"
+      ;;
+    all)
+      bash "$manager" update all --source "$repo"
+      ;;
+    *)
+      err "Unknown bun-termux update component: $component"
+      return 1
+      ;;
+  esac
+}
+
+rebuild_bun_termux_wrapper() {
+  info "Rebuilding bun-termux wrapper..."
+  update_bun_termux_components wrapper
+}
+
+upgrade_bun_termux() {
+  info "Updating the Bun runtime and bun-termux wrapper..."
+  update_bun_termux_components all
 }
 
 verify_termux_bun_install_path() {
@@ -348,22 +378,17 @@ _install_bun_termux() {
   export PATH="$BUN_INSTALL/bin:$PATH"
   [[ -f "$BUN_INSTALL/env" ]] && source "$BUN_INSTALL/env"
 
-  # Install bun-termux wrapper (userland-exec + LD_PRELOAD shim)
+  # Install bun-termux wrapper (userland-exec + LD_PRELOAD shim). Use the
+  # upstream manager instead of `make install`: the latter copies directly
+  # over the live wrapper and Android rejects that with ETXTBSY.
   # This replaces the raw bun binary with a wrapper that:
   #   - Loads glibc's ld-linux via userland exec (fixes /proc/self/exe)
   #   - Intercepts syscalls for Android filesystem compatibility
   #   - Remaps shebang paths to Termux prefix
-  if [[ ! -d "$HOME/.bun-termux" ]]; then
-    info "Installing bun-termux wrapper..."
-    if git clone https://github.com/Happ1ness-dev/bun-termux.git "$HOME/.bun-termux" 2>/dev/null \
-       && (cd "$HOME/.bun-termux" && make && make install) 2>/dev/null; then
-      ok "bun-termux wrapper installed"
-    else
-      warn "bun-termux wrapper build failed — will use grun (glibc-runner) fallback"
-      rm -rf "$HOME/.bun-termux" 2>/dev/null || true
-    fi
+  if rebuild_bun_termux_wrapper; then
+    ok "bun-termux wrapper installed"
   else
-    info "bun-termux wrapper already present, skipping..."
+    warn "bun-termux wrapper build failed — will use grun (glibc-runner) fallback"
   fi
 
   # Determine which execution method works (same 3-tier detection as _resolve_bun)
@@ -476,8 +501,10 @@ ensure_bun() {
 # exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
 # at $BUN_INSTALL/bin/bun. On native Termux we cannot use `bun upgrade` —
 # Bun's built-in updater probes for `ld` and aborts ("unsupported on systems
-# without ld") because Termux uses bionic, not glibc. Instead we rebuild the
-# bun-termux wrapper, which is the source of truth for Bun on Termux.
+# without ld") because Termux uses bionic, not glibc. Instead we use the
+# bun-termux manager, which atomically replaces both the underlying `buno`
+# runtime and its wrapper. Atomic replacement is required because Android will
+# not allow `cp` to truncate an executable that is currently mapped.
 upgrade_bun_channel() {
   local channel="$1"
   local before
@@ -496,8 +523,8 @@ upgrade_bun_channel() {
     fi
 
     info "Updating Bun to latest Termux stable (current: $before)..."
-    if ! rebuild_bun_termux_wrapper; then
-      err "bun-termux rebuild failed. Continuing with the existing $before binary."
+    if ! upgrade_bun_termux; then
+      err "bun-termux upgrade failed. Continuing with the existing $before binary."
       return 0
     fi
 

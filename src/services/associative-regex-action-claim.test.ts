@@ -10,6 +10,10 @@ describe("associative regex action claims", () => {
     db.run(`CREATE TABLE chats (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
+      character_id TEXT,
+      name TEXT NOT NULL DEFAULT '',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0
     )`);
     db.run(`CREATE TABLE messages (
@@ -34,6 +38,11 @@ describe("associative regex action claims", () => {
        (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, created_at)
        VALUES (?, ?, 0, 0, 'Guide', 'Choose', 1, 0, '["Choose"]', '[1]', '{}', 1)`,
     ).run("message-1", "chat-1");
+    db.query(
+      `INSERT INTO messages
+       (id, chat_id, index_in_chat, is_user, name, content, send_date, swipe_id, swipes, swipe_dates, extra, created_at)
+       VALUES (?, ?, 1, 1, 'User', 'Choose', 2, 0, '["Choose"]', '[2]', '{}', 2)`,
+    ).run("user-message", "chat-1");
   });
 
   afterAll(() => closeDatabase());
@@ -123,5 +132,107 @@ describe("associative regex action claims", () => {
       { messageId: "message-1", instanceId: "script-3:90:100", scriptId: "script-3", actionId: "east", multiSelect: true },
     ]);
     expect(eastAfterConflict.status).toBe("claimed");
+  });
+
+  test("commits resolved state effects into persistent chat variables", () => {
+    const claimed = claimAssociativeRegexAction("user-1", "chat-1", "message-1", {
+      instanceId: "script-state:0:6",
+      scriptId: "script-state",
+      actionId: "choose-route",
+      stateEffects: [{ key: "adventure.route", value: "rooftops" }],
+    });
+
+    expect(claimed.status).toBe("claimed");
+    const metadata = JSON.parse((getDb().query("SELECT metadata FROM chats WHERE id = ?").get("chat-1") as any).metadata);
+    expect(metadata.chat_variables).toEqual({ "adventure.route": "rooftops" });
+
+    const duplicate = claimAssociativeRegexAction("user-1", "chat-1", "message-1", {
+      instanceId: "script-state:0:6",
+      scriptId: "script-state",
+      actionId: "choose-route",
+      stateEffects: [{ key: "adventure.route", value: "street" }],
+    });
+    expect(duplicate.status).toBe("used");
+    const afterDuplicate = JSON.parse((getDb().query("SELECT metadata FROM chats WHERE id = ?").get("chat-1") as any).metadata);
+    expect(afterDuplicate.chat_variables).toEqual({ "adventure.route": "rooftops" });
+  });
+
+  test("applies multi-select state effects together at commit", () => {
+    const claimed = claimAssociativeRegexActions("user-1", "chat-1", [
+      {
+        messageId: "message-1",
+        instanceId: "script-state-batch:0:6",
+        scriptId: "script-state-batch",
+        actionId: "route",
+        multiSelect: true,
+        stateEffects: [{ key: "adventure.route", value: "canals" }],
+      },
+      {
+        messageId: "message-1",
+        instanceId: "script-state-batch:0:6",
+        scriptId: "script-state-batch",
+        actionId: "companion",
+        multiSelect: true,
+        stateEffects: [{ key: "adventure.companion", value: "Lyra" }],
+      },
+    ]);
+
+    expect(claimed.status).toBe("claimed");
+    const metadata = JSON.parse((getDb().query("SELECT metadata FROM chats WHERE id = ?").get("chat-1") as any).metadata);
+    expect(metadata.chat_variables).toMatchObject({
+      "adventure.route": "canals",
+      "adventure.companion": "Lyra",
+    });
+  });
+
+  test("rejects state effects sourced from a user-role message", () => {
+    const result = claimAssociativeRegexAction("user-1", "chat-1", "user-message", {
+      instanceId: "script-state-user:0:6",
+      scriptId: "script-state-user",
+      actionId: "unsafe",
+      stateEffects: [{ key: "adventure.route", value: "forged" }],
+    });
+
+    expect(result.status).toBe("forbidden");
+    const metadata = JSON.parse((getDb().query("SELECT metadata FROM chats WHERE id = ?").get("chat-1") as any).metadata);
+    expect(metadata.chat_variables?.["adventure.route"]).not.toBe("forged");
+  });
+
+  test("atomically combines state changes with a fork at the source message", () => {
+    const result = claimAssociativeRegexAction("user-1", "chat-1", "message-1", {
+      instanceId: "script-composite:0:6",
+      scriptId: "script-composite",
+      actionId: "branch-route",
+      requiresAssistantSource: true,
+      stateEffects: [{ key: "adventure.route", value: "hidden-pass" }],
+      fork: true,
+    });
+
+    expect(result.status).toBe("claimed");
+    if (result.status !== "claimed") return;
+    expect(result.forkedChat).toBeTruthy();
+    expect(result.forkedChat?.metadata.chat_variables).toMatchObject({
+      "adventure.route": "hidden-pass",
+    });
+    expect(result.forkedChat?.metadata).toMatchObject({
+      branched_from: "chat-1",
+      branch_at_message: "message-1",
+    });
+    const forkMessages = getDb()
+      .query("SELECT is_user, content FROM messages WHERE chat_id = ? ORDER BY index_in_chat")
+      .all(result.forkedChat!.id);
+    expect(forkMessages).toEqual([{ is_user: 0, content: "Choose" }]);
+  });
+
+  test("rejects fork effects sourced from a user-role message", () => {
+    const result = claimAssociativeRegexAction("user-1", "chat-1", "user-message", {
+      instanceId: "script-fork-user:0:6",
+      scriptId: "script-fork-user",
+      actionId: "unsafe-fork",
+      requiresAssistantSource: true,
+      fork: true,
+    });
+
+    expect(result.status).toBe("forbidden");
   });
 });

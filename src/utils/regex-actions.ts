@@ -70,14 +70,20 @@ export function buildRegexActionCaptureTemplate(actions: RegexAction[]): {
   unpack: (replacement: string, scriptId: string, instanceId: string) => ResolvedRegexAction[];
 } {
   const nonce = `\u0002LRA:${crypto.randomUUID()}:`;
-  const markers = Array.from({ length: actions.length * 5 + 1 }, (_, index) => `${nonce}${index}\u0003`);
+  const fieldCount = actions.reduce((count, action) => (
+    count + 5 + (action.effects ?? []).filter((effect) => effect.type !== "fork").length
+  ), 0);
+  const markers = Array.from({ length: fieldCount + 1 }, (_, index) => `${nonce}${index}\u0003`);
   let template = markers[0];
-  for (let i = 0; i < actions.length; i++) {
-    template += actions[i].title + markers[i * 5 + 1];
-    template += actions[i].subtitle + markers[i * 5 + 2];
-    template += actions[i].content + markers[i * 5 + 3];
-    template += actions[i].cost + markers[i * 5 + 4];
-    template += actions[i].limit + markers[i * 5 + 5];
+  let templateMarker = 1;
+  for (const action of actions) {
+    for (const value of [action.title, action.subtitle, action.content, action.cost, action.limit]) {
+      template += value + markers[templateMarker++];
+    }
+    for (const effect of action.effects ?? []) {
+      if (effect.type === "set_state") template += effect.value + markers[templateMarker++];
+      else if (effect.type === "draft") template += effect.content + markers[templateMarker++];
+    }
   }
 
   return {
@@ -86,32 +92,41 @@ export function buildRegexActionCaptureTemplate(actions: RegexAction[]): {
       if (!replacement.startsWith(markers[0])) return [];
       let cursor = markers[0].length;
       const resolved: ResolvedRegexAction[] = [];
-      for (let i = 0; i < actions.length; i++) {
-        const titleEnd = replacement.indexOf(markers[i * 5 + 1], cursor);
-        if (titleEnd < 0) return [];
-        const title = replacement.slice(cursor, titleEnd);
-        cursor = titleEnd + markers[i * 5 + 1].length;
-
-        const subtitleEnd = replacement.indexOf(markers[i * 5 + 2], cursor);
-        if (subtitleEnd < 0) return [];
-        const subtitle = replacement.slice(cursor, subtitleEnd);
-        cursor = subtitleEnd + markers[i * 5 + 2].length;
-
-        const contentEnd = replacement.indexOf(markers[i * 5 + 3], cursor);
-        if (contentEnd < 0) return [];
-        const content = replacement.slice(cursor, contentEnd);
-        cursor = contentEnd + markers[i * 5 + 3].length;
-
-        const costEnd = replacement.indexOf(markers[i * 5 + 4], cursor);
-        if (costEnd < 0) return [];
-        const cost = replacement.slice(cursor, costEnd);
-        cursor = costEnd + markers[i * 5 + 4].length;
-
-        const limitEnd = replacement.indexOf(markers[i * 5 + 5], cursor);
-        if (limitEnd < 0) return [];
-        const limit = replacement.slice(cursor, limitEnd);
-        cursor = limitEnd + markers[i * 5 + 5].length;
-        resolved.push({ ...actions[i], title, subtitle, content, cost, limit, scriptId, instanceId });
+      let markerIndex = 1;
+      const readField = (): string | null => {
+        const marker = markers[markerIndex++];
+        const end = replacement.indexOf(marker, cursor);
+        if (end < 0) return null;
+        const value = replacement.slice(cursor, end);
+        cursor = end + marker.length;
+        return value;
+      };
+      for (const action of actions) {
+        const fields = Array.from({ length: 5 }, readField);
+        if (fields.some((field) => field === null)) return [];
+        const effects = [] as NonNullable<RegexAction["effects"]>;
+        for (const effect of action.effects ?? []) {
+          if (effect.type === "fork") {
+            effects.push(effect);
+            continue;
+          }
+          const value = readField();
+          if (value === null) return [];
+          if (effect.type === "set_state") effects.push({ ...effect, value });
+          else effects.push({ ...effect, content: value });
+        }
+        const [title, subtitle, content, cost, limit] = fields as string[];
+        resolved.push({
+          ...action,
+          title,
+          subtitle,
+          content,
+          cost,
+          limit,
+          ...(effects.length > 0 ? { effects } : {}),
+          scriptId,
+          instanceId,
+        });
       }
       return resolved;
     },

@@ -4,6 +4,7 @@ import type {
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
   GroupedRecentChat, ChatSummary, ChatTreeNode
 } from '@/types/api'
+import type { RegexActionEffect } from '@/types/regex'
 
 export const chatsApi = {
   list(params?: { characterId?: string; limit?: number; offset?: number }) {
@@ -172,6 +173,8 @@ export const messagesApi = {
     return post<{
       message: Message
       usage: { script_id: string; action_id: string; used_at: number }
+      effects?: RegexActionEffect[]
+      forked_chat?: Chat
     }>(`/chats/${chatId}/messages/${messageId}/regex-action`, input)
   },
 

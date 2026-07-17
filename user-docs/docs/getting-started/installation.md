@@ -69,7 +69,7 @@ After the shell opens, continue with the normal startup command below.
     ./start.sh
     ```
 
-    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`. If Bun is older than 1.3.13, startup automatically rebuilds the stable `bun-termux` wrapper before continuing.
+    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`. If Bun is older than 1.3.13, startup uses the `bun-termux` manager to atomically update both the Bun runtime and its wrapper before continuing.
 
     If `grun bun --version` works but the native Termux install path is still broken, `start.sh` now attempts a `bun-termux` rebuild before it lets first-run setup continue.
 
@@ -131,9 +131,9 @@ The start scripts accept flags to control behavior:
     !!! note "Termux behavior"
         Bun's built-in `bun upgrade` command does not work on native Termux — it aborts with `'bun upgrade' is unsupported on systems without ld` because Termux uses Android's bionic libc, not glibc. On Termux:
 
-        * `--upgrade-bun` rebuilds the [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux) wrapper at `$HOME/.bun-termux` (`git pull && make && make install`), which is the actual source of Bun on Termux.
+        * `--upgrade-bun` updates the Bun runtime and rebuilds the [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux) wrapper at `$HOME/.bun-termux`. The upstream manager installs both through atomic renames, so an already-running wrapper does not cause Android's `Text file busy` error.
         * `--upgrade-bun-canary` is **not supported** — bun-termux only packages stable releases. The start script will skip the upgrade and continue with the existing binary. If you specifically need canary, run Lumiverse inside a [proot-distro Linux](https://github.com/termux/proot-distro) environment, where standard `bun upgrade --canary` works normally.
-        * If native Termux reports a broken install path before first run, the fastest repair is usually `./start.sh --upgrade-bun`, which rebuilds the wrapper in place.
+        * If native Termux reports a broken install path before first run, the fastest repair is usually `./start.sh --upgrade-bun`, which updates the runtime and wrapper in place.
 
 === "Windows (`start.ps1`)"
 

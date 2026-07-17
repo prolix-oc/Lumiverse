@@ -19,6 +19,8 @@ import {
   getActivatedWorldInfoEntriesForChat,
   resolveWorldInfoOutlets,
 } from "../services/prompt-assembly.service";
+import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import type { RegexActionEffect } from "../types/regex-script";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -715,11 +717,32 @@ app.post("/:chatId/messages/regex-actions/claim", async (c) => {
     if (!action.multi_select && action.type !== "send") {
       return c.json({ error: "only Send actions can trigger a mixed batch claim" }, 400);
     }
-    selections.push({ messageId, scriptId, actionId, instanceId, multiSelect: action.multi_select });
+    let stateEffects: Array<{ key: string; value: string }> | undefined;
+    if (action.effects?.length) {
+      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+      if (resolved.status === "user_source") {
+        return c.json({ error: "composable effects require an assistant source message" }, 403);
+      }
+      if (resolved.status !== "resolved") {
+        return c.json({ error: "regex action could not be verified from its source message" }, 404);
+      }
+      stateEffects = resolved.effects
+        .filter((effect) => effect.type === "set_state")
+        .map(({ key, value }) => ({ key, value }));
+    }
+    selections.push({
+      messageId,
+      scriptId,
+      actionId,
+      instanceId,
+      multiSelect: action.multi_select,
+      ...(stateEffects ? { stateEffects } : {}),
+    });
   }
 
   const result = svc.claimAssociativeRegexActions(userId, chatId, selections);
   if (result.status === "not_found") return c.json({ error: "Source message not found", messages: result.messages }, 404);
+  if (result.status === "forbidden") return c.json({ error: "composable effects require an assistant source message", messages: result.messages }, 403);
   if (result.status === "used") {
     return c.json({ error: "One or more choices have already been used", messages: result.messages, usage: result.usage }, 409);
   }
@@ -750,17 +773,44 @@ app.post("/:chatId/messages/:id/regex-action", async (c) => {
     return c.json({ error: "multi-select actions must be finalized with the batch claim endpoint" }, 400);
   }
 
+  let resolvedEffects: RegexActionEffect[] = [];
+  let stateEffects: Array<{ key: string; value: string }> | undefined;
+  if (action.effects?.length) {
+    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+    if (resolved.status === "user_source") {
+      return c.json({ error: "composable effects require an assistant source message" }, 403);
+    }
+    if (resolved.status !== "resolved") {
+      return c.json({ error: "regex action could not be verified from its source message" }, 404);
+    }
+    resolvedEffects = resolved.effects;
+    stateEffects = resolvedEffects
+      .filter((effect) => effect.type === "set_state")
+      .map(({ key, value }) => ({ key, value }));
+  }
+
   const result = svc.claimAssociativeRegexAction(userId, chatId, messageId, {
     instanceId,
     scriptId,
     actionId,
     multiSelect: false,
+    ...(stateEffects ? { stateEffects } : {}),
+    ...(resolvedEffects.length > 0 ? {
+      requiresAssistantSource: true,
+      fork: resolvedEffects.some((effect) => effect.type === "fork"),
+    } : {}),
   });
   if (result.status === "not_found") return c.json({ error: "Message not found" }, 404);
+  if (result.status === "forbidden") return c.json({ error: "composable effects require an assistant source message" }, 403);
   if (result.status === "used") {
     return c.json({ error: "This choice has already been used", message: result.message, usage: result.usage }, 409);
   }
-  return c.json({ message: result.message, usage: result.usage });
+  return c.json({
+    message: result.message,
+    usage: result.usage,
+    ...(resolvedEffects.length > 0 ? { effects: resolvedEffects } : {}),
+    ...(result.forkedChat ? { forked_chat: result.forkedChat } : {}),
+  });
 });
 
 app.put("/:chatId/messages/:id", async (c) => {
