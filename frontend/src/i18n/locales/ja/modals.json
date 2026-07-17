@@ -211,7 +211,7 @@
     "componentTab": "成分",
     "assets": "資産",
     "reference": "参照",
-    "tsxNotice": "Editing <1>{{name}}</1> — 安全に解釈された TSX サブセット。任意の JavaScript は実行されません。",
+    "tsxNotice": "<1>{{name}}</1> を編集中 — 組み込み動作を維持するには Original スロットを残し、その周囲にマークアップを追加してください。安全な TSX のみ解釈されます。",
     "validCss": "有効なCSS",
     "validTsx": "有効なTSX",
     "errorPrefix": "エラー：",

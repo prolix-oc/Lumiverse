@@ -55,7 +55,7 @@ export type SafeRenderNode =
 export interface RuntimeOverrideContext {
   props: Record<string, unknown>
   actions: Record<string, unknown>
-  /** Host-trusted React elements keyed by slot tag name (e.g. 'Content'). */
+  /** Host-trusted React elements keyed by slot tag name (e.g. 'Original'). */
   slots: Record<string, React.ReactNode>
 }
 

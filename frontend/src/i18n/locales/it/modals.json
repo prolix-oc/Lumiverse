@@ -211,7 +211,7 @@
     "componentTab": "Componente",
     "assets": "Asset",
     "reference": "Riferimento",
-    "tsxNotice": "Modifica di <1>{{name}}</1> — sottoinsieme TSX sicuro interpretato; JavaScript arbitrario non viene eseguito.",
+    "tsxNotice": "Modifica di <1>{{name}}</1> — mantieni lo slot Original per preservare il comportamento integrato e aggiungi il markup attorno. Solo TSX sicuro.",
     "validCss": "CSS valido",
     "validTsx": "TSX valido",
     "errorPrefix": "Errore:",

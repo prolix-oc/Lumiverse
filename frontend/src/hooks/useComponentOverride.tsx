@@ -63,6 +63,9 @@ function getOrTranspile(name: string, tsx: string) {
 
 /**
  * Hook that returns a wrapped component — either the user's override or the default.
+ * The override also receives a trusted <Original /> slot containing the complete
+ * default renderer, allowing safe additive decoration without rebuilding native
+ * controls and behavior.
  *
  * Usage:
  * ```tsx
@@ -104,14 +107,19 @@ export function useComponentOverride<P extends Record<string, any>>(
 
   if (compiled?.component) {
     const UserComponent = compiled.component
+    const original = <DefaultComponent {...defaultProps} />
     // Freeze top-level props so user code can't reassign action callbacks.
     // Host slots ride along under a reserved key the interpreter reads directly
     // and never exposes to user scope (see FORBIDDEN_PROPERTY_NAMES).
-    const frozenProps = Object.freeze({ ...overrideProps, [HOST_SLOTS_PROP]: hostSlots })
+    // Original is assigned last so callers cannot replace the native component.
+    const frozenProps = Object.freeze({
+      ...overrideProps,
+      [HOST_SLOTS_PROP]: { ...hostSlots, Original: original },
+    })
     return (
       <OverrideErrorBoundary
         componentName={componentName}
-        fallback={<DefaultComponent {...defaultProps} />}
+        fallback={original}
       >
         <UserComponent {...frozenProps} />
       </OverrideErrorBoundary>

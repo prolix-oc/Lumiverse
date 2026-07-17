@@ -211,7 +211,7 @@
     "componentTab": "组件",
     "assets": "资源",
     "reference": "参考",
-    "tsxNotice": "正在编辑 <1>{{name}}</1> — 安全 TSX 子集解释执行；不执行任意 JavaScript。",
+    "tsxNotice": "正在编辑 <1>{{name}}</1> — 请保留 Original 插槽以维持内置功能，并在其周围添加标记。仅解释安全 TSX。",
     "validCss": "有效 CSS",
     "validTsx": "有效 TSX",
     "errorPrefix": "错误：",

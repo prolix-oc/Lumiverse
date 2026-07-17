@@ -211,7 +211,7 @@
     "componentTab": "Composant",
     "assets": "Actifs",
     "reference": "Référence",
-    "tsxNotice": "Editing <1>{{name}}</1> — sous-ensemble TSX sûr interprété ; JavaScript arbitraire n'est pas exécuté.",
+    "tsxNotice": "Modification de <1>{{name}}</1> — conservez l’emplacement Original pour préserver le comportement intégré et ajoutez le balisage autour. TSX sûr uniquement.",
     "validCss": "CSS valide",
     "validTsx": "TSX valide",
     "errorPrefix": "Erreur :",

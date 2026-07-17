@@ -214,7 +214,7 @@
     "componentTab": "Component",
     "assets": "Assets",
     "reference": "Reference",
-    "tsxNotice": "Editing <1>{{name}}</1> — interpreted safe TSX subset; arbitrary JavaScript is not executed.",
+    "tsxNotice": "Editing <1>{{name}}</1> — keep the Original slot to preserve built-in behavior; add markup around it. Interpreted safe TSX only.",
     "validCss": "Valid CSS",
     "validTsx": "Valid TSX",
     "errorPrefix": "Error:",

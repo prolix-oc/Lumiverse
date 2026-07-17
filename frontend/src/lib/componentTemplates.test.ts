@@ -1,7 +1,11 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from 'bun:test'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { compileComponentAst, formatAstDiagnostic } from './componentAstCompiler'
+import { createTrustedOverrideComponent } from './componentAstRuntime'
+import { HOST_SLOTS_PROP } from './componentOverrideCapabilities'
 import { getComponentTemplate } from './componentTemplates'
 
 // Every component exposed in the override editor whose "Reset Template" button
@@ -28,6 +32,7 @@ describe('component starter templates', () => {
       const diagnostic = result.error ? formatAstDiagnostic(result.error) : null
       expect(diagnostic).toBeNull()
       expect(result.program).not.toBeNull()
+      expect(template).toContain('<Original />')
     })
   }
 
@@ -35,6 +40,35 @@ describe('component starter templates', () => {
     const { template } = getComponentTemplate('SomeComponentWithoutACuratedTemplate')
     const result = compileComponentAst(template)
     expect(result.error).toBeNull()
+    expect(template).toContain('<Original />')
+  })
+
+  test('the trusted original-component slot compiles without props or children', () => {
+    const valid = compileComponentAst(`export default function AdditiveOverride(props) {
+  return <><Original /><span>Decoration</span></>
+}`)
+    expect(valid.error).toBeNull()
+
+    const withProps = compileComponentAst(`export default function InvalidOverride(props) {
+  return <Original className="replacement" />
+}`)
+    expect(withProps.error?.message).toBe('<Original /> does not accept props.')
+  })
+
+  test('the trusted original-component slot renders the host component unchanged', () => {
+    const compiled = compileComponentAst(`export default function AdditiveOverride(props) {
+  return <><Original /><span>Decoration</span></>
+}`)
+    if (!compiled.program) throw new Error('Expected additive override to compile')
+
+    const Override = createTrustedOverrideComponent(compiled.program)
+    const html = renderToStaticMarkup(React.createElement(Override, {
+      [HOST_SLOTS_PROP]: {
+        Original: React.createElement('button', { type: 'button' }, 'Native action'),
+      },
+    }))
+
+    expect(html).toBe('<button type="button">Native action</button><span>Decoration</span>')
   })
 
   test('large avatar tier example compiles for message overrides', () => {

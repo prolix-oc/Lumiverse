@@ -595,7 +595,7 @@ export default function CustomCSSModal() {
               </div>
             </div>
 
-            {/* TSX sandbox notice */}
+            {/* TSX sandbox/additive-edit notice */}
             {activeTab === 'tsx' && !isGlobal && (
               <div className={styles.tsxNotice}>
                 <ShieldAlert size={14} className={styles.tsxNoticeIcon} />

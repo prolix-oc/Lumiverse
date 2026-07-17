@@ -1,8 +1,9 @@
 /**
  * Starter templates and props documentation for overridable components.
  *
- * Tier 1 components get a curated template with the flattened props contract.
- * Tier 2 components get a static safe template until explicit props contracts exist.
+ * Templates render the trusted <Original /> slot by default. This makes a TSX
+ * edit additive: built-in behavior remains mounted unless an advanced author
+ * deliberately replaces the starter template with a full implementation.
  */
 
 export interface PropDoc {
@@ -24,50 +25,7 @@ export interface ComponentTemplate {
 const BUBBLE_MESSAGE: ComponentTemplate = {
   template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles }) {
   return (
-    <div className={styles.card || ''} data-part={message.isUser ? 'user' : 'character'}>
-      {/* Avatar — message.avatarUrl follows the active layout and its full-size
-          preference. To choose the source yourself use message.avatar, e.g.
-          message.avatar.cropped.lg or message.avatar.original.full. */}
-      <div className={styles.avatar || ''}>
-        {message.avatarUrl ? (
-          <img src={message.avatarUrl} alt={message.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
-        ) : (
-          <div className={styles.avatarFallback || ''}>
-            {message.initial}
-          </div>
-        )}
-      </div>
-
-      {/* Bubble */}
-      <div className={styles.bubble || ''}>
-        {/* Header */}
-        <div className={styles.header || ''}>
-          <span className={styles.name || ''} style={{ color: message.isUser ? 'rgba(255,165,0,0.85)' : 'var(--lumiverse-primary-text)' }}>
-            {message.displayName}
-          </span>
-        </div>
-
-        {/* Reasoning — <Reasoning /> renders the built-in collapsible block.
-            (Or build your own from reasoning.raw / reasoning.duration.) */}
-        {reasoning && <Reasoning />}
-
-        {/* Content — <Content /> renders fully-formatted markdown, code blocks,
-            macros and interactivity. Use content.raw for the plain source. */}
-        <Content />
-
-        {/* Attachments — <Attachments /> renders inline images/audio. */}
-        {attachments.length > 0 && <Attachments />}
-
-        {/* Swipes */}
-        {swipes.total > 1 && (
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, fontSize: 12 }}>
-            <button onClick={actions.swipeLeft}>←</button>
-            <span>{swipes.current} / {swipes.total}</span>
-            <button onClick={actions.swipeRight}>→</button>
-          </div>
-        )}
-      </div>
-    </div>
+    <Original />
   )
 }`,
   props: [
@@ -125,6 +83,7 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'swipeRight', type: '() => void', description: 'Navigate to next swipe' },
     ]},
     { name: 'styles', type: 'Record<string, string>', description: 'Original CSS module class names' },
+    { name: '<Original />', type: 'slot tag', description: 'Renders the complete built-in component. Keep this slot to preserve native actions, swipes, editing, greetings, accessibility, and future host updates.' },
     { name: '<Content />', type: 'slot tag', description: 'Renders the fully-formatted message body (markdown, code highlighting, macros, interactivity) exactly like the built-in renderer. Place this tag where the message text should appear.' },
     { name: '<Reasoning />', type: 'slot tag', description: 'Renders the built-in reasoning/CoT collapsible block. Renders nothing when there is no reasoning.' },
     { name: '<Attachments />', type: 'slot tag', description: 'Renders inline image/audio attachments. Renders nothing when there are none.' },
@@ -136,17 +95,17 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
 function genericTemplate(name: string, propsNote: string): ComponentTemplate {
   return {
     template: `export default function ${name}(props) {
-  // Tier 2 AST overrides are limited to static presentational markup until
-  // this component has an explicit safe props contract.
 ${propsNote}
 
   return (
-    <div style={{ padding: 12, opacity: 0.7 }}>
-      Custom ${name} override placeholder
-    </div>
+    <Original />
   )
 }`,
-    props: [],
+    props: [{
+      name: '<Original />',
+      type: 'slot tag',
+      description: 'Renders the complete built-in component. Keep this slot so TSX changes remain additive.',
+    }],
   }
 }
 
@@ -202,11 +161,16 @@ export function getComponentTemplate(componentName: string): ComponentTemplate {
 ${propsNote}
 
   return (
-    <div style={{ padding: 12, opacity: 0.7 }}>
-      Custom ${componentName} override placeholder
-    </div>
+    <Original />
   )
 }`,
-    props: generatedProps || [],
+    props: [
+      {
+        name: '<Original />',
+        type: 'slot tag',
+        description: 'Renders the complete built-in component. Keep this slot so TSX changes remain additive.',
+      },
+      ...(generatedProps || []),
+    ],
   }
 }

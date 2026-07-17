@@ -93,9 +93,35 @@ For richer sharing — including custom CSS, component overrides, and bundled as
 For full styling control beyond what the Theme Panel exposes, open **Settings → Appearance → Custom CSS** (or invoke the Custom CSS modal from the Theme Panel). It supports:
 
 - **Custom CSS** — raw CSS that's injected after the built-in stylesheet, so you can override any variable or selector
-- **Component Overrides** — drop-in TSX replacements for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
+- **Component Overrides** — safe TSX decorators for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
+
+Component starter templates render `<Original />`, a trusted slot containing the
+complete built-in component. Keep that slot in the template and add markup around
+it so native behavior—actions, swipes, editing, greetings, accessibility, and new
+features added in later releases—continues to work. Removing `<Original />` opts
+into a full replacement, which means the replacement must recreate every feature
+it needs.
+
+```jsx
+export default function BubbleMessage(props) {
+  return (
+    <>
+      <Original />
+      <div className="message-decoration">✦</div>
+    </>
+  )
+}
+```
+
+Use per-component CSS when the change is purely visual; it layers onto the native
+component without changing its React structure.
 
 ### Choosing message avatar resolution
+
+The example below intentionally replaces the built-in message markup because it
+changes the avatar source, not just its presentation. A full replacement must
+also render any actions or controls it wants to retain. For sizing, cropping,
+borders, and other visual avatar changes, keep `<Original />` and use CSS instead.
 
 `BubbleMessage` and `MinimalMessage` component overrides receive the same avatar sources. Use `message.avatar` when the theme needs a specific shape or resolution:
 
