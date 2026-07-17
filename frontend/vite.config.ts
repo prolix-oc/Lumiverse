@@ -6,7 +6,11 @@ import pkg from './package.json'
 
 export default defineConfig({
   plugins: [
-    react(),
+    react({
+      babel: {
+        plugins: [['babel-plugin-react-compiler', { target: '19' }]],
+      },
+    }),
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src',
