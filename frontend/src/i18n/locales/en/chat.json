@@ -13,7 +13,13 @@
     "hideFromAi": "Hide from AI context",
     "unhideFromAi": "Unhide from AI context",
     "hide": "Hide",
-    "unhide": "Unhide"
+    "unhide": "Unhide",
+    "setContextAnchor": "Protect context from this message",
+    "clearContextAnchor": "Clear protected context anchor",
+    "contextAnchorHidden": "Unhide this message before using it as a context anchor",
+    "contextAnchorSet": "Context anchor set",
+    "contextAnchorCleared": "Context anchor cleared",
+    "contextAnchorFailed": "Failed to update context anchor"
   },
   "scrollToBottom": "Scroll to bottom",
   "inputPlaceholder": "Type a message…",

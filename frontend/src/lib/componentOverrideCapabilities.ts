@@ -81,6 +81,7 @@ export const ALLOWED_ACTION_PATHS = new Set([
   'actions.edit',
   'actions.delete',
   'actions.toggleHidden',
+  'actions.toggleContextAnchor',
   'actions.fork',
   'actions.promptBreakdown',
   'actions.swipeLeft',

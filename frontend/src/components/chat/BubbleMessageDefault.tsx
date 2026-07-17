@@ -5,7 +5,7 @@
 import { useRef, useCallback, useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
+import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
@@ -59,12 +59,14 @@ export interface BubbleMessageDefaultProps {
   displayName: string
   macroUserName: string
   isHidden: boolean
+  isContextAnchor: boolean
   userLeft: boolean
   handleEdit: () => void
   handleSaveEdit: () => void
   handleCancelEdit: () => void
   handleDelete: () => void
   handleToggleHidden: () => void
+  handleToggleContextAnchor: () => void
   handleFork: () => void
   handlePromptBreakdown: () => void
 }
@@ -175,8 +177,8 @@ export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, userLeft,
-  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor, userLeft,
+  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
   handleFork, handlePromptBreakdown,
 }: BubbleMessageDefaultProps) {
   const { t } = useTranslation('chat')
@@ -292,6 +294,13 @@ export default function BubbleMessageDefault({
       active: isHidden,
       onClick: () => contextAction(handleToggleHidden),
     },
+    ...(!isHidden ? [{
+      key: 'toggle-context-anchor',
+      label: isContextAnchor ? t('messageActions.clearContextAnchor') : t('messageActions.setContextAnchor'),
+      icon: <Anchor size={14} />,
+      active: isContextAnchor,
+      onClick: () => contextAction(handleToggleContextAnchor),
+    }] satisfies ContextMenuEntry[] : []),
     {
       key: 'fork',
       label: t('messageActions.fork'),
@@ -314,7 +323,7 @@ export default function BubbleMessageDefault({
     },
   ], [
     canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
-    handlePromptBreakdown, handleToggleHidden, hasSavedAudio, isGenerating, isHidden, isPlaying, isUser,
+    handlePromptBreakdown, handleToggleHidden, handleToggleContextAnchor, hasSavedAudio, isGenerating, isHidden, isContextAnchor, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
 
@@ -465,6 +474,7 @@ export default function BubbleMessageDefault({
           onEdit={handleEdit}
           onDelete={handleDelete}
           onToggleHidden={handleToggleHidden}
+          onToggleContextAnchor={handleToggleContextAnchor}
           onFork={handleFork}
           onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
           onPlay={canPlay ? togglePlayback : undefined}
@@ -472,6 +482,7 @@ export default function BubbleMessageDefault({
           isGenerating={isGenerating}
           hasSavedAudio={hasSavedAudio}
           isHidden={isHidden}
+          isContextAnchor={isContextAnchor}
           content={message.content}
           className={styles.actionsPill}
         />

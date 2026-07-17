@@ -2213,6 +2213,16 @@ export function bulkSetHidden(userId: string, chatId: string, messageIds: string
 
   transaction();
 
+  if (
+    hidden &&
+    typeof chat.metadata?.context_history_anchor_message_id === "string" &&
+    messageIds.includes(chat.metadata.context_history_anchor_message_id)
+  ) {
+    mergeChatMetadata(userId, chatId, {
+      context_history_anchor_message_id: undefined,
+    });
+  }
+
   // Emit events for WS sync
   for (const msg of updated) {
     eventBus.emit(EventType.MESSAGE_EDITED, { chatId, message: msg }, userId);
@@ -2263,6 +2273,15 @@ export function bulkDeleteMessages(userId: string, chatId: string, messageIds: s
 
   transaction();
 
+  if (
+    typeof chat.metadata?.context_history_anchor_message_id === "string" &&
+    deletedIds.includes(chat.metadata.context_history_anchor_message_id)
+  ) {
+    mergeChatMetadata(userId, chatId, {
+      context_history_anchor_message_id: undefined,
+    });
+  }
+
   cleanupAudioAttachments(userId, attachmentsToCleanup);
 
   for (const msgId of deletedIds) {
@@ -2291,6 +2310,12 @@ export function deleteMessage(userId: string, id: string): boolean {
   const attachmentsToCleanup = collectMessageAttachments(msg);
   const result = getDb().query("DELETE FROM messages WHERE id = ? AND chat_id = ?").run(id, msg.chat_id);
   if (result.changes > 0) {
+    const chat = getChat(userId, msg.chat_id);
+    if (chat?.metadata?.context_history_anchor_message_id === id) {
+      mergeChatMetadata(userId, msg.chat_id, {
+        context_history_anchor_message_id: undefined,
+      });
+    }
     cleanupAudioAttachments(userId, attachmentsToCleanup);
     eventBus.emit(EventType.MESSAGE_DELETED, { chatId: msg.chat_id, messageId: id }, userId);
     invalidateChatMemoryCache(msg.chat_id);
@@ -2533,7 +2558,11 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message): Created
     .get(userId, `${branchLabel}%`) as { count: number };
   const newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
 
-  const metadata = { ...chat.metadata, branched_from: chat.id, branch_at_message: msg.id };
+  const metadata: Record<string, any> = {
+    ...chat.metadata,
+    branched_from: chat.id,
+    branch_at_message: msg.id,
+  };
 
   const db = getDb();
   db.query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -2569,6 +2598,20 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message): Created
       branchId,
       now,
     );
+  }
+
+  const sourceAnchorId = typeof chat.metadata?.context_history_anchor_message_id === "string"
+    ? chat.metadata.context_history_anchor_message_id
+    : null;
+  if (sourceAnchorId) {
+    const mappedAnchorId = idMap.get(sourceAnchorId);
+    if (mappedAnchorId) {
+      metadata.context_history_anchor_message_id = mappedAnchorId;
+    } else {
+      delete metadata.context_history_anchor_message_id;
+    }
+    db.query("UPDATE chats SET metadata = ? WHERE id = ? AND user_id = ?")
+      .run(JSON.stringify(metadata), newChatId, userId);
   }
 
   return {

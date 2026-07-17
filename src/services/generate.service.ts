@@ -2648,6 +2648,23 @@ export async function startGeneration(
           deliberationHandledByMacro,
         } = pipeline;
 
+        // A context anchor is a strict guardrail: older history may be clipped,
+        // but the marked message and every newer turn must fit together. Abort
+        // before the primary provider receives any prompt when that protected
+        // tail exceeds the available history budget.
+        if (pipeline.contextClipStats?.anchorOverflow) {
+          const protectedTokens = pipeline.contextClipStats.protectedHistoryTokens ?? 0;
+          const availableTokens = Math.max(
+            0,
+            pipeline.contextClipStats.remainingHistoryBudget,
+          );
+          throw new Error(
+            `Protected context anchor needs ${protectedTokens.toLocaleString()} tokens, ` +
+              `but only ${availableTokens.toLocaleString()} fit after prompt overhead. ` +
+              `Increase Context Size or lower Max Response.`,
+          );
+        }
+
         // Persist deferred WI state and dirty chat variables after assembly.
         // Both go through mergeChatMetadata so that any user-driven metadata edits
         // (alternate field selections, world book attachments, etc.) that landed

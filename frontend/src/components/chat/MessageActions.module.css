@@ -5,3 +5,8 @@
   flex-shrink: 0;
   margin-top: 4px;
 }
+
+.contextAnchorActive {
+  color: var(--lumiverse-accent, #7c5cff) !important;
+  background: color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 16%, transparent) !important;
+}

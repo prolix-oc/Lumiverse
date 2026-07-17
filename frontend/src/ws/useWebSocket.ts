@@ -661,6 +661,18 @@ export function useWebSocket() {
                 over: Math.abs(clip.remainingHistoryBudget).toLocaleString(),
               }),
             )
+          } else if (
+            clip?.enabled &&
+            clip.anchorActive &&
+            !clip.anchorOverflow &&
+            (state.summarization.contextAnchorWarningThresholdTokens ?? 0) > 0 &&
+            (clip.remainingBeforeAnchor ?? Number.POSITIVE_INFINITY) <= state.summarization.contextAnchorWarningThresholdTokens
+          ) {
+            toast.warning(
+              i18n.t('common.toast.contextAnchorNearLimit', {
+                remaining: Math.max(0, clip.remainingBeforeAnchor ?? 0).toLocaleString(),
+              }),
+            )
           } else if (clip?.enabled && clip.remainingHistoryBudget <= 0 && clip.messagesDropped > 0) {
             toast.warning(i18n.t('common.toast.contextNoHistoryRoom'))
           } else if (clip?.enabled && clip.messagesDropped > 0) {

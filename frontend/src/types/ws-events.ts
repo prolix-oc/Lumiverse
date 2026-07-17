@@ -312,6 +312,10 @@ export interface ContextClipStats {
   tokenizerUsed: string
   budgetInvalid?: boolean
   fixedOverBudget?: boolean
+  anchorActive?: boolean
+  protectedHistoryTokens?: number
+  remainingBeforeAnchor?: number
+  anchorOverflow?: boolean
 }
 
 export interface GenerationStartedPayload {

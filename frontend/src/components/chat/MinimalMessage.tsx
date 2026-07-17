@@ -25,8 +25,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleFork,
+    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden, isContextAnchor,
+    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
@@ -48,6 +48,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
       fullAvatarUrl,
       avatar,
       isHidden,
+      isContextAnchor,
       isStreaming: isActivelyStreaming,
       isLastMessage,
       tokenCount: tokenCount ?? null,
@@ -84,6 +85,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
       edit: handleEdit,
       delete: handleDelete,
       toggleHidden: handleToggleHidden,
+      toggleContextAnchor: handleToggleContextAnchor,
       fork: handleFork,
       promptBreakdown: handlePromptBreakdown,
       swipeLeft: () => {},
@@ -91,10 +93,10 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     }),
     styles,
   }), [
-    message, isUser, displayName, avatarUrl, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isActivelyStreaming,
+    message, isUser, displayName, avatarUrl, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isContextAnchor, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
-    handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden,
+    handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
     handleFork, handlePromptBreakdown,
   ])
 
@@ -135,8 +137,8 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
+    tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
+    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
     handleFork, handlePromptBreakdown,
   }
 

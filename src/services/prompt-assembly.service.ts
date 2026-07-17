@@ -151,14 +151,19 @@ const CHAT_HISTORY_KEY = "__chatHistorySource";
 const WORLD_INFO_KEY = "__worldInfoSource";
 const SOURCE_ID_KEY = "__sourceMessageId";
 const SOURCE_INDEX_KEY = "__sourceIndexInChat";
+const CONTEXT_ANCHOR_PROTECTED_KEY = "__contextAnchorProtected";
 const PRESERVE_DISPLAY_REASONING_DELIMS_KEY =
   "__preserveDisplayReasoningDelimiters";
 
 function markAsChatHistory(
   msg: LlmMessage,
   source?: { id: string; index_in_chat: number },
+  contextAnchorProtected = false,
 ): LlmMessage {
   (msg as any)[CHAT_HISTORY_KEY] = true;
+  if (contextAnchorProtected) {
+    (msg as any)[CONTEXT_ANCHOR_PROTECTED_KEY] = true;
+  }
   if (source) {
     (msg as any)[SOURCE_ID_KEY] = source.id;
     (msg as any)[SOURCE_INDEX_KEY] = source.index_in_chat;
@@ -168,6 +173,10 @@ function markAsChatHistory(
 
 export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+function isContextAnchorProtected(msg: LlmMessage): boolean {
+  return (msg as any)[CONTEXT_ANCHOR_PROTECTED_KEY] === true;
 }
 
 function markAsWorldInfoEntry(msg: LlmMessage): LlmMessage {
@@ -1182,6 +1191,20 @@ export async function assemblePrompt(
   const messages = ctx.excludeMessageId
     ? allMessages.filter((m) => m.id !== ctx.excludeMessageId)
     : allMessages;
+  const contextAnchorMessageId =
+    typeof chat.metadata?.context_history_anchor_message_id === "string"
+      ? chat.metadata.context_history_anchor_message_id
+      : null;
+  const contextAnchorMessage = contextAnchorMessageId
+    ? allMessages.find(
+        (message) =>
+          message.id === contextAnchorMessageId && message.extra?.hidden !== true,
+      )
+    : undefined;
+  // Use the stored chat index rather than the filtered-message position so an
+  // anchor still protects following history during regenerate/swipe, where the
+  // target message itself is temporarily excluded from prompt assembly.
+  const contextAnchorIndex = contextAnchorMessage?.index_in_chat;
   // For group chats, resolve the target character; fall back to the chat's primary character
   const characterId = ctx.targetCharacterId || chat.character_id;
   // Temporary chats have no character: a synthetic "Assistant" stands in so
@@ -2372,9 +2395,22 @@ export async function assemblePrompt(
         summarizationSettings.messageLimitCount != null &&
         summarizationSettings.messageLimitCount > 0
       ) {
-        effectiveMessages = messages.slice(
-          -summarizationSettings.messageLimitCount,
+        const requestedStart = Math.max(
+          0,
+          messages.length - summarizationSettings.messageLimitCount,
         );
+        const anchorStart = contextAnchorIndex == null
+          ? -1
+          : messages.findIndex(
+              (message) => message.index_in_chat >= contextAnchorIndex,
+            );
+        // An anchor tail always wins over the count-based Message Limit. This
+        // may include more than N messages, but never slices the marked
+        // message or anything newer out of model context.
+        const start = anchorStart >= 0
+          ? Math.min(requestedStart, anchorStart)
+          : requestedStart;
+        effectiveMessages = messages.slice(start);
       }
       const generatedImageContextPolicy = resolveGeneratedImageContextPolicy(
         settingsMap.get("imageGeneration"),
@@ -2480,16 +2516,33 @@ export async function assemblePrompt(
             }
           }
           const source = { id: msg.id, index_in_chat: msg.index_in_chat };
+          const contextAnchorProtected =
+            contextAnchorIndex != null &&
+            msg.index_in_chat >= contextAnchorIndex;
           if (parts.length > 0) {
-            result.push(markAsChatHistory({ role, content: parts }, source));
+            result.push(
+              markAsChatHistory(
+                { role, content: parts },
+                source,
+                contextAnchorProtected,
+              ),
+            );
           } else {
-            result.push(markAsChatHistory({ role, content: contentForPrompt }, source));
+            result.push(
+              markAsChatHistory(
+                { role, content: contentForPrompt },
+                source,
+                contextAnchorProtected,
+              ),
+            );
           }
         } else {
           result.push(
             markAsChatHistory(
               { role, content: contentForPrompt },
               { id: msg.id, index_in_chat: msg.index_in_chat },
+              contextAnchorIndex != null &&
+                msg.index_in_chat >= contextAnchorIndex,
             ),
           );
         }
@@ -5134,6 +5187,9 @@ function mergeConsecutiveUserMessages(
       const wasWorldInfo =
         isWorldInfoEntryMessage(result[i]) ||
         isWorldInfoEntryMessage(result[i + 1]);
+      const wasContextAnchorProtected =
+        isContextAnchorProtected(result[i]) ||
+        isContextAnchorProtected(result[i + 1]);
       const mergedSourceId =
         getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
       const mergedSourceIndex =
@@ -5152,6 +5208,7 @@ function mergeConsecutiveUserMessages(
           typeof mergedSourceId === "string" && typeof mergedSourceIndex === "number"
             ? { id: mergedSourceId, index_in_chat: mergedSourceIndex }
             : undefined,
+          wasContextAnchorProtected,
         );
       }
       if (wasWorldInfo) markAsWorldInfoEntry(result[i]);
@@ -5692,6 +5749,10 @@ export async function clipToContextBudget(
   }
 
   const remainingHistoryBudget = inputBudget - fixedTokens;
+  const protectedHistoryStart = historyIndices.findIndex((index) =>
+    isContextAnchorProtected(result[index]),
+  );
+  const anchorActive = protectedHistoryStart >= 0;
 
   // char/4 approximation for history we intentionally never tokenize (the
   // clipped-away prefix). Feeds the display-only "N messages / ~M tokens
@@ -5720,21 +5781,53 @@ export async function clipToContextBudget(
     messagesDropped: 0,
     tokensDropped: 0,
     tokenizerUsed: counter.name,
+    anchorActive,
+    protectedHistoryTokens: 0,
+    remainingBeforeAnchor: remainingHistoryBudget,
     ...overrides,
   });
+
+  const countProtectedHistory = async (): Promise<number> => {
+    if (!anchorActive) return 0;
+    let tokens = 0;
+    for (let i = protectedHistoryStart; i < historyIndices.length; i++) {
+      const msg = result[historyIndices[i]];
+      const text = `${msg.role}\n${getTextContent(msg)}`;
+      charsSinceYield += text.length;
+      await yieldWhenDue();
+      tokens += counter.count(text);
+    }
+    return tokens;
+  };
 
   // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
   // Don't clip silently — surface the misconfiguration via `budgetInvalid`.
   if (inputBudget <= 0) {
     const allHistory = approxHistoryTokens(0, historyIndices.length);
+    const protectedHistoryTokens = await countProtectedHistory();
     return makeStats({
       budgetInvalid: true,
       chatHistoryTokensBefore: allHistory,
       chatHistoryTokensAfter: allHistory,
+      protectedHistoryTokens,
+      remainingBeforeAnchor: remainingHistoryBudget - protectedHistoryTokens,
+      anchorOverflow: anchorActive && protectedHistoryTokens > 0,
     });
   }
 
   if (remainingHistoryBudget <= 0) {
+    const protectedHistoryTokens = await countProtectedHistory();
+    if (anchorActive && protectedHistoryTokens > 0) {
+      const allHistory = approxHistoryTokens(0, historyIndices.length);
+      return makeStats({
+        chatHistoryTokensBefore: allHistory,
+        chatHistoryTokensAfter: allHistory,
+        protectedHistoryTokens,
+        remainingBeforeAnchor: remainingHistoryBudget - protectedHistoryTokens,
+        anchorOverflow: true,
+        fixedOverBudget: remainingHistoryBudget < 0,
+      });
+    }
     // Measure history before compaction — the in-place drop below truncates
     // `result`, after which `historyIndices` no longer addresses valid entries.
     const allHistory = approxHistoryTokens(0, historyIndices.length);
@@ -5760,9 +5853,25 @@ export async function clipToContextBudget(
   // Walk history newest→oldest, tokenizing each message only as we reach it.
   // The first message that would overflow the budget stops the walk; every
   // older message is dropped without ever being tokenized.
-  let accHistoryTokens = 0;
-  let oldestKeptHistoryIdx = -1;
-  for (let i = historyIndices.length - 1; i >= 0; i--) {
+  const protectedHistoryTokens = await countProtectedHistory();
+  const remainingBeforeAnchor = remainingHistoryBudget - protectedHistoryTokens;
+  if (anchorActive && remainingBeforeAnchor < 0) {
+    const allHistory =
+      approxHistoryTokens(0, protectedHistoryStart) + protectedHistoryTokens;
+    return makeStats({
+      chatHistoryTokensBefore: allHistory,
+      chatHistoryTokensAfter: allHistory,
+      protectedHistoryTokens,
+      remainingBeforeAnchor,
+      anchorOverflow: true,
+    });
+  }
+
+  let accHistoryTokens = protectedHistoryTokens;
+  let oldestKeptHistoryIdx = anchorActive
+    ? protectedHistoryStart
+    : -1;
+  for (let i = (anchorActive ? protectedHistoryStart : historyIndices.length) - 1; i >= 0; i--) {
     const msg = result[historyIndices[i]];
     const text = `${msg.role}\n${getTextContent(msg)}`;
     charsSinceYield += text.length;
@@ -5777,6 +5886,8 @@ export async function clipToContextBudget(
     return makeStats({
       chatHistoryTokensBefore: accHistoryTokens,
       chatHistoryTokensAfter: accHistoryTokens,
+      protectedHistoryTokens,
+      remainingBeforeAnchor,
     });
   }
 
@@ -5805,6 +5916,8 @@ export async function clipToContextBudget(
     chatHistoryTokensAfter: accHistoryTokens,
     messagesDropped: droppedCount,
     tokensDropped,
+    protectedHistoryTokens,
+    remainingBeforeAnchor,
   });
 }
 

@@ -425,6 +425,14 @@ export interface ContextClipStats {
   budgetInvalid?: boolean;
   /** True when fixed prompt overhead alone is larger than the available input budget. */
   fixedOverBudget?: boolean;
+  /** True when a chat context anchor protected one or more history messages. */
+  anchorActive?: boolean;
+  /** Exact tokens required by the protected anchor tail. */
+  protectedHistoryTokens?: number;
+  /** Space left for history before the protected anchor. Negative means the anchor cannot fit. */
+  remainingBeforeAnchor?: number;
+  /** True when the protected anchor tail cannot fit in the remaining history budget. */
+  anchorOverflow?: boolean;
 }
 
 export interface AssemblyResult {

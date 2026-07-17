@@ -27,3 +27,8 @@
   background: var(--lumiverse-fill-subtle);
   color: var(--lumiverse-text);
 }
+
+.pill .contextAnchorActive {
+  color: var(--lumiverse-accent, #7c5cff);
+  background: color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 16%, transparent);
+}

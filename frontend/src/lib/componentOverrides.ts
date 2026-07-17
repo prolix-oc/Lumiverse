@@ -59,6 +59,7 @@ export interface OverrideMessageInfo {
   /** Cropped/original avatar URLs across all size tiers. */
   avatar: OverrideAvatar
   isHidden: boolean
+  isContextAnchor: boolean
   isStreaming: boolean
   isLastMessage: boolean
   tokenCount: number | null
@@ -106,6 +107,7 @@ export interface OverrideActions {
   edit: () => void
   delete: () => void
   toggleHidden: () => void
+  toggleContextAnchor: () => void
   fork: () => void
   promptBreakdown: () => void
   swipeLeft: () => void
