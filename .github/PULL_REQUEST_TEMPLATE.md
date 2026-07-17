@@ -10,6 +10,7 @@ List the commands you ran and their results. Include any relevant test output.
 # Example
 bun x tsc --noEmit
 cd frontend && bun run typecheck
+bun run lint
 ```
 
 ## Required checklist
@@ -19,7 +20,7 @@ cd frontend && bun run typecheck
 - [ ] All applicable tests pass.
 - [ ] I ran the relevant type check(s) with no type errors or warnings:
   - [ ] Backend: `bun x tsc --noEmit`
-  - [ ] Frontend: `cd frontend && bun run typecheck`
+  - [ ] Frontend: `cd frontend && bun run typecheck`, `bun run lint`
 
 ## UI changes (if applicable)
 
