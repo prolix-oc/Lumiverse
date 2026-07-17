@@ -325,6 +325,7 @@ function ParamField({
   const displayName = paramKey
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
+    .replace(/^Unet\b/, 'UNet')
     .trim()
   const normalizedSliderValue = useMemo(
     () => normalizeSliderSchemaValue(value, schema),

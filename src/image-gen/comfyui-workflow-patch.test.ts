@@ -248,3 +248,34 @@ describe("detectInjectionPoints — img2img hints", () => {
     expect(denoise?.suggestedAs).toBe("denoise");
   });
 });
+
+describe("ComfyUI UNet mappings", () => {
+  const workflow = {
+    "4": {
+      class_type: "UNETLoader",
+      inputs: { unet_name: "embedded.safetensors", weight_dtype: "default" },
+    },
+  };
+
+  test("auto-detects UNETLoader.unet_name", () => {
+    const points = detectInjectionPoints(workflow);
+    expect(points).toContainEqual({
+      nodeId: "4",
+      classType: "UNETLoader",
+      fieldName: "unet_name",
+      currentValue: "embedded.safetensors",
+      suggestedAs: "unet",
+    });
+  });
+
+  test("injects a selected UNet and preserves the embedded default when unset", () => {
+    const mappings: ComfyUIFieldMapping[] = [
+      { nodeId: "4", fieldName: "unet_name", mappedAs: "unet", autoDetected: true },
+    ];
+
+    expect(patchWorkflow(workflow, mappings, { unet: "flux-dev.safetensors" })["4"].inputs.unet_name)
+      .toBe("flux-dev.safetensors");
+    expect(patchWorkflow(workflow, mappings, {})["4"].inputs.unet_name)
+      .toBe("embedded.safetensors");
+  });
+});

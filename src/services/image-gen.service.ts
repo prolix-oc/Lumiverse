@@ -917,6 +917,7 @@ async function applyComfyUIWorkflowConfig(
     width: numberParam(params.width),
     height: numberParam(params.height),
     checkpoint: stringParam(params.checkpoint || params.ckpt_name),
+    unet: stringParam(params.unet || params.unet_name),
     custom: customValues,
   };
 

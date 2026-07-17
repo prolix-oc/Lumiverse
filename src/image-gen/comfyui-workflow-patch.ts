@@ -9,6 +9,7 @@ export type ComfyUIMappedFieldSemantic =
   | "width"
   | "height"
   | "checkpoint"
+  | "unet"
   | "lora_name"
   | "lora_strength_model"
   | "lora_strength_clip"
@@ -42,6 +43,7 @@ export interface ComfyUIPatchValues {
   width?: number;
   height?: number;
   checkpoint?: string;
+  unet?: string;
   lora_name?: string;
   lora_strength_model?: number;
   lora_strength_clip?: number;
@@ -132,6 +134,8 @@ function resolveMappedValue(
       return values.height;
     case "checkpoint":
       return values.checkpoint;
+    case "unet":
+      return values.unet;
     case "lora_name": {
       const lora = loraEntriesByNodeId?.get(mapping.nodeId);
       return loraEntriesByNodeId ? lora?.lora_name : values.lora_name;

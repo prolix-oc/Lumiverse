@@ -54,7 +54,8 @@
       "cfg": "CFG",
       "sampler_name": "Sampler",
       "scheduler": "Scheduler",
-      "checkpoint": "Checkpoint"
+      "checkpoint": "Checkpoint",
+      "unet": "UNet"
     }
   },
   "drawer": {

@@ -25,6 +25,7 @@ export type ComfyUIMappedFieldSemantic =
   | 'width'
   | 'height'
   | 'checkpoint'
+  | 'unet'
   | 'custom'
 
 export interface ComfyUIFieldMapping {

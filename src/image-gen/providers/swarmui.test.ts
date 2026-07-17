@@ -227,12 +227,48 @@ describe("SwarmUIImageProvider — rawRequestOverride", () => {
     expect(body.model).toBe("sd_xl");
     expect(body.steps).toBe(33); // non-protected override still applies
   });
+
+  test("an optional UNet selection overrides the connection model", async () => {
+    fetchStub = stubFetch();
+    const response = await new SwarmUIImageProvider().generate(
+      "",
+      uniqueBase(),
+      req({ unet: "flux/flux1-dev.safetensors" }),
+    );
+
+    expect(generatedRequestBody(fetchStub).model).toBe("flux/flux1-dev.safetensors");
+    expect(response.model).toBe("flux/flux1-dev.safetensors");
+  });
 });
 
 describe("SwarmUIImageProvider — model discovery", () => {
   let fetchStub: InstalledFetch;
 
   afterEach(() => fetchStub?.restore());
+
+  test("loads UNet choices from SwarmUI's unified Stable-Diffusion inventory", async () => {
+    const base = uniqueBase();
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) {
+        return Response.json({ session_id: "session-unet" });
+      }
+      if (call.url === `${base}/API/ListModels`) {
+        return Response.json({ files: [{ name: "flux/flux1-dev.safetensors" }] });
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+
+    const models = await new SwarmUIImageProvider().listModelsBySubtype("", base, "unets");
+
+    expect(models).toEqual([{ id: "flux/flux1-dev.safetensors", label: "flux1-dev" }]);
+    const listCall = fetchStub.calls.find((call) => call.url.endsWith("/API/ListModels"));
+    expect(listCall?.body).toEqual({
+      session_id: "session-unet",
+      path: "",
+      depth: 10,
+      subtype: "Stable-Diffusion",
+    });
+  });
 
   test("lists canonical nested LoRA paths with the exact request body", async () => {
     const base = uniqueBase();

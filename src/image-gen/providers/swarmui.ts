@@ -74,6 +74,12 @@ const PARAMETERS: ImageParameterSchemaMap = {
     group: "models",
     modelSubtype: "vae",
   },
+  unet: {
+    type: "string",
+    description: "Optional standalone diffusion model override. Leave empty to use the connection's model.",
+    group: "models",
+    modelSubtype: "unets",
+  },
   clipLModel: {
     type: "string",
     description: "CLIP-L text encoder model, for SD3/Flux-style diffusion models",
@@ -460,6 +466,11 @@ export class SwarmUIImageProvider implements ImageProvider {
     return h
   }
 
+  private resolvedModel(request: ImageGenRequest): string {
+    const unet = request.parameters?.unet
+    return typeof unet === "string" && unet.trim() ? unet : request.model
+  }
+
   private async requestModelList(
     base: string,
     token: string | undefined,
@@ -496,7 +507,10 @@ export class SwarmUIImageProvider implements ImageProvider {
       session_id: sessionId,
       images: 1,
       prompt: request.prompt,
-      model: request.model,
+      // SwarmUI represents checkpoints and standalone diffusion models with
+      // the same `model` request parameter. An image-tab UNet selection is a
+      // per-generation override of the connection's default model.
+      model: this.resolvedModel(request),
       // SwarmUI only honors explicit width/height when aspectratio is "Custom".
       // Otherwise the server derives dimensions from `sidelength` + the selected
       // aspect ratio preset (default "1:1") and our width/height are ignored.
@@ -596,7 +610,7 @@ export class SwarmUIImageProvider implements ImageProvider {
       )
       return {
         imageDataUrl,
-        model: request.model || "comfyui-workflow",
+        model: this.resolvedModel(request) || "comfyui-workflow",
         provider: this.name,
       }
     }
@@ -670,7 +684,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
       return {
         imageDataUrl,
-        model: request.model || "unknown",
+        model: this.resolvedModel(request) || "unknown",
         provider: this.name,
       }
     } finally {
@@ -704,7 +718,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         if (next.done) {
           return {
             imageDataUrl: next.value.imageDataUrl,
-            model: request.model || "comfyui-workflow",
+            model: this.resolvedModel(request) || "comfyui-workflow",
             provider: this.name,
           }
         }
@@ -769,7 +783,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
     return {
       imageDataUrl,
-      model: request.model || "unknown",
+      model: this.resolvedModel(request) || "unknown",
       provider: this.name,
     }
   }
@@ -806,6 +820,12 @@ export class SwarmUIImageProvider implements ImageProvider {
     subtype: string,
   ): Promise<Array<{ id: string; label: string }>> {
     switch (subtype) {
+      case "unets":
+      case "unet":
+        // SwarmUI intentionally keeps checkpoints and diffusion_models in one
+        // Stable-Diffusion inventory, then chooses CheckpointLoaderSimple or
+        // UNETLoader from the selected model's metadata/path at generation.
+        return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "Stable-Diffusion" })
       case "vae":
         return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "VAE" })
       case "text_encoders":

@@ -43,6 +43,7 @@ const ROLE_DEFS: readonly RoleDef[] = [
   { semantic: 'sampler_name', group: 'sampling' },
   { semantic: 'scheduler', group: 'sampling' },
   { semantic: 'checkpoint', group: 'model' },
+  { semantic: 'unet', group: 'model' },
 ]
 
 const GROUP_ORDER: readonly RoleGroup[] = ['core', 'sampling', 'model']
