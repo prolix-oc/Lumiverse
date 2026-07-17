@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createNewLoomPreset, marshalUpdate } from '@/lib/loom/service'
+import { createBlock, createNewLoomPreset, marshalUpdate } from '@/lib/loom/service'
 import { applyPresetEditorDraft, toPresetEditorDraft } from './preset-editor-adapter'
 import type { SpindlePresetEditorDraft } from './preset-editor-types'
 
@@ -820,6 +820,17 @@ describe('preset editor draft adapter', () => {
     expect(next.promptVariables?.[block.id]?.choices).toBeUndefined()
     expect(persisted.metadata?.promptVariables).toEqual({})
     expect(current.promptVariables).toEqual(originalValues)
+  })
+
+  test('accepts large imported presets that exceed the legacy 512-block / 64KB-string limits', () => {
+    const current = createNewLoomPreset('Large import source')
+    const largeContent = 'x'.repeat(150 * 1024)
+    current.blocks = Array.from({ length: 600 }, (_, index) => createBlock({
+      name: `Block ${index}`,
+      content: index === 0 ? largeContent : `content ${index}`,
+    }))
+
+    expect(() => toPresetEditorDraft(current)).not.toThrow()
   })
 
 })

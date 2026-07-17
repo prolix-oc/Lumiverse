@@ -107,13 +107,16 @@ const MACRO_ARGUMENT_KEYS: Record<string, true> = {
   name: true,
   optional: true,
 }
+// Budgets are sized to let large imported presets (e.g. NemoNet, ~534 blocks
+// with individual blocks >1 MB) round-trip through the Spindle preset editor
+// without crashing the Loom UI.
 export const LOOM_DTO_LIMITS = Object.freeze({
   maxDepth: 16,
-  maxNodes: 16_384,
+  maxNodes: 65_536,
   maxEntries: 65_536,
-  maxStringLength: 64 * 1024,
-  maxStringBytes: 4 * 1024 * 1024,
-  maxBlocks: 512,
+  maxStringLength: 2 * 1024 * 1024,
+  maxStringBytes: 8 * 1024 * 1024,
+  maxBlocks: 2048,
   maxVariablesPerBlock: 512,
   maxOptionsPerVariable: 256,
   maxPromptBuckets: 512,

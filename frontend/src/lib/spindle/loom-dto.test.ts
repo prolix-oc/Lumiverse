@@ -294,12 +294,12 @@ describe('validateLoomValue', () => {
     expect(() => validateLoomValue(manyNodes)).toThrow(/complexity|array length/)
 
     const belowAggregate = Array.from(
-      { length: 400 },
+      { length: 700 },
       (_, index) => block(`aggregate-${index}`, { content: 'x'.repeat(8_000) }),
     )
     expect(() => validateLoomValue(value({ blocks: belowAggregate }))).not.toThrow()
     const aboveAggregate = Array.from(
-      { length: 500 },
+      { length: 1_000 },
       (_, index) => block(`aggregate-${index}`, { content: 'x'.repeat(9_000) }),
     )
     expect(() => validateLoomValue(value({ blocks: aboveAggregate }))).toThrow('aggregate string')
