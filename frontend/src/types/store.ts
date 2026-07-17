@@ -271,9 +271,9 @@ export interface UISlice {
   incrementBadgeCount: () => void
   resetBadgeCount: () => void
 
-  // Regen feedback text retention
-  lastRegenFeedback: string
-  setLastRegenFeedback: (text: string) => void
+  // Regen feedback text retention (keyed by chat id so drafts don't leak across chats)
+  lastRegenFeedback: Record<string, string>
+  setLastRegenFeedback: (chatId: string, text: string) => void
 
   // Message editing (globally single-slot)
   editingMessageId: string | null

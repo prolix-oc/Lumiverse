@@ -62,8 +62,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   incrementBadgeCount: () => set((state) => ({ badgeCount: state.badgeCount + 1 })),
   resetBadgeCount: () => set({ badgeCount: 0 }),
 
-  lastRegenFeedback: '',
-  setLastRegenFeedback: (text) => set({ lastRegenFeedback: text }),
+  lastRegenFeedback: {},
+  setLastRegenFeedback: (chatId, text) =>
+    set((state) => ({
+      lastRegenFeedback: { ...state.lastRegenFeedback, [chatId]: text },
+    })),
 
   editingMessageId: null,
   setEditingMessageId: (id) => set({ editingMessageId: id }),

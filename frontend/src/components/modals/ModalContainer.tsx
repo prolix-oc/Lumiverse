@@ -128,10 +128,10 @@ export default function ModalContainer() {
         />
       )}
 
-      {activeModal === 'regenFeedback' && (
+      {activeModal === 'regenFeedback' && modalProps.chatId && (
         <RegenFeedbackModal
-          defaultValue={lastRegenFeedback}
-          onSaveDraft={setLastRegenFeedback}
+          defaultValue={lastRegenFeedback[modalProps.chatId as string] ?? ''}
+          onSaveDraft={(feedback) => setLastRegenFeedback(modalProps.chatId as string, feedback)}
           onSubmit={(feedback) => {
             modalProps.onSubmit?.(feedback)
             closeModal()

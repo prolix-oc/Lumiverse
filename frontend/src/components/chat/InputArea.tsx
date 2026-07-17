@@ -2108,13 +2108,14 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (isGeneratingInChat) return
     if (regenFeedback.enabled) {
       openModal('regenFeedback', {
+        chatId,
         onSubmit: (feedback: string) => doRegenerate(feedback),
         onSkip: () => doRegenerate(),
       })
     } else {
       doRegenerate()
     }
-  }, [isGeneratingInChat, regenFeedback.enabled, openModal, doRegenerate])
+  }, [isGeneratingInChat, regenFeedback.enabled, openModal, doRegenerate, chatId])
 
   const handleContinue = useCallback(async () => {
     if (isGeneratingInChat) return
