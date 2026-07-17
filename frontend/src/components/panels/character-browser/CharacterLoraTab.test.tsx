@@ -181,6 +181,22 @@ afterEach(async () => {
   storeState = { imageGenProfiles: [], activeImageGenConnectionId: null }
 })
 
+function findButtonByText(host: HTMLDivElement, text: string) {
+  return Array.from(host.querySelectorAll('button')).find((b) =>
+    b.textContent?.includes(text),
+  )
+}
+
+async function typeInto(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    input.focus()
+    const descriptor = Object.getOwnPropertyDescriptor(domWindow.HTMLInputElement.prototype, 'value')
+    descriptor?.set?.call(input, value)
+    input.dispatchEvent(new domWindow.Event('input', { bubbles: true, cancelable: true }))
+    await new Promise<void>((resolve) => domWindow.setTimeout(resolve, 0))
+  })
+}
+
 describe('CharacterLoraTab SD API guidance', () => {
   test('treats SD API as discoverable, renders accurate guidance, and exposes the exact discovered filename', async () => {
     const profile = sdApiProfile()
@@ -236,5 +252,42 @@ describe('CharacterLoraTab SD API guidance', () => {
     const manualFilename = Array.from(host.querySelectorAll<HTMLInputElement>('input'))
       .find((input) => input.type === 'text')
     expect(manualFilename?.value).toBe('styles/ink.safetensors')
+  })
+
+  test('saving with an empty LoRA name deletes the existing binding', async () => {
+    const profile = sdApiProfile()
+    const discovery = createDeferred<ImageGenConnectionModelsResult>()
+    storeState = {
+      imageGenProfiles: [profile],
+      activeImageGenConnectionId: profile.id,
+    }
+    getImageGenLora.mockResolvedValue({
+      binding: {
+        lora_name: 'old.safetensors',
+        weight_model: 0.8,
+        weight_clip: 0.7,
+        bound_at: 1,
+      },
+    })
+    deleteImageGenLora.mockResolvedValue({ success: true })
+    modelsBySubtype.mockReturnValue(discovery.promise)
+
+    const host = await mount(<CharacterLoraTab characterId="character-clear" />)
+    await settleDeferred(discovery, { provider: 'sdapi', models: [] })
+
+    const manualFilename = Array.from(host.querySelectorAll<HTMLInputElement>('input')).find(
+      (input) => input.type === 'text',
+    )
+    expect(manualFilename?.value).toBe('old.safetensors')
+
+    await typeInto(manualFilename!, '')
+
+    const saveBtn = findButtonByText(host, 'Update')
+    expect(saveBtn).not.toBeUndefined()
+    await click(saveBtn!)
+
+    expect(deleteImageGenLora).toHaveBeenCalledWith('character-clear')
+    expect(setImageGenLora).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Cleared.')
   })
 })

@@ -69,10 +69,31 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
   }, [characterId])
 
 
+  const handleClear = useCallback(async () => {
+    setSaving(true)
+    setStatusMessage(null)
+    try {
+      await charactersApi.deleteImageGenLora(characterId)
+      setBinding(null)
+      setLoraName('')
+      setWeightModel('1')
+      setWeightClip('1')
+      setBaseTags('')
+      setSourceUrl('')
+      setStatusMessage({ kind: 'ok', text: t('characterEditor.imageLora.cleared') })
+    } catch (err: any) {
+      setStatusMessage({ kind: 'error', text: err?.message || t('characterEditor.imageLora.clearFailed') })
+    } finally {
+      setSaving(false)
+    }
+  }, [characterId, t])
+
   const handleSave = useCallback(async () => {
     const trimmedName = loraName.trim()
     if (!trimmedName) {
-      setStatusMessage({ kind: 'error', text: t('characterEditor.imageLora.pickBeforeSave') })
+      // If the user cleared the LoRA picker/filename, treat Save as a removal
+      // so they don't get stuck with a binding they can't clear.
+      await handleClear()
       return
     }
     const wm = Number(weightModel)
@@ -99,26 +120,7 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
     } finally {
       setSaving(false)
     }
-  }, [characterId, loraName, weightModel, weightClip, baseTags, sourceUrl, t])
-
-  const handleClear = useCallback(async () => {
-    setSaving(true)
-    setStatusMessage(null)
-    try {
-      await charactersApi.deleteImageGenLora(characterId)
-      setBinding(null)
-      setLoraName('')
-      setWeightModel('1')
-      setWeightClip('1')
-      setBaseTags('')
-      setSourceUrl('')
-      setStatusMessage({ kind: 'ok', text: t('characterEditor.imageLora.cleared') })
-    } catch (err: any) {
-      setStatusMessage({ kind: 'error', text: err?.message || t('characterEditor.imageLora.clearFailed') })
-    } finally {
-      setSaving(false)
-    }
-  }, [characterId, t])
+  }, [characterId, loraName, weightModel, weightClip, baseTags, sourceUrl, t, handleClear])
 
   const loraOptions = useMemo(() => {
     const seen = new Set<string>()
