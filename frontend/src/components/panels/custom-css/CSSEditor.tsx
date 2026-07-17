@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useEffect, useCallback, useImperativeHandle } from 'react'
+import { forwardRef, useRef, useEffect, useImperativeHandle } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
 import { EditorState, type Extension } from '@codemirror/state'
 import { css } from '@codemirror/lang-css'
@@ -30,9 +30,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   onChangeRef.current = onChange
 
   const suppressRef = useRef(false)
+  const valueRef = useRef(value)
+  valueRef.current = value
+  const extensionsRef = useRef(extensions)
+  extensionsRef.current = extensions
   const langRef = useRef(language)
+  langRef.current = language
 
-  const createEditor = useCallback(() => {
+  // Recreate editor when language mode changes. Value and extension updates
+  // are read from refs so keystrokes don't destroy and recreate the editor.
+  useEffect(() => {
     if (!containerRef.current) return
 
     const updateListener = EditorView.updateListener.of((update) => {
@@ -44,7 +51,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
     const lang = langRef.current ?? css()
 
     const state = EditorState.create({
-      doc: value,
+      doc: valueRef.current,
       extensions: [
         lineNumbers(),
         highlightActiveLine(),
@@ -64,7 +71,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
           ...foldKeymap,
           ...closeBracketsKeymap,
         ]),
-        ...extensions,
+        ...(extensionsRef.current ?? []),
         updateListener,
         EditorView.lineWrapping,
       ],
@@ -72,21 +79,12 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
 
     const view = new EditorView({ state, parent: containerRef.current })
     viewRef.current = view
-  }, [extensions, value])
 
-  // Recreate editor when language mode changes
-  useEffect(() => {
-    langRef.current = language
-    if (viewRef.current) {
-      viewRef.current.destroy()
-      viewRef.current = null
-    }
-    createEditor()
     return () => {
-      viewRef.current?.destroy()
+      view.destroy()
       viewRef.current = null
     }
-  }, [createEditor, language])
+  }, [language])
 
   // Sync external value changes
   useEffect(() => {

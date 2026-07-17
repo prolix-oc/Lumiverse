@@ -194,4 +194,40 @@ describe("user-data export ZIP64 round-trip", () => {
     const manifest = await verifyArchiveFast(archivePath);
     expect(manifest.producer).toBe("lumiverse");
   });
+
+  test.skipIf(!process.env.BENCHMARK)(
+    "500k character rows benchmark (set BENCHMARK=1 to run)",
+    async () => {
+      const ROWS = 500_000;
+      const stmt = getDb().prepare(
+        "INSERT INTO characters (id, user_id, name, description, created_at, updated_at) " +
+          "VALUES (?, ?, ?, ?, 0, 0)",
+      );
+      const tx = getDb().transaction((count: number) => {
+        for (let i = 0; i < count; i++) {
+          const id = `char-${i.toString(36).padStart(8, "0")}`;
+          const desc = "x".repeat(900) + ` #${i}`;
+          stmt.run(id, USER_ID, `Char ${i}`, desc);
+        }
+      });
+      tx(ROWS);
+
+      const t0 = performance.now();
+      const stream = buildExportStream({
+        userId: USER_ID,
+        includeVectors: false,
+        producerVersion: "test",
+      });
+      const bytes = await readAll(stream);
+      const t1 = performance.now();
+
+      expect(isValidZip(bytes)).toBe(true);
+      expect(bytes.byteLength).toBeGreaterThan(1_000_000);
+      console.log(
+        `[benchmark] ${ROWS.toLocaleString()} rows in ${(t1 - t0).toFixed(1)}ms ` +
+          `(${Math.round(ROWS / ((t1 - t0) / 1000)).toLocaleString()} rows/s)`,
+      );
+    },
+    120_000,
+  );
 });

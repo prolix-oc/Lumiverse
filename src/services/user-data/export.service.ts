@@ -51,7 +51,7 @@ import { encryptSecret } from "./secret-ticket.service";
 // ---------------------------------------------------------------------------
 
 /** Yield to the event loop every N NDJSON rows so /generate, WS pings, etc. stay snappy. */
-const YIELD_INTERVAL_ROWS = 256;
+const YIELD_INTERVAL_ROWS = 1024;
 
 /** Yield to the event loop every N bytes streamed for a single binary file. */
 const YIELD_BINARY_BYTES = 4 * 1024 * 1024;
@@ -72,10 +72,7 @@ const NDJSON_COMPRESSION = 3;
  * underlying zlib DEFLATE step is a fixed cost per call; coalescing
  * dramatically reduces overhead on high-row-count tables.
  */
-const NDJSON_FLUSH_BYTES = 64 * 1024;
-
-/** Default chunk size for binary copies. */
-const FILE_CHUNK_BYTES = 256 * 1024;
+const NDJSON_FLUSH_BYTES = 256 * 1024;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -303,13 +300,15 @@ function makeControllerSink(
  * row-by-row; `close()` finalises the stream so archiver emits the entry's
  * data descriptor + central-directory record.
  *
- * Rows are coalesced into ~64 KB buffers before being written into the
+ * Rows are coalesced into ~256 KB buffers before being written into the
  * PassThrough; archiver will feed them to zlib's DEFLATE one chunk at a
- * time, and a 64 KB call into zlib is roughly the sweet spot for
+ * time, and a 256 KB call into zlib is roughly the sweet spot for
  * high-row-count tables.
  */
 function openNdjsonEntry(archive: ZipArchive, archivePath: string) {
-  const stream = new PassThrough();
+  // Size the PassThrough buffer to the coalescing target so writing a full
+  // flush block doesn't stall waiting for archiver/zlib to drain.
+  const stream = new PassThrough({ highWaterMark: NDJSON_FLUSH_BYTES });
   archive.append(stream as unknown as Readable, { name: archivePath });
   const encoder = new TextEncoder();
   let rowCount = 0;
