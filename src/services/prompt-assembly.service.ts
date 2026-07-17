@@ -6011,11 +6011,13 @@ export function buildParameters(
 
   // API-level reasoning: inject provider-specific params when enabled.
   // Placed before custom body so custom body can override with more specific config.
-  // For toggle-only providers (Moonshot, Z.AI), always inject when apiReasoning is on.
+  // For providers that require an explicit on-switch (Moonshot, Z.AI), always inject
+  // when apiReasoning is on.
   if (reasoningSettings?.apiReasoning && providerName) {
     const effort = reasoningSettings.reasoningEffort || "auto";
-    const isToggleOnly = providerName === "moonshot" || providerName === "zai";
-    if (effort !== "auto" || isToggleOnly) {
+    const requiresExplicitOnSwitch =
+      providerName === "moonshot" || providerName === "zai";
+    if (effort !== "auto" || requiresExplicitOnSwitch) {
       injectReasoningParams(
         params,
         providerName,
@@ -6072,8 +6074,13 @@ export function buildParameters(
  * - Bedrock:     reasoning_effort (top-level OpenAI Chat Completions string).
  *                Bedrock maps it to each model's native mechanism (gpt-oss
  *                reasoning, Claude thinking, etc.). Valid: none/minimal/low/medium/high.
- * - Moonshot:    thinking: { type: "enabled" } — toggle-only, effort ignored
- * - Z.AI:        thinking: { type: "enabled" } — toggle-only, effort ignored
+ * - Moonshot:    model-dependent. Kimi K3 uses top-level reasoning_effort (only
+ *                "max" at present). K2.7-code uses thinking: { type: "enabled",
+ *                keep: "all" } (or omit, since thinking is always on). K2.6/K2.5
+ *                use thinking: { type: "enabled" }.
+ * - Z.AI:        thinking: { type: "enabled" } plus reasoning_effort for GLM-5.x
+ *                models (max/xhigh/high/medium/low/minimal/none). GLM-4.x only
+ *                receives the thinking toggle.
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
 export function injectReasoningParams(
@@ -6199,11 +6206,53 @@ export function injectReasoningParams(
     }
     // Avoid sending both forms — the object form we just set is authoritative.
     delete params.reasoning_effort;
-  } else if (providerName === "moonshot" || providerName === "zai") {
-    // Toggle-only providers: thinking is enabled/disabled, no effort granularity.
-    // The "Request Reasoning" toggle controls this — effort is ignored.
+  } else if (providerName === "moonshot") {
+    // Moonshot model families use different reasoning controls:
+    // - Kimi K3: top-level reasoning_effort (currently only "max");
+    //   the K2.x `thinking` parameter must NOT be sent.
+    // - Kimi K2.7 Code: thinking is always on and Preserved Thinking is always on.
+    //   If explicitly set, only {"type":"enabled","keep":"all"} is accepted.
+    // - Kimi K2.6 / K2.5: thinking.type enabled/disabled toggles reasoning.
+    const modelId = model || "";
+    const isK3 = /^kimi-k3/i.test(modelId);
+    const isK27Code = /^kimi-k2\.7-code/i.test(modelId);
+
+    if (isK3) {
+      if (params.reasoning_effort === undefined) {
+        params.reasoning_effort = "max";
+      }
+    } else if (isK27Code) {
+      if (!params.thinking) {
+        params.thinking = { type: "enabled", keep: "all" };
+      }
+    } else {
+      // K2.6, K2.5, or unknown Moonshot model.
+      if (!params.thinking) {
+        params.thinking = { type: "enabled" };
+      }
+    }
+  } else if (providerName === "zai") {
+    // Z.AI (Zhipu GLM): thinking.type controls CoT; GLM-5.x additionally
+    // supports reasoning_effort (GLM-5.2+ officially, GLM-5/5.1 support max/high
+    // per the GLM-5 repo). Send both so GLM-5.x models use the requested effort.
     if (!params.thinking) {
       params.thinking = { type: "enabled" };
+    }
+
+    const isGlm5 = model ? /^glm-5/i.test(model) : false;
+    if (isGlm5 && params.reasoning_effort === undefined) {
+      const validEfforts = new Set([
+        "max",
+        "xhigh",
+        "high",
+        "medium",
+        "low",
+        "minimal",
+        "none",
+      ]);
+      // "auto" maps to the documented default deep-reasoning level.
+      params.reasoning_effort =
+        effort === "auto" ? "max" : validEfforts.has(effort) ? effort : "max";
     }
   } else if (providerName === "bedrock") {
     // Bedrock's OpenAI-compatible Chat Completions endpoint exposes a single
@@ -6272,6 +6321,27 @@ export function applyProviderReasoningOffSwitch(
   }
 
   if (providerName === "deepseek") {
+    params.thinking = { type: "disabled" };
+    return;
+  }
+
+  if (providerName === "zai") {
+    params.thinking = { type: "disabled" };
+    return;
+  }
+
+  if (providerName === "moonshot") {
+    const modelId = modelName || "";
+    const isK3 = /^kimi-k3/i.test(modelId);
+    const isK27Code = /^kimi-k2\.7-code/i.test(modelId);
+
+    if (isK3 || isK27Code) {
+      // K3 and K2.7-code always think; sending a disabled config errors or is
+      // ignored. Stripping reasoning params is the best we can do for "off".
+      return;
+    }
+
+    // K2.6 / K2.5 support an explicit disabled toggle.
     params.thinking = { type: "disabled" };
     return;
   }

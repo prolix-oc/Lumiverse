@@ -1167,8 +1167,9 @@ function applyEffectiveReasoningSettings(
 
   if (reasoningSettings?.apiReasoning) {
     const effort = reasoningSettings.reasoningEffort || "auto";
-    const isToggleOnly = providerName === "moonshot" || providerName === "zai";
-    if (effort !== "auto" || isToggleOnly) {
+    const requiresExplicitOnSwitch =
+      providerName === "moonshot" || providerName === "zai";
+    if (effort !== "auto" || requiresExplicitOnSwitch) {
       injectReasoningParams(
         params,
         providerName,
