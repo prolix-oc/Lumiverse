@@ -129,7 +129,7 @@
     "title": "Importa script Regex",
     "fileUpload": "Carica file",
     "pasteJson": "Incolla JSON",
-    "dropZone": "Trascina un file JSON qui o clicca per sfogliare",
+    "dropZone": "Trascina uno o più file JSON qui oppure clicca per sfogliare",
     "formatsHint": "Supporta formati Lumiverse e SillyTavern",
     "pastePlaceholder": "Incolla JSON qui...",
     "importing": "Importazione...",

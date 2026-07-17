@@ -129,7 +129,7 @@
     "title": "導入正則腳本",
     "fileUpload": "文件上傳",
     "pasteJson": "粘貼 JSON",
-    "dropZone": "將 JSON 文件拖放到此處或點擊瀏覽",
+    "dropZone": "將一個或多個 JSON 文件拖放到此處，或點擊瀏覽",
     "formatsHint": "支持 Lumiverse 與 SillyTavern 格式",
     "pastePlaceholder": "在此粘貼 JSON…",
     "importing": "導入中…",

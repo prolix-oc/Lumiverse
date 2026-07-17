@@ -129,7 +129,7 @@
     "title": "Import正規表現スクリプト",
     "fileUpload": "ファイルのアップロード",
     "pasteJson": "JSON を貼り付け",
-    "dropZone": "ここに JSON ファイルをドロップするか、クリックして参照してください",
+    "dropZone": "ここに 1 つ以上の JSON ファイルをドロップするか、クリックして参照してください",
     "formatsHint": "Lumiverse および SillyTavern 形式をサポート",
     "pastePlaceholder": "ここに JSON を貼り付けます...",
     "importing": "インポート中...",
