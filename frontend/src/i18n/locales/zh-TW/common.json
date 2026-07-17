@@ -1,6 +1,11 @@
 {
   "appName": "Lumiverse",
   "home": "首頁",
+  "safeTheme": {
+    "url": "此瀏覽器工作階段已啟用安全主題模式。自訂 CSS 和元件覆寫已暫時停用；請移除 ?safe-theme=1 後重新載入以恢復。",
+    "server": "此伺服器已啟用安全主題模式。自訂 CSS 和元件覆寫已暫時停用；請取消 LUMIVERSE_SAFE_THEME 並重新啟動以恢復。",
+    "both": "URL 和伺服器均已啟用安全主題模式。自訂 CSS 和元件覆寫已暫時停用。"
+  },
   "actions": {
     "save": "保存",
     "cancel": "取消",

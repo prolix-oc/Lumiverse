@@ -33,6 +33,9 @@
 .PARAMETER NoRunner
     Start without the visual terminal runner
 
+.PARAMETER SafeTheme
+    Suppress custom CSS and component overrides for emergency recovery
+
 .PARAMETER UpgradeBun
     Upgrade Bun to the latest stable release before continuing
 
@@ -56,6 +59,8 @@ param(
     [string]$FrontendPath,
 
     [switch]$NoRunner,
+
+    [switch]$SafeTheme,
 
     [Alias("k")]
     [switch]$KillPkgs,
@@ -374,6 +379,10 @@ function Start-Backend {
 
     $env:FRONTEND_DIR = $frontendDist
     Load-EnvFile
+    if ($SafeTheme) {
+        $env:LUMIVERSE_SAFE_THEME = "true"
+        Write-Warn "Safe theme mode enabled: custom CSS and component overrides are suppressed"
+    }
 
     # smol (low-memory GC mode) defaults on; operators disable it persistently
     # via LUMIVERSE_SMOL=false in .env (survives auto-updates, unlike bunfig.toml).

@@ -2016,7 +2016,8 @@ export default function ImageGenPanel() {
           </EditorSection>
 
           <EditorSection title={t('imageGenPanel.sceneSettings')} Icon={IconBrush}>
-            <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharactersPersona')} hint={t('imageGenPanel.includeCharactersPersonaHint')} />
+            <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharacters')} hint={t('imageGenPanel.includeCharactersHint')} />
+            <ToggleRow checked={!!imageGeneration.includePersona} onChange={(checked) => updateTop({ includePersona: checked })} label={t('imageGenPanel.includePersona')} hint={t('imageGenPanel.includePersonaHint')} />
             <ToggleRow checked={imageGeneration.autoGenerate !== false} onChange={(checked) => updateTop({ autoGenerate: checked })} label={t('imageGenPanel.autoGenerateOnReply')} />
             <ToggleRow checked={!!imageGeneration.forceGeneration} onChange={(checked) => updateTop({ forceGeneration: checked })} label={t('imageGenPanel.ignoreSceneChange')} />
             <ToggleRow

@@ -1,6 +1,11 @@
 {
   "appName": "Lumivers",
   "home": "Accueil",
+  "safeTheme": {
+    "url": "Le mode thème sécurisé est actif pour cette session de navigation. Le CSS personnalisé et les remplacements de composants sont temporairement désactivés ; rechargez sans ?safe-theme=1 pour les restaurer.",
+    "server": "Le mode thème sécurisé est actif pour ce serveur. Le CSS personnalisé et les remplacements de composants sont temporairement désactivés ; supprimez LUMIVERSE_SAFE_THEME et redémarrez pour les restaurer.",
+    "both": "Le mode thème sécurisé est actif via l’URL et le serveur. Le CSS personnalisé et les remplacements de composants sont temporairement désactivés."
+  },
   "actions": {
     "save": "Enregistrer",
     "cancel": "Annuler",

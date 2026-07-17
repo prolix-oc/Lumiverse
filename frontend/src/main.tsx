@@ -7,6 +7,7 @@ import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { isBundleUpdateInProgress, rememberRegistration } from './lib/swUpdater'
+import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
@@ -435,7 +436,7 @@ if (navigator.maxTouchPoints > 0) {
   window.addEventListener('lumiverse:recover-mobile-layout', recoverMobileLayout)
 }
 
-void initI18n().then(() => {
+void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary label="Application">

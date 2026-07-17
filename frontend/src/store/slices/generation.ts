@@ -7,6 +7,7 @@ export const createGenerationSlice: StateCreator<AppStore, [], [], GenerationSli
     enabled: false,
     activeImageGenConnectionId: null,
     includeCharacters: false,
+    includePersona: false,
     promptMode: 'scene',
     customPrompt: '',
     customNegativePrompt: '',

@@ -715,6 +715,7 @@ export interface ImageGenSettings {
   enabled: boolean
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
+  includePersona: boolean
   promptMode?: 'scene' | 'custom' | 'parsed_custom'
   customPrompt?: string
   customNegativePrompt?: string

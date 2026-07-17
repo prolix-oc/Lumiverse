@@ -38,6 +38,8 @@ export interface EnvConfig {
   trustedOrigins: string[];
   trustedOriginsSet: Set<string>;
   trustAnyOrigin: boolean;
+  /** Suppress user custom CSS and component overrides without deleting them. */
+  safeThemeMode: boolean;
   spindleEphemeralGlobalMaxBytes: number;
   spindleEphemeralExtensionDefaultMaxBytes: number;
   spindleEphemeralExtensionMaxOverrides: Record<string, number>;
@@ -165,6 +167,9 @@ export function loadEnv(): EnvConfig {
   const authSecret = process.env.AUTH_SECRET || "";
 
   const trustAnyOrigin = process.env.TRUST_ANY_ORIGIN === "true";
+  const safeThemeMode = ["1", "true", "yes", "on"].includes(
+    (process.env.LUMIVERSE_SAFE_THEME || "").trim().toLowerCase(),
+  );
   const trustedOrigins = process.env.TRUSTED_ORIGINS
     ? process.env.TRUSTED_ORIGINS.split(",").map((o) => o.trim())
     : [
@@ -234,6 +239,7 @@ export function loadEnv(): EnvConfig {
     trustedOrigins,
     trustedOriginsSet,
     trustAnyOrigin,
+    safeThemeMode,
     spindleEphemeralGlobalMaxBytes,
     spindleEphemeralExtensionDefaultMaxBytes,
     spindleEphemeralExtensionMaxOverrides,

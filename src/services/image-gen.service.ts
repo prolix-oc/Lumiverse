@@ -73,6 +73,7 @@ interface ImageGenSettings {
   enabled: boolean;
   activeImageGenConnectionId?: string | null;
   includeCharacters: boolean;
+  includePersona: boolean;
   promptMode?: ImageGenPromptMode;
   customPrompt?: string;
   customNegativePrompt?: string;
@@ -128,6 +129,7 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   enabled: false,
   activeImageGenConnectionId: null,
   includeCharacters: false,
+  includePersona: false,
   promptMode: "scene",
   customPrompt: "",
   customNegativePrompt: "",
@@ -257,10 +259,7 @@ const SCENE_FIELDS: Array<keyof SceneData> = ["environment", "time_of_day", "wea
 const CUSTOM_PROMPT_PARSER_SYSTEM =
   "You are a visual scene analyst and image-prompt writer. Read the current roleplay chat context and rewrite it into the final image generation prompt. Preserve the current scene, visible subjects, actions, composition, lighting, and mood. Follow the user's parser instructions, but do not treat those instructions as the final prompt unless they explicitly say so. Return either plain prompt text or JSON with keys prompt and negative_prompt. Do not include markdown fences unless returning JSON.";
 
-const CHARACTER_AWARE_SCENE_INSTRUCTIONS = `Character-aware mode is enabled because the user selected Include Characters.
-Override any earlier environment-only instruction: include visible characters and the user persona when the context supports it.
-
-In addition to the base scene keys, include these optional JSON keys:
+const SUBJECT_AWARE_SCENE_SCHEMA = `In addition to the base scene keys, include these optional JSON keys:
 - character_names: comma-separated names of visible subjects.
 - character_appearances: array of objects with name, role, appearance, and tags. Use concise visual image-generation tags in tags.
 - composition_subjects: the main subject grouping or pose/action relationship.
@@ -268,7 +267,29 @@ In addition to the base scene keys, include these optional JSON keys:
 - composition_camera: camera angle or lens direction.
 - composition_rating: array of concise composition tags.
 
-Do not invent unsupported character details. Use character/persona descriptions and the latest chat actions.`;
+Do not invent unsupported subject details. Use the selected character/persona descriptions and the latest chat actions.`;
+
+export function buildSceneSubjectInstructions(includeCharacters: boolean, includePersona: boolean): string {
+  if (!includeCharacters && !includePersona) return "";
+
+  const selected = [
+    includeCharacters ? "roleplay characters" : "",
+    includePersona ? "the user persona" : "",
+  ].filter(Boolean).join(" and ");
+  const visibleSubjects = [
+    includeCharacters ? "visible roleplay characters" : "",
+    includePersona ? "the visible user persona" : "",
+  ].filter(Boolean).join(" and ");
+  const excluded = [
+    !includeCharacters ? "roleplay characters" : "",
+    !includePersona ? "the user persona" : "",
+  ].filter(Boolean).join(" and ");
+
+  return `Subject-aware mode is enabled because the user selected ${selected} for inclusion.
+Override any earlier environment-only instruction: include ${visibleSubjects} when the chat context supports it.${excluded ? ` Do not include ${excluded} as image subjects.` : ""}
+
+${SUBJECT_AWARE_SCENE_SCHEMA}`;
+}
 
 // Tracks in-flight image generations keyed by `${userId}:${chatId}` so a new
 // request for the same chat can abort an existing one mid-flight.
@@ -441,7 +462,7 @@ export async function generateSceneBackground(
 
       // Pass character tags from scene analysis
       const charTags =
-        settings.includeCharacters && Array.isArray((promptResult.scene as any)?.character_appearances)
+        (settings.includeCharacters || settings.includePersona) && Array.isArray((promptResult.scene as any)?.character_appearances)
           ? (promptResult.scene as any).character_appearances
               .map((c: any) => ({ tags: String(c?.tags || "") }))
               .filter((c: any) => c.tags)
@@ -1315,7 +1336,12 @@ async function resolveImagePrompt(
   const scene = await analyzeScene(userId, chatId, settings, signal);
   return {
     scene,
-    prompt: buildImagePrompt(scene, providerName, settings.includeCharacters, imageParams),
+    prompt: buildImagePrompt(
+      scene,
+      providerName,
+      settings.includeCharacters || settings.includePersona,
+      imageParams,
+    ),
     negativePrompt: input.negativePrompt,
   };
 }
@@ -1403,6 +1429,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
 
   const tool = BUILTIN_TOOLS_MAP.get("generate_scene");
   if (!tool) throw new Error("generate_scene council tool is unavailable");
+  const subjectInstructions = buildSceneSubjectInstructions(settings.includeCharacters, settings.includePersona);
 
   const response = await rawGenerate(userId, {
     provider: parser.connection.provider,
@@ -1411,7 +1438,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
     messages: [
       {
         role: "system",
-        content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
+        content: `${tool.prompt}${subjectInstructions ? `\n\n${subjectInstructions}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
       ...await buildContextMessages(userId, chatId, settings, signal),
       { role: "user", content: "Return scene JSON now." },
@@ -1427,6 +1454,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
 
 export async function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings, signal?: AbortSignal): Promise<LlmMessage[]> {
   const includeCharacters = settings.includeCharacters;
+  const includePersona = settings.includePersona;
   const msgs: LlmMessage[] = [];
   const env = buildMacroEnvForChat(userId, chatId);
 
@@ -1445,7 +1473,7 @@ export async function buildContextMessages(userId: string, chatId: string, setti
 
   const chat = chatsSvc.getChat(userId, chatId);
   const char = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
-  const persona = includeCharacters ? personasSvc.resolvePersonaOrDefault(userId) : null;
+  const persona = includePersona ? personasSvc.resolvePersonaOrDefault(userId) : null;
   const recentMessages = chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings));
 
   // {{outlet::name}} only resolves after world-info activation. Mirror the
@@ -1454,8 +1482,8 @@ export async function buildContextMessages(userId: string, chatId: string, setti
   // the outlet map once before resolving any field.
   if (env) {
     const outletCandidates = [
-      char?.description,
-      char?.scenario,
+      includeCharacters ? char?.description : undefined,
+      includeCharacters ? char?.scenario : undefined,
       persona?.title,
       persona?.description,
       ...recentMessages.map((m) => m.content),
@@ -1470,7 +1498,7 @@ export async function buildContextMessages(userId: string, chatId: string, setti
     }
   }
 
-  if (chat && char) {
+  if (includeCharacters && chat && char) {
     const description = await resolve(char.description);
     const scenario = await resolve(char.scenario);
     const charInfo = [
@@ -1547,7 +1575,7 @@ function parseSceneJson(input: string): SceneData {
 function buildImagePrompt(
   scene: SceneData,
   providerName: string,
-  includeCharacters: boolean,
+  includeSubjects: boolean,
   params: Record<string, any>
 ): string {
   if (providerName === "novelai") {
@@ -1556,10 +1584,10 @@ function buildImagePrompt(
     const compositionRating = Array.isArray((scene as any).composition_rating)
       ? (scene as any).composition_rating
       : null;
-    if (includeCharacters && compositionRating?.length) tags.push(...compositionRating.map((v: any) => String(v)));
-    if (includeCharacters && (scene as any).composition_subjects) tags.push(String((scene as any).composition_subjects));
-    if (includeCharacters && (scene as any).composition_shot) tags.push(String((scene as any).composition_shot));
-    if (includeCharacters && (scene as any).composition_camera) tags.push(String((scene as any).composition_camera));
+    if (includeSubjects && compositionRating?.length) tags.push(...compositionRating.map((v: any) => String(v)));
+    if (includeSubjects && (scene as any).composition_subjects) tags.push(String((scene as any).composition_subjects));
+    if (includeSubjects && (scene as any).composition_shot) tags.push(String((scene as any).composition_shot));
+    if (includeSubjects && (scene as any).composition_camera) tags.push(String((scene as any).composition_camera));
 
     if (scene.environment) tags.push(scene.environment);
     if (scene.time_of_day) tags.push(scene.time_of_day);
@@ -1568,7 +1596,7 @@ function buildImagePrompt(
     if (scene.focal_detail) tags.push(scene.focal_detail);
     if (scene.palette_override) tags.push(scene.palette_override);
 
-    if (includeCharacters) {
+    if (includeSubjects) {
       const names = String((scene as any).character_names || "")
         .split(",")
         .map((n) => n.trim().toLowerCase())
@@ -1599,7 +1627,7 @@ function buildImagePrompt(
   if (scene.mood) prompt += ` Mood: ${scene.mood}.`;
   if (scene.focal_detail) prompt += ` Focus: ${scene.focal_detail}.`;
   if (scene.palette_override) prompt += ` Colors: ${scene.palette_override}.`;
-  if (includeCharacters) {
+  if (includeSubjects) {
     if (scene.character_names) prompt += ` Characters: ${scene.character_names}.`;
     if (Array.isArray(scene.character_appearances) && scene.character_appearances.length > 0) {
       const appearances = scene.character_appearances
@@ -1743,7 +1771,17 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 export function getImageGenSettings(userId: string): ImageGenSettings {
   const row = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY);
-  const settings = { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const stored = row?.value || {};
+  const settings = {
+    ...DEFAULT_IMAGE_SETTINGS,
+    ...stored,
+    // Before persona inclusion had its own switch, Include Characters meant
+    // "characters and persona". Preserve that behavior for existing rows.
+    includePersona:
+      typeof stored.includePersona === "boolean"
+        ? stored.includePersona
+        : Boolean(stored.includeCharacters),
+  };
   const savedConnectionId = settings.activeImageGenConnectionId || null;
   const savedConnection = savedConnectionId
     ? imageGenConnSvc.getConnection(userId, savedConnectionId)
@@ -1879,6 +1917,7 @@ const IMAGE_GEN_EXPORT_VERSION = 1;
  */
 const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string" | "object"> = {
   includeCharacters: "boolean",
+  includePersona: "boolean",
   promptMode: "string",
   customPrompt: "string",
   customNegativePrompt: "string",
@@ -2113,6 +2152,15 @@ export async function importImageGenConfig(
       Object.assign(next, { [key]: value });
       importedSettings = true;
     }
+    // Version 1 exports created before the split only contain the old combined
+    // switch. Treat it as both switches, matching persisted-row migration.
+    if (
+      typeof payload.settings.includeCharacters === "boolean"
+      && !("includePersona" in payload.settings)
+    ) {
+      next.includePersona = payload.settings.includeCharacters;
+      importedSettings = true;
+    }
     if ("activeLoraPresetId" in payload.settings || importedLoraPresets) {
       const activeLoraPresetId = payload.settings.activeLoraPresetId;
       next.activeLoraPresetId =
@@ -2323,4 +2371,3 @@ function coerceLoraImportWeight(value: unknown, fallback?: number): number | nul
   const weight = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(weight) ? Math.min(2, Math.max(0, weight)) : null;
 }
-

@@ -62,6 +62,8 @@ async function seedExporter() {
     promptParserConnectionId: "llm-conn-1",
     promptParserModel: "exporter-parser-model",
     promptParserParameters: { temperature: 1 },
+    includeCharacters: true,
+    includePersona: false,
     customPrompt: "shared custom prompt",
     sceneChangeThreshold: 3,
     activePromptPresetId: MAIN_PRESET.id,
@@ -96,6 +98,8 @@ describe("image gen config import/export", () => {
     const settings = exported.settings!;
     expect(settings.customPrompt).toBe("shared custom prompt");
     expect(settings.sceneChangeThreshold).toBe(3);
+    expect(settings.includeCharacters).toBe(true);
+    expect(settings.includePersona).toBe(false);
     // Active preset reference travels because the preset itself is included.
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     expect("enabled" in settings).toBe(false);
@@ -160,6 +164,8 @@ describe("image gen config import/export", () => {
     const settings = imageGenSvc.getImageGenSettings(IMPORTER);
     expect(settings.customPrompt).toBe("shared custom prompt");
     expect(settings.sceneChangeThreshold).toBe(3);
+    expect(settings.includeCharacters).toBe(true);
+    expect(settings.includePersona).toBe(false);
     expect(settings.activePromptPresetId).toBe(MAIN_PRESET.id);
     // The receiver's enabled state and parser setup are never touched.
     expect(settings.enabled).toBe(false);
@@ -173,6 +179,20 @@ describe("image gen config import/export", () => {
     expect(connections.data[0].name).toBe("My NovelAI");
     expect(connections.data[0].has_api_key).toBe(false);
     expect(connections.data[0].default_parameters.steps).toBe(28);
+  });
+
+  test("imports the legacy combined inclusion switch as characters and persona", async () => {
+    const result = await imageGenSvc.importImageGenConfig(IMPORTER, {
+      version: 1,
+      type: "lumiverse_image_gen_config",
+      settings: { includeCharacters: true },
+    });
+
+    expect(result.errors).toHaveLength(0);
+    expect(result.imported.settings).toBe(true);
+    const settings = imageGenSvc.getImageGenSettings(IMPORTER);
+    expect(settings.includeCharacters).toBe(true);
+    expect(settings.includePersona).toBe(true);
   });
 
   test("re-importing a preset with the same ID overwrites it but keeps local parser setup", async () => {

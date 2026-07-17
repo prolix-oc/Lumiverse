@@ -15,6 +15,7 @@ set -euo pipefail
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
+#   ./start.sh --safe-theme     Suppress custom CSS/component overrides for recovery
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
 #   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
 #
@@ -150,6 +151,7 @@ MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | e
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
+SAFE_THEME=false
 BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
 MINIMUM_BUN_VERSION="1.3.13"
 for arg in "$@"; do
@@ -165,6 +167,7 @@ for arg in "$@"; do
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
+    --safe-theme)   SAFE_THEME=true ;;
     --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
     --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
@@ -776,6 +779,11 @@ start_backend() {
     set -a
     source "$BACKEND_DIR/.env"
     set +a
+  fi
+
+  if [[ "$SAFE_THEME" == true ]]; then
+    export LUMIVERSE_SAFE_THEME=true
+    warn "Safe theme mode enabled: custom CSS and component overrides are suppressed"
   fi
 
   # smol (low-memory GC mode) defaults on; operators disable it persistently

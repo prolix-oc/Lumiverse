@@ -336,6 +336,17 @@ function mergeStoredSetting(defaultValue: any, storedValue: any): any {
   return merged
 }
 
+export function migrateStoredImageGeneration(storedValue: any): any {
+  if (
+    isPlainObject(storedValue)
+    && typeof storedValue.includeCharacters === 'boolean'
+    && typeof storedValue.includePersona !== 'boolean'
+  ) {
+    return { ...storedValue, includePersona: storedValue.includeCharacters }
+  }
+  return storedValue
+}
+
 /** Immediately flush any pending settings (e.g. on page unload). */
 export function flushSettings() {
   if (flushTimer !== null) {
@@ -828,7 +839,10 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           !DATA_KEYS.has(row.key)
           || hasNewerLocalSetting(row.key, localRevisionAtLoadStart)
         ) continue
-        patch[row.key] = mergeStoredSetting((defaults as any)[row.key], row.value)
+        const storedValue = row.key === 'imageGeneration'
+          ? migrateStoredImageGeneration(row.value)
+          : row.value
+        patch[row.key] = mergeStoredSetting((defaults as any)[row.key], storedValue)
       }
 
       // Recover any settings the previous page wrote to localStorage but may
@@ -840,7 +854,10 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
             !DATA_KEYS.has(k)
             || hasNewerLocalSetting(k, localRevisionAtLoadStart)
           ) continue
-          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], v)
+          const pendingValue = k === 'imageGeneration'
+            ? migrateStoredImageGeneration(v)
+            : v
+          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
         }
       }
 

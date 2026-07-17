@@ -4,6 +4,7 @@ import { transpileComponent } from '@/lib/componentTranspiler'
 import { HOST_SLOTS_PROP } from '@/lib/componentOverrideCapabilities'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
+import { isSafeThemeMode } from '@/lib/safeThemeMode'
 
 /**
  * ErrorBoundary that falls back to the default component on crash.
@@ -85,12 +86,13 @@ export function useComponentOverride<P extends Record<string, any>>(
   hostSlots?: Record<string, React.ReactNode>,
 ): React.ReactElement {
   const override = useStore((s) => s.componentOverrides?.[componentName])
+  const safeThemeMode = isSafeThemeMode()
   const prevErrorRef = useRef<string | null>(null)
 
   const compiled = useMemo(() => {
-    if (!override?.enabled || !override.tsx.trim()) return null
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) return null
     return getOrTranspile(componentName, override.tsx)
-  }, [componentName, override?.enabled, override?.tsx])
+  }, [safeThemeMode, componentName, override?.enabled, override?.tsx])
 
   // Show transpile errors once (not on every render)
   if (compiled?.error && compiled.error !== prevErrorRef.current) {
@@ -139,12 +141,13 @@ export function useOverrideRender(
   props: Record<string, any>,
 ): React.ReactElement | null {
   const override = useStore((s) => s.componentOverrides?.[componentName])
+  const safeThemeMode = isSafeThemeMode()
   const prevErrorRef = useRef<string | null>(null)
 
   const compiled = useMemo(() => {
-    if (!override?.enabled || !override.tsx.trim()) return null
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) return null
     return getOrTranspile(componentName, override.tsx)
-  }, [componentName, override?.enabled, override?.tsx])
+  }, [safeThemeMode, componentName, override?.enabled, override?.tsx])
 
   if (compiled?.error && compiled.error !== prevErrorRef.current) {
     prevErrorRef.current = compiled.error

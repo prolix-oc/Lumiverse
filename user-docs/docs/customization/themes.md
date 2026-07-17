@@ -144,6 +144,20 @@ A **Theme Pack** bundles everything together — theme variables, custom CSS, co
 
 Theme Packs travel with their assets, so a recipient sees exactly what you see without needing to re-upload images.
 
+### Safe theme recovery
+
+If custom CSS or a component override makes the interface inaccessible, open Lumiverse with `?safe-theme=1` appended to its URL, for example `https://lumiverse.example.com/?safe-theme=1`. This suppresses custom CSS and component CSS/TSX overrides for that browser session without deleting them. Remove the query parameter and reload when the theme has been repaired.
+
+Server operators and theme developers can also start Lumiverse with safe theme mode enabled:
+
+```bash
+./start.sh --safe-theme
+# Windows PowerShell: .\start.ps1 -SafeTheme
+# Direct/server/container launches can set LUMIVERSE_SAFE_THEME=true instead.
+```
+
+The startup flag applies to every browser using that server. Unset it and restart Lumiverse to restore saved styling. The existing `Ctrl+Shift+U` shortcut remains available when the app has mounted; unlike safe theme mode, the shortcut persists the disabled state of the current CSS and component overrides.
+
 ---
 
 ## CSS Variables

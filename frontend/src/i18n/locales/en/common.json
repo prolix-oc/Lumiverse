@@ -1,6 +1,11 @@
 {
   "appName": "Lumiverse",
   "home": "Home",
+  "safeTheme": {
+    "url": "Safe theme mode is active for this browser session. Custom CSS and component overrides are temporarily suppressed; reload without ?safe-theme=1 to restore them.",
+    "server": "Safe theme mode is active for this server. Custom CSS and component overrides are temporarily suppressed; unset LUMIVERSE_SAFE_THEME and restart to restore them.",
+    "both": "Safe theme mode is active from both the URL and server controls. Custom CSS and component overrides are temporarily suppressed."
+  },
   "actions": {
     "save": "Save",
     "cancel": "Cancel",

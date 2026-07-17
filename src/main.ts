@@ -38,6 +38,9 @@ try {
   process.exit(1);
 }
 console.log(`[startup] Data directory: ${env.dataDir}`);
+if (env.safeThemeMode) {
+  console.warn("[startup] Safe theme mode enabled: custom CSS and component overrides are suppressed");
+}
 
 // Resolve encryption identity (file > env migration > generate)
 await initIdentity();
