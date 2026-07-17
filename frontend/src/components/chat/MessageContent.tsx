@@ -39,6 +39,7 @@ import {
 import { toast } from '@/lib/toast'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
+import { hasImmediateUserReply } from './regexActionAvailability'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import styles from './MessageContent.module.css'
 import clsx from 'clsx'
@@ -1363,6 +1364,9 @@ export default function MessageContent({
     if (!messageId) return undefined
     return s.messages.find((message) => message.id === messageId)?.extra?.associative_regex_action_usage
   })
+  const regexActionsSuperseded = useStore((s) => (
+    !isUser && hasImmediateUserReply(s.messages, messageId)
+  ))
   const characters = useStore((s) => s.characters)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
@@ -1511,6 +1515,12 @@ export default function MessageContent({
           typeof payload.limit !== 'number' || !Number.isFinite(payload.limit) || payload.limit < 0 ||
           typeof payload.content !== 'string' || !payload.content.trim()
         ) return
+        if (regexActionsSuperseded) {
+          event.preventDefault()
+          event.stopPropagation()
+          toast.info(t('toast.regexActionExpired'))
+          return
+        }
         const configured = regexScripts
           .find((script) => script.id === payload.scriptId && !script.disabled && script.target.includes('display'))
           ?.actions.find((action) => action.id === payload.id)
@@ -1555,11 +1565,11 @@ export default function MessageContent({
       container.removeEventListener('click', activate)
       container.removeEventListener('keydown', activate)
     }
-  }, [chatId, messageId, isStreaming, regexScripts, actionUsage, t, regexSelectionVersion])
+  }, [chatId, messageId, isStreaming, regexScripts, actionUsage, regexActionsSuperseded, t, regexSelectionVersion])
 
   useLayoutEffect(() => {
     const container = containerRef.current
-    if (!container || !actionUsage) return
+    if (!container) return
     const elements: Element[] = Array.from(container.querySelectorAll('[data-lumiverse-regex-action]'))
     for (const island of container.querySelectorAll<HTMLElement>(`.${styles.htmlIsland}`)) {
       if (island.shadowRoot) {
@@ -1581,11 +1591,11 @@ export default function MessageContent({
           ?.actions.find((action) => action.id === payload.id)
         if (!configured) continue
         const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
-        const blockHasSelection = Object.keys(actionUsage).some((key) => (
+        const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
           key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
         ))
         const used = configured.multi_select
-          ? !!actionUsage[payload.instanceId] || !!actionUsage[usageKey]
+          ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
           : blockHasSelection
         const activation: RegexActionActivation = {
           id: payload.id,
@@ -1609,9 +1619,11 @@ export default function MessageContent({
         element.toggleAttribute('data-lumiverse-regex-action-budget-blocked', budgetBlocked)
         if (configured.multi_select) element.setAttribute('aria-pressed', selected ? 'true' : 'false')
         else element.removeAttribute('aria-pressed')
-        if (used) {
+        const disabled = used || regexActionsSuperseded
+        element.toggleAttribute('data-lumiverse-regex-action-superseded', regexActionsSuperseded)
+        if (disabled) {
           element.setAttribute('aria-disabled', 'true')
-          element.setAttribute('data-lumiverse-regex-action-used', 'true')
+          element.toggleAttribute('data-lumiverse-regex-action-used', used)
           element.setAttribute('tabindex', '-1')
           if (element instanceof HTMLElement || element instanceof SVGElement) {
             element.style.cursor = 'not-allowed'
@@ -1644,7 +1656,7 @@ export default function MessageContent({
         }
       } catch {}
     }
-  }, [actionUsage, regexScripts, renderContent, regexSelectionVersion, chatId, messageId])
+  }, [actionUsage, regexActionsSuperseded, regexScripts, renderContent, regexSelectionVersion, chatId, messageId])
 
   // Attach click handler for code copy buttons
   useEffect(() => {

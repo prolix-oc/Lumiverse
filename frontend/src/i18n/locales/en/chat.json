@@ -171,6 +171,7 @@
     "regexActionSelected": "Choice selected",
     "regexActionQueued": "This choice will be appended invisibly to your next message.",
     "regexActionAlreadyUsed": "That choice block has already been used.",
+    "regexActionExpired": "That choice is no longer available because you already replied.",
     "regexActionClaimFailed": "This choice could not be selected.",
     "regexActionMultiQueued": "Option added ({{cost}} cost; {{total}}/{{limit}} selected). Click again to remove it before Send.",
     "regexActionMultiRemoved": "Option removed from the next Send.",

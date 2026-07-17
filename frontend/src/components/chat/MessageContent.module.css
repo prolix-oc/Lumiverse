@@ -22,7 +22,9 @@
   outline-offset: 2px;
 }
 
-.content :global([data-lumiverse-regex-action-used="true"]) {
+.content :global([data-lumiverse-regex-action-used="true"]),
+.content :global([data-lumiverse-regex-action-superseded]) {
+  cursor: not-allowed;
   opacity: 0.55;
   filter: saturate(0.45);
 }
