@@ -25,9 +25,9 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
   template: `export default function BubbleMessage({ message, content, reasoning, swipes, attachments, editing, actions, styles }) {
   return (
     <div className={styles.card || ''} data-part={message.isUser ? 'user' : 'character'}>
-      {/* Avatar — message.avatarUrl is the cropped square. For a specific size or
-          the original aspect ratio use message.avatar, e.g. message.avatar.cropped.lg
-          or message.avatar.original.full */}
+      {/* Avatar — message.avatarUrl follows the active layout and its full-size
+          preference. To choose the source yourself use message.avatar, e.g.
+          message.avatar.cropped.lg or message.avatar.original.full. */}
       <div className={styles.avatar || ''}>
         {message.avatarUrl ? (
           <img src={message.avatarUrl} alt={message.displayName} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
@@ -78,8 +78,8 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
       { name: 'isUser', type: 'boolean', description: 'True if sent by user' },
       { name: 'displayName', type: 'string', description: 'Resolved display name' },
       { name: 'initial', type: 'string', description: 'First letter of displayName, uppercased (\'?\' when empty) — handy for avatar fallbacks' },
-      { name: 'avatarUrl', type: 'string | null', description: 'Convenience: cropped square at the active layout’s tier (see avatar for full control)' },
-      { name: 'fullAvatarUrl', type: 'string | null', description: 'Convenience: original aspect ratio at full resolution (see avatar for full control)' },
+      { name: 'avatarUrl', type: 'string | null', description: 'Source selected by the active layout; normally cropped sm/lg, or original full resolution when that layout’s “Use full-size avatars” preference is enabled' },
+      { name: 'fullAvatarUrl', type: 'string | null', description: 'Convenience: original aspect ratio at full resolution (see avatar for an explicit tier)' },
       { name: 'avatar', type: 'object', description: 'Avatar URLs by variant and size tier', children: [
         { name: 'cropped', type: '{ sm, lg, full }', description: '1:1 square crop (falls back to original) — sm ~300px, lg ~700px, full = original res' },
         { name: 'original', type: '{ sm, lg, full }', description: 'Uploaded native aspect ratio — sm ~300px, lg ~700px, full = original res' },

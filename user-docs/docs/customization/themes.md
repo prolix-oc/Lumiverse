@@ -95,6 +95,32 @@ For full styling control beyond what the Theme Panel exposes, open **Settings �
 - **Custom CSS** — raw CSS that's injected after the built-in stylesheet, so you can override any variable or selector
 - **Component Overrides** — drop-in TSX replacements for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
 
+### Choosing message avatar resolution
+
+`BubbleMessage` and `MinimalMessage` component overrides receive the same avatar sources. Use `message.avatar` when the theme needs a specific shape or resolution:
+
+```jsx
+export default function BubbleMessage({ message, styles }) {
+  const avatarSrc = message.avatar.cropped.lg || message.avatar.cropped.sm || message.avatarUrl
+
+  return (
+    <div className={styles.card || ''}>
+      <img src={avatarSrc || ''} alt={message.displayName} />
+      <Content />
+    </div>
+  )
+}
+```
+
+The available sources are:
+
+- `message.avatar.cropped.sm`, `.lg`, and `.full` — the square crop at about 300 px, about 700 px, or original resolution
+- `message.avatar.original.sm`, `.lg`, and `.full` — the uploaded aspect ratio at those same tiers
+- `message.avatarUrl` — the source selected by the current message style; it also follows that style's **Use full-size avatars** preference
+- `message.fullAvatarUrl` — the original aspect ratio at full resolution
+
+Use the same expressions in a `MinimalMessage` override; only the exported function/component being overridden changes. Changing an image's `src` requires a component override—Custom CSS can resize or crop the rendered image, but cannot select another source URL.
+
 ---
 
 ## Theme Assets & Bundles

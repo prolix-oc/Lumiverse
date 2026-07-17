@@ -36,4 +36,30 @@ describe('component starter templates', () => {
     const result = compileComponentAst(template)
     expect(result.error).toBeNull()
   })
+
+  test('large avatar tier example compiles for message overrides', () => {
+    const source = `export default function MessageWithLargeAvatar({ message }) {
+  const avatarSrc = message.avatar.cropped.lg || message.avatar.cropped.sm || message.avatarUrl
+  return (
+    <div>
+      <img src={avatarSrc || ''} alt={message.displayName} />
+      <Content />
+    </div>
+  )
+}`
+    const result = compileComponentAst(source)
+
+    expect(result.error ? formatAstDiagnostic(result.error) : null).toBeNull()
+    expect(result.program).not.toBeNull()
+  })
+
+  test('both message styles document the complete avatar tier contract', () => {
+    for (const componentName of ['BubbleMessage', 'MinimalMessage']) {
+      const messageProp = getComponentTemplate(componentName).props.find((prop) => prop.name === 'message')
+      const avatarProp = messageProp?.children?.find((prop) => prop.name === 'avatar')
+
+      expect(avatarProp?.children?.map((prop) => prop.name)).toEqual(['cropped', 'original'])
+      expect(avatarProp?.children?.every((prop) => prop.type === '{ sm, lg, full }')).toBe(true)
+    }
+  })
 })
