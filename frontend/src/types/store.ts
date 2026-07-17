@@ -317,6 +317,7 @@ export type RegenFeedbackPosition = 'system' | 'user'
 export interface RegenFeedbackSettings {
   enabled: boolean
   position: RegenFeedbackPosition
+  includePreviousGeneration: boolean
 }
 
 // ---- Reasoning Settings ----

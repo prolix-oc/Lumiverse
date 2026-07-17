@@ -453,6 +453,7 @@
     "regenSystemPrompt": "System Prompt",
     "regenHintUser": "Feedback is appended to the last user message as [OOC: ...]",
     "regenHintSystem": "Feedback is appended to the end of the system prompt as [OOC: ...]",
+    "regenIncludePrevious": "Include previous generation as reference in feedback",
     "messageInfoTitle": "Message Info",
     "showTokenCount": "Show token count in message pill",
     "showTokenCountHint": "Displays the token count for assistant messages in the timestamp badge below each message",

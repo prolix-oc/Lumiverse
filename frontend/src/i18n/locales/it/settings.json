@@ -363,6 +363,7 @@
     "regenSystemPrompt": "Prompt di sistema",
     "regenHintUser": "Il feedback viene aggiunto all'ultimo messaggio utente come [OOC: ...]",
     "regenHintSystem": "Il feedback viene aggiunto alla fine del prompt di sistema come [OOC: ...]",
+    "regenIncludePrevious": "Includi la generazione precedente come riferimento nel feedback",
     "messageInfoTitle": "Info messaggio",
     "showTokenCount": "Mostra conteggio token nella pillola del messaggio",
     "showTokenCountHint": "Visualizza il conteggio dei token per i messaggi dell'assistente nel badge dell'ora sotto ogni messaggio",

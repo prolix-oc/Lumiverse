@@ -131,13 +131,12 @@ export default function ModalContainer() {
       {activeModal === 'regenFeedback' && (
         <RegenFeedbackModal
           defaultValue={lastRegenFeedback}
+          onSaveDraft={setLastRegenFeedback}
           onSubmit={(feedback) => {
-            setLastRegenFeedback(feedback)
             modalProps.onSubmit?.(feedback)
             closeModal()
           }}
           onSkip={() => {
-            setLastRegenFeedback('')
             modalProps.onSkip?.()
             closeModal()
           }}

@@ -14,7 +14,8 @@
     "message": "次世代へのガイダンスを提供します。これは OOC 命令として組み込まれます。",
     "placeholder": "e.g.応答を短くし、対話に焦点を当て、口調をより遊び心に変えてください...",
     "submit": "再生成",
-    "skip": "スキップ"
+    "skip": "スキップ",
+    "usePreviousGeneration": "前回の生成を参照として使用する"
   },
   "permissionRequest": {
     "title": "許可リクエスト",

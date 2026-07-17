@@ -14,7 +14,8 @@
     "message": "Fournir des conseils à la prochaine génération. Ceci sera inclus en tant qu'instruction OOC.",
     "placeholder": "e.g. Raccourcissez la réponse, concentrez-vous sur le dialogue, changez le ton pour être plus ludique...",
     "submit": "Régénérer",
-    "skip": "Sauter"
+    "skip": "Sauter",
+    "usePreviousGeneration": "Utiliser la génération précédente comme référence"
   },
   "permissionRequest": {
     "title": "Demande d'autorisation",

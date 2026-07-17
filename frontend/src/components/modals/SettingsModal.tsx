@@ -1020,29 +1020,37 @@ function ChatSettings() {
       />
 
       {regenFeedback.enabled && (
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>{t('chat.regenPosition')}</label>
-          <div className={styles.segmented}>
-            {([
-              { value: 'user', label: t('chat.regenUserMessage') },
-              { value: 'system', label: t('chat.regenSystemPrompt') },
-            ] as const).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                className={clsx(styles.segmentedBtn, regenFeedback.position === opt.value && styles.segmentedBtnActive)}
-                onClick={() => setSetting('regenFeedback', { ...regenFeedback, position: opt.value })}
-              >
-                {opt.label}
-              </button>
-            ))}
+        <>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel}>{t('chat.regenPosition')}</label>
+            <div className={styles.segmented}>
+              {([
+                { value: 'user', label: t('chat.regenUserMessage') },
+                { value: 'system', label: t('chat.regenSystemPrompt') },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={clsx(styles.segmentedBtn, regenFeedback.position === opt.value && styles.segmentedBtnActive)}
+                  onClick={() => setSetting('regenFeedback', { ...regenFeedback, position: opt.value })}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <p className={styles.helperText}>
+              {regenFeedback.position === 'user'
+                ? t('chat.regenHintUser')
+                : t('chat.regenHintSystem')}
+            </p>
           </div>
-          <p className={styles.helperText}>
-            {regenFeedback.position === 'user'
-              ? t('chat.regenHintUser')
-              : t('chat.regenHintSystem')}
-          </p>
-        </div>
+
+          <Toggle.Checkbox
+            checked={regenFeedback.includePreviousGeneration}
+            onChange={(checked) => setSetting('regenFeedback', { ...regenFeedback, includePreviousGeneration: checked })}
+            label={t('chat.regenIncludePrevious')}
+          />
+        </>
       )}
 
       <h3 id={sectionAnchorId('chat', 'messageInfo')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.messageInfoTitle')}</h3>

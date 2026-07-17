@@ -23,6 +23,8 @@ interface InputPromptModalProps {
   zIndex?: number
   /** Attribution line below the title (e.g. extension name) */
   attribution?: string
+  /** Optional content rendered between the input and the action buttons */
+  footer?: React.ReactNode
 }
 
 export function InputPromptModal({
@@ -41,6 +43,7 @@ export function InputPromptModal({
   icon,
   zIndex,
   attribution,
+  footer,
 }: InputPromptModalProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'inputPrompt' })
   const { t: tc } = useTranslation('common')
@@ -109,6 +112,8 @@ export function InputPromptModal({
             onKeyDown={handleKeyDown}
           />
         )}
+
+        {footer}
 
         <div className={css.actions}>
           <button

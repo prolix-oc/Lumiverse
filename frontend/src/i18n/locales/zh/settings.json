@@ -363,6 +363,7 @@
     "regenSystemPrompt": "系统提示词",
     "regenHintUser": "反馈会附加到最后一条用户消息，格式为 [OOC: ...]",
     "regenHintSystem": "反馈会附加到系统提示词末尾，格式为 [OOC: ...]",
+    "regenIncludePrevious": "在反馈中包含上一次生成作为参考",
     "messageInfoTitle": "消息信息",
     "showTokenCount": "在消息标签中显示 token 数",
     "showTokenCountHint": "在每条消息下方的时间戳徽章中显示助手消息的 token 数",

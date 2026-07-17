@@ -14,7 +14,8 @@
     "message": "Provide guidance for the next generation. This will be included as an OOC instruction.",
     "placeholder": "e.g. Make the response shorter, focus on dialogue, change the tone to be more playful...",
     "submit": "Regenerate",
-    "skip": "Skip"
+    "skip": "Skip",
+    "usePreviousGeneration": "Use previous generation as reference"
   },
   "permissionRequest": {
     "title": "Permission Request",

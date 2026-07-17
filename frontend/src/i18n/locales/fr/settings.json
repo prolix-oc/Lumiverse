@@ -447,6 +447,7 @@
     "regenSystemPrompt": "Invite système",
     "regenHintUser": "Le commentaire est ajouté au dernier message utilisateur sous la forme [OOC : ...]",
     "regenHintSystem": "Le commentaire est ajouté à la fin de l'invite système sous la forme [OOC : ...]",
+    "regenIncludePrevious": "Inclure la génération précédente comme référence dans les commentaires",
     "messageInfoTitle": "Informations sur le message",
     "showTokenCount": "Afficher le nombre de jetons dans le message pill",
     "showTokenCountHint": "Affiche le nombre de jetons pour les messages de l'assistant dans le badge d'horodatage sous chaque message",

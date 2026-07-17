@@ -501,6 +501,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   regenFeedback: {
     enabled: false,
     position: 'user',
+    includePreviousGeneration: false,
   },
   swipeGesturesEnabled: true,
   showMessageTokenCount: true,

@@ -14,7 +14,8 @@
     "message": "Fornisci indicazioni per la prossima generazione. Questo verrà incluso come istruzione OOC.",
     "placeholder": "es. Accorcia la risposta, concentrati sul dialogo, cambia il tono per essere più giocoso...",
     "submit": "Rigenera",
-    "skip": "Salta"
+    "skip": "Salta",
+    "usePreviousGeneration": "Usa la generazione precedente come riferimento"
   },
   "permissionRequest": {
     "title": "Richiesta autorizzazione",

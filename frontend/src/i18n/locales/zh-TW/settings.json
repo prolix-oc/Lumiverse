@@ -447,6 +447,7 @@
     "regenSystemPrompt": "系統提示詞",
     "regenHintUser": "反饋會附加到最後一條用戶消息，格式為 [OOC: ...]",
     "regenHintSystem": "反饋會附加到系統提示詞末尾，格式為 [OOC: ...]",
+    "regenIncludePrevious": "在反饋中包含上一次生成作為參考",
     "messageInfoTitle": "消息信息",
     "showTokenCount": "在消息標籤中顯示 token 數",
     "showTokenCountHint": "在每條消息下方的時間戳徽章中顯示助手消息的 token 數",

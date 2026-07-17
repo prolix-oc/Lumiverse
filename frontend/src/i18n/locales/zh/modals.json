@@ -14,7 +14,8 @@
     "message": "为下一次生成提供指导，将作为 OOC 指令包含在内。",
     "placeholder": "例如：缩短回复、侧重对话、让语气更轻松…",
     "submit": "重新生成",
-    "skip": "跳过"
+    "skip": "跳过",
+    "usePreviousGeneration": "使用上一次生成作为参考"
   },
   "permissionRequest": {
     "title": "权限请求",
