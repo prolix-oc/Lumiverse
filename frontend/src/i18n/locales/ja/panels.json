@@ -1942,7 +1942,8 @@
       "number": "番号",
       "slider": "スライダー"
     },
-    "dragComingSoon": "Drag (近日公開予定)",
+    "dragToReorder": "{{name}}（{{position}} 番目）をドラッグして並べ替え",
+    "variableFallback": "変数 {{position}}",
     "type": "タイプ",
     "name": "名前",
     "namePlaceholder": "トーン",

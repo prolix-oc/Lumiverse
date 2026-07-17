@@ -1942,7 +1942,8 @@
       "number": "Nombre",
       "slider": "Curseur"
     },
-    "dragComingSoon": "Drag (à venir)",
+    "dragToReorder": "Faites glisser {{name}} (position {{position}}) pour réorganiser",
+    "variableFallback": "Variable {{position}}",
     "type": "Taper",
     "name": "Nom",
     "namePlaceholder": "tonifier",

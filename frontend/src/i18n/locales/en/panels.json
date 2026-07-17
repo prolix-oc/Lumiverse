@@ -2080,7 +2080,8 @@
       "switch": "On / Off",
       "multiselect": "Multi-select"
     },
-    "dragComingSoon": "Drag (coming soon)",
+    "dragToReorder": "Drag {{name}} (position {{position}}) to reorder",
+    "variableFallback": "Variable {{position}}",
     "type": "Type",
     "name": "Name",
     "namePlaceholder": "tone",

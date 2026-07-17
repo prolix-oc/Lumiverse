@@ -92,6 +92,10 @@
   border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
 }
 
+.cardDragging {
+  opacity: 0.5;
+}
+
 /* Left accent bar — type-coded. Subtle saturation: the card is still
    clearly the subject. */
 .card::before {
@@ -337,6 +341,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--lumiverse-text-dim);
   cursor: grab;
   border-radius: 4px;
@@ -350,6 +357,15 @@
 
 .handle:active {
   cursor: grabbing;
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  outline-offset: 2px;
+}
+
+.handleDisabled {
+  cursor: default;
 }
 
 .nameField {

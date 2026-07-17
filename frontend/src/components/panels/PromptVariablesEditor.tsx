@@ -1,5 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import {
   AlertTriangle,
   ChevronDown,
@@ -11,12 +28,14 @@ import {
 import clsx from 'clsx'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { generateUUID } from '@/lib/uuid'
 import type {
   PromptVariableDef,
   PromptVariableOption,
   PromptVariableType,
 } from '@/lib/loom/types'
+import { useDragHandleBlur } from './connection-manager/useDragHandleBlur'
 import css from './PromptVariablesEditor.module.css'
 
 // ============================================================================
@@ -50,6 +69,20 @@ function makeNewVariable(): PromptVariableDef {
 
 function makeNewOption(index: number): PromptVariableOption {
   return { id: generateUUID(), label: `Option ${index + 1}`, value: '' }
+}
+
+export function reorderPromptVariables(
+  variables: PromptVariableDef[],
+  activeId: string,
+  overId: string | null,
+): PromptVariableDef[] {
+  if (!overId || activeId === overId) return variables
+
+  const activeIndex = variables.findIndex((variable) => variable.id === activeId)
+  const overIndex = variables.findIndex((variable) => variable.id === overId)
+  if (activeIndex < 0 || overIndex < 0) return variables
+
+  return arrayMove(variables, activeIndex, overIndex)
 }
 
 // Type-preserving migration. Swapping types shouldn't nuke the user's work —
@@ -177,6 +210,11 @@ function coerceVariableType(
 export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
   const { t } = useTranslation('panels')
   const [expanded, setExpanded] = useState(variables.length > 0)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   const duplicateNames = useMemo(() => {
     const counts = new Map<string, number>()
@@ -211,6 +249,15 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
     setExpanded(true)
   }
 
+  const handleDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+    const reordered = reorderPromptVariables(
+      variables,
+      String(active.id),
+      over === null ? null : String(over.id),
+    )
+    if (reordered !== variables) onChange(reordered)
+  }, [onChange, variables])
+
   return (
     <div className={css.root}>
       <div className={css.header}>
@@ -239,18 +286,28 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
         variables.length === 0 ? (
           <div className={css.empty}>{t('promptVariablesEditor.empty')}</div>
         ) : (
-          <div className={css.list}>
-            {variables.map((v) => (
-              <VariableRow
-                key={v.id}
-                variable={v}
-                isDuplicate={Boolean(v.name?.trim()) && duplicateNames.has(v.name.trim())}
-                onUpdate={(patch) => updateVar(v.id, patch)}
-                onChangeType={(type) => changeType(v.id, type)}
-                onRemove={() => removeVar(v.id)}
-              />
-            ))}
-          </div>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={variables.map((variable) => variable.id)} strategy={verticalListSortingStrategy}>
+              <div className={css.list}>
+                {variables.map((v, index) => (
+                  <VariableRow
+                    key={v.id}
+                    variable={v}
+                    index={index}
+                    total={variables.length}
+                    isDuplicate={Boolean(v.name?.trim()) && duplicateNames.has(v.name.trim())}
+                    onUpdate={(patch) => updateVar(v.id, patch)}
+                    onChangeType={(type) => changeType(v.id, type)}
+                    onRemove={() => removeVar(v.id)}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )
       )}
     </div>
@@ -263,6 +320,8 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
 
 interface VariableRowProps {
   variable: PromptVariableDef
+  index: number
+  total: number
   isDuplicate: boolean
   onUpdate: (patch: Partial<PromptVariableDef>) => void
   onChangeType: (type: PromptVariableType) => void
@@ -271,12 +330,35 @@ interface VariableRowProps {
 
 function VariableRow({
   variable,
+  index,
+  total,
   isDuplicate,
   onUpdate,
   onChangeType,
   onRemove,
 }: VariableRowProps) {
   const { t } = useTranslation('panels')
+  const sortingDisabled = total < 2
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setSortableRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: variable.id, disabled: sortingDisabled })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+  const handleRef = useDragHandleBlur(isDragging)
+  const setHandleRef = useCallback((node: HTMLButtonElement | null) => {
+    handleRef.current = node
+    setActivatorNodeRef(node)
+  }, [handleRef, setActivatorNodeRef])
   const typeOptions = useMemo(
     () =>
       (['text', 'textarea', 'number', 'slider', 'select', 'switch', 'multiselect'] as const).map((value) => ({
@@ -294,14 +376,29 @@ function VariableRow({
   const sliderMin = isSlider ? (variable as { min: number }).min : 0
   const sliderMax = isSlider ? (variable as { max: number }).max : 100
   const sliderStep = isSlider ? (variable as { step?: number }).step ?? 1 : 1
+  const position = index + 1
+  const displayName = variable.name.trim() || variable.label.trim() || t('promptVariablesEditor.variableFallback', { position })
 
   return (
-    <div className={clsx(css.card, TYPE_ACCENT_CLASS[variable.type])}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(css.card, TYPE_ACCENT_CLASS[variable.type], isDragging && css.cardDragging)}
+    >
       {/* Row 1: handle · type · name · delete */}
       <div className={css.headerRow}>
-        <span className={css.handle} aria-hidden="true" title={t('promptVariablesEditor.dragComingSoon')}>
+        <button
+          ref={setHandleRef}
+          type="button"
+          className={clsx(css.handle, sortingDisabled && css.handleDisabled)}
+          aria-label={t('promptVariablesEditor.dragToReorder', { position, name: displayName })}
+          title={t('promptVariablesEditor.dragToReorder', { position, name: displayName })}
+          {...attributes}
+          {...(sortingDisabled ? {} : listeners)}
+          aria-disabled={sortingDisabled}
+        >
           <GripVertical size={14} />
-        </span>
+        </button>
 
         <div className={clsx(css.field, css.typeField)}>
           <label className={css.fieldLabel}>{t('promptVariablesEditor.type')}</label>

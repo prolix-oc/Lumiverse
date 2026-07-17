@@ -1942,7 +1942,8 @@
       "number": "数字",
       "slider": "滑块"
     },
-    "dragComingSoon": "拖拽（即将推出）",
+    "dragToReorder": "拖动{{name}}（第 {{position}} 项）以重新排序",
+    "variableFallback": "变量 {{position}}",
     "type": "类型",
     "name": "名称",
     "namePlaceholder": "tone",
