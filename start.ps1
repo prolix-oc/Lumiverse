@@ -161,11 +161,20 @@ function Ensure-Bun {
 function Invoke-BunUpgrade {
     param([ValidateSet("stable", "canary")][string]$Channel)
 
-    # Windows PowerShell 5 may promote native stderr output to a terminating
-    # NativeCommandError. Merge it into stdout and use the real exit code.
-    & bun upgrade "--$Channel" 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "bun upgrade exited with code $LASTEXITCODE"
+    # Windows PowerShell 5 turns redirected native stderr into error records.
+    # Bun writes normal upgrade progress there, so temporarily allow those
+    # records through and decide success from the native process exit code.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & bun upgrade "--$Channel" 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw "bun upgrade exited with code $exitCode"
     }
 }
 
