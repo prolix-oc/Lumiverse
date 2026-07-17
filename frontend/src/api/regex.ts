@@ -53,6 +53,14 @@ export const regexApi = {
     return put<RegexScript>(`/regex-scripts/${id}/toggle`, { disabled, active_preset_id: activePresetId ?? null })
   },
 
+  toggleFolder(folder: string, disabled: boolean, activePresetId?: string | null) {
+    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/folders/toggle', {
+      folder,
+      disabled,
+      active_preset_id: activePresetId ?? null,
+    })
+  },
+
   reorder(ids: string[]) {
     return put<{ success: boolean }>('/regex-scripts/reorder', { ids })
   },

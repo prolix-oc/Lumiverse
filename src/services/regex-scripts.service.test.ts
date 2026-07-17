@@ -13,6 +13,7 @@ import {
   reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
   toggleRegexScript,
+  toggleRegexScriptsByFolder,
   updateRegexScript,
 } from "./regex-scripts.service";
 import { initMacros } from "../macros";
@@ -238,6 +239,91 @@ describe("preset-bound regex activation", () => {
     switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: "preset-2" });
     expect(mustGetScript(presetOneEnabledId).disabled).toBe(true);
     expect(mustGetScript(presetTwoEnabledId).disabled).toBe(false);
+  });
+});
+
+describe("regex folder toggle", () => {
+  test("toggles every script in a folder", () => {
+    const a = createRegexScript(USER_ID, { name: "A", find_regex: "a", folder: "Folder", disabled: false });
+    const b = createRegexScript(USER_ID, { name: "B", find_regex: "b", folder: "Folder", disabled: false });
+    createRegexScript(USER_ID, { name: "Other", find_regex: "o", folder: "Other", disabled: false });
+
+    expect(typeof a).not.toBe("string");
+    expect(typeof b).not.toBe("string");
+    const aId = (a as Exclude<typeof a, string>).id;
+    const bId = (b as Exclude<typeof b, string>).id;
+
+    const result = toggleRegexScriptsByFolder(USER_ID, "Folder", true);
+    expect(result.changedIds.sort()).toEqual([aId, bId].sort());
+    expect(result.skippedIds).toEqual([]);
+    expect(mustGetScript(aId).disabled).toBe(true);
+    expect(mustGetScript(bId).disabled).toBe(true);
+  });
+
+  test("ignores scripts already in the target state", () => {
+    const a = createRegexScript(USER_ID, { name: "A", find_regex: "a", folder: "Folder", disabled: true });
+    const b = createRegexScript(USER_ID, { name: "B", find_regex: "b", folder: "Folder", disabled: true });
+
+    expect(typeof a).not.toBe("string");
+    expect(typeof b).not.toBe("string");
+
+    const result = toggleRegexScriptsByFolder(USER_ID, "Folder", true);
+    expect(result.changedIds).toEqual([]);
+    expect(result.skippedIds).toEqual([]);
+  });
+
+  test("skips scripts bound to an inactive preset", () => {
+    const active = createRegexScript(USER_ID, {
+      name: "Active Preset Script",
+      find_regex: "a",
+      folder: "Folder",
+      preset_id: "preset-1",
+      disabled: false,
+    }, { activePresetId: "preset-1" });
+    const inactive = createRegexScript(USER_ID, {
+      name: "Inactive Preset Script",
+      find_regex: "i",
+      folder: "Folder",
+      preset_id: "preset-2",
+      disabled: false,
+    }, { activePresetId: "preset-2" });
+
+    expect(typeof active).not.toBe("string");
+    expect(typeof inactive).not.toBe("string");
+    const activeId = (active as Exclude<typeof active, string>).id;
+    const inactiveId = (inactive as Exclude<typeof inactive, string>).id;
+
+    const result = toggleRegexScriptsByFolder(USER_ID, "Folder", true, { activePresetId: "preset-1" });
+    expect(result.changedIds).toEqual([activeId]);
+    expect(result.skippedIds).toEqual([inactiveId]);
+    expect(mustGetScript(activeId).disabled).toBe(true);
+    expect(mustGetScript(inactiveId).disabled).toBe(false);
+  });
+
+  test("persists active preset enablement to the restore list", () => {
+    const script = createRegexScript(USER_ID, {
+      name: "Preset Script",
+      find_regex: "a",
+      folder: "Folder",
+      preset_id: "preset-1",
+      disabled: false,
+    }, { activePresetId: "preset-1" });
+    expect(typeof script).not.toBe("string");
+    const id = (script as Exclude<typeof script, string>).id;
+
+    toggleRegexScriptsByFolder(USER_ID, "Folder", true, { activePresetId: "preset-1" });
+    expect(mustGetScript(id).disabled).toBe(true);
+
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: null });
+    expect(mustGetScript(id).disabled).toBe(true);
+
+    activatePresetBoundRegexScripts(USER_ID, "preset-1");
+    expect(mustGetScript(id).disabled).toBe(true);
+
+    toggleRegexScriptsByFolder(USER_ID, "Folder", false, { activePresetId: "preset-1" });
+    switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: null });
+    activatePresetBoundRegexScripts(USER_ID, "preset-1");
+    expect(mustGetScript(id).disabled).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
 
-import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X, Link, Unlink, TriangleAlert, GripVertical } from 'lucide-react'
+import { Plus, Upload, Download, Trash2, Globe, User, MessageCircle, ChevronRight, FolderPlus, Check, X, Link, Unlink, TriangleAlert, GripVertical, Power } from 'lucide-react'
 import {
   DndContext,
   MouseSensor,
@@ -99,6 +99,7 @@ export default function RegexPanel() {
   const removeRegexScript = useStore((s) => s.removeRegexScript)
   const bulkRemoveRegexScripts = useStore((s) => s.bulkRemoveRegexScripts)
   const toggleRegexScript = useStore((s) => s.toggleRegexScript)
+  const toggleRegexFolder = useStore((s) => s.toggleRegexFolder)
   const reorderRegexScripts = useStore((s) => s.reorderRegexScripts)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -354,6 +355,28 @@ export default function RegexPanel() {
     }
   }, [toggleRegexScript, t])
 
+  const handleToggleFolder = useCallback(async (scripts: RegexScript[], folder: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (scripts.length === 0) return
+    const allEnabled = scripts.every((s) => !s.disabled)
+    const nextDisabled = allEnabled
+    const actionKey = nextDisabled ? 'disableFolder' : 'enableFolder'
+    try {
+      const result = await toggleRegexFolder(folder, nextDisabled)
+      const changedCount = result.changedIds.length
+      const skippedCount = result.skippedIds.length
+      if (changedCount > 0) {
+        toast.success(t(`regexPanel.${actionKey}`, { folder, count: changedCount }))
+      } else if (skippedCount > 0) {
+        toast.info(t('regexPanel.folderToggleSkipped', { folder, count: skippedCount }))
+      } else {
+        toast.info(t(`regexPanel.${actionKey}None`, { folder }))
+      }
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
+    }
+  }, [toggleRegexFolder, t])
+
   const handleBindToPreset = useCallback(async (script: RegexScript, e: React.MouseEvent) => {
     e.stopPropagation()
     if (!activeLoomPresetId) {
@@ -566,6 +589,23 @@ export default function RegexPanel() {
                         </span>
                         <span className={styles.folderCount}>{group.scripts.length}</span>
                         <div className={styles.folderActions}>
+                          {group.scripts.length > 0 && (
+                            <button
+                              className={clsx(
+                                styles.folderActionBtn,
+                                group.scripts.every((s) => !s.disabled) && styles.folderToggleActive,
+                              )}
+                              onClick={(e) => handleToggleFolder(group.scripts, group.folder, e)}
+                              title={group.scripts.every((s) => !s.disabled)
+                                ? t('regexPanel.disableFolderTitle', { folder: folderLabel })
+                                : t('regexPanel.enableFolderTitle', { folder: folderLabel })}
+                              aria-label={group.scripts.every((s) => !s.disabled)
+                                ? t('regexPanel.disableFolderAria', { folder: folderLabel })
+                                : t('regexPanel.enableFolderAria', { folder: folderLabel })}
+                            >
+                              <Power size={12} />
+                            </button>
+                          )}
                           {isNamedFolder && activeLoomPresetId && (
                             <button
                               className={styles.folderActionBtn}

@@ -941,6 +941,67 @@ export function toggleRegexScript(
   return updated;
 }
 
+/**
+ * Bulk enable/disable every regex script in a folder.
+ *
+ * Scripts bound to a preset other than the active one are skipped (mirroring
+ * per-script toggle behavior). Scripts bound to the active preset have their
+ * enablement persisted to the preset restore list.
+ */
+export function toggleRegexScriptsByFolder(
+  userId: string,
+  folder: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): { changedIds: string[]; skippedIds: string[] } {
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const rows = getDb()
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as Array<{ id: string; preset_id?: string | null; disabled: number }>;
+
+  const changedIds: string[] = [];
+  const skippedIds: string[] = [];
+  const targets: Array<{ id: string; preset_id: string | null }> = [];
+
+  for (const row of rows) {
+    if (row.preset_id && row.preset_id !== activePresetId) {
+      skippedIds.push(row.id);
+      continue;
+    }
+    if (row.disabled === (disabled ? 1 : 0)) {
+      continue;
+    }
+    targets.push({ id: row.id, preset_id: row.preset_id ?? null });
+  }
+
+  if (targets.length === 0) {
+    return { changedIds, skippedIds };
+  }
+
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const targetIds = targets.map((t) => t.id);
+  const placeholders = targetIds.map(() => "?").join(", ");
+
+  db.transaction(() => {
+    db.query(`UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id IN (${placeholders}) AND user_id = ?`)
+      .run(disabled ? 1 : 0, now, ...targetIds, userId);
+  })();
+
+  for (const target of targets) {
+    changedIds.push(target.id);
+    if (target.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, target.preset_id, target.id, !disabled);
+    }
+    const updated = getRegexScript(userId, target.id);
+    if (updated) {
+      eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id: target.id, script: updated }, userId);
+    }
+  }
+
+  return { changedIds, skippedIds };
+}
+
 // ── Character-bound query ────────────────────────────────────────────────────
 
 /** Returns all regex scripts scoped to a specific character (for bundling into .charx exports). */

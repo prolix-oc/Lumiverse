@@ -442,6 +442,15 @@
   color: var(--lumiverse-danger, #ef4444);
 }
 
+.folderToggleActive {
+  color: var(--lumiverse-success, #22c55e);
+}
+
+.folderToggleActive:hover {
+  color: var(--lumiverse-success, #22c55e);
+  background: color-mix(in srgb, var(--lumiverse-success, #22c55e) 12%, transparent);
+}
+
 /* ── Create Popover ──────────────────────────────── */
 
 .createPopoverWrapper {

@@ -311,4 +311,16 @@ app.put("/:id/toggle", async (c) => {
   return c.json(script);
 });
 
+// POST /folders/toggle — bulk enable/disable every script in a folder
+app.post("/folders/toggle", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const folder = typeof body?.folder === "string" ? body.folder : undefined;
+  if (folder === undefined) return c.json({ error: "folder is required" }, 400);
+  const result = svc.toggleRegexScriptsByFolder(userId, folder, !!body?.disabled, {
+    activePresetId: body?.active_preset_id ?? null,
+  });
+  return c.json(result);
+});
+
 export { app as regexScriptsRoutes };

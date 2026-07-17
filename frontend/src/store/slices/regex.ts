@@ -104,5 +104,15 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
     }))
   },
 
+  toggleRegexFolder: async (folder: string, disabled: boolean) => {
+    const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const result = await enqueuePresetRegexOperation(() => regexApi.toggleFolder(folder, disabled, activePresetId))
+    const changed = new Set(result.changedIds)
+    set((s) => ({
+      regexScripts: s.regexScripts.map((r) => (changed.has(r.id) ? { ...r, disabled } : r)),
+    }))
+    return result
+  },
+
   setRegexEditingId: (id: string | null) => set({ regexEditingId: id }),
 })
