@@ -26,6 +26,7 @@ import * as poolSvc from "./generation-pool.service";
 import * as connectionsSvc from "./connections.service";
 import * as settingsSvc from "./settings.service";
 import * as worldBooksSvc from "./world-books.service";
+import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 import {
   setMultiplayerPersonaProvider,
   setMultiplayerWorldInfoProvider,
@@ -1405,7 +1406,8 @@ async function triggerHostGeneration(room: Room): Promise<void> {
       generation_type: "normal",
     });
   } catch (err) {
-    console.error("[multiplayer] startGeneration error:", err);
+    const message = clampErrorMessage(describeProviderError(err, "Room generation failed"));
+    console.error(`[multiplayer] startGeneration error: ${message}`);
   }
 }
 

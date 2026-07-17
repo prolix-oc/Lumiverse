@@ -15,6 +15,17 @@ export {
 } from './preset-selection-coordinator-core'
 
 let presetSelectionCoordinator: PresetSelectionCoordinator | null = null
+let unconfiguredWarningLogged = false
+
+function createNoOpPresetSelectionCoordinator(): PresetSelectionCoordinator {
+  return {
+    begin: () => ({
+      transition: async () => false,
+      cancel() {},
+    }),
+    transition: async () => false,
+  }
+}
 
 export function configurePresetSelectionCoordinator(adapter: PresetSelectionAdapter): void {
   presetSelectionCoordinator = createPresetSelectionCoordinator(adapter)
@@ -22,7 +33,14 @@ export function configurePresetSelectionCoordinator(adapter: PresetSelectionAdap
 
 function getPresetSelectionCoordinator(): PresetSelectionCoordinator {
   if (!presetSelectionCoordinator) {
-    throw new Error('PRESET_SELECTION_UNAVAILABLE: Preset selection coordinator is not initialized')
+    if (!unconfiguredWarningLogged) {
+      unconfiguredWarningLogged = true
+      console.warn(
+        '[preset-selection] Coordinator not configured; using no-op fallback. ' +
+        'This is expected in tests and SSR, but the app root should call configurePresetSelectionCoordinator.',
+      )
+    }
+    return createNoOpPresetSelectionCoordinator()
   }
   return presetSelectionCoordinator
 }

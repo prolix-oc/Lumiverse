@@ -86,6 +86,7 @@ import {
   subscribeLiveRoot,
   type LiveRootPermission,
 } from './live-root-registry'
+import { scheduleMicrotask } from '@/lib/schedule-microtask'
 
 // Spindle bridge components expose imperative handles by mutating the bridge
 // object passed from the extension runtime. This is an intentional escape hatch
@@ -557,7 +558,7 @@ function buildHandle<TOptions, TValue>(
     // Compatibility for extensions that construct a detached subtree, mount
     // host components into it, then append the subtree before returning to the
     // event loop. The provisional mount never becomes live in unowned DOM.
-    queueMicrotask(() => {
+    scheduleMicrotask(() => {
       if (!tracked.destroyed && !adoptPendingMount(extensionId, tracked)) tracked.destroy()
     })
   }

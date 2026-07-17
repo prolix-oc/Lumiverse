@@ -35,12 +35,20 @@ function consumeNonce(expectedNonce: string | null): boolean {
 
 // ─── BetterAuth instance ────────────────────────────────────────────────
 
-const ssoConfigs = listEnabledSsoAuthConfigs();
-if (ssoConfigs.length > 0) {
-  console.log(`[Auth] Registered ${ssoConfigs.length} owner-configured SSO provider${ssoConfigs.length === 1 ? "" : "s"}.`);
-  for (const provider of ssoConfigs) {
-    console.log(`[Auth] SSO ${provider.providerId} redirect URI: ${provider.redirectURI}`);
+let ssoConfigs: ReturnType<typeof listEnabledSsoAuthConfigs> = [];
+try {
+  ssoConfigs = listEnabledSsoAuthConfigs();
+  if (ssoConfigs.length > 0) {
+    console.log(`[Auth] Registered ${ssoConfigs.length} owner-configured SSO provider${ssoConfigs.length === 1 ? "" : "s"}.`);
+    for (const provider of ssoConfigs) {
+      console.log(`[Auth] SSO ${provider.providerId} redirect URI: ${provider.redirectURI}`);
+    }
   }
+} catch (err) {
+  // This can happen in tests that import auth before migrations have run.
+  // In production the table exists, so surface it as a warning rather than crash.
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`[Auth] Could not load SSO providers at startup: ${message}`);
 }
 
 export const auth = betterAuth({

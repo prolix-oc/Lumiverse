@@ -30,6 +30,7 @@ import type { ImageGenRequest } from "../image-gen/types";
 import type { Message } from "../types/message";
 import type { ImageGenConnectionProfile } from "../types/image-gen-connection";
 import { scheduleLowPriorityTask } from "../utils/low-priority-task";
+import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 
 // Ensure image gen providers are registered
 import "../image-gen/index";
@@ -521,9 +522,10 @@ export async function generateSceneBackground(
         userId,
       });
     } catch (err) {
+      const message = clampErrorMessage(describeProviderError(err, "Image generation failed"));
       eventBus.emit(
         EventType.IMAGE_GEN_ERROR,
-        { assetId: jobId, chatId, message: err instanceof Error ? err.message : String(err) },
+        { assetId: jobId, chatId, message },
         userId,
       );
       throw resolveAbortReason(generationSignal.signal) ?? err;

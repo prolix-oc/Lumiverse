@@ -5,5 +5,8 @@
 # LUMIVERSE_SMOL=false in .env to disable. See scripts/runner/server-manager.ts,
 # start.sh, and start.ps1.
 
+[test]
+pathIgnorePatterns = "vendor/**"
+
 [install]
 peer = false

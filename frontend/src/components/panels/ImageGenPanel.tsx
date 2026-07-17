@@ -198,9 +198,9 @@ export function ModelComboField({
   latestInputsRef.current = { activeConnection, modelSubtype, loadModels }
 
   const currentResult = result
-    && result.profile === activeConnection
+    && result.profile.id === activeConnection?.id
     && result.modelSubtype === modelSubtype
-  const models = useMemo(() => currentResult ? result.models : [], [currentResult, result.models])
+  const models = useMemo(() => currentResult ? result.models : [], [currentResult, result?.models])
   const modelError = currentResult ? result.error : null
   const loading = currentResult ? result.loading : false
 
