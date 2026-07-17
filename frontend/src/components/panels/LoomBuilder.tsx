@@ -1073,8 +1073,8 @@ function PresetSelector({ registry, activePresetId, activePresetName, onSelect, 
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-      <select className={s.select} style={{ flex: 1, minWidth: 0 }} value={activePresetId || ''} onChange={e => onSelect(e.target.value || null)}>
+    <div className={s.presetSelector}>
+      <select className={clsx(s.select, s.presetSelect)} value={activePresetId || ''} onChange={e => onSelect(e.target.value || null)}>
         <option value="">{t('preset.selectPlaceholder')}</option>
         {registryEntries.map(([id, entry]) => (
           <option key={id} value={id}>{t('preset.blocksCount', { name: entry.name, count: entry.blockCount })}</option>
@@ -2396,30 +2396,34 @@ export default function LoomBuilder({
             onExport={handleExport}
             onExportLegacy={() => setShowLegacyExportConfirm(true)}
           />
-          <button
-            type="button"
-            className={clsx(s.btn, s.searchToggle, isSearchVisible && s.searchToggleActive)}
-            onClick={toggleSearch}
-            disabled={!activePreset}
-            title={isSearchVisible ? lb('search.closeTitle') : lb('search.openTitle')}
-          >
-            <Search size={14} />
-            {isSearchVisible ? lb('search.close') : lb('search.search')}
-          </button>
-          <button
-            type="button"
-            className={s.btn}
-            onClick={toggleAllCategories}
-            disabled={categoryIds.length === 0 || isSearchActive}
-            title={isSearchActive
-              ? lb('category.bulkUnavailableSearch')
-              : allCategoriesCollapsed
-                ? lb('category.expandAll')
-                : lb('category.collapseAll')}
-          >
-            {allCategoriesCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            {allCategoriesCollapsed ? lb('category.expandAll') : lb('category.collapseAll')}
-          </button>
+          <div className={s.toolbarActions}>
+            <button
+              type="button"
+              className={clsx(s.btn, s.searchToggle, isSearchVisible && s.searchToggleActive)}
+              onClick={toggleSearch}
+              disabled={!activePreset}
+              aria-label={isSearchVisible ? lb('search.close') : lb('search.search')}
+              title={isSearchVisible ? lb('search.closeTitle') : lb('search.openTitle')}
+            >
+              <Search size={14} />
+              <span className={s.toolbarButtonLabel}>{isSearchVisible ? lb('search.close') : lb('search.search')}</span>
+            </button>
+            <button
+              type="button"
+              className={clsx(s.btn, s.categoryToggle)}
+              onClick={toggleAllCategories}
+              disabled={categoryIds.length === 0 || isSearchActive}
+              aria-label={allCategoriesCollapsed ? lb('category.expandAll') : lb('category.collapseAll')}
+              title={isSearchActive
+                ? lb('category.bulkUnavailableSearch')
+                : allCategoriesCollapsed
+                  ? lb('category.expandAll')
+                  : lb('category.collapseAll')}
+            >
+              {allCategoriesCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <span className={s.toolbarButtonLabel}>{allCategoriesCollapsed ? lb('category.expandAll') : lb('category.collapseAll')}</span>
+            </button>
+          </div>
           {activePreset && isSearchVisible && (
             <div className={s.searchBarRow}>
               <div className={s.searchField}>

@@ -48,6 +48,27 @@
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
+  container-type: inline-size;
+}
+
+.presetSelector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.presetSelect {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .extensionToolbar {
@@ -110,6 +131,35 @@
   color: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary-020);
   background: var(--lumiverse-primary-010);
+}
+
+/* Keep the preset selector usable in narrow sidebars. The bulk action remains
+   discoverable through its icon and tooltip, while its text returns when the
+   toolbar has enough room for both controls. */
+@container (max-width: 620px) {
+  .categoryToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .categoryToggle .toolbarButtonLabel {
+    display: none;
+  }
+}
+
+@container (max-width: 440px) {
+  .searchToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .searchToggle .toolbarButtonLabel {
+    display: none;
+  }
 }
 
 .searchBarRow {
