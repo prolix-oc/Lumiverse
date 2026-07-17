@@ -20,6 +20,7 @@ export interface WorldInfoSources {
   entries: WorldBookEntry[];
   worldBookIds: string[];
   bookSourceMap: Map<string, BookSource>;
+  bookNameMap: Map<string, string>;
 }
 
 export function getGroupCardMode(chat: Chat): GroupCardMode {
@@ -98,6 +99,7 @@ export function collectWorldInfoSources(
 ): WorldInfoSources {
   const worldBookIds: string[] = [];
   const bookSourceMap = new Map<string, BookSource>();
+  const bookNameMap = new Map<string, string>();
   const seen = new Set<string>();
 
   const pushBook = (id: string | null | undefined, source: BookSource) => {
@@ -128,7 +130,7 @@ export function collectWorldInfoSources(
 
   const entries: WorldBookEntry[] = [];
   if (worldBookIds.length > 0) {
-    const entryMap = worldBooksSvc.listEntriesForBooks(userId, worldBookIds);
+    const entryMap = worldBooksSvc.listEntriesForBooks(userId, worldBookIds, bookNameMap);
     for (const id of worldBookIds) {
       const bookEntries = entryMap.get(id);
       if (bookEntries && bookEntries.length > 0) {
@@ -157,5 +159,6 @@ export function collectWorldInfoSources(
     entries,
     worldBookIds,
     bookSourceMap,
+    bookNameMap,
   };
 }

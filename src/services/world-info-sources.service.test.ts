@@ -66,6 +66,7 @@ describe("group chat world-info source selection", () => {
 
     expect(sources.worldBookIds).toEqual([loreMember.book.id]);
     expect(sources.entries.map((entry) => entry.content)).toEqual(["Inactive member lore"]);
+    expect(sources.bookNameMap.get(loreMember.book.id)).toBe("Lorekeeper Book");
   });
 
   test("active-character lorebook mode overrides merged cards", () => {

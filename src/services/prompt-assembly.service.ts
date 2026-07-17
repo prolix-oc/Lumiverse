@@ -1716,6 +1716,7 @@ export async function assemblePrompt(
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
   const wiCache = mergedWorldInfo.cache;
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
@@ -3931,6 +3932,7 @@ export function mergeActivatedWorldInfoEntries(
   vectorEntries: VectorActivatedEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
+  bookNameMap?: Map<string, string>,
 ): MergedWorldInfoEntriesResult {
   const mergeStartedAt = performance.now();
   const selection = selectMergedWorldInfoEntries(
@@ -3968,6 +3970,7 @@ export function mergeActivatedWorldInfoEntries(
         score: source?.score,
         bookId: entry.world_book_id,
         bookSource: bookSourceMap?.get(entry.world_book_id),
+        bookName: bookNameMap?.get(entry.world_book_id),
       };
     });
 
@@ -4649,6 +4652,7 @@ async function computeActivatedWorldInfoForChat(
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
 }
 

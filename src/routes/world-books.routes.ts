@@ -562,6 +562,7 @@ app.post("/:id/diagnostics", async (c) => {
     vectorDetail.entries,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
   const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
     vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),

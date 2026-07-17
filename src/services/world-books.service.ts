@@ -1042,14 +1042,20 @@ export function listEntries(userId: string, worldBookId: string): WorldBookEntry
 
 /**
  * Batch-load entries for multiple world books in 2 queries (ownership + entries).
- * Returns a Map from bookId → entries[], preserving per-book grouping.
+ * Returns a Map from bookId → entries[], preserving per-book grouping. When
+ * provided, `bookNameMap` is populated from the ownership query at no extra cost.
  */
-export function listEntriesForBooks(userId: string, bookIds: string[]): Map<string, WorldBookEntry[]> {
+export function listEntriesForBooks(
+  userId: string,
+  bookIds: string[],
+  bookNameMap?: Map<string, string>,
+): Map<string, WorldBookEntry[]> {
   if (bookIds.length === 0) return new Map();
   const ph = bookIds.map(() => "?").join(", ");
   const owned = getDb()
-    .query(`SELECT id FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
-    .all(...bookIds, userId) as { id: string }[];
+    .query(`SELECT id, name FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...bookIds, userId) as { id: string; name: string }[];
+  for (const book of owned) bookNameMap?.set(book.id, book.name);
   const ownedSet = new Set(owned.map(b => b.id));
   const validIds = bookIds.filter(id => ownedSet.has(id));
   if (validIds.length === 0) return new Map();

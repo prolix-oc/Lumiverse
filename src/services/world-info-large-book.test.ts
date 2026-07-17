@@ -392,6 +392,22 @@ describe("global keyword matching overrides", () => {
 // ---------------------------------------------------------------------------
 
 describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[], vectorized)", () => {
+  test("includes the source book name in activated entry summaries", () => {
+    const entry = makeEntry({ world_book_id: "book-lore" });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [entry],
+      [],
+      {},
+      new Map([["book-lore", "character"]]),
+      new Map([["book-lore", "Character Lore"]]),
+    );
+
+    expect(result.activatedWorldInfo).toEqual([
+      expect.objectContaining({ id: entry.id, bookName: "Character Lore" }),
+    ]);
+  });
+
   test("accepts all 15 vector candidates when settings are default", () => {
     const vectorCandidates = Array.from({ length: 15 }, (_, i) =>
       asVectorCandidate(makeEntry({ order_value: i + 1, comment: `memory #${i + 1}` })),

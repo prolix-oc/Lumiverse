@@ -1175,6 +1175,7 @@ export interface ActivatedWorldInfoEntry {
   score?: number;
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
+  bookName?: string;
 }
 
 export type UpdateWorldBookEntryInput = CreateWorldBookEntryInput;

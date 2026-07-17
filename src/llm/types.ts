@@ -316,6 +316,7 @@ export interface PrefetchedData {
     entries: import("../types/world-book").WorldBookEntry[];
     worldBookIds: string[];
     bookSourceMap: Map<string, import("../services/world-info-sources.service").BookSource>;
+    bookNameMap: Map<string, string>;
   };
   /** Group chat members, batch-loaded. */
   groupCharacters?: Map<string, import("../types/character").Character>;
@@ -342,6 +343,7 @@ export interface ActivatedWorldInfoEntry {
   score?: number;
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
+  bookName?: string;
 }
 
 export interface MemoryStats {
