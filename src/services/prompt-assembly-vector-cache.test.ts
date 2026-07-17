@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { WorldBookEntry } from "../types/world-book";
 import type { EmbeddingConfigWithStatus } from "./embeddings.service";
-import { __vectorWiCacheTest } from "./prompt-assembly.service";
+import {
+  __vectorWiCacheTest,
+  __vectorWiRetrievalTest,
+} from "./prompt-assembly.service";
 import type { VectorStoreConfig } from "./vector-store-config.service";
 import type { WorldBookVectorSettings } from "./world-book-vector-settings.service";
 import type { VectorWorldInfoRetrievalResult } from "./world-info-vector-ranking";
@@ -255,5 +258,34 @@ describe("vector world-info retrieval cache", () => {
     expect(secondHit?.blockerMessages).toEqual(["original"]);
     expect(secondHit?.entries[0].entry.content).toBe("old lore");
     expect(secondHit?.entries[0].matchedPrimaryKeys).toEqual(["alpha"]);
+  });
+});
+
+describe("vector world-info search fan-out", () => {
+  test("searches only attached books containing search-ready entries", () => {
+    const searchable = __vectorWiRetrievalTest.getSearchableWorldBookIds(
+      ["book-keyword-only", "book-ready", "book-pending"],
+      [
+        entry({
+          id: "entry-ready",
+          world_book_id: "book-ready",
+        }),
+        entry({
+          id: "entry-pending",
+          world_book_id: "book-pending",
+          vector_index_status: "pending",
+          vector_indexed_at: null,
+        }),
+        entry({
+          id: "entry-keyword-only",
+          world_book_id: "book-keyword-only",
+          vectorized: false,
+          vector_index_status: "not_enabled",
+          vector_indexed_at: null,
+        }),
+      ],
+    );
+
+    expect(searchable).toEqual(["book-ready"]);
   });
 });

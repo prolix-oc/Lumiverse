@@ -4034,6 +4034,18 @@ function isVectorEligibleWorldInfoEntry(
   return isWorldBookEntryVectorSearchReady(entry);
 }
 
+function getVectorSearchableWorldBookIds(
+  worldBookIds: string[],
+  entries: WorldBookEntryModel[],
+): string[] {
+  const eligibleBookIds = new Set(
+    entries
+      .filter(isVectorEligibleWorldInfoEntry)
+      .map((entry) => entry.world_book_id),
+  );
+  return worldBookIds.filter((bookId) => eligibleBookIds.has(bookId));
+}
+
 // ─── Vector WI retrieval cache (short-TTL for rapid dry-run optimization) ───
 
 const VECTOR_WI_CACHE_TTL_MS = 30_000;
@@ -4152,6 +4164,10 @@ export const __vectorWiCacheTest = {
   set: setCachedVectorWiResult,
 };
 
+export const __vectorWiRetrievalTest = {
+  getSearchableWorldBookIds: getVectorSearchableWorldBookIds,
+};
+
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
   chatId: string,
@@ -4216,6 +4232,10 @@ export async function collectVectorActivatedWorldInfoDetailed(
   );
   const queryBuildMs = performance.now() - queryBuildStartedAt;
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
+  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
+    worldBookIds,
+    entries,
+  );
   const lexicalQueryPreviews = buildWorldInfoLexicalQueryBatches(
     queryText,
     eligibleEntries,
@@ -4353,23 +4373,25 @@ export async function collectVectorActivatedWorldInfoDetailed(
     >();
 
     const searchStartedAt = performance.now();
-    // Bound how many world-book vector searches hit LanceDB concurrently. Each
-    // call is a hybrid (vector + FTS) pair of native queries; firing one per
-    // lorebook unbounded floods the native engine on large contexts (a prime
-    // segfault amplifier). A small worker pool caps in-flight native queries
-    // while preserving the PromiseSettledResult[] shape the loop below expects.
+    // Search only books represented by a search-ready SQLite entry. Attached
+    // keyword-only/pending books cannot contribute a usable hit and querying
+    // them produces misleading zero-row provider diagnostics.
+    //
+    // Bound how many world-book vector searches run concurrently. A small
+    // worker pool caps in-flight native queries while preserving the
+    // PromiseSettledResult[] shape the loop below expects.
     const WI_VECTOR_SEARCH_CONCURRENCY = 4;
     const searchResults: PromiseSettledResult<
       Awaited<ReturnType<typeof embeddingsSvc.searchWorldBookEntriesHybridWithVector>>
-    >[] = new Array(worldBookIds.length);
+    >[] = new Array(searchableWorldBookIds.length);
     {
       let nextIdx = 0;
       const runWorker = async () => {
-        for (let i = nextIdx++; i < worldBookIds.length; i = nextIdx++) {
+        for (let i = nextIdx++; i < searchableWorldBookIds.length; i = nextIdx++) {
           try {
             const value = await embeddingsSvc.searchWorldBookEntriesHybridWithVector(
               userId,
-              worldBookIds[i],
+              searchableWorldBookIds[i],
               lexicalQueryPreviews.map((batch) => batch.text),
               queryVector,
               candidateLimit,
@@ -4385,7 +4407,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       };
       await Promise.all(
         Array.from(
-          { length: Math.min(WI_VECTOR_SEARCH_CONCURRENCY, worldBookIds.length) },
+          { length: Math.min(WI_VECTOR_SEARCH_CONCURRENCY, searchableWorldBookIds.length) },
           runWorker,
         ),
       );
