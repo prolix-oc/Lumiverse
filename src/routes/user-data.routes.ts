@@ -290,11 +290,17 @@ app.post("/import", async (c) => {
     try {
       await verifyArchiveFast(archivePath);
     } catch (fastErr) {
-      // Only fall back on shape errors (ZIP64, truncated tail, etc.) — a
-      // genuine "wrong producer" or "schema mismatch" should not be retried.
+      // Fall back to the streaming verifier on shape errors (truncated tail,
+      // signature glitches). `verifyArchiveFast` itself handles ZIP64 in-tree
+      // now, so a fall-back here usually means a genuinely odd file — but
+      // the streaming path uses fflate.Unzip which is the reference
+      // implementation and is the safer retry. Genuine producer/schema
+      // mismatches should not be retried.
       if (
         fastErr instanceof ArchiveValidationError &&
-        (fastErr.code === "bad_manifest" || fastErr.code === "no_manifest") &&
+        (fastErr.code === "bad_manifest" ||
+          fastErr.code === "no_manifest" ||
+          fastErr.code === "not_zip") &&
         /ZIP64|truncated|signature invalid|extends past|too small/i.test(fastErr.message)
       ) {
         await verifyArchive(archivePath);

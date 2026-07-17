@@ -219,9 +219,16 @@ mock.module('@/api/image-gen-connections', () => ({
   },
 }))
 
-mock.module('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}))
+// Intentionally NOT mocking 'react-i18next' here. The test asserts that
+// `host.textContent` does not contain specific translation keys (e.g.
+// 'imageGenConnectionManager.loading'); a real i18next instance returns
+// the key itself as a fallback when no translation is loaded, which is
+// exactly the behaviour the assertions depend on. The previous mock
+// (`{ useTranslation: () => ({ t: key => key }) }`) was redundant AND
+// leaked into other test files: bun:test's `mock.module` is global and
+// provides only the listed exports, which broke later tests that import
+// `I18nextProvider` / `initReactI18next` from 'react-i18next' (e.g.
+// CharacterLoraTab.test.tsx).
 
 mock.module('lucide-react', () => ({
   Plus: () => null,

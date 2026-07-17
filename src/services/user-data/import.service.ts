@@ -312,11 +312,27 @@ const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 // the tail of the archive lets us locate `manifest.json` in O(1) regardless
 // of where it sits in the file, which matters for legacy archives (manifest
 // last) and 2+ GB exports.
+//
+// ZIP64 (used when an archive crosses 2³²−1 bytes, has more than 65535
+// entries, or has an individual entry > 4 GB) augments the EOCD with a
+// "ZIP64 End of Central Directory Locator" (sig 0x07064b50, 20 bytes,
+// sitting immediately before the standard EOCD) and a "ZIP64 End of
+// Central Directory Record" (sig 0x06064b50, 56 bytes) at the offset
+// named by the locator. Those two records carry the true 64-bit
+// cdSize, cdOffset, and totalEntries values. ZIP64-aware writers also
+// store per-entry 64-bit overrides in the central directory's "extra
+// field" (tag 0x0001); we honour those below when the standard 32-bit
+// fields are the 0xFFFFFFFF / 0xFFFF sentinels.
 
 const EOCD_SIG = 0x06054b50; // "PK\x05\x06"
 const CDH_SIG = 0x02014b50;  // "PK\x01\x02"
 const LFH_SIG = 0x04034b50;  // "PK\x03\x04"
+const ZIP64_EOCD_LOCATOR_SIG = 0x07064b50; // "PK\x06\x07"
+const ZIP64_EOCD_RECORD_SIG = 0x06064b50; // "PK\x06\x06"
+const ZIP64_EXTRA_TAG = 0x0001;
 const EOCD_MIN_BYTES = 22;
+const ZIP64_EOCD_LOCATOR_BYTES = 20;
+const ZIP64_EOCD_RECORD_BYTES = 56;
 const ZIP_COMMENT_MAX = 65535;
 
 interface CentralDirEntry {
@@ -325,6 +341,31 @@ interface CentralDirEntry {
   compressedSize: number;
   uncompressedSize: number;
   localHeaderOffset: number;
+}
+
+/**
+ * Walk a central-directory-header (or local-file-header) extra field and
+ * return the first ZIP64 block (tag 0x0001) as a typed view, or null if no
+ * such block is present. Each extra block is: 2-byte tag, 2-byte size,
+ * `size` bytes of payload. Blocks are concatenated back-to-back.
+ */
+function readZip64Extra(
+  extra: Uint8Array,
+  extraOffset: number,
+  extraLen: number,
+): DataView | null {
+  let pos = extraOffset;
+  const end = extraOffset + extraLen;
+  while (pos + 4 <= end) {
+    const view = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
+    const tag = view.getUint16(pos, true);
+    const size = view.getUint16(pos + 2, true);
+    if (tag === ZIP64_EXTRA_TAG) {
+      return new DataView(extra.buffer, extra.byteOffset + pos + 4, size);
+    }
+    pos += 4 + size;
+  }
+  return null;
 }
 
 async function readBytes(file: Bun.BunFile, start: number, end: number): Promise<Uint8Array> {
@@ -337,9 +378,12 @@ async function readBytes(file: Bun.BunFile, start: number, end: number): Promise
  * regardless of total archive size. Throws ArchiveValidationError if the
  * archive's central directory can't be located or manifest.json is absent.
  *
- * ZIP64 archives (> 4 GB or > 65535 entries) are NOT handled here — they
- * fall back to the streaming `verifyArchive` below. Our 5 GB import cap
- * makes ZIP64 possible but rare in practice (>4 GB single archives only).
+ * Supports ZIP64 (PPAPP 6.2): when the standard EOCD reports 0xFFFFFFFF /
+ * 0xFFFF sentinels, we read the ZIP64 EOCD locator sitting immediately
+ * before the EOCD and the ZIP64 EOCD record it points to, and resolve the
+ * real 64-bit cdSize / cdOffset / totalEntries. Per-entry 64-bit overrides
+ * in the central directory's extra field (tag 0x0001) are honoured when
+ * the standard 32-bit fields are the 0xFFFFFFFF sentinel.
  */
 export async function verifyArchiveFast(archivePath: string): Promise<ArchiveManifest> {
   const file = Bun.file(archivePath);
@@ -367,14 +411,74 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
   if (eocdOffsetInTail < 0) {
     throw new ArchiveValidationError("not_zip", "ZIP End-of-Central-Directory record not found");
   }
+  // Position of the standard EOCD's first byte within the file. The ZIP64
+  // EOCD locator (if present) sits exactly ZIP64_EOCD_LOCATOR_BYTES (20)
+  // bytes before the standard EOCD — no padding, per PKWARE spec.
+  const eocdFileOffset = size - tailWindow + eocdOffsetInTail;
   const eocd = new DataView(tail.buffer, tail.byteOffset + eocdOffsetInTail, EOCD_MIN_BYTES);
-  const totalEntries = eocd.getUint16(10, true);
-  const cdSize = eocd.getUint32(12, true);
-  const cdOffset = eocd.getUint32(16, true);
-  // ZIP64 sentinel: 0xFFFFFFFF / 0xFFFF means "look at the ZIP64 EOCD locator
-  // instead." We don't parse ZIP64 here — caller falls back to streaming.
-  if (cdSize === 0xffffffff || cdOffset === 0xffffffff || totalEntries === 0xffff) {
-    throw new ArchiveValidationError("not_zip", "archive uses ZIP64 (fast path unsupported)");
+  let totalEntries = eocd.getUint16(10, true);
+  let cdSize = eocd.getUint32(12, true);
+  let cdOffset = eocd.getUint32(16, true);
+  // ZIP64 sentinel: a 0xFFFFFFFF / 0xFFFF in any of the three fields means
+  // "look at the ZIP64 EOCD record." The locator is positioned
+  // ZIP64_EOCD_LOCATOR_BYTES (20) bytes before the standard EOCD — but we
+  // may have paged it in via the same tail read, so check before fetching
+  // more bytes.
+  const eocdNeedsZip64 = cdSize === 0xffffffff || cdOffset === 0xffffffff || totalEntries === 0xffff;
+  if (eocdNeedsZip64) {
+    if (eocdFileOffset < ZIP64_EOCD_LOCATOR_BYTES) {
+      throw new ArchiveValidationError(
+        "not_zip",
+        "ZIP64 End-of-Central-Directory locator truncated (file too small)",
+      );
+    }
+    // We may already have the locator inside `tail` (if the EOCD's file
+    // offset is within tailWindow). Otherwise, fetch exactly those 20
+    // bytes. The locator signature is at locatorOffset (20 bytes before
+    // the EOCD's first byte).
+    const locatorFileOffset = eocdFileOffset - ZIP64_EOCD_LOCATOR_BYTES;
+    let locatorView: DataView;
+    if (locatorFileOffset >= size - tailWindow) {
+      // Already inside the tail read.
+      const localOff = locatorFileOffset - (size - tailWindow);
+      locatorView = new DataView(tail.buffer, tail.byteOffset + localOff, ZIP64_EOCD_LOCATOR_BYTES);
+    } else {
+      const locatorBytes = await readBytes(
+        file,
+        locatorFileOffset,
+        locatorFileOffset + ZIP64_EOCD_LOCATOR_BYTES,
+      );
+      if (locatorBytes.byteLength < ZIP64_EOCD_LOCATOR_BYTES) {
+        throw new ArchiveValidationError("not_zip", "ZIP64 EOCD locator truncated");
+      }
+      locatorView = new DataView(locatorBytes.buffer, locatorBytes.byteOffset, ZIP64_EOCD_LOCATOR_BYTES);
+    }
+    if (locatorView.getUint32(0, true) !== ZIP64_EOCD_LOCATOR_SIG) {
+      throw new ArchiveValidationError(
+        "not_zip",
+        "ZIP64 EOCD sentinel detected but ZIP64 EOCD locator not found",
+      );
+    }
+    const zip64EocdOffset = Number(locatorView.getBigUint64(8, true));
+    const zip64EocdBytes = await readBytes(
+      file,
+      zip64EocdOffset,
+      zip64EocdOffset + ZIP64_EOCD_RECORD_BYTES,
+    );
+    if (zip64EocdBytes.byteLength < ZIP64_EOCD_RECORD_BYTES) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record truncated");
+    }
+    const zip64Eocd = new DataView(
+      zip64EocdBytes.buffer,
+      zip64EocdBytes.byteOffset,
+      ZIP64_EOCD_RECORD_BYTES,
+    );
+    if (zip64Eocd.getUint32(0, true) !== ZIP64_EOCD_RECORD_SIG) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record signature invalid");
+    }
+    totalEntries = Number(zip64Eocd.getBigUint64(32, true));
+    cdSize = Number(zip64Eocd.getBigUint64(40, true));
+    cdOffset = Number(zip64Eocd.getBigUint64(48, true));
   }
   if (cdOffset + cdSize > size) {
     throw new ArchiveValidationError("not_zip", "central directory extends past end of file");
@@ -390,13 +494,43 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
     const view = new DataView(cd.buffer, cd.byteOffset + pos);
     if (view.getUint32(0, true) !== CDH_SIG) break;
     const compression = view.getUint16(10, true);
-    const compressedSize = view.getUint32(20, true);
-    const uncompressedSize = view.getUint32(24, true);
+    let compressedSize = view.getUint32(20, true);
+    let uncompressedSize = view.getUint32(24, true);
     const nameLen = view.getUint16(28, true);
     const extraLen = view.getUint16(30, true);
     const commentLen = view.getUint16(32, true);
-    const localHeaderOffset = view.getUint32(42, true);
+    let localHeaderOffset = view.getUint32(42, true);
     const name = decoder.decode(cd.subarray(pos + 46, pos + 46 + nameLen));
+
+    // ZIP64: when the standard 32-bit fields hold the 0xFFFFFFFF sentinel,
+    // the real value lives in the ZIP64 extra block (tag 0x0001) of the
+    // central directory header's extra field. Order inside the block per
+    // PKWARE APPNOTE 4.5: uncompressed size, compressed size, local header
+    // offset, disk number start. Only the fields that would otherwise be
+    // 0xFFFFFFFF are emitted.
+    if (
+      extraLen > 0 &&
+      (uncompressedSize === 0xffffffff ||
+        compressedSize === 0xffffffff ||
+        localHeaderOffset === 0xffffffff)
+    ) {
+      const zip64 = readZip64Extra(cd, pos + 46 + nameLen, extraLen);
+      if (zip64) {
+        let cursor = 0;
+        if (uncompressedSize === 0xffffffff && cursor + 8 <= zip64.byteLength) {
+          uncompressedSize = Number(zip64.getBigUint64(cursor, true));
+          cursor += 8;
+        }
+        if (compressedSize === 0xffffffff && cursor + 8 <= zip64.byteLength) {
+          compressedSize = Number(zip64.getBigUint64(cursor, true));
+          cursor += 8;
+        }
+        if (localHeaderOffset === 0xffffffff && cursor + 8 <= zip64.byteLength) {
+          localHeaderOffset = Number(zip64.getBigUint64(cursor, true));
+        }
+      }
+    }
+
     if (name === "manifest.json") {
       manifestEntry = { name, compression, compressedSize, uncompressedSize, localHeaderOffset };
       break;

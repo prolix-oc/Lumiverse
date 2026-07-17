@@ -5,12 +5,20 @@
 // databank documents, theme assets, notification sounds), and — when the
 // user opted in — a per-user slice of the LanceDB vector store.
 //
-// The whole pipeline is driven by `fflate.Zip` so the archive never has to
-// fit in memory: every NDJSON row and every binary chunk is pushed into a
-// `ZipDeflate`/`ZipPassThrough` stream as it's produced, and `fflate.Zip`
-// emits compressed bytes back through `onData` for the HTTP response.
+// The whole pipeline is driven by `archiver`'s streaming ZipArchive so the
+// archive never has to fit in memory: every NDJSON row and every binary
+// chunk is piped into an archiver entry as it's produced, and the archive
+// emits compressed bytes back through a Node→Web-Stream bridge for the
+// HTTP response.
+//
+// `forceZip64: true` lifts the legacy ZIP32 4 GB ceiling — without it,
+// archives that cross 2³²−1 bytes silently corrupt (32-bit compressedSize /
+// uncompressedSize / localHeaderOffset fields wrap to 0). The previous
+// fflate-based writer had no ZIP64 support at all, which made any export
+// over 4 GB produce a broken file with no recovery path on import.
 
-import { Zip, ZipDeflate, AsyncZipDeflate, ZipPassThrough, type ZipInputFile } from "fflate";
+import { ZipArchive, type ArchiverError, type ZipEntryData } from "archiver";
+import { PassThrough, Writable, type Readable } from "stream";
 import { join, basename } from "path";
 import { existsSync } from "fs";
 import { eventBus } from "../../ws/bus";
@@ -59,35 +67,14 @@ const FILE_CONCURRENCY = 8;
 const NDJSON_COMPRESSION = 3;
 
 /**
- * Batch NDJSON row writes into chunks of roughly this size before pushing
- * into the deflate stream. Each fflate push() runs CRC32 + a DEFLATE step;
- * 64 KB per push is the sweet spot for high-row-count tables.
+ * Flush the NDJSON coalescing buffer into the entry once it reaches roughly
+ * this many bytes. archiver accepts arbitrarily chunked writes, but the
+ * underlying zlib DEFLATE step is a fixed cost per call; coalescing
+ * dramatically reduces overhead on high-row-count tables.
  */
 const NDJSON_FLUSH_BYTES = 64 * 1024;
 
-/**
- * Tables that frequently grow into hundreds of MB of plaintext. These get
- * AsyncZipDeflate so DEFLATE runs on a Worker thread, freeing the main
- * thread to keep producing rows and reading from SQLite in parallel.
- * Smaller / sparse tables keep using the sync ZipDeflate to avoid the
- * per-entry worker-spawn overhead.
- */
-const BIG_NDJSON_TABLES = new Set<string>([
-  "messages",
-  "chat_chunks",
-  "memory_consolidations",
-  "memory_entities",
-  "memory_mentions",
-  "memory_relations",
-  "memory_salience",
-  "memory_font_colors",
-  "world_book_entries",
-  "databank_chunks",
-  "dream_weaver_messages",
-  "cortex_vault_chunks",
-]);
-
-/** Default Bun ReadableStream chunk size for binary copies. */
+/** Default chunk size for binary copies. */
 const FILE_CHUNK_BYTES = 256 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -139,6 +126,11 @@ export function buildExportStream(opts: ExportOptions): ReadableStream<Uint8Arra
         }
       });
     },
+    cancel() {
+      // Client disconnect. The route binds opts.signal to the request
+      // body — Bun tears it down on the same lifecycle, which propagates
+      // into the in-flight SQLite iterators and the archiver sink.
+    },
   });
 }
 
@@ -158,25 +150,6 @@ function emitProgress(userId: string, payload: Record<string, any>): void {
     /* progress is best-effort */
   }
 }
-
-/**
- * Promise-wrapped helper to push a chunk into a ZipInputFile and wait until
- * fflate has consumed it (via the file's `ondata` callback). Without the
- * wait, large NDJSON streams can outpace the underlying deflate and the
- * Zip controller backs up. The Zip-level onData drains into our own
- * ReadableStream controller, which provides natural backpressure.
- */
-function pushChunk(
-  file: ZipInputFile & { push: (chunk: Uint8Array, final?: boolean) => void },
-  chunk: Uint8Array,
-  final: boolean,
-): void {
-  // fflate's ZipDeflate.push is synchronous; we don't need to await. The
-  // ondata callback fires inside push() before it returns.
-  file.push(chunk, final);
-}
-
-// (legacy rowid-pagination helper removed; we use Statement.iterate() directly)
 
 /** Quote a SQL identifier minimally. */
 function ident(name: string): string {
@@ -271,9 +244,6 @@ function scrubRow(row: Record<string, any>, scrub?: Record<string, any>): Record
   return out;
 }
 
-// (rowid stripping no longer needed — Statement.iterate() projects only the
-// explicitly selected columns)
-
 /**
  * Returns true if a `settings.key` value is a known secret namespace.
  * Used to belt-and-braces filter the settings export: even though such
@@ -295,30 +265,60 @@ interface FileRefCollected {
 }
 
 /**
- * Open a NDJSON entry in the zip and return a helper to append rows.
- *
- * Rows are buffered into ~64 KB chunks before being pushed into the
- * underlying deflate stream — each fflate `push()` triggers CRC32 + a
- * DEFLATE step, so coalescing reduces overhead dramatically on high-row-
- * count tables.
- *
- * If `async: true`, an AsyncZipDeflate is used so DEFLATE runs on a Worker
- * thread, freeing the main thread to keep reading from SQLite.
+ * Bridge a Node.js Writable (the archiver's sink) to a Web
+ * ReadableStreamDefaultController. Each chunk flushed by archiver is
+ * forwarded to the controller; an enqueue after the controller has been
+ * closed (client disconnect mid-archive) is swallowed.
  */
-function openNdjsonEntry(zip: Zip, archivePath: string, opts?: { async?: boolean }) {
-  const file = opts?.async
-    ? new AsyncZipDeflate(archivePath, { level: NDJSON_COMPRESSION })
-    : new ZipDeflate(archivePath, { level: NDJSON_COMPRESSION });
-  zip.add(file);
+function makeControllerSink(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+): Writable {
+  return new Writable({
+    write(chunk, _encoding, callback) {
+      try {
+        // chunk is a Buffer; slice so we hand a fresh Uint8Array to the
+        // stream (Bun's controller copies the view's bytes).
+        const view = chunk instanceof Uint8Array
+          ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+          : new Uint8Array(0);
+        controller.enqueue(view);
+        callback();
+      } catch (err) {
+        callback(err as Error);
+      }
+    },
+    final(callback) {
+      try {
+        controller.close();
+      } catch {
+        /* already closed (e.g. we errored) */
+      }
+      callback();
+    },
+  });
+}
+
+/**
+ * Open a streaming NDJSON entry backed by a PassThrough. The caller pushes
+ * row-by-row; `close()` finalises the stream so archiver emits the entry's
+ * data descriptor + central-directory record.
+ *
+ * Rows are coalesced into ~64 KB buffers before being written into the
+ * PassThrough; archiver will feed them to zlib's DEFLATE one chunk at a
+ * time, and a 64 KB call into zlib is roughly the sweet spot for
+ * high-row-count tables.
+ */
+function openNdjsonEntry(archive: ZipArchive, archivePath: string) {
+  const stream = new PassThrough();
+  archive.append(stream as unknown as Readable, { name: archivePath });
   const encoder = new TextEncoder();
   let rowCount = 0;
-  // Coalescing buffer.
   const pending: Uint8Array[] = [];
   let pendingBytes = 0;
 
   function flush(final: boolean): void {
     if (pendingBytes === 0) {
-      if (final) pushChunk(file, new Uint8Array(0), true);
+      if (final) stream.end();
       return;
     }
     let combined: Uint8Array;
@@ -334,7 +334,8 @@ function openNdjsonEntry(zip: Zip, archivePath: string, opts?: { async?: boolean
     }
     pending.length = 0;
     pendingBytes = 0;
-    pushChunk(file, combined, final);
+    stream.write(combined);
+    if (final) stream.end();
   }
 
   return {
@@ -354,56 +355,26 @@ function openNdjsonEntry(zip: Zip, archivePath: string, opts?: { async?: boolean
 
 /**
  * Stream a single on-disk file into the archive. Skipped silently if the
- * file doesn't exist; the caller records the miss in the manifest.
+ * file doesn't exist. Binary payloads (images, avatars) are stored
+ * uncompressed — they're already compressed and zlib would just burn CPU.
  */
-async function streamFileIntoZip(
-  zip: Zip,
+async function streamFileIntoArchive(
+  archive: ZipArchive,
   absPath: string,
   archivePath: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
   if (!existsSync(absPath)) return false;
   const file = Bun.file(absPath);
+  const entryOpts: ZipEntryData = { name: archivePath, store: true };
   if (file.size === 0) {
     // Add an empty entry so the import path still sees it.
-    const empty = new ZipPassThrough(archivePath);
-    zip.add(empty);
-    empty.push(new Uint8Array(0), true);
+    archive.append(Buffer.alloc(0), entryOpts);
     return true;
   }
-  // Images/avatars are typically PNG/JPEG/WebP — already compressed. Store
-  // them with ZipPassThrough (no recompression) to save CPU.
-  const entry = new ZipPassThrough(archivePath);
-  zip.add(entry);
-  const reader = file.stream().getReader();
-  let copied = 0;
-  let yieldDebt = 0;
-  try {
-    while (true) {
-      if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-      const { value, done } = await reader.read();
-      if (done) {
-        pushChunk(entry, new Uint8Array(0), true);
-        break;
-      }
-      if (value) {
-        pushChunk(entry, value, false);
-        copied += value.byteLength;
-        yieldDebt += value.byteLength;
-        if (yieldDebt >= YIELD_BINARY_BYTES) {
-          yieldDebt = 0;
-          await yieldAndCheck(signal);
-        }
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* ignore */
-    }
-  }
-  return copied > 0 || file.size === 0;
+  archive.file(absPath, entryOpts);
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  return true;
 }
 
 /**
@@ -448,7 +419,7 @@ const WORLD_BOOK_EMBEDDINGS_TABLE = "embeddings_world_books";
  */
 async function exportLancedbVectors(
   userId: string,
-  zip: Zip,
+  archive: ZipArchive,
   signal: AbortSignal | undefined,
   onProgress: (table: string, count: number) => void,
 ): Promise<{ counts: Record<string, number> }> {
@@ -483,7 +454,9 @@ async function exportLancedbVectors(
     const archivePath = `lancedb/${tableName}.ndjson`;
     // Vector rows are large (each Float32Array is base64'd into ~6× its byte
     // length) so this is the single biggest beneficiary of off-thread deflate.
-    const entry = openNdjsonEntry(zip, archivePath, { async: true });
+    // archiver doesn't expose a worker-thread DEFLATE knob, but the
+    // PassThrough + 64 KB coalescing keeps zlib's call overhead bounded.
+    const entry = openNdjsonEntry(archive, archivePath);
     let count = 0;
     try {
       // QueryBase implements AsyncIterable<RecordBatch>, so we can stream
@@ -562,36 +535,35 @@ async function runExport(
   const secretsExported: string[] = [];
   let secretsSkipped = 0;
 
-  // Pipe fflate.Zip output into the HTTP response stream.
-  const zip = new Zip((err, chunk, final) => {
-    if (err) {
-      try {
-        controller.error(err);
-      } catch {
-        /* already errored */
-      }
-      return;
-    }
-    if (chunk && chunk.byteLength > 0) {
-      // ZipDeflate emits the empty trailing chunk before `final`; copy chunk
-      // so fflate is free to reuse the underlying buffer. Guard the enqueue
-      // because fflate keeps pushing chunks asynchronously after the client
-      // disconnects, and an unguarded enqueue surfaces as an opaque
-      // AbortError in app.onError.
-      try {
-        controller.enqueue(new Uint8Array(chunk));
-      } catch {
-        /* client disconnected */
-      }
-    }
-    if (final) {
-      try {
-        controller.close();
-      } catch {
-        /* already closed */
-      }
+  // Pipe archiver's output into the HTTP response stream. forceZip64 keeps
+  // the archive valid past 4 GB (32-bit ZIP32 header fields would wrap to
+  // 0 and silently corrupt the central directory otherwise).
+  const archive = new ZipArchive({
+    zlib: { level: NDJSON_COMPRESSION },
+    forceZip64: true,
+  });
+
+  let fatalErr: unknown = null;
+  archive.on("warning", (err: ArchiverError) => {
+    // archiver's "warning" is for recoverable issues (e.g. ENOENT on a
+    // globbed file). For an explicit export we never pass globs, so any
+    // warning here is unexpected — surface it but don't tear down the
+    // archive yet.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`[user-data export] archiver warning: ${err.message}`);
     }
   });
+  archive.on("error", (err: ArchiverError) => {
+    fatalErr = err;
+    try {
+      controller.error(err);
+    } catch {
+      /* already errored */
+    }
+  });
+
+  const sink = makeControllerSink(controller);
+  archive.pipe(sink);
 
   // Snapshot of the embedding config (drives import-side compatibility check).
   let embeddingConfig: ArchiveEmbeddingConfig = { provider: null, model: null, dimension: null };
@@ -621,9 +593,9 @@ async function runExport(
     hasEncryptedSecrets: !!opts.secrets,
     secretsCount: opts.secrets?.secretKeys.length ?? 0,
   });
-  const manifestEntry = new ZipDeflate("manifest.json", { level: NDJSON_COMPRESSION });
-  zip.add(manifestEntry);
-  manifestEntry.push(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), true);
+  archive.append(JSON.stringify(manifest, null, 2), {
+    name: "manifest.json",
+  });
 
   emitProgress(userId, { phase: "start", archiveId, includeVectors });
 
@@ -637,8 +609,7 @@ async function runExport(
     if (EXCLUDED_TABLES.has(spec.table)) return;
     const built = buildSelectForTable(spec.table, userId, spec);
     if (!built) return;
-    const useAsync = BIG_NDJSON_TABLES.has(spec.table);
-    const entry = openNdjsonEntry(zip, `database/${spec.table}.ndjson`, { async: useAsync });
+    const entry = openNdjsonEntry(archive, `database/${spec.table}.ndjson`);
     let rowsOut = 0;
     let lastEmittedAt = 0;
     const stmt = getDb().prepare(built.sql);
@@ -695,8 +666,7 @@ async function runExport(
     const synthSpec: TableSpec = { table, ownership } as TableSpec;
     const built = buildSelectForTable(table, userId, synthSpec);
     if (!built) return;
-    const useAsync = BIG_NDJSON_TABLES.has(table);
-    const entry = openNdjsonEntry(zip, `database/${table}.ndjson`, { async: useAsync });
+    const entry = openNdjsonEntry(archive, `database/${table}.ndjson`);
     let rowsOut = 0;
     let lastEmittedAt = 0;
     const stmt = getDb().prepare(built.sql);
@@ -709,7 +679,11 @@ async function runExport(
       if (rowsOut % YIELD_INTERVAL_ROWS === 0) {
         const now = Date.now();
         if (now - lastEmittedAt >= 100) {
-          emitProgress(userId, { phase: "table", table, processed: rowsOut });
+          emitProgress(userId, {
+            phase: "table",
+            table,
+            processed: rowsOut,
+          });
           lastEmittedAt = now;
         }
         await yieldAndCheck(signal);
@@ -728,9 +702,7 @@ async function runExport(
     const sql =
       `SELECT ${columns.map(ident).join(", ")} FROM ${ident(table)} ` +
       `WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`;
-    const entry = openNdjsonEntry(zip, `database/${table}.ndjson`, {
-      async: BIG_NDJSON_TABLES.has(table),
-    });
+    const entry = openNdjsonEntry(archive, `database/${table}.ndjson`);
     let rowsOut = 0;
     let lastEmittedAt = 0;
     const stmt = getDb().prepare(sql);
@@ -743,7 +715,11 @@ async function runExport(
       if (rowsOut % YIELD_INTERVAL_ROWS === 0) {
         const now = Date.now();
         if (now - lastEmittedAt >= 100) {
-          emitProgress(userId, { phase: "table", table, processed: rowsOut });
+          emitProgress(userId, {
+            phase: "table",
+            table,
+            processed: rowsOut,
+          });
           lastEmittedAt = now;
         }
         await yieldAndCheck(signal);
@@ -779,8 +755,8 @@ async function runExport(
   try {
     const sound = getCompletionSound(userId);
     if (sound) {
-      const ok = await streamFileIntoZip(
-        zip,
+      const ok = await streamFileIntoArchive(
+        archive,
         sound.filepath,
         `files/notification-sounds/${basename(sound.filepath)}`,
         signal,
@@ -804,7 +780,7 @@ async function runExport(
   let filesDone = 0;
   await withConcurrency(deduped, FILE_CONCURRENCY, async (entry) => {
     if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    const ok = await streamFileIntoZip(zip, entry.absolutePath, entry.archivePath, signal);
+    const ok = await streamFileIntoArchive(archive, entry.absolutePath, entry.archivePath, signal);
     if (!ok) missingFiles.push(entry.absolutePath);
     filesDone++;
     if ((filesDone & 31) === 0) {
@@ -819,7 +795,7 @@ async function runExport(
     emitProgress(userId, { phase: "lancedb_start" });
     const { counts: vectorCounts } = await exportLancedbVectors(
       userId,
-      zip,
+      archive,
       signal,
       (table, count) => emitProgress(userId, { phase: "lancedb", table, processed: count }),
     );
@@ -832,8 +808,8 @@ async function runExport(
     emitProgress(userId, { phase: "secrets_start" });
     const ctx = opts.secrets;
     const wanted = new Set(ctx.secretKeys);
-    const indexEntry = openNdjsonEntry(zip, "secrets/index.json");
-    const blobEntry = openNdjsonEntry(zip, "secrets/encrypted.ndjson", { async: true });
+    const indexEntry = openNdjsonEntry(archive, "secrets/index.json");
+    const blobEntry = openNdjsonEntry(archive, "secrets/encrypted.ndjson");
 
     // Sidecar with public metadata only — names of the keys, no values.
     // Lets the importer surface "will restore N keys" before the user
@@ -884,12 +860,24 @@ async function runExport(
 
   // ---- 6) Stats trailer (counts + missing-files report) -------------
   const stats = { counts, missingFiles };
-  const statsEntry = new ZipDeflate("manifest-stats.json", { level: NDJSON_COMPRESSION });
-  zip.add(statsEntry);
-  statsEntry.push(new TextEncoder().encode(JSON.stringify(stats, null, 2)), true);
+  archive.append(JSON.stringify(stats, null, 2), {
+    name: "manifest-stats.json",
+  });
 
-  // ---- 7) Finalize the ZIP ----------------------------------------
-  zip.end();
+  // ---- 7) Finalize the archive ------------------------------------
+  try {
+    await archive.finalize();
+  } catch (err) {
+    if (!fatalErr) {
+      try {
+        controller.error(err);
+      } catch {
+        /* already errored */
+      }
+    }
+    throw err;
+  }
+  if (fatalErr) throw fatalErr;
 
   emitProgress(userId, { phase: "complete", archiveId, schemaVersion: ARCHIVE_SCHEMA_VERSION });
 }
