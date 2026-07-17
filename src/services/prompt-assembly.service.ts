@@ -2972,10 +2972,11 @@ export async function assemblePrompt(
         content: oocContent,
       });
     } else {
-      // Append to the last user message
+      // Append to the last real chat-history user message so preset-added
+      // user prompts (e.g. CoT instructions placed after history) don't steal it.
       let injected = false;
       for (let i = result.length - 1; i >= 0; i--) {
-        if (result[i].role === "user") {
+        if (result[i].role === "user" && isChatHistoryMessage(result[i])) {
           if (typeof result[i].content === "string") {
             result[i] = {
               ...result[i],
