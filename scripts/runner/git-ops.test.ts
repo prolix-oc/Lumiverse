@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   inspectDependencyTree,
+  planChangedDependencies,
   prepareDependencyInstall,
   restoreDependencyInstall,
   runWithServerStopped,
@@ -110,4 +111,25 @@ test("starts the server once after a stopped operation succeeds", async () => {
   );
 
   expect(calls).toEqual(["stop", "operation", "start"]);
+});
+
+test("repairs Termux native bindings before a source-only frontend rebuild", () => {
+  expect(planChangedDependencies(["frontend/src/App.tsx"], true)).toEqual({
+    installBackend: false,
+    installFrontend: false,
+    repairTermuxFrontendNativeDeps: true,
+  });
+});
+
+test("does not duplicate the Termux binding repair after a frontend install", () => {
+  expect(planChangedDependencies(["frontend/package.json"], true)).toEqual({
+    installBackend: false,
+    installFrontend: true,
+    repairTermuxFrontendNativeDeps: false,
+  });
+});
+
+test("does not repair frontend bindings for backend-only or non-Termux updates", () => {
+  expect(planChangedDependencies(["src/main.ts"], true).repairTermuxFrontendNativeDeps).toBe(false);
+  expect(planChangedDependencies(["frontend/src/App.tsx"], false).repairTermuxFrontendNativeDeps).toBe(false);
 });

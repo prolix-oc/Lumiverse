@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { promoteFrontendBuild, recoverInterruptedBuild } from './build-frontend'
+import { promoteFrontendBuild, recoverInterruptedBuild, resolveViteRuntime } from './build-frontend'
 
 const tempDirs: string[] = []
 
@@ -26,6 +26,19 @@ afterEach(() => {
 })
 
 describe('atomic frontend build promotion', () => {
+  test('uses Android-aware Node to select native bindings on Termux', () => {
+    expect(resolveViteRuntime(
+      { LUMIVERSE_IS_TERMUX: 'true' },
+      '/home/user/.bun/bin/bun',
+      '/data/data/com.termux/files/usr/bin/node',
+    )).toBe('/data/data/com.termux/files/usr/bin/node')
+  })
+
+  test('keeps Bun as the Vite runtime outside Termux-like environments', () => {
+    expect(resolveViteRuntime({}, '/home/user/.bun/bin/bun', '/usr/bin/node'))
+      .toBe('/home/user/.bun/bin/bun')
+  })
+
   test('restores the previous bundle after an interrupted directory swap', () => {
     const root = makeTempDir()
     const staged = join(root, '.dist-build-stale')

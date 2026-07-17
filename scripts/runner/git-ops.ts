@@ -119,6 +119,32 @@ function frontendDependenciesChanged(changedFiles: string[] | null): boolean {
   );
 }
 
+export interface ChangedDependencyPlan {
+  installBackend: boolean;
+  installFrontend: boolean;
+  repairTermuxFrontendNativeDeps: boolean;
+}
+
+/**
+ * Keep source-only Termux rebuilds on the same native-binding repair path that
+ * the pre-optimization update flow got from reinstalling frontend dependencies
+ * on every update. A frontend install already performs this repair itself.
+ */
+export function planChangedDependencies(
+  changedFiles: string[] | null,
+  termuxLike: boolean,
+): ChangedDependencyPlan {
+  const installBackend = backendDependenciesChanged(changedFiles);
+  const installFrontend = frontendDependenciesChanged(changedFiles);
+
+  return {
+    installBackend,
+    installFrontend,
+    repairTermuxFrontendNativeDeps:
+      termuxLike && shouldRebuildFrontend(changedFiles) && !installFrontend,
+  };
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -561,19 +587,25 @@ async function ensureChangedDependencies(
   changedFiles: string[] | null,
   reportProgress?: ProgressReporter,
 ): Promise<void> {
-  const installBackend = backendDependenciesChanged(changedFiles);
-  const installFrontend = frontendDependenciesChanged(changedFiles);
+  const plan = planChangedDependencies(
+    changedFiles,
+    isTermuxRuntime() || isProotRuntime(),
+  );
 
-  if (installBackend) {
+  if (plan.installBackend) {
     reportProgress?.("Installing backend dependencies...");
     await ensureBackendDependencies();
   }
-  if (installFrontend) {
+  if (plan.installFrontend) {
     reportProgress?.("Installing frontend dependencies...");
     await ensureFrontendDependencies(frontendDir);
   }
-  if (!installBackend && !installFrontend) {
+  if (!plan.installBackend && !plan.installFrontend) {
     log("Dependency manifests are unchanged; skipping package installation.");
+  }
+  if (plan.repairTermuxFrontendNativeDeps) {
+    reportProgress?.("Repairing Termux frontend native bindings...");
+    await repairTermuxFrontendNativeDeps(frontendDir);
   }
 }
 

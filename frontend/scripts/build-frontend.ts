@@ -9,6 +9,20 @@ import { basename, join, resolve } from 'path'
 
 const REQUIRED_BUILD_FILES = ['index.html', 'sw.js'] as const
 
+export function resolveViteRuntime(
+  env: Record<string, string | undefined> = process.env,
+  bunExecPath = process.execPath,
+  nodeExecPath: string | null = Bun.which('node'),
+): string {
+  const isTermuxLike = env.LUMIVERSE_IS_TERMUX === 'true' || env.LUMIVERSE_IS_PROOT === 'true'
+
+  // The glibc Bun binary used on native Termux reports itself as Linux, while
+  // Termux's Node runtime correctly reports Android. Vite/Rolldown selects its
+  // native binding from that platform value, so preserve the pre-wrapper
+  // `vite build` behavior and honor Vite's Node runtime on Termux-like hosts.
+  return isTermuxLike ? nodeExecPath ?? 'node' : bunExecPath
+}
+
 function assertUsableBuild(buildDir: string): void {
   for (const file of REQUIRED_BUILD_FILES) {
     const path = join(buildDir, file)
@@ -87,7 +101,7 @@ async function buildFrontend(): Promise<void> {
   rmSync(backupDir, { recursive: true, force: true })
 
   console.log(`Building frontend into ${basename(stagedDir)}...`)
-  const proc = Bun.spawn([process.execPath, viteCli, 'build', '--outDir', stagedDir, '--emptyOutDir'], {
+  const proc = Bun.spawn([resolveViteRuntime(), viteCli, 'build', '--outDir', stagedDir, '--emptyOutDir'], {
     cwd: frontendDir,
     stdin: 'ignore',
     stdout: 'inherit',
