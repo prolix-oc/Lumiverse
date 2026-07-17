@@ -6,6 +6,7 @@ import {
   inspectDependencyTree,
   prepareDependencyInstall,
   restoreDependencyInstall,
+  runWithServerStopped,
 } from "./git-ops.js";
 
 const tempDirs: string[] = [];
@@ -80,4 +81,33 @@ test("restores the previous dependency tree after a failed repair attempt", () =
   expect(existsSync(join(dir, "node_modules", "hono"))).toBe(true);
   expect(existsSync(join(dir, "node_modules", "@types", "node"))).toBe(false);
   expect(existsSync(join(dir, "node_modules", ".lumiverse-install-complete"))).toBe(false);
+});
+
+test("restarts the server after a stopped operation fails", async () => {
+  const calls: string[] = [];
+
+  await expect(runWithServerStopped(
+    "test operation",
+    async () => { calls.push("stop"); },
+    async () => { calls.push("start"); },
+    async () => {
+      calls.push("operation");
+      throw new Error("build failed");
+    },
+  )).rejects.toThrow("build failed");
+
+  expect(calls).toEqual(["stop", "operation", "start"]);
+});
+
+test("starts the server once after a stopped operation succeeds", async () => {
+  const calls: string[] = [];
+
+  await runWithServerStopped(
+    "test operation",
+    async () => { calls.push("stop"); },
+    async () => { calls.push("start"); },
+    async () => { calls.push("operation"); },
+  );
+
+  expect(calls).toEqual(["stop", "operation", "start"]);
 });

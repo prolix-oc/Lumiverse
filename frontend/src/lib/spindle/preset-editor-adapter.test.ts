@@ -17,6 +17,15 @@ describe('preset editor draft adapter', () => {
     expect(raw.metadata?.fixture_extension).toEqual({ mode: 'multi' })
   })
 
+  test('projects an explicitly undefined block variables field as omitted', () => {
+    const current = createNewLoomPreset('Native block save')
+    current.blocks[0]!.variables = undefined
+
+    const draft = toPresetEditorDraft(current)
+
+    expect(Object.hasOwn(draft.blocks[0]!, 'variables')).toBe(false)
+  })
+
   test('accepts published drafts without promptVariables and reconciles current values', () => {
     const current = createNewLoomPreset('Published-shape source')
     const block = current.blocks[0]!

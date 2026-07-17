@@ -155,7 +155,7 @@ function projectPublicBlock(value: unknown, label: string): PromptBlockDTO {
   const target: Record<string, unknown> = {}
   for (const key of PUBLIC_BLOCK_KEYS) putPublicField(target, value, key, label)
   const variables = ownData(value, 'variables', label)
-  if (variables.present) {
+  if (variables.present && variables.value !== undefined) {
     target.variables = ownArrayElements(variables.value, `${label}.variables`, 'maxVariablesPerBlock')
       .map((variable, index) => projectPublicVariable(variable, `${label}.variables[${index}]`))
   }

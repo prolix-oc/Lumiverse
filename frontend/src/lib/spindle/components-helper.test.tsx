@@ -39,9 +39,9 @@ test('component helper cases pass in an isolated module graph', async () => {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter((line) => /^\d+ (?:pass|fail|skip)$/.test(line))
-      expect(summaryLines).toEqual(['29 pass', '0 fail'])
+      expect(summaryLines).toEqual(['31 pass', '0 fail'])
       expect(output).toMatch(/\b[1-9]\d* expect\(\) calls\b/)
-      expect(output).toMatch(/Ran 29 tests across 1 file/)
+      expect(output).toMatch(/Ran 31 tests across 1 file/)
     } catch (error) {
       throw new Error(
         `Isolated component helper tests failed:\n${diagnostics}\n${String(error)}`,

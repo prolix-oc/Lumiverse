@@ -760,7 +760,7 @@ start_backend() {
     info "Serving frontend from: $frontend_dist"
   elif [[ "$MODE" != "dev" ]]; then
     warn "No frontend build found. Backend will start without serving frontend."
-    warn "Run './start.sh --build-only' first, or use './start.sh' to build + start."
+    warn "Run './start.sh --build-only' first, or use './start.sh --build' to build + start."
   fi
 
   install_deps "$BACKEND_DIR" "backend"

@@ -392,6 +392,66 @@ describe('public component bridge lifecycle and ownership', () => {
     handle.destroy()
   })
 
+  test('adopts components mounted while an extension-owned subtree is assembled off-DOM', async () => {
+    const extensionId = 'bridge-detached-subtree'
+    const root = ownedRoot(extensionId, 'detached-subtree-root')
+    const card = document.createElement('section')
+    const selectTarget = document.createElement('div')
+    const sliderTarget = document.createElement('div')
+    card.append(selectTarget, sliderTarget)
+    const helper = createComponentsHelper(
+      extensionId,
+      extensionId,
+      async () => ({ categories: [] }),
+      generation,
+    )
+
+    const select = helper.mountSelect(selectTarget, {
+      value: 'one',
+      options: [{ value: 'one', label: 'One' }],
+    })
+    const slider = helper.mountRangeSlider(sliderTarget, {
+      min: 0,
+      max: 1,
+      step: 0.1,
+      value: 0.5,
+    })
+    const portal = document.body.querySelector<HTMLElement>('[data-spindle-component-portal]')
+    expect(portal?.hasAttribute('hidden')).toBe(true)
+
+    root.append(card)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(select.getValue()).toBe('one')
+    expect(slider.getValue()).toBe(0.5)
+    expect(portal?.hasAttribute('hidden')).toBe(false)
+    select.destroy()
+    slider.destroy()
+  })
+
+  test('destroys a provisional detached mount unless it is synchronously adopted by an owned root', async () => {
+    const extensionId = 'bridge-unadopted-subtree'
+    const helper = createComponentsHelper(
+      extensionId,
+      extensionId,
+      async () => ({ categories: [] }),
+      generation,
+    )
+    const target = document.createElement('div')
+    const handle = helper.mountTextInput(target, { value: 'provisional' })
+
+    expect(handle.getValue()).toBe('provisional')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(() => handle.getValue()).toThrow('COMPONENT_DESTROYED')
+
+    const connectedTarget = document.createElement('div')
+    document.body.append(connectedTarget)
+    expect(() => helper.mountTextInput(connectedTarget, { value: 'unowned' }))
+      .toThrow('components.mount*(): target must be inside DOM owned by the current extension')
+  })
+
   test('closes mounts when their target is removed from a detached owner root', async () => {
     const extensionId = 'bridge-detached-removal'
     const root = document.createElement('section')

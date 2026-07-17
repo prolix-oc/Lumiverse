@@ -50,7 +50,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
 Every `mountX(target, options)` call:
 
-1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string. Selectors are evaluated across the current extension's live registered placement roots, including roots temporarily detached while their tab or panel is inactive; the selector must resolve exactly one target.
+1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string. Selectors are evaluated across the current extension's live registered placement roots, including roots temporarily detached while their tab or panel is inactive; the selector must resolve exactly one target. An `HTMLElement` in a newly constructed, unowned detached subtree is accepted provisionally so you can mount a component before appending its containing card or panel. That subtree must be appended under one of your live registered roots synchronously, before the current JavaScript task completes, or the host destroys the mount.
 2. **Renders the real component** into that element.
 3. **Returns a handle** with `update()`, `destroy()`, and component-specific helpers such as `getValue()` where documented.
 
@@ -111,7 +111,7 @@ For form components, the host commits the next value before invoking `onChange`,
 
 ## Loom block editor
 
-`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still be inside a live, currently registered placement root owned by the calling extension (the same target rules as every shared component apply). A registered placement root may be temporarily detached while its tab or panel is inactive; an arbitrary detached element with only an ownership attribute is not a valid target.
+`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still follow the same ownership rules as every shared component. A registered placement root may be temporarily detached while its tab or panel is inactive. A new unowned detached subtree may be mounted provisionally only when it is synchronously appended under a live registered root; an arbitrary detached element with only an ownership attribute is not a valid target.
 
 The public value is deliberately closed:
 

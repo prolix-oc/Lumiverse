@@ -5,7 +5,9 @@ import {
   applyUpdate,
   switchBranch,
   ensureDependencies,
+  ensureFrontendDependencies,
   rebuildFrontend,
+  runWithServerStopped,
 } from "./git-ops.js";
 import { writeTrustAnyOrigin } from "./env-config.js";
 import {
@@ -238,19 +240,22 @@ export async function handleIPCMessage(msg: any): Promise<void> {
         await waitForResponseFlush();
         const frontendDir = join(PROJECT_ROOT, "frontend");
 
-        progress(id, "rebuild", "Stopping server for dependency checks and frontend rebuild...");
-        await stopServer();
+        progress(id, "rebuild", "Stopping server for frontend rebuild...");
+        await runWithServerStopped(
+          "Frontend rebuild",
+          () => stopServer(),
+          () => { startServer(isDev); return Promise.resolve(); },
+          async () => {
+            progress(id, "rebuild", "Installing frontend dependencies...");
+            await ensureFrontendDependencies(frontendDir);
 
-        progress(id, "rebuild", "Installing backend and frontend dependencies...");
-        await ensureDependencies(frontendDir);
-
-        progress(id, "rebuild", "Waiting for Vite build to finish...");
-        await rebuildFrontend(frontendDir);
-
-        startServer(isDev);
+            progress(id, "rebuild", "Waiting for Vite build to finish...");
+            await rebuildFrontend(frontendDir);
+          },
+        );
       } catch (err) {
         console.error("[runner] Frontend rebuild failed:", err);
-        console.error("[runner] Server remains stopped because the rebuild did not complete successfully.");
+        console.error("[runner] Server restarted with the previous validated frontend bundle.");
       } finally {
         operationInProgress = null;
       }

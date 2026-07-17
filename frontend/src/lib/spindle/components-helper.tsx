@@ -97,7 +97,8 @@ interface PortalNodeState {
 
 interface TrackedMount {
   root: Root
-  ownerRoot: Element
+  ownerRoot: Element | null
+  unsubscribeOwner: () => void
   target: HTMLElement
   portalOwnerId: string
   portalNodes: Set<HTMLElement>
@@ -225,22 +226,42 @@ function resolveTarget(
     throw new Error('components.mount*(): target must resolve to an HTMLElement')
   }
   const ownerRecord = getPlacementRootRecord(extensionId, resolved, expectedGeneration)
-  if (!isOwnedByExtension(extensionId, resolved)) {
+  const awaitingSynchronousAdoption = !selectorTarget
+    && !isConnectedToDocument(resolved)
+    && ownershipBoundary(resolved) === null
+    && ownerRecord === null
+  if (!isOwnedByExtension(extensionId, resolved) && !awaitingSynchronousAdoption) {
     throw new Error('components.mount*(): target must be inside DOM owned by the current extension')
   }
-  if (!ownerRecord) {
+  if (!ownerRecord && !awaitingSynchronousAdoption) {
     throw new Error('components.mount*(): target must be inside a registered placement owned by the current extension')
   }
   return resolved
 }
 
+function adoptPendingMount(extensionId: string, mount: TrackedMount): boolean {
+  if (mount.ownerRoot) return true
+  const ownerRecord = getPlacementRootRecord(extensionId, mount.target, mount.generation)
+  if (!ownerRecord || !isOwnedByExtension(extensionId, mount.target)) return false
+  mount.ownerRoot = ownerRecord.root
+  mount.requiredPermission = ownerRecord.permission
+  mount.unsubscribeOwner = subscribeLiveRoot(ownerRecord.root, mount.destroy)
+  observeExtensionMounts(extensionId, ownerRecord.root)
+  syncPortalVisibility(mount)
+  return true
+}
+
 function isMountLive(extensionId: string, mount: TrackedMount): boolean {
   if (mount.destroyed || mount.generation !== currentGeneration(extensionId)) return false
-  if (!mount.ownerRoot.contains(mount.target)) return false
+  if (!mount.ownerRoot && !adoptPendingMount(extensionId, mount)) {
+    return !isConnectedToDocument(mount.target) && ownershipBoundary(mount.target) === null
+  }
+  const ownerRoot = mount.ownerRoot
+  if (!ownerRoot || !ownerRoot.contains(mount.target)) return false
   const boundary = ownershipBoundary(mount.target)
   if (!boundary) return false
   const targetRecord = getLiveRootRecord(extensionId, mount.target, mount.generation)
-  if (!targetRecord || targetRecord.root !== mount.ownerRoot) return false
+  if (!targetRecord || targetRecord.root !== ownerRoot) return false
   return boundary.getAttribute('data-spindle-extension-root') === extensionId
     || boundary.getAttribute('data-spindle-ext') === extensionId
 }
@@ -274,7 +295,7 @@ function setPortalOwnerActivity(node: HTMLElement, active: boolean): void {
 }
 
 function syncPortalVisibility(mount: TrackedMount): void {
-  const ownerDetached = !isConnectedToDocument(mount.ownerRoot)
+  const ownerDetached = !mount.ownerRoot || !isConnectedToDocument(mount.ownerRoot)
   for (const node of mount.portalNodes) {
     if (ownerDetached) {
       node.setAttribute('hidden', '')
@@ -362,7 +383,7 @@ function track(extensionId: string, mount: TrackedMount): void {
     mountsByExtension.set(extensionId, set)
   }
   set.add(mount)
-  observeExtensionMounts(extensionId, mount.ownerRoot)
+  observeExtensionMounts(extensionId, mount.ownerRoot ?? undefined)
   collectPortalNodes(mount)
   syncPortalVisibility(mount)
 }
@@ -483,16 +504,18 @@ function buildHandle<TOptions, TValue>(
 ): SpindleMountedComponent<TOptions> & { getValue(): TValue } & Omit<BridgeAPI<TOptions, TValue>, 'update' | 'getValue'> {
   const generation = currentGeneration(extensionId)
   const ownerRecord = getPlacementRootRecord(extensionId, target, generation)
-  if (!ownerRecord) {
+  const awaitingSynchronousAdoption = !ownerRecord
+    && !isConnectedToDocument(target)
+    && ownershipBoundary(target) === null
+  if (!ownerRecord && !awaitingSynchronousAdoption) {
     mount.root.unmount()
     throw new Error('components.mount*(): target root was unregistered during mount')
   }
-  let unsubscribeOwner = () => {}
   let tracked: TrackedMount
   const destroy = (skipPortalScan: boolean): void => {
     if (tracked.destroyed) return
     tracked.destroyed = true
-    unsubscribeOwner()
+    tracked.unsubscribeOwner()
     if (!skipPortalScan) collectPortalNodes(tracked)
     try {
       mount.bridge.invalidate?.()
@@ -509,7 +532,8 @@ function buildHandle<TOptions, TValue>(
   }
   tracked = {
     root: mount.root,
-    ownerRoot: ownerRecord.root,
+    ownerRoot: ownerRecord?.root ?? null,
+    unsubscribeOwner: () => {},
     target,
     portalOwnerId: mount.portalOwnerId,
     portalNodes: new Set(),
@@ -521,7 +545,16 @@ function buildHandle<TOptions, TValue>(
     destroyAfterPortalIndex: () => destroy(true),
   }
   track(extensionId, tracked)
-  unsubscribeOwner = subscribeLiveRoot(ownerRecord.root, tracked.destroy)
+  if (ownerRecord) {
+    tracked.unsubscribeOwner = subscribeLiveRoot(ownerRecord.root, tracked.destroy)
+  } else {
+    // Compatibility for extensions that construct a detached subtree, mount
+    // host components into it, then append the subtree before returning to the
+    // event loop. The provisional mount never becomes live in unowned DOM.
+    queueMicrotask(() => {
+      if (!tracked.destroyed && !adoptPendingMount(extensionId, tracked)) tracked.destroy()
+    })
+  }
 
   const ensureLive = (): boolean => {
     if (isMountLive(extensionId, tracked)) return true

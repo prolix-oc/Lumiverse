@@ -58,6 +58,8 @@ Thumbs.db
 frontend/src/lib/generatedComponentProps.ts
 frontend/src/lib/generatedCssVariables.ts
 frontend/src/lib/generatedComponentCss.ts
+frontend/.dist-build-*/
+frontend/.dist-backup-*/
 *.tsbuildinfo
 
 # =============================================================================
@@ -74,6 +76,7 @@ frontend/src/lib/generatedComponentCss.ts
 !CONTRIBUTING.md
 !CODE_OF_CONDUCT.md
 !.github/ISSUE_TEMPLATE/**/*.md
+!.github/PULL_REQUEST_TEMPLATE.md
 scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh

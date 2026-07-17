@@ -8,7 +8,7 @@
     "extract-props": "bun run scripts/extract-props.ts",
     "extract-css-vars": "bun run scripts/extract-css-vars.ts",
     "typecheck": "bun run extract-props && bun run extract-css-vars && tsc -b",
-    "build": "bun run extract-props && bun run extract-css-vars && vite build",
+    "build": "bun run extract-props && bun run extract-css-vars && bun run scripts/build-frontend.ts",
     "build:checked": "bun run typecheck && bun run build",
     "preview": "vite preview",
     "postinstall": "node scripts/postinstall-bindings.cjs || true"
