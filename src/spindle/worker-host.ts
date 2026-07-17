@@ -5942,11 +5942,10 @@ export class WorkerHost {
         return new Promise<MacroInterceptorResult | void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
-            reject(
-              new Error(
-                `Macro interceptor timeout from ${this.manifest.identifier}`
-              )
+            console.warn(
+              `[Spindle] Macro interceptor from ${this.manifest.identifier} timed out after 10s; skipping`
             );
+            resolve(undefined);
           }, 10_000);
 
           this.pendingRequests.set(requestId, {
@@ -5994,11 +5993,10 @@ export class WorkerHost {
         return new Promise<WorldInfoInterceptorResultDTO | void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             this.pendingRequests.delete(requestId);
-            reject(
-              new Error(
-                `World-info interceptor timeout from ${this.manifest.identifier}`
-              )
+            console.warn(
+              `[Spindle] World-info interceptor from ${this.manifest.identifier} timed out after 10s; skipping`
             );
+            resolve(undefined);
           }, 10_000);
 
           this.pendingRequests.set(requestId, {
