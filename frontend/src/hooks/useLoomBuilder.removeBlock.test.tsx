@@ -160,10 +160,14 @@ interface LoomBuilderTestSurface {
 }
 
 let hookSurface: LoomBuilderTestSurface
+// Test harness intentionally performs non-reactive assignments to module-level
+// test state so the suite can inspect hook outputs. This is safe only in tests.
+/* eslint-disable react-compiler/react-compiler */
 function HookHarness() {
   hookSurface = useLoomBuilder()
   return null
 }
+/* eslint-enable react-compiler/react-compiler */
 
 
 async function waitForEvent(event: string): Promise<void> {

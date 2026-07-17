@@ -140,7 +140,7 @@ export default function CommandPalette() {
     }
 
     return { grouped: groups, orderedFlat: flat, flatIndexMap: idxMap }
-  }, [query, userRole, drawerTabs, drawerSettings.hiddenTabIds, hiddenPlacements, extensionCommands, activeScopes, location.pathname, hiddenTabIds, hiddenPlacementIds, i18n.language])
+  }, [query, userRole, drawerTabs, extensionCommands, activeScopes, location.pathname, hiddenTabIds, hiddenPlacementIds])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {

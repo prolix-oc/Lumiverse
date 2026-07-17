@@ -66,7 +66,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         setStreamingError(msg)
       }
     },
-    [chatId, isStreaming, mutedCharacterIds, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, startStreaming, setStreamingError]
+    [chatId, isStreaming, mutedCharacterIds, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, startStreaming, setStreamingError, te]
   )
 
   const openContextMenu = useCallback((characterId: string, pos: ContextMenuPos) => {
@@ -124,7 +124,7 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
         },
       })
     },
-    [chatId, characters, groupCharacterIds, mutedCharacterIds, setGroupCharacterIds, setMutedCharacterIds, openModal]
+    [chatId, characters, groupCharacterIds, mutedCharacterIds, setGroupCharacterIds, setMutedCharacterIds, openModal, t]
   )
 
   const handleForceGenerateFromMenu = useCallback(
@@ -153,8 +153,6 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
     if (!chars || typeof chars !== 'object') return new Set<string>()
     return new Set(Object.keys(chars).filter((id) => !!chars[id]))
   }, [activeChatMetadata])
-
-  if (groupCharacterIds.length === 0) return null
 
   const contextIsMuted = contextMenu ? mutedCharacterIds.includes(contextMenu.characterId) : false
 
@@ -191,6 +189,8 @@ export default function GroupChatMemberBar({ chatId }: GroupChatMemberBarProps) 
       },
     ]
   }, [contextMenu, contextIsMuted, isStreaming, overrideIds, handleForceGenerateFromMenu, handleToggleMute, handleOpenVoiceModal, handleRemoveMember, t])
+
+  if (groupCharacterIds.length === 0) return null
 
   return (
     <div className={styles.barWrapper}>

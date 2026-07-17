@@ -96,7 +96,7 @@ export default function GroupChatCreatorModal() {
     if (Object.keys(overrides).length > 0) {
       setTalkativenessOverrides((prev) => ({ ...prev, ...overrides }))
     }
-  }, [selectedCharacters])
+  }, [selectedCharacters, talkativenessOverrides])
 
   const greetingOptions = useMemo<GreetingOption[]>(() => {
     const options: GreetingOption[] = []

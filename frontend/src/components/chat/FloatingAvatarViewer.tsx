@@ -39,7 +39,7 @@ export default function FloatingAvatarViewer() {
   useEffect(() => {
     if (!floatingAvatar) return
     setSize({ width: floatingAvatar.width, height: floatingAvatar.height })
-  }, [floatingAvatar?.width, floatingAvatar?.height])
+  }, [floatingAvatar, floatingAvatar?.width, floatingAvatar?.height])
 
   // Position on open — center of viewport or use stored position
   useEffect(() => {
@@ -53,7 +53,7 @@ export default function FloatingAvatarViewer() {
     x = Math.max(PAD, Math.min(x, window.innerWidth - floatingAvatar.width - PAD))
     y = Math.max(PAD, Math.min(y, window.innerHeight - floatingAvatar.height - DRAG_BAR_H - PAD))
     setPos({ x, y })
-  }, [floatingAvatar?.imageUrl]) // re-center when a new image opens
+  }, [floatingAvatar?.imageUrl, floatingAvatar]) // re-center when a new image opens
 
   // Detect image aspect ratio and adjust container size
   useEffect(() => {

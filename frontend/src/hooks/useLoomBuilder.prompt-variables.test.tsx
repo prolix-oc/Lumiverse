@@ -175,11 +175,15 @@ interface LoomBuilderTestSurface {
 let hookSurface: LoomBuilderTestSurface
 const mountedRoots = new Set<Root>()
 let renderCount = 0
+// Test harness intentionally performs non-reactive assignments to module-level
+// test state so the suite can inspect hook outputs. This is safe only in tests.
+/* eslint-disable react-compiler/react-compiler */
 function HookHarness() {
   renderCount += 1
   hookSurface = useLoomBuilder() as unknown as LoomBuilderTestSurface
   return null
 }
+/* eslint-enable react-compiler/react-compiler */
 
 async function renderHook(): Promise<{ host: HTMLDivElement; root: Root }> {
   const host = document.createElement('div')

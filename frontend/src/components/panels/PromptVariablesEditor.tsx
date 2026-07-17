@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DndContext,
@@ -35,7 +35,6 @@ import type {
   PromptVariableOption,
   PromptVariableType,
 } from '@/lib/loom/types'
-import { useDragHandleBlur } from './connection-manager/useDragHandleBlur'
 import css from './PromptVariablesEditor.module.css'
 
 // ============================================================================
@@ -354,11 +353,18 @@ function VariableRow({
     transition,
     isDragging,
   })
-  const handleRef = useDragHandleBlur(isDragging)
+  const handleRef = useRef<HTMLButtonElement>(null)
+  const wasDraggingRef = useRef(false)
+  useEffect(() => {
+    if (wasDraggingRef.current && !isDragging) {
+      handleRef.current?.blur()
+    }
+    wasDraggingRef.current = isDragging
+  }, [isDragging])
   const setHandleRef = useCallback((node: HTMLButtonElement | null) => {
     handleRef.current = node
     setActivatorNodeRef(node)
-  }, [handleRef, setActivatorNodeRef])
+  }, [setActivatorNodeRef])
   const typeOptions = useMemo(
     () =>
       (['text', 'textarea', 'number', 'slider', 'select', 'switch', 'multiselect'] as const).map((value) => ({

@@ -160,7 +160,6 @@ export default function SearchableSelect(props: SearchableSelectProps) {
   const isSelected = useCallback(
     (v: string) =>
       isMulti ? (props.value as string[]).includes(v) : props.value === v,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isMulti, props.value],
   )
 
@@ -177,7 +176,6 @@ export default function SearchableSelect(props: SearchableSelectProps) {
         setSearch('')
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isMulti, props.onChange, props.value],
   )
 
@@ -186,7 +184,6 @@ export default function SearchableSelect(props: SearchableSelectProps) {
     ;(props.onChange as (value: string) => void)('')
     setOpen(false)
     setSearch('')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMulti, props.onChange])
 
   // Tracks the last window/visualViewport resize so the outside-click handler
@@ -395,7 +392,6 @@ export default function SearchableSelect(props: SearchableSelectProps) {
 
   const selectedOption = useMemo(
     () => (isMulti ? undefined : options.find((o) => o.value === (props.value as string))),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isMulti, options, props.value],
   )
 

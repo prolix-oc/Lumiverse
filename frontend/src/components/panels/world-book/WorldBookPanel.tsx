@@ -331,7 +331,7 @@ export default function WorldBookPanel() {
     } catch {
       setVectorStatus(t('worldBookPanel.vectorPreviewFailed'))
     }
-  }, [selectedBookId])
+  }, [selectedBookId, t])
 
   const handleConvertToVectorized = useCallback(async () => {
     if (!selectedBookId) return

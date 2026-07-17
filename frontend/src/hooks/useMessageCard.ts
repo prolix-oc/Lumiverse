@@ -267,10 +267,7 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const avatar = useMemo(
     () => ({ cropped: croppedAvatarTiers, original: originalAvatarTiers }),
-    [
-      croppedAvatarTiers.sm, croppedAvatarTiers.lg, croppedAvatarTiers.full,
-      originalAvatarTiers.sm, originalAvatarTiers.lg, originalAvatarTiers.full,
-    ],
+    [croppedAvatarTiers, originalAvatarTiers],
   )
 
   const macroUserName = useMemo(() => {
@@ -480,6 +477,7 @@ export function useMessageCard(message: Message, chatId: string) {
   // back to the live roster because no per-message snapshot exists for them.
   // Non-reactive read on purpose: avoids re-rendering every card on
   // typing/presence churn.
+  // eslint-disable-next-line react-compiler/react-compiler
   const mpStore = useStore.getState()
   const mpAuthor = resolveMultiplayerMessageAuthor({
     message,

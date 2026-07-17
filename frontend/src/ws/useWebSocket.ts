@@ -2029,7 +2029,7 @@ export function useWebSocket() {
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, store])
 
   useEffect(() => {
     wsClient.setFocusedChat(activeChatId)

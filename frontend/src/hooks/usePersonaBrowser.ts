@@ -408,6 +408,7 @@ export function usePersonaBrowser() {
       activePersonaId,
       characters,
       characterPersonaBindings,
+      isChatScoped,
       personaTagBindings,
       persistedChatPersonaId,
       personas,

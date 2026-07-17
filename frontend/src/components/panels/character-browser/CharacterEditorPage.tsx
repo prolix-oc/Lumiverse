@@ -690,7 +690,7 @@ export default function CharacterEditorPage() {
         browser.updateCharacter(editingCharacterId, { [field]: value })
       }, DEBOUNCE_MS)
     },
-    [editingCharacterId, browser.updateCharacter, showSaving]
+    [editingCharacterId, browser, showSaving]
   )
 
   // ── Atomic extensions mutation pipeline ──────────────────────────────
@@ -726,7 +726,7 @@ export default function CharacterEditorPage() {
     pendingExtensionsRef.current = null
     showSaving()
     await browser.updateCharacter(editingCharacterId, { extensions: next })
-  }, [editingCharacterId, browser.updateCharacter, showSaving])
+  }, [editingCharacterId, browser, showSaving])
 
   const mutateExtensions = useCallback(
     (mutator: (ext: Record<string, any>) => Record<string, any>, immediate: boolean) => {
@@ -887,7 +887,7 @@ export default function CharacterEditorPage() {
     setNewTag('')
     showSaving()
     browser.updateCharacter(editingCharacterId, { tags: updated })
-  }, [newTag, tags, editingCharacterId, browser.updateCharacter, showSaving])
+  }, [newTag, tags, editingCharacterId, browser, showSaving])
 
   const handleRemoveTag = useCallback(
     (tag: string) => {
@@ -897,7 +897,7 @@ export default function CharacterEditorPage() {
       showSaving()
       browser.updateCharacter(editingCharacterId, { tags: updated })
     },
-    [tags, editingCharacterId, browser.updateCharacter, showSaving]
+    [tags, editingCharacterId, browser, showSaving]
   )
 
   const handleGreetingChange = useCallback(
@@ -917,7 +917,7 @@ export default function CharacterEditorPage() {
       showSaving()
       browser.updateCharacter(editingCharacterId, { alternate_greetings: updated })
     }
-  }, [alternateGreetings, editingCharacterId, browser.updateCharacter, showSaving])
+  }, [alternateGreetings, editingCharacterId, browser, showSaving])
 
   const handleRemoveGreeting = useCallback(
     (index: number) => {
@@ -928,7 +928,7 @@ export default function CharacterEditorPage() {
         browser.updateCharacter(editingCharacterId, { alternate_greetings: updated })
       }
     },
-    [alternateGreetings, editingCharacterId, browser.updateCharacter, showSaving]
+    [alternateGreetings, editingCharacterId, browser, showSaving]
   )
 
   const handleExtensionsChange = useCallback(
@@ -971,7 +971,7 @@ export default function CharacterEditorPage() {
         toast.error(err.body?.error || err.message || t('characterEditor.unbindRegexFailed'))
       }
     },
-    [updateRegexScript]
+    [updateRegexScript, t]
   )
 
   const clearActivatedWorldInfo = useStore((s) => s.clearActivatedWorldInfo)
@@ -1066,7 +1066,7 @@ export default function CharacterEditorPage() {
         setAltAvatarUploadProgress(null)
       }
     },
-    [mutateExtensions]
+    [editingCharacterId, character, mutateExtensions, t]
   )
 
   const { cropModalProps: altAvatarCropProps, openCropFlow: openAltAvatarCropFlow } =
@@ -1102,7 +1102,7 @@ export default function CharacterEditorPage() {
     setLocalPerspectiveLayers(nextLayers)
     pendingLayersRef.current = clonePerspectiveLayers(nextLayers)
     syncedPerspectiveLayersRef.current = clonePerspectiveLayers(nextLayers)
-  }, [character?.id])
+  }, [character?.id, character, perspectiveLayers])
 
   const flushPerspectiveLayersSave = useCallback(async () => {
     if (!editingCharacterId) return
@@ -1242,19 +1242,19 @@ export default function CharacterEditorPage() {
       skipPerspectiveLayerFlushRef.current = false
       throw err
     }
-  }, [editingCharacterId, browser.deleteCharacter, close])
+  }, [editingCharacterId, browser, close])
 
   const handleDuplicate = useCallback(async () => {
     if (!editingCharacterId) return
     const dup = await browser.duplicateCharacter(editingCharacterId)
     setEditingCharacterId(dup.id)
-  }, [editingCharacterId, browser.duplicateCharacter, setEditingCharacterId])
+  }, [editingCharacterId, browser, setEditingCharacterId])
 
   const handleOpenChat = useCallback(() => {
     if (!character) return
     close()
     browser.openChat(character)
-  }, [character, browser.openChat, close])
+  }, [character, browser, close])
 
   const handleCreatePersonaFromCharacter = useCallback(async () => {
     if (!character || creatingPersona) return

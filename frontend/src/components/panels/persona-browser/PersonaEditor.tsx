@@ -331,7 +331,7 @@ export default function PersonaEditor({
   const addonCount = personaAddonCount + globalAddonCount
   const tagOptions = useMemo(
     () => availableTags.map(({ tag, count }) => ({ value: tag, label: tag, sublabel: t('personaEditor.characterCount', { count }) })),
-    [availableTags],
+    [availableTags, t],
   )
   const matchingCharacterCount = useMemo(
     () => tagBinding ? characters.filter((character) => characterMatchesPersonaTagBinding(character.tags || [], tagBinding)).length : 0,

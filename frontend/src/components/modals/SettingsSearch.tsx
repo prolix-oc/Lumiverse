@@ -44,11 +44,7 @@ export default function SettingsSearch({ onNavigate }: SettingsSearchProps) {
   const openedAt = useRef(0)
 
   // Rebuild the index when role or language changes (titles are resolved at build time).
-  const index = useMemo(
-    () => getSettingsSearchIndex(userRole),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [userRole, i18n.language],
-  )
+  const index = useMemo(() => getSettingsSearchIndex(userRole), [userRole])
 
   const { groups, flat } = useMemo(() => {
     const q = query.trim().toLowerCase()

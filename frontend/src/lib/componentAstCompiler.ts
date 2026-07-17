@@ -1,4 +1,3 @@
-import { parse } from '@babel/parser'
 import type { ComponentAstBinding, ComponentAstDiagnostic, ComponentAstProgram } from './componentAstTypes'
 import {
   ALLOWED_ACTION_PATHS,
@@ -13,6 +12,20 @@ import {
 } from './componentOverrideCapabilities'
 
 type Node = any
+
+let parserModule: typeof import('@babel/parser') | null = null
+let parserPromise: Promise<typeof import('@babel/parser')> | null = null
+
+async function getParser(): Promise<typeof import('@babel/parser')> {
+  if (parserModule) return parserModule
+  if (!parserPromise) {
+    parserPromise = import('@babel/parser').then((mod) => {
+      parserModule = mod
+      return mod
+    })
+  }
+  return parserPromise
+}
 
 export type ComponentAstCompileResult =
   | { program: ComponentAstProgram; error: null }
@@ -35,7 +48,7 @@ export function formatAstDiagnostic(error: ComponentAstDiagnostic): string {
   return error.message
 }
 
-export function compileComponentAst(source: string): ComponentAstCompileResult {
+export async function compileComponentAst(source: string): Promise<ComponentAstCompileResult> {
   if (!source.trim()) return { program: null, error: { message: 'Override source is empty.' } }
   if (source.length > MAX_OVERRIDE_SOURCE_LENGTH) {
     return {
@@ -43,6 +56,8 @@ export function compileComponentAst(source: string): ComponentAstCompileResult {
       error: { message: `Override source is too large (max ${MAX_OVERRIDE_SOURCE_LENGTH.toLocaleString()} characters).` },
     }
   }
+
+  const { parse } = await getParser()
 
   let ast: Node
   try {

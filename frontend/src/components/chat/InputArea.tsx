@@ -240,6 +240,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
+  const openPopoverRef = useRef(openPopover)
+  useEffect(() => {
+    openPopoverRef.current = openPopover
+  }, [openPopover])
   const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
   const [personaSearch, setPersonaSearch] = useState('')
@@ -475,7 +479,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setAltFieldsLoaded(true)
       })
       .catch(() => { setAltFieldsData({}); setAltFieldsLoaded(false) })
-  }, [activeCharacterId, isGroupChat, groupCharacterKey, groupAltFieldsKey])
+  }, [activeCharacterId, isGroupChat, groupCharacterIds, groupCharacterKey, groupAltFieldsKey])
 
   const pruneAltSelections = useCallback((
     selections: Record<string, string>,
@@ -730,7 +734,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     t,
   ])
 
-  const currentChatAddonOverrides = activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {}
+  const currentChatAddonOverrides = useMemo(
+    () => activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {},
+    [activePersonaId, chatAddonStatesByPersona],
+  )
   const basePersonaAddonStates = useMemo(() => {
     const states: Record<string, boolean> = {}
     for (const addon of personaAddons) states[addon.id] = addon.enabled
@@ -834,7 +841,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       toast.error(t('toast.failedSaveAddonState'))
       return false
     }
-  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata])
+  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata, t])
 
   const handleToggleAddonState = useCallback((addonId: string) => {
     void persistChatAddonOverride(addonId, !(effectivePersonaAddonStates[addonId] ?? false))
@@ -1111,8 +1118,8 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // Databank # autocomplete — search when hash query changes
   useEffect(() => {
     if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current)
-    if (hashQuery === null || hashQuery.length === 0) {
-      if (openPopover === 'databank') setOpenPopover(null)
+      if (hashQuery === null || hashQuery.length === 0) {
+      if (openPopoverRef.current === 'databank') setOpenPopover(null)
       setDatabankResults([])
       return
     }
@@ -1127,7 +1134,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setDatabankActiveIdx(0)
         if (results.length > 0) {
           setOpenPopover('databank')
-        } else if (openPopover === 'databank') {
+        } else if (openPopoverRef.current === 'databank') {
           setOpenPopover(null)
         }
       } catch {
@@ -1135,14 +1142,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       }
     }, 200)
     return () => { if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hashQuery, chatId, activeCharacterId])
 
   // @ autocomplete — filter locally against group members. Muted members are
   // kept in the list (dimmed in UI); selecting them overrides mute for this turn.
   useEffect(() => {
     if (!isGroupChat || atQuery === null) {
-      if (openPopover === 'groupMember') setOpenPopover(null)
+      if (openPopoverRef.current === 'groupMember') setOpenPopover(null)
       setAtResults([])
       return
     }
@@ -1178,10 +1184,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setAtActiveIdx(0)
     if (ranked.length > 0) {
       setOpenPopover('groupMember')
-    } else if (openPopover === 'groupMember') {
+    } else if (openPopoverRef.current === 'groupMember') {
       setOpenPopover(null)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [atQuery, isGroupChat, groupCharacterIds, mutedCharacterIds, characters])
 
   // While hidden for mobile edit, the RO below cannot observe a display:none
@@ -1341,10 +1346,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     charactersApi.get(activeCharacterId).then((c) => setCharacterName(c.name)).catch(() => {})
   }, [activeCharacterId])
 
-  const DOCUMENT_EXTENSIONS = new Set([
+  const DOCUMENT_EXTENSIONS = useMemo(() => new Set([
     '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.xml',
     '.html', '.htm', '.yaml', '.yml', '.log', '.rst', '.rtf',
-  ])
+  ]), [])
 
   const isDocumentFile = useCallback((file: File) => {
     const ext = file.name.lastIndexOf('.') >= 0 ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
@@ -1676,7 +1681,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend, finalizeRegexSelections])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t])
 
   const handleSend = useCallback(async (
     contentOverride?: string,
@@ -1859,7 +1864,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, t, te])
 
   useEffect(() => {
     const handleRegexAction = async (event: Event) => {
@@ -2097,7 +2102,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
@@ -2141,7 +2146,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.continueFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
@@ -2182,7 +2187,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea])
+  }, [chatId, isGeneratingInChat, text, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
 
   const handleStop = useCallback(async () => {
     if (!isGeneratingInChat) return
@@ -2251,7 +2256,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       console.error('[InputArea] Failed to start new chat:', err)
       toast.error(t('toast.failedStartNewChat'))
     }
-  }, [activeCharacterId, isGroupChat, groupCharacterIds, navigate, openModal])
+  }, [activeCharacterId, isGroupChat, groupCharacterIds, navigate, openModal, t])
 
   const handleConvertToGroup = useCallback(async () => {
     if (!chatId || !activeCharacterId || isGroupChat) return
@@ -2281,7 +2286,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         title: t('toast.conversionFailed'),
       })
     }
-  }, [chatId, activeCharacterId, isGroupChat, navigate, openModal])
+  }, [chatId, activeCharacterId, isGroupChat, navigate, openModal, t])
 
   const handleDryRun = useCallback(async () => {
     if (dryRunning || isGeneratingInChat) return
@@ -2310,7 +2315,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setDryRunning(false)
     }
-  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat])
+  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -2348,7 +2353,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setResolvingMacros(false)
     }
-  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection])
+  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te])
 
   const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, hashStartIndex)
@@ -2662,7 +2667,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setSttStatus('idle')
       toast.error(err?.message || t('toast.sttFailed'), { title: t('toast.sttFailed') })
     }
-  }, [isListeningToSTT, isSTTSupported, voiceSettings, text, openModal, applySTTTranscript, stopSTTSession, finalizeSTTTranscript])
+  }, [isListeningToSTT, isSTTSupported, voiceSettings, text, openModal, applySTTTranscript, stopSTTSession, finalizeSTTTranscript, t])
 
   useEffect(() => {
     if (isGeneratingInChat && isListeningToSTT) {

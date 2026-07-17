@@ -166,7 +166,7 @@ export default function MultiplayerPanel() {
     } catch {
       /* remote unavailable — local room still works */
     }
-  }, [])
+  }, [setRemoteCode])
 
   const hostCreate = useCallback(async () => {
     if (!activeChatId) return
@@ -292,7 +292,7 @@ export default function MultiplayerPanel() {
     } finally {
       setBusy(false)
     }
-  }, [roomId])
+  }, [roomId, setRemoteCode])
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {

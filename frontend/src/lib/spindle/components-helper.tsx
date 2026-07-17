@@ -87,6 +87,12 @@ import {
   type LiveRootPermission,
 } from './live-root-registry'
 
+// Spindle bridge components expose imperative handles by mutating the bridge
+// object passed from the extension runtime. This is an intentional escape hatch
+// from React's pure-render model, so the React Compiler cannot safely optimize
+// these components.
+/* eslint-disable react-compiler/react-compiler */
+
 // ── Tracking & lifecycle ──────────────────────────────────────────────────
 
 interface PortalNodeState {
@@ -660,6 +666,7 @@ function useBridgeBinding<TOptions, TValue>(
     return cloneBridgeValue(stored)
   }
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useLayoutEffect(() => {
     bridge.update = (patch) => {
       if (valueKey && patch[valueKey] !== undefined) {
@@ -670,8 +677,8 @@ function useBridgeBinding<TOptions, TValue>(
       setProps((prev) => ({ ...prev, ...patch }))
     }
     bridge.getValue = () => cloneBridgeValue(valueRef.current)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  /* eslint-enable react-hooks/exhaustive-deps */
   // Sync valueKey patches that arrive via update — already handled in setProps callback.
   // Nothing else needed here.
   void props
@@ -747,8 +754,10 @@ function useConnectionModels(connection: SpindleConnectionRef | undefined): {
         if (token === inflight.current) setLoading(false)
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection?.kind, connection?.id, activeId])
 
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!connection || !activeId) {
       inflight.current += 1
@@ -759,6 +768,7 @@ function useConnectionModels(connection: SpindleConnectionRef | undefined): {
       inflight.current += 1
     }
   }, [connection?.kind, connection?.id, activeId])
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     void refresh()
@@ -1630,3 +1640,5 @@ export function createComponentsHelper(
     mountLoomBlockEditor,
   }
 }
+
+/* eslint-enable react-compiler/react-compiler */

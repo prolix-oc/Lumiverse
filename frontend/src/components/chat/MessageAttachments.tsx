@@ -91,7 +91,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
     } catch (err: any) {
       addToast({ type: 'error', title: t('attachments.couldNotRemoveImage'), message: err?.body?.error || err?.message || 'Unknown error' })
     }
-  }, [addToast, chatId, closeContextMenu, messageId, targetImageId])
+  }, [addToast, chatId, closeContextMenu, messageId, targetImageId, t])
 
   // Removes the image currently shown in the lightbox. Throws on failure so the
   // lightbox surfaces its own error toast (the thumbnail context-menu path uses

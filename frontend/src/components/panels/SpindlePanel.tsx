@@ -62,7 +62,7 @@ export default function SpindlePanel() {
         .filter((ext) => hasExtensionMountPoint(ext.id, 'settings_extensions'))
         .map((ext) => ext.id)
     ),
-    [extensions, extensionMountPointsVersion]
+    [extensions]
   )
 
   const [togglingPerm, setTogglingPerm] = useState<string | null>(null)

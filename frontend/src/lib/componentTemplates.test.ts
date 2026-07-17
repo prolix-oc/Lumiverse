@@ -26,9 +26,9 @@ const COMPONENT_NAMES = [
 
 describe('component starter templates', () => {
   for (const name of COMPONENT_NAMES) {
-    test(`${name} template compiles cleanly through the AST sandbox`, () => {
+    test(`${name} template compiles cleanly through the AST sandbox`, async () => {
       const { template } = getComponentTemplate(name)
-      const result = compileComponentAst(template)
+      const result = await compileComponentAst(template)
       const diagnostic = result.error ? formatAstDiagnostic(result.error) : null
       expect(diagnostic).toBeNull()
       expect(result.program).not.toBeNull()
@@ -36,27 +36,27 @@ describe('component starter templates', () => {
     })
   }
 
-  test('unknown component falls back to a compilable generic template', () => {
+  test('unknown component falls back to a compilable generic template', async () => {
     const { template } = getComponentTemplate('SomeComponentWithoutACuratedTemplate')
-    const result = compileComponentAst(template)
+    const result = await compileComponentAst(template)
     expect(result.error).toBeNull()
     expect(template).toContain('<Original />')
   })
 
-  test('the trusted original-component slot compiles without props or children', () => {
-    const valid = compileComponentAst(`export default function AdditiveOverride(props) {
+  test('the trusted original-component slot compiles without props or children', async () => {
+    const valid = await compileComponentAst(`export default function AdditiveOverride(props) {
   return <><Original /><span>Decoration</span></>
 }`)
     expect(valid.error).toBeNull()
 
-    const withProps = compileComponentAst(`export default function InvalidOverride(props) {
+    const withProps = await compileComponentAst(`export default function InvalidOverride(props) {
   return <Original className="replacement" />
 }`)
     expect(withProps.error?.message).toBe('<Original /> does not accept props.')
   })
 
-  test('the trusted original-component slot renders the host component unchanged', () => {
-    const compiled = compileComponentAst(`export default function AdditiveOverride(props) {
+  test('the trusted original-component slot renders the host component unchanged', async () => {
+    const compiled = await compileComponentAst(`export default function AdditiveOverride(props) {
   return <><Original /><span>Decoration</span></>
 }`)
     if (!compiled.program) throw new Error('Expected additive override to compile')
@@ -71,7 +71,7 @@ describe('component starter templates', () => {
     expect(html).toBe('<button type="button">Native action</button><span>Decoration</span>')
   })
 
-  test('large avatar tier example compiles for message overrides', () => {
+  test('large avatar tier example compiles for message overrides', async () => {
     const source = `export default function MessageWithLargeAvatar({ message }) {
   const avatarSrc = message.avatar.cropped.lg || message.avatar.cropped.sm || message.avatarUrl
   return (
@@ -81,7 +81,7 @@ describe('component starter templates', () => {
     </div>
   )
 }`
-    const result = compileComponentAst(source)
+    const result = await compileComponentAst(source)
 
     expect(result.error ? formatAstDiagnostic(result.error) : null).toBeNull()
     expect(result.program).not.toBeNull()

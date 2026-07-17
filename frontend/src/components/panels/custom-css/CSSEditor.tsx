@@ -72,7 +72,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
 
     const view = new EditorView({ state, parent: containerRef.current })
     viewRef.current = view
-  }, [])
+  }, [extensions, value])
 
   // Recreate editor when language mode changes
   useEffect(() => {

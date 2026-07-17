@@ -981,10 +981,11 @@ app.post("/:chatId/display-preprocess", async (c) => {
       return c.json({ error: "each item requires rawContent (string)" }, 400);
     }
 
-    const processed = [];
-    for (const item of items as DisplayPreprocessItem[]) {
-      processed.push(await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal));
-    }
+    const processed = await Promise.all(
+      (items as DisplayPreprocessItem[]).map((item) =>
+        runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal)
+      )
+    );
 
     return c.json({ items: processed });
   }

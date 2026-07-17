@@ -9,7 +9,6 @@ import SearchableSelect from '@/components/shared/SearchableSelect'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import type { ImageGenConnectionModelsResult, ImageGenConnectionProfile } from '@/types/api'
 import { useConnectionSensors, useVerticalSortModifier } from './connection-manager/useConnectionDragAndDrop'
-import { useDragHandleBlur } from './connection-manager/useDragHandleBlur'
 import styles from './ImageGenPanel.module.css'
 
 const LORA_WEIGHT_MIN = 0
@@ -347,11 +346,18 @@ function SortableLoraRow({
     disabled: sortingDisabled,
   })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
-  const handleRef = useDragHandleBlur(isDragging)
+  const handleRef = useRef<HTMLButtonElement>(null)
+  const wasDraggingRef = useRef(false)
+  useEffect(() => {
+    if (wasDraggingRef.current && !isDragging) {
+      handleRef.current?.blur()
+    }
+    wasDraggingRef.current = isDragging
+  }, [isDragging])
   const setHandleRef = useCallback((node: HTMLButtonElement | null) => {
     handleRef.current = node
     setActivatorNodeRef(node)
-  }, [handleRef, setActivatorNodeRef])
+  }, [setActivatorNodeRef])
   const position = index + 1
   const displayName = row.lora_name.trim() || t('imageGenPanel.loraRowFallback', { position })
 

@@ -279,7 +279,7 @@ export default function ExpandedTextEditor({
   )
 
   // Use caller-provided macros, or eagerly-loaded local catalog
-  const resolvedMacros = macros ?? selfLoadedMacros ?? []
+  const resolvedMacros = useMemo(() => macros ?? selfLoadedMacros ?? [], [macros, selfLoadedMacros])
   findModeRef.current = findMode
   findQueryRef.current = findQuery
   macroSearchRef.current = macroSearch
@@ -486,7 +486,7 @@ export default function ExpandedTextEditor({
       document.removeEventListener('keydown', handleEditorShortcut, true)
       if (!inline) document.body.style.overflow = ''
     }
-  }, [])
+  }, [inline])
 
   const handleTextareaChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
     captureSelection(e.currentTarget)

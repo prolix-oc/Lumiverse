@@ -78,7 +78,7 @@ export default function ManageChatsModal() {
       .filter((name): name is string => Boolean(name))
     if (names.length === 0) return t('groupChatLabel', { count: groupCharacterIds.length })
     return `${names.join(', ')} · ${groupCharacterIds.length} members`
-  }, [characters, groupCharacterIds, isGroupContext])
+  }, [characters, groupCharacterIds, isGroupContext, t])
 
   // Fetch chats for this character or exact group composition.
   const fetchChats = useCallback(async () => {
@@ -144,7 +144,7 @@ export default function ManageChatsModal() {
         break
     }
     return sorted
-  }, [chats, search, sortMode])
+  }, [chats, search, sortMode, formatChatName])
 
   const cycleSortMode = useCallback(() => {
     setSortMode((prev) => {
@@ -239,7 +239,7 @@ export default function ManageChatsModal() {
       console.error('[ManageChats] Failed to create chat:', err)
       toast.error(t('createFailed'))
     }
-  }, [characterId, closeModal, groupCharacterIds, isGroupContext, navigate])
+  }, [characterId, closeModal, groupCharacterIds, isGroupContext, navigate, t])
 
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click()
@@ -272,7 +272,7 @@ export default function ManageChatsModal() {
         setImporting(false)
       }
     },
-    [characterId, fetchChats]
+    [characterId, fetchChats, t]
   )
 
   const handleImportStClick = useCallback(() => {
@@ -327,7 +327,7 @@ export default function ManageChatsModal() {
       }
       setImportingSt(false)
     },
-    [characterId, fetchChats, groupCharacterIds, isGroupContext]
+    [characterId, fetchChats, groupCharacterIds, isGroupContext, t]
   )
 
   return (

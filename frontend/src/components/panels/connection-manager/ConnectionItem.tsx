@@ -170,7 +170,7 @@ export default function ConnectionItem({
     } finally {
       setTesting(false)
     }
-  }, [profile.id])
+  }, [profile.id, t])
 
   const handleSaveEdit = useCallback(async (input: CreateConnectionProfileInput) => {
     try {

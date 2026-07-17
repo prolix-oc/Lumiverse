@@ -120,7 +120,7 @@ export default function PersonaManager() {
     } finally {
       setRenameBusy(false)
     }
-  }, [browser, renameStoredFolder, renamingFolder, renamingValue])
+  }, [browser, renameStoredFolder, renamingFolder, renamingValue, t])
 
   const handleDeleteFolder = useCallback(async (folder: string) => {
     const name = folder.trim()
@@ -148,7 +148,7 @@ export default function PersonaManager() {
         }
       },
     })
-  }, [browser, deleteStoredFolder, deletingFolder, openModal])
+  }, [browser, deleteStoredFolder, deletingFolder, openModal, t])
 
   const handleCreate = useCallback(
     async (name: string, avatarFile?: File, originalFile?: File) => {

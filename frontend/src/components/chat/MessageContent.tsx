@@ -1211,7 +1211,7 @@ function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolea
       shadow.removeEventListener('error', scheduleLayoutNotify, true)
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
     }
-  }, [html])
+  }, [html, isStreaming])
 
   return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
 }
@@ -1402,9 +1402,13 @@ export default function MessageContent({
   )
   const deliveredTagInterceptsRef = useRef(new Set<string>())
   const interceptedMessageTags = useMemo(
-    () => disableInterceptors
-      ? { content, intercepts: [] }
-      : stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
+    () => {
+      // interceptorRegistryVersion is the external-store invalidation trigger.
+      void interceptorRegistryVersion
+      return disableInterceptors
+        ? { content, intercepts: [] }
+        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming })
+    },
     [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion, disableInterceptors],
   )
 
@@ -1763,8 +1767,7 @@ export default function MessageContent({
     // layout events already notify MessageList via scheduleLayoutNotify(), so
     // re-creating observers on every renderContent change is unnecessary and
     // causes observer churn during fast streaming.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [isStreaming])
 
   // While streaming, ratchet the content container's min-height upward so that
   // transient DOM shrinkage (unclosed tags snapping shut, image placeholders

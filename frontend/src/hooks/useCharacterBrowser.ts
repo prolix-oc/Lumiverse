@@ -128,7 +128,7 @@ export function useCharacterBrowser() {
         )
       },
     )
-  }, [!!importProgress])
+  }, [importProgress])
 
   // Refresh gallery when LumiHub install completes (external mutation)
   useEffect(() => {

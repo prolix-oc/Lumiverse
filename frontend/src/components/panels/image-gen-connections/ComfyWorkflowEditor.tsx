@@ -127,7 +127,7 @@ export function ComfyWorkflowEditor({
   const nodeCount = config?.workflow_api_json ? Object.keys(config.workflow_api_json).length : 0
 
   const showImport = !config || replacing
-  const savedWorkflows = library?.workflows ?? []
+  const savedWorkflows = useMemo(() => library?.workflows ?? [], [library?.workflows])
   const activeEntry = savedWorkflows.find((w) => w.id === library?.active_id) ?? null
   const currentUnsaved = Boolean(config) && library !== null && !activeEntry
   const pendingEntry = pendingAction ? savedWorkflows.find((w) => w.id === pendingAction.id) ?? null : null

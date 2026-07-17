@@ -200,7 +200,7 @@ export function ModelComboField({
   const currentResult = result
     && result.profile === activeConnection
     && result.modelSubtype === modelSubtype
-  const models = currentResult ? result.models : []
+  const models = useMemo(() => currentResult ? result.models : [], [currentResult, result.models])
   const modelError = currentResult ? result.error : null
   const loading = currentResult ? result.loading : false
 
@@ -582,7 +582,7 @@ export default function ImageGenPanel() {
     } finally {
       setWorkflowLoading(false)
     }
-  }, [activeConnection])
+  }, [activeConnection, t])
 
   useEffect(() => {
     void refreshActiveComfyWorkflow()
@@ -656,7 +656,7 @@ export default function ImageGenPanel() {
 
   // Provider parameters are saved on the active connection so they do not leak
   // across profiles that happen to use the same parameter names.
-  const genParams: Record<string, any> = activeConnection?.default_parameters || {}
+  const genParams = useMemo(() => activeConnection?.default_parameters || {}, [activeConnection?.default_parameters])
 
   const updateTop = (partial: Record<string, any>) => setImageGenSettings(partial)
 
@@ -700,7 +700,7 @@ export default function ImageGenPanel() {
     return normalizeComfyControlValue(customValues[customKey] ?? control.defaultValue)
   }, [genParams.comfyui_field_values])
 
-  const promptPresets = imageGeneration.promptPresets || []
+  const promptPresets = useMemo(() => imageGeneration.promptPresets || [], [imageGeneration.promptPresets])
   const mainPresets = useMemo(() => promptPresets.filter((p) => (p.kind ?? 'main') === 'main'), [promptPresets])
   const characterPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'character'), [promptPresets])
   const personaPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'persona'), [promptPresets])
@@ -760,13 +760,19 @@ export default function ImageGenPanel() {
   // Re-hydrate the editor textareas whenever the edit target (or its bindings)
   // changes. For main, the editor mirrors the live customPrompt; for
   // character/persona, it mirrors the bound preset (or stays blank).
+  // The live custom prompt/negative are read through refs so the effect does
+  // not re-run on every keystroke while the user is editing.
+  const customPromptRef = useRef(imageGeneration.customPrompt)
+  customPromptRef.current = imageGeneration.customPrompt
+  const customNegativePromptRef = useRef(imageGeneration.customNegativePrompt)
+  customNegativePromptRef.current = imageGeneration.customNegativePrompt
   useEffect(() => {
     if (editTarget === 'main') {
       const activeId = imageGeneration.activePromptPresetId || null
       const activePreset = activeId ? mainPresets.find((p) => p.id === activeId) : null
       setLoadedPresetId(activePreset?.id ?? null)
-      setDraftPrompt(imageGeneration.customPrompt || '')
-      setDraftNegative(imageGeneration.customNegativePrompt || '')
+      setDraftPrompt(customPromptRef.current || '')
+      setDraftNegative(customNegativePromptRef.current || '')
     } else if (editTarget === 'character') {
       const preset = characterPresetId ? characterPresets.find((p) => p.id === characterPresetId) : null
       setLoadedPresetId(preset?.id ?? null)
@@ -783,11 +789,7 @@ export default function ImageGenPanel() {
       setDraftNegative('')
     }
     setPresetName('')
-    // We intentionally exclude `imageGeneration.customPrompt`/`customNegativePrompt`
-    // from deps — the editor itself is the source of truth for those when on
-    // the 'main' target. Re-running on every keystroke would clobber the draft.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editTarget, imageGeneration.activePromptPresetId, characterPresetId, personaPresetId, promptPresets])
+  }, [editTarget, imageGeneration.activePromptPresetId, characterPresetId, personaPresetId, promptPresets, mainPresets, characterPresets, personaPresets])
 
   useEffect(() => {
     const activeId = imageGeneration.activeLoraPresetId || null
@@ -864,7 +866,7 @@ export default function ImageGenPanel() {
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('imageGenPanel.failedUpdateCharacterBinding'))
     }
-  }, [activeCharacterId])
+  }, [activeCharacterId, t])
 
   const bindPersonaPreset = useCallback(async (presetId: string | null) => {
     if (!activePersonaId) return
@@ -879,7 +881,7 @@ export default function ImageGenPanel() {
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('imageGenPanel.failedUpdatePersonaBinding'))
     }
-  }, [activePersonaId])
+  }, [activePersonaId, t])
 
   // Unified picker: switches active main preset (and panel content) when
   // editing main, or binds/unbinds the active character/persona when editing
@@ -980,6 +982,7 @@ export default function ImageGenPanel() {
     presetName,
     promptPresets,
     setImageGenSettings,
+    t,
   ])
 
   const deletePromptPreset = useCallback(() => {
@@ -1221,7 +1224,7 @@ export default function ImageGenPanel() {
       setSceneGenerating(false)
       setCurrentJobId(null)
     }
-  }, [imageGeneration.promptGenerationTimeoutSeconds, imageGeneration.generationTimeoutSeconds, setSceneBackground, setSceneGenerating])
+  }, [imageGeneration.promptGenerationTimeoutSeconds, imageGeneration.generationTimeoutSeconds, setSceneBackground, setSceneGenerating, t])
 
   const handleGenerate = async (forceGeneration = false) => {
     if (!activeChatId) {

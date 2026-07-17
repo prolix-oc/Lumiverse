@@ -105,7 +105,7 @@ export default function AddGroupMemberModal() {
         setAddingId(null)
       }
     },
-    [chatId, allSummaries, memberIds, setGroupCharacterIds, addingId]
+    [chatId, allSummaries, memberIds, setGroupCharacterIds, addingId, t]
   )
 
   useEffect(() => {

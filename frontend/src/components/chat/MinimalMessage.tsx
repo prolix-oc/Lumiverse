@@ -93,7 +93,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     }),
     styles,
   }), [
-    message, isUser, displayName, avatarUrl, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isContextAnchor, isActivelyStreaming,
+    message, isUser, displayName, fullAvatarUrl, displayAvatarUrl, avatar, isHidden, isContextAnchor, isActivelyStreaming,
     isLastMessage, tokenCount, displayContent, reasoning, reasoningDuration,
     isEditing, editContent, editReasoning, setEditContent, setEditReasoning,
     handleSaveEdit, handleCancelEdit, handleEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,

@@ -643,7 +643,6 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
     keywordHitIds,
     noteMessages,
     overlapCount,
-    pulledTraceCount,
     t,
   ])
 

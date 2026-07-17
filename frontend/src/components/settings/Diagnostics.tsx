@@ -390,12 +390,12 @@ function PwaCapabilitiesSection() {
   const [countdown, setCountdown] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
 
-  const describeTestFailure = (reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active') => {
+  const describeTestFailure = useCallback((reason?: 'no_subscriptions' | 'disabled' | 'event_disabled' | 'user_active') => {
     if (reason === 'disabled') return t('diagnostics.pushDisabled')
     if (reason === 'event_disabled') return t('diagnostics.pushEventDisabled')
     if (reason === 'user_active') return t('diagnostics.pushUserActive')
     return t('diagnostics.pushNoSubscriptions')
-  }
+  }, [t])
 
   const pushRegistrationLabel = (status: 'ready' | 'pending' | 'missing' | 'error') => {
     if (status === 'ready') return t('diagnostics.swReady')
@@ -432,7 +432,7 @@ function PwaCapabilitiesSection() {
         setSending(false)
       }
     }, 10_000)
-  }, [addToast, t])
+  }, [addToast, describeTestFailure, t])
 
   return (
     <div className={styles.section}>

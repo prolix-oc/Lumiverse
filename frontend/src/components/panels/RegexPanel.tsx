@@ -326,7 +326,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [removeRegexScript, expandedId])
+  }, [removeRegexScript, expandedId, t])
 
   const handleDeleteGroup = useCallback(async (scripts: RegexScript[]) => {
     setDeleteGroupTarget(null)
@@ -343,7 +343,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [bulkRemoveRegexScripts, expandedId])
+  }, [bulkRemoveRegexScripts, expandedId, t])
 
   const handleToggle = useCallback(async (id: string, disabled: boolean, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -352,7 +352,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [toggleRegexScript])
+  }, [toggleRegexScript, t])
 
   const handleBindToPreset = useCallback(async (script: RegexScript, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -367,7 +367,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [activeLoomPresetId, updateRegexScript])
+  }, [activeLoomPresetId, updateRegexScript, t])
 
   const handleBindFolderToPreset = useCallback(async (scripts: RegexScript[], folderLabel: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -385,7 +385,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [activeLoomPresetId, updateRegexScript])
+  }, [activeLoomPresetId, updateRegexScript, t])
 
   const handleExport = useCallback(async () => {
     try {
@@ -400,7 +400,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [])
+  }, [t])
 
   const handleExportFolder = useCallback(async (folder: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -416,7 +416,7 @@ export default function RegexPanel() {
     } catch (err: any) {
       toast.error(err.body?.error || err.message || t('regexPanel.requestFailed'))
     }
-  }, [])
+  }, [t])
 
   const handleImport = useCallback(() => {
     openModal('regexImport')

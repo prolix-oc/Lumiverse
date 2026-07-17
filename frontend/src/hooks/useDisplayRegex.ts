@@ -837,6 +837,8 @@ export function useDisplayRegex(
     contentCacheKey,
     dynamicMacros,
     cvSnapshot,
+    preprocessOpts?.messageId,
+    preprocessOpts?.role,
   ])
 
   // Carry the previous resolved value forward across cv-bumps and per-chunk

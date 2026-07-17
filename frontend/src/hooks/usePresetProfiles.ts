@@ -247,7 +247,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, addToast, mutationCoordinator, authUserId])
+  }, [presetId, blocks, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Clear defaults
   const clearDefaults = useCallback(async () => {
@@ -279,7 +279,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, addToast, mutationCoordinator, authUserId])
+  }, [presetId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Bind to current chat
   const bindToChat = useCallback(async () => {
@@ -309,7 +309,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeChatId, addToast, mutationCoordinator, authUserId])
+  }, [presetId, blocks, activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current chat
   const unbindChat = useCallback(async () => {
@@ -335,7 +335,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [activeChatId, addToast, mutationCoordinator, authUserId])
+  }, [activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
   const bindToCharacter = useCallback(async () => {
     const targetPresetId = presetId
     const targetCharacterId = activeCharacterId
@@ -363,7 +363,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeCharacterId, isGroupChat, addToast, mutationCoordinator, authUserId])
+  }, [presetId, blocks, activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current character
   const unbindCharacter = useCallback(async () => {
@@ -389,7 +389,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [activeCharacterId, isGroupChat, addToast, mutationCoordinator, authUserId])
+  }, [activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
   // Bind to current connection profile
   const bindToConnection = useCallback(async () => {
     const targetPresetId = presetId
@@ -418,7 +418,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [presetId, blocks, activeProfileId, addToast, mutationCoordinator, authUserId])
+  }, [presetId, blocks, activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current connection profile
   const unbindConnection = useCallback(async () => {
@@ -444,7 +444,7 @@ export function usePresetProfiles(
     } finally {
       endMutation()
     }
-  }, [activeProfileId, addToast, mutationCoordinator, authUserId])
+  }, [activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Character bindings are skipped in group chats (per-member bindings are
   // ambiguous — backend resolveProfile applies the same gate).

@@ -249,7 +249,7 @@ export default function ChatHeads() {
     }
 
     gravityRafRef.current = requestAnimationFrame(tick)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => () => { if (gravityRafRef.current) cancelAnimationFrame(gravityRafRef.current) }, [])
 

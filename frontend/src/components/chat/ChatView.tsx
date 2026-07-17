@@ -447,7 +447,7 @@ export default function ChatView() {
       offGenerationProgress()
       offGenerationEnd()
     }
-  }, [chatId])
+  }, [chatId, t])
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {
@@ -731,7 +731,7 @@ export default function ChatView() {
     return () => {
       cancelled = true
     }
-  }, [chatId, setActiveChat, setMessages])
+  }, [chatId, setActiveChat, setMessages, t])
 
   // Cleanup on unmount
   useEffect(() => {

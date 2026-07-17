@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
 import { ModalShell } from '@/components/shared/ModalShell'
@@ -35,10 +35,12 @@ export default function ImageGenExportModal({ isOpen, onClose, presets }: ImageG
 
   // Re-arm the selection each time the modal opens so it reflects the
   // current preset list with everything selected by default.
+  const wasOpenRef = useRef(isOpen)
   useEffect(() => {
-    if (isOpen) setSelectedIds(new Set(presets.map((p) => p.id)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen])
+    const opening = isOpen && !wasOpenRef.current
+    wasOpenRef.current = isOpen
+    if (opening) setSelectedIds(new Set(presets.map((p) => p.id)))
+  }, [isOpen, presets])
 
   const groups = useMemo(
     () =>

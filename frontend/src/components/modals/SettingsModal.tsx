@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'motion/react'
 import { RefreshCw, GripVertical } from 'lucide-react'
@@ -1508,7 +1508,7 @@ function ExtensionPoolSettings() {
 
   const canEditPools = !!overviewMe?.canEditPools
 
-  const load = async (isRefresh = false) => {
+  const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true)
     else setLoading(true)
     setError(null)
@@ -1540,11 +1540,11 @@ function ExtensionPoolSettings() {
       if (isRefresh) setRefreshing(false)
       else setLoading(false)
     }
-  }
+  }, [poolUnit, t])
 
   useEffect(() => {
     load()
-  }, [])
+  }, [load])
 
   const rows = useMemo(() => {
     if (overviewAdmin) return overviewAdmin.extensions
@@ -1821,60 +1821,61 @@ function ExtensionPoolSettings() {
   )
 }
 
+const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode'>> = {
+  lean: {
+    chunkTargetTokens: 220,
+    chunkMaxTokens: 360,
+    chunkOverlapTokens: 40,
+    retrievalTopK: 4,
+    maxChunksPerEntry: 4,
+  },
+  balanced: {
+    chunkTargetTokens: 420,
+    chunkMaxTokens: 700,
+    chunkOverlapTokens: 80,
+    retrievalTopK: 6,
+    maxChunksPerEntry: 8,
+  },
+  deep: {
+    chunkTargetTokens: 720,
+    chunkMaxTokens: 1200,
+    chunkOverlapTokens: 120,
+    retrievalTopK: 8,
+    maxChunksPerEntry: 12,
+  },
+}
+const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
+  presetMode: 'balanced',
+  ...WORLD_BOOK_VECTOR_PRESETS.balanced,
+}
+
+const normalizeWorldBookVectorSettings = (
+  value: unknown,
+  retrievalFallback: number,
+): WorldBookVectorSettings => {
+  const raw = (value && typeof value === 'object') ? value as Partial<WorldBookVectorSettings> : {}
+  const base = {
+    ...DEFAULT_WORLD_BOOK_VECTOR_SETTINGS,
+    retrievalTopK: retrievalFallback,
+  }
+  const presetMode: WorldBookVectorPresetMode = raw.presetMode === 'lean' || raw.presetMode === 'balanced' || raw.presetMode === 'deep' || raw.presetMode === 'custom'
+    ? raw.presetMode
+    : base.presetMode
+  const preset = presetMode === 'custom' ? null : WORLD_BOOK_VECTOR_PRESETS[presetMode]
+  const target = Math.min(2000, Math.max(120, Math.floor((raw.chunkTargetTokens ?? preset?.chunkTargetTokens ?? base.chunkTargetTokens))))
+  const max = Math.min(4000, Math.max(target, Math.floor((raw.chunkMaxTokens ?? preset?.chunkMaxTokens ?? base.chunkMaxTokens))))
+  return {
+    presetMode,
+    chunkTargetTokens: target,
+    chunkMaxTokens: max,
+    chunkOverlapTokens: Math.min(500, Math.max(0, Math.floor((raw.chunkOverlapTokens ?? preset?.chunkOverlapTokens ?? base.chunkOverlapTokens)))),
+    retrievalTopK: Math.max(1, Math.floor((raw.retrievalTopK ?? preset?.retrievalTopK ?? base.retrievalTopK))),
+    maxChunksPerEntry: Math.min(24, Math.max(1, Math.floor((raw.maxChunksPerEntry ?? preset?.maxChunksPerEntry ?? base.maxChunksPerEntry)))),
+  }
+}
+
 function EmbeddingsSettings() {
   const { t } = useTranslation('settings')
-  const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, 'custom'>, Omit<WorldBookVectorSettings, 'presetMode'>> = {
-    lean: {
-      chunkTargetTokens: 220,
-      chunkMaxTokens: 360,
-      chunkOverlapTokens: 40,
-      retrievalTopK: 4,
-      maxChunksPerEntry: 4,
-    },
-    balanced: {
-      chunkTargetTokens: 420,
-      chunkMaxTokens: 700,
-      chunkOverlapTokens: 80,
-      retrievalTopK: 6,
-      maxChunksPerEntry: 8,
-    },
-    deep: {
-      chunkTargetTokens: 720,
-      chunkMaxTokens: 1200,
-      chunkOverlapTokens: 120,
-      retrievalTopK: 8,
-      maxChunksPerEntry: 12,
-    },
-  }
-  const DEFAULT_WORLD_BOOK_VECTOR_SETTINGS: WorldBookVectorSettings = {
-    presetMode: 'balanced',
-    ...WORLD_BOOK_VECTOR_PRESETS.balanced,
-  }
-
-  const normalizeWorldBookVectorSettings = (
-    value: unknown,
-    retrievalFallback: number,
-  ): WorldBookVectorSettings => {
-    const raw = (value && typeof value === 'object') ? value as Partial<WorldBookVectorSettings> : {}
-    const base = {
-      ...DEFAULT_WORLD_BOOK_VECTOR_SETTINGS,
-      retrievalTopK: retrievalFallback,
-    }
-    const presetMode: WorldBookVectorPresetMode = raw.presetMode === 'lean' || raw.presetMode === 'balanced' || raw.presetMode === 'deep' || raw.presetMode === 'custom'
-      ? raw.presetMode
-      : base.presetMode
-    const preset = presetMode === 'custom' ? null : WORLD_BOOK_VECTOR_PRESETS[presetMode]
-    const target = Math.min(2000, Math.max(120, Math.floor((raw.chunkTargetTokens ?? preset?.chunkTargetTokens ?? base.chunkTargetTokens))))
-    const max = Math.min(4000, Math.max(target, Math.floor((raw.chunkMaxTokens ?? preset?.chunkMaxTokens ?? base.chunkMaxTokens))))
-    return {
-      presetMode,
-      chunkTargetTokens: target,
-      chunkMaxTokens: max,
-      chunkOverlapTokens: Math.min(500, Math.max(0, Math.floor((raw.chunkOverlapTokens ?? preset?.chunkOverlapTokens ?? base.chunkOverlapTokens)))),
-      retrievalTopK: Math.max(1, Math.floor((raw.retrievalTopK ?? preset?.retrievalTopK ?? base.retrievalTopK))),
-      maxChunksPerEntry: Math.min(24, Math.max(1, Math.floor((raw.maxChunksPerEntry ?? preset?.maxChunksPerEntry ?? base.maxChunksPerEntry)))),
-    }
-  }
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -1893,7 +1894,7 @@ function EmbeddingsSettings() {
   const worldBookSettingsDirtyRef = useRef(false)
   const worldBookSettingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -1905,11 +1906,11 @@ function EmbeddingsSettings() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [t])
 
   useEffect(() => {
     load()
-  }, [])
+  }, [load])
 
   useEffect(() => {
     let cancelled = false
@@ -2907,7 +2908,7 @@ function AdvancedSettings() {
   const [success, setSuccess] = useState<string | null>(null)
   const [cfg, setCfg] = useState<ChatMemorySettings | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -2920,9 +2921,9 @@ function AdvancedSettings() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [t])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   const quickModePresets: Record<string, Pick<ChatMemorySettings, 'chunkTargetTokens' | 'chunkMaxTokens' | 'chunkOverlapTokens' | 'exclusionWindow'>> = {
     conservative: { chunkTargetTokens: 600, chunkMaxTokens: 1200, chunkOverlapTokens: 100, exclusionWindow: 30 },
@@ -2964,7 +2965,7 @@ function AdvancedSettings() {
       }
     }, 600)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [cfg])
+  }, [cfg, t])
 
   return (
     <div className={styles.settingsSection}>

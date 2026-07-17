@@ -323,7 +323,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       setMobileRangeWarm(false)
       rangeWarmTimerRef.current = null
     }, duration)
-  }, [isCoarsePointer])
+  }, [])
   const streamingError = useStore((s) => s.streamingError)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
@@ -790,7 +790,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   })
   // The core virtualizer exposes this as a mutable instance hook even though
   // the React wrapper's options type does not currently declare it.
-  rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustScrollPositionOnItemSizeChange
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-compiler/react-compiler
+    rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustScrollPositionOnItemSizeChange
+  }, [rowVirtualizer, shouldAdjustScrollPositionOnItemSizeChange])
 
   const measureMountedRows = useCallback(() => {
     const el = scrollRef.current
@@ -1032,7 +1035,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     return true
   }, [hasInListEditableFocus, inputSafeZone, markPinned, markProgrammaticScroll, rowVirtualizer, virtualListItems.length])
 
-  const updatePinState = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
+  const updatePinState = useCallback((scrollTop: number, scrollHeight: number, clientHeight: number) => {
     const distance = scrollHeight - scrollTop - clientHeight
     const shouldPin = shouldPinMessageListTail({
       distanceFromEnd: distance,
@@ -1042,7 +1045,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     })
     if (shouldPin) markPinned()
     else isPinnedRef.current = false
-  }
+  }, [markPinned, BOTTOM_REPIN_EPSILON, EXPLICIT_BOTTOM_REPIN_EPSILON])
 
   // User scroll intent owns pinning: any upward scroll disables auto-follow,
   // and we only re-arm once the user actually returns to the bottom.
@@ -1092,7 +1095,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       topLoadArmedRef.current = false
       loadMore()
     }
-  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, markUserUnpinned, recoverTailVoid, suppressKeyboardRepin])
+  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, markUserUnpinned, recoverTailVoid, suppressKeyboardRepin, updatePinState])
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     suppressKeyboardRepin(1000)

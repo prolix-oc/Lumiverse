@@ -1496,12 +1496,17 @@ function PromptBehaviorSettings({ promptBehavior, onSave }: { promptBehavior: an
 // ============================================================================
 
 function CompletionSettingsPanel({ completionSettings, onSave }: { completionSettings: any; onSave: (updates: Record<string, any>) => void }) {
+  // The compiler's hook-name heuristic falsely flags the `useSystemPrompt`
+  // boolean setting as a Hook reference. Suppress only this component.
+  /* eslint-disable react-compiler/react-compiler */
   const { t } = useLb()
   const { continuePostfixOptions } = useLoomOptionLabels()
   const [isExpanded, setIsExpanded] = useState(false)
   const settings = completionSettings || {}
   const defaults = DEFAULT_COMPLETION_SETTINGS
+  const systemPromptKey = 'useSystemPrompt'
   const visibleKeys = Object.keys(defaults).filter(key => key !== 'namesBehavior')
+  const systemPromptEnabled = !!(settings[systemPromptKey] ?? defaults[systemPromptKey])
 
   const activeCount = visibleKeys.filter(key => {
     const current = settings[key] ?? defaults[key as keyof typeof defaults]
@@ -1544,7 +1549,7 @@ function CompletionSettingsPanel({ completionSettings, onSave }: { completionSet
           </div>
           <hr className={s.menuDivider} />
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            <Toggle.Checkbox checked={!!(settings.useSystemPrompt ?? defaults.useSystemPrompt)} onChange={v => handleChange('useSystemPrompt', v)} label={t('settings.useSystemPrompt')} />
+            <Toggle.Checkbox checked={systemPromptEnabled} onChange={v => handleChange('useSystemPrompt', v)} label={t('settings.useSystemPrompt')} />
             <Toggle.Checkbox checked={!!(settings.enableWebSearch ?? defaults.enableWebSearch)} onChange={v => handleChange('enableWebSearch', v)} label={t('settings.enableWebSearch')} />
             <Toggle.Checkbox checked={!!(settings.sendInlineMedia ?? defaults.sendInlineMedia)} onChange={v => handleChange('sendInlineMedia', v)} label={t('settings.sendInlineMedia')} />
             <Toggle.Checkbox checked={!!(settings.enableFunctionCalling ?? defaults.enableFunctionCalling)} onChange={v => handleChange('enableFunctionCalling', v)} label={t('settings.enableFunctionCalling')} />
@@ -1554,6 +1559,7 @@ function CompletionSettingsPanel({ completionSettings, onSave }: { completionSet
       )}
     </div>
   )
+  /* eslint-enable react-compiler/react-compiler */
 }
 
 // ============================================================================
@@ -1800,7 +1806,7 @@ export default function LoomBuilder({
     } else {
       addToast({ type: 'info', message: lb('profiles.alreadyDefault') })
     }
-  }, [presetProfiles.defaults, activePreset, saveBlocks, addToast])
+  }, [presetProfiles.defaults, activePreset, saveBlocks, addToast, lb])
 
   // Apply the resolved preset profile binding to the active preset's blocks
   // whenever the chat/character context changes and the hook confirms its
@@ -1861,6 +1867,7 @@ export default function LoomBuilder({
     presetProfiles.activeChatId,
     presetProfiles.activeCharacterId,
     presetProfiles.activeProfileId,
+    presetProfiles,
     activePreset?.id,
     saveBlocks,
   ])
@@ -2259,7 +2266,7 @@ export default function LoomBuilder({
 
   const handleAddCategory = useCallback(() => {
     addBlock(createMarkerBlock('category', lb('actions.newCategory')))
-  }, [addBlock])
+  }, [addBlock, lb])
 
   const handleAddMarker = useCallback((type: string) => {
     addBlock(createMarkerBlock(type))
@@ -2285,7 +2292,7 @@ export default function LoomBuilder({
   const handleDuplicatePreset = useCallback(async () => {
     if (!activePreset || !activePresetId) return
     await duplicatePreset(activePresetId, `${activePreset.name}${lb('preset.copySuffix')}`)
-  }, [activePreset, activePresetId, duplicatePreset])
+  }, [activePreset, activePresetId, duplicatePreset, lb])
 
   const handleDeletePreset = useCallback(async () => {
     if (!activePresetId) return
@@ -2307,7 +2314,7 @@ export default function LoomBuilder({
     } catch (err: any) {
       toast.error(err.body?.error || err.message || lb('toast.exportFailed'))
     }
-  }, [exportInternal])
+  }, [exportInternal, lb])
 
   const handleExportLegacy = useCallback(() => {
     const data = exportLegacy()

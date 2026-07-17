@@ -1,16 +1,44 @@
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import pkg from './package.json'
 
 export default defineConfig({
   plugins: [
-    react({
-      babel: {
-        plugins: [['babel-plugin-react-compiler', { target: '19' }]],
-      },
+    babel({
+      presets: [
+        reactCompilerPreset({
+          target: '19',
+          // Gradual adoption: only compile components/hooks annotated with
+          // "use memo". This keeps build times fast while we opt files in
+          // one at a time. Switch to compilationMode: 'all' once the codebase
+          // is clean and the wins are proven.
+          compilationMode: 'annotation',
+        }),
+      ],
+      // Only run the React Compiler on files that can contain components/hooks.
+      // .tsx files are component/JSX code; src/hooks/*.ts are shared hooks.
+      // Specific hook files outside these directories are listed explicitly.
+      include: [
+        /\.tsx$/,
+        /src\/hooks\/[^/]+\.ts$/,
+        /src\/store\/index\.ts$/,
+        /src\/ws\/useWebSocket\.ts$/,
+        /src\/lib\/dndUiScale\.ts$/,
+        /src\/lib\/oocAvatarLookup\.ts$/,
+        /src\/lib\/wallpaperVideoCache\.ts$/,
+        /src\/lib\/i18n\/worldBookEntryLabels\.ts$/,
+        /src\/lib\/i18n\/loomOptionLabels\.ts$/,
+        /src\/lib\/spindle\/components-helper\.tsx$/,
+      ],
+      exclude: [
+        /node_modules/,
+        /src\/lib\/generated(?:ComponentCss|ComponentProps|CssVariables)\.ts$/,
+      ],
     }),
+    react(),
     VitePWA({
       strategies: 'injectManifest',
       srcDir: 'src',
@@ -23,6 +51,17 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,woff,woff2}'],
         // Main app chunk is ~5MB; locale JSON are separate lazy chunks (see src/i18n/resources.ts).
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+      },
+      integration: {
+        configureCustomSWViteBuild(config) {
+          const output = config.build?.rollupOptions?.output as
+            | Record<string, unknown>
+            | undefined
+          if (output) {
+            delete output.inlineDynamicImports
+            output.codeSplitting = false
+          }
+        },
       },
     }),
   ],

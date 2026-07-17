@@ -53,7 +53,7 @@ export default function GroupSettingsModal() {
   const chatId = modalProps?.chatId ?? ''
   const metadata = modalProps?.metadata ?? {}
   const isGroup = metadata.group === true
-  const characterIds: string[] = metadata.character_ids ?? []
+  const characterIds = useMemo(() => (metadata.character_ids ?? []) as string[], [metadata.character_ids])
   // Single-character chats hang voice overrides off the chat's owning
   // character. The modal opens for the active chat, so activeCharacterId is
   // a reliable proxy when this isn't a group.
@@ -107,9 +107,12 @@ export default function GroupSettingsModal() {
   // ── Voice overrides ──────────────────────────────────────────────────
   // Only exposed in single-character chats. Group chats use the member-bar
   // context menu to set per-member overrides individually.
-  const initialVoiceOverrides = metadata.voiceOverrides && typeof metadata.voiceOverrides === 'object'
-    ? metadata.voiceOverrides as Record<string, any>
-    : {}
+  const initialVoiceOverrides = useMemo(
+    () => metadata.voiceOverrides && typeof metadata.voiceOverrides === 'object'
+      ? metadata.voiceOverrides as Record<string, any>
+      : {},
+    [metadata.voiceOverrides],
+  )
   const [narratorOverride, setNarratorOverride] = useState<VoiceRef | null>(
     readVoiceRef(initialVoiceOverrides.narrator),
   )
