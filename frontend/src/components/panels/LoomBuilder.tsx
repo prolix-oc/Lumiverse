@@ -405,14 +405,21 @@ function TrustedMacroPreviewControls({
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewDiagnostics, setPreviewDiagnostics] = useState<{ level: string; message: string }[]>([])
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A preview can be superseded while its macro request is in flight. Track
+  // the request version so a late response never replaces newer context.
+  const previewRequestVersionRef = useRef(0)
   const activeChatId = __contextMeterStore((state) => state.activeChatId)
   const activeCharacterId = __contextMeterStore((state) => state.activeCharacterId)
   const activeGroupCharacterId = __contextMeterStore((state) => state.activeGroupCharacterId)
+  const activePersonaId = __contextMeterStore((state) => state.activePersonaId)
+  const activeProfileId = __contextMeterStore((state) => state.activeProfileId)
 
   useEffect(() => {
+    const requestVersion = ++previewRequestVersionRef.current
     if (!showPreview || !content.trim()) {
       setPreviewText('')
       setPreviewDiagnostics([])
+      setPreviewLoading(false)
       return
     }
     clearTimeout(previewTimerRef.current)
@@ -430,19 +437,27 @@ function TrustedMacroPreviewControls({
         prompt_blocks: previewBlocks,
         prompt_variables: promptVariables,
         ...(activeChatId ? { chat_id: activeChatId } : {}),
+        ...(activePersonaId ? { persona_id: activePersonaId } : {}),
+        ...(activeProfileId ? { connection_id: activeProfileId } : {}),
         ...(activeGroupCharacterId || activeCharacterId
           ? { character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined }
           : {}),
       })
         .then((response) => {
+          if (previewRequestVersionRef.current !== requestVersion) return
           setPreviewText(response.text)
           setPreviewDiagnostics(response.diagnostics)
         })
         .catch(() => {
+          if (previewRequestVersionRef.current !== requestVersion) return
           setPreviewText(t('blockEditor.previewUnavailable'))
           setPreviewDiagnostics([])
         })
-        .finally(() => setPreviewLoading(false))
+        .finally(() => {
+          if (previewRequestVersionRef.current === requestVersion) {
+            setPreviewLoading(false)
+          }
+        })
     }, 500)
     return () => {
       clearTimeout(previewTimerRef.current)
@@ -451,6 +466,8 @@ function TrustedMacroPreviewControls({
     activeCharacterId,
     activeChatId,
     activeGroupCharacterId,
+    activePersonaId,
+    activeProfileId,
     blockId,
     blocks,
     content,

@@ -55,6 +55,7 @@ Object.assign(globalThis, {
 const NullComponent = () => null
 const translation = (key: string) => key
 let resolverCalls = 0
+const resolverRequests: Array<Record<string, unknown>> = []
 const mountedRoots = new Set<Root>()
 const MockToggle = Object.assign(NullComponent, {
   Checkbox: ({ label }: { label?: ReactNode }) => createElement('label', null, label),
@@ -68,7 +69,8 @@ const mainStoreState = {
   addToast: () => {},
   activeChatId: null,
   activeCharacterId: null,
-  activeProfileId: null,
+  activePersonaId: 'preview-persona',
+  activeProfileId: 'preview-connection',
   isGroupChat: false,
   user: null,
   breakdownCache: {},
@@ -86,8 +88,9 @@ mock.module('react-i18next', () => ({
 }))
 mock.module('@/i18n', () => ({ default: { t: translation, language: 'en' } }))
 mock.module('@/api/macros', () => ({
-  resolveMacros: async () => {
+  resolveMacros: async (request: Record<string, unknown>) => {
     resolverCalls += 1
+    resolverRequests.push(request)
     return { text: 'resolved', diagnostics: [] }
   },
   resolveMacrosBatch: async () => ({ resolved: {} }),
@@ -389,6 +392,7 @@ afterEach(() => {
   expect(mountedRoots.size).toBe(0)
   document.body.replaceChildren()
   resolverCalls = 0
+  resolverRequests.length = 0
 })
 afterAll(async () => {
   await act(async () => {})
@@ -452,6 +456,26 @@ describe('controlled Loom editor trust boundary', () => {
 
     expect(container.textContent).toContain('blockEditor.preview')
     expect(container.textContent).toContain('blockEditor.sealedBlockTitle')
+    unmountRoot(root)
+  })
+
+  test('resolves a block preview with the active connection and persona', async () => {
+    const { container, root } = renderBlockEditor(true, () => {})
+    const previewButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('blockEditor.preview'))
+    expect(previewButton).toBeDefined()
+
+    flushSync(() => previewButton!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 550))
+    })
+
+    expect(resolverCalls).toBe(1)
+    expect(resolverRequests[0]).toMatchObject({
+      template: 'Hello {{user}}',
+      connection_id: 'preview-connection',
+      persona_id: 'preview-persona',
+    })
     unmountRoot(root)
   })
 
