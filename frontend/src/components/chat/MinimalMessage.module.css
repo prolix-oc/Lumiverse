@@ -204,6 +204,16 @@
   line-height: 1;
 }
 
+/* User metadata sits on the right side of the row. Keep the badge itself as
+   one unit; the wrapping header can still move the whole pill below the name
+   when horizontal space is tight. */
+.user .metaPill {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  max-width: none;
+  white-space: nowrap;
+}
+
 .metaSegment {
   display: inline-flex;
   align-items: center;

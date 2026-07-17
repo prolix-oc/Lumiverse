@@ -378,6 +378,15 @@
   align-self: flex-end;
 }
 
+/* The right-aligned user badge should remain a single line. The left-aligned
+   option retains the general wrapping behavior for backwards compatibility. */
+.user:not(.userLeft) .metaPill {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  max-width: none;
+  white-space: nowrap;
+}
+
 .userLeft.user .metaPill {
   align-self: flex-start;
 }
@@ -608,6 +617,12 @@
 
   .headerLeft {
     align-items: flex-start;
+    max-width: 100%;
+  }
+
+  /* Actions occupy their own strip above the card at this breakpoint, so the
+     desktop reservation would only squeeze the right-side metadata. */
+  .user:not(.userLeft) .headerLeft {
     max-width: 100%;
   }
 
