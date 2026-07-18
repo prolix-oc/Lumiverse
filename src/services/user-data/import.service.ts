@@ -19,7 +19,15 @@ import {
   type EncryptedSecretEntry,
 } from "./secret-ticket.service";
 import { putSecret } from "../secrets.service";
-import { mkdirSync, existsSync, unlinkSync, statSync } from "fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  statSync,
+  unlinkSync,
+  writeSync,
+} from "fs";
 import { join, dirname, basename, resolve, sep } from "path";
 import { getDb } from "../../db/connection";
 import { env } from "../../env";
@@ -189,24 +197,49 @@ export async function persistUploadedArchive(
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const path = join(dir, "archive.lvbak");
 
-  const sink = Bun.file(path).writer();
+  // Keep Bun's internal queue deliberately small. More importantly, every
+  // write below is awaited: FileSink.write() returns a Promise when the disk
+  // cannot keep pace with the request. Ignoring that Promise turns the sink
+  // into an unbounded RAM queue on slow Android/Termux storage.
+  const sink = Bun.file(path).writer({ highWaterMark: 256 * 1024 });
   const reader = body.getReader();
-  let header = new Uint8Array(0);
+  const header = new Uint8Array(4);
+  let headerBytes = 0;
   let magicChecked = false;
   let total = 0;
-  let aborted = false;
+  let sinkClosed = false;
 
-  const cleanup = () => {
+  const closeSink = async (ignoreError = false) => {
+    if (sinkClosed) return;
+    sinkClosed = true;
     try {
-      sink.end();
-    } catch {
-      /* ignore */
+      await sink.end();
+    } catch (err) {
+      if (!ignoreError) throw err;
     }
+  };
+
+  const cleanup = async () => {
+    // Cleanup runs while another validation/write error is already in flight;
+    // don't replace that useful error with a secondary close failure.
+    await closeSink(true);
     try {
       unlinkSync(path);
     } catch {
       /* ignore */
     }
+  };
+
+  const writeChunk = async (chunk: Uint8Array) => {
+    if (chunk.byteLength === 0) return;
+    if (total + chunk.byteLength > MAX_COMPRESSED_BYTES) {
+      throw new ArchiveValidationError(
+        "size",
+        `archive exceeds compressed size cap (${total + chunk.byteLength} bytes)`,
+      );
+    }
+    await sink.write(chunk);
+    total += chunk.byteLength;
   };
 
   try {
@@ -215,62 +248,47 @@ export async function persistUploadedArchive(
       if (done) break;
       if (!value || value.byteLength === 0) continue;
 
-      // Accumulate the first chunk(s) until we have ≥ 4 bytes, then verify.
+      // Accumulate only the four magic bytes. The previous implementation
+      // copied the *entire* first stream chunk into a new Uint8Array; some Bun
+      // builds can deliver a very large first chunk for a known-length body,
+      // temporarily doubling an already-large archive in memory.
       if (!magicChecked) {
-        const combined = new Uint8Array(header.byteLength + value.byteLength);
-        combined.set(header, 0);
-        combined.set(value, header.byteLength);
-        header = combined;
-        if (header.byteLength >= 4) {
-          if (!startsWithZipMagic(header)) {
-            aborted = true;
-            cleanup();
-            throw new ArchiveValidationError(
-              "not_zip",
-              "Uploaded file is not a ZIP archive (missing PK\\x03\\x04 header).",
-            );
-          }
-          magicChecked = true;
-          sink.write(header);
-          total += header.byteLength;
-          header = new Uint8Array(0);
+        const take = Math.min(4 - headerBytes, value.byteLength);
+        header.set(value.subarray(0, take), headerBytes);
+        headerBytes += take;
+        if (headerBytes < 4) continue;
+
+        if (!startsWithZipMagic(header)) {
+          throw new ArchiveValidationError(
+            "not_zip",
+            "Uploaded file is not a ZIP archive (missing PK\\x03\\x04 header).",
+          );
         }
+
+        magicChecked = true;
+        await writeChunk(header);
+        await writeChunk(value.subarray(take));
         continue;
       }
 
-      sink.write(value);
-      total += value.byteLength;
-      if (total > MAX_COMPRESSED_BYTES) {
-        aborted = true;
-        cleanup();
-        throw new ArchiveValidationError(
-          "size",
-          `archive exceeds compressed size cap (${total} bytes)`,
-        );
-      }
+      await writeChunk(value);
     }
 
     // Body ended before we had 4 bytes — treat as invalid.
     if (!magicChecked) {
-      aborted = true;
-      cleanup();
       throw new ArchiveValidationError("not_zip", "Upload is empty or shorter than a ZIP header.");
     }
 
-    await sink.end();
+    await closeSink();
   } catch (err) {
-    if (!aborted) {
-      try {
-        sink.end();
-      } catch {
-        /* ignore */
-      }
-      try {
-        unlinkSync(path);
-      } catch {
-        /* ignore */
-      }
+    // Stop accepting network data immediately on validation/write failure,
+    // then remove the partial archive after the sink has actually closed.
+    try {
+      await reader.cancel(err);
+    } catch {
+      /* ignore */
     }
+    await cleanup();
     throw err;
   } finally {
     try {
@@ -863,6 +881,16 @@ interface ImportBuffer {
   stagingDir: string;
 }
 
+/** Write a complete Uint8Array even if the OS performs a short write. */
+function writeAllSync(fd: number, chunk: Uint8Array): void {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const written = writeSync(fd, chunk, offset, chunk.byteLength - offset);
+    if (written <= 0) throw new Error("archive staging write made no progress");
+    offset += written;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: extract archive into staging
 // ---------------------------------------------------------------------------
@@ -895,7 +923,12 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   // fflate's Unzip is a sync API; we feed chunks as we read them, and it
   // hands us files via the callback. Each file's `ondata` is wired to
   // append to a staging file on disk.
-  const openFiles = new Map<UnzipFile, { writeStream: Bun.FileSink; entry: BufferedEntry; closed: boolean }>();
+  // fflate's callbacks are synchronous and expose no pause/backpressure hook.
+  // A Bun.FileSink can therefore queue decompressed chunks faster than slow
+  // Android storage can flush them. Use synchronous file descriptors here:
+  // extraction is already CPU-synchronous, and this guarantees each chunk is
+  // on disk before fflate is allowed to produce the next one.
+  const openFiles = new Map<UnzipFile, { fd: number; entry: BufferedEntry; closed: boolean }>();
   let openFileError: any = null;
 
   const unzip = new Unzip((file) => {
@@ -929,7 +962,18 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     // Stage every entry as a real file on disk so the apply phase can re-read
     // it in topological order without buffering anything in JS memory.
     const stagingPath = join(buf.stagingDir, `${buf.entryCount.toString(36)}.bin`);
-    const sink = Bun.file(stagingPath).writer();
+    let fd: number;
+    try {
+      fd = openSync(stagingPath, "w");
+    } catch (err) {
+      openFileError = err;
+      try {
+        file.terminate?.();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
 
     let entry: BufferedEntry;
     switch (descriptor.kind) {
@@ -979,7 +1023,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
         break;
     }
 
-    openFiles.set(file, { writeStream: sink, entry, closed: false });
+    openFiles.set(file, { fd, entry, closed: false });
     buf.entries.push(entry);
 
     file.ondata = (err, chunk, final) => {
@@ -991,27 +1035,19 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
       if (!handle) return;
       if (chunk && chunk.byteLength > 0) {
         try {
-          handle.writeStream.write(chunk);
+          enforceQuota(chunk.byteLength);
+          writeAllSync(handle.fd, chunk);
+          handle.entry.byteSize += chunk.byteLength;
         } catch (writeErr) {
           openFileError = writeErr;
-          return;
-        }
-        handle.entry.byteSize += chunk.byteLength;
-        try {
-          enforceQuota(chunk.byteLength);
-        } catch (quotaErr) {
-          openFileError = quotaErr;
           return;
         }
       }
       if (final) {
         if (!handle.closed) {
           handle.closed = true;
-          // FileSink.end() flushes; ignore returned promise to keep the sync
-          // ondata path simple. The OS write is durable enough for our
-          // purposes (we re-read inside the same process).
           try {
-            handle.writeStream.end();
+            closeSync(handle.fd);
           } catch {
             /* ignore */
           }
@@ -1056,8 +1092,10 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     }
     // Force-close any still-open sinks (shouldn't happen for well-formed zips).
     for (const handle of openFiles.values()) {
+      if (handle.closed) continue;
+      handle.closed = true;
       try {
-        handle.writeStream.end();
+        closeSync(handle.fd);
       } catch {
         /* ignore */
       }
