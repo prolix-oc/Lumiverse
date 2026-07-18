@@ -138,55 +138,57 @@ afterEach(() => {
 
 describe('preset editor tab registration', () => {
   test('unwinds state subscription and root when per-extension or global cap rejects registration', () => {
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 8; index += 1) {
       handles.push(createPresetEditorTabHandle(extensionId, {
         id: `per-extension-${index}`,
         title: `Per-extension ${index}`,
       }, () => {}, generation))
     }
 
-    expect(activeSubscriptions).toBe(4)
+    expect(activeSubscriptions).toBe(8)
     expect(() => createPresetEditorTabHandle(extensionId, {
       id: 'per-extension-overflow',
       title: 'Per-extension overflow',
     }, () => {}, generation)).toThrow('Preset editor tab limit reached')
-    expect(activeSubscriptions).toBe(4)
-    expect(createdRoots[4]?.removed).toBe(true)
-    expect(placementStore.getState().presetEditorTabs).toHaveLength(4)
+    expect(activeSubscriptions).toBe(8)
+    expect(createdRoots[8]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorTabs).toHaveLength(8)
 
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 56; index += 1) {
       handles.push(createPresetEditorTabHandle(`global-extension-${index}`, {
         id: `global-${index}`,
         title: `Global ${index}`,
       }, () => {}, generation))
     }
 
-    expect(activeSubscriptions).toBe(8)
+    expect(activeSubscriptions).toBe(64)
     expect(() => createPresetEditorTabHandle('global-overflow', {
       id: 'global-overflow',
       title: 'Global overflow',
     }, () => {}, generation)).toThrow('Global preset editor tab limit reached')
-    expect(activeSubscriptions).toBe(8)
-    expect(createdRoots[9]?.removed).toBe(true)
-    expect(placementStore.getState().presetEditorTabs).toHaveLength(8)
+    expect(activeSubscriptions).toBe(64)
+    expect(createdRoots[65]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorTabs).toHaveLength(64)
   })
 })
 
 describe('preset editor toolbar registration', () => {
   test('unwinds the root when per-extension or global cap rejects registration', () => {
-    toolbarHandles.push(createPresetEditorToolbarItemHandle(extensionId, {
-      id: 'per-extension-0',
-      ariaLabel: 'Per-extension 0',
-    }, () => {}, generation))
+    for (let index = 0; index < 4; index += 1) {
+      toolbarHandles.push(createPresetEditorToolbarItemHandle(extensionId, {
+        id: `per-extension-${index}`,
+        ariaLabel: `Per-extension ${index}`,
+      }, () => {}, generation))
+    }
 
     expect(() => createPresetEditorToolbarItemHandle(extensionId, {
       id: 'per-extension-overflow',
       ariaLabel: 'Per-extension overflow',
     }, () => {}, generation)).toThrow('Preset editor toolbar item limit reached')
-    expect(createdRoots[1]?.removed).toBe(true)
-    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(1)
+    expect(createdRoots[4]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(4)
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 28; index += 1) {
       toolbarHandles.push(createPresetEditorToolbarItemHandle(`global-extension-${index}`, {
         id: `global-${index}`,
         ariaLabel: `Global ${index}`,
@@ -197,8 +199,8 @@ describe('preset editor toolbar registration', () => {
       id: 'global-overflow',
       ariaLabel: 'Global overflow',
     }, () => {}, generation)).toThrow('Global preset editor toolbar item limit reached')
-    expect(createdRoots[5]?.removed).toBe(true)
-    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(4)
+    expect(createdRoots[33]?.removed).toBe(true)
+    expect(placementStore.getState().presetEditorToolbarItems).toHaveLength(32)
   })
 
   test('removes revoked toolbar resources and rejects stale handle calls', () => {

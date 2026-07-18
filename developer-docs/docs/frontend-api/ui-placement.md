@@ -8,7 +8,7 @@ If a placement needs an isolated child document with inline scripts, create and 
 
 ## Drawer Tabs (free — no permission needed)
 
-Register a tab in the ViewportDrawer sidebar. Max 4 per extension, 8 global.
+Register a tab in the ViewportDrawer sidebar. Max 8 per extension, 64 global.
 Drawer tabs are free: registering or updating one does not require `ui_panels`, and revoking `ui_panels` does not remove it.
 
 Drawer tabs are managed by Lumiverse's central tab registry. When you register a tab, it automatically appears in the sidebar **and** the command palette (`Ctrl+K`). The metadata you provide controls how the tab looks and how users find it.
@@ -86,7 +86,7 @@ No extra code needed. The registry handles the wiring.
 
 ## Character Editor Tabs (requires `characters`)
 
-Register a tab inside the native character editor modal. Max 4 per extension, 8 global.
+Register a tab inside the native character editor modal. Max 8 per extension, 64 global.
 
 Character-editor tabs are scoped to whichever character card the user is currently editing. Your tab root persists like other Spindle placements, but it is only shown while the editor modal is open.
 
@@ -171,7 +171,7 @@ This helper exposes the current editor snapshot and a safe way to mutate the dra
 
 ## Preset Editor Tabs (requires `presets`)
 
-Register a tab inside the native Loom preset editor. Max 4 per extension, 8
+Register a tab inside the native Loom preset editor. Max 8 per extension, 64
 global. The helper exposes the latest in-memory draft so extension edits share
 the editor's serialized save queue instead of racing direct preset API writes.
 
@@ -212,9 +212,9 @@ passthrough metadata bag contains a colliding key.
 
 ### Preset-editor toolbar items
 
-`ctx.ui.registerPresetEditorToolbarItem({ id, ariaLabel })` registers one
+`ctx.ui.registerPresetEditorToolbarItem({ id, ariaLabel })` registers an
 extension-owned root above Loom's list/edit branch. Each extension can register
-one item; four items are available globally. The returned handle exposes `root`,
+up to four items; 32 items are available globally. The returned handle exposes `root`,
 `itemId`, `setVisible(visible)`, and `destroy()`. The host supplies placement
 only: extension code owns the toolbar's controls, labels, and accessibility
 semantics beneath its required `ariaLabel`.
@@ -261,7 +261,7 @@ read `ctx.ui.presetEditor.extension` again to acquire a fresh helper.
 
 ## Float Widgets (requires `ui_panels`)
 
-Create a small draggable widget overlaying the UI. Max 2 per extension, 8 global.
+Create a small draggable widget overlaying the UI. Max 4 per extension, 32 global.
 
 ```ts
 const widget = ctx.ui.createFloatWidget({
@@ -372,7 +372,7 @@ Returns the header title for the built-in tab. Read-only.
 
 ## Dock Panels (requires `ui_panels`)
 
-Create an always-visible panel fixed to a screen edge. Max 1 per edge per extension, 2 per edge global.
+Create an always-visible panel fixed to a screen edge. Max 2 per edge per extension, 8 per edge global.
 
 ```ts
 const panel = ctx.ui.requestDockPanel({
@@ -405,7 +405,7 @@ On mobile, left/right dock panels become full-width bottom sheets.
 
 ## App Mounts (requires `app_manipulation`)
 
-Mount an unrestricted portal into `document.body` that persists across route changes. Max 1 per extension, 4 global.
+Mount an unrestricted portal into `document.body` that persists across route changes. Max 2 per extension, 32 global.
 
 ```ts
 const mount = ctx.ui.mountApp({
@@ -426,7 +426,7 @@ mount.destroy()
 
 ## Input Bar Actions (free — no permission needed)
 
-Register action buttons inside the **Extras** popover on the chat input bar. Extension actions are visually grouped under a teal-badged header with the extension name. Max 4 per extension, 12 global.
+Register action buttons inside the **Extras** popover on the chat input bar. Extension actions are visually grouped under a teal-badged header with the extension name. Max 8 per extension, 64 global.
 
 ```ts
 const action = ctx.ui.registerInputBarAction({
@@ -737,13 +737,14 @@ resetBtn.addEventListener('click', async () => {
 
 | Placement | Per Extension | Global |
 |---|---|---|
-| Drawer Tab | 4 | 8 |
-| Character Editor Tab | 4 | 8 |
-| Preset Editor Tab | 4 | 8 |
-| Float Widget | 2 | 8 |
-| Dock Panel | 1 per edge | 2 per edge |
-| App Mount | 1 | 4 |
-| Input Bar Action | 4 | 12 |
+| Drawer Tab | 8 | 64 |
+| Character Editor Tab | 8 | 64 |
+| Preset Editor Tab | 8 | 64 |
+| Preset Editor Toolbar Item | 4 | 32 |
+| Float Widget | 4 | 32 |
+| Dock Panel | 2 per edge | 8 per edge |
+| App Mount | 2 | 32 |
+| Input Bar Action | 8 | 64 |
 | Modal | 2 stacked | — |
 
 Exceeding limits throws an error. All placements are automatically cleaned up when an extension is disabled, removed, updated, or reloaded. A placement that requires a permission is also removed immediately when that permission is revoked; its stale handle remains closed.

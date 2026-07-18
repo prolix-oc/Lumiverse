@@ -5,14 +5,14 @@ import type { SpindleDockEdge, SpindleTabLocation as TabLocation } from 'lumiver
 // ── Capacity limits ──
 
 const PLACEMENT_LIMITS = {
-  drawerTabs: { perExtension: 4, global: 8 },
-  characterEditorTabs: { perExtension: 4, global: 8 },
-  presetEditorTabs: { perExtension: 4, global: 8 },
-  presetEditorToolbarItems: { perExtension: 1, global: 4 },
-  floatWidgets: { perExtension: 2, global: 8 },
-  dockPanels: { perExtensionPerEdge: 1, globalPerEdge: 2 },
-  appMounts: { perExtension: 1, global: 4 },
-  inputBarActions: { perExtension: 4, global: 12 },
+  drawerTabs: { perExtension: 8, global: 64 },
+  characterEditorTabs: { perExtension: 8, global: 64 },
+  presetEditorTabs: { perExtension: 8, global: 64 },
+  presetEditorToolbarItems: { perExtension: 4, global: 32 },
+  floatWidgets: { perExtension: 4, global: 32 },
+  dockPanels: { perExtensionPerEdge: 2, globalPerEdge: 8 },
+  appMounts: { perExtension: 2, global: 32 },
+  inputBarActions: { perExtension: 8, global: 64 },
 } as const
 
 // ── State types ──

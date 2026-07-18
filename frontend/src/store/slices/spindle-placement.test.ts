@@ -129,6 +129,24 @@ describe('preset editor placements', () => {
   })
 })
 
+describe('placement capacity', () => {
+  test('allows drawer tabs from thirty distinct extensions', () => {
+    const slice = makeSlice()
+
+    for (let index = 0; index < 30; index += 1) {
+      slice.state.registerDrawerTab({
+        id: `tab-${index}`,
+        extensionId: `extension-${index}`,
+        title: `Extension ${index}`,
+        badge: null,
+        root: {} as HTMLElement,
+      })
+    }
+
+    expect(slice.state.drawerTabs).toHaveLength(30)
+  })
+})
+
 describe('hideAllPlacements / showAllPlacements', () => {
   let slice: ReturnType<typeof makeSlice>
   beforeEach(() => {
