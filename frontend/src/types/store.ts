@@ -501,6 +501,8 @@ export interface SettingsSlice {
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
   messageContextMenuEnabled: boolean
+  /** Suppress toasts when older chat messages are omitted from generation context. */
+  suppressContextDropWarnings: boolean
   favoritesBarCollapsed: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]

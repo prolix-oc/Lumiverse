@@ -107,6 +107,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'swipeGesturesEnabled',
   'showMessageTokenCount',
   'messageContextMenuEnabled',
+  'suppressContextDropWarnings',
   'guidedGenerations',
   'quickReplySets',
   'toastPosition',
@@ -506,6 +507,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   swipeGesturesEnabled: true,
   showMessageTokenCount: true,
   messageContextMenuEnabled: true,
+  suppressContextDropWarnings: false,
   favoritesBarCollapsed: false,
   globalWorldBooks: [],
   worldInfoSettings: {

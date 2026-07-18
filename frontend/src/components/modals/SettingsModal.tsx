@@ -734,6 +734,7 @@ function ChatSettings() {
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const messagesPerPage = useStore((s) => s.messagesPerPage)
   const regenFeedback = useStore((s) => s.regenFeedback)
+  const suppressContextDropWarnings = useStore((s) => s.suppressContextDropWarnings)
   const setSetting = useStore((s) => s.setSetting)
 
   return (
@@ -1067,6 +1068,13 @@ function ChatSettings() {
         onChange={(checked) => setSetting('messageContextMenuEnabled', checked)}
         label={t('chat.contextMenu')}
         hint={t('chat.contextMenuHint')}
+      />
+
+      <Toggle.Checkbox
+        checked={suppressContextDropWarnings}
+        onChange={(checked) => setSetting('suppressContextDropWarnings', checked)}
+        label={t('chat.preventDroppedMessageWarning')}
+        hint={t('chat.preventDroppedMessageWarningHint')}
       />
 
       <h3 id={sectionAnchorId('chat', 'swipe')} className={styles.sectionTitle} style={{ marginTop: 12 }}>{t('chat.swipeTitle')}</h3>
