@@ -13,6 +13,7 @@ import {
   reportRegexScriptPerformance,
   switchPresetBoundRegexScripts,
   toggleRegexScript,
+  toggleRegexScriptsByIds,
   toggleRegexScriptsByFolder,
   updateRegexScript,
 } from "./regex-scripts.service";
@@ -324,6 +325,54 @@ describe("regex folder toggle", () => {
     switchPresetBoundRegexScripts(USER_ID, { previousPresetId: "preset-1", presetId: null });
     activatePresetBoundRegexScripts(USER_ID, "preset-1");
     expect(mustGetScript(id).disabled).toBe(false);
+  });
+});
+
+describe("regex selection toggle", () => {
+  test("toggles only the selected scripts and ignores duplicate or missing ids", () => {
+    const a = createRegexScript(USER_ID, { name: "A", find_regex: "a", folder: "One", disabled: false });
+    const b = createRegexScript(USER_ID, { name: "B", find_regex: "b", folder: "Two", disabled: false });
+    const other = createRegexScript(USER_ID, { name: "Other", find_regex: "o", disabled: false });
+
+    expect(typeof a).not.toBe("string");
+    expect(typeof b).not.toBe("string");
+    expect(typeof other).not.toBe("string");
+    const aId = (a as Exclude<typeof a, string>).id;
+    const bId = (b as Exclude<typeof b, string>).id;
+    const otherId = (other as Exclude<typeof other, string>).id;
+
+    const result = toggleRegexScriptsByIds(USER_ID, [aId, "missing", bId, aId], true);
+    expect(result.changedIds).toEqual([aId, bId]);
+    expect(result.skippedIds).toEqual([]);
+    expect(mustGetScript(aId).disabled).toBe(true);
+    expect(mustGetScript(bId).disabled).toBe(true);
+    expect(mustGetScript(otherId).disabled).toBe(false);
+  });
+
+  test("skips selected scripts bound to an inactive preset", () => {
+    const active = createRegexScript(USER_ID, {
+      name: "Active",
+      find_regex: "a",
+      preset_id: "preset-1",
+      disabled: false,
+    }, { activePresetId: "preset-1" });
+    const inactive = createRegexScript(USER_ID, {
+      name: "Inactive",
+      find_regex: "i",
+      preset_id: "preset-2",
+      disabled: false,
+    }, { activePresetId: "preset-2" });
+
+    expect(typeof active).not.toBe("string");
+    expect(typeof inactive).not.toBe("string");
+    const activeId = (active as Exclude<typeof active, string>).id;
+    const inactiveId = (inactive as Exclude<typeof inactive, string>).id;
+
+    const result = toggleRegexScriptsByIds(USER_ID, [activeId, inactiveId], true, { activePresetId: "preset-1" });
+    expect(result.changedIds).toEqual([activeId]);
+    expect(result.skippedIds).toEqual([inactiveId]);
+    expect(mustGetScript(activeId).disabled).toBe(true);
+    expect(mustGetScript(inactiveId).disabled).toBe(false);
   });
 });
 

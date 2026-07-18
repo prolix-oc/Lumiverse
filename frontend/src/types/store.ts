@@ -1260,6 +1260,7 @@ export interface RegexSlice {
   bulkRemoveRegexScripts: (ids: string[]) => Promise<number>
   reorderRegexScripts: (orderedIds: string[], folderChange?: { id: string; folder: string }) => Promise<void>
   toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
+  toggleSelectedRegexScripts: (ids: string[], disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
   toggleRegexFolder: (folder: string, disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
   setRegexEditingId: (id: string | null) => void
 }

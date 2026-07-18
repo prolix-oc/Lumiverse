@@ -104,6 +104,17 @@ export const createRegexSlice: StateCreator<RegexSlice> = (set, get) => ({
     }))
   },
 
+  toggleSelectedRegexScripts: async (ids: string[], disabled: boolean) => {
+    if (ids.length === 0) return { changedIds: [], skippedIds: [] }
+    const activePresetId = (get() as any).activeLoomPresetId ?? null
+    const result = await enqueuePresetRegexOperation(() => regexApi.toggleSelected(ids, disabled, activePresetId))
+    const changed = new Set(result.changedIds)
+    set((s) => ({
+      regexScripts: s.regexScripts.map((r) => (changed.has(r.id) ? { ...r, disabled } : r)),
+    }))
+    return result
+  },
+
   toggleRegexFolder: async (folder: string, disabled: boolean) => {
     const activePresetId = (get() as any).activeLoomPresetId ?? null
     const result = await enqueuePresetRegexOperation(() => regexApi.toggleFolder(folder, disabled, activePresetId))

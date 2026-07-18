@@ -45,6 +45,14 @@ export const regexApi = {
     return post<{ deleted: string[]; count: number }>('/regex-scripts/bulk-delete', { ids })
   },
 
+  toggleSelected(ids: string[], disabled: boolean, activePresetId?: string | null) {
+    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/bulk-toggle', {
+      ids,
+      disabled,
+      active_preset_id: activePresetId ?? null,
+    })
+  },
+
   duplicate(id: string) {
     return post<RegexScript>(`/regex-scripts/${id}/duplicate`)
   },

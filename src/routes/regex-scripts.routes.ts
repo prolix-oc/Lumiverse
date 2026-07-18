@@ -249,6 +249,18 @@ app.post("/bulk-delete", async (c) => {
   return c.json({ deleted, count: deleted.length });
 });
 
+// POST /bulk-toggle — enable/disable an explicit selection in one transaction
+app.post("/bulk-toggle", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
+  const stringIds = body.ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
+  const result = svc.toggleRegexScriptsByIds(userId, stringIds, !!body?.disabled, {
+    activePresetId: body?.active_preset_id ?? null,
+  });
+  return c.json(result);
+});
+
 // GET /:id — get by ID
 app.get("/:id", (c) => {
   const userId = c.get("userId");

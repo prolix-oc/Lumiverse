@@ -941,24 +941,14 @@ export function toggleRegexScript(
   return updated;
 }
 
-/**
- * Bulk enable/disable every regex script in a folder.
- *
- * Scripts bound to a preset other than the active one are skipped (mirroring
- * per-script toggle behavior). Scripts bound to the active preset have their
- * enablement persisted to the preset restore list.
- */
-export function toggleRegexScriptsByFolder(
-  userId: string,
-  folder: string,
-  disabled: boolean,
-  context?: RegexMutationContext,
-): { changedIds: string[]; skippedIds: string[] } {
-  const activePresetId = normalizeOptionalId(context?.activePresetId);
-  const rows = getDb()
-    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
-    .all(userId, folder) as Array<{ id: string; preset_id?: string | null; disabled: number }>;
+type RegexToggleRow = { id: string; preset_id?: string | null; disabled: number };
 
+function toggleRegexScriptRows(
+  userId: string,
+  rows: RegexToggleRow[],
+  disabled: boolean,
+  activePresetId: string | null,
+): { changedIds: string[]; skippedIds: string[] } {
   const changedIds: string[] = [];
   const skippedIds: string[] = [];
   const targets: Array<{ id: string; preset_id: string | null }> = [];
@@ -1000,6 +990,55 @@ export function toggleRegexScriptsByFolder(
   }
 
   return { changedIds, skippedIds };
+}
+
+/**
+ * Bulk enable/disable an explicit set of regex scripts.
+ *
+ * Missing / cross-user IDs are ignored. Scripts bound to a preset other than
+ * the active one are returned in skippedIds, matching per-script toggle safety.
+ */
+export function toggleRegexScriptsByIds(
+  userId: string,
+  ids: string[],
+  disabled: boolean,
+  context?: RegexMutationContext,
+): { changedIds: string[]; skippedIds: string[] } {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return { changedIds: [], skippedIds: [] };
+
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const unorderedRows = getDb()
+    .query(`SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...uniqueIds) as RegexToggleRow[];
+  const rowsById = new Map(unorderedRows.map((row) => [row.id, row]));
+  const rows = uniqueIds.flatMap((id) => {
+    const row = rowsById.get(id);
+    return row ? [row] : [];
+  });
+
+  return toggleRegexScriptRows(userId, rows, disabled, normalizeOptionalId(context?.activePresetId));
+}
+
+/**
+ * Bulk enable/disable every regex script in a folder.
+ *
+ * Scripts bound to a preset other than the active one are skipped (mirroring
+ * per-script toggle behavior). Scripts bound to the active preset have their
+ * enablement persisted to the preset restore list.
+ */
+export function toggleRegexScriptsByFolder(
+  userId: string,
+  folder: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): { changedIds: string[]; skippedIds: string[] } {
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const rows = getDb()
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as RegexToggleRow[];
+
+  return toggleRegexScriptRows(userId, rows, disabled, activePresetId);
 }
 
 // ── Character-bound query ────────────────────────────────────────────────────
