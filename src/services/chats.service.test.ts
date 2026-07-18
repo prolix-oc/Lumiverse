@@ -3,6 +3,7 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   addSwipe,
   convertSoloChatToGroup,
+  deleteChats,
   getChat,
   cycleSwipe,
   getMessage,
@@ -383,6 +384,26 @@ describe("recent chats", () => {
       },
     ]);
     expect(original.metadata).toEqual({ author_note: "keep me" });
+  });
+});
+
+describe("bulk chat deletion", () => {
+  test("deletes only owned selected chats and ignores duplicate or missing ids", () => {
+    seedChat("delete-one", "c1", "One", "{}", 100);
+    seedChat("delete-two", "c1", "Two", "{}", 200);
+    seedChat("keep", "c1", "Keep", "{}", 300);
+    getDb()
+      .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("foreign", "u2", "c1", "Foreign", "{}", 400, 400);
+
+    const deleted = deleteChats("u1", ["delete-two", "missing", "delete-one", "delete-two", "foreign"]);
+
+    expect(deleted).toEqual(["delete-two", "delete-one"]);
+    expect(getChat("u1", "delete-one")).toBeNull();
+    expect(getChat("u1", "delete-two")).toBeNull();
+    expect(getChat("u1", "keep")?.name).toBe("Keep");
+    const foreign = getDb().query("SELECT id FROM chats WHERE id = ?").get("foreign") as { id: string } | null;
+    expect(foreign?.id).toBe("foreign");
   });
 });
 

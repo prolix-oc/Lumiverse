@@ -75,6 +75,14 @@ export const chatsApi = {
     return del<void>(`/chats/${id}`)
   },
 
+  bulkDeleteChats(ids: string[]) {
+    return post<{ deleted: string[]; count: number }>('/chats/bulk-delete', { ids })
+  },
+
+  exportChat(id: string) {
+    return get<{ chat: Chat; messages: Message[] }>(`/chats/${id}/export`)
+  },
+
   deleteCharacterChats(characterId: string) {
     return del<{ success: boolean; deleted: number }>(`/chats/character-chats/${characterId}`)
   },

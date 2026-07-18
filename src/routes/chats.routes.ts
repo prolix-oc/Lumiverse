@@ -173,6 +173,15 @@ app.delete("/character-chats/:characterId", (c) => {
   return c.json({ success: true, deleted });
 });
 
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
+  const ids = body.ids.filter((value: unknown): value is string => typeof value === "string" && value.length > 0);
+  const deleted = svc.deleteChats(userId, ids);
+  return c.json({ deleted, count: deleted.length });
+});
+
 app.get("/group-chats", (c) => {
   const userId = c.get("userId");
   const rawCharacterIds = c.req.query("character_ids");

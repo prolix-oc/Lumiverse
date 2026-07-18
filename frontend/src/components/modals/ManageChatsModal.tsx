@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Search, MessageSquare, Pencil, Download, Upload, Trash2,
-  ArrowRight, Check, SortAsc, FileText, Clock, Plus, Gamepad2, X,
+  ArrowRight, Check, SortAsc, FileText, Clock, Plus, Gamepad2,
+  ListChecks, X, Square, CheckSquare,
 } from 'lucide-react'
+import { strToU8, zipSync } from 'fflate'
 import { useNavigate } from 'react-router'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { Button } from '@/components/shared/FormComponents'
@@ -17,6 +19,7 @@ import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import clsx from 'clsx'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { previewText } from '@/lib/previewText'
+import { triggerBlobDownload } from '@/lib/downloads'
 import styles from './ManageChatsModal.module.css'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
@@ -33,6 +36,16 @@ interface ChatSummary {
 type SortMode = 'date' | 'name' | 'messages'
 
 const EMPTY_GROUP_CHARACTER_IDS: string[] = []
+
+function sanitizeDownloadSegment(value: string, fallback: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80)
+  return sanitized || fallback
+}
 
 export default function ManageChatsModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'manageChats' })
@@ -59,6 +72,10 @@ export default function ManageChatsModal() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ChatSummary | null>(null)
+  const [bulkDeleteTarget, setBulkDeleteTarget] = useState<{ ids: string[]; activeExcluded: boolean } | null>(null)
+  const [bulkMode, setBulkMode] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [importing, setImporting] = useState(false)
   const [importingSt, setImportingSt] = useState(false)
 
@@ -111,8 +128,14 @@ export default function ManageChatsModal() {
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (deleteTarget || bulkDeleteTarget) return
         if (renamingId) {
           setRenamingId(null)
+          return
+        }
+        if (bulkMode) {
+          setBulkMode(false)
+          setSelectedIds(new Set())
           return
         }
         closeModal()
@@ -122,7 +145,7 @@ export default function ManageChatsModal() {
     return () => {
       document.removeEventListener('keydown', handleEscape)
     }
-  }, [closeModal, renamingId])
+  }, [bulkDeleteTarget, bulkMode, closeModal, deleteTarget, renamingId])
 
   // Filter + sort
   const filteredChats = useMemo(() => {
@@ -146,6 +169,22 @@ export default function ManageChatsModal() {
     return sorted
   }, [chats, search, sortMode, formatChatName])
 
+  const filteredChatIds = useMemo(() => filteredChats.map((chat) => chat.id), [filteredChats])
+  const selectedChats = useMemo(() => chats.filter((chat) => selectedIds.has(chat.id)), [chats, selectedIds])
+  const allFilteredSelected = filteredChatIds.length > 0 && filteredChatIds.every((id) => selectedIds.has(id))
+  const deletableSelectedIds = useMemo(
+    () => selectedChats.filter((chat) => chat.id !== activeChatId).map((chat) => chat.id),
+    [activeChatId, selectedChats],
+  )
+
+  useEffect(() => {
+    const validIds = new Set(chats.map((chat) => chat.id))
+    setSelectedIds((previous) => {
+      const next = new Set([...previous].filter((id) => validIds.has(id)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [chats])
+
   const cycleSortMode = useCallback(() => {
     setSortMode((prev) => {
       if (prev === 'date') return 'name'
@@ -155,6 +194,31 @@ export default function ManageChatsModal() {
   }, [])
 
   const sortLabel = sortMode === 'date' ? t('sortDate') : sortMode === 'name' ? t('sortName') : t('sortMessages')
+
+  const toggleBulkMode = useCallback(() => {
+    const nextEnabled = !bulkMode
+    setBulkMode(nextEnabled)
+    setSelectedIds(new Set())
+    setRenamingId(null)
+  }, [bulkMode])
+
+  const toggleChatSelection = useCallback((chatId: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(chatId)) next.delete(chatId)
+      else next.add(chatId)
+      return next
+    })
+  }, [])
+
+  const toggleAllFiltered = useCallback(() => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous)
+      if (allFilteredSelected) filteredChatIds.forEach((id) => next.delete(id))
+      else filteredChatIds.forEach((id) => next.add(id))
+      return next
+    })
+  }, [allFilteredSelected, filteredChatIds])
 
   // Actions
   const handleSwitch = useCallback(
@@ -192,20 +256,54 @@ export default function ManageChatsModal() {
 
   const handleExport = useCallback(async (chatId: string, chatName: string) => {
     try {
-      const data = await get<{ chat: any; messages: any[] }>('/chats/' + chatId + '/export')
+      const data = await chatsApi.exportChat(chatId)
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${chatName || 'chat'}_export.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      triggerBlobDownload(blob, `${sanitizeDownloadSegment(chatName, 'chat')}_export.json`)
     } catch (err) {
       console.error('[ManageChats] Failed to export chat:', err)
     }
   }, [])
+
+  const handleBulkExport = useCallback(async () => {
+    if (selectedChats.length === 0) return
+    setBulkBusy(true)
+    try {
+      const exportResults = await Promise.allSettled(selectedChats.map(async (chat, index) => ({
+        chat,
+        index,
+        data: await chatsApi.exportChat(chat.id),
+      })))
+      const files: Record<string, Uint8Array> = {}
+      let exportedCount = 0
+      for (const result of exportResults) {
+        if (result.status !== 'fulfilled') continue
+        const item = result.value
+        const displayName = formatChatName(item.chat)
+        const baseName = sanitizeDownloadSegment(displayName, `chat-${item.index + 1}`)
+        const idSuffix = item.chat.id.slice(0, 8)
+        files[`${baseName}-${idSuffix}.json`] = strToU8(JSON.stringify(item.data, null, 2))
+        exportedCount++
+      }
+      const failedCount = selectedChats.length - exportedCount
+      if (exportedCount === 0) {
+        toast.error(t('bulkExportFailed'))
+        return
+      }
+      const archive = Uint8Array.from(zipSync(files, { level: 6 }))
+      const contextName = sanitizeDownloadSegment(groupLabel || characterName, 'chats')
+      triggerBlobDownload(new Blob([archive], { type: 'application/zip' }), `${contextName}-chats.zip`)
+      if (failedCount > 0) {
+        toast.warning(t('bulkExportPartial', { exported: exportedCount, failed: failedCount }))
+      } else {
+        toast.success(t('bulkExported', { count: exportedCount }))
+      }
+    } catch (err: any) {
+      console.error('[ManageChats] Failed to export selected chats:', err)
+      toast.error(err?.body?.error || err?.message || t('bulkExportFailed'))
+    } finally {
+      setBulkBusy(false)
+    }
+  }, [characterName, formatChatName, groupLabel, selectedChats, t])
 
   const handleConfirmDelete = useCallback(async () => {
     if (!deleteTarget) return
@@ -217,6 +315,36 @@ export default function ManageChatsModal() {
     }
     setDeleteTarget(null)
   }, [deleteTarget])
+
+  const handleConfirmBulkDelete = useCallback(async () => {
+    if (!bulkDeleteTarget || bulkDeleteTarget.ids.length === 0) return
+    const requestedIds = bulkDeleteTarget.ids
+    setBulkDeleteTarget(null)
+    setBulkBusy(true)
+    try {
+      const result = await chatsApi.bulkDeleteChats(requestedIds)
+      const deletedIds = new Set(result.deleted)
+      setChats((previous) => previous.filter((chat) => !deletedIds.has(chat.id)))
+      setSelectedIds((previous) => {
+        const next = new Set(previous)
+        result.deleted.forEach((id) => next.delete(id))
+        return next
+      })
+      if (result.deleted.length < requestedIds.length) {
+        toast.warning(t('bulkDeletePartial', {
+          deleted: result.deleted.length,
+          failed: requestedIds.length - result.deleted.length,
+        }))
+      } else {
+        toast.success(t('bulkDeleted', { count: result.deleted.length }))
+      }
+    } catch (err: any) {
+      console.error('[ManageChats] Failed to delete selected chats:', err)
+      toast.error(err?.body?.error || err?.message || t('bulkDeleteFailed'))
+    } finally {
+      setBulkBusy(false)
+    }
+  }, [bulkDeleteTarget, t])
 
   const handleNewChat = useCallback(async () => {
     const toastId = toast.info(t('startingChatMessage'), {
@@ -365,6 +493,15 @@ export default function ManageChatsModal() {
               {sortLabel}
             </Button>
             <Button
+              size="icon"
+              variant="ghost"
+              className={clsx(bulkMode && styles.bulkModeBtnActive)}
+              onClick={toggleBulkMode}
+              title={t(bulkMode ? 'exitBulkSelect' : 'bulkSelect')}
+              aria-label={t(bulkMode ? 'exitBulkSelect' : 'bulkSelect')}
+              icon={bulkMode ? <X size={14} /> : <ListChecks size={14} />}
+            />
+            <Button
               size="sm"
               icon={importing ? <Spinner size={13} /> : <Upload size={13} />}
               onClick={handleImportClick}
@@ -399,6 +536,56 @@ export default function ManageChatsModal() {
             />
           </div>
 
+          {bulkMode && (
+            <div className={styles.bulkBar}>
+              <div className={styles.bulkSummary}>
+                <button
+                  type="button"
+                  className={styles.bulkSelectAll}
+                  onClick={toggleAllFiltered}
+                  disabled={filteredChatIds.length === 0 || bulkBusy}
+                >
+                  {allFilteredSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+                  {t(allFilteredSelected ? 'deselectAll' : 'selectAll')}
+                </button>
+                <span className={styles.bulkCount}>{t('selectedCount', { count: selectedIds.size })}</span>
+              </div>
+              <div className={styles.bulkActions}>
+                <button
+                  type="button"
+                  className={styles.bulkActionBtn}
+                  onClick={() => { void handleBulkExport() }}
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  title={t('exportSelected')}
+                >
+                  {bulkBusy ? <Spinner size={13} /> : <Download size={13} />}
+                  {t('export')}
+                </button>
+                <button
+                  type="button"
+                  className={clsx(styles.bulkActionBtn, styles.bulkDeleteBtn)}
+                  onClick={() => {
+                    if (deletableSelectedIds.length === 0) {
+                      toast.info(t('activeChatDeleteHint'))
+                      return
+                    }
+                    setBulkDeleteTarget({
+                      ids: deletableSelectedIds,
+                      activeExcluded: !!activeChatId && selectedIds.has(activeChatId),
+                    })
+                  }}
+                  disabled={selectedIds.size === 0 || bulkBusy}
+                  title={deletableSelectedIds.length === 0 && selectedIds.size > 0
+                    ? t('activeChatDeleteHint')
+                    : t('deleteSelected')}
+                >
+                  <Trash2 size={13} />
+                  {t('delete')}
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className={styles.body}>
             {loading && (
               <div className={styles.loading}>
@@ -417,12 +604,36 @@ export default function ManageChatsModal() {
               filteredChats.map((chat) => {
                 const isActive = chat.id === activeChatId
                 const displayName = formatChatName(chat)
+                const selected = selectedIds.has(chat.id)
                 return (
-                  <div key={chat.id} className={clsx(styles.card, isActive && styles.cardActive)}>
-                    <MessageSquare
-                      size={18}
-                      className={clsx(styles.cardIcon, isActive && styles.cardIconActive)}
-                    />
+                  <div
+                    key={chat.id}
+                    className={clsx(
+                      styles.card,
+                      isActive && styles.cardActive,
+                      bulkMode && styles.cardSelectable,
+                      selected && styles.cardSelected,
+                    )}
+                    onClick={bulkMode ? () => toggleChatSelection(chat.id) : undefined}
+                  >
+                    {bulkMode ? (
+                      <button
+                        type="button"
+                        className={styles.selectionBtn}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          toggleChatSelection(chat.id)
+                        }}
+                        aria-label={t(selected ? 'deselectChat' : 'selectChat', { name: displayName })}
+                      >
+                        {selected ? <CheckSquare size={18} /> : <Square size={18} />}
+                      </button>
+                    ) : (
+                      <MessageSquare
+                        size={18}
+                        className={clsx(styles.cardIcon, isActive && styles.cardIconActive)}
+                      />
+                    )}
 
                     <div className={styles.cardInfo}>
                       {renamingId === chat.id ? (
@@ -465,7 +676,7 @@ export default function ManageChatsModal() {
                       </div>
                     </div>
 
-                    <div className={styles.cardActions}>
+                    {!bulkMode && <div className={styles.cardActions}>
                       {!isActive && (
                         <Button
                           size="icon"
@@ -510,15 +721,17 @@ export default function ManageChatsModal() {
                           icon={<Trash2 size={14} />}
                         />
                       )}
-                    </div>
+                    </div>}
                   </div>
                 )
               })}
 
-            <button type="button" className={styles.newChatBtn} onClick={handleNewChat}>
-              <Plus size={15} />
-              {t('newChat')}
-            </button>
+            {!bulkMode && (
+              <button type="button" className={styles.newChatBtn} onClick={handleNewChat}>
+                <Plus size={15} />
+                {t('newChat')}
+              </button>
+            )}
           </div>
     </ModalShell>
 
@@ -528,6 +741,21 @@ export default function ManageChatsModal() {
         onCancel={() => setDeleteTarget(null)}
         title={t('deleteTitle')}
         message={t('deleteMessage', { name: deleteTarget ? formatChatName(deleteTarget) : '' })}
+        variant="danger"
+        confirmText={tc('actions.delete')}
+        cancelText={tc('actions.cancel')}
+      />
+
+      <ConfirmationModal
+        isOpen={bulkDeleteTarget !== null}
+        onConfirm={handleConfirmBulkDelete}
+        onCancel={() => setBulkDeleteTarget(null)}
+        title={t('deleteSelectedTitle')}
+        message={bulkDeleteTarget
+          ? t(bulkDeleteTarget.activeExcluded ? 'deleteSelectedMessageActive' : 'deleteSelectedMessage', {
+              count: bulkDeleteTarget.ids.length,
+            })
+          : ''}
         variant="danger"
         confirmText={tc('actions.delete')}
         cancelText={tc('actions.cancel')}
