@@ -17,6 +17,7 @@ import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
 import { mapWithConcurrency } from "../utils/concurrency";
+import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 
 const app = new Hono();
 const PERSPECTIVE_LAYERS = new Set<svc.PerspectiveLayerKind>(["background", "framing", "subject"]);
@@ -44,6 +45,50 @@ function importCardRegexBestEffort(userId: string, characterId: string, extensio
   } catch (err) {
     console.error("[character import] regex import failed:", err);
   }
+}
+
+// These values refer to locally-owned entities rather than portable card data.
+// Replacing a JSON/PNG card must not detach or delete the user's avatar,
+// expression assets, world book links, or selected TTS voice.
+const LOCAL_CHARACTER_EXTENSION_KEYS = new Set([
+  "expressions",
+  "expression_groups",
+  "alternate_fields",
+  "alternate_avatars",
+  "world_book_id",
+  "world_book_ids",
+  "avatar_crop_image_id",
+  "original_image_id",
+  "risu_asset_map",
+  "landing_perspective_layers",
+  "ttsVoice",
+]);
+
+function buildCardReplacementInput(existing: Character, card: CreateCharacterInput): UpdateCharacterInput {
+  const preservedExtensions = Object.fromEntries(
+    Object.entries(existing.extensions ?? {}).filter(([key]) =>
+      LOCAL_CHARACTER_EXTENSION_KEYS.has(key) || key.startsWith("_lumiverse_")
+    )
+  );
+
+  return {
+    // Deliberately omit `name`: this endpoint only replaces card contents.
+    description: card.description ?? "",
+    personality: card.personality ?? "",
+    scenario: card.scenario ?? "",
+    first_mes: card.first_mes ?? "",
+    mes_example: card.mes_example ?? "",
+    creator: card.creator ?? "",
+    creator_notes: card.creator_notes ?? "",
+    system_prompt: card.system_prompt ?? "",
+    post_history_instructions: card.post_history_instructions ?? "",
+    tags: card.tags ?? [],
+    alternate_greetings: card.alternate_greetings ?? [],
+    extensions: {
+      ...(card.extensions ?? {}),
+      ...preservedExtensions,
+    },
+  };
 }
 
 // ─── Portable LoRA surfacing ──────────────────────────────────────────────
@@ -510,6 +555,48 @@ app.post("/import-url", async (c) => {
       return c.json({ error: err.message }, 400);
     }
     return c.json({ error: err.message || "Failed to import from URL" }, 400);
+  }
+});
+
+// Replace only the portable card data on an existing character. This is kept
+// separate from /import so a JSON/PNG upload cannot accidentally create a new
+// character or replace its name/avatar.
+app.post("/:id/replace-card", async (c) => {
+  const userId = c.get("userId");
+  const characterId = c.req.param("id");
+  const existing = svc.getCharacter(userId, characterId);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size === 0) {
+      return c.json({ error: "Character card file is required" }, 400);
+    }
+
+    const format = await cardSvc.detectCharacterImportFormat(file);
+    let cardInput: CreateCharacterInput;
+    if (format === "png") {
+      cardInput = await cardSvc.extractCardFromPng(file);
+    } else if (format === "json") {
+      let json: unknown;
+      try {
+        json = JSON.parse(await file.text());
+      } catch {
+        return c.json({ error: "Invalid JSON in uploaded file" }, 400);
+      }
+      cardInput = cardSvc.parseCardJson(json);
+    } else {
+      return c.json({ error: "Only JSON and PNG character cards can replace card data" }, 400);
+    }
+
+    const updated = svc.updateCharacter(userId, characterId, buildCardReplacementInput(existing, cardInput));
+    // The character was checked above, but preserve the normal 404 contract
+    // should it be deleted between parsing and the update.
+    if (!updated) return c.json({ error: "Not found" }, 404);
+    return c.json(updated);
+  } catch (err: any) {
+    return respondImportError(c, err, "Failed to replace character card data");
   }
 });
 

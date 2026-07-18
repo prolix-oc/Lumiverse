@@ -378,6 +378,7 @@ export default function CharacterEditorPage() {
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [creatingPersona, setCreatingPersona] = useState(false)
+  const [replacingCard, setReplacingCard] = useState(false)
   const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
@@ -390,6 +391,7 @@ export default function CharacterEditorPage() {
   const layerSaveLockRef = useRef<Promise<void> | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const cardReplaceFileRef = useRef<HTMLInputElement>(null)
   const perspectiveLayerFileRef = useRef<HTMLInputElement>(null)
   const galleryFileRef = useRef<HTMLInputElement>(null)
   const galleryScrollRef = useRef<HTMLDivElement>(null)
@@ -1090,6 +1092,33 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
+  const handleReplaceCard = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId || replacingCard) return
+
+      // An older debounce firing after the replacement would otherwise restore
+      // stale editor values over the newly-uploaded card.
+      for (const timer of Object.values(timers.current)) clearTimeout(timer)
+      pendingExtensionsRef.current = null
+      if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+
+      setReplacingCard(true)
+      try {
+        const updated = await charactersApi.replaceCard(editingCharacterId, file)
+        lastSyncedId.current = null
+        updateCharInStore(editingCharacterId, updated)
+        toast.success(t('characterEditor.replaceCardSuccess'))
+      } catch (err: any) {
+        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
+      } finally {
+        setReplacingCard(false)
+      }
+    },
+    [editingCharacterId, replacingCard, t, updateCharInStore]
+  )
+
   const perspectiveLayers = useMemo<CharacterPerspectiveLayerInput[]>(() => {
     return readPerspectiveLayers(character?.extensions?.landing_perspective_layers)
   }, [character?.extensions?.landing_perspective_layers])
@@ -1424,6 +1453,13 @@ export default function CharacterEditorPage() {
                       className={styles.hiddenInput}
                       onChange={handleFileSelected}
                     />
+                    <input
+                      ref={cardReplaceFileRef}
+                      type="file"
+                      accept=".json,application/json,.png,image/png"
+                      className={styles.hiddenInput}
+                      onChange={handleReplaceCard}
+                    />
                   </div>
 
                   <div className={styles.headerInfo}>
@@ -1453,6 +1489,15 @@ export default function CharacterEditorPage() {
                       {creatingPersona
                         ? <Spinner size={14} fast />
                         : <UserPlus size={14} />}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => cardReplaceFileRef.current?.click()}
+                      title={t('characterEditor.replaceCard')}
+                      disabled={replacingCard}
+                    >
+                      {replacingCard ? <Spinner size={14} fast /> : <Upload size={14} />}
                     </Button>
                     <div className={styles.exportWrapper} ref={exportMenuRef}>
                       <Button

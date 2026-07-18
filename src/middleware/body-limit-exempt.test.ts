@@ -17,4 +17,8 @@ describe("isLargeUploadBodyLimitExemptPath", () => {
   test("allows Qwen custom voice uploads through the global 10MB guard", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/tts-connections/abc/qwen/custom-voices")).toBe(true);
   });
+
+  test("allows character-card replacements through the global 10MB guard", () => {
+    expect(isLargeUploadBodyLimitExemptPath("/api/v1/characters/character-1/replace-card")).toBe(true);
+  });
 });

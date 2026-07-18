@@ -1,4 +1,5 @@
 const GALLERY_PATH_RE = /^\/api\/v1\/characters\/[^/]+\/gallery(?:\/.*)?$/;
+const CHARACTER_CARD_REPLACE_PATH_RE = /^\/api\/v1\/characters\/[^/]+\/replace-card$/;
 const EXPRESSIONS_ZIP_PATH_RE =
   /^\/api\/v1\/characters\/[^/]+\/expressions\/(?:groups\/[^/]+\/)?upload-zip$/;
 const QWEN_CUSTOM_VOICE_UPLOAD_RE =
@@ -9,6 +10,7 @@ export function isLargeUploadBodyLimitExemptPath(path: string): boolean {
     path.startsWith("/api/v1/migrate/") ||
     path === "/api/v1/characters/import-bulk" ||
     path === "/api/v1/characters/import" ||
+    CHARACTER_CARD_REPLACE_PATH_RE.test(path) ||
     path.startsWith("/api/v1/world-books/import") ||
     path === "/api/v1/images" ||
     path === "/api/v1/images/wallpapers" ||

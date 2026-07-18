@@ -125,6 +125,13 @@ export const charactersApi = {
     return upload<ImportResult>('/characters/import', form)
   },
 
+  replaceCard(id: string, file: File, onProgress?: (percent: number) => void) {
+    const form = new FormData()
+    form.append('file', file)
+    if (onProgress) return uploadWithProgress<Character>(`/characters/${id}/replace-card`, form, onProgress)
+    return upload<Character>(`/characters/${id}/replace-card`, form)
+  },
+
   importUrl(url: string) {
     return post<ImportResult>('/characters/import-url', { url })
   },
