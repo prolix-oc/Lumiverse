@@ -127,6 +127,14 @@
   gap: 8px;
 }
 
+.listHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
 .updateAllBtn {
   display: inline-flex;
   align-items: center;

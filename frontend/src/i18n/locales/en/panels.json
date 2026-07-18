@@ -2038,6 +2038,13 @@
     },
     "addExtension": "Add Extension",
     "installed": "Installed ({{count}})",
+    "sortBy": "Sort extensions by {{field}}",
+    "sort": {
+      "dateInstalled": "Date installed",
+      "dateUpdated": "Date updated",
+      "alphabeticalAsc": "A-Z",
+      "alphabeticalDesc": "Z-A"
+    },
     "bulkUpdateInProgress": "Bulk update in progress",
     "updateAllHint": "Pull + rebuild every manageable extension",
     "updatingProgress": "Updating {{current}}/{{total}}{{name}}",

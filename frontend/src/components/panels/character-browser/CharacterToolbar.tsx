@@ -5,21 +5,18 @@ import {
   LayoutGrid,
   RectangleVertical,
   List,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   RefreshCw,
   CheckSquare,
   Layers,
   UsersRound,
 } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import ImportMenu from './ImportMenu'
 import type { CharacterFilterTab, CharacterSortField, CharacterSortDirection, CharacterViewMode } from '@/types/store'
 import styles from './CharacterToolbar.module.css'
 import clsx from 'clsx'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
+import { SortControl } from '@/components/shared/SortControl'
 
 interface CharacterToolbarProps {
   searchQuery: string
@@ -72,9 +69,6 @@ export default function CharacterToolbar({
   onGroupChat,
 }: CharacterToolbarProps) {
   const { t } = useTranslation('panels')
-  const [sortOpen, setSortOpen] = useState(false)
-  const sortRef = useRef<HTMLDivElement>(null)
-
   const isGroupsTab = filterTab === 'groups'
   // shuffle is meaningless for group chats; the hook coerces it to 'recent'
   // for fetching — mirror that visually so the active item highlights correctly.
@@ -83,19 +77,6 @@ export default function CharacterToolbar({
   const visibleSortOptions = isGroupsTab
     ? SORT_OPTIONS.filter((opt) => opt.value !== 'shuffle')
     : SORT_OPTIONS
-
-  useEffect(() => {
-    if (!sortOpen) return
-    const openedAt = Date.now()
-    const handler = (e: PointerEvent) => {
-      if (e.timeStamp < openedAt + 100) return
-      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
-        setSortOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', handler)
-    return () => document.removeEventListener('pointerdown', handler)
-  }, [sortOpen])
 
   return (
     <div className={styles.toolbar}>
@@ -154,52 +135,33 @@ export default function CharacterToolbar({
           </button>
         </div>
 
-        <div className={styles.sortContainer} ref={sortRef}>
+        <SortControl
+          options={visibleSortOptions.map((option) => ({
+            value: option.value,
+            label: t(`characterToolbar.sort.${option.label}`),
+          }))}
+          value={effectiveSortField}
+          onChange={onSortFieldChange}
+          title={t('characterToolbar.sortBy', { field: t(`characterToolbar.sort.${effectiveSortField}`) })}
+          {...(effectiveSortField === 'shuffle'
+            ? undefined
+            : {
+                direction: sortDirection,
+                onToggleDirection: onToggleSortDirection,
+                ascendingTitle: t('characterToolbar.ascending'),
+                descendingTitle: t('characterToolbar.descending'),
+              })}
+        />
+        {effectiveSortField === 'shuffle' && (
           <button
             type="button"
             className={styles.iconBtn}
-            onClick={() => setSortOpen(!sortOpen)}
-            title={t('characterToolbar.sortBy', { field: t(`characterToolbar.sort.${effectiveSortField}`) })}
+            onClick={onToggleSortDirection}
+            title={t('characterToolbar.reshuffle')}
           >
-            <ArrowUpDown size={14} />
+            <RefreshCw size={14} />
           </button>
-          {sortOpen && (
-            <div className={styles.sortDropdown}>
-              {visibleSortOptions.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={clsx(styles.sortItem, effectiveSortField === opt.value && styles.sortItemActive)}
-                  onClick={() => {
-                    onSortFieldChange(opt.value)
-                    setSortOpen(false)
-                  }}
-                >
-                  {t(`characterToolbar.sort.${opt.label}`)}
-                </button>
-              ))}
-            </div>
-          )}
-          {effectiveSortField === 'shuffle' ? (
-            <button
-              type="button"
-              className={styles.iconBtn}
-              onClick={onToggleSortDirection}
-              title={t('characterToolbar.reshuffle')}
-            >
-              <RefreshCw size={14} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className={styles.iconBtn}
-              onClick={onToggleSortDirection}
-              title={sortDirection === 'asc' ? t('characterToolbar.ascending') : t('characterToolbar.descending')}
-            >
-              {sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-            </button>
-          )}
-        </div>
+        )}
 
         <button
           type="button"

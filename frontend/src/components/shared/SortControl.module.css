@@ -1,0 +1,61 @@
+.container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 120px;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-fill-subtle));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast);
+}
+
+.item:hover {
+  background: var(--lumiverse-fill-subtle);
+}
+
+.itemActive {
+  color: var(--lumiverse-primary-muted);
+}
+
+.iconButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--lumiverse-btn-icon);
+  height: var(--lumiverse-btn-icon);
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.iconButton:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
