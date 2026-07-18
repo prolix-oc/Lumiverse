@@ -46,7 +46,6 @@ import {
   Braces,
   RotateCcw,
   Wifi,
-  Code2,
   AlertTriangle,
   MessageSquare,
   Bot,
@@ -1313,29 +1312,17 @@ function SamplerSlider({ param, value, onChange }: SamplerSliderProps) {
 
 interface GenerationSettingsProps {
   samplerOverrides: any
-  customBody: any
   connectionProfile: LoomConnectionProfile | null
   samplerParams: SamplerParam[]
   onSaveSamplers: (overrides: any) => void
-  onSaveCustomBody: (body: any) => void
   onRefreshProfile: () => void
 }
 
-function GenerationSettings({ samplerOverrides, customBody, connectionProfile, samplerParams, onSaveSamplers, onSaveCustomBody, onRefreshProfile }: GenerationSettingsProps) {
+function GenerationSettings({ samplerOverrides, connectionProfile, samplerParams, onSaveSamplers, onRefreshProfile }: GenerationSettingsProps) {
   const { t } = useLb()
   const [isExpanded, setIsExpanded] = useState(false)
-  const [jsonError, setJsonError] = useState<string | null>(null)
-  const [localJson, setLocalJson] = useState(customBody?.rawJson || '{}')
-
-  const prevJsonRef = useRef(customBody?.rawJson)
-  if (customBody?.rawJson !== prevJsonRef.current) {
-    prevJsonRef.current = customBody?.rawJson
-    setLocalJson(customBody?.rawJson || '{}')
-    setJsonError(null)
-  }
 
   const overrides = samplerOverrides || {}
-  const body = customBody || {}
   const supported = connectionProfile?.supportedParams || new Set<string>()
 
   const visibleParams = samplerParams.filter(p => supported.has(p.key))
@@ -1350,20 +1337,7 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
 
   const handleResetSamplers = () => onSaveSamplers({ ...DEFAULT_SAMPLER_OVERRIDES })
 
-  const handleToggleCustomBody = () => onSaveCustomBody({ ...body, enabled: !body.enabled })
-
-  const handleJsonChange = (raw: string) => {
-    setLocalJson(raw)
-    try {
-      JSON.parse(raw)
-      setJsonError(null)
-      onSaveCustomBody({ ...body, rawJson: raw })
-    } catch (e: any) {
-      setJsonError(e.message)
-    }
-  }
-
-  const isActive = overrides.enabled || body.enabled
+  const isActive = overrides.enabled
 
   return (
     <div className={s.accordionSection}>
@@ -1374,7 +1348,6 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
         <Settings2 size={12} style={{ color: isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
         <span className={s.accordionTitle}>{t('settings.samplers')}</span>
         {activeCount > 0 && <span className={s.accordionBadge}>{activeCount}</span>}
-        {body.enabled && <Code2 size={10} style={{ color: 'var(--lumiverse-primary)', flexShrink: 0 }} />}
         {isExpanded ? <ChevronDown size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} /> : <ChevronRight size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />}
       </div>
       {isExpanded && (
@@ -1401,22 +1374,6 @@ function GenerationSettings({ samplerOverrides, customBody, connectionProfile, s
               label={t('settings.streamResponse')}
               hint={t('settings.streamHint')}
             />
-          </div>
-          <hr className={s.menuDivider} style={{ margin: '4px 0 4px' }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0 4px' }}>
-            <span className={s.samplerLabel}>{t('settings.customBody')}</span>
-            <Toggle.Checkbox checked={!!body.enabled} onChange={handleToggleCustomBody} label={t('settings.enabled')} />
-          </div>
-          <div style={body.enabled ? {} : { opacity: 0.35, pointerEvents: 'none' as const }}>
-            <textarea
-              className={s.customBodyTextarea}
-              value={localJson}
-              onChange={e => handleJsonChange(e.target.value)}
-              placeholder={'{\n  "thinking": { "type": "enabled" }\n}'}
-              spellCheck={false}
-            />
-            {jsonError && <div className={s.jsonError}><AlertTriangle size={10} /> {jsonError}</div>}
-            <div className={s.settingsHint} style={{ marginTop: '3px' }}>{t('settings.customBodyHint')}</div>
           </div>
         </div>
       )}
@@ -1762,7 +1719,6 @@ export default function LoomBuilder({
     updateBlock,
     toggleBlock,
     saveSamplerOverrides,
-    saveCustomBody,
     savePromptBehavior,
     saveCompletionSettings,
     saveAdvancedSettings,
@@ -2685,11 +2641,9 @@ export default function LoomBuilder({
         {activePreset && (
           <GenerationSettings
             samplerOverrides={activePreset.samplerOverrides}
-            customBody={activePreset.customBody}
             connectionProfile={connectionProfile}
             samplerParams={samplerParams}
             onSaveSamplers={saveSamplerOverrides}
-            onSaveCustomBody={saveCustomBody}
             onRefreshProfile={refreshConnectionProfile}
           />
         )}

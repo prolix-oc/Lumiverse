@@ -1277,32 +1277,6 @@
 }
 
 
-/* ============================================================================
-   CUSTOM BODY
-   ============================================================================ */
-
-.customBodyTextarea {
-  width: 100%;
-  min-height: 64px;
-  padding: 10px 12px;
-  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  font-family: var(--lumiverse-font-mono, monospace);
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
-}
-
-.customBodyTextarea:focus {
-  border-color: var(--lumiverse-primary-muted);
-  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
-}
-
 .jsonError {
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);

@@ -19,6 +19,7 @@ import type {
   PromptBehavior,
   CompletionSettings,
   SamplerOverrides,
+  CustomBody,
   AuthorsNote,
   AdvancedSettings,
   PromptVariableDef,
@@ -1841,8 +1842,15 @@ export async function assemblePrompt(
       "council_settings",
     ]);
 
-  // Populate reasoning macros from user settings
-  const reasoningVal = settingsMap.get("reasoningSettings");
+  // A connection's reasoning binding is the effective source for all
+  // reasoning settings, including its custom request body. Fall back to the
+  // user's global setting when the connection is unbound.
+  const reasoningVal = resolveEffectiveReasoningSettings(
+    connection,
+    settingsMap.get("reasoningSettings"),
+  );
+
+  // Populate reasoning macros from the effective settings.
   if (reasoningVal) {
     macroEnv.extra.reasoningPrefix = reasoningVal.prefix ?? "";
     macroEnv.extra.reasoningSuffix = reasoningVal.suffix ?? "";
@@ -5929,14 +5937,69 @@ export function applyGoogleSearchPresetSetting(
   }
 }
 
+type ReasoningParameterSettings = {
+  prefix?: string;
+  suffix?: string;
+  autoParse?: boolean;
+  apiReasoning?: boolean;
+  reasoningEffort?: string;
+  keepInHistory?: number;
+  thinkingDisplay?: string;
+  /** When present, supersedes the legacy preset-level custom body. */
+  customBody?: CustomBody;
+};
+
+function resolveEffectiveReasoningSettings(
+  connection: ConnectionProfile | null | undefined,
+  globalSettings: unknown,
+): ReasoningParameterSettings | null {
+  const boundSettings = connection?.metadata?.reasoningBindings?.settings;
+  if (
+    boundSettings &&
+    typeof boundSettings === "object" &&
+    !Array.isArray(boundSettings)
+  ) {
+    return boundSettings as ReasoningParameterSettings;
+  }
+  if (
+    globalSettings &&
+    typeof globalSettings === "object" &&
+    !Array.isArray(globalSettings)
+  ) {
+    return globalSettings as ReasoningParameterSettings;
+  }
+  return null;
+}
+
+function hasOwnCustomBody(
+  settings: ReasoningParameterSettings | null | undefined,
+): boolean {
+  return !!settings && Object.hasOwn(settings, "customBody");
+}
+
+/**
+ * Spread a valid enabled custom body onto request parameters. Invalid JSON or
+ * non-object JSON is intentionally ignored, matching the legacy behavior.
+ */
+export function applyCustomBodyParameters(
+  params: Record<string, any>,
+  customBody: CustomBody | null | undefined,
+): void {
+  if (!customBody?.enabled || !customBody.rawJson) return;
+  try {
+    const parsed = JSON.parse(customBody.rawJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      Object.assign(params, parsed);
+    }
+  } catch {
+    // Invalid JSON — skip silently. The UI prevents saving invalid values.
+  }
+}
+
 export function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
-  reasoningSettings?: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null,
+  reasoningSettings?: ReasoningParameterSettings | null,
   providerName?: string | null,
   modelName?: string | null,
 ): Record<string, any> {
@@ -6013,16 +6076,14 @@ export function buildParameters(
     }
   }
 
-  // Custom body from preset.parameters.customBody
-  const customBody = preset?.parameters?.customBody;
-  if (customBody?.enabled && customBody.rawJson) {
-    try {
-      const custom = JSON.parse(customBody.rawJson);
-      Object.assign(params, custom);
-    } catch {
-      // Invalid JSON — skip silently
-    }
-  }
+  // Custom bodies now live with reasoning so connection reasoning bindings can
+  // snapshot and apply them. Older presets continue to work until a user saves
+  // the new setting; an explicitly saved disabled body cleanly turns off the
+  // old preset-level value.
+  const customBody = hasOwnCustomBody(reasoningSettings)
+    ? reasoningSettings?.customBody
+    : preset?.parameters?.customBody;
+  applyCustomBodyParameters(params, customBody);
 
   // Authoritative off-switch: when the user has disabled API reasoning, strip every
   // provider-specific reasoning field — including anything a customBody spread in —
@@ -6527,9 +6588,13 @@ async function legacyAssembly(
         userId,
         "reasoningSettings",
       );
-      if (reasoningSetting?.value) {
-        macroEnv.extra.reasoningPrefix = reasoningSetting.value.prefix ?? "";
-        macroEnv.extra.reasoningSuffix = reasoningSetting.value.suffix ?? "";
+      const effectiveReasoning = resolveEffectiveReasoningSettings(
+        connection,
+        reasoningSetting?.value,
+      );
+      if (effectiveReasoning) {
+        macroEnv.extra.reasoningPrefix = effectiveReasoning.prefix ?? "";
+        macroEnv.extra.reasoningSuffix = effectiveReasoning.suffix ?? "";
       }
       // Populate theme info for {{userColorMode}} macro (legacy path)
       const themeSetting = settingsSvc.getSetting(userId, "theme");
@@ -6708,24 +6773,24 @@ async function legacyAssembly(
   );
 
   // Strip reasoning from older chat history messages based on keepInHistory
-  let reasoningVal: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null = null;
+  let reasoningVal: ReasoningParameterSettings | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(
       userId,
       "reasoningSettings",
     );
-    if (reasoningSetting?.value) {
+    const effectiveReasoning = resolveEffectiveReasoningSettings(
+      connection,
+      reasoningSetting?.value,
+    );
+    if (effectiveReasoning) {
       stripReasoningFromChatHistory(
         llmMessages,
         legacyFirstChatIdx,
         legacyHistoryCount,
-        reasoningSetting.value,
+        effectiveReasoning,
       );
-      reasoningVal = reasoningSetting.value;
+      reasoningVal = effectiveReasoning;
     }
 
     // Apply context filters (details blocks, loom tags, HTML tags)
