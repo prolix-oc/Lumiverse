@@ -242,23 +242,26 @@ app.post("/import", async (c) => {
   let jobId: string;
   try {
     const ct = c.req.header("content-type") || "";
-    let body: ReadableStream<Uint8Array> | null = null;
-    let size: number | null = declared > 0 ? declared : null;
-
     if (ct.startsWith("multipart/form-data")) {
-      // FormData is buffered by Bun; fine for archives up to a few hundred MB.
-      // For larger payloads, clients should POST the raw archive as the body.
-      const form = await c.req.formData();
-      const file = form.get("archive");
-      if (!(file instanceof File)) {
-        return c.json({ error: "form field 'archive' (File) is required" }, 400);
-      }
-      body = file.stream();
-      size = file.size;
-    } else {
-      // Raw upload (preferred for large archives).
-      body = c.req.raw.body;
+      // Bun's formData() parser materializes the complete multipart body in
+      // memory. That is unsafe for account archives on low-memory hosts
+      // (especially Termux), where a single large upload can kill the server
+      // before persistUploadedArchive gets a chance to stream it to disk.
+      // The Data Portability UI has always sent the File as a raw body, so
+      // reject this legacy/undocumented shape instead of retaining an OOM
+      // footgun for direct API clients.
+      return c.json(
+        {
+          error:
+            "multipart archive uploads are not supported; send the archive as the raw request body",
+          code: "multipart_not_supported",
+        },
+        415,
+      );
     }
+
+    const body = c.req.raw.body;
+    const size = declared > 0 ? declared : null;
     if (!body) return c.json({ error: "request body is empty" }, 400);
 
     const persisted = await persistUploadedArchive(userId, body, size);
