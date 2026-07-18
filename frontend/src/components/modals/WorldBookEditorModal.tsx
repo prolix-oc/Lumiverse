@@ -17,6 +17,7 @@ import { useWorldBookListLiveSync } from '@/hooks/useWorldBookListLiveSync'
 import Pagination from '@/components/shared/Pagination'
 import { triggerBlobDownload } from '@/lib/downloads'
 import { upsertById } from '@/lib/worldBookList'
+import { toast } from '@/lib/toast'
 import type { WorldBook, WorldBookVectorSummary } from '@/types/api'
 import type { WorldBookExportFormat } from '@/api/world-books'
 
@@ -71,7 +72,12 @@ export default function WorldBookEditorModal() {
   const [bookDescription, setBookDescription] = useState('')
   const [bookFolder, setBookFolder] = useState('')
   const [vectorSummary, setVectorSummary] = useState<WorldBookVectorSummary | null>(null)
-  const { folders, createFolder } = useFolders('worldBookFolders', books)
+  const {
+    folders,
+    createFolder,
+    renameFolder: renameStoredFolder,
+    deleteFolder: deleteStoredFolder,
+  } = useFolders('worldBookFolders', books)
 
   const [postImportBook, setPostImportBook] = useState<WorldBook | null>(null)
 
@@ -81,6 +87,8 @@ export default function WorldBookEditorModal() {
   const [bulkExportIds, setBulkExportIds] = useState<string[] | null>(null)
   const [bulkExportFormat, setBulkExportFormat] = useState<WorldBookExportFormat>('lumiverse')
   const [bulkActionPending, setBulkActionPending] = useState(false)
+  const [deleteFolderConfirm, setDeleteFolderConfirm] = useState<string | null>(null)
+  const [folderActionPending, setFolderActionPending] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [convertPreview, setConvertPreview] = useState<{
     total: number; eligible: number; keys_retained?: number; constant_skipped: number
@@ -352,6 +360,46 @@ export default function WorldBookEditorModal() {
     }
   }, [bulkActionPending, markLocalBookEdit, selectedBookId, selectedIds])
 
+  const handleRenameFolder = useCallback(async (oldName: string, newName: string) => {
+    const source = oldName.trim()
+    const target = newName.trim()
+    if (!source || !target || source === target) return
+
+    if (bookFolder === source) markLocalBookEdit()
+    try {
+      const result = await worldBooksApi.renameFolder(source, target)
+      const updatedById = new Map(result.updated.map((book) => [book.id, book]))
+      setBooks((previous) => previous.map((book) => updatedById.get(book.id) ?? book))
+      setBookFolder((current) => (current === source ? target : current))
+      renameStoredFolder(source, target)
+      toast.success(t('renamedFolderSuccess', { name: target, count: result.count }))
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message || t('renameFolderFailed'))
+      throw err
+    }
+  }, [bookFolder, markLocalBookEdit, renameStoredFolder, t])
+
+  const handleDeleteFolder = useCallback(async (name: string) => {
+    const folder = name.trim()
+    if (!folder || folderActionPending) return
+
+    setFolderActionPending(true)
+    if (bookFolder === folder) markLocalBookEdit()
+    try {
+      const result = await worldBooksApi.deleteFolder(folder)
+      const updatedById = new Map(result.updated.map((book) => [book.id, book]))
+      setBooks((previous) => previous.map((book) => updatedById.get(book.id) ?? book))
+      setBookFolder((current) => (current === folder ? '' : current))
+      deleteStoredFolder(folder)
+      setDeleteFolderConfirm(null)
+      toast.success(t('deletedFolderSuccess', { name: folder, count: result.count }))
+    } catch (err: any) {
+      toast.error(err.body?.error || err.message || t('deleteFolderFailed'))
+    } finally {
+      setFolderActionPending(false)
+    }
+  }, [bookFolder, deleteStoredFolder, folderActionPending, markLocalBookEdit, t])
+
   const handleBookNameChange = useCallback(
     (value: string) => {
       markLocalBookEdit()
@@ -603,6 +651,8 @@ export default function WorldBookEditorModal() {
                       selectedFolder=""
                       onSelect={(folder) => void handleBulkMoveFolder(folder)}
                       onCreateFolder={createFolder}
+                      onRenameFolder={handleRenameFolder}
+                      onDeleteFolder={setDeleteFolderConfirm}
                       placeholder={t('bulkMoveFolder')}
                       className={styles.bulkFolderDropdown}
                     />
@@ -727,6 +777,8 @@ export default function WorldBookEditorModal() {
                         selectedFolder={bookFolder}
                         onSelect={handleBookFolderChange}
                         onCreateFolder={createFolder}
+                        onRenameFolder={handleRenameFolder}
+                        onDeleteFolder={setDeleteFolderConfirm}
                       />
                     </div>
                     {vectorSummary && (
@@ -821,6 +873,22 @@ export default function WorldBookEditorModal() {
           onConfirm={() => void handleBulkDelete(bulkDeleteConfirm)}
           onCancel={() => {
             if (!bulkActionPending) setBulkDeleteConfirm(null)
+          }}
+        />
+      )}
+
+      {deleteFolderConfirm && (
+        <ConfirmationModal
+          isOpen={true}
+          title={t('deleteFolderTitle')}
+          message={t('deleteFolderMessage', { name: deleteFolderConfirm })}
+          variant="danger"
+          confirmText={tc('actions.delete')}
+          loading={folderActionPending}
+          loadingText={t('bulkActionPending')}
+          onConfirm={() => void handleDeleteFolder(deleteFolderConfirm)}
+          onCancel={() => {
+            if (!folderActionPending) setDeleteFolderConfirm(null)
           }}
         />
       )}

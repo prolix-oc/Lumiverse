@@ -111,6 +111,47 @@
   transition: background var(--lumiverse-transition-fast);
 }
 
+.optionRow {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
+
+.optionRow .option {
+  flex: 1;
+  min-width: 0;
+}
+
+.optionActions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 4px;
+}
+
+.optionAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.optionAction:hover {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.optionDeleteAction:hover {
+  color: var(--lumiverse-error);
+}
+
 .option:hover {
   background: var(--lumiverse-fill-subtle);
 }
@@ -169,4 +210,12 @@
 .createBtn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* Keep the inline create, rename, and search fields at iOS's no-zoom size. */
+@media (pointer: coarse) {
+  .searchInput,
+  .createInput {
+    font-size: 16px;
+  }
 }

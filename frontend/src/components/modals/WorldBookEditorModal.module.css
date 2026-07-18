@@ -486,6 +486,13 @@
   border-color: var(--lumiverse-primary);
 }
 
+/* Avoid iOS browser zoom when editing a lorebook in the pop-out modal. */
+@media (pointer: coarse) {
+  .fieldInput {
+    font-size: max(16px, calc(13px * var(--lumiverse-font-scale, 1)));
+  }
+}
+
 /* ── Entry list ── */
 .entryListHeader {
   display: flex;

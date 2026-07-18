@@ -603,7 +603,13 @@
     "exportFormatLumiverse": "Lumiverse",
     "exportFormatCharacterBook": "Libro personaggio",
     "exportFormatSillyTavern": "SillyTavern",
-    "exportBookTitle": "Esporta libro"
+    "exportBookTitle": "Esporta libro",
+    "renameFolderFailed": "Impossibile rinominare la cartella",
+    "deleteFolderTitle": "Elimina cartella lorebook",
+    "deleteFolderMessage": "Eliminare la cartella \"{{name}}\"? I lorebook in questa cartella verranno spostati in Nessuna cartella.",
+    "deleteFolderFailed": "Impossibile eliminare la cartella",
+    "renamedFolderSuccess": "Cartella rinominata in \"{{name}}\" e aggiornati {{count}} lorebook",
+    "deletedFolderSuccess": "Cartella \"{{name}}\" eliminata e {{count}} lorebook spostati in Nessuna cartella"
   },
   "globalAddons": {
     "title": "Libreria globale addon",

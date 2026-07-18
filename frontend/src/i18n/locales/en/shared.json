@@ -48,7 +48,11 @@
     "searchFolders": "Search folders...",
     "none": "None",
     "folderNamePlaceholder": "Folder name...",
-    "createNew": "Create new folder..."
+    "createNew": "Create new folder...",
+    "renameFolder": "Rename {{name}}",
+    "deleteFolder": "Delete {{name}}",
+    "confirmRename": "Confirm rename",
+    "cancelRename": "Cancel rename"
   },
   "imageLightbox": {
     "loadFailed": "Failed to load image",

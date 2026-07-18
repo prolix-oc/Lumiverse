@@ -613,7 +613,13 @@
     "exportFormatLumiverse": "Lumiverse",
     "exportFormatCharacterBook": "Character Book",
     "exportFormatSillyTavern": "SillyTavern",
-    "exportBookTitle": "Export book"
+    "exportBookTitle": "Export book",
+    "renameFolderFailed": "Failed to rename folder",
+    "deleteFolderTitle": "Delete Lorebook Folder",
+    "deleteFolderMessage": "Delete folder \"{{name}}\"? Lorebooks in this folder will move to No folder.",
+    "deleteFolderFailed": "Failed to delete folder",
+    "renamedFolderSuccess": "Renamed folder to \"{{name}}\" and updated {{count}} lorebooks",
+    "deletedFolderSuccess": "Deleted folder \"{{name}}\" and moved {{count}} lorebooks to No folder"
   },
   "globalAddons": {
     "title": "Global Add-Ons Library",

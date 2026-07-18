@@ -6,6 +6,7 @@ import type {
   WorldBookReindexResult, WorldBookVectorSummary,
   DuplicateWorldBookEntryInput, ReorderWorldBookEntriesInput,
   WorldBookEntryBulkActionInput, WorldBookEntryBulkActionResult,
+  RenameWorldBookFolderResponse, DeleteWorldBookFolderResponse,
 } from '@/types/api'
 import { triggerBlobDownload } from '@/lib/downloads'
 
@@ -50,6 +51,17 @@ export const worldBooksApi = {
 
   update(id: string, input: UpdateWorldBookInput) {
     return put<WorldBook>(`/world-books/${id}`, input)
+  },
+
+  renameFolder(oldName: string, newName: string) {
+    return post<RenameWorldBookFolderResponse>('/world-books/folders/rename', {
+      old_name: oldName,
+      new_name: newName,
+    })
+  },
+
+  deleteFolder(name: string) {
+    return post<DeleteWorldBookFolderResponse>('/world-books/folders/delete', { name })
   },
 
   delete(id: string) {

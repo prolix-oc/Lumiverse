@@ -603,7 +603,13 @@
     "exportFormatLumiverse": "Lumiverse",
     "exportFormatCharacterBook": "Livre de personnage",
     "exportFormatSillyTavern": "SillyTavern",
-    "exportBookTitle": "Exporter le livre"
+    "exportBookTitle": "Exporter le livre",
+    "renameFolderFailed": "Échec du renommage du dossier",
+    "deleteFolderTitle": "Supprimer le dossier de lorebook",
+    "deleteFolderMessage": "Supprimer le dossier « {{name}} » ? Les lorebooks de ce dossier seront déplacés vers Aucun dossier.",
+    "deleteFolderFailed": "Échec de la suppression du dossier",
+    "renamedFolderSuccess": "Dossier renommé en « {{name}} » et {{count}} lorebooks mis à jour",
+    "deletedFolderSuccess": "Dossier « {{name}} » supprimé et {{count}} lorebooks déplacés vers Aucun dossier"
   },
   "globalAddons": {
     "title": "Bibliothèque globale de modules complémentaires",

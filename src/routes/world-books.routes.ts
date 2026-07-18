@@ -394,6 +394,28 @@ app.post("/bulk-move-folder", async (c) => {
   return c.json({ updated: result.updated });
 });
 
+app.post("/folders/rename", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ old_name?: unknown; new_name?: unknown }>().catch(() => null);
+  const oldName = typeof body?.old_name === "string" ? body.old_name.trim() : "";
+  const newName = typeof body?.new_name === "string" ? body.new_name.trim() : "";
+  if (!oldName) return c.json({ error: "old_name is required" }, 400);
+  if (!newName) return c.json({ error: "new_name is required" }, 400);
+
+  const updated = svc.renameWorldBookFolder(userId, oldName, newName);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/folders/delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: unknown }>().catch(() => null);
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  const updated = svc.deleteWorldBookFolder(userId, name);
+  return c.json({ updated, count: updated.length });
+});
+
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();

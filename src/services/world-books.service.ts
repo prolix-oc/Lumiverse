@@ -637,6 +637,62 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
   return getWorldBook(userId, id)!;
 }
 
+/**
+ * Rename a folder by moving every one of the user's world books in that
+ * folder. Folders are represented by the `folder` value on each world book,
+ * rather than a separate database entity.
+ */
+export function renameWorldBookFolder(userId: string, oldName: string, newName: string): WorldBook[] {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, source) as any[];
+  if (rows.length === 0) return [];
+
+  if (source === target) {
+    return rows.map(rowToBook);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(target, now, userId, source);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: target, updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
+/**
+ * Delete an organizational folder without deleting its lorebooks. Its books
+ * are moved into the unfiled bucket, represented by an empty folder string.
+ */
+export function deleteWorldBookFolder(userId: string, name: string): WorldBook[] {
+  const folder = name.trim();
+  if (!folder) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as any[];
+  if (rows.length === 0) return [];
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(now, userId, folder);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: "", updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
 function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): string[] {
   if (worldBookIds.length === 0) return [];
   const placeholders = worldBookIds.map(() => "?").join(", ");

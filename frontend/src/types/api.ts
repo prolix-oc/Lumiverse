@@ -1020,6 +1020,16 @@ export interface CreateWorldBookInput {
 
 export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
 
+export interface RenameWorldBookFolderResponse {
+  updated: WorldBook[];
+  count: number;
+}
+
+export interface DeleteWorldBookFolderResponse {
+  updated: WorldBook[];
+  count: number;
+}
+
 export interface CreateWorldBookEntryInput {
   outlet_name?: string | null;
   wi_marker?: string | null;

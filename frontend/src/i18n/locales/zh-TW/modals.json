@@ -603,7 +603,13 @@
     "exportFormatLumiverse": "Lumiverse",
     "exportFormatCharacterBook": "角色書",
     "exportFormatSillyTavern": "SillyTavern",
-    "exportBookTitle": "導出書籍"
+    "exportBookTitle": "導出書籍",
+    "renameFolderFailed": "重新命名資料夾失敗",
+    "deleteFolderTitle": "刪除 Lorebook 資料夾",
+    "deleteFolderMessage": "要刪除資料夾「{{name}}」嗎？其中的 Lorebook 將移至無資料夾。",
+    "deleteFolderFailed": "刪除資料夾失敗",
+    "renamedFolderSuccess": "已將資料夾重新命名為「{{name}}」，並更新了 {{count}} 個 Lorebook",
+    "deletedFolderSuccess": "已刪除資料夾「{{name}}」，並將 {{count}} 個 Lorebook 移至無資料夾"
   },
   "globalAddons": {
     "title": "全局附加庫",

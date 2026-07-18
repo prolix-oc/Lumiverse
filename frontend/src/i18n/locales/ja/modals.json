@@ -603,7 +603,13 @@
     "exportFormatLumiverse": "Lumiverse",
     "exportFormatCharacterBook": "キャラクターブック",
     "exportFormatSillyTavern": "SillyTavern",
-    "exportBookTitle": "ブックをエクスポート"
+    "exportBookTitle": "ブックをエクスポート",
+    "renameFolderFailed": "フォルダー名を変更できませんでした",
+    "deleteFolderTitle": "ロアブックフォルダーを削除",
+    "deleteFolderMessage": "フォルダー「{{name}}」を削除しますか？このフォルダーのロアブックはフォルダーなしに移動します。",
+    "deleteFolderFailed": "フォルダーを削除できませんでした",
+    "renamedFolderSuccess": "フォルダー名を「{{name}}」に変更し、{{count}} 件のロアブックを更新しました",
+    "deletedFolderSuccess": "フォルダー「{{name}}」を削除し、{{count}} 件のロアブックをフォルダーなしに移動しました"
   },
   "globalAddons": {
     "title": "グローバル アドオン ライブラリ",
