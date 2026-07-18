@@ -35,6 +35,23 @@ export interface Message {
   created_at: number;
 }
 
+/** A persisted, currently-visible message that matched a chat find query. */
+export interface ChatMessageSearchMatch {
+  id: string;
+  index_in_chat: number;
+  /** Zero-based position in the persisted chat history. */
+  offset: number;
+}
+
+export interface ChatMessageSearchResult {
+  data: ChatMessageSearchMatch[];
+  /** Total matching messages, including any omitted by the response cap. */
+  total: number;
+  /** Total persisted messages in the chat at the time of the search. */
+  message_total: number;
+  truncated: boolean;
+}
+
 export interface CreateMessageInput {
   is_user: boolean;
   name: string;

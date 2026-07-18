@@ -67,6 +67,7 @@ import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type
 interface InputAreaProps {
   chatId: string
   onNavigateHome?: () => void
+  onOpenChatFind?: () => void
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
@@ -228,7 +229,7 @@ function slugifyName(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
+export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: InputAreaProps) {
   const { t } = useTranslation('chat')
   const { t: te } = useTranslation('errors')
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
@@ -3343,6 +3344,21 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
           {renderPopover === 'extras' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              {isMobile && onOpenChatFind && (
+                <button
+                  type="button"
+                  className={styles.popRowBtn}
+                  onClick={() => {
+                    setOpenPopover(null)
+                    onOpenChatFind()
+                  }}
+                >
+                  <span className={styles.personaMain}>
+                    <Search size={14} />
+                    <span>{t('findInChat.open')}</span>
+                  </span>
+                </button>
+              )}
               <div className={styles.extrasSection}>
                 <div className={styles.quickSetName}>{t('quickMenu.impersonate')}</div>
                 {lastImpersonateInput && (

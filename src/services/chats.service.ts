@@ -6,7 +6,12 @@ import { getCharacter, LANDING_PERSPECTIVE_LAYERS_KEY, normalizeLandingPerspecti
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import type { Chat, CreateChatInput, CreateGroupChatInput, UpdateChatInput, RecentChat, GroupedRecentChat, ChatSummary } from "../types/chat";
 import { isTemporaryChatMetadata } from "../types/chat";
-import type { Message, CreateMessageInput, UpdateMessageInput } from "../types/message";
+import type {
+  Message,
+  CreateMessageInput,
+  UpdateMessageInput,
+  ChatMessageSearchResult,
+} from "../types/message";
 import type { BulkMessageInput } from "../types/migrate";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -1558,6 +1563,88 @@ export function listMessagesTail(userId: string, chatId: string, limit: number, 
     total,
     limit,
     offset,
+  };
+}
+
+const CHAT_FIND_MAX_RESULTS = 10_000;
+
+function visibleMessageTextForSearch(row: { content?: unknown; swipes?: unknown; swipe_id?: unknown }): string {
+  let swipes: unknown[] | null = null;
+  try {
+    const parsed = typeof row.swipes === "string" ? JSON.parse(row.swipes) : row.swipes;
+    if (Array.isArray(parsed)) swipes = parsed;
+  } catch {
+    // Fall back to content below. Legacy and partially-written rows can carry
+    // malformed swipe JSON, but their active content is still searchable.
+  }
+
+  const swipeId = typeof row.swipe_id === "number" && Number.isInteger(row.swipe_id)
+    ? row.swipe_id
+    : 0;
+  const activeSwipe = swipes?.[swipeId];
+  return typeof activeSwipe === "string"
+    ? activeSwipe
+    : typeof row.content === "string"
+      ? row.content
+      : "";
+}
+
+function isLoomInjectedMessageForSearch(extra: unknown): boolean {
+  try {
+    const parsed = typeof extra === "string" ? JSON.parse(extra) : extra;
+    return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      && !!(parsed as Record<string, unknown>)._loom_inject;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find visible, active-swipe message text without loading the whole chat into
+ * the browser. The response includes a stable persisted offset so the
+ * virtualized client can page older history up to a selected result.
+ */
+export function searchMessages(userId: string, chatId: string, query: string): ChatMessageSearchResult {
+  const needle = query.toLocaleLowerCase();
+  if (!needle) {
+    return { data: [], total: 0, message_total: 0, truncated: false };
+  }
+
+  const rows = getDb()
+    .query(`
+      SELECT m.id, m.index_in_chat, m.content, m.swipes, m.swipe_id, m.extra
+      FROM messages m
+      JOIN chats c ON m.chat_id = c.id
+      WHERE m.chat_id = ? AND c.user_id = ?
+      ORDER BY m.index_in_chat ASC
+    `)
+    .all(chatId, userId) as Array<{
+      id: string;
+      index_in_chat: number;
+      content: string;
+      swipes: string;
+      swipe_id: number;
+      extra: string;
+    }>;
+
+  const data: ChatMessageSearchResult["data"] = [];
+  let total = 0;
+
+  rows.forEach((row, offset) => {
+    if (isLoomInjectedMessageForSearch(row.extra)) return;
+    if (!visibleMessageTextForSearch(row).toLocaleLowerCase().includes(needle)) return;
+
+    total += 1;
+    if (data.length < CHAT_FIND_MAX_RESULTS) {
+      data.push({ id: row.id, index_in_chat: row.index_in_chat, offset });
+    }
+  });
+
+  return {
+    data,
+    total,
+    message_total: rows.length,
+    truncated: total > data.length,
   };
 }
 

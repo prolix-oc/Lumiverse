@@ -18,9 +18,10 @@ interface MinimalMessageProps {
   isSelectMode?: boolean
   isSelected?: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery?: string
 }
 
-export default function MinimalMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect }: MinimalMessageProps) {
+export default function MinimalMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: MinimalMessageProps) {
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
@@ -114,6 +115,7 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
         messageId={message.id}
         chatId={chatId}
         depth={depth}
+        findQuery={findQuery}
       />
     ),
     Reasoning: reasoning ? (
@@ -128,13 +130,13 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
       <MessageAttachments attachments={attachments} isUser={isUser} chatId={chatId} messageId={message.id} />
     ) : null,
   }), [
-    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth,
+    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth, findQuery,
     reasoning, reasoningDuration, reasoningStartedAt, attachments,
   ])
 
   // ── Default props for the built-in renderer ──
   const defaultProps: MinimalMessageDefaultProps = {
-    message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+    message, chatId, depth, isSelectMode, isSelected, onToggleSelect, findQuery,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,

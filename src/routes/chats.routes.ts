@@ -624,6 +624,19 @@ app.get("/:chatId/messages", (c) => {
   return c.json(svc.listMessages(userId, chatId, pagination, { light }));
 });
 
+app.get("/:chatId/messages/search", (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const chat = svc.getChat(userId, chatId);
+  if (!chat) return c.json({ error: "Chat not found" }, 404);
+
+  const query = c.req.query("q")?.trim() ?? "";
+  if (query.length === 0) return c.json({ data: [], total: 0, message_total: 0, truncated: false });
+  if (query.length > 500) return c.json({ error: "Search query is too long" }, 400);
+
+  return c.json(svc.searchMessages(userId, chatId, query));
+});
+
 app.post("/:chatId/messages/bulk-hide", async (c) => {
   const userId = c.get("userId");
   const chatId = c.req.param("chatId");

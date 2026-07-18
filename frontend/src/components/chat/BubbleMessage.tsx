@@ -18,9 +18,10 @@ interface BubbleMessageProps {
   isSelectMode?: boolean
   isSelected?: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery?: string
 }
 
-export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect }: BubbleMessageProps) {
+export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: BubbleMessageProps) {
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const {
@@ -119,6 +120,7 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
         messageId={message.id}
         chatId={chatId}
         depth={depth}
+        findQuery={findQuery}
       />
     ),
     Reasoning: reasoning ? (
@@ -133,13 +135,13 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
       <MessageAttachments attachments={attachments} isUser={isUser} chatId={chatId} messageId={message.id} />
     ) : null,
   }), [
-    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth,
+    displayContent, isUser, macroUserName, isActivelyStreaming, message.id, chatId, depth, findQuery,
     reasoning, reasoningDuration, reasoningStartedAt, attachments,
   ])
 
   // ── Default props for the built-in renderer ──
   const defaultProps: BubbleMessageDefaultProps = {
-    message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+    message, chatId, depth, isSelectMode, isSelected, onToggleSelect, findQuery,
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor, userLeft,

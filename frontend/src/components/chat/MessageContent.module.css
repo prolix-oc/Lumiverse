@@ -13,6 +13,15 @@
 
 .contentChar {}
 
+.findMatch {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--lumiverse-warning, #f5b942) 58%, transparent);
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .content :global([data-lumiverse-regex-action]) {
   cursor: pointer;
 }

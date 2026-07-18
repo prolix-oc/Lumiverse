@@ -55,6 +55,7 @@ interface MessageContentProps {
   characterNameOverride?: string
   risuAssetMapOverride?: Record<string, string> | null
   disableInterceptors?: boolean
+  findQuery?: string
 }
 
 // Custom renderer for sheld prose classes
@@ -1216,6 +1217,97 @@ function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolea
   return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
 }
 
+const CHAT_FIND_HIGHLIGHT_ATTR = 'data-chat-find-highlight'
+const CHAT_FIND_SKIP_SELECTOR = 'script,style,textarea,input,button,select,option,svg,math'
+
+type ChatFindHighlightRoot = HTMLElement | ShadowRoot
+
+function clearChatFindHighlights(root: ChatFindHighlightRoot): boolean {
+  const matches = root.querySelectorAll<HTMLElement>(`mark[${CHAT_FIND_HIGHLIGHT_ATTR}]`)
+  if (matches.length === 0) return false
+
+  for (const match of matches) {
+    const parent = match.parentNode
+    if (!parent) continue
+    parent.replaceChild(document.createTextNode(match.textContent ?? ''), match)
+    if (parent instanceof Element) parent.normalize()
+  }
+
+  return true
+}
+
+function highlightChatFindMatches(root: ChatFindHighlightRoot, query: string): boolean {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) return false
+
+  const escapedQuery = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const matcher = new RegExp(escapedQuery, 'giu')
+  const textNodes: Text[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      if (!node.nodeValue || !parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest(`mark[${CHAT_FIND_HIGHLIGHT_ATTR}]`)) return NodeFilter.FILTER_REJECT
+      if (parent.closest(CHAT_FIND_SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+
+  while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+
+  let changed = false
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue ?? ''
+    matcher.lastIndex = 0
+    if (!matcher.test(text)) continue
+
+    matcher.lastIndex = 0
+    const fragment = document.createDocumentFragment()
+    let cursor = 0
+    let match: RegExpExecArray | null
+
+    while ((match = matcher.exec(text)) !== null) {
+      if (match.index > cursor) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)))
+      }
+
+      const mark = document.createElement('mark')
+      mark.className = styles.findMatch
+      mark.setAttribute(CHAT_FIND_HIGHLIGHT_ATTR, '')
+      // CSS modules do not cross into an HTML island's shadow root. Keep the
+      // same visual treatment there with inherited theme variables.
+      if (root instanceof ShadowRoot) {
+        mark.style.background = 'color-mix(in srgb, var(--lumiverse-warning, #f5b942) 58%, transparent)'
+        mark.style.color = 'inherit'
+        mark.style.borderRadius = '2px'
+        mark.style.padding = '0 1px'
+      }
+      mark.textContent = match[0]
+      fragment.appendChild(mark)
+
+      cursor = match.index + match[0].length
+      if (match[0].length === 0) break
+    }
+
+    if (cursor < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor)))
+    }
+
+    textNode.parentNode?.replaceChild(fragment, textNode)
+    changed = true
+  }
+
+  return changed
+}
+
+function getChatFindHighlightRoots(container: HTMLElement): ChatFindHighlightRoot[] {
+  const roots: ChatFindHighlightRoot[] = [container]
+  for (const island of container.querySelectorAll<HTMLElement>('[data-lumiverse-html-island]')) {
+    if (island.shadowRoot) roots.push(island.shadowRoot)
+  }
+  return roots
+}
+
 /**
  * dangerouslySetInnerHTML wrapper that preserves IMG element identity by
  * src across innerHTML replacements, so images don't redo the cache lookup,
@@ -1356,6 +1448,7 @@ export default function MessageContent({
   characterNameOverride,
   risuAssetMapOverride,
   disableInterceptors = false,
+  findQuery = '',
 }: MessageContentProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -1872,6 +1965,28 @@ export default function MessageContent({
 
     return elements
   }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming])
+
+  // Highlight rendered text nodes instead of rewriting the source Markdown or
+  // sanitized HTML. This preserves formatting, display regexes, OOC layouts,
+  // and isolated HTML islands while making query matches visible everywhere.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const roots = getChatFindHighlightRoots(container)
+    for (const root of roots) clearChatFindHighlights(root)
+    if (!findQuery.trim()) return
+
+    let changed = false
+    for (const root of roots) changed = highlightChatFindMatches(root, findQuery) || changed
+    if (changed) notifyMessageContentLayout(container)
+
+    return () => {
+      let didClear = false
+      for (const root of roots) didClear = clearChatFindHighlights(root) || didClear
+      if (didClear) notifyMessageContentLayout(container)
+    }
+  }, [findQuery, renderedBlocks])
 
   // Chunk fade animation for streaming tokens
   useLayoutEffect(() => {

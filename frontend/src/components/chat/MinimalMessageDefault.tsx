@@ -38,6 +38,7 @@ export interface MinimalMessageDefaultProps {
   isSelectMode: boolean
   isSelected: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery: string
   // Pre-computed from useMessageCard
   isEditing: boolean
   editContent: string
@@ -174,6 +175,7 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
 
 export default function MinimalMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+  findQuery,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
   tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
@@ -413,6 +415,7 @@ export default function MinimalMessageDefault({
             messageId={message.id}
             chatId={chatId}
             depth={depth}
+            findQuery={findQuery}
           />
         ) : isActivelyStreaming ? (
           <StreamingIndicator />

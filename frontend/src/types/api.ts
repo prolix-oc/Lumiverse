@@ -228,6 +228,19 @@ export interface Message {
   created_at: number;
 }
 
+export interface ChatMessageSearchMatch {
+  id: string;
+  index_in_chat: number;
+  offset: number;
+}
+
+export interface ChatMessageSearchResult {
+  data: ChatMessageSearchMatch[];
+  total: number;
+  message_total: number;
+  truncated: boolean;
+}
+
 export interface CreateMessageInput {
   is_user: boolean;
   name: string;

@@ -27,6 +27,7 @@ import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
+import ChatFindBar, { type ChatFindNavigationTarget } from './ChatFindBar'
 import ScrollToBottom from './ScrollToBottom'
 import CouncilPill from './CouncilPill'
 import PortraitPanel from './PortraitPanel'
@@ -194,6 +195,10 @@ export default function ChatView() {
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
   const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
+  const [chatFindOpen, setChatFindOpen] = useState(false)
+  const [chatFindFocusRequest, setChatFindFocusRequest] = useState(0)
+  const [chatFindQuery, setChatFindQuery] = useState('')
+  const [chatFindTarget, setChatFindTarget] = useState<ChatFindNavigationTarget | null>(null)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const setMessages = useStore((s) => s.setMessages)
   const messages = useStore((s) => s.messages)
@@ -218,9 +223,49 @@ export default function ChatView() {
   const [chatChromeLeaving, setChatChromeLeaving] = useState(false)
   const messageSelectMode = useStore((s) => s.messageSelectMode)
   const setMessageSelectMode = useStore((s) => s.setMessageSelectMode)
+  const activeModal = useStore((s) => s.activeModal)
+  const commandPaletteOpen = useStore((s) => s.commandPaletteOpen)
   const toggleSelectMode = useCallback(() => {
     setMessageSelectMode(!messageSelectMode)
   }, [messageSelectMode, setMessageSelectMode])
+
+  const closeChatFind = useCallback(() => {
+    setChatFindOpen(false)
+    setChatFindQuery('')
+    setChatFindTarget(null)
+  }, [])
+
+  const openChatFind = useCallback(() => {
+    setChatFindOpen(true)
+    setChatFindFocusRequest((request) => request + 1)
+  }, [])
+
+  const clearChatFindTarget = useCallback(() => {
+    setChatFindTarget(null)
+  }, [])
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if (activeModal || commandPaletteOpen) return
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'f') return
+
+      event.preventDefault()
+      openChatFind()
+    }
+
+    // Deliberately use the bubbling phase. ExpandedTextEditor owns its find
+    // shortcut from a capture listener and stops propagation, so its local
+    // Find remains authoritative when it is open above a chat.
+    document.addEventListener('keydown', handleFindShortcut)
+    return () => document.removeEventListener('keydown', handleFindShortcut)
+  }, [activeModal, commandPaletteOpen, openChatFind])
+
+  useEffect(() => {
+    setChatFindOpen(false)
+    setChatFindQuery('')
+    setChatFindTarget(null)
+  }, [chatId])
 
   useSwipeKeyboard()
   useEditKeyboard()
@@ -948,11 +993,26 @@ export default function ChatView() {
                 <ListChecks size={14} />
               </button>
             </div>
-            <MessageList messages={messages} chatId={chatId} isStreaming={isStreaming} />
+            <ChatFindBar
+              chatId={chatId}
+              open={chatFindOpen}
+              focusRequest={chatFindFocusRequest}
+              onClose={closeChatFind}
+              onNavigate={setChatFindTarget}
+              onClearTarget={clearChatFindTarget}
+              onQueryChange={setChatFindQuery}
+            />
+            <MessageList
+              messages={messages}
+              chatId={chatId}
+              isStreaming={isStreaming}
+              findTarget={chatFindTarget}
+              findQuery={chatFindQuery}
+            />
             <ScrollToBottom />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
-            <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} />
+            <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>
 
