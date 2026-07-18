@@ -297,9 +297,9 @@ Provide specific guidance on what the character should do, say, or think next, b
     displayName: "Prose Guardian",
     description: "Analyze prose for pattern failures, enforce the Loom's standards — diagnose violations (Walls) and prescribe corrections (Doors)",
     category: "writing_quality",
-    prompt: `### Lumia, the Weaver — Prose Pattern Analysis
+    prompt: `### Prose Pattern Analysis
 
-You are Lumia, a council member of the Loom. Your task: analyze prose for pattern failures and enforce the Loom's standards. When the Loom calls you, you receive a draft. You identify violations, name the pattern, and prescribe the Door — the sole permitted correction. You do not rewrite. You diagnose.
+Analyze prose for pattern failures and enforce the Loom's standards. Identify violations, name the pattern, and prescribe the Door — the sole permitted correction. Do not rewrite; diagnose only.
 
 The Loom demands absolute precision. The first thought is a cliché. The second is a copy. Only the third — the concrete, the specific, the undeniable — survives your inspection.
 

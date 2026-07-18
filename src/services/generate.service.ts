@@ -57,6 +57,7 @@ import {
   appendCouncilDeliberationHistory,
   collectWorldInfoForCouncil,
   formatDeliberation,
+  selectCouncilContextMessages,
   type CouncilEnrichment,
   type CouncilExecutionResultWithHistory,
 } from "./council/council-execution.service";
@@ -1046,6 +1047,11 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
+function excludesLatestUserMessage(toolsSettings: unknown): boolean {
+  return (toolsSettings as { excludeLatestUserMessage?: boolean })
+    .excludeLatestUserMessage === true;
+}
+
 // Hash the council's view of the chat — the (id, content) pairs of the last
 // `contextWindow` messages, the same slice council members consume in
 // buildContextMessages. Mixed into the cache fingerprint so that editing or
@@ -1053,8 +1059,13 @@ function stableJson(value: unknown): string {
 function hashCouncilContextMessages(
   messages: Message[],
   contextWindow: number,
+  excludeLatestUserMessage: boolean,
 ): string {
-  const window = messages.slice(-contextWindow);
+  const window = selectCouncilContextMessages(
+    messages,
+    contextWindow,
+    excludeLatestUserMessage,
+  );
   const hasher = new Bun.CryptoHasher("sha256");
   for (const m of window) {
     hasher.update(m.id);
@@ -1084,6 +1095,7 @@ function buildCouncilCacheFingerprint(
       mode: councilSettings.toolsSettings.mode,
       timeoutMs: councilSettings.toolsSettings.timeoutMs,
       sidecarContextWindow: councilSettings.toolsSettings.sidecarContextWindow,
+      excludeLatestUserMessage: excludesLatestUserMessage(councilSettings.toolsSettings),
       includeUserPersona: councilSettings.toolsSettings.includeUserPersona,
       includeCharacterInfo: councilSettings.toolsSettings.includeCharacterInfo,
       includeWorldInfo: councilSettings.toolsSettings.includeWorldInfo,
@@ -2126,6 +2138,7 @@ export async function startGeneration(
             councilContextHash = hashCouncilContextMessages(
               councilMessages,
               councilSettings.toolsSettings.sidecarContextWindow,
+              excludesLatestUserMessage(councilSettings.toolsSettings),
             );
 
             // Check if we can reuse cached council results for regens/swipes/continues

@@ -17,13 +17,17 @@ import QuickAddPackDropdown from './council/QuickAddPackDropdown'
 import LumiaSelector from '@/components/modals/LumiaSelector'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
 import { useCouncilProfiles } from '@/hooks/useCouncilProfiles'
-import type { CouncilMember } from 'lumiverse-spindle-types'
+import type { CouncilMember, CouncilToolsSettings } from 'lumiverse-spindle-types'
 import promptStyles from './PromptPanel.module.css'
 import styles from './CouncilManager.module.css'
 
 const MIN_TOOL_TIMEOUT_MS = 15000
 
 type LumiaSelectorMode = 'definition' | 'behavior' | 'personality'
+
+type CouncilPromptControl = {
+  excludeLatestUserMessage?: boolean
+}
 
 function ToggleRow({
   checked,
@@ -179,7 +183,7 @@ export default function CouncilManager() {
     loadAvailableTools()
   }, [loadAvailableTools])
 
-  const ts = councilSettings.toolsSettings
+  const ts = councilSettings.toolsSettings as typeof councilSettings.toolsSettings & CouncilPromptControl
 
   const handleToggleEnabled = useCallback(() => {
     saveCouncilSettings({
@@ -643,6 +647,18 @@ export default function CouncilManager() {
               onChange={(checked) => setCouncilToolsSettings({ includeWorldInfo: checked })}
               label={t('context.includeWorldInfo')}
             />
+            {(ts.mode ?? 'sidecar') === 'sidecar' && (
+              <Toggle.Checkbox
+                checked={ts.excludeLatestUserMessage ?? false}
+                onChange={(checked) => {
+                  const partial: Partial<CouncilToolsSettings & CouncilPromptControl> = {
+                    excludeLatestUserMessage: checked,
+                  }
+                  setCouncilToolsSettings(partial)
+                }}
+                label={t('context.excludeLatestUserMessage')}
+              />
+            )}
             <Toggle.Checkbox
               checked={ts.allowUserControl}
               onChange={(checked) => setCouncilToolsSettings({ allowUserControl: checked })}

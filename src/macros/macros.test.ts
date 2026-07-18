@@ -1506,7 +1506,7 @@ describe("Regex Reference macros", () => {
 });
 
 describe("Lumia and council macros", () => {
-  test("lumiaCouncilInst matches the extension council prompt verbatim", async () => {
+  test("lumiaCouncilInst keeps council profiles as feedback perspectives", async () => {
     const env = makeEnv();
     env.extra.council = {
       councilMode: true,
@@ -1537,13 +1537,13 @@ describe("Lumia and council macros", () => {
     };
 
     const result = await ev("{{lumiaCouncilInst}}", env);
-    expect(result).toContain("COUNCIL MODE ACTIVATED! We Lumias gather in the Loom's planning room to weave the next story beat TOGETHER.");
-    expect(result).toContain("- Address each other BY NAME—no speaking into the void");
-    expect(result).toContain("This is a conversation, not a list of separate opinions. Every voice responds to what came before.");
-    expect(result).toContain("The current sitting members of the council are: **Mira**, **Kael**");
+    expect(result).toContain("## Council Feedback Mode");
+    expect(result).toContain("They are not characters to portray in the response.");
+    expect(result).toContain("Do not simulate a council meeting");
+    expect(result).toContain("Available feedback perspectives: **Mira**, **Kael**");
   });
 
-  test("lumiaStateSynthesis matches the extension council sound-off prompt", async () => {
+  test("lumiaStateSynthesis keeps council output out of the roleplay", async () => {
     const env = makeEnv();
     env.extra.council = {
       councilMode: true,
@@ -1574,9 +1574,9 @@ describe("Lumia and council macros", () => {
     };
 
     const result = await ev("{{lumiaStateSynthesis}}", env);
-    expect(result).toContain("**Council Sound-Off**");
-    expect(result).toContain("- Each member maintains their UNIQUE personality—do not blend or homogenize voices");
-    expect(result).not.toContain("Members kick off in first person as named individuals");
+    expect(result).toContain("## Council Perspective Handling");
+    expect(result).toContain("Do not turn those perspectives into speakers, dialogue, or a group roleplay.");
+    expect(result).not.toContain("Council Sound-Off");
   });
 
   test("lumiaOOC matches the extension council social prompt", async () => {
@@ -1734,8 +1734,8 @@ describe("Lumia and council macros", () => {
     expect(result).toContain("## Council Deliberation");
     expect(result).toContain("Mira");
     expect(result).toContain("Moonlight, rain, and a tense confrontation in the alley.");
-    expect(result).toContain("2. Debate which suggestions have the most merit");
-    expect(result).not.toContain("2. Debate which suggestions have the most merit in first person as named council members responding to each other");
+    expect(result).toContain("## Council Feedback Usage");
+    expect(result).toContain("Do not roleplay, quote, or respond as a council member.");
   });
 
   test("lumiaCouncilToolsActive reflects actual tool output", async () => {

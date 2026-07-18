@@ -2277,6 +2277,7 @@
       "includeUserPersona": "Include User Persona",
       "includeCharacterInfo": "Include Character Info",
       "includeWorldInfo": "Include World Info",
+      "excludeLatestUserMessage": "Exclude Latest User Message from Sidecar",
       "allowUserControl": "Allow User Control",
       "retainResults": "Retain Results for Regens/Swipes",
       "webSearchHint": "Configure Settings → Web Search to enable the Web Search council tool for inline or sidecar use."
