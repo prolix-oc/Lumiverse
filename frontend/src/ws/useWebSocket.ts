@@ -224,15 +224,6 @@ async function deleteEmptyGeneratedSwipe(
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
 const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
 
-// Set on first SYSTEM_DISK_LOW receipt to silence the rebroadcasts the
-// backend fires every 5 min while the disk stays over threshold. Module
-// scope (not state) — survives WS reconnects, resets only on full page load.
-let diskWarningShown = false
-// SMART alerts are re-emitted by each scheduled health check so an operator
-// who connects later can still receive one. Avoid repeatedly interrupting an
-// already-connected browser; reset only after a full page load.
-let smartWarningShown = false
-
 interface VarChangeSummary {
   bagWideVarChange: boolean
   changedVars: ReadonlySet<string>
@@ -1477,11 +1468,6 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SYSTEM_DISK_LOW, (payload: { path: string; usagePercent: number; freeBytes: number; totalBytes: number; thresholdPercent: number; thresholdFreeBytes: number }) => {
-        // Backend re-emits this on every 5-min interval while the disk is
-        // over threshold so late-connecting admins still get notified. Dedupe
-        // here so existing sessions only see one toast per page-load.
-        if (diskWarningShown) return
-        diskWarningShown = true
         const formatBytes = (bytes: number): string => {
           const GIB = 1024 * 1024 * 1024
           const MIB = 1024 * 1024
@@ -1498,11 +1484,7 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SYSTEM_SMART_ALERT, (payload: SystemSmartAlertPayload) => {
-        // The backend re-emits on later scheduled checks while the condition
-        // persists so an operator who connects after startup can still see it.
-        // A page should surface this once, not every six-hour SMART poll.
-        if (smartWarningShown || payload.drives.length === 0) return
-        smartWarningShown = true
+        if (payload.drives.length === 0) return
 
         const affected = payload.drives.slice(0, 3).map((drive) => {
           const label = drive.model ? `${drive.model} (${drive.device})` : drive.device

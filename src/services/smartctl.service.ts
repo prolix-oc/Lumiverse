@@ -138,6 +138,7 @@ let snapshotPromise: Promise<SmartctlSnapshot> | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 let alertReemitTimer: ReturnType<typeof setInterval> | null = null;
 let installationPromise: Promise<SmartctlInstallResult> | null = null;
+let lastSmartWarningFingerprint: string | null = null;
 
 function currentPlatform(deps: SmartctlDependencies): Platform {
   return deps.platform ?? getPlatform();
@@ -848,14 +849,48 @@ async function runScheduledSmartctlCheck(): Promise<void> {
   emitSmartctlAlert(snapshot);
 }
 
+function hasFailingSmartAlert(payload: SystemSmartAlertPayload): boolean {
+  return payload.drives.some((drive) => (
+    drive.status === "failing"
+    || drive.conditions.some((condition) => condition.severity === "failing")
+  ));
+}
+
+/** A stable warning identity that excludes the check timestamp. */
+function getSmartWarningFingerprint(payload: SystemSmartAlertPayload): string {
+  return payload.drives
+    .map((drive) => [
+      drive.device,
+      drive.model ?? "",
+      drive.status,
+      ...drive.conditions
+        .map((condition) => `${condition.severity}:${condition.message}`)
+        .sort(),
+    ].join("\u0001"))
+    .sort()
+    .join("\u0002");
+}
+
 /**
- * Re-emit on each scheduled check while evidence remains. The frontend keeps
- * the toast to one per page load, matching low-disk-space behavior while
- * still notifying an operator who connects after the initial startup check.
+ * Emit a warning once per unchanged SMART condition. Failing conditions stay
+ * persistent so operators who connect later continue to receive an error.
  */
 function emitSmartctlAlert(snapshot: SmartctlSnapshot): void {
   const payload = getSystemSmartAlertPayload(snapshot);
-  if (!payload) return;
+  if (!payload) {
+    lastSmartWarningFingerprint = null;
+    return;
+  }
+
+  if (hasFailingSmartAlert(payload)) {
+    // A later downgrade back to warning is a change worth surfacing.
+    lastSmartWarningFingerprint = null;
+  } else {
+    const fingerprint = getSmartWarningFingerprint(payload);
+    if (fingerprint === lastSmartWarningFingerprint) return;
+    lastSmartWarningFingerprint = fingerprint;
+  }
+
   for (const userId of getPrivilegedUserIds()) {
     eventBus.emit(EventType.SYSTEM_SMART_ALERT, payload, userId);
   }
@@ -879,9 +914,9 @@ export function startSmartctlMonitor(): void {
   monitorTimer = setInterval(() => {
     void runScheduledSmartctlCheck().catch((err) => console.warn("[smartctl] Scheduled check failed:", err));
   }, MONITOR_INTERVAL_MS);
-  // SMART reads themselves are deliberately infrequent. Re-send the latest
-  // actionable alert more often so an operator who opens the app after the
-  // startup scan does not need to wait six hours for the next disk read.
+  // SMART reads themselves are deliberately infrequent. Re-send only failing
+  // alerts more often; warning alerts are emitted again only when evidence
+  // changes.
   alertReemitTimer = setInterval(() => {
     if (latestSnapshot) emitSmartctlAlert(latestSnapshot);
   }, ALERT_REEMIT_INTERVAL_MS);
