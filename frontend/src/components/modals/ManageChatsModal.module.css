@@ -97,6 +97,81 @@
   color: var(--lumiverse-text);
 }
 
+.bulkModeBtnActive {
+  color: var(--lumiverse-primary) !important;
+  background: var(--lumiverse-primary-010) !important;
+  border-color: var(--lumiverse-primary-050) !important;
+}
+
+/* ── Bulk selection ── */
+.bulkBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 24px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-primary-010);
+  flex-shrink: 0;
+}
+
+.bulkSummary,
+.bulkActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bulkSelectAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-primary);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.bulkCount {
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+}
+
+.bulkActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 7px;
+  background: var(--lumiverse-bg-dark);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition: all 180ms ease;
+}
+
+.bulkActionBtn:hover:not(:disabled) {
+  color: var(--lumiverse-text);
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-fill);
+}
+
+.bulkDeleteBtn:hover:not(:disabled) {
+  color: var(--lumiverse-danger, #ef4444);
+  border-color: color-mix(in srgb, var(--lumiverse-danger, #ef4444) 55%, var(--lumiverse-border));
+}
+
+.bulkSelectAll:disabled,
+.bulkActionBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* .sortBtn — migrated to shared Button component */
 
 /* ── Body ── */
@@ -141,6 +216,35 @@
 
 .cardActive:hover {
   background: var(--lumiverse-primary-015);
+}
+
+.cardSelectable {
+  cursor: pointer;
+}
+
+.cardSelected,
+.cardSelected:hover {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+}
+
+.selectionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-primary);
+  cursor: pointer;
+}
+
+.selectionBtn:hover {
+  background: var(--lumiverse-primary-010);
 }
 
 .cardIcon {
@@ -278,4 +382,27 @@
 
 .newChatBtn svg {
   color: var(--lumiverse-primary);
+}
+
+@media (max-width: 480px) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .searchWrap {
+    flex-basis: 100%;
+  }
+
+  .bulkBar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bulkSummary {
+    justify-content: space-between;
+  }
+
+  .bulkActions > button {
+    flex: 1;
+  }
 }

@@ -1052,6 +1052,28 @@ export function deleteChat(userId: string, id: string): boolean {
 }
 
 /**
+ * Delete an explicit set of chats while preserving the full per-chat cleanup
+ * performed by deleteChat. Duplicate, missing, and cross-user IDs are ignored.
+ */
+export function deleteChats(userId: string, ids: string[]): string[] {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return [];
+
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const ownedRows = getDb()
+    .query(`SELECT id FROM chats WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...uniqueIds) as Array<{ id: string }>;
+  const ownedIds = new Set(ownedRows.map((row) => row.id));
+
+  const deletedIds: string[] = [];
+  for (const id of uniqueIds) {
+    if (!ownedIds.has(id)) continue;
+    if (deleteChat(userId, id)) deletedIds.push(id);
+  }
+  return deletedIds;
+}
+
+/**
  * Delete every temporary (character-less, metadata.temporary) chat the user
  * owns. Called when the user returns to the landing page — temp chats are
  * disposable by contract. Goes through deleteChat so audio/embedding/cortex
