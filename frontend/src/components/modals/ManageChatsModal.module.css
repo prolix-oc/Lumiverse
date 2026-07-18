@@ -97,6 +97,10 @@
   color: var(--lumiverse-text);
 }
 
+.bulkModeBtn {
+  border-color: var(--lumiverse-border) !important;
+}
+
 .bulkModeBtnActive {
   color: var(--lumiverse-primary) !important;
   background: var(--lumiverse-primary-010) !important;
