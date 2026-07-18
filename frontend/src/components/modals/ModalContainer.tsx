@@ -65,18 +65,23 @@ export default function ModalContainer() {
           message={modalProps.message || t('confirm.defaultMessage')}
           variant={modalProps.variant || 'safe'}
           confirmText={modalProps.confirmText}
-          onConfirm={() => {
-            modalProps.onConfirm?.()
+          inputLabel={modalProps.inputLabel}
+          inputPlaceholder={modalProps.inputPlaceholder}
+          defaultInputValue={modalProps.defaultInputValue}
+          checkboxLabel={modalProps.checkboxLabel}
+          defaultCheckboxChecked={modalProps.defaultCheckboxChecked}
+          onConfirm={(inputValue, checkboxChecked) => {
             closeModal()
+            modalProps.onConfirm?.(inputValue, checkboxChecked)
           }}
           onCancel={() => {
-            modalProps.onCancel?.()
             closeModal()
+            modalProps.onCancel?.()
           }}
           secondaryText={modalProps.secondaryText}
           onSecondary={modalProps.onSecondary ? () => {
-            modalProps.onSecondary?.()
             closeModal()
+            modalProps.onSecondary?.()
           } : undefined}
           secondaryVariant={modalProps.secondaryVariant}
         />

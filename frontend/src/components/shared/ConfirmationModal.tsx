@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useId, useState, type CSSProperties, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, AlertCircle, Info, X } from 'lucide-react'
 import { ModalShell } from './ModalShell'
@@ -9,7 +9,7 @@ type Variant = 'danger' | 'warning' | 'safe'
 
 interface ConfirmationModalProps {
   isOpen: boolean
-  onConfirm: () => void
+  onConfirm: (inputValue: string, checkboxChecked: boolean) => void
   onCancel: () => void
   title?: string
   message?: string | ReactNode
@@ -29,6 +29,13 @@ interface ConfirmationModalProps {
   loading?: boolean
   /** Label shown alongside the spinner while `loading` is true. */
   loadingText?: string
+  /** Optional single-line input shown above the action buttons. */
+  inputLabel?: string
+  inputPlaceholder?: string
+  defaultInputValue?: string
+  /** Optional checkbox shown above the action buttons. */
+  checkboxLabel?: string
+  defaultCheckboxChecked?: boolean
 }
 
 const variantConfig = {
@@ -78,6 +85,11 @@ export default function ConfirmationModal({
   zIndex = 10002,
   loading = false,
   loadingText,
+  inputLabel,
+  inputPlaceholder,
+  defaultInputValue = '',
+  checkboxLabel,
+  defaultCheckboxChecked = false,
 }: ConfirmationModalProps) {
   const { t } = useTranslation('modals')
   const { t: tc } = useTranslation('common')
@@ -88,6 +100,20 @@ export default function ConfirmationModal({
   const resolvedLoading = loadingText ?? t('confirm.working')
   const displayIcon = customIcon || variantIcons[variant] || variantIcons.safe
   const modalStyle = getVariantStyle(variant)
+  const [inputValue, setInputValue] = useState(defaultInputValue)
+  const [checkboxChecked, setCheckboxChecked] = useState(defaultCheckboxChecked)
+  const inputId = useId()
+  const checkboxId = useId()
+
+  useEffect(() => {
+    if (!isOpen) return
+    setInputValue(defaultInputValue)
+    setCheckboxChecked(defaultCheckboxChecked)
+  }, [defaultCheckboxChecked, defaultInputValue, isOpen])
+
+  const handleConfirm = () => {
+    onConfirm(inputValue, checkboxChecked)
+  }
 
   return (
     <ModalShell
@@ -99,6 +125,7 @@ export default function ConfirmationModal({
       style={modalStyle}
       closeOnBackdrop={!loading}
       closeOnEscape={!loading}
+      scrollable={Boolean(inputLabel)}
     >
       {!loading && (
         <button onClick={onCancel} type="button" className={styles.closeBtn} aria-label={t('confirm.close')}>
@@ -106,51 +133,85 @@ export default function ConfirmationModal({
         </button>
       )}
 
-      <div className={styles.content}>
-        <div className={styles.iconWrap}>
-          {displayIcon}
-        </div>
-        <h3 className={styles.title}>{resolvedTitle}</h3>
-        <div className={styles.message}>{resolvedMessage}</div>
-      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!loading) handleConfirm()
+        }}
+      >
+        <div className={styles.content}>
+          <div className={styles.iconWrap}>
+            {displayIcon}
+          </div>
+          <h3 className={styles.title}>{resolvedTitle}</h3>
+          <div className={styles.message}>{resolvedMessage}</div>
 
-      <div className={styles.actions}>
-        <button
-          onClick={onCancel}
-          type="button"
-          className={styles.cancelBtn}
-          disabled={loading}
-        >
-          {resolvedCancel}
-        </button>
-        {secondaryText && onSecondary && (
+          {inputLabel && (
+            <div className={styles.inputGroup}>
+              <label className={styles.inputLabel} htmlFor={inputId}>{inputLabel}</label>
+              <input
+                id={inputId}
+                className={styles.input}
+                type="text"
+                placeholder={inputPlaceholder}
+                value={inputValue}
+                onChange={(event) => setInputValue(event.target.value)}
+                disabled={loading}
+              />
+            </div>
+          )}
+
+          {checkboxLabel && (
+            <label className={styles.checkbox} htmlFor={checkboxId}>
+              <input
+                id={checkboxId}
+                type="checkbox"
+                checked={checkboxChecked}
+                onChange={(event) => setCheckboxChecked(event.target.checked)}
+                disabled={loading}
+              />
+              <span>{checkboxLabel}</span>
+            </label>
+          )}
+        </div>
+
+        <div className={styles.actions}>
           <button
-            onClick={onSecondary}
             type="button"
-            className={styles.confirmBtn}
-            style={getVariantStyle(secondaryVariant || variant)}
+            onClick={onCancel}
+            className={styles.cancelBtn}
             disabled={loading}
           >
-            {secondaryText}
+            {resolvedCancel}
           </button>
-        )}
-        <button
-          onClick={onConfirm}
-          type="button"
-          className={styles.confirmBtn}
-          style={modalStyle}
-          disabled={loading}
-        >
-          {loading ? (
-            <span className={styles.loadingLabel}>
-              <Spinner size={14} />
-              {resolvedLoading}
-            </span>
-          ) : (
-            resolvedConfirm
+          {secondaryText && onSecondary && (
+            <button
+              onClick={onSecondary}
+              type="button"
+              className={styles.confirmBtn}
+              style={getVariantStyle(secondaryVariant || variant)}
+              disabled={loading}
+            >
+              {secondaryText}
+            </button>
           )}
-        </button>
-      </div>
+          <button
+            type="submit"
+            className={styles.confirmBtn}
+            style={modalStyle}
+            disabled={loading}
+          >
+            {loading ? (
+              <span className={styles.loadingLabel}>
+                <Spinner size={14} />
+                {resolvedLoading}
+              </span>
+            ) : (
+              resolvedConfirm
+            )}
+          </button>
+        </div>
+      </form>
     </ModalShell>
   )
 }

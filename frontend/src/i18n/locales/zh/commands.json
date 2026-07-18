@@ -262,7 +262,9 @@
     "forkChat": {
       "title": "分叉聊天",
       "message": "从最新消息创建新分支？",
-      "confirm": "分叉"
+      "confirm": "分叉",
+      "nameLabel": "聊天名称（可选）",
+      "namePlaceholder": "留空可使用自动生成的名称"
     },
     "deleteChat": {
       "title": "删除聊天",

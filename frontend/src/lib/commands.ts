@@ -179,9 +179,11 @@ export const COMMANDS: Command[] = [
         title: tc('confirm.forkChat.title'),
         message: tc('confirm.forkChat.message'),
         confirmText: tc('confirm.forkChat.confirm'),
-        onConfirm: async () => {
+        inputLabel: tc('confirm.forkChat.nameLabel'),
+        inputPlaceholder: tc('confirm.forkChat.namePlaceholder'),
+        onConfirm: async (name: string) => {
           try {
-            const newChat = await chatsApi.branch(activeChatId, lastMessage.id)
+            const newChat = await chatsApi.branch(activeChatId, lastMessage.id, name)
             navigate(`/chat/${newChat.id}`)
           } catch {
             useStore.getState().addToast({ type: 'error', message: tc('toast.failedForkChat') })

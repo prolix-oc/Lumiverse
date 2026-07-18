@@ -177,6 +177,7 @@
     "creatingChatCortex": "Creazione chat e preparazione cortex memoria in background…",
     "failedCreateChat": "Creazione chat fallita",
     "failedStartNewChat": "Avvio nuova chat fallito",
+    "failedDeleteChat": "Impossibile eliminare questa chat",
     "failedOpenChat": "Apertura chat fallita",
     "characterImported": "\"{{name}}\" importato",
     "importFailed": "Importazione fallita",
@@ -381,7 +382,9 @@
     "fork": {
       "title": "Dividi chat",
       "message": "Creare un nuovo ramo della chat a questo messaggio? Tutti i messaggi fino ad ora verranno copiati.",
-      "confirm": "Dividi"
+      "confirm": "Dividi",
+      "nameLabel": "Nome della chat (facoltativo)",
+      "namePlaceholder": "Lascia vuoto per usare un nome automatico"
     },
     "delete": {
       "title": "Elimina",
@@ -394,5 +397,11 @@
       "message": "Questo eliminerà definitivamente questo messaggio dalla chat.",
       "confirm": "Elimina"
     }
+  },
+  "newChatConfirm": {
+    "title": "Avvia una nuova chat",
+    "message": "Vuoi davvero avviare una nuova chat?",
+    "confirm": "Avvia chat",
+    "deleteThisChat": "Elimina questa chat"
   }
 }

@@ -432,9 +432,11 @@ export function useMessageCard(message: Message, chatId: string) {
       title: tc('fork.title'),
       message: tc('fork.message'),
       confirmText: tc('fork.confirm'),
-      onConfirm: async () => {
+      inputLabel: tc('fork.nameLabel'),
+      inputPlaceholder: tc('fork.namePlaceholder'),
+      onConfirm: async (name: string) => {
         try {
-          const newChat = await chatsApi.branch(chatId, message.id)
+          const newChat = await chatsApi.branch(chatId, message.id, name)
           navigate(`/chat/${newChat.id}`)
         } catch (err) {
           console.error('[MessageCard] Failed to fork chat:', err)

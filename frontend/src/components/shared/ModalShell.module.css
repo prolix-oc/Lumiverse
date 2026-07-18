@@ -30,6 +30,14 @@
   flex-direction: column;
 }
 
+/* Form-focused dialogs can be taller than the available space once a mobile
+   keyboard is open. Keep their controls reachable instead of clipping them. */
+.scrollable {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 :global([data-glass]) .modal {
   box-shadow: var(--lumiverse-shadow-xl, 0 20px 60px rgba(0, 0, 0, 0.5));
 }

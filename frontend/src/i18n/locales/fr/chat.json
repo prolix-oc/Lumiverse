@@ -177,6 +177,7 @@
     "creatingChatCortex": "Création du chat et préparation du Cortex mémoire en arrière-plan…",
     "failedCreateChat": "Échec de la création du chat",
     "failedStartNewChat": "Échec du démarrage d'un nouveau chat",
+    "failedDeleteChat": "Impossible de supprimer ce chat",
     "failedOpenChat": "Échec de l'ouverture du chat",
     "characterImported": "\"{{name}}\" était importé",
     "importFailed": "Échec de l'importation",
@@ -381,7 +382,9 @@
     "fork": {
       "title": "Bavarder",
       "message": "Créer une nouvelle branche de chat à ce message ? Tous les messages jusqu'à présent seront copiés.",
-      "confirm": "Fourchette"
+      "confirm": "Fourchette",
+      "nameLabel": "Nom du chat (facultatif)",
+      "namePlaceholder": "Laissez vide pour utiliser un nom automatique"
     },
     "delete": {
       "title": "Supprimer",
@@ -394,5 +397,11 @@
       "message": "Cela supprimera définitivement ce message du chat.",
       "confirm": "Supprimer"
     }
+  },
+  "newChatConfirm": {
+    "title": "Démarrer un nouveau chat",
+    "message": "Voulez-vous vraiment démarrer un nouveau chat ?",
+    "confirm": "Démarrer le chat",
+    "deleteThisChat": "Supprimer ce chat"
   }
 }

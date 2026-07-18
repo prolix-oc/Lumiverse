@@ -2651,21 +2651,26 @@ interface CreatedChatBranch {
 }
 
 /** Insert a branch while participating in the caller's current transaction. */
-function createChatBranchRows(userId: string, chat: Chat, msg: Message): CreatedChatBranch {
+function createChatBranchRows(userId: string, chat: Chat, msg: Message, requestedName?: string): CreatedChatBranch {
   const branchId = crypto.randomUUID();
   const newChatId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
 
-  // Branch names: "{baseName} — Branch at #{msgIndex}"
-  const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
-  const baseName = (chat.name || character?.name || "Chat").replace(/\s+—\s+Branch.*$/i, "").replace(/\s+\(branch\s*\d*\)$/i, "");
-  const branchLabel = `${baseName} — Branch at #${msg.index_in_chat}`;
+  const customName = requestedName?.trim();
+  let newName = customName || "";
 
-  // De-duplicate if multiple branches @ same point
-  const existing = getDb()
-    .query("SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND name LIKE ?")
-    .get(userId, `${branchLabel}%`) as { count: number };
-  const newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
+  if (!newName) {
+    // Branch names: "{baseName} — Branch at #{msgIndex}"
+    const character = chat.character_id ? getCharacter(userId, chat.character_id) : null;
+    const baseName = (chat.name || character?.name || "Chat").replace(/\s+—\s+Branch.*$/i, "").replace(/\s+\(branch\s*\d*\)$/i, "");
+    const branchLabel = `${baseName} — Branch at #${msg.index_in_chat}`;
+
+    // De-duplicate automatically named branches at the same point.
+    const existing = getDb()
+      .query("SELECT COUNT(*) as count FROM chats WHERE user_id = ? AND name LIKE ?")
+      .get(userId, `${branchLabel}%`) as { count: number };
+    newName = existing.count > 0 ? `${branchLabel} (${existing.count + 1})` : branchLabel;
+  }
 
   const metadata: Record<string, any> = {
     ...chat.metadata,
@@ -2750,7 +2755,7 @@ function emitCreatedChatBranch(userId: string, created: CreatedChatBranch): Chat
   return forkedChat;
 }
 
-export function branchChat(userId: string, chatId: string, atMessageId: string): Chat | null {
+export function branchChat(userId: string, chatId: string, atMessageId: string, requestedName?: string): Chat | null {
   const chat = getChat(userId, chatId);
   if (!chat) return null;
   const msg = getMessage(userId, atMessageId);
@@ -2759,7 +2764,7 @@ export function branchChat(userId: string, chatId: string, atMessageId: string):
   let created: CreatedChatBranch;
 
   try {
-    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg))();
+    created = getDb().transaction(() => createChatBranchRows(userId, chat, msg, requestedName))();
   } catch (err) {
     console.error("[chats] Branch failed:", err);
     return null;

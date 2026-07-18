@@ -2209,10 +2209,20 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     }
   }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
-  const handleNewChat = useCallback(async () => {
+  const queueCurrentChatDeletion = useCallback(() => {
+    void chatsApi.delete(chatId).catch((err) => {
+      console.error('[InputArea] Failed to delete previous chat after creating a new one:', err)
+      toast.error(t('toast.failedDeleteChat'))
+    })
+  }, [chatId, t])
+
+  const createNewChat = useCallback(async (deleteThisChat: boolean) => {
     // For group chats, open group creator pre-populated with current members
     if (isGroupChat && groupCharacterIds.length > 0) {
-      openModal('groupChatCreator', { initialCharacterIds: [...groupCharacterIds] })
+      openModal('groupChatCreator', {
+        initialCharacterIds: [...groupCharacterIds],
+        ...(deleteThisChat ? { deleteChatIdAfterCreate: chatId } : {}),
+      })
       return
     }
     if (!activeCharacterId) return
@@ -2235,6 +2245,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
               })
               toast.dismiss(toastId)
               navigate(`/chat/${chat.id}`)
+              if (deleteThisChat) queueCurrentChatDeletion()
             } catch (err) {
               toast.dismiss(toastId)
               console.error('[InputArea] Failed to create chat:', err)
@@ -2253,12 +2264,25 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       toast.dismiss(creationToastId)
       creationToastId = null
       navigate(`/chat/${chat.id}`)
+      if (deleteThisChat) queueCurrentChatDeletion()
     } catch (err) {
       if (creationToastId) toast.dismiss(creationToastId)
       console.error('[InputArea] Failed to start new chat:', err)
       toast.error(t('toast.failedStartNewChat'))
     }
-  }, [activeCharacterId, isGroupChat, groupCharacterIds, navigate, openModal, t])
+  }, [activeCharacterId, chatId, isGroupChat, groupCharacterIds, navigate, openModal, queueCurrentChatDeletion, t])
+
+  const handleNewChat = useCallback(() => {
+    openModal('confirm', {
+      title: t('newChatConfirm.title'),
+      message: t('newChatConfirm.message'),
+      confirmText: t('newChatConfirm.confirm'),
+      checkboxLabel: t('newChatConfirm.deleteThisChat'),
+      onConfirm: (_inputValue: string, deleteThisChat: boolean) => {
+        void createNewChat(deleteThisChat)
+      },
+    })
+  }, [createNewChat, openModal, t])
 
   const handleConvertToGroup = useCallback(async () => {
     if (!chatId || !activeCharacterId || isGroupChat) return

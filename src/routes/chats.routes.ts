@@ -563,7 +563,8 @@ app.post("/:id/branch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.message_id) return c.json({ error: "message_id is required" }, 400);
-  const branch = svc.branchChat(userId, c.req.param("id"), body.message_id);
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined;
+  const branch = svc.branchChat(userId, c.req.param("id"), body.message_id, name);
   if (!branch) return c.json({ error: "Not found or invalid message" }, 404);
   return c.json(branch, 201);
 });

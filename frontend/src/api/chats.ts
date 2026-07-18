@@ -6,6 +6,11 @@ import type {
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
+/** Use the user's local date and time so automatically named chats are easy to distinguish. */
+export function createTimestampedChatName(now = new Date()): string {
+  return now.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
+}
+
 export const chatsApi = {
   list(params?: { characterId?: string; limit?: number; offset?: number }) {
     return get<PaginatedResult<Chat>>('/chats', params)
@@ -40,7 +45,10 @@ export const chatsApi = {
   },
 
   create(input: CreateChatInput) {
-    return post<Chat>('/chats', input)
+    return post<Chat>('/chats', {
+      ...input,
+      name: input.name?.trim() || createTimestampedChatName(),
+    })
   },
 
   /**
@@ -88,7 +96,10 @@ export const chatsApi = {
   },
 
   createGroup(input: CreateGroupChatInput) {
-    return post<Chat>('/chats/group', input)
+    return post<Chat>('/chats/group', {
+      ...input,
+      name: input.name?.trim() || createTimestampedChatName(),
+    })
   },
 
   convertToGroup(id: string) {
@@ -128,8 +139,11 @@ export const chatsApi = {
     )
   },
 
-  branch(chatId: string, messageId: string) {
-    return post<Chat>(`/chats/${chatId}/branch`, { message_id: messageId })
+  branch(chatId: string, messageId: string, name?: string) {
+    return post<Chat>(`/chats/${chatId}/branch`, {
+      message_id: messageId,
+      ...(name?.trim() ? { name: name.trim() } : {}),
+    })
   },
 
   getTree(chatId: string) {

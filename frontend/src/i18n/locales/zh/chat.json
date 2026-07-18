@@ -182,6 +182,7 @@
     "creatingChatCortex": "正在创建聊天并在后台准备记忆皮层…",
     "failedCreateChat": "创建聊天失败",
     "failedStartNewChat": "开始新聊天失败",
+    "failedDeleteChat": "删除此聊天失败",
     "failedOpenChat": "打开聊天失败",
     "characterImported": "已导入「{{name}}」",
     "importFailed": "导入失败",
@@ -389,7 +390,9 @@
     "fork": {
       "title": "分叉聊天",
       "message": "从此消息创建新的聊天分支？将复制此点之前的所有消息。",
-      "confirm": "分叉"
+      "confirm": "分叉",
+      "nameLabel": "聊天名称（可选）",
+      "namePlaceholder": "留空可使用自动生成的名称"
     },
     "delete": {
       "title": "删除",
@@ -402,5 +405,11 @@
       "message": "这将永久从聊天中移除此消息。",
       "confirm": "删除"
     }
+  },
+  "newChatConfirm": {
+    "title": "开始新聊天",
+    "message": "确定要开始新聊天吗？",
+    "confirm": "开始新聊天",
+    "deleteThisChat": "删除此聊天"
   }
 }

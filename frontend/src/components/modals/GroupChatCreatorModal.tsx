@@ -34,7 +34,10 @@ export default function GroupChatCreatorModal() {
 
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
-  const modalProps = useStore((s) => s.modalProps) as { initialCharacterIds?: string[] } | null
+  const modalProps = useStore((s) => s.modalProps) as {
+    initialCharacterIds?: string[]
+    deleteChatIdAfterCreate?: string
+  } | null
   const characters = useStore((s) => s.characters)
   const [step, setStep] = useState<Step>('characters')
   const [selectedIds, setSelectedIds] = useState<string[]>(modalProps?.initialCharacterIds ?? [])
@@ -186,12 +189,17 @@ export default function GroupChatCreatorModal() {
       }
       closeModal()
       navigate(`/chat/${chat.id}`)
+      if (modalProps?.deleteChatIdAfterCreate) {
+        void chatsApi.delete(modalProps.deleteChatIdAfterCreate).catch((err) => {
+          console.error('[GroupChatCreator] Failed to delete previous chat after creating a new one:', err)
+        })
+      }
     } catch (err) {
       console.error('[GroupChatCreator] Failed to create group chat:', err)
     } finally {
       setCreating(false)
     }
-  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, navigate])
+  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, modalProps?.deleteChatIdAfterCreate, navigate])
 
   const canProceed =
     step === 'characters'

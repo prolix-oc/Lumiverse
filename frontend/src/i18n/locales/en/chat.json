@@ -208,6 +208,7 @@
     "creatingChatCortex": "Creating chat and preparing Memory Cortex in the background…",
     "failedCreateChat": "Failed to create chat",
     "failedStartNewChat": "Failed to start new chat",
+    "failedDeleteChat": "Failed to delete this chat",
     "failedOpenChat": "Failed to open chat",
     "characterImported": "\"{{name}}\" was imported",
     "importFailed": "Import failed",
@@ -423,7 +424,9 @@
     "fork": {
       "title": "Fork Chat",
       "message": "Create a new chat branch at this message? All messages up to this point will be copied.",
-      "confirm": "Fork"
+      "confirm": "Fork",
+      "nameLabel": "Chat name (optional)",
+      "namePlaceholder": "Leave blank to use an automatic name"
     },
     "delete": {
       "title": "Delete",
@@ -436,5 +439,11 @@
       "message": "This will permanently remove this message from the chat.",
       "confirm": "Delete"
     }
+  },
+  "newChatConfirm": {
+    "title": "Start New Chat",
+    "message": "Are you sure you want to start a new chat?",
+    "confirm": "Start New Chat",
+    "deleteThisChat": "Delete This Chat"
   }
 }

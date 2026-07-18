@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { claimAssociativeRegexAction, claimAssociativeRegexActions } from "./chats.service";
+import { branchChat, claimAssociativeRegexAction, claimAssociativeRegexActions } from "./chats.service";
 
 describe("associative regex action claims", () => {
   beforeAll(() => {
@@ -222,6 +222,12 @@ describe("associative regex action claims", () => {
       .query("SELECT is_user, content FROM messages WHERE chat_id = ? ORDER BY index_in_chat")
       .all(result.forkedChat!.id);
     expect(forkMessages).toEqual([{ is_user: 0, content: "Choose" }]);
+  });
+
+  test("uses an explicitly requested name when branching a chat", () => {
+    const branch = branchChat("user-1", "chat-1", "message-1", "  Hidden Passage  ");
+
+    expect(branch?.name).toBe("Hidden Passage");
   });
 
   test("rejects fork effects sourced from a user-role message", () => {
