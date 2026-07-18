@@ -264,6 +264,7 @@ export default function ExpandedTextEditor({
   const isComposingRef = useRef(false)
   const findModeRef = useRef<'find' | 'replace' | null>(null)
   const findQueryRef = useRef('')
+  const lastScrolledMatchNavigationRequestRef = useRef(0)
   const macroSearchRef = useRef('')
   const showMacrosRef = useRef(false)
   onCloseRef.current = onClose
@@ -274,6 +275,7 @@ export default function ExpandedTextEditor({
   const [findQuery, setFindQuery] = useState('')
   const [replacement, setReplacement] = useState('')
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0)
+  const [matchNavigationRequest, setMatchNavigationRequest] = useState(0)
   const [selfLoadedMacros, setSelfLoadedMacros] = useState<MacroGroup[] | null>(
     () => (macros || markdownOnly) ? null : getAvailableMacros(),
   )
@@ -367,6 +369,7 @@ export default function ExpandedTextEditor({
     if (findMatches.length === 0) return
     const normalized = (nextIndex + findMatches.length) % findMatches.length
     setCurrentMatchIndex(normalized)
+    setMatchNavigationRequest((request) => request + 1)
     setMatchSelection(findMatches[normalized])
   }, [findMatches, setMatchSelection])
 
@@ -411,6 +414,10 @@ export default function ExpandedTextEditor({
   }, [findMatches.length])
 
   useEffect(() => {
+    // Editing text or the query recalculates the matches. Keep the viewport in
+    // place for those updates; only an explicit next/previous navigation moves it.
+    if (matchNavigationRequest === lastScrolledMatchNavigationRequestRef.current) return
+    lastScrolledMatchNavigationRequestRef.current = matchNavigationRequest
     if (findMatches.length === 0) return
     const frame = requestAnimationFrame(() => {
       dialogRef.current
@@ -418,7 +425,7 @@ export default function ExpandedTextEditor({
         ?.scrollIntoView({ block: 'center' })
     })
     return () => cancelAnimationFrame(frame)
-  }, [currentMatchIndex, findMatches])
+  }, [currentMatchIndex, findMatches, matchNavigationRequest])
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current
