@@ -31,6 +31,8 @@ import { Toggle } from '@/components/shared/Toggle'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { generateUUID } from '@/lib/uuid'
 import type {
+  PromptBlockPlacement,
+  PromptBlockPlacementBinding,
   PromptVariableDef,
   PromptVariableOption,
   PromptVariableType,
@@ -44,6 +46,9 @@ import css from './PromptVariablesEditor.module.css'
 export interface VariablesEditorProps {
   variables: PromptVariableDef[]
   onChange: (vars: PromptVariableDef[]) => void
+  placementBinding?: PromptBlockPlacementBinding
+  fallbackPlacement: PromptBlockPlacement
+  onPlacementBindingChange: (binding: PromptBlockPlacementBinding | undefined) => void
 }
 
 const TYPE_ACCENT_CLASS: Record<PromptVariableType, string> = {
@@ -206,7 +211,13 @@ function coerceVariableType(
 // VariablesEditor — accordion + list
 // ============================================================================
 
-export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
+export function VariablesEditor({
+  variables,
+  onChange,
+  placementBinding,
+  fallbackPlacement,
+  onPlacementBindingChange,
+}: VariablesEditorProps) {
   const { t } = useTranslation('panels')
   const [expanded, setExpanded] = useState(variables.length > 0)
   const sensors = useSensors(
@@ -309,7 +320,148 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
           </DndContext>
         )
       )}
+
+      <PlacementBindingEditor
+        variables={variables}
+        binding={placementBinding}
+        fallbackPlacement={fallbackPlacement}
+        onChange={onPlacementBindingChange}
+      />
     </div>
+  )
+}
+
+interface PlacementBindingEditorProps {
+  variables: PromptVariableDef[]
+  binding?: PromptBlockPlacementBinding
+  fallbackPlacement: PromptBlockPlacement
+  onChange: (binding: PromptBlockPlacementBinding | undefined) => void
+}
+
+function clonePlacement(placement: PromptBlockPlacement): PromptBlockPlacement {
+  return { role: placement.role, position: placement.position, depth: placement.depth }
+}
+
+function buildPlacementBinding(
+  variable: Extract<PromptVariableDef, { type: 'select' }>,
+  fallbackPlacement: PromptBlockPlacement,
+  existing?: PromptBlockPlacementBinding,
+): PromptBlockPlacementBinding {
+  return {
+    variableId: variable.id,
+    options: Object.fromEntries(
+      variable.options.map((option) => [
+        option.id,
+        clonePlacement(existing?.options[option.id] ?? fallbackPlacement),
+      ]),
+    ),
+  }
+}
+
+/** Creator-side configuration for a select variable that changes this block's placement. */
+function PlacementBindingEditor({
+  variables,
+  binding,
+  fallbackPlacement,
+  onChange,
+}: PlacementBindingEditorProps) {
+  const { t } = useTranslation('panels')
+  const selectors = variables.filter(
+    (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => variable.type === 'select',
+  )
+  const selected = selectors.find((variable) => variable.id === binding?.variableId) ?? null
+
+  const enable = () => {
+    const selector = selectors[0]
+    if (!selector) return
+    onChange(buildPlacementBinding(selector, fallbackPlacement))
+  }
+
+  const changeSelector = (variableId: string) => {
+    const selector = selectors.find((variable) => variable.id === variableId)
+    if (!selector) return
+    onChange(buildPlacementBinding(selector, fallbackPlacement, binding))
+  }
+
+  const updateOption = (optionId: string, patch: Partial<PromptBlockPlacement>) => {
+    if (!selected || !binding) return
+    const current = binding.options[optionId] ?? fallbackPlacement
+    const next = { ...current, ...patch }
+    const isAppend = next.role === 'user_append' || next.role === 'assistant_append'
+    if (!isAppend && next.position !== 'in_history') next.depth = 0
+    onChange({
+      ...binding,
+      options: { ...binding.options, [optionId]: next },
+    })
+  }
+
+  return (
+    <section className={css.placementBinding}>
+      <div className={css.placementHeader}>
+        <div>
+          <div className={css.placementTitle}>{t('promptVariablesEditor.placementTitle')}</div>
+          <p className={css.placementHint}>{t('promptVariablesEditor.placementHint')}</p>
+        </div>
+        <Toggle.Switch checked={!!selected} onChange={(enabled) => (enabled ? enable() : onChange(undefined))} disabled={selectors.length === 0} />
+      </div>
+
+      {selectors.length === 0 ? (
+        <p className={css.placementUnavailable}>{t('promptVariablesEditor.placementUnavailable')}</p>
+      ) : selected && binding ? (
+        <div className={css.placementBody}>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('promptVariablesEditor.placementVariable')}</span>
+            <select className={css.select} value={selected.id} onChange={(event) => changeSelector(event.target.value)}>
+              {selectors.map((variable) => (
+                <option key={variable.id} value={variable.id}>
+                  {variable.label || variable.name || t('promptVariablesEditor.placementUntitled')}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selected.options.length === 0 ? (
+            <p className={css.placementUnavailable}>{t('promptVariablesEditor.placementNoOptions')}</p>
+          ) : (
+            <div className={css.placementOptions}>
+              {selected.options.map((option) => {
+                const placement = binding.options[option.id] ?? fallbackPlacement
+                const showDepth = placement.position === 'in_history' || placement.role === 'user_append' || placement.role === 'assistant_append'
+                return (
+                  <div key={option.id} className={css.placementOption}>
+                    <span className={css.placementOptionName}>{option.label || option.id}</span>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('blockEditor.role')}</span>
+                      <select className={css.select} value={placement.role} onChange={(event) => updateOption(option.id, { role: event.target.value as PromptBlockPlacement['role'] })}>
+                        <option value="system">{t('blockEditor.roles.system')}</option>
+                        <option value="user">{t('blockEditor.roles.user')}</option>
+                        <option value="assistant">{t('blockEditor.roles.assistant')}</option>
+                        <option value="user_append">{t('blockEditor.roles.user_append')}</option>
+                        <option value="assistant_append">{t('blockEditor.roles.assistant_append')}</option>
+                      </select>
+                    </label>
+                    <label className={css.field}>
+                      <span className={css.fieldLabel}>{t('blockEditor.position')}</span>
+                      <select className={css.select} value={placement.position} onChange={(event) => updateOption(option.id, { position: event.target.value as PromptBlockPlacement['position'] })}>
+                        <option value="pre_history">{t('blockEditor.positions.pre_history')}</option>
+                        <option value="post_history">{t('blockEditor.positions.post_history')}</option>
+                        <option value="in_history">{t('blockEditor.positions.in_history')}</option>
+                      </select>
+                    </label>
+                    {showDepth && (
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{t('blockEditor.depth')}</span>
+                        <NumberStepper value={placement.depth} min={0} onChange={(value) => updateOption(option.id, { depth: value ?? 0 })} />
+                      </label>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
   )
 }
 

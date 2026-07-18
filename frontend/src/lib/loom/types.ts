@@ -78,6 +78,18 @@ export type PromptVariableType = PromptVariableDef['type']
 export type PromptVariableValue = string | number | string[]
 export type PromptVariableValues = Record<string /* blockId */, Record<string /* varName */, PromptVariableValue>>
 
+export interface PromptBlockPlacement {
+  role: 'system' | 'user' | 'assistant' | LoomInjectTag
+  position: 'pre_history' | 'post_history' | 'in_history'
+  depth: number
+}
+
+/** A select variable on this block can choose one of these insertion profiles. */
+export interface PromptBlockPlacementBinding {
+  variableId: string
+  options: Record<string /* select option id */, PromptBlockPlacement>
+}
+
 export interface PromptBlock {
   id: string
   name: string
@@ -94,6 +106,7 @@ export interface PromptBlock {
   group?: string | null
   categoryMode?: 'radio' | 'checkbox' | null
   variables?: PromptVariableDef[]
+  placementBinding?: PromptBlockPlacementBinding
   /** When uploaded to LumiHub, content is extracted into a private sidecar block. */
   sealed?: boolean
   sealedKey?: string

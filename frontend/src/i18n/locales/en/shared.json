@@ -20,6 +20,8 @@
     "untitledBlock": "Untitled block",
     "variableCount_one": "{{count}} variable",
     "variableCount_other": "{{count}} variables",
+    "placementSummary": "Placement: {{role}} · {{position}}",
+    "placementSummaryWithDepth": "Placement: {{role}} · {{position}} · depth {{depth}}",
     "resetAll": "Reset all",
     "saving": "Saving…",
     "resetToDefault": "Reset to default"

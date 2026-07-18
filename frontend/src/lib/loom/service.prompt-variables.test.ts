@@ -3,6 +3,7 @@ import {
   normalizeCategoryBlockState,
   pruneOrphanPromptVariables,
   reconcilePromptVariableValues,
+  resolvePromptBlockPlacements,
   toggleBlockWithCategoryRules,
   validatePromptVariableSchema,
 } from './service'
@@ -381,5 +382,37 @@ describe('Loom prompt-variable schema and value reconciliation', () => {
     const switched = toggleBlockWithCategoryRules(normalized, 'second')
     expect(switched.filter((entry) => entry.group === 'category' && entry.enabled).map((entry) => entry.id))
       .toEqual(['second'])
+  })
+})
+
+describe('resolvePromptBlockPlacements', () => {
+  test('projects the saved dropdown selection for frontend placement displays', () => {
+    const selector: PromptVariableDef = {
+      id: 'placement-target',
+      name: 'target',
+      label: 'Target',
+      type: 'select',
+      defaultValue: 'normal',
+      options: [
+        { id: 'normal', label: 'Normal', value: '' },
+        { id: 'frontier', label: 'Frontier', value: '' },
+      ],
+    }
+    const configured = block('placement', [selector])
+    configured.placementBinding = {
+      variableId: selector.id,
+      options: {
+        normal: { role: 'system', position: 'pre_history', depth: 0 },
+        frontier: { role: 'user', position: 'in_history', depth: 2 },
+      },
+    }
+
+    const [effective] = resolvePromptBlockPlacements(
+      [configured],
+      { placement: { target: 'frontier' } },
+    )
+
+    expect(effective).toMatchObject({ role: 'user', position: 'in_history', depth: 2 })
+    expect(configured).toMatchObject({ role: 'system', position: 'pre_history', depth: 0 })
   })
 })

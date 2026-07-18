@@ -128,6 +128,23 @@ export type PromptVariableType = PromptVariableDef['type'];
 export type PromptVariableValue = string | number | string[];
 export type PromptVariableValues = Record<string /* blockId */, Record<string /* varName */, PromptVariableValue>>;
 
+/** A complete insertion configuration that can be selected by a prompt variable. */
+export interface PromptBlockPlacement {
+  role: 'system' | 'user' | 'assistant' | 'user_append' | 'assistant_append';
+  position: 'pre_history' | 'post_history' | 'in_history';
+  depth: number;
+}
+
+/**
+ * Lets a select variable declared on this block choose its effective insertion
+ * configuration. The variable id is used instead of its name so renaming a
+ * variable cannot silently break the binding.
+ */
+export interface PromptBlockPlacementBinding {
+  variableId: string;
+  options: Record<string /* select option id */, PromptBlockPlacement>;
+}
+
 export interface PromptBlock {
   id: string;
   name: string;
@@ -144,6 +161,7 @@ export interface PromptBlock {
   group: string | null;
   categoryMode?: 'radio' | 'checkbox' | null;
   variables?: PromptVariableDef[];
+  placementBinding?: PromptBlockPlacementBinding;
   sealed?: boolean;
   sealedKey?: string;
   sealedSource?: string;

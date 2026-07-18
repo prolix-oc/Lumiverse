@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { evaluate, buildEnv, resolveGroupCharacterNames, resolvePersonaPronouns, registry, initMacros } from "../macros";
+import { evaluate, buildEnv, resolveGroupCharacterNames, resolvePersonaPronouns, registry, initMacros, withPromptBlockContext } from "../macros";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type { Chat } from "../types/chat";
@@ -14,6 +14,7 @@ import * as connectionsSvc from "../services/connections.service";
 import * as memoryCortex from "../services/memory-cortex";
 import {
   normalizePromptBlockText,
+  resolvePromptBlockPlacements,
   populateLumiaLoomContext,
   resolvePromptVariables,
 } from "../services/prompt-assembly.service";
@@ -38,6 +39,8 @@ app.post("/resolve", async (c) => {
     user_input?: string;
     dynamic_macros?: Record<string, string>;
     prompt_blocks?: PromptBlock[];
+    /** The prompt block whose content is being previewed. */
+    prompt_block_id?: string;
     prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
     // When true, leading/trailing whitespace is stripped from the resolved
     // text. This mirrors the per-block trim the assembly applies to a prompt
@@ -56,7 +59,7 @@ app.post("/resolve", async (c) => {
   const env = await buildEnvFromIds(userId, body);
   seedPromptVariablesForPreview(env, body);
 
-  const result = await evaluate(body.template, env, registry);
+  const result = await evaluateWithPromptBlockContext(body.template, env, body);
   return c.json({
     text: body.trim ? normalizePromptBlockText(result.text) : result.text,
     diagnostics: result.diagnostics,
@@ -82,6 +85,8 @@ app.post("/resolve-batch", async (c) => {
     user_input?: string;
     dynamic_macros?: Record<string, string>;
     prompt_blocks?: PromptBlock[];
+    /** Block id for each template key when batch-previewing prompt blocks. */
+    prompt_block_ids?: Record<string, string>;
     prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
   }>();
 
@@ -113,7 +118,11 @@ app.post("/resolve-batch", async (c) => {
       cacheable[key] = true;
       continue;
     }
-    const result = await evaluate(template, env, registry);
+    const result = await evaluateWithPromptBlockContext(template, env, {
+      prompt_blocks: body.prompt_blocks,
+      prompt_block_id: body.prompt_block_ids?.[key],
+      prompt_variables: body.prompt_variables,
+    });
     resolved[key] = result.text;
     touchedVars[key] = Array.from(result.touchedVars);
     cacheable[key] = result.cacheable;
@@ -424,6 +433,24 @@ function seedPromptVariablesForPreview(env: MacroEnv, body: {
     updated_at: 0,
   } satisfies Preset;
   resolvePromptVariables(env, body.prompt_blocks, preset);
+}
+
+async function evaluateWithPromptBlockContext(
+  template: string,
+  env: MacroEnv,
+  body: {
+    prompt_blocks?: PromptBlock[];
+    prompt_block_id?: string;
+    prompt_variables?: Record<string, Record<string, PromptVariableValue>>;
+  },
+) {
+  if (!body.prompt_blocks?.length) return evaluate(template, env, registry);
+  const effectiveBlocks = resolvePromptBlockPlacements(body.prompt_blocks, {
+    metadata: { promptVariables: body.prompt_variables ?? {} },
+  });
+  const block = effectiveBlocks.find((candidate) => candidate.id === body.prompt_block_id);
+  if (!block) return evaluate(template, env, registry);
+  return withPromptBlockContext(env, block, () => evaluate(template, env, registry));
 }
 
 export { app as macrosRoutes };

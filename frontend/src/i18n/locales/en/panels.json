@@ -2145,7 +2145,13 @@
     "max": "Max",
     "step": "Step",
     "descriptionOptional": "Description (optional)",
-    "descriptionPlaceholder": "Hint shown to end users configuring this variable"
+    "descriptionPlaceholder": "Hint shown to end users configuring this variable",
+    "placementTitle": "Placement selector",
+    "placementHint": "Let one dropdown option choose this block's role, prompt position, and optional history depth.",
+    "placementUnavailable": "Add a Dropdown variable before enabling placement selection.",
+    "placementVariable": "Controlling dropdown",
+    "placementUntitled": "Untitled dropdown",
+    "placementNoOptions": "Add options to this dropdown to configure their placements."
   },
   "councilManager": {
     "toast": {

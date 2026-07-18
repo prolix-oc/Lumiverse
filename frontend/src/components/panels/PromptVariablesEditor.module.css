@@ -238,6 +238,71 @@
   color: var(--lumiverse-text-dim);
 }
 
+/* ---- Placement binding (select variable → block insertion profile) ---- */
+
+.placementBinding {
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+}
+
+.placementHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.placementTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.placementHint,
+.placementUnavailable {
+  margin: 3px 0 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+}
+
+.placementBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.placementOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.placementOption {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) repeat(3, minmax(105px, 1fr));
+  align-items: end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 7px;
+  background: var(--lumiverse-bg-darker);
+}
+
+.placementOptionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--lumiverse-text);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  padding-bottom: 8px;
+}
+
 /* ---- Switch default control ---- */
 
 .switchToggleRow {
@@ -506,5 +571,11 @@
   .colHalf,
   .colThird {
     grid-column: span 12;
+  }
+  .placementOption {
+    grid-template-columns: 1fr;
+  }
+  .placementOptionName {
+    padding-bottom: 0;
   }
 }

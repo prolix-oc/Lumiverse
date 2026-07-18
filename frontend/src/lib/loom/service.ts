@@ -2,8 +2,10 @@ import type { PromptBlockDTO, PromptVariableDefDTO, PromptVariableOptionDTO, Pro
 import type { Preset, CreatePresetInput, UpdatePresetInput, ProviderInfo } from '@/types/api'
 import type {
   PromptBlock,
+  PromptBlockPlacement,
   PromptVariableValue,
   PromptVariableDef,
+  PromptVariableValues,
   LoomPreset,
   LoomRegistryEntry,
   LoomConnectionProfile,
@@ -63,6 +65,66 @@ export function createMarkerBlock(markerType: string, name?: string): PromptBloc
     marker: markerType,
     content: '',
     isLocked: isStructural,
+  })
+}
+
+function isPromptBlockPlacement(value: unknown): value is PromptBlockPlacement {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const placement = value as Partial<PromptBlockPlacement>
+  return (
+    (placement.role === 'system' || placement.role === 'user' || placement.role === 'assistant' || placement.role === 'user_append' || placement.role === 'assistant_append')
+    && (placement.position === 'pre_history' || placement.position === 'post_history' || placement.position === 'in_history')
+    && typeof placement.depth === 'number'
+    && Number.isFinite(placement.depth)
+    && placement.depth >= 0
+  )
+}
+
+/**
+ * Project select-variable placement bindings for UI surfaces that need to
+ * display the same role/position/depth the prompt assembler will use. This is
+ * read-only and leaves each preset block's persisted fallback unchanged.
+ */
+export function resolvePromptBlockPlacements(
+  blocks: PromptBlock[],
+  values: PromptVariableValues,
+): PromptBlock[] {
+  return blocks.map((block) => {
+    const binding = block.placementBinding
+    if (
+      !binding
+      || typeof binding.variableId !== 'string'
+      || !binding.variableId
+      || !binding.options
+      || typeof binding.options !== 'object'
+      || Array.isArray(binding.options)
+    ) return block
+
+    const selector = block.variables?.find(
+      (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => (
+        variable.id === binding.variableId && variable.type === 'select'
+      ),
+    )
+    if (!selector) return block
+
+    const validIds = new Set(selector.options.map((option) => option.id))
+    const configured = values[block.id]?.[selector.name]
+    const fallback = validIds.has(selector.defaultValue)
+      ? selector.defaultValue
+      : selector.options[0]?.id ?? ''
+    const selectedId = typeof configured === 'string' && validIds.has(configured)
+      ? configured
+      : fallback
+    if (!selectedId || !Object.prototype.hasOwnProperty.call(binding.options, selectedId)) return block
+
+    const placement = binding.options[selectedId]
+    if (!isPromptBlockPlacement(placement)) return block
+    return {
+      ...block,
+      role: placement.role,
+      position: placement.position,
+      depth: Math.floor(placement.depth),
+    }
   })
 }
 
@@ -717,6 +779,7 @@ const PROMPT_BLOCK_IDENTITY_KEYS = [
   'characterTagTrigger',
   'group',
   'categoryMode',
+  'placementBinding',
 ] as const
 
 function sameNativePromptBlockOccurrence(previous: PromptBlock, next: PromptBlock): boolean {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptVariableValue } from "../types/preset";
+import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptBlockPlacement, PromptVariableValue } from "../types/preset";
 import { PresetRevisionConflictError } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
@@ -436,6 +436,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
     ? input.position
     : "pre_history";
   const characterTagTrigger = sanitizePromptBlockCharacterTagTrigger(input.characterTagTrigger);
+  const placementBinding = normalizePromptBlockPlacementBinding(input.placementBinding);
   return {
     id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
     name: typeof input.name === "string" && input.name.trim() ? input.name : "New Chat",
@@ -454,7 +455,37 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
       ? input.categoryMode
       : null,
     ...(Array.isArray(input.variables) ? { variables: input.variables } : {}),
+    ...(placementBinding ? { placementBinding } : {}),
   };
+}
+
+function normalizePromptBlockPlacementBinding(
+  value: unknown,
+): PromptBlock["placementBinding"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as { variableId?: unknown; options?: unknown };
+  if (typeof raw.variableId !== "string" || !raw.variableId.trim()) return undefined;
+  if (!raw.options || typeof raw.options !== "object" || Array.isArray(raw.options)) return undefined;
+
+  const options: Record<string, PromptBlockPlacement> = {};
+  for (const [optionId, candidate] of Object.entries(raw.options as Record<string, unknown>)) {
+    if (!optionId.trim() || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const placement = candidate as Partial<PromptBlockPlacement>;
+    if (
+      (placement.role !== "system" && placement.role !== "user" && placement.role !== "assistant" && placement.role !== "user_append" && placement.role !== "assistant_append") ||
+      (placement.position !== "pre_history" && placement.position !== "post_history" && placement.position !== "in_history") ||
+      typeof placement.depth !== "number" || !Number.isFinite(placement.depth) || placement.depth < 0
+    ) {
+      continue;
+    }
+    options[optionId] = {
+      role: placement.role,
+      position: placement.position,
+      depth: Math.floor(placement.depth),
+    };
+  }
+  if (Object.keys(options).length === 0) return undefined;
+  return { variableId: raw.variableId.trim(), options };
 }
 
 export function normalizePromptBlocks(blocks: PromptBlock[]): PromptBlock[] {

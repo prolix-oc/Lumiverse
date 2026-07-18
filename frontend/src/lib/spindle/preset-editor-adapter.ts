@@ -47,6 +47,7 @@ const PUBLIC_VARIABLE_KEYS = [
 const PUBLIC_OPTION_KEYS = ['id', 'label', 'value'] as const
 
 const HOST_BLOCK_FIELDS = [
+  'placementBinding',
   'sealed',
   'sealedKey',
   'sealedSource',

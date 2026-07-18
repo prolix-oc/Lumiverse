@@ -65,7 +65,7 @@ import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
-import { computeGroups, createBlock, createMarkerBlock } from '@/lib/loom/service'
+import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
   PROMPT_TEMPLATES,
@@ -76,7 +76,7 @@ import {
   DEFAULT_COMPLETION_SETTINGS,
   DEFAULT_ADVANCED_SETTINGS,
 } from '@/lib/loom/constants'
-import type { PromptBlock, PromptVariableDef, PromptVariableValues, LoomConnectionProfile, SamplerParam, MacroGroup, CategoryGroup, LoomPreset } from '@/lib/loom/types'
+import type { PromptBlock, PromptBlockPlacement, PromptBlockPlacementBinding, PromptVariableDef, PromptVariableValues, LoomConnectionProfile, SamplerParam, MacroGroup, CategoryGroup, LoomPreset } from '@/lib/loom/types'
 import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import { PromptVariablesModal } from '@/components/shared/PromptVariablesModal'
 import { VariablesEditor } from './PromptVariablesEditor'
@@ -301,6 +301,7 @@ function SortableCategoryItem({
 
 interface SortableBlockItemProps {
   block: PromptBlock
+  effectiveRole?: PromptBlock['role']
   onEdit: (block: PromptBlock) => void
   onDelete: (id: string) => void
   onToggle: (id: string) => void
@@ -308,7 +309,7 @@ interface SortableBlockItemProps {
   dragDisabled?: boolean
 }
 
-function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
+function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
   const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
@@ -316,6 +317,7 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDi
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
   const preview = block.content ? block.content.substring(0, 50) + (block.content.length > 50 ? '...' : '') : ''
+  const displayedRole = effectiveRole ?? block.role
 
   return (
     <div
@@ -341,7 +343,7 @@ function SortableBlockItem({ block, onEdit, onDelete, onToggle, indented, dragDi
           </span>
           <span className={s.blockMetaRow}>
             {!isMarker && (
-              <span className={clsx(s.badge, ROLE_BADGES[block.role] || s.badgeSystem)}>{ROLE_DISPLAY_LABELS[block.role] || block.role}</span>
+              <span className={clsx(s.badge, ROLE_BADGES[displayedRole] || s.badgeSystem)}>{ROLE_DISPLAY_LABELS[displayedRole] || displayedRole}</span>
             )}
             {isMarker && (
               <span className={clsx(s.badge, s.badgeMarker)}>{t('block.marker')}</span>
@@ -386,6 +388,7 @@ interface TrustedMacroPreviewControlsProps {
   position: PromptBlock['position']
   depth: number
   variables: PromptVariableDef[]
+  placementBinding?: PromptBlockPlacementBinding
 }
 
 function TrustedMacroPreviewControls({
@@ -397,6 +400,7 @@ function TrustedMacroPreviewControls({
   position,
   depth,
   variables,
+  placementBinding,
 }: TrustedMacroPreviewControlsProps) {
   const { t } = useLb()
   const [showPreview, setShowPreview] = useState(false)
@@ -427,13 +431,14 @@ function TrustedMacroPreviewControls({
       const isAppend = role === 'user_append' || role === 'assistant_append'
       const previewBlocks = blocks.map((candidate) =>
         candidate.id === blockId
-          ? { ...candidate, content, role, position, depth, variables, enabled: true }
+          ? { ...candidate, content, role, position, depth, variables, placementBinding, enabled: true }
           : candidate,
       )
       resolveMacrosApi({
         template: content,
         trim: !isAppend,
         prompt_blocks: previewBlocks,
+        prompt_block_id: blockId,
         prompt_variables: promptVariables,
         ...(activeChatId ? { chat_id: activeChatId } : {}),
         ...(activePersonaId ? { persona_id: activePersonaId } : {}),
@@ -476,6 +481,7 @@ function TrustedMacroPreviewControls({
     role,
     t,
     variables,
+    placementBinding,
     showPreview,
   ])
 
@@ -530,6 +536,35 @@ interface BlockEditorProps {
   trustedHostFeatures?: boolean
 }
 
+function cleanPlacementBinding(
+  binding: PromptBlockPlacementBinding | undefined,
+  variables: PromptVariableDef[],
+  fallback: PromptBlockPlacement,
+): PromptBlockPlacementBinding | undefined {
+  if (!binding) return undefined
+  const selector = variables.find(
+    (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => (
+      variable.id === binding.variableId && variable.type === 'select'
+    ),
+  )
+  if (!selector || selector.options.length === 0) return undefined
+  const validRoles = new Set<PromptBlockPlacement['role']>(['system', 'user', 'assistant', 'user_append', 'assistant_append'])
+  const validPositions = new Set<PromptBlockPlacement['position']>(['pre_history', 'post_history', 'in_history'])
+  const options: PromptBlockPlacementBinding['options'] = {}
+  for (const option of selector.options) {
+    const raw = binding.options[option.id]
+    const placement = raw
+      && validRoles.has(raw.role)
+      && validPositions.has(raw.position)
+      && Number.isFinite(raw.depth)
+      && raw.depth >= 0
+      ? { role: raw.role, position: raw.position, depth: Math.floor(raw.depth) }
+      : { ...fallback }
+    options[option.id] = placement
+  }
+  return { variableId: selector.id, options }
+}
+
 export function BlockEditor({
   block,
   blocks,
@@ -562,6 +597,7 @@ export function BlockEditor({
   const [variables, setVariables] = useState<PromptVariableDef[]>(
     Array.isArray(block.variables) ? block.variables : [],
   )
+  const [placementBinding, setPlacementBinding] = useState<PromptBlockPlacementBinding | undefined>(block.placementBinding)
   const [showMacros, setShowMacros] = useState(false)
   const [macroSearch, setMacroSearch] = useState('')
   const [showExpandedEditor, setShowExpandedEditor] = useState(false)
@@ -579,6 +615,11 @@ export function BlockEditor({
     const isAppend = role === 'user_append' || role === 'assistant_append'
     const cleanedVariables = variables.filter((variable) => variable && variable.name?.trim().length > 0)
     const cleanedCharacterTagTrigger = sanitizeCharacterTagTrigger(characterTagTrigger)
+    const fallbackPlacement: PromptBlockPlacement = {
+      role,
+      position: isAppend ? 'pre_history' : position,
+      depth: (position === 'in_history' || isAppend) ? depth : 0,
+    }
     const trustedUpdates: Partial<PromptBlock> = {}
     if (trustedHostFeatures) {
       const cleanSealedKey = sanitizeSealedBlockKey(sealedKey || block.sealedKey || block.id)
@@ -602,6 +643,7 @@ export function BlockEditor({
       ...trustedUpdates,
       categoryMode: block.marker === 'category' ? categoryMode : null,
       variables: cleanedVariables.length ? cleanedVariables : undefined,
+      placementBinding: cleanPlacementBinding(placementBinding, cleanedVariables, fallbackPlacement),
     })
   }
 
@@ -748,6 +790,7 @@ export function BlockEditor({
                 position={position}
                 depth={depth}
                 variables={variables}
+                placementBinding={placementBinding}
               />
             )}
           </div>
@@ -885,7 +928,13 @@ export function BlockEditor({
             <span className={s.settingsHint}>{t('blockEditor.characterTagTriggerHint')}</span>
           </div>
 
-          <VariablesEditor variables={variables} onChange={setVariables} />
+          <VariablesEditor
+            variables={variables}
+            onChange={setVariables}
+            placementBinding={placementBinding}
+            fallbackPlacement={{ role, position, depth }}
+            onPlacementBindingChange={setPlacementBinding}
+          />
         </div>
       </div>
       {showExpandedEditor && (
@@ -936,6 +985,10 @@ export function ControlledLoomBlockEditor({
   const editingBlock = editingBlockId
     ? blocks.find((block) => block.id === editingBlockId) ?? null
     : null
+  const effectiveRoles = useMemo(() => new Map(
+    resolvePromptBlockPlacements(blocks, promptVariables)
+      .map((block) => [block.id, block.role] as const),
+  ), [blocks, promptVariables])
 
   useEffect(() => {
     if (editingBlockId && !blocks.some((block) => block.id === editingBlockId)) {
@@ -997,8 +1050,8 @@ export function ControlledLoomBlockEditor({
                 <div className={s.blockNameRow}>
                   <span className={s.blockName}>{block.name}</span>
                   <span className={s.blockMetaRow}>
-                    <span className={clsx(s.badge, ROLE_BADGES[block.role] || s.badgeSystem)}>
-                      {ROLE_DISPLAY_LABELS[block.role] || block.role}
+                    <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
+                      {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
                     </span>
                   </span>
                 </div>
@@ -1956,6 +2009,12 @@ export default function LoomBuilder({
   )
 
   const groups = useMemo(() => computeGroups(activePreset?.blocks), [activePreset?.blocks])
+  const effectiveRoles = useMemo(() => new Map(
+    resolvePromptBlockPlacements(
+      activePreset?.blocks ?? [],
+      activePreset?.promptVariables ?? {},
+    ).map((block) => [block.id, block.role] as const),
+  ), [activePreset?.blocks, activePreset?.promptVariables])
   const categoryIds = useMemo(
     () => (activePreset?.blocks ?? [])
       .filter((block) => block.marker === 'category')
@@ -2718,6 +2777,7 @@ export default function LoomBuilder({
                         <SortableBlockItem
                           key={block.id}
                           block={block}
+                          effectiveRole={effectiveRoles.get(block.id)}
                           onEdit={handleEdit}
                           onDelete={handleDelete}
                           onToggle={toggleBlock}

@@ -12,6 +12,8 @@ export interface MacroResolveRequest {
   user_input?: string
   dynamic_macros?: Record<string, string>
   prompt_blocks?: PromptBlock[]
+  /** Prompt block whose content is being rendered for preview. */
+  prompt_block_id?: string
   prompt_variables?: PromptVariableValues
   /**
    * Strip leading/trailing whitespace from the resolved text, mirroring the
@@ -49,6 +51,8 @@ export interface MacroBatchResolveRequest {
   /** Exact input-bar draft text available to {{userInput}} during preview. */
   user_input?: string
   prompt_blocks?: PromptBlock[]
+  /** Prompt block id keyed by template name when previewing blocks in a batch. */
+  prompt_block_ids?: Record<string, string>
   prompt_variables?: PromptVariableValues
 }
 

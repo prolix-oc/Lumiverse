@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
 import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
-import { initMacros } from "./index";
+import { initMacros, withPromptBlockContext } from "./index";
 import type { MacroEnv } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -20,6 +20,7 @@ function makeEnv(opts: {
   worldInfoOutlets?: Record<string, string>;
   rejectedSwipe?: string;
   userInput?: string;
+  promptBlock?: MacroEnv["promptBlock"];
   multiplayer?: {
     playerCount: number;
     playerNames: string[];
@@ -90,6 +91,7 @@ function makeEnv(opts: {
       chat: new Map(Object.entries(opts.chatVars ?? {})),
     },
     dynamicMacros: {},
+    promptBlock: opts.promptBlock,
     extra: {
       messages: opts.messages ?? [
         { content: "Hello, how are you?", name: "Alice", is_user: true },
@@ -143,6 +145,25 @@ describe("Chat transcript examples", () => {
       "User: Recall it: lantern-lit alley",
       "Assistant: I remember lantern-lit alley.",
     ].join("\n"));
+  });
+});
+
+describe("Prompt block placement macros", () => {
+  test("reflect the current block configuration only while that block renders", async () => {
+    const env = makeEnv();
+
+    expect(
+      await ev("{{promptBlockRole}}/{{promptBlockPosition}}/{{promptBlockDepth}}", env),
+    ).toBe("//");
+
+    const resolved = await withPromptBlockContext(
+      env,
+      { role: "assistant_append", position: "in_history", depth: 3 },
+      () => ev("{{promptBlockRole}}/{{blockPosition}}/{{prompt_block_depth}}", env),
+    );
+
+    expect(resolved).toBe("assistant_append/in_history/3");
+    expect(env.promptBlock).toBeUndefined();
   });
 });
 

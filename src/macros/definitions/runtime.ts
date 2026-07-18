@@ -95,6 +95,40 @@ export function registerStateMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    name: "promptBlockRole",
+    category: "State",
+    description: "Configured role of the preset prompt block currently being rendered",
+    returnType: "string",
+    aliases: ["blockRole", "prompt_block_role"],
+    handler: (ctx) => ctx.env.promptBlock?.role ?? "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "promptBlockPosition",
+    category: "State",
+    description: "Configured chat position of the preset prompt block currently being rendered",
+    returnType: "string",
+    aliases: ["blockPosition", "prompt_block_position"],
+    handler: (ctx) => ctx.env.promptBlock?.position ?? "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "promptBlockDepth",
+    category: "State",
+    description: "Configured insertion depth of the preset prompt block currently being rendered",
+    returnType: "integer",
+    aliases: ["blockDepth", "prompt_block_depth"],
+    handler: (ctx) =>
+      ctx.env.promptBlock ? String(ctx.env.promptBlock.depth) : "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
     name: "userColorMode",
     category: "State",
     description: "User's selected color scheme (dark, light, or system)",

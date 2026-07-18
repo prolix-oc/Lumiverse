@@ -4,7 +4,7 @@ import { registry } from "../macros/MacroRegistry";
 import { initMacros } from "../macros";
 import type { MacroEnv } from "../macros/types";
 import type { Preset, PromptBlock, PromptVariableDef } from "../types/preset";
-import { coercePromptVariable, resolvePromptVariables } from "./prompt-assembly.service";
+import { coercePromptVariable, resolvePromptBlockPlacements, resolvePromptVariables } from "./prompt-assembly.service";
 
 // ---------------------------------------------------------------------------
 // Minimal env factory — only the fields {{var}} touches matter here.
@@ -181,6 +181,65 @@ describe("coercePromptVariable — multiselect", () => {
     const r = coercePromptVariable(def, undefined);
     expect(r.rendered).toBe("Be concise.");
     expect(r.selectedIds).toEqual(["concise"]);
+  });
+});
+
+describe("resolvePromptBlockPlacements", () => {
+  const selector: PromptVariableDef = {
+    id: "placement-target",
+    name: "adherence_target",
+    label: "Adherence target",
+    type: "select",
+    defaultValue: "baseline",
+    options: [
+      { id: "baseline", label: "Balanced", value: "Balanced" },
+      { id: "frontier", label: "Frontier", value: "Frontier" },
+    ],
+  };
+  const block: PromptBlock = {
+    id: "placement-block",
+    name: "Placement-aware prompt",
+    content: "{{promptBlockRole}}/{{promptBlockPosition}}/{{promptBlockDepth}}",
+    role: "system",
+    enabled: true,
+    position: "pre_history",
+    depth: 0,
+    marker: null,
+    isLocked: false,
+    color: null,
+    injectionTrigger: [],
+    group: null,
+    variables: [selector],
+    placementBinding: {
+      variableId: selector.id,
+      options: {
+        baseline: { role: "system", position: "pre_history", depth: 0 },
+        frontier: { role: "user", position: "in_history", depth: 3 },
+      },
+    },
+  };
+
+  test("projects the saved select option into an effective placement without mutating the stored block", () => {
+    const resolved = resolvePromptBlockPlacements([block], {
+      metadata: { promptVariables: { "placement-block": { adherence_target: "frontier" } } },
+    });
+
+    expect(resolved[0]).toMatchObject({ role: "user", position: "in_history", depth: 3 });
+    expect(block).toMatchObject({ role: "system", position: "pre_history", depth: 0 });
+  });
+
+  test("uses the select default and leaves the block unchanged when its chosen option has no placement mapping", () => {
+    const defaultResolved = resolvePromptBlockPlacements([block], { metadata: { promptVariables: {} } });
+    expect(defaultResolved[0]).toMatchObject({ role: "system", position: "pre_history", depth: 0 });
+
+    const unmapped = {
+      ...block,
+      placementBinding: { variableId: selector.id, options: {} },
+    };
+    const unchanged = resolvePromptBlockPlacements([unmapped], {
+      metadata: { promptVariables: { "placement-block": { adherence_target: "frontier" } } },
+    });
+    expect(unchanged[0]).toBe(unmapped);
   });
 });
 

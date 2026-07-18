@@ -41,6 +41,7 @@ import {
   resolveGroupCharacterNames,
   registry,
   initMacros,
+  withPromptBlockContext,
 } from "../macros";
 import type { MacroEnv } from "../macros";
 import {
@@ -898,6 +899,21 @@ function appendBaseRole(role: string): "user" | "assistant" {
 }
 
 /**
+ * Resolve one preset block within its own placement context. This deliberately
+ * wraps the existing single macro evaluation rather than scheduling a second
+ * pass, so the placement macros are strictly observational.
+ */
+async function evaluatePromptBlockContent(
+  content: string,
+  macroEnv: MacroEnv,
+  block: Pick<PromptBlock, "role" | "position" | "depth">,
+): Promise<string> {
+  return withPromptBlockContext(macroEnv, block, async () =>
+    (await evaluate(content, macroEnv, registry)).text,
+  );
+}
+
+/**
  * Walk enabled prompt blocks, merge stored overrides over creator defaults,
  * coerce + clamp per variable type, and publish the result on env.extra so
  * {{var::name}} / {{hasVar::name}} / {{varDefault::name}} resolve consistently
@@ -1045,6 +1061,83 @@ export function coercePromptVariable(
       };
     }
   }
+}
+
+const PROMPT_BLOCK_ROLES = new Set<PromptBlock["role"]>([
+  "system",
+  "user",
+  "assistant",
+  "user_append",
+  "assistant_append",
+]);
+const PROMPT_BLOCK_POSITIONS = new Set<PromptBlock["position"]>([
+  "pre_history",
+  "post_history",
+  "in_history",
+]);
+
+function isPromptBlockPlacement(value: unknown): value is Pick<PromptBlock, "role" | "position" | "depth"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const placement = value as Partial<Pick<PromptBlock, "role" | "position" | "depth">>;
+  return (
+    typeof placement.role === "string" &&
+    PROMPT_BLOCK_ROLES.has(placement.role as PromptBlock["role"]) &&
+    typeof placement.position === "string" &&
+    PROMPT_BLOCK_POSITIONS.has(placement.position as PromptBlock["position"]) &&
+    typeof placement.depth === "number" &&
+    Number.isFinite(placement.depth) &&
+    placement.depth >= 0
+  );
+}
+
+/**
+ * Resolve select-variable placement bindings without rendering any macros.
+ * This is deliberately a lightweight configuration projection before the
+ * existing single content-render pass; the persisted block remains unchanged.
+ */
+export function resolvePromptBlockPlacements(
+  blocks: PromptBlock[],
+  preset: Pick<Preset, "metadata"> | null,
+): PromptBlock[] {
+  const stored = (preset?.metadata?.promptVariables ?? {}) as Record<
+    string,
+    Record<string, PromptVariableValue>
+  >;
+
+  return blocks.map((block) => {
+    const binding = block.placementBinding;
+    if (
+      !binding ||
+      typeof binding.variableId !== "string" ||
+      !binding.variableId ||
+      !binding.options ||
+      typeof binding.options !== "object" ||
+      Array.isArray(binding.options)
+    ) {
+      return block;
+    }
+    const selector = block.variables?.find(
+      (variable) => variable.id === binding.variableId && variable.type === "select",
+    );
+    if (!selector) return block;
+
+    const selectedId = coercePromptVariable(
+      selector,
+      stored[block.id]?.[selector.name],
+    ).selectedIds[0];
+    if (!selectedId || !Object.prototype.hasOwnProperty.call(binding.options, selectedId)) {
+      return block;
+    }
+    const placement = binding.options[selectedId];
+    if (!isPromptBlockPlacement(placement)) return block;
+
+    return {
+      ...block,
+      role: placement.role,
+      position: placement.position,
+      depth: Math.floor(placement.depth),
+    };
+  });
 }
 
 function clampNumber(
@@ -1273,9 +1366,6 @@ export async function assemblePrompt(
   }
   presetProfilesSvc.normalizeCategoryBlockStates(blocks);
 
-  // Reorder blocks so the position field (pre_history / post_history /
-  // in_history) is honoured relative to the chat_history marker.
-  reorderBlocksByPosition(blocks);
   profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
@@ -1813,6 +1903,12 @@ export async function assemblePrompt(
   // can read consistent values across every block in this assembly.
   resolvePromptVariables(macroEnv, blocks, preset);
 
+  // A select variable may choose an in-memory insertion profile for its own
+  // block. Project that configuration before ordering/rendering, rather than
+  // asking macro output to mutate placement during the render pass.
+  const effectiveBlocks = resolvePromptBlockPlacements(blocks, preset);
+  reorderBlocksByPosition(effectiveBlocks);
+
   // Use prefetched settings or batch-load all needed settings in a single query
   const settingsMap =
     pf?.allSettings ??
@@ -2069,12 +2165,12 @@ export async function assemblePrompt(
   profiler.addPhase("databank-retrieval", performance.now() - phaseStartedAt);
 
   // Detect if any enabled block uses the {{memories}} macro
-  const macroHandlesMemory = blocks.some(
+  const macroHandlesMemory = effectiveBlocks.some(
     (b) => b.enabled && b.content && /\{\{memories(\b|::|\}\})/.test(b.content),
   );
 
   // Detect if any enabled block uses the {{databank}} macro
-  const macroHandlesDatabank = blocks.some(
+  const macroHandlesDatabank = effectiveBlocks.some(
     (b) => b.enabled && b.content && /\{\{databank(\b|::|\}\})/.test(b.content),
   );
 
@@ -2264,7 +2360,7 @@ export async function assemblePrompt(
   // advances. The final block's after-entries are flushed after the loop.
   let pendingPinnedAfter: PinnedMarkerEntry[] | null = null;
 
-  for (const block of blocks) {
+  for (const block of effectiveBlocks) {
     // Flush the previous block's marker-pinned "after" entries before this
     // iteration emits anything. Runs unconditionally — it belongs to the
     // previous block, so it must land even if this block is skipped below.
@@ -2672,7 +2768,7 @@ export async function assemblePrompt(
     ) {
       const macro = MARKER_TO_MACRO[block.marker];
       const resolved = normalizePromptBlockText(
-        (await evaluate(macro, macroEnv, registry)).text,
+        await evaluatePromptBlockContent(macro, macroEnv, block),
       );
       if (resolved) {
         const role = (block.role || "system") as LlmMessage["role"];
@@ -2699,7 +2795,11 @@ export async function assemblePrompt(
     ) {
       phiMacroReferenced = true;
     }
-    const rawResolved = (await evaluate(content, macroEnv, registry)).text;
+    const rawResolved = await evaluatePromptBlockContent(
+      content,
+      macroEnv,
+      block,
+    );
 
     // Append roles: collect for deferred application after full assembly.
     // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
