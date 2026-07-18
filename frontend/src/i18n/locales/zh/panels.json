@@ -1079,6 +1079,8 @@
     "duplicate": "复制",
     "exporting": "导出中",
     "preparingExport": "正在准备 {{format}} 导出…",
+    "exportAssetsProgress": "正在添加导出项目 ({{completed}}/{{total}})…",
+    "exportCompressing": "正在压缩 CHARX 存档…",
     "exportSuccess": "已将 {{name}} 导出为 {{format}}",
     "exportFailed": "导出失败：{{error}}",
     "unknownError": "未知错误",

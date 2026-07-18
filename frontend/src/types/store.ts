@@ -263,6 +263,7 @@ export interface UISlice {
   openCommandPalette: () => void
   closeCommandPalette: () => void
   addToast: (toast: Omit<Toast, 'id'>) => string
+  updateToast: (id: string, update: Partial<Omit<Toast, 'id'>>) => void
   removeToast: (id: string) => void
   clearToasts: () => void
 

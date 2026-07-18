@@ -1211,6 +1211,8 @@
     "duplicate": "Duplicate",
     "exporting": "Exporting",
     "preparingExport": "Preparing {{format}} export…",
+    "exportAssetsProgress": "Adding export items ({{completed}}/{{total}})…",
+    "exportCompressing": "Compressing CHARX archive…",
     "exportSuccess": "{{name}} exported as {{format}}",
     "exportFailed": "Export failed: {{error}}",
     "unknownError": "Unknown error",

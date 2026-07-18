@@ -17,6 +17,8 @@ import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { buildSlug } from "../lumihub/manifest";
 import { applyCharxModulesAndAssets, autoImportEmbeddedWorldbook } from "../services/charx-import.service";
 import { mapWithConcurrency } from "../utils/concurrency";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
 import type { Character, CreateCharacterInput, UpdateCharacterInput } from "../types/character";
 
 const app = new Hono();
@@ -736,16 +738,51 @@ app.get("/:id/export", async (c) => {
   }
 
   if (format === "charx") {
-    const buf = await exportSvc.exportAsCharx(userId, id);
-    if (!buf) return c.json({ error: "Not found" }, 404);
-    const character = svc.getCharacter(userId, id);
-    const name = exportSvc.sanitizeFilename(character?.name || "character");
-    return new Response(new Uint8Array(buf), {
-      headers: {
-        "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${name}.charx"`,
-      },
-    });
+    const requestedExportId = c.req.query("export_id");
+    const exportId = requestedExportId && requestedExportId.length <= 128 ? requestedExportId : undefined;
+    const emitProgress = (payload: Record<string, unknown>) => {
+      try {
+        eventBus.emit(EventType.CHARACTER_EXPORT_PROGRESS, { characterId: id, exportId, ...payload }, userId);
+      } catch {
+        // A download must not fail because the caller has no live WebSocket.
+      }
+    };
+
+    emitProgress({ phase: "preparing" });
+    try {
+      const buf = await exportSvc.exportAsCharx(userId, id, {
+        onProgress(progress) {
+          // A card can contain hundreds of gallery images. Send enough updates
+          // to feel live without flooding every connected client.
+          if (
+            progress.phase === "collecting_assets" &&
+            progress.completed !== 0 &&
+            progress.completed !== progress.total &&
+            progress.completed % 4 !== 0
+          ) {
+            return;
+          }
+          emitProgress(progress);
+        },
+      });
+      if (!buf) {
+        emitProgress({ phase: "failed", error: "Character not found" });
+        return c.json({ error: "Not found" }, 404);
+      }
+      const character = svc.getCharacter(userId, id);
+      const name = exportSvc.sanitizeFilename(character?.name || "character");
+      return new Response(new Uint8Array(buf), {
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="${name}.charx"`,
+          "Content-Length": String(buf.byteLength),
+          "Cache-Control": "no-store",
+        },
+      });
+    } catch (err: any) {
+      emitProgress({ phase: "failed", error: err?.message || "Failed to export CHARX" });
+      throw err;
+    }
   }
 
   return c.json({ error: "Invalid format. Must be one of: json, png, charx" }, 400);

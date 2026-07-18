@@ -1078,6 +1078,8 @@
     "duplicate": "Duplica",
     "exporting": "Esportazione",
     "preparingExport": "Preparazione esportazione {{format}}…",
+    "exportAssetsProgress": "Aggiunta degli elementi di esportazione ({{completed}}/{{total}})…",
+    "exportCompressing": "Compressione dell'archivio CHARX…",
     "exportSuccess": "{{name}} esportato come {{format}}",
     "exportFailed": "Esportazione fallita: {{error}}",
     "unknownError": "Errore sconosciuto",

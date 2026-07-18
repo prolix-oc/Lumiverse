@@ -46,6 +46,8 @@ import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import { Button } from '@/components/shared/FormComponents'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import SearchableSelect from '@/components/shared/SearchableSelect'
@@ -73,6 +75,15 @@ const DEBOUNCE_MS = 2000
 const MAX_PERSPECTIVE_LAYERS = 5
 const GALLERY_MIN_ITEM_WIDTH = 120
 const GALLERY_GAP = 8
+
+interface CharxExportProgress {
+  characterId?: string
+  exportId?: string
+  phase: 'preparing' | 'collecting_assets' | 'compressing' | 'complete' | 'failed'
+  completed?: number
+  total?: number
+  error?: string
+}
 const GALLERY_OVERSCAN = 3
 const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g
 const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi
@@ -1344,13 +1355,77 @@ export default function CharacterEditorPage() {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exporting, setExporting] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+  const activeCharxExportRef = useRef<{
+    exportId: string
+    characterId: string
+    characterName: string
+    toastId: string
+  } | null>(null)
+
+  useEffect(() => {
+    return wsClient.on(EventType.CHARACTER_EXPORT_PROGRESS, (payload: CharxExportProgress) => {
+      const active = activeCharxExportRef.current
+      if (!active || payload.exportId !== active.exportId || payload.characterId !== active.characterId) return
+
+      if (payload.phase === 'collecting_assets') {
+        toast.update(active.toastId, {
+          message: t('characterEditor.exportAssetsProgress', {
+            completed: payload.completed ?? 0,
+            total: payload.total ?? 0,
+          }),
+        })
+        return
+      }
+      if (payload.phase === 'compressing') {
+        toast.update(active.toastId, { message: t('characterEditor.exportCompressing') })
+        return
+      }
+      if (payload.phase === 'complete') {
+        toast.dismiss(active.toastId)
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.success(t('characterEditor.exportSuccess', { name: active.characterName, format: 'CHARX' }))
+        return
+      }
+      if (payload.phase === 'failed') {
+        toast.dismiss(active.toastId)
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.error(t('characterEditor.exportFailed', { error: payload.error || t('characterEditor.unknownError') }))
+      }
+    })
+  }, [t])
 
   const handleExport = useCallback(async (format: 'json' | 'png' | 'charx') => {
     if (!editingCharacterId || !character) return
     setExporting(true)
     setShowExportMenu(false)
     const formatLabel = format === 'charx' ? 'CHARX' : format === 'png' ? 'PNG' : 'JSON'
-    const toastId = toast.info(t('characterEditor.preparingExport', { format: formatLabel }), { title: t('characterEditor.exporting'), duration: 60_000, dismissible: false })
+    const toastId = toast.info(t('characterEditor.preparingExport', { format: formatLabel }), {
+      title: t('characterEditor.exporting'),
+      duration: format === 'charx' ? 0 : 60_000,
+      dismissible: false,
+    })
+
+    if (format === 'charx') {
+      const exportId = uuidv7()
+      activeCharxExportRef.current = {
+        exportId,
+        characterId: editingCharacterId,
+        characterName: character.name,
+        toastId,
+      }
+      try {
+        charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+      } catch (err) {
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.dismiss(toastId)
+        toast.error(t('characterEditor.exportFailed', { error: err instanceof Error ? err.message : t('characterEditor.unknownError') }))
+      }
+      return
+    }
+
     try {
       await charactersApi.exportCharacter(editingCharacterId, format, character.name)
       toast.dismiss(toastId)

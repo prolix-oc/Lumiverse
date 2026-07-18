@@ -168,6 +168,23 @@ export const charactersApi = {
     triggerBlobDownload(blob, `${safeName}.${ext}`)
   },
 
+  /**
+   * Start a CHARX download as a native browser download. Unlike fetching a
+   * Blob into JavaScript, this lets the browser show its own transfer progress
+   * and avoids keeping a second copy of a potentially large archive in memory.
+   */
+  downloadCharxExport(id: string, exportId: string, characterName?: string) {
+    const safeName = (characterName || 'character').replace(/[^a-zA-Z0-9_\-. ]/g, '_')
+    const params = new URLSearchParams({ format: 'charx', export_id: exportId })
+    const anchor = document.createElement('a')
+    anchor.href = `${BASE_URL}/characters/${encodeURIComponent(id)}/export?${params.toString()}`
+    anchor.download = `${safeName}.charx`
+    anchor.style.display = 'none'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+  },
+
   getResolvedFields(id: string, chatId?: string) {
     const params: Record<string, any> = {}
     if (chatId) params.chat_id = chatId

@@ -1079,6 +1079,8 @@
     "duplicate": "Dupliquer",
     "exporting": "Exportation",
     "preparingExport": "Préparation de l'exportation {{format}}…",
+    "exportAssetsProgress": "Ajout des éléments à exporter ({{completed}}/{{total}})…",
+    "exportCompressing": "Compression de l’archive CHARX…",
     "exportSuccess": "{{name}} exporté en tant que {{format}}",
     "exportFailed": "Échec de l'exportation : {{error}}",
     "unknownError": "Erreur inconnue",

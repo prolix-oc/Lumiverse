@@ -54,6 +54,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
     return id
   },
 
+  updateToast: (id, update) =>
+    set((state) => ({
+      toasts: state.toasts.map((toast) => (toast.id === id ? { ...toast, ...update, id } : toast)),
+    })),
+
   removeToast: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 

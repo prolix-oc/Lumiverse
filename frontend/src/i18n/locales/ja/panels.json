@@ -1079,6 +1079,8 @@
     "duplicate": "重複",
     "exporting": "エクスポート中",
     "preparingExport": "準備中 {{format}}エクスポート…",
+    "exportAssetsProgress": "エクスポート項目を追加中 ({{completed}}/{{total}})…",
+    "exportCompressing": "CHARX アーカイブを圧縮中…",
     "exportSuccess": "{{name}} は {{format}} としてエクスポートされました",
     "exportFailed": " としてエクスポートされました。エクスポートに失敗しました: {{error}}",
     "unknownError": "不明なエラー",
