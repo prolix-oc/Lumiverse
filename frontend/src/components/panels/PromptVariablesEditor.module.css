@@ -241,10 +241,12 @@
 /* ---- Placement binding (select variable → block insertion profile) ---- */
 
 .placementBinding {
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+  border-radius: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, var(--lumiverse-primary-005, rgba(147, 112, 219, 0.05)), transparent 45%),
+    var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
 }
 
 .placementHeader {
@@ -256,8 +258,17 @@
 
 .placementTitle {
   color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
+}
+
+.placementEnable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
 }
 
 .placementHint,
@@ -271,25 +282,57 @@
 .placementBody {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 14px;
+  margin-top: 14px;
 }
 
 .placementOptions {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.placementProfilesHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+}
+
+.placementProfilesHeader > :first-child {
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
 }
 
 .placementOption {
-  display: grid;
-  grid-template-columns: minmax(110px, 1fr) repeat(3, minmax(105px, 1fr));
-  align-items: end;
-  gap: 8px;
-  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--lumiverse-border);
-  border-radius: 7px;
-  background: var(--lumiverse-bg-darker);
+  border-radius: 9px;
+  background: var(--lumiverse-bg-darker, rgba(0, 0, 0, 0.14));
+}
+
+.placementOptionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.placementOptionKicker {
+  display: block;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.65px;
+  text-transform: uppercase;
 }
 
 .placementOptionName {
@@ -298,9 +341,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--lumiverse-text);
-  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
-  padding-bottom: 8px;
+  margin-top: 2px;
+}
+
+.placementSummary {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--lumiverse-primary-text, #c4b5fd);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  text-align: right;
+}
+
+.placementFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
 }
 
 /* ---- Switch default control ---- */
@@ -572,10 +630,16 @@
   .colThird {
     grid-column: span 12;
   }
-  .placementOption {
-    grid-template-columns: 1fr;
+  .placementHeader,
+  .placementOptionHeader,
+  .placementProfilesHeader {
+    align-items: flex-start;
+    flex-direction: column;
   }
-  .placementOptionName {
-    padding-bottom: 0;
+  .placementSummary {
+    text-align: left;
+  }
+  .placementFields {
+    grid-template-columns: 1fr;
   }
 }

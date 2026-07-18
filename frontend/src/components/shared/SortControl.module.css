@@ -19,6 +19,11 @@
   z-index: 50;
 }
 
+.dropdownEnd {
+  right: 0;
+  left: auto;
+}
+
 .item {
   display: block;
   width: 100%;

@@ -2155,9 +2155,13 @@
     "descriptionPlaceholder": "Hint shown to end users configuring this variable",
     "placementTitle": "Placement selector",
     "placementHint": "Let one dropdown option choose this block's role, prompt position, and optional history depth.",
-    "placementUnavailable": "Add a Dropdown variable before enabling placement selection.",
+    "placementEnabled": "Enabled",
+    "placementUnavailable": "Add a named Dropdown variable before enabling placement selection.",
     "placementVariable": "Controlling dropdown",
-    "placementUntitled": "Untitled dropdown",
+    "placementProfiles": "Placement profiles",
+    "placementProfilesHint": "Each option uses the placement configured below.",
+    "placementOption": "Dropdown option",
+    "placementOptionFallback": "Option {{index}}",
     "placementNoOptions": "Add options to this dropdown to configure their placements."
   },
   "councilManager": {

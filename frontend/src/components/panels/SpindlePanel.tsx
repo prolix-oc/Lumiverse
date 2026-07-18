@@ -446,6 +446,7 @@ export default function SpindlePanel() {
             onChange={setExtensionSortMode}
             title={t('spindlePanel.sortBy', { field: extensionSortLabel })}
             dropdownWidth={150}
+            dropdownAlign="end"
           />
           {manageableCount > 0 && (
             <button

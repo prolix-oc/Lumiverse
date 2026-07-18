@@ -366,10 +366,16 @@ function PlacementBindingEditor({
   onChange,
 }: PlacementBindingEditorProps) {
   const { t } = useTranslation('panels')
+  const blockEditor = (key: string) => t(`loomBuilder.blockEditor.${key}`)
   const selectors = variables.filter(
-    (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => variable.type === 'select',
+    (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => (
+      variable.type === 'select' && variable.name.trim().length > 0
+    ),
   )
   const selected = selectors.find((variable) => variable.id === binding?.variableId) ?? null
+  const selectorLabel = (variable: PromptVariableDef) => (
+    variable.label.trim() || variable.name.trim()
+  )
 
   const enable = () => {
     const selector = selectors[0]
@@ -402,7 +408,10 @@ function PlacementBindingEditor({
           <div className={css.placementTitle}>{t('promptVariablesEditor.placementTitle')}</div>
           <p className={css.placementHint}>{t('promptVariablesEditor.placementHint')}</p>
         </div>
-        <Toggle.Switch checked={!!selected} onChange={(enabled) => (enabled ? enable() : onChange(undefined))} disabled={selectors.length === 0} />
+        <div className={css.placementEnable}>
+          <span>{t('promptVariablesEditor.placementEnabled')}</span>
+          <Toggle.Switch checked={!!selected} onChange={(enabled) => (enabled ? enable() : onChange(undefined))} disabled={selectors.length === 0} />
+        </div>
       </div>
 
       {selectors.length === 0 ? (
@@ -414,7 +423,7 @@ function PlacementBindingEditor({
             <select className={css.select} value={selected.id} onChange={(event) => changeSelector(event.target.value)}>
               {selectors.map((variable) => (
                 <option key={variable.id} value={variable.id}>
-                  {variable.label || variable.name || t('promptVariablesEditor.placementUntitled')}
+                  {selectorLabel(variable)}
                 </option>
               ))}
             </select>
@@ -424,37 +433,53 @@ function PlacementBindingEditor({
             <p className={css.placementUnavailable}>{t('promptVariablesEditor.placementNoOptions')}</p>
           ) : (
             <div className={css.placementOptions}>
-              {selected.options.map((option) => {
+              <div className={css.placementProfilesHeader}>
+                <span>{t('promptVariablesEditor.placementProfiles')}</span>
+                <span>{t('promptVariablesEditor.placementProfilesHint')}</span>
+              </div>
+              {selected.options.map((option, index) => {
                 const placement = binding.options[option.id] ?? fallbackPlacement
                 const showDepth = placement.position === 'in_history' || placement.role === 'user_append' || placement.role === 'assistant_append'
+                const roleLabel = blockEditor(`roles.${placement.role}`)
+                const positionLabel = blockEditor(`positions.${placement.position}`)
                 return (
-                  <div key={option.id} className={css.placementOption}>
-                    <span className={css.placementOptionName}>{option.label || option.id}</span>
-                    <label className={css.field}>
-                      <span className={css.fieldLabel}>{t('blockEditor.role')}</span>
-                      <select className={css.select} value={placement.role} onChange={(event) => updateOption(option.id, { role: event.target.value as PromptBlockPlacement['role'] })}>
-                        <option value="system">{t('blockEditor.roles.system')}</option>
-                        <option value="user">{t('blockEditor.roles.user')}</option>
-                        <option value="assistant">{t('blockEditor.roles.assistant')}</option>
-                        <option value="user_append">{t('blockEditor.roles.user_append')}</option>
-                        <option value="assistant_append">{t('blockEditor.roles.assistant_append')}</option>
-                      </select>
-                    </label>
-                    <label className={css.field}>
-                      <span className={css.fieldLabel}>{t('blockEditor.position')}</span>
-                      <select className={css.select} value={placement.position} onChange={(event) => updateOption(option.id, { position: event.target.value as PromptBlockPlacement['position'] })}>
-                        <option value="pre_history">{t('blockEditor.positions.pre_history')}</option>
-                        <option value="post_history">{t('blockEditor.positions.post_history')}</option>
-                        <option value="in_history">{t('blockEditor.positions.in_history')}</option>
-                      </select>
-                    </label>
-                    {showDepth && (
+                  <article key={option.id} className={css.placementOption}>
+                    <div className={css.placementOptionHeader}>
+                      <div>
+                        <span className={css.placementOptionKicker}>{t('promptVariablesEditor.placementOption')}</span>
+                        <div className={css.placementOptionName}>{option.label.trim() || option.id || t('promptVariablesEditor.placementOptionFallback', { index: index + 1 })}</div>
+                      </div>
+                      <span className={css.placementSummary}>
+                        {roleLabel} · {positionLabel}{showDepth ? ` · ${blockEditor('depth')} ${placement.depth}` : ''}
+                      </span>
+                    </div>
+                    <div className={css.placementFields}>
                       <label className={css.field}>
-                        <span className={css.fieldLabel}>{t('blockEditor.depth')}</span>
+                        <span className={css.fieldLabel}>{blockEditor('role')}</span>
+                        <select className={css.select} value={placement.role} onChange={(event) => updateOption(option.id, { role: event.target.value as PromptBlockPlacement['role'] })}>
+                          <option value="system">{blockEditor('roles.system')}</option>
+                          <option value="user">{blockEditor('roles.user')}</option>
+                          <option value="assistant">{blockEditor('roles.assistant')}</option>
+                          <option value="user_append">{blockEditor('roles.user_append')}</option>
+                          <option value="assistant_append">{blockEditor('roles.assistant_append')}</option>
+                        </select>
+                      </label>
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{blockEditor('position')}</span>
+                        <select className={css.select} value={placement.position} onChange={(event) => updateOption(option.id, { position: event.target.value as PromptBlockPlacement['position'] })}>
+                          <option value="pre_history">{blockEditor('positions.pre_history')}</option>
+                          <option value="post_history">{blockEditor('positions.post_history')}</option>
+                          <option value="in_history">{blockEditor('positions.in_history')}</option>
+                        </select>
+                      </label>
+                      {showDepth && (
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{blockEditor('depth')}</span>
                         <NumberStepper value={placement.depth} min={0} onChange={(value) => updateOption(option.id, { depth: value ?? 0 })} />
                       </label>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  </article>
                 )
               })}
             </div>

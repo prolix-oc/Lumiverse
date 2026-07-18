@@ -18,6 +18,7 @@ interface SortControlProps<T extends string> {
   ascendingTitle?: string
   descendingTitle?: string
   dropdownWidth?: number
+  dropdownAlign?: 'start' | 'end'
 }
 
 /**
@@ -34,6 +35,7 @@ export function SortControl<T extends string>({
   ascendingTitle,
   descendingTitle,
   dropdownWidth,
+  dropdownAlign = 'start',
 }: SortControlProps<T>) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -71,7 +73,11 @@ export function SortControl<T extends string>({
         <ArrowUpDown size={14} />
       </button>
       {open && (
-        <div className={styles.dropdown} role="menu" style={dropdownWidth ? { width: dropdownWidth } : undefined}>
+        <div
+          className={clsx(styles.dropdown, dropdownAlign === 'end' && styles.dropdownEnd)}
+          role="menu"
+          style={dropdownWidth ? { width: dropdownWidth } : undefined}
+        >
           {options.map((option) => (
             <button
               key={option.value}
