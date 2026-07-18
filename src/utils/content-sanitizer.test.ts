@@ -76,6 +76,26 @@ describe("stripNonProseTags", () => {
     ).toBe('Before <font color="#ff0000">red text</font> after');
   });
 
+  test("preserves configured thought delimiters inside font blocks until attribution", () => {
+    const options = { keepFontTags: true, preserveFontInnerTags: ["thinking"] };
+    expect(
+      stripNonProseTags(
+        '<font color="#c8a2c8"><thinking>Juniper must not hesitate.</thinking></font>',
+        options,
+      ),
+    ).toBe('<font color="#c8a2c8"><thinking>Juniper must not hesitate.</thinking></font>');
+
+    // The same tag remains non-prose outside a color block, and colors inside
+    // structural wrappers remain excluded from attribution.
+    expect(stripNonProseTags('Before <thinking>private reasoning</thinking> after', options)).toBe("Before after");
+    expect(
+      stripNonProseTags(
+        '<details><font color="#c8a2c8"><thinking>private reasoning</thinking></font></details>',
+        options,
+      ),
+    ).toBe("");
+  });
+
   test("preserves color span tags when keepFontTags is set", () => {
     expect(
       stripNonProseTags(

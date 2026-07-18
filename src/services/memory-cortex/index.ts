@@ -88,6 +88,22 @@ export type {
 export { buildEmotionalContext } from "./emotional-context";
 export { formatEntitySnapshots, formatRelationships } from "./entity-context";
 export { extractNPsFromChunk } from "./np-chunker";
+
+/**
+ * Return the tag name for a configured HTML thought delimiter pair.
+ * The sanitizer needs this narrow hint so it can retain the delimiters inside
+ * a font block long enough for font attribution to classify the block.
+ */
+function getThoughtMarkerHtmlTags(markers: MemoryCortexConfig["thoughtMarkers"]): string[] {
+  const prefix = markers?.prefix?.trim();
+  const suffix = markers?.suffix?.trim();
+  if (!prefix || !suffix) return [];
+
+  const open = prefix.match(/^<\s*([a-zA-Z][\w:-]*)\b[^>]*>$/);
+  const close = suffix.match(/^<\s*\/\s*([a-zA-Z][\w:-]*)\s*>$/);
+  if (!open || !close || open[1].toLowerCase() !== close[1].toLowerCase()) return [];
+  return [open[1].toLowerCase()];
+}
 export {
   resolveCanonicalId,
   normalizeEntityName,
@@ -1104,6 +1120,7 @@ export async function processChunk(
     // keeps font tags so attribution still works.
     const proseContent = stripNonProseTags(rawChunkContent, {
       keepFontTags: true,
+      preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
       extraScaffoldTags: config.nonProseScaffoldTags,
     });
     const thoughtDelimiters = config.thoughtMarkers;
@@ -2007,7 +2024,11 @@ export async function rebuildCortex(
             // keepFontTags: true so the sidecar can still do color attribution.
             content: stripNonProseTags(
               hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content),
-              { keepFontTags: true, extraScaffoldTags: config.nonProseScaffoldTags },
+              {
+                keepFontTags: true,
+                preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
+                extraScaffoldTags: config.nonProseScaffoldTags,
+              },
             ),
           }));
 
@@ -2056,6 +2077,7 @@ export async function rebuildCortex(
                 // processChunkFontColors path is acceptable for grading input.
                 const proseContent = stripNonProseTags(raw, {
                   keepFontTags: true,
+                  preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
                   extraScaffoldTags: config.nonProseScaffoldTags,
                 });
                 const cleanContent = stripThoughtDelimiters(stripFontTags(proseContent), config.thoughtMarkers);
