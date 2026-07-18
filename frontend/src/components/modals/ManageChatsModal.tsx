@@ -494,8 +494,7 @@ export default function ManageChatsModal() {
             </Button>
             <Button
               size="icon"
-              variant="ghost"
-              className={clsx(bulkMode && styles.bulkModeBtnActive)}
+              className={clsx(styles.bulkModeBtn, bulkMode && styles.bulkModeBtnActive)}
               onClick={toggleBulkMode}
               title={t(bulkMode ? 'exitBulkSelect' : 'bulkSelect')}
               aria-label={t(bulkMode ? 'exitBulkSelect' : 'bulkSelect')}
