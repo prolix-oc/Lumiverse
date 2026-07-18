@@ -19,6 +19,7 @@ import type {
   PromptBehavior,
   CompletionSettings,
   SamplerOverrides,
+  CustomBody,
   AuthorsNote,
   AdvancedSettings,
   PromptVariableDef,
@@ -120,6 +121,13 @@ import {
   type BookSource,
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
+import {
+  isGenuinelyNewChat,
+  resolveNewChatPromptConfig,
+  resolvePromptBehavior,
+  shouldInjectEmptySendNudge,
+  shouldInjectGroupNudge,
+} from "./prompt-behavior";
 
 export type {
   VectorActivatedEntry,
@@ -504,32 +512,6 @@ function isDecorativeNewChatSeparator(text: string): boolean {
   if (trimmed === "[Start a new Chat]") return true;
   return /^\[Start a new group chat(?:\. Group members:.*)?\]$/i.test(trimmed);
 }
-
-function isGenuinelyNewChat(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.extra?.hidden === true) continue;
-    if (!msg.is_user && msg.extra?.greeting !== true) return false;
-  }
-  return true;
-}
-
-function resolveNewChatPromptConfig(
-  promptBehavior: PromptBehavior,
-  chat: Chat,
-): { prompt: string | undefined; label: string } {
-  if (chat.metadata?.group === true) {
-    return {
-      prompt: promptBehavior.newGroupChatPrompt ?? promptBehavior.newChatPrompt,
-      label: "New Group Chat Prompt",
-    };
-  }
-  return {
-    prompt: promptBehavior.newChatPrompt,
-    label: "New Chat Prompt",
-  };
-}
-
-const DEFAULT_EMPTY_SEND_NUDGE = "[Write the next reply only as {{char}}.]";
 
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
@@ -1276,7 +1258,10 @@ export async function assemblePrompt(
     (b: PromptBlock) => ({ ...b }),
   );
   const prompts = preset?.prompts ?? {};
-  const promptBehavior: PromptBehavior = prompts.promptBehavior ?? {};
+  // Presets may predate a behavior field, arrive from a partial import, or
+  // never have been opened by the Loom editor. Resolve their behavior values
+  // at the generation boundary so every mode shares the same reliable defaults.
+  const promptBehavior = resolvePromptBehavior(prompts.promptBehavior);
   const completionSettings: CompletionSettings =
     prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null =
@@ -1857,8 +1842,15 @@ export async function assemblePrompt(
       "council_settings",
     ]);
 
-  // Populate reasoning macros from user settings
-  const reasoningVal = settingsMap.get("reasoningSettings");
+  // A connection's reasoning binding is the effective source for all
+  // reasoning settings, including its custom request body. Fall back to the
+  // user's global setting when the connection is unbound.
+  const reasoningVal = resolveEffectiveReasoningSettings(
+    connection,
+    settingsMap.get("reasoningSettings"),
+  );
+
+  // Populate reasoning macros from the effective settings.
   if (reasoningVal) {
     macroEnv.extra.reasoningPrefix = reasoningVal.prefix ?? "";
     macroEnv.extra.reasoningSuffix = reasoningVal.suffix ?? "";
@@ -2346,7 +2338,10 @@ export async function assemblePrompt(
         const {
           prompt: newChatPrompt,
           label: newChatPromptLabel,
-        } = resolveNewChatPromptConfig(promptBehavior, chat);
+        } = resolveNewChatPromptConfig(
+          promptBehavior,
+          chat.metadata?.group === true,
+        );
         if (newChatPrompt) {
           const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
             .text;
@@ -3125,18 +3120,15 @@ export async function assemblePrompt(
   // Empty-send nudge: normal generations that start from an assistant-ending
   // chat need a fresh user turn so providers produce a new reply instead of
   // relying on continue semantics. Group/member-targeted nudges use groupNudge.
-  const lastVisibleChatMessage = [...messages]
-    .reverse()
-    .find((msg) => msg.extra?.hidden !== true);
   if (
-    ctx.generationType === "normal" &&
-    !ctx.targetCharacterId &&
-    lastVisibleChatMessage &&
-    !lastVisibleChatMessage.is_user &&
     result.length > 0 &&
-    result[result.length - 1].role !== "user"
+    shouldInjectEmptySendNudge({
+      generationType: ctx.generationType,
+      targetCharacterId: ctx.targetCharacterId,
+      messages,
+    })
   ) {
-    const nudge = promptBehavior.emptySendNudge ?? DEFAULT_EMPTY_SEND_NUDGE;
+    const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
       const resolved = (await evaluate(nudge, macroEnv, registry)).text;
       if (resolved) {
@@ -3155,7 +3147,7 @@ export async function assemblePrompt(
   let assistantPrefill: string | undefined;
 
   // Group chat nudge from preset (e.g. "[Write next reply only as {{char}}]")
-  if (ctx.targetCharacterId) {
+  if (shouldInjectGroupNudge(ctx.targetCharacterId)) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
       const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
@@ -5945,14 +5937,69 @@ export function applyGoogleSearchPresetSetting(
   }
 }
 
+type ReasoningParameterSettings = {
+  prefix?: string;
+  suffix?: string;
+  autoParse?: boolean;
+  apiReasoning?: boolean;
+  reasoningEffort?: string;
+  keepInHistory?: number;
+  thinkingDisplay?: string;
+  /** When present, supersedes the legacy preset-level custom body. */
+  customBody?: CustomBody;
+};
+
+function resolveEffectiveReasoningSettings(
+  connection: ConnectionProfile | null | undefined,
+  globalSettings: unknown,
+): ReasoningParameterSettings | null {
+  const boundSettings = connection?.metadata?.reasoningBindings?.settings;
+  if (
+    boundSettings &&
+    typeof boundSettings === "object" &&
+    !Array.isArray(boundSettings)
+  ) {
+    return boundSettings as ReasoningParameterSettings;
+  }
+  if (
+    globalSettings &&
+    typeof globalSettings === "object" &&
+    !Array.isArray(globalSettings)
+  ) {
+    return globalSettings as ReasoningParameterSettings;
+  }
+  return null;
+}
+
+function hasOwnCustomBody(
+  settings: ReasoningParameterSettings | null | undefined,
+): boolean {
+  return !!settings && Object.hasOwn(settings, "customBody");
+}
+
+/**
+ * Spread a valid enabled custom body onto request parameters. Invalid JSON or
+ * non-object JSON is intentionally ignored, matching the legacy behavior.
+ */
+export function applyCustomBodyParameters(
+  params: Record<string, any>,
+  customBody: CustomBody | null | undefined,
+): void {
+  if (!customBody?.enabled || !customBody.rawJson) return;
+  try {
+    const parsed = JSON.parse(customBody.rawJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      Object.assign(params, parsed);
+    }
+  } catch {
+    // Invalid JSON — skip silently. The UI prevents saving invalid values.
+  }
+}
+
 export function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
-  reasoningSettings?: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null,
+  reasoningSettings?: ReasoningParameterSettings | null,
   providerName?: string | null,
   modelName?: string | null,
 ): Record<string, any> {
@@ -6029,16 +6076,14 @@ export function buildParameters(
     }
   }
 
-  // Custom body from preset.parameters.customBody
-  const customBody = preset?.parameters?.customBody;
-  if (customBody?.enabled && customBody.rawJson) {
-    try {
-      const custom = JSON.parse(customBody.rawJson);
-      Object.assign(params, custom);
-    } catch {
-      // Invalid JSON — skip silently
-    }
-  }
+  // Custom bodies now live with reasoning so connection reasoning bindings can
+  // snapshot and apply them. Older presets continue to work until a user saves
+  // the new setting; an explicitly saved disabled body cleanly turns off the
+  // old preset-level value.
+  const customBody = hasOwnCustomBody(reasoningSettings)
+    ? reasoningSettings?.customBody
+    : preset?.parameters?.customBody;
+  applyCustomBodyParameters(params, customBody);
 
   // Authoritative off-switch: when the user has disabled API reasoning, strip every
   // provider-specific reasoning field — including anything a customBody spread in —
@@ -6543,9 +6588,13 @@ async function legacyAssembly(
         userId,
         "reasoningSettings",
       );
-      if (reasoningSetting?.value) {
-        macroEnv.extra.reasoningPrefix = reasoningSetting.value.prefix ?? "";
-        macroEnv.extra.reasoningSuffix = reasoningSetting.value.suffix ?? "";
+      const effectiveReasoning = resolveEffectiveReasoningSettings(
+        connection,
+        reasoningSetting?.value,
+      );
+      if (effectiveReasoning) {
+        macroEnv.extra.reasoningPrefix = effectiveReasoning.prefix ?? "";
+        macroEnv.extra.reasoningSuffix = effectiveReasoning.suffix ?? "";
       }
       // Populate theme info for {{userColorMode}} macro (legacy path)
       const themeSetting = settingsSvc.getSetting(userId, "theme");
@@ -6724,24 +6773,24 @@ async function legacyAssembly(
   );
 
   // Strip reasoning from older chat history messages based on keepInHistory
-  let reasoningVal: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null = null;
+  let reasoningVal: ReasoningParameterSettings | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(
       userId,
       "reasoningSettings",
     );
-    if (reasoningSetting?.value) {
+    const effectiveReasoning = resolveEffectiveReasoningSettings(
+      connection,
+      reasoningSetting?.value,
+    );
+    if (effectiveReasoning) {
       stripReasoningFromChatHistory(
         llmMessages,
         legacyFirstChatIdx,
         legacyHistoryCount,
-        reasoningSetting.value,
+        effectiveReasoning,
       );
-      reasoningVal = reasoningSetting.value;
+      reasoningVal = effectiveReasoning;
     }
 
     // Apply context filters (details blocks, loom tags, HTML tags)

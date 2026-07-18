@@ -14,7 +14,6 @@ import { getMacroCatalog } from '@/api/macros'
 import type { LoomPreset, PromptBlock, LoomConnectionProfile, MacroGroup, PromptVariableValues } from '@/lib/loom/types'
 import {
   DEFAULT_SAMPLER_OVERRIDES,
-  DEFAULT_CUSTOM_BODY,
   DEFAULT_PROMPT_BEHAVIOR,
   DEFAULT_COMPLETION_SETTINGS,
   DEFAULT_ADVANCED_SETTINGS,
@@ -549,14 +548,6 @@ export function useLoomBuilder() {
     }))
   }, [updateActivePreset])
 
-  const saveCustomBody = useCallback((customBody: any) => {
-    updateActivePreset((current) => ({
-      ...current,
-      customBody: { ...customBody },
-      updatedAt: Date.now(),
-    }))
-  }, [updateActivePreset])
-
   const savePromptBehavior = useCallback((updates: Record<string, any>) => {
     updateActivePreset((current) => ({
       ...current,
@@ -762,7 +753,6 @@ export function useLoomBuilder() {
     // Sampler constants
     SAMPLER_PARAMS,
     DEFAULT_SAMPLER_OVERRIDES,
-    DEFAULT_CUSTOM_BODY,
     DEFAULT_PROMPT_BEHAVIOR,
     DEFAULT_COMPLETION_SETTINGS,
     DEFAULT_ADVANCED_SETTINGS,
@@ -784,9 +774,8 @@ export function useLoomBuilder() {
     toggleBlock,
     reorderBlocks,
 
-    // Sampler & body settings
+    // Sampler settings
     saveSamplerOverrides,
-    saveCustomBody,
 
     // Prompt behavior, completion, advanced
     savePromptBehavior,

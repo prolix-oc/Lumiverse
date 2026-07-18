@@ -274,7 +274,6 @@ function configureMainLoomState(): void {
     updateBlock: () => true,
     toggleBlock: () => {},
     saveSamplerOverrides: () => {},
-    saveCustomBody: () => {},
     savePromptBehavior: () => {},
     saveCompletionSettings: () => {},
     saveAdvancedSettings: () => {},

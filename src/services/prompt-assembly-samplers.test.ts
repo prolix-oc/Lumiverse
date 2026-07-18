@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { buildParameters } from "./prompt-assembly.service";
-import type { SamplerOverrides } from "../types/preset";
+import type { Preset, SamplerOverrides } from "../types/preset";
 
 function samplerOverrides(
   overrides: Partial<SamplerOverrides> = {},
@@ -39,5 +39,54 @@ describe("sampler parameter assembly", () => {
     );
 
     expect(parameters.top_p).toBe(0.8);
+  });
+
+  test("applies the reasoning custom body instead of the legacy preset body", () => {
+    const preset = {
+      parameters: {
+        customBody: { enabled: true, rawJson: '{"legacy":true,"priority":"preset"}' },
+      },
+      prompts: {},
+    } as unknown as Preset;
+
+    const parameters = buildParameters(
+      null,
+      preset,
+      {
+        customBody: { enabled: true, rawJson: '{"bound":true,"priority":"reasoning"}' },
+      },
+    );
+
+    expect(parameters).toEqual({ bound: true, priority: "reasoning" });
+  });
+
+  test("keeps a legacy preset custom body until a reasoning body is saved", () => {
+    const preset = {
+      parameters: {
+        customBody: { enabled: true, rawJson: '{"legacy":true}' },
+      },
+      prompts: {},
+    } as unknown as Preset;
+
+    expect(buildParameters(null, preset, {})).toEqual({ legacy: true });
+    expect(
+      buildParameters(null, preset, {
+        customBody: { enabled: false, rawJson: '{}' },
+      }),
+    ).toEqual({});
+  });
+
+  test("applies the reasoning off switch after a custom body", () => {
+    const parameters = buildParameters(
+      null,
+      null,
+      {
+        apiReasoning: false,
+        customBody: { enabled: true, rawJson: '{"reasoning":{"effort":"high"}}' },
+      },
+      "openrouter",
+    );
+
+    expect(parameters).not.toHaveProperty("reasoning");
   });
 });

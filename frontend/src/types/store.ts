@@ -341,6 +341,12 @@ export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | '
  *  ('omitted' on Opus 4.7 / Mythos Preview, 'summarized' elsewhere). */
 export type ThinkingDisplay = 'auto' | 'summarized' | 'omitted'
 
+/** Extra JSON fields spread onto the provider request body. */
+export interface ReasoningCustomBody {
+  enabled: boolean
+  rawJson: string
+}
+
 export interface ReasoningSettings {
   prefix: string
   suffix: string
@@ -354,6 +360,11 @@ export interface ReasoningSettings {
   /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
    *  'auto' leaves the field unset so the API picks a model-appropriate default. */
   thinkingDisplay: ThinkingDisplay
+  /**
+   * Extra request-body fields. Omitted for legacy settings so the backend can
+   * continue honoring an old preset-level custom body until this is saved.
+   */
+  customBody?: ReasoningCustomBody
 }
 
 /** Reasoning settings snapshot bound to a connection profile. */

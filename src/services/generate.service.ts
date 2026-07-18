@@ -10,6 +10,7 @@ import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
 import {
   assemblePrompt,
+  applyCustomBodyParameters,
   applyProviderReasoningOffSwitch,
   injectReasoningParams,
   collectVectorActivatedWorldInfo,
@@ -45,6 +46,7 @@ import {
 } from "./inline-tool-continuation";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
+import type { CustomBody } from "../types/preset";
 import {
   interceptorPipeline,
   type InterceptorBreakdownEntry,
@@ -1017,6 +1019,7 @@ type ReasoningSettingsSnapshot = {
   apiReasoning?: boolean;
   reasoningEffort?: string;
   thinkingDisplay?: string;
+  customBody?: CustomBody;
 } | null;
 
 type CouncilResultCache = CachedCouncilResult & {
@@ -1158,12 +1161,17 @@ function applyEffectiveReasoningSettings(
   modelName: string | undefined,
   params: GenerationParameters,
   override?: GenerationReasoningOverrideDTO,
+  includeCustomBody = false,
 ): void {
   const resolvedOverride = resolveReasoningOverride(override);
   const reasoningSettings =
     resolvedOverride !== undefined
       ? resolvedOverride
       : getEffectiveReasoningSettings(userId, connection);
+
+  if (includeCustomBody) {
+    applyCustomBodyParameters(params, reasoningSettings?.customBody);
+  }
 
   if (reasoningSettings?.apiReasoning) {
     const effort = reasoningSettings.reasoningEffort || "auto";
@@ -1569,6 +1577,8 @@ async function runPromptPipeline(opts: {
     effectiveConnection.provider,
     effectiveConnection.model || undefined,
     parameters,
+    undefined,
+    !!opts.inputMessages,
   );
 
   return {
@@ -4396,6 +4406,7 @@ async function prepareRawCall(
     input.model,
     parameters,
     input.reasoning,
+    true,
   );
   if (reasoningConnection) injectConnectionMetadataFlags(reasoningConnection, parameters);
 
@@ -4444,6 +4455,7 @@ async function prepareQuietCall(
     connection.model || undefined,
     mergedParams,
     input.reasoning,
+    true,
   );
 
   // Allow callers (e.g. Memory Cortex sidecar) to override the model without
@@ -4667,6 +4679,8 @@ export async function summarizeGenerate(
       provider.name,
       sidecarModel || connection.model || undefined,
       mergedParams,
+      undefined,
+      true,
     );
 
     const resolvedModel = sidecarModel || connection.model;

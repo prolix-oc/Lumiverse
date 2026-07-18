@@ -191,6 +191,12 @@ export interface SamplerOverrides {
   streaming?: boolean;
 }
 
+/** Extra JSON fields spread onto the provider request body. */
+export interface CustomBody {
+  enabled: boolean;
+  rawJson: string;
+}
+
 export interface AdvancedSettings {
   seed: number;
   customStopStrings: string[];

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Brain } from 'lucide-react'
 import { IconBolt } from '@tabler/icons-react'
 import { useStore } from '@/store'
@@ -48,6 +48,12 @@ export default function PresetManager() {
   const isApiReasoningDisabled = !reasoningSettings.apiReasoning
   const effortOptions = getEffortOptions(activeProvider, activeModel)
   const isAnthropic = activeProvider === 'anthropic'
+  const customBody = useMemo(
+    () => reasoningSettings.customBody ?? { enabled: false, rawJson: '{}' },
+    [reasoningSettings.customBody],
+  )
+  const [localCustomBodyJson, setLocalCustomBodyJson] = useState(customBody.rawJson)
+  const [customBodyError, setCustomBodyError] = useState<string | null>(null)
   const activeBindingMatchesPanel = normalizedActiveBinding
     ? areReasoningSettingsEqual(normalizedActiveBinding, reasoningSettings)
       && (typeof activeBindingPromptBias !== 'string' || activeBindingPromptBias === promptBias)
@@ -64,6 +70,22 @@ export default function PresetManager() {
     },
     [activeModel, activeProvider, reasoningSettings, setSetting]
   )
+
+  useEffect(() => {
+    setLocalCustomBodyJson(customBody.rawJson)
+    setCustomBodyError(null)
+  }, [customBody.rawJson])
+
+  const updateCustomBody = useCallback((rawJson: string) => {
+    setLocalCustomBodyJson(rawJson)
+    try {
+      JSON.parse(rawJson)
+      setCustomBodyError(null)
+      updateReasoning({ customBody: { ...customBody, rawJson } })
+    } catch (error: any) {
+      setCustomBodyError(error.message)
+    }
+  }, [customBody, updateReasoning])
 
   const activePreset = REASONING_PRESETS.find(
     (p) => p.prefix === reasoningSettings.prefix && p.suffix === reasoningSettings.suffix
@@ -205,6 +227,32 @@ export default function PresetManager() {
             </span>
           </div>
         )}
+
+        {/* Custom request body */}
+        <div className={styles.fieldGroup}>
+          <div className={styles.customBodyHeader}>
+            <span className={styles.label}>{t('loomBuilder.settings.customBody')}</span>
+            <Toggle.Checkbox
+              checked={customBody.enabled}
+              onChange={(enabled) => updateReasoning({ customBody: { ...customBody, enabled } })}
+              label={t('loomBuilder.settings.enabled')}
+            />
+          </div>
+          <div className={!customBody.enabled ? styles.customBodyDisabled : undefined}>
+            <textarea
+              name="reasoning-custom-body"
+              aria-label={t('loomBuilder.settings.customBody')}
+              className={styles.textarea}
+              value={localCustomBodyJson}
+              onChange={(event) => updateCustomBody(event.target.value)}
+              placeholder={'{\n  "thinking": { "type": "enabled" }\n}'}
+              spellCheck={false}
+              rows={5}
+            />
+            {customBodyError && <div className={styles.jsonError}>{customBodyError}</div>}
+            <div className={styles.toggleDesc}>{t('loomBuilder.settings.customBodyHint')}</div>
+          </div>
+        </div>
 
         {/* Keep N reasoning blocks in history */}
         <div className={styles.fieldGroup}>

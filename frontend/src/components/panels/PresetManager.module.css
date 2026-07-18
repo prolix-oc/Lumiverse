@@ -173,6 +173,24 @@
   border-color: var(--lumiverse-primary-040, rgba(140, 130, 255, 0.4));
 }
 
+.customBodyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.customBodyDisabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.jsonError {
+  margin-top: 4px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-error, #ef4444);
+}
+
 /* ── Quick buttons row (for Start Reply With) ── */
 .quickBtnRow {
   display: flex;
