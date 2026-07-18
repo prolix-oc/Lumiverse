@@ -120,6 +120,13 @@ import {
   type BookSource,
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
+import {
+  isGenuinelyNewChat,
+  resolveNewChatPromptConfig,
+  resolvePromptBehavior,
+  shouldInjectEmptySendNudge,
+  shouldInjectGroupNudge,
+} from "./prompt-behavior";
 
 export type {
   VectorActivatedEntry,
@@ -504,32 +511,6 @@ function isDecorativeNewChatSeparator(text: string): boolean {
   if (trimmed === "[Start a new Chat]") return true;
   return /^\[Start a new group chat(?:\. Group members:.*)?\]$/i.test(trimmed);
 }
-
-function isGenuinelyNewChat(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.extra?.hidden === true) continue;
-    if (!msg.is_user && msg.extra?.greeting !== true) return false;
-  }
-  return true;
-}
-
-function resolveNewChatPromptConfig(
-  promptBehavior: PromptBehavior,
-  chat: Chat,
-): { prompt: string | undefined; label: string } {
-  if (chat.metadata?.group === true) {
-    return {
-      prompt: promptBehavior.newGroupChatPrompt ?? promptBehavior.newChatPrompt,
-      label: "New Group Chat Prompt",
-    };
-  }
-  return {
-    prompt: promptBehavior.newChatPrompt,
-    label: "New Chat Prompt",
-  };
-}
-
-const DEFAULT_EMPTY_SEND_NUDGE = "[Write the next reply only as {{char}}.]";
 
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
@@ -1276,7 +1257,10 @@ export async function assemblePrompt(
     (b: PromptBlock) => ({ ...b }),
   );
   const prompts = preset?.prompts ?? {};
-  const promptBehavior: PromptBehavior = prompts.promptBehavior ?? {};
+  // Presets may predate a behavior field, arrive from a partial import, or
+  // never have been opened by the Loom editor. Resolve their behavior values
+  // at the generation boundary so every mode shares the same reliable defaults.
+  const promptBehavior = resolvePromptBehavior(prompts.promptBehavior);
   const completionSettings: CompletionSettings =
     prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null =
@@ -2346,7 +2330,10 @@ export async function assemblePrompt(
         const {
           prompt: newChatPrompt,
           label: newChatPromptLabel,
-        } = resolveNewChatPromptConfig(promptBehavior, chat);
+        } = resolveNewChatPromptConfig(
+          promptBehavior,
+          chat.metadata?.group === true,
+        );
         if (newChatPrompt) {
           const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
             .text;
@@ -3125,18 +3112,15 @@ export async function assemblePrompt(
   // Empty-send nudge: normal generations that start from an assistant-ending
   // chat need a fresh user turn so providers produce a new reply instead of
   // relying on continue semantics. Group/member-targeted nudges use groupNudge.
-  const lastVisibleChatMessage = [...messages]
-    .reverse()
-    .find((msg) => msg.extra?.hidden !== true);
   if (
-    ctx.generationType === "normal" &&
-    !ctx.targetCharacterId &&
-    lastVisibleChatMessage &&
-    !lastVisibleChatMessage.is_user &&
     result.length > 0 &&
-    result[result.length - 1].role !== "user"
+    shouldInjectEmptySendNudge({
+      generationType: ctx.generationType,
+      targetCharacterId: ctx.targetCharacterId,
+      messages,
+    })
   ) {
-    const nudge = promptBehavior.emptySendNudge ?? DEFAULT_EMPTY_SEND_NUDGE;
+    const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
       const resolved = (await evaluate(nudge, macroEnv, registry)).text;
       if (resolved) {
@@ -3155,7 +3139,7 @@ export async function assemblePrompt(
   let assistantPrefill: string | undefined;
 
   // Group chat nudge from preset (e.g. "[Write next reply only as {{char}}]")
-  if (ctx.targetCharacterId) {
+  if (shouldInjectGroupNudge(ctx.targetCharacterId)) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
       const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
