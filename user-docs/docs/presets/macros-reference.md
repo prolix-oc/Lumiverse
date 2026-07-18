@@ -999,6 +999,32 @@ Information about the current system state.
 | `{{hasExtension::name}}` | `{{has_extension}}` | `"true"` / `"false"` — whether a named extension is active |
 | `{{userColorMode}}` | `{{user_color_mode}}`, `{{colorMode}}`, `{{color_mode}}` | User's color scheme (`dark`, `light`, or `system`) |
 
+### Prompt Block Placement
+
+These read-only macros report the **effective placement** of the preset block currently being rendered. If that block uses a [Placement Selector](prompt-variables.md#placement-selector), they reflect the user's saved Dropdown choice; otherwise they reflect the block's ordinary configuration.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{promptBlockRole}}` | `{{blockRole}}`, `{{prompt_block_role}}` | Current block role: `system`, `user`, `assistant`, `user_append`, or `assistant_append` |
+| `{{promptBlockPosition}}` | `{{blockPosition}}`, `{{prompt_block_position}}` | Current block position: `pre_history`, `post_history`, or `in_history` |
+| `{{promptBlockDepth}}` | `{{blockDepth}}`, `{{prompt_block_depth}}` | Current block depth as a number (including `0`) |
+
+They resolve to an empty string outside preset-block rendering, such as in a free-form macro preview. They only report placement; they cannot move or modify a block.
+
+**Example — adapt wording to placement:**
+
+```
+{{if::{{promptBlockPosition}} == in_history}}
+This is an in-history reminder. Treat it as context attached near the conversation.
+{{else}}
+This is a top-level instruction block.
+{{/if}}
+
+{{if::{{promptBlockRole}} == system}}
+Follow these instructions at the system level.
+{{/if}}
+```
+
 ---
 
 ## Reasoning / Chain-of-Thought

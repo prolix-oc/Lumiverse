@@ -66,10 +66,11 @@ nav = [
     { "Setting Up a Connection" = "connections/setting-up.md" },
     { "Supported Providers" = "connections/providers.md" },
   ] },
-  { "Reasoning" = [
+  { "Presets" = [
     { "Overview" = "presets/index.md" },
     { "Understanding Presets" = "presets/understanding-presets.md" },
     { "Prompt Blocks" = "presets/prompt-blocks.md" },
+    { "Prompt Variables" = "presets/prompt-variables.md" },
     { "Sampler Settings" = "presets/sampler-settings.md" },
     { "Preset Profiles" = "presets/preset-profiles.md" },
     { "Macros Reference" = "presets/macros-reference.md" },
