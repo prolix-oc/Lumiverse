@@ -1,0 +1,93 @@
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 7px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
+  background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.searchIcon {
+  flex: 0 0 auto;
+  color: var(--lumiverse-text-dim);
+}
+
+.input {
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--lumiverse-input-bg, var(--lumiverse-fill-subtle));
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.input:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--lumiverse-primary) 18%, transparent);
+}
+
+.input::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.matchCount {
+  min-width: 42px;
+  overflow: hidden;
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono, monospace);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: color var(--lumiverse-transition-fast, 120ms), border-color var(--lumiverse-transition-fast, 120ms), background var(--lumiverse-transition-fast, 120ms);
+}
+
+.iconButton:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-010);
+}
+
+.iconButton:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+@media (max-width: 600px) {
+  .bar {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+
+  .matchCount {
+    min-width: 36px;
+  }
+
+  .iconButton {
+    width: 27px;
+    height: 27px;
+  }
+}

@@ -9,9 +9,10 @@ interface MessageCardProps {
   message: Message
   chatId: string
   depth?: number
+  findQuery?: string
 }
 
-const MessageCard = memo(function MessageCard({ message, chatId, depth = 0 }: MessageCardProps) {
+const MessageCard = memo(function MessageCard({ message, chatId, depth = 0, findQuery = '' }: MessageCardProps) {
   const displayMode = useStore((s) => s.chatSheldDisplayMode)
   const messageSelectMode = useStore((s) => s.messageSelectMode)
   const selectedMessageIds = useStore((s) => s.selectedMessageIds)
@@ -42,6 +43,7 @@ const MessageCard = memo(function MessageCard({ message, chatId, depth = 0 }: Me
         isSelectMode={messageSelectMode}
         isSelected={isSelected}
         onToggleSelect={handleSelectClick}
+        findQuery={findQuery}
       />
     )
   }
@@ -54,6 +56,7 @@ const MessageCard = memo(function MessageCard({ message, chatId, depth = 0 }: Me
       isSelectMode={messageSelectMode}
       isSelected={isSelected}
       onToggleSelect={handleSelectClick}
+      findQuery={findQuery}
     />
   )
 })

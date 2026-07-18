@@ -1,8 +1,8 @@
-import { get, post, put, patch, del, upload } from './client'
+import { get, post, put, patch, del, upload, type RequestOptions } from './client'
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, ChatSummary, ChatTreeNode
+  GroupedRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
@@ -161,8 +161,12 @@ export const chatsApi = {
 }
 
 export const messagesApi = {
-  list(chatId: string, params?: { limit?: number; offset?: number; tail?: boolean }) {
-    return get<PaginatedResult<Message>>(`/chats/${chatId}/messages`, params)
+  list(chatId: string, params?: { limit?: number; offset?: number; tail?: boolean }, options?: RequestOptions) {
+    return get<PaginatedResult<Message>>(`/chats/${chatId}/messages`, params, options)
+  },
+
+  search(chatId: string, query: string, options?: RequestOptions) {
+    return get<ChatMessageSearchResult>(`/chats/${chatId}/messages/search`, { q: query }, options)
   },
 
   get(chatId: string, messageId: string) {

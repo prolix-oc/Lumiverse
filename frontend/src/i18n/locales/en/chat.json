@@ -95,6 +95,18 @@
     "modCmd": "Cmd",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "Find in chat",
+    "placeholder": "Find in chat…",
+    "clear": "Clear find text",
+    "previous": "Previous result",
+    "next": "Next result",
+    "close": "Close find",
+    "matchCount": "{{current}} of {{total}}",
+    "noMatches": "No results",
+    "loading": "Searching…",
+    "searchFailed": "Couldn't search this chat"
+  },
   "quickMenu": {
     "noGuidedGenerations": "No guided generations configured.",
     "disableAllGuidedGenerations": "Disable all guided generations",

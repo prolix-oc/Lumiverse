@@ -38,6 +38,7 @@ export interface BubbleMessageDefaultProps {
   isSelectMode: boolean
   isSelected: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery: string
   // Pre-computed from useMessageCard
   isEditing: boolean
   editContent: string
@@ -175,6 +176,7 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
 
 export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+  findQuery,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
   tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor, userLeft,
@@ -439,6 +441,7 @@ export default function BubbleMessageDefault({
               messageId={message.id}
               chatId={chatId}
               depth={depth}
+              findQuery={findQuery}
             />
           ) : isActivelyStreaming ? (
             <StreamingIndicator />

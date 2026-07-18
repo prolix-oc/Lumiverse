@@ -1324,6 +1324,38 @@ export async function install(
 
 // ─── Update ──────────────────────────────────────────────────────────────
 
+const LOCAL_GIT_COMMAND_TIMEOUT_MS = 15_000;
+const GIT_PULL_TIMEOUT_MS = 60_000;
+const GIT_FETCH_TIMEOUT_MS = 30_000;
+
+function spawnFailureReason(
+  proc: SpawnAsyncResult,
+  timeoutMs: number
+): string {
+  if (proc.timedOut) {
+    return `timed out after ${timeoutMs / 1000}s`;
+  }
+  return proc.stderr.trim() || proc.stdout.trim() || `exit code ${proc.exitCode}`;
+}
+
+async function runGitStep(
+  repo: string,
+  cmd: string[],
+  label: string,
+  options: { timeoutMs: number; ignoreStdout?: boolean }
+): Promise<void> {
+  const proc = await spawnAsync(cmd, {
+    cwd: repo,
+    timeoutMs: options.timeoutMs,
+    ignoreStdout: options.ignoreStdout,
+  });
+  if (proc.exitCode === 0) return;
+
+  throw new Error(
+    `${label} failed: ${spawnFailureReason(proc, options.timeoutMs)}`
+  );
+}
+
 export async function update(identifier: string): Promise<ExtensionInfo> {
   const repo = repoDir(identifier);
   if (!existsSync(repo)) {
@@ -1340,16 +1372,17 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   if (!devMode) {
     // Clean build artifacts and installed dependencies so git pull succeeds.
     // We don't read stdout for these — ignore it to reduce pipe overhead.
-    await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
-    await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
-
-    const pullProc = await spawnAsync(["git", "pull"], {
-      cwd: repo,
-      timeoutMs: 60_000,
+    await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
+      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+      ignoreStdout: true,
     });
-    if (pullProc.exitCode !== 0) {
-      throw new Error(`git pull failed: ${pullProc.stderr}`);
-    }
+    await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
+      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+      ignoreStdout: true,
+    });
+    await runGitStep(repo, ["git", "pull"], "git pull", {
+      timeoutMs: GIT_PULL_TIMEOUT_MS,
+    });
   }
 
   // Re-read manifest — in non-dev mode the pull may have modified it; in
@@ -1828,50 +1861,39 @@ export async function switchBranch(
     throw new Error(`Extension repo not found: ${identifier}`);
   }
 
-  const runGitStep = async (
-    cmd: string[],
-    label: string,
-    options: { timeoutMs?: number; ignoreStdout?: boolean } = {}
-  ): Promise<void> => {
-    const proc = await spawnAsync(cmd, {
-      cwd: repo,
-      timeoutMs: options.timeoutMs,
-      ignoreStdout: options.ignoreStdout,
-    });
-    if (proc.exitCode === 0) return;
-
-    const reason = proc.timedOut
-      ? `timed out after ${(options.timeoutMs ?? 0) / 1000}s`
-      : proc.stderr.trim() || proc.stdout.trim() || "unknown error";
-    throw new Error(`${label} failed: ${reason}`);
-  };
-
   // Clean working tree
-  await runGitStep(["git", "checkout", "."], "git checkout .", {
+  await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
     ignoreStdout: true,
-    timeoutMs: 15_000,
+    timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
   });
-  await runGitStep(["git", "clean", "-fd"], "git clean -fd", {
+  await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
     ignoreStdout: true,
-    timeoutMs: 15_000,
+    timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
   });
 
   // Widen the fetch refspec — shallow/single-branch clones only track one branch
   await runGitStep(
+    repo,
     ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
     "git config remote.origin.fetch",
-    { timeoutMs: 15_000 }
+    { timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS }
   );
 
   // Fetch the target branch (--depth=1 to keep it shallow)
-  await runGitStep(["git", "fetch", "--depth", "1", "origin", branch], `git fetch ${branch}`, {
-    timeoutMs: 30_000,
-  });
+  await runGitStep(
+    repo,
+    ["git", "fetch", "--depth", "1", "origin", branch],
+    `git fetch ${branch}`,
+    { timeoutMs: GIT_FETCH_TIMEOUT_MS }
+  );
 
   // Checkout the branch
-  await runGitStep(["git", "checkout", "-B", branch, `origin/${branch}`], `git checkout ${branch}`, {
-    timeoutMs: 30_000,
-  });
+  await runGitStep(
+    repo,
+    ["git", "checkout", "-B", branch, `origin/${branch}`],
+    `git checkout ${branch}`,
+    { timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS }
+  );
 
   // Re-read manifest
   const manifest = await readManifest(identifier);

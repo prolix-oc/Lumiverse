@@ -12,6 +12,7 @@ import {
   listRecentChatsGrouped,
   patchMessageExtra,
   removeGroupMember,
+  searchMessages,
   setGroupMemberAlternateFields,
   updateMessage,
 } from "./chats.service";
@@ -151,6 +152,32 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDatabase();
+});
+
+describe("chat message search", () => {
+  test("searches the active swipe and omits internal injected messages", () => {
+    seedChat("chat-find", "c1", "Find", "{}", 100);
+    seedMessage("before", "chat-find", "No match here", {}, { index: 0 });
+    seedMessage("active-swipe", "chat-find", "Stale content", {}, { index: 1 });
+    getDb().query("UPDATE messages SET swipes = ?, swipe_id = ? WHERE id = ?").run(
+      JSON.stringify(["needle in an inactive swipe", "Needle in the active swipe"]),
+      1,
+      "active-swipe",
+    );
+    seedMessage("injected", "chat-find", "Needle in internal content", { _loom_inject: { block_id: "hidden" } }, { index: 2 });
+    seedMessage("after", "chat-find", "A second needle result", {}, { index: 3 });
+
+    const result = searchMessages("u1", "chat-find", "needle");
+
+    expect(result.total).toBe(2);
+    expect(result.message_total).toBe(4);
+    expect(result.truncated).toBe(false);
+    expect(result.data).toEqual([
+      { id: "active-swipe", index_in_chat: 1, offset: 1 },
+      { id: "after", index_in_chat: 3, offset: 3 },
+    ]);
+    expect(searchMessages("u1", "chat-find", "inactive").total).toBe(0);
+  });
 });
 
 describe("recent chats", () => {

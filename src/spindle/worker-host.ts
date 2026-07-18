@@ -11,27 +11,11 @@ import type {
   ReasoningSettingsDTO,
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
-  CharacterDTO,
-  CharacterAvatarUploadDTO,
-  ChatDTO,
-  WorldBookDTO,
-  WorldBookEntryDTO,
-  RegexScriptDTO,
-  RegexScopeDTO,
-  RegexTargetDTO,
-  DatabankDTO,
-  DatabankDocumentDTO,
   DatabankDocumentCreateDTO,
-  PersonaDTO,
-  GlobalAddonDTO,
-  ActivatedWorldInfoEntryDTO,
   DryRunResultDTO,
-  ChatMemoryResultDTO,
-  ThemeOverrideDTO,
   SpindleCommandDTO,
   SpindleCommandContextDTO,
   CouncilMemberContext,
-  ImageDTO,
   ImageUploadDTO,
 } from "lumiverse-spindle-types";
 import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
@@ -64,53 +48,28 @@ import {
   clearPromptRegexOwner,
 } from "./prompt-regex-ownership";
 import * as managerSvc from "./manager.service";
-import {
-  BUILT_IN_DRAWER_TABS,
-  getVisibleSettingsTabs as getVisibleUISettingsTabs,
-} from "./ui-registry";
-import { getUserExtensionDrawerTabs } from "./ui-frontend-state.service";
 import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
-import * as charactersSvc from "../services/characters.service";
 import * as chatsSvc from "../services/chats.service";
-import {
-  getCharacterWorldBookIds,
-  setCharacterWorldBookIds,
-} from "../utils/character-world-books";
-import * as worldBooksSvc from "../services/world-books.service";
-import { pruneOrphanedWiState } from "../services/wi-state-prune.service";
-import * as presetsSvc from "../services/presets.service";
-import * as regexScriptsSvc from "../services/regex-scripts.service";
-import * as databanksSvc from "../services/databank";
-import * as filesSvc from "../services/files.service";
-import * as personasSvc from "../services/personas.service";
-import * as globalAddonsSvc from "../services/global-addons.service";
-import * as settingsSvc from "../services/settings.service";
-import * as councilSettingsSvc from "../services/council/council-settings.service";
-import * as packsSvc from "../services/packs.service";
-import { buildCouncilMemberContext } from "../services/council/tool-runtime";
+import type * as presetsSvc from "../services/presets.service";
 import { resolveInterceptorTimeout } from "../services/spindle-settings.service";
 import { getSidecarSettings } from "../services/sidecar-settings.service";
-import * as colorExtractionSvc from "../services/color-extraction.service";
-import { generateThemeVariables as generateThemeVariablesFn } from "../utils/theme-engine";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
-import * as embeddingsSvc from "../services/embeddings.service";
-import * as memoryCortexSvc from "../services/memory-cortex";
-import * as entityGraphSvc from "../services/memory-cortex/entity-graph";
-import * as cortexConsolidationSvc from "../services/memory-cortex/consolidation";
-import * as cortexVaultSvc from "../services/memory-cortex/vault";
-import * as chatMemoryCacheSvc from "../services/chat-memory-cache.service";
-import * as vectorizationQueueSvc from "../services/vectorization-queue.service";
 import * as tokenizerSvc from "../services/tokenizer.service";
 import * as imageGenConnSvc from "../services/image-gen-connections.service";
-import * as imagesSvc from "../services/images.service";
-import * as audioSvc from "../services/audio.service";
-import * as mediaSvc from "../services/media.service";
+import type * as imagesSvc from "../services/images.service";
+import type * as mediaSvc from "../services/media.service";
 import { spawnAsync } from "./spawn-async";
 import { assembleSpindleBlocks, type SpindleAssembleInput } from "./assembly";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import "../image-gen/index";
-import { getEphemeralPoolConfig } from "./ephemeral-pool.service";
+import { WorkerHostStorageApi } from "./worker-host-storage-api";
+import { WorkerHostStateApi } from "./worker-host-state-api";
+import { WorkerHostContentApi } from "./worker-host-content-api";
+import { WorkerHostMemoryApi } from "./worker-host-memory-api";
+import { WorkerHostProcessApi } from "./worker-host-process-api";
+import { WorkerHostInteractionApi } from "./worker-host-interaction-api";
+import { WorkerHostPresentationApi } from "./worker-host-presentation-api";
 import { createRuntimeTransport, type RuntimeTransport } from "./runtime-transport";
 import {
   readSharedRpcEndpoint,
@@ -121,9 +80,8 @@ import {
   type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
-import { PresetRevisionConflictError, type CreatePresetInput, type UpdatePresetInput } from "../types/preset";
+import type { CreatePresetInput, UpdatePresetInput } from "../types/preset";
 import { getDb } from "../db/connection";
-import { normalizeSpindleAppNavigationPath } from "./url-safety";
 import {
   getMessages as getChatMessages,
   createMessage as createChatMessage,
@@ -132,38 +90,15 @@ import {
   getMessage as getChatMessage,
 } from "../services/chats.service";
 import {
-  putSecret,
-  getSecret,
-  deleteSecret,
-  listSecretKeys,
-  validateSecret,
-} from "../services/secrets.service";
-import { getUserExtensionPath } from "../auth/provision";
-import {
   existsSync,
   readFileSync,
   writeFileSync,
-  unlinkSync,
-  readdirSync,
   mkdirSync,
-  mkdtempSync,
-  statSync,
-  renameSync,
-  rmSync,
 } from "fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "crypto";
-import { join, resolve, relative, sep, extname } from "path";
-import { tmpdir } from "os";
+import { join, resolve, sep } from "path";
 
-type PresetConflictWorkerError = {
-  code: string;
-  message: string;
-  presetId?: string;
-  expectedCacheRevision?: number;
-  actualCacheRevision?: number;
-};
-const EPHEMERAL_MAX_FILES = 250;
 const sharedRpcPermissionScope = new AsyncLocalStorage<string | undefined>();
 
 type ManagedSpindlePermission = Parameters<typeof managerSvc.hasPermission>[1];
@@ -196,9 +131,6 @@ type TokenCountResult = {
   approximate: boolean;
 };
 
-type ResolvedWorkerMediaSource = mediaSvc.ResolvedMediaSourceDTO & {
-  cleanup?: () => void;
-};
 
 type FrontendProcessState =
   | "starting"
@@ -323,8 +255,6 @@ type BackendProcessRuntimeInit = {
   metadata?: Record<string, unknown>;
   userId?: string;
 };
-
-type SpindleUserRole = "operator" | "admin" | "user";
 
 type HostToBackendProcessRuntime =
   | { type: "init"; process: BackendProcessRuntimeInit }
@@ -658,59 +588,6 @@ async function getFrontendVersion(): Promise<string> {
 const CORS_PROXY_TIMEOUT_MS = 30_000;
 const CORS_PROXY_MAX_BODY_BYTES = 25 * 1024 * 1024; // 25 MB
 
-const MAX_CSS_VALUE_LENGTH = 1024;
-
-/**
- * Reject CSS variable values that could exfiltrate data, deface the UI in
- * surprising ways, or chain into a CSS-injection attack. We accept ordinary
- * literals (colors, lengths, shadows, gradients, font lists, transforms) and
- * reject things like `url(javascript:...)`, `expression(...)`, `@import`, and
- * embedded HTML/JS — everything you'd expect a Lumiverse theme variable to
- * never contain.
- */
-function validateCssValue(value: unknown): string | null {
-  if (value === undefined || value === null) return "value must be a string";
-  if (typeof value !== "string") return "value must be a string";
-  if (value.length > MAX_CSS_VALUE_LENGTH) return `value exceeds ${MAX_CSS_VALUE_LENGTH} characters`;
-  if (value.length === 0) return null; // empty string clears the var, which is fine
-
-  const trimmed = value.trim();
-  // Strip any backslash escapes so attackers can't smuggle disallowed tokens
-  // like `expr\ession(...)`. We're checking the literal characters the browser
-  // would interpret.
-  const lowered = trimmed.toLowerCase().replace(/\\/g, "");
-
-  // Disallow control characters and unbalanced delimiters.
-  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) return "control characters not allowed";
-  if (/[<>]/.test(value)) return "angle brackets not allowed";
-  if (value.includes("{") || value.includes("}") || value.includes(";")) {
-    return "must be a single property value (no { } ; )";
-  }
-
-  // Block CSS sinks that can execute or exfiltrate.
-  if (lowered.includes("javascript:")) return "javascript: URLs not allowed";
-  if (lowered.includes("vbscript:")) return "vbscript: URLs not allowed";
-  if (lowered.includes("data:text/html")) return "data:text/html URLs not allowed";
-  if (lowered.includes("expression(")) return "CSS expression() not allowed";
-  if (lowered.startsWith("@")) return "at-rules not allowed in variable values";
-  if (/^url\(\s*['"]?\s*(?!https?:|data:image\/)/i.test(trimmed)) {
-    return "url() must point to https: or a data:image/* payload";
-  }
-  // Block image-attribute selector exfil patterns (`image-set("https://...")`)
-  // unless they are HTTPS or safe data: image URLs — same rule as url().
-  if (/image-set\(/i.test(trimmed)) {
-    if (!/image-set\(\s*['"]?\s*(https?:|data:image\/)/i.test(trimmed)) {
-      return "image-set() must point to https: or a data:image/* payload";
-    }
-  }
-  return null;
-}
-
-/**
- * Drain a fetch response body up to `maxBytes`, throwing if the cap is hit.
- * Using `.text()` would buffer the entire body unconditionally, so an attacker
- * could ship a multi-GB response and exhaust process memory.
- */
 async function readResponseBodyCapped(response: Response, maxBytes: number): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader();
@@ -910,40 +787,6 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
 }
 
 export class WorkerHost {
-  private static readonly FULL_THEME_SENTINEL_KEYS = [
-    "--lumiverse-primary",
-    "--lumiverse-bg",
-    "--lumiverse-text",
-    "--lumiverse-border",
-    "--lumiverse-fill",
-    "--lcs-glass-bg",
-  ] as const;
-  private static readonly FULL_THEME_MIN_KEYS = 40;
-
-  /** Keys that represent user preferences, not theme colors.
-   *  applyPalette strips these so it only changes colors — glass, radii,
-   *  fonts, scale, and transitions are always owned by the user's config. */
-  private static readonly USER_PREFERENCE_KEYS = new Set([
-    "--lcs-glass-blur",
-    "--lcs-glass-soft-blur",
-    "--lcs-glass-strong-blur",
-    "--lcs-radius",
-    "--lcs-radius-sm",
-    "--lcs-radius-xs",
-    "--lcs-transition",
-    "--lcs-transition-fast",
-    "--lumiverse-radius",
-    "--lumiverse-radius-sm",
-    "--lumiverse-radius-md",
-    "--lumiverse-radius-lg",
-    "--lumiverse-radius-xl",
-    "--lumiverse-font-family",
-    "--lumiverse-font-mono",
-    "--lumiverse-font-scale",
-    "--lumiverse-ui-scale",
-    "--lumiverse-transition",
-    "--lumiverse-transition-fast",
-  ]);
   private runtime: RuntimeTransport | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
@@ -964,14 +807,8 @@ export class WorkerHost {
   private worldInfoInterceptorUnregister: (() => void) | null = null;
   private registeredMacroNames = new Set<string>();
   private macroValueCache = new Map<string, string>();
-  private toastTimestamps: number[] = [];
-  private static readonly TOAST_RATE_LIMIT = 5;
-  private static readonly TOAST_RATE_WINDOW_MS = 10_000;
-  private registeredCommands: SpindleCommandDTO[] = [];
-  private static readonly MAX_COMMANDS_PER_EXTENSION = 20;
   private static readonly MAX_BACKEND_PROCESSES = 16;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
-  private commandInvokedHandlers = new Set<string>(); // tracked for cleanup only
   private onWorkerReady: (() => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
   private onRuntimeExit: (() => void) | null = null;
@@ -980,10 +817,13 @@ export class WorkerHost {
   private runtimeStatsInterval: ReturnType<typeof setInterval> | null = null;
   private readonly installScope: "operator" | "user";
   private readonly installedByUserId: string | null;
-  private frontendProcesses = new Map<string, FrontendProcessRecord>();
-  private frontendProcessKeyIndex = new Map<string, string>();
-  private backendProcesses = new Map<string, BackendProcessRecord>();
-  private backendProcessKeyIndex = new Map<string, string>();
+  private readonly storageApi: WorkerHostStorageApi;
+  private readonly stateApi: WorkerHostStateApi;
+  private readonly contentApi: WorkerHostContentApi;
+  private readonly memoryApi: WorkerHostMemoryApi;
+  private readonly processApi: WorkerHostProcessApi;
+  private readonly interactionApi: WorkerHostInteractionApi;
+  private readonly presentationApi: WorkerHostPresentationApi;
   private sharedRpcPermissionScopes = new Map<string, Set<string>>();
 
   constructor(
@@ -997,6 +837,63 @@ export class WorkerHost {
       typeof metadata.installed_by_user_id === "string" && metadata.installed_by_user_id.trim()
         ? metadata.installed_by_user_id
         : null;
+    this.storageApi = new WorkerHostStorageApi({
+      identifier: manifest.identifier,
+      installScope: this.installScope,
+      installedByUserId: this.installedByUserId,
+      hasPermission: (permission) => this.hasPermission(permission),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.stateApi = new WorkerHostStateApi({
+      getChatOwnerId: (chatId) => this.getChatOwnerId(chatId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      hasPermission: (permission) => this.hasPermission(permission),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.contentApi = new WorkerHostContentApi({
+      manifest,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.memoryApi = new WorkerHostMemoryApi({
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      postResponse: (message) => this.postToWorker(message),
+    });
+    this.processApi = new WorkerHostProcessApi({
+      extensionId,
+      manifest,
+      installScope: this.installScope,
+      installedByUserId: this.installedByUserId,
+      storageRootPath: () => this.getStorageRootPath(),
+      post: (message) => this.postToWorker(message),
+      resolve: (requestId, result) => this.resolveRequest(requestId, result),
+      reject: (requestId, error) => this.rejectRequest(requestId, error),
+    });
+    this.interactionApi = new WorkerHostInteractionApi({
+      extensionId,
+      manifest,
+      installScope: this.installScope,
+      installedByUserId: this.installedByUserId,
+      isRuntimeActive: () => this.runtime !== null,
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      post: (message) => this.postToWorker(message as RuntimeHostToWorker),
+    });
+    this.presentationApi = new WorkerHostPresentationApi({
+      extensionId,
+      manifest,
+      installScope: this.installScope,
+      installedByUserId: this.installedByUserId,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      post: (message) => this.postToWorker(message),
+    });
   }
 
   private getScopedUserId(): string | null {
@@ -1030,449 +927,6 @@ export class WorkerHost {
 
     const scoped = this.sharedRpcPermissionScopes.get(scopeId);
     return Boolean(scoped?.has(permission)) && managerSvc.hasPermission(this.manifest.identifier, permission);
-  }
-
-  private resolveFrontendProcessUserId(userId?: string): string {
-    if (this.installScope === "user") {
-      if (!this.installedByUserId) {
-        throw new Error("Extension owner is not set");
-      }
-      return this.installedByUserId;
-    }
-
-    if (typeof userId !== "string" || !userId.trim()) {
-      throw new Error("userId is required when spawning a managed process");
-    }
-
-    return userId.trim();
-  }
-
-  private buildFrontendProcessKey(userId: string, kind: string, key: string): string {
-    return `${userId}:${kind}:${key}`;
-  }
-
-  private snapshotFrontendProcess(record: FrontendProcessRecord): FrontendProcessInfo {
-    return {
-      processId: record.processId,
-      kind: record.kind,
-      ...(record.key ? { key: record.key } : {}),
-      state: record.state,
-      ...(record.userId ? { userId: record.userId } : {}),
-      ...(record.metadata ? { metadata: record.metadata } : {}),
-      startedAt: record.startedAt,
-      ...(record.readyAt ? { readyAt: record.readyAt } : {}),
-      ...(record.lastHeartbeatAt ? { lastHeartbeatAt: record.lastHeartbeatAt } : {}),
-      ...(record.endedAt ? { endedAt: record.endedAt } : {}),
-      ...(record.exitReason ? { exitReason: record.exitReason } : {}),
-      ...(record.error ? { error: record.error } : {}),
-    };
-  }
-
-  private clearFrontendProcessTimers(record: FrontendProcessRecord): void {
-    if (record.startupTimer) {
-      clearTimeout(record.startupTimer);
-      record.startupTimer = null;
-    }
-    if (record.heartbeatTimer) {
-      clearTimeout(record.heartbeatTimer);
-      record.heartbeatTimer = null;
-    }
-  }
-
-  private emitFrontendProcessLifecycle(
-    record: FrontendProcessRecord,
-    previousState?: FrontendProcessState
-  ): void {
-    this.postToWorker({
-      type: "frontend_process_lifecycle",
-      event: {
-        processId: record.processId,
-        kind: record.kind,
-        ...(record.key ? { key: record.key } : {}),
-        ...(record.userId ? { userId: record.userId } : {}),
-        state: record.state,
-        ...(previousState ? { previousState } : {}),
-        at: record.endedAt ?? record.lastHeartbeatAt ?? record.readyAt ?? record.startedAt,
-        ...(record.exitReason ? { exitReason: record.exitReason } : {}),
-        ...(record.error ? { error: record.error } : {}),
-        ...(record.metadata ? { metadata: record.metadata } : {}),
-      },
-    });
-  }
-
-  private armFrontendHeartbeatTimer(record: FrontendProcessRecord): void {
-    if (record.heartbeatTimeoutMs <= 0) return;
-    if (record.heartbeatTimer) clearTimeout(record.heartbeatTimer);
-    record.heartbeatTimer = setTimeout(() => {
-      const latest = this.frontendProcesses.get(record.processId);
-      if (!latest) return;
-      this.requestFrontendProcessStop(latest, "timed_out");
-      this.finalizeFrontendProcess(latest, "timed_out", "timed_out", "Frontend process heartbeat timed out");
-    }, record.heartbeatTimeoutMs);
-  }
-
-  private requestFrontendProcessStop(record: FrontendProcessRecord, reason?: string): void {
-    eventBus.emit(
-      EventType.SPINDLE_FRONTEND_PROCESS,
-      {
-        extensionId: this.extensionId,
-        identifier: this.manifest.identifier,
-        action: "stop",
-        processId: record.processId,
-        ...(reason ? { reason } : {}),
-      },
-      record.userId,
-    );
-  }
-
-  private transitionFrontendProcess(
-    record: FrontendProcessRecord,
-    nextState: FrontendProcessState,
-    extras?: { readyAt?: string; lastHeartbeatAt?: string; endedAt?: string; exitReason?: FrontendProcessExitReason; error?: string }
-  ): void {
-    if (record.state === nextState && !extras) return;
-    const previousState = record.state;
-    record.state = nextState;
-    if (extras?.readyAt) record.readyAt = extras.readyAt;
-    if (extras?.lastHeartbeatAt) record.lastHeartbeatAt = extras.lastHeartbeatAt;
-    if (extras?.endedAt) record.endedAt = extras.endedAt;
-    if (extras?.exitReason) record.exitReason = extras.exitReason;
-    if (extras && "error" in extras) {
-      record.error = extras.error;
-    }
-    this.emitFrontendProcessLifecycle(record, previousState);
-  }
-
-  private finalizeFrontendProcess(
-    record: FrontendProcessRecord,
-    state: Extract<FrontendProcessState, "stopped" | "completed" | "failed" | "timed_out">,
-    exitReason: FrontendProcessExitReason,
-    error?: string,
-  ): void {
-    this.clearFrontendProcessTimers(record);
-    this.transitionFrontendProcess(record, state, {
-      endedAt: new Date().toISOString(),
-      exitReason,
-      ...(error ? { error } : { error: undefined }),
-    });
-    this.frontendProcesses.delete(record.processId);
-    if (record.key) {
-      this.frontendProcessKeyIndex.delete(
-        this.buildFrontendProcessKey(record.userId ?? "", record.kind, record.key)
-      );
-    }
-  }
-
-  private getFrontendProcessRecord(processId: string): FrontendProcessRecord | null {
-    return this.frontendProcesses.get(processId) ?? null;
-  }
-
-  private getFrontendProcessForUser(processId: string, userId: string): FrontendProcessRecord | null {
-    const record = this.frontendProcesses.get(processId);
-    if (!record) return null;
-    if (record.userId && record.userId !== userId) return null;
-    return record;
-  }
-
-  private stopAllFrontendProcesses(exitReason: FrontendProcessExitReason): void {
-    for (const record of Array.from(this.frontendProcesses.values())) {
-      this.requestFrontendProcessStop(record, exitReason);
-      this.clearFrontendProcessTimers(record);
-      this.frontendProcesses.delete(record.processId);
-      if (record.key) {
-        this.frontendProcessKeyIndex.delete(
-          this.buildFrontendProcessKey(record.userId ?? "", record.kind, record.key)
-        );
-      }
-    }
-  }
-
-  private getBackendProcessRuntimeMode(): Extract<import("./runtime-transport").RuntimeTransportMode, "process" | "sandbox"> {
-    const raw = process.env.LUMIVERSE_SPINDLE_RUNTIME_MODE?.trim().toLowerCase();
-    return raw === "sandbox" ? "sandbox" : "process";
-  }
-
-  private buildBackendProcessKey(userId: string, kind: string, key: string): string {
-    return `${userId}:${kind}:${key}`;
-  }
-
-  private snapshotBackendProcess(record: BackendProcessRecord): BackendProcessInfo {
-    return {
-      processId: record.processId,
-      entry: record.entry,
-      kind: record.kind,
-      ...(record.key ? { key: record.key } : {}),
-      state: record.state,
-      ...(record.userId ? { userId: record.userId } : {}),
-      ...(record.metadata ? { metadata: record.metadata } : {}),
-      startedAt: record.startedAt,
-      ...(record.readyAt ? { readyAt: record.readyAt } : {}),
-      ...(record.lastHeartbeatAt ? { lastHeartbeatAt: record.lastHeartbeatAt } : {}),
-      ...(record.endedAt ? { endedAt: record.endedAt } : {}),
-      ...(record.exitReason ? { exitReason: record.exitReason } : {}),
-      ...(record.error ? { error: record.error } : {}),
-    };
-  }
-
-  private clearBackendProcessTimers(record: BackendProcessRecord): void {
-    if (record.startupTimer) {
-      clearTimeout(record.startupTimer);
-      record.startupTimer = null;
-    }
-    if (record.heartbeatTimer) {
-      clearTimeout(record.heartbeatTimer);
-      record.heartbeatTimer = null;
-    }
-    if (record.stopTimer) {
-      clearTimeout(record.stopTimer);
-      record.stopTimer = null;
-    }
-  }
-
-  private emitBackendProcessLifecycle(
-    record: BackendProcessRecord,
-    previousState?: BackendProcessState
-  ): void {
-    this.postToWorker({
-      type: "backend_process_lifecycle",
-      event: {
-        processId: record.processId,
-        entry: record.entry,
-        kind: record.kind,
-        ...(record.key ? { key: record.key } : {}),
-        ...(record.userId ? { userId: record.userId } : {}),
-        state: record.state,
-        ...(previousState ? { previousState } : {}),
-        at: record.endedAt ?? record.lastHeartbeatAt ?? record.readyAt ?? record.startedAt,
-        ...(record.exitReason ? { exitReason: record.exitReason } : {}),
-        ...(record.error ? { error: record.error } : {}),
-        ...(record.metadata ? { metadata: record.metadata } : {}),
-      },
-    });
-  }
-
-  private armBackendHeartbeatTimer(record: BackendProcessRecord): void {
-    if (record.heartbeatTimeoutMs <= 0) return;
-    if (record.heartbeatTimer) clearTimeout(record.heartbeatTimer);
-    record.heartbeatTimer = setTimeout(() => {
-      const latest = this.backendProcesses.get(record.processId);
-      if (!latest) return;
-      try {
-        latest.runtime.terminate(true);
-      } catch {
-        // ignore
-      }
-      this.finalizeBackendProcess(latest, "timed_out", "timed_out", "Backend process heartbeat timed out");
-    }, record.heartbeatTimeoutMs);
-  }
-
-  private armBackendStopTimer(record: BackendProcessRecord): void {
-    if (record.stopTimer) clearTimeout(record.stopTimer);
-    record.stopTimer = setTimeout(() => {
-      const latest = this.backendProcesses.get(record.processId);
-      if (!latest) return;
-      try {
-        latest.runtime.terminate(true);
-      } catch {
-        // ignore
-      }
-      this.finalizeBackendProcess(latest, "stopped", "stopped", "Backend process force-stopped after stop timeout");
-    }, 5_000);
-  }
-
-  private transitionBackendProcess(
-    record: BackendProcessRecord,
-    nextState: BackendProcessState,
-    extras?: { readyAt?: string; lastHeartbeatAt?: string; endedAt?: string; exitReason?: BackendProcessExitReason; error?: string }
-  ): void {
-    if (record.state === nextState && !extras) return;
-    const previousState = record.state;
-    record.state = nextState;
-    if (extras?.readyAt) record.readyAt = extras.readyAt;
-    if (extras?.lastHeartbeatAt) record.lastHeartbeatAt = extras.lastHeartbeatAt;
-    if (extras?.endedAt) record.endedAt = extras.endedAt;
-    if (extras?.exitReason) record.exitReason = extras.exitReason;
-    if (extras && "error" in extras) {
-      record.error = extras.error;
-    }
-    this.emitBackendProcessLifecycle(record, previousState);
-  }
-
-  private finalizeBackendProcess(
-    record: BackendProcessRecord,
-    state: Extract<BackendProcessState, "stopped" | "completed" | "failed" | "timed_out">,
-    exitReason: BackendProcessExitReason,
-    error?: string,
-  ): void {
-    this.clearBackendProcessTimers(record);
-    this.transitionBackendProcess(record, state, {
-      endedAt: new Date().toISOString(),
-      exitReason,
-      ...(error ? { error } : { error: undefined }),
-    });
-    this.backendProcesses.delete(record.processId);
-    if (record.key) {
-      this.backendProcessKeyIndex.delete(
-        this.buildBackendProcessKey(record.userId ?? "", record.kind, record.key)
-      );
-    }
-  }
-
-  private getBackendProcessRecord(processId: string): BackendProcessRecord | null {
-    return this.backendProcesses.get(processId) ?? null;
-  }
-
-  private async resolveBackendProcessEntryPath(entry: string): Promise<string> {
-    const normalized = typeof entry === "string" ? entry.trim().replace(/\\/g, "/") : "";
-    if (!normalized) throw new Error("entry is required");
-    if (normalized.startsWith("/") || normalized.split("/").includes("..")) {
-      throw new Error("entry must be a relative path inside the extension repo");
-    }
-    if (!normalized.startsWith("dist/")) {
-      throw new Error("backend process entries must live under dist/");
-    }
-    if (!/\.(?:cjs|mjs|js)$/.test(normalized)) {
-      throw new Error("backend process entry must be a built JavaScript file");
-    }
-
-    const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
-    const repoAbs = resolve(repoPath);
-    const entryPath = resolve(repoAbs, normalized);
-    const insideRepo = entryPath === repoAbs || entryPath.startsWith(`${repoAbs}${sep}`);
-    if (!insideRepo) {
-      throw new Error(`Path traversal detected in backend process entry: ${entry}`);
-    }
-    if (!(await Bun.file(entryPath).exists())) {
-      throw new Error(`Backend process entry not found: ${normalized}`);
-    }
-
-    const blocked = managerSvc.detectDangerousBackendCapabilities(
-      await Bun.file(entryPath).text(),
-      managerSvc.declaredCapabilitiesFromManifest(this.manifest),
-    );
-    if (blocked.length > 0) {
-      throw new Error(
-        `Backend process entry \"${normalized}\" uses blocked backend capabilities: ${blocked.join(", ")}`
-      );
-    }
-
-    return entryPath;
-  }
-
-  private handleBackendProcessRuntimeMessage(
-    processId: string,
-    message: BackendProcessRuntimeToHost
-  ): void {
-    const record = this.backendProcesses.get(processId);
-    if (!record) return;
-
-    switch (message.type) {
-      case "ready": {
-        if (record.state !== "starting") return;
-        if (record.startupTimer) {
-          clearTimeout(record.startupTimer);
-          record.startupTimer = null;
-        }
-        const now = new Date().toISOString();
-        this.transitionBackendProcess(record, "running", {
-          readyAt: now,
-          lastHeartbeatAt: now,
-        });
-        this.armBackendHeartbeatTimer(record);
-        this.postToWorker({
-          type: "response",
-          requestId: record.requestId,
-          result: this.snapshotBackendProcess(record),
-        });
-        return;
-      }
-
-      case "heartbeat": {
-        if (record.state !== "running") return;
-        const now = new Date().toISOString();
-        this.transitionBackendProcess(record, "running", { lastHeartbeatAt: now });
-        this.armBackendHeartbeatTimer(record);
-        return;
-      }
-
-      case "message": {
-        this.postToWorker({
-          type: "backend_process_message",
-          processId: record.processId,
-          payload: message.payload,
-          userId: record.userId ?? "",
-        });
-        return;
-      }
-
-      case "complete": {
-        if (record.state === "starting") {
-          this.rejectRequest(record.requestId, new Error("Backend process completed before it became ready"));
-        }
-        this.finalizeBackendProcess(record, "completed", "completed");
-        return;
-      }
-
-      case "fail": {
-        const error = message.error?.trim() || "Backend process failed";
-        if (record.state === "starting") {
-          this.rejectRequest(record.requestId, new Error(error));
-        }
-        this.finalizeBackendProcess(record, "failed", "failed", error);
-        return;
-      }
-
-      case "stopped": {
-        if (record.state === "starting") {
-          this.rejectRequest(record.requestId, new Error("Backend process stopped before it became ready"));
-        }
-        this.finalizeBackendProcess(record, "stopped", "stopped");
-        return;
-      }
-    }
-  }
-
-  private handleBackendProcessRuntimeExit(
-    processId: string,
-    exitCode: number | null,
-    signalCode: number | null,
-    error?: Error,
-  ): void {
-    const record = this.backendProcesses.get(processId);
-    if (!record) return;
-
-    const details = error?.message || `Backend process exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
-    if (record.state === "starting") {
-      this.rejectRequest(record.requestId, new Error(details));
-      this.finalizeBackendProcess(record, "failed", "failed", details);
-      return;
-    }
-    if (record.state === "stopping") {
-      this.finalizeBackendProcess(record, "stopped", "stopped");
-      return;
-    }
-    this.finalizeBackendProcess(record, "failed", "failed", details);
-  }
-
-  private stopAllBackendProcesses(exitReason: BackendProcessExitReason): void {
-    for (const record of Array.from(this.backendProcesses.values())) {
-      this.clearBackendProcessTimers(record);
-      try {
-        record.runtime.terminate(true);
-      } catch {
-        // ignore
-      }
-      this.transitionBackendProcess(record, "stopped", {
-        endedAt: new Date().toISOString(),
-        exitReason,
-      });
-      this.backendProcesses.delete(record.processId);
-      if (record.key) {
-        this.backendProcessKeyIndex.delete(
-          this.buildBackendProcessKey(record.userId ?? "", record.kind, record.key)
-        );
-      }
-    }
   }
 
   private getStorageRootPath(identifier: string = this.manifest.identifier): string {
@@ -1660,8 +1114,8 @@ export class WorkerHost {
     const runtimeExitPromise = this.runtimeExitPromise;
     this.runtimeStopping = true;
     this.stopRuntimeStatsSampling();
-    this.stopAllFrontendProcesses("backend_unloaded");
-    this.stopAllBackendProcesses("backend_unloaded");
+    this.processApi.stopAllFrontendProcesses("backend_unloaded");
+    this.processApi.stopAllBackendProcesses("backend_unloaded");
 
     // Wait for the worker to acknowledge shutdown (posted right before
     // process.exit(0) in worker-runtime.ts) — or fall back to terminate()
@@ -1736,8 +1190,8 @@ export class WorkerHost {
 
   private cleanup(): void {
     this.stopRuntimeStatsSampling();
-    this.stopAllFrontendProcesses("backend_unloaded");
-    this.stopAllBackendProcesses("backend_unloaded");
+    this.processApi.stopAllFrontendProcesses("backend_unloaded");
+    this.processApi.stopAllBackendProcesses("backend_unloaded");
     this.onWorkerReady = null;
     this.onWorkerShutdownAck = null;
     this.onRuntimeExit?.();
@@ -1779,20 +1233,11 @@ export class WorkerHost {
     }
     this.registeredMacroNames.clear();
     this.macroValueCache.clear();
-    this.toastTimestamps = [];
+    this.interactionApi.clear();
 
-    // Clear commands and broadcast removal
-    if (this.registeredCommands.length > 0) {
-      this.registeredCommands = [];
-      this.broadcastCommandsChanged();
-    }
-
-    // Clear theme overrides
-    this.clearThemeOverrides();
-
-    // Clear chat-style-mode claims, broadcasts null-chatId per affected user
-    // so frontend stores drop this extension's relaxation claims.
-    this.clearChatStyleModes();
+    // Clear theme overrides and chat-style-mode claims.
+    this.presentationApi.clearThemeOverrides();
+    this.presentationApi.clearChatStyleModes();
 
     // Unregister interceptors and context handlers
     interceptorPipeline.unregisterByExtension(this.extensionId);
@@ -1864,76 +1309,11 @@ export class WorkerHost {
     event: "ready" | "heartbeat" | "complete" | "fail" | "frontend_unloaded",
     error?: string,
   ): void {
-    const record = this.getFrontendProcessForUser(processId, userId);
-    if (!record) return;
-
-    switch (event) {
-      case "ready": {
-        if (record.state !== "starting") return;
-        const now = new Date().toISOString();
-        if (record.startupTimer) {
-          clearTimeout(record.startupTimer);
-          record.startupTimer = null;
-        }
-        this.transitionFrontendProcess(record, "running", {
-          readyAt: now,
-          lastHeartbeatAt: now,
-          error: undefined,
-        });
-        this.armFrontendHeartbeatTimer(record);
-        this.resolveRequest(record.requestId, this.snapshotFrontendProcess(record));
-        break;
-      }
-      case "heartbeat": {
-        if (record.state !== "running" && record.state !== "stopping") return;
-        const now = new Date().toISOString();
-        record.lastHeartbeatAt = now;
-        this.armFrontendHeartbeatTimer(record);
-        break;
-      }
-      case "complete": {
-        if (record.state === "completed" || record.state === "failed" || record.state === "timed_out" || record.state === "stopped") {
-          return;
-        }
-        this.finalizeFrontendProcess(
-          record,
-          record.state === "stopping" ? "stopped" : "completed",
-          record.state === "stopping" ? "stopped" : "completed",
-        );
-        break;
-      }
-      case "fail": {
-        if (record.state === "completed" || record.state === "failed" || record.state === "timed_out" || record.state === "stopped") {
-          return;
-        }
-        const message = error?.trim() || "Frontend process failed";
-        if (record.state === "starting") {
-          this.clearFrontendProcessTimers(record);
-          this.finalizeFrontendProcess(record, "failed", "failed", message);
-          this.rejectRequest(processId, new Error(message));
-        } else {
-          this.finalizeFrontendProcess(record, "failed", "failed", message);
-        }
-        break;
-      }
-      case "frontend_unloaded": {
-        if (record.state === "starting") {
-          const message = "Frontend extension unloaded before the process became ready";
-          this.clearFrontendProcessTimers(record);
-          this.finalizeFrontendProcess(record, "failed", "frontend_unloaded", message);
-          this.rejectRequest(processId, new Error(message));
-          return;
-        }
-        this.finalizeFrontendProcess(record, "stopped", "frontend_unloaded", error);
-        break;
-      }
-    }
+    this.processApi.handleFrontendProcessEvent(processId, userId, event, error);
   }
 
   handleFrontendProcessMessage(processId: string, userId: string, payload: unknown): void {
-    const record = this.getFrontendProcessForUser(processId, userId);
-    if (!record) return;
-    this.postToWorker({ type: "frontend_process_message", processId, payload, userId });
+    this.processApi.handleFrontendProcessMessage(processId, userId, payload);
   }
 
   /**
@@ -2153,6 +1533,13 @@ export class WorkerHost {
   }
 
   private handleMessageInScope(msg: RuntimeWorkerToHost): void {
+    if (this.storageApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
+      return;
+    }
+    if (this.stateApi.dispatch(msg as unknown as { type: string; [key: string]: unknown })) {
+      return;
+    }
+
     switch (msg.type) {
       case "subscribe_event":
         this.handleSubscribeEvent(msg.event);
@@ -2216,86 +1603,6 @@ export class WorkerHost {
         break;
       case "assemble_prompt":
         this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
-        break;
-      case "storage_read":
-        this.handleStorageRead(msg.requestId, msg.path);
-        break;
-      case "storage_write":
-        this.handleStorageWrite(msg.requestId, msg.path, msg.data);
-        break;
-      case "storage_read_binary":
-        this.handleStorageReadBinary(msg.requestId, msg.path);
-        break;
-      case "storage_write_binary":
-        this.handleStorageWriteBinary(msg.requestId, msg.path, msg.data);
-        break;
-      case "storage_delete":
-        this.handleStorageDelete(msg.requestId, msg.path);
-        break;
-      case "storage_list":
-        this.handleStorageList(msg.requestId, msg.prefix);
-        break;
-      case "storage_exists":
-        this.handleStorageExists(msg.requestId, msg.path);
-        break;
-      case "storage_mkdir":
-        this.handleStorageMkdir(msg.requestId, msg.path);
-        break;
-      case "storage_move":
-        this.handleStorageMove(msg.requestId, msg.from, msg.to);
-        break;
-      case "storage_stat":
-        this.handleStorageStat(msg.requestId, msg.path);
-        break;
-      case "ephemeral_read":
-        this.handleEphemeralRead(msg.requestId, msg.path);
-        break;
-      case "ephemeral_write":
-        this.handleEphemeralWrite(
-          msg.requestId,
-          msg.path,
-          msg.data,
-          msg.ttlMs,
-          msg.reservationId
-        );
-        break;
-      case "ephemeral_read_binary":
-        this.handleEphemeralReadBinary(msg.requestId, msg.path);
-        break;
-      case "ephemeral_write_binary":
-        this.handleEphemeralWriteBinary(
-          msg.requestId,
-          msg.path,
-          msg.data,
-          msg.ttlMs,
-          msg.reservationId
-        );
-        break;
-      case "ephemeral_delete":
-        this.handleEphemeralDelete(msg.requestId, msg.path);
-        break;
-      case "ephemeral_list":
-        this.handleEphemeralList(msg.requestId, msg.prefix);
-        break;
-      case "ephemeral_stat":
-        this.handleEphemeralStat(msg.requestId, msg.path);
-        break;
-      case "ephemeral_clear_expired":
-        this.handleEphemeralClearExpired(msg.requestId);
-        break;
-      case "ephemeral_pool_status":
-        this.handleEphemeralPoolStatus(msg.requestId);
-        break;
-      case "ephemeral_request_block":
-        this.handleEphemeralRequestBlock(
-          msg.requestId,
-          msg.sizeBytes,
-          msg.ttlMs,
-          msg.reason
-        );
-        break;
-      case "ephemeral_release_block":
-        this.handleEphemeralReleaseBlock(msg.requestId, msg.reservationId);
         break;
       case "permissions_get_granted":
         this.handlePermissionsGetGranted(msg.requestId);
@@ -2409,51 +1716,6 @@ export class WorkerHost {
           this.resolveRequest(msg.requestId, msg.result ?? "");
         }
         break;
-      case "user_storage_read":
-        this.handleUserStorageRead(msg.requestId, msg.path, msg.userId);
-        break;
-      case "user_storage_write":
-        this.handleUserStorageWrite(msg.requestId, msg.path, msg.data, msg.userId);
-        break;
-      case "user_storage_read_binary":
-        this.handleUserStorageReadBinary(msg.requestId, msg.path, msg.userId);
-        break;
-      case "user_storage_write_binary":
-        this.handleUserStorageWriteBinary(msg.requestId, msg.path, msg.data, msg.userId);
-        break;
-      case "user_storage_delete":
-        this.handleUserStorageDelete(msg.requestId, msg.path, msg.userId);
-        break;
-      case "user_storage_list":
-        this.handleUserStorageList(msg.requestId, msg.prefix, msg.userId);
-        break;
-      case "user_storage_exists":
-        this.handleUserStorageExists(msg.requestId, msg.path, msg.userId);
-        break;
-      case "user_storage_mkdir":
-        this.handleUserStorageMkdir(msg.requestId, msg.path, msg.userId);
-        break;
-      case "user_storage_move":
-        this.handleUserStorageMove(msg.requestId, msg.from, msg.to, msg.userId);
-        break;
-      case "user_storage_stat":
-        this.handleUserStorageStat(msg.requestId, msg.path, msg.userId);
-        break;
-      case "enclave_put":
-        this.handleEnclavePut(msg.requestId, msg.key, msg.value, msg.userId);
-        break;
-      case "enclave_get":
-        this.handleEnclaveGet(msg.requestId, msg.key, msg.userId);
-        break;
-      case "enclave_delete":
-        this.handleEnclaveDelete(msg.requestId, msg.key, msg.userId);
-        break;
-      case "enclave_has":
-        this.handleEnclaveHas(msg.requestId, msg.key, msg.userId);
-        break;
-      case "enclave_list":
-        this.handleEnclaveList(msg.requestId, msg.userId);
-        break;
       case "frontend_message": {
         // User-scoped extensions can only ever target their installer; the
         // worker-supplied userId is ignored to prevent cross-user delivery.
@@ -2487,307 +1749,227 @@ export class WorkerHost {
       case "create_oauth_state":
         this.handleCreateOAuthState(msg.requestId);
         break;
-      // ─── Variables (free tier) ────────────────────────────────────────
-      case "vars_get_local":
-        this.handleVarsGetLocal(msg.requestId, msg.chatId, msg.key);
-        break;
-      case "vars_set_local":
-        this.handleVarsSetLocal(msg.requestId, msg.chatId, msg.key, msg.value);
-        break;
-      case "vars_delete_local":
-        this.handleVarsDeleteLocal(msg.requestId, msg.chatId, msg.key);
-        break;
-      case "vars_list_local":
-        this.handleVarsListLocal(msg.requestId, msg.chatId);
-        break;
-      case "vars_has_local":
-        this.handleVarsHasLocal(msg.requestId, msg.chatId, msg.key);
-        break;
-      case "vars_get_global":
-        this.handleVarsGetGlobal(msg.requestId, msg.key, msg.userId);
-        break;
-      case "vars_set_global":
-        this.handleVarsSetGlobal(msg.requestId, msg.key, msg.value, msg.userId);
-        break;
-      case "vars_delete_global":
-        this.handleVarsDeleteGlobal(msg.requestId, msg.key, msg.userId);
-        break;
-      case "vars_list_global":
-        this.handleVarsListGlobal(msg.requestId, msg.userId);
-        break;
-      case "vars_has_global":
-        this.handleVarsHasGlobal(msg.requestId, msg.key, msg.userId);
-        break;
-      case "vars_get_chat":
-        this.handleVarsGetChat(msg.requestId, msg.chatId, msg.key);
-        break;
-      case "vars_set_chat":
-        this.handleVarsSetChat(msg.requestId, msg.chatId, msg.key, msg.value);
-        break;
-      case "vars_delete_chat":
-        this.handleVarsDeleteChat(msg.requestId, msg.chatId, msg.key);
-        break;
-      case "vars_list_chat":
-        this.handleVarsListChat(msg.requestId, msg.chatId);
-        break;
-      case "vars_has_chat":
-        this.handleVarsHasChat(msg.requestId, msg.chatId, msg.key);
-        break;
-      // ─── Presets (gated: "presets") ─────────────────────────────────
-      case "presets_list":
-        this.handlePresetsList(msg.requestId, msg.limit, msg.offset, msg.userId);
-        break;
-      case "presets_get":
-        this.handlePresetsGet(msg.requestId, msg.presetId, msg.userId);
-        break;
-      case "presets_create":
-        this.handlePresetsCreate(msg.requestId, msg.input, msg.userId);
-        break;
-      case "presets_update":
-        this.handlePresetsUpdate(msg.requestId, msg.presetId, msg.input, msg.userId);
-        break;
-      case "presets_delete":
-        this.handlePresetsDelete(msg.requestId, msg.presetId, msg.userId);
-        break;
-      case "preset_blocks_list":
-        this.handlePresetBlocksList(msg.requestId, msg.presetId, msg.userId);
-        break;
-      case "preset_blocks_get":
-        this.handlePresetBlocksGet(msg.requestId, msg.presetId, msg.blockId, msg.userId);
-        break;
-      case "preset_blocks_create":
-        this.handlePresetBlocksCreate(msg.requestId, msg.presetId, msg.input, msg.index, msg.userId);
-        break;
-      case "preset_blocks_update":
-        this.handlePresetBlocksUpdate(msg.requestId, msg.presetId, msg.blockId, msg.input, msg.userId);
-        break;
-      case "preset_blocks_delete":
-        this.handlePresetBlocksDelete(msg.requestId, msg.presetId, msg.blockId, msg.userId);
-        break;
-      case "preset_categories_list":
-        this.handlePresetCategoriesList(msg.requestId, msg.presetId, msg.userId);
-        break;
       // ─── Characters (gated: "characters") ─────────────────────────────
       case "characters_list":
-        this.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleCharactersList(msg.requestId, msg.limit, msg.offset, msg.userId);
         break;
       case "characters_get":
-        this.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);
+        this.contentApi.handleCharactersGet(msg.requestId, msg.characterId, msg.userId);
         break;
       case "characters_create":
-        this.handleCharactersCreate(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handleCharactersCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "characters_set_avatar":
-        this.handleCharactersSetAvatar(msg.requestId, msg.characterId, msg.avatar, msg.userId);
+        this.contentApi.handleCharactersSetAvatar(msg.requestId, msg.characterId, msg.avatar, msg.userId);
         break;
       case "characters_update":
-        this.handleCharactersUpdate(msg.requestId, msg.characterId, msg.input, msg.userId);
+        this.contentApi.handleCharactersUpdate(msg.requestId, msg.characterId, msg.input, msg.userId);
         break;
       case "characters_delete":
-        this.handleCharactersDelete(msg.requestId, msg.characterId, msg.userId);
+        this.contentApi.handleCharactersDelete(msg.requestId, msg.characterId, msg.userId);
         break;
       // ─── Chats (gated: "chats") ───────────────────────────────────────
       case "chats_list":
-        this.handleChatsList(msg.requestId, msg.characterId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleChatsList(msg.requestId, msg.characterId, msg.limit, msg.offset, msg.userId);
         break;
       case "chats_get":
-        this.handleChatsGet(msg.requestId, msg.chatId, msg.userId);
+        this.contentApi.handleChatsGet(msg.requestId, msg.chatId, msg.userId);
         break;
       case "chats_get_active":
-        this.handleChatsGetActive(msg.requestId, msg.userId);
+        this.contentApi.handleChatsGetActive(msg.requestId, msg.userId);
         break;
       case "chats_update":
-        this.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
+        this.contentApi.handleChatsUpdate(msg.requestId, msg.chatId, msg.input, msg.userId);
         break;
       case "chats_delete":
-        this.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
+        this.contentApi.handleChatsDelete(msg.requestId, msg.chatId, msg.userId);
         break;
       // ─── Chat Memories (gated: "chats") ──────────────────────────────
       case "chats_get_memories":
-        this.handleChatsGetMemories(msg.requestId, msg.chatId, msg.topK, msg.userId);
+        this.memoryApi.handleChatsGetMemories(msg.requestId, msg.chatId, msg.topK, msg.userId);
         break;
       // ─── Memory Cortex & Long-Term Chat Memory (gated: "memories") ───
       case "memories_config_get":
-        this.handleMemoriesConfigGet(msg.requestId, msg.userId);
+        this.memoryApi.handleMemoriesConfigGet(msg.requestId, msg.userId);
         break;
       case "memories_config_put":
-        this.handleMemoriesConfigPut(msg.requestId, msg.patch, msg.userId);
+        this.memoryApi.handleMemoriesConfigPut(msg.requestId, msg.patch, msg.userId);
         break;
       case "memories_query_cortex":
-        this.handleMemoriesQueryCortex(msg.requestId, msg.query);
+        this.memoryApi.handleMemoriesQueryCortex(msg.requestId, msg.query);
         break;
       case "memories_query_linked":
-        this.handleMemoriesQueryLinked(msg.requestId, msg.chatId, msg.queryText, msg.userId);
+        this.memoryApi.handleMemoriesQueryLinked(msg.requestId, msg.chatId, msg.queryText, msg.userId);
         break;
       case "memories_get_cached":
-        this.handleMemoriesGetCached(msg.requestId, msg.chatId);
+        this.memoryApi.handleMemoriesGetCached(msg.requestId, msg.chatId);
         break;
       case "memories_get_cached_linked":
-        this.handleMemoriesGetCachedLinked(msg.requestId, msg.chatId);
+        this.memoryApi.handleMemoriesGetCachedLinked(msg.requestId, msg.chatId);
         break;
       case "memories_invalidate_cache":
-        this.handleMemoriesInvalidateCache(msg.requestId, msg.chatId);
+        this.memoryApi.handleMemoriesInvalidateCache(msg.requestId, msg.chatId);
         break;
       case "memories_invalidate_linked_cache":
-        this.handleMemoriesInvalidateLinkedCache(msg.requestId, msg.chatId);
+        this.memoryApi.handleMemoriesInvalidateLinkedCache(msg.requestId, msg.chatId);
         break;
       case "memories_entities_list":
-        this.handleMemoriesEntitiesList(msg.requestId, msg.chatId, msg.activeOnly, msg.limit, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesList(msg.requestId, msg.chatId, msg.activeOnly, msg.limit, msg.userId);
         break;
       case "memories_entities_get":
-        this.handleMemoriesEntitiesGet(msg.requestId, msg.entityId, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesGet(msg.requestId, msg.entityId, msg.userId);
         break;
       case "memories_entities_find_by_name":
-        this.handleMemoriesEntitiesFindByName(msg.requestId, msg.chatId, msg.name, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesFindByName(msg.requestId, msg.chatId, msg.name, msg.userId);
         break;
       case "memories_entities_upsert":
-        this.handleMemoriesEntitiesUpsert(msg.requestId, msg.chatId, msg.entity, msg.chunkId ?? null, msg.createdAt, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesUpsert(msg.requestId, msg.chatId, msg.entity, msg.chunkId ?? null, msg.createdAt, msg.userId);
         break;
       case "memories_entities_update_status":
-        this.handleMemoriesEntitiesUpdateStatus(msg.requestId, msg.entityId, msg.patch, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesUpdateStatus(msg.requestId, msg.entityId, msg.patch, msg.userId);
         break;
       case "memories_entities_add_facts":
-        this.handleMemoriesEntitiesAddFacts(msg.requestId, msg.entityId, msg.facts, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesAddFacts(msg.requestId, msg.entityId, msg.facts, msg.userId);
         break;
       case "memories_entities_get_facts":
-        this.handleMemoriesEntitiesGetFacts(msg.requestId, msg.entityId, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesGetFacts(msg.requestId, msg.entityId, msg.userId);
         break;
       case "memories_entities_update_emotional_valence":
-        this.handleMemoriesEntitiesUpdateEmotionalValence(msg.requestId, msg.entityId, msg.valence, msg.userId);
+        this.memoryApi.handleMemoriesEntitiesUpdateEmotionalValence(msg.requestId, msg.entityId, msg.valence, msg.userId);
         break;
       case "memories_relations_list":
-        this.handleMemoriesRelationsList(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesRelationsList(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_relations_list_all":
-        this.handleMemoriesRelationsListAll(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesRelationsListAll(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_relations_for_entity":
-        this.handleMemoriesRelationsForEntity(msg.requestId, msg.chatId, msg.entityId, msg.userId);
+        this.memoryApi.handleMemoriesRelationsForEntity(msg.requestId, msg.chatId, msg.entityId, msg.userId);
         break;
       case "memories_relations_for_entities":
-        this.handleMemoriesRelationsForEntities(msg.requestId, msg.chatId, msg.entityIds, msg.limit, msg.userId);
+        this.memoryApi.handleMemoriesRelationsForEntities(msg.requestId, msg.chatId, msg.entityIds, msg.limit, msg.userId);
         break;
       case "memories_relations_upsert":
-        this.handleMemoriesRelationsUpsert(msg.requestId, msg.chatId, msg.relation, msg.chunkId ?? null, msg.userId);
+        this.memoryApi.handleMemoriesRelationsUpsert(msg.requestId, msg.chatId, msg.relation, msg.chunkId ?? null, msg.userId);
         break;
       case "memories_consolidations_list":
-        this.handleMemoriesConsolidationsList(msg.requestId, msg.chatId, msg.tier, msg.userId);
+        this.memoryApi.handleMemoriesConsolidationsList(msg.requestId, msg.chatId, msg.tier, msg.userId);
         break;
       case "memories_consolidations_latest_arc":
-        this.handleMemoriesConsolidationsLatestArc(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesConsolidationsLatestArc(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_consolidations_run":
-        this.handleMemoriesConsolidationsRun(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesConsolidationsRun(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_salience_get":
-        this.handleMemoriesSalienceGet(msg.requestId, msg.chatId, msg.limit, msg.offset, msg.userId);
+        this.memoryApi.handleMemoriesSalienceGet(msg.requestId, msg.chatId, msg.limit, msg.offset, msg.userId);
         break;
       case "memories_vaults_list":
-        this.handleMemoriesVaultsList(msg.requestId, msg.userId);
+        this.memoryApi.handleMemoriesVaultsList(msg.requestId, msg.userId);
         break;
       case "memories_vaults_get":
-        this.handleMemoriesVaultsGet(msg.requestId, msg.vaultId, msg.userId);
+        this.memoryApi.handleMemoriesVaultsGet(msg.requestId, msg.vaultId, msg.userId);
         break;
       case "memories_vaults_get_chunks":
-        this.handleMemoriesVaultsGetChunks(msg.requestId, msg.vaultId, msg.userId);
+        this.memoryApi.handleMemoriesVaultsGetChunks(msg.requestId, msg.vaultId, msg.userId);
         break;
       case "memories_vaults_create":
-        this.handleMemoriesVaultsCreate(msg.requestId, msg.input, msg.userId);
+        this.memoryApi.handleMemoriesVaultsCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "memories_vaults_rename":
-        this.handleMemoriesVaultsRename(msg.requestId, msg.vaultId, msg.name, msg.userId);
+        this.memoryApi.handleMemoriesVaultsRename(msg.requestId, msg.vaultId, msg.name, msg.userId);
         break;
       case "memories_vaults_delete":
-        this.handleMemoriesVaultsDelete(msg.requestId, msg.vaultId, msg.userId);
+        this.memoryApi.handleMemoriesVaultsDelete(msg.requestId, msg.vaultId, msg.userId);
         break;
       case "memories_vaults_reindex":
-        this.handleMemoriesVaultsReindex(msg.requestId, msg.vaultId, msg.userId);
+        this.memoryApi.handleMemoriesVaultsReindex(msg.requestId, msg.vaultId, msg.userId);
         break;
       case "memories_links_list":
-        this.handleMemoriesLinksList(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesLinksList(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_links_attach":
-        this.handleMemoriesLinksAttach(msg.requestId, msg.input, msg.userId);
+        this.memoryApi.handleMemoriesLinksAttach(msg.requestId, msg.input, msg.userId);
         break;
       case "memories_links_remove":
-        this.handleMemoriesLinksRemove(msg.requestId, msg.chatId, msg.linkId, msg.userId);
+        this.memoryApi.handleMemoriesLinksRemove(msg.requestId, msg.chatId, msg.linkId, msg.userId);
         break;
       case "memories_links_toggle":
-        this.handleMemoriesLinksToggle(msg.requestId, msg.chatId, msg.linkId, msg.enabled, msg.userId);
+        this.memoryApi.handleMemoriesLinksToggle(msg.requestId, msg.chatId, msg.linkId, msg.enabled, msg.userId);
         break;
       case "memories_chat_chunks_list":
-        this.handleMemoriesChatChunksList(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesChatChunksList(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_chat_memory_get":
-        this.handleMemoriesChatMemoryGet(msg.requestId, msg.chatId, msg.topK, msg.userId);
+        this.memoryApi.handleMemoriesChatMemoryGet(msg.requestId, msg.chatId, msg.topK, msg.userId);
         break;
       case "memories_chat_memory_warm":
-        this.handleMemoriesChatMemoryWarm(msg.requestId, msg.chatId, msg.force, msg.userId);
+        this.memoryApi.handleMemoriesChatMemoryWarm(msg.requestId, msg.chatId, msg.force, msg.userId);
         break;
       case "memories_chat_memory_invalidate":
-        this.handleMemoriesChatMemoryInvalidate(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesChatMemoryInvalidate(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_stats_usage":
-        this.handleMemoriesStatsUsage(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesStatsUsage(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_stats_ingestion_status":
-        this.handleMemoriesStatsIngestionStatus(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesStatsIngestionStatus(msg.requestId, msg.chatId, msg.userId);
         break;
       case "memories_stats_ingestion_telemetry":
-        this.handleMemoriesStatsIngestionTelemetry(msg.requestId, msg.chatId, msg.userId);
+        this.memoryApi.handleMemoriesStatsIngestionTelemetry(msg.requestId, msg.chatId, msg.userId);
         break;
       // ─── World Books (gated: "world_books") ──────────────────────────
       case "world_books_list":
-        this.handleWorldBooksList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleWorldBooksList(msg.requestId, msg.limit, msg.offset, msg.userId);
         break;
       case "world_books_get":
-        this.handleWorldBooksGet(msg.requestId, msg.worldBookId, msg.userId);
+        this.contentApi.handleWorldBooksGet(msg.requestId, msg.worldBookId, msg.userId);
         break;
       case "world_books_create":
-        this.handleWorldBooksCreate(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handleWorldBooksCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "world_books_update":
-        this.handleWorldBooksUpdate(msg.requestId, msg.worldBookId, msg.input, msg.userId);
+        this.contentApi.handleWorldBooksUpdate(msg.requestId, msg.worldBookId, msg.input, msg.userId);
         break;
       case "world_books_delete":
-        this.handleWorldBooksDelete(msg.requestId, msg.worldBookId, msg.userId);
+        this.contentApi.handleWorldBooksDelete(msg.requestId, msg.worldBookId, msg.userId);
         break;
       // ─── World Book Entries (gated: "world_books") ────────────────────
       case "world_book_entries_list":
-        this.handleWorldBookEntriesList(msg.requestId, msg.worldBookId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleWorldBookEntriesList(msg.requestId, msg.worldBookId, msg.limit, msg.offset, msg.userId);
         break;
       case "world_book_entries_get":
-        this.handleWorldBookEntriesGet(msg.requestId, msg.entryId, msg.userId);
+        this.contentApi.handleWorldBookEntriesGet(msg.requestId, msg.entryId, msg.userId);
         break;
       case "world_book_entries_create":
-        this.handleWorldBookEntriesCreate(msg.requestId, msg.worldBookId, msg.input, msg.userId);
+        this.contentApi.handleWorldBookEntriesCreate(msg.requestId, msg.worldBookId, msg.input, msg.userId);
         break;
       case "world_book_entries_update":
-        this.handleWorldBookEntriesUpdate(msg.requestId, msg.entryId, msg.input, msg.userId);
+        this.contentApi.handleWorldBookEntriesUpdate(msg.requestId, msg.entryId, msg.input, msg.userId);
         break;
       case "world_book_entries_delete":
-        this.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
+        this.contentApi.handleWorldBookEntriesDelete(msg.requestId, msg.entryId, msg.userId);
         break;
       // ─── Activated World Info (gated: "world_books") ─────────────────
       case "world_books_get_activated":
-        this.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
+        this.contentApi.handleWorldBooksGetActivated(msg.requestId, msg.chatId, msg.userId);
         break;
       // ─── Global World Books (gated: "world_books") ───────────────────
       case "world_books_get_global":
-        this.handleWorldBooksGetGlobal(msg.requestId, msg.userId);
+        this.contentApi.handleWorldBooksGetGlobal(msg.requestId, msg.userId);
         break;
       case "world_books_set_global":
-        this.handleWorldBooksSetGlobal(msg.requestId, msg.worldBookIds, msg.userId);
+        this.contentApi.handleWorldBooksSetGlobal(msg.requestId, msg.worldBookIds, msg.userId);
         break;
       case "world_books_activate_global":
-        this.handleWorldBooksActivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
+        this.contentApi.handleWorldBooksActivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
         break;
       case "world_books_deactivate_global":
-        this.handleWorldBooksDeactivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
+        this.contentApi.handleWorldBooksDeactivateGlobal(msg.requestId, msg.worldBookId, msg.userId);
         break;
       // ─── Regex Scripts (gated: "regex_scripts") ──────────────────────
       case "regex_scripts_list":
-        this.handleRegexScriptsList(
+        this.contentApi.handleRegexScriptsList(
           msg.requestId,
           msg.scope,
           msg.scopeId,
@@ -2798,10 +1980,10 @@ export class WorkerHost {
         );
         break;
       case "regex_scripts_get":
-        this.handleRegexScriptsGet(msg.requestId, msg.scriptId, msg.userId);
+        this.contentApi.handleRegexScriptsGet(msg.requestId, msg.scriptId, msg.userId);
         break;
       case "regex_scripts_get_active":
-        this.handleRegexScriptsGetActive(
+        this.contentApi.handleRegexScriptsGetActive(
           msg.requestId,
           msg.target,
           msg.characterId,
@@ -2810,55 +1992,55 @@ export class WorkerHost {
         );
         break;
       case "regex_scripts_create":
-        this.handleRegexScriptsCreate(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handleRegexScriptsCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "regex_scripts_update":
-        this.handleRegexScriptsUpdate(msg.requestId, msg.scriptId, msg.input, msg.userId);
+        this.contentApi.handleRegexScriptsUpdate(msg.requestId, msg.scriptId, msg.input, msg.userId);
         break;
       case "regex_scripts_delete":
-        this.handleRegexScriptsDelete(msg.requestId, msg.scriptId, msg.userId);
+        this.contentApi.handleRegexScriptsDelete(msg.requestId, msg.scriptId, msg.userId);
         break;
       // ─── Databanks (gated: "databanks") ─────────────────────────────
       case "databanks_list":
-        this.handleDatabanksList(msg.requestId, msg.limit, msg.offset, msg.scope, msg.scopeId, msg.userId);
+        this.contentApi.handleDatabanksList(msg.requestId, msg.limit, msg.offset, msg.scope, msg.scopeId, msg.userId);
         break;
       case "databanks_get":
-        this.handleDatabanksGet(msg.requestId, msg.databankId, msg.userId);
+        this.contentApi.handleDatabanksGet(msg.requestId, msg.databankId, msg.userId);
         break;
       case "databanks_create":
-        this.handleDatabanksCreate(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handleDatabanksCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "databanks_update":
-        this.handleDatabanksUpdate(msg.requestId, msg.databankId, msg.input, msg.userId);
+        this.contentApi.handleDatabanksUpdate(msg.requestId, msg.databankId, msg.input, msg.userId);
         break;
       case "databanks_delete":
-        this.handleDatabanksDelete(msg.requestId, msg.databankId, msg.userId);
+        this.contentApi.handleDatabanksDelete(msg.requestId, msg.databankId, msg.userId);
         break;
       // ─── Databank Documents (gated: "databanks") ───────────────────
       case "databank_documents_list":
-        this.handleDatabankDocumentsList(msg.requestId, msg.databankId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleDatabankDocumentsList(msg.requestId, msg.databankId, msg.limit, msg.offset, msg.userId);
         break;
       case "databank_documents_get":
-        this.handleDatabankDocumentsGet(msg.requestId, msg.documentId, msg.userId);
+        this.contentApi.handleDatabankDocumentsGet(msg.requestId, msg.documentId, msg.userId);
         break;
       case "databank_documents_create":
-        this.handleDatabankDocumentsCreate(msg.requestId, msg.databankId, msg.input, msg.userId);
+        this.contentApi.handleDatabankDocumentsCreate(msg.requestId, msg.databankId, msg.input, msg.userId);
         break;
       case "databank_documents_update":
-        this.handleDatabankDocumentsUpdate(msg.requestId, msg.documentId, msg.input, msg.userId);
+        this.contentApi.handleDatabankDocumentsUpdate(msg.requestId, msg.documentId, msg.input, msg.userId);
         break;
       case "databank_documents_delete":
-        this.handleDatabankDocumentsDelete(msg.requestId, msg.documentId, msg.userId);
+        this.contentApi.handleDatabankDocumentsDelete(msg.requestId, msg.documentId, msg.userId);
         break;
       case "databank_documents_get_content":
-        this.handleDatabankDocumentsGetContent(msg.requestId, msg.documentId, msg.userId);
+        this.contentApi.handleDatabankDocumentsGetContent(msg.requestId, msg.documentId, msg.userId);
         break;
       case "databank_documents_reprocess":
-        this.handleDatabankDocumentsReprocess(msg.requestId, msg.documentId, msg.userId);
+        this.contentApi.handleDatabankDocumentsReprocess(msg.requestId, msg.documentId, msg.userId);
         break;
       // ─── Images (gated: "images") ──────────────────────────────────────
       case "images_list":
-        this.handleImagesList(
+        this.contentApi.handleImagesList(
           msg.requestId,
           msg.limit,
           msg.offset,
@@ -2870,7 +2052,7 @@ export class WorkerHost {
         );
         break;
       case "images_get":
-        this.handleImagesGet(
+        this.contentApi.handleImagesGet(
           msg.requestId,
           msg.imageId,
           msg.specificity,
@@ -2881,13 +2063,13 @@ export class WorkerHost {
         );
         break;
       case "images_upload":
-        this.handleImagesUpload(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handleImagesUpload(msg.requestId, msg.input, msg.userId);
         break;
       case "images_upload_many":
-        this.handleImagesUploadMany(msg.requestId, msg.items, msg.userId, msg.concurrency);
+        this.contentApi.handleImagesUploadMany(msg.requestId, msg.items, msg.userId, msg.concurrency);
         break;
       case "images_upload_from_data_url":
-        this.handleImagesUploadFromDataUrl(
+        this.contentApi.handleImagesUploadFromDataUrl(
           msg.requestId,
           msg.dataUrl,
           msg.originalFilename,
@@ -2897,84 +2079,84 @@ export class WorkerHost {
         );
         break;
       case "images_delete":
-        this.handleImagesDelete(msg.requestId, msg.imageId, msg.userId);
+        this.contentApi.handleImagesDelete(msg.requestId, msg.imageId, msg.userId);
         break;
       case "images_delete_many":
-        this.handleImagesDeleteMany(msg.requestId, msg.imageIds, msg.userId);
+        this.contentApi.handleImagesDeleteMany(msg.requestId, msg.imageIds, msg.userId);
         break;
       case "media_audio_convert":
-        this.handleMediaAudioConvert(msg.requestId, msg.input);
+        this.contentApi.handleMediaAudioConvert(msg.requestId, msg.input);
         break;
       case "media_video_convert":
-        this.handleMediaVideoConvert(msg.requestId, msg.input);
+        this.contentApi.handleMediaVideoConvert(msg.requestId, msg.input);
         break;
       case "media_video_transcode":
-        this.handleMediaVideoTranscode(msg.requestId, msg.input);
+        this.contentApi.handleMediaVideoTranscode(msg.requestId, msg.input);
         break;
       case "media_video_remove_audio":
-        this.handleMediaVideoRemoveAudio(msg.requestId, msg.input);
+        this.contentApi.handleMediaVideoRemoveAudio(msg.requestId, msg.input);
         break;
       case "media_video_add_audio":
-        this.handleMediaVideoAddAudio(msg.requestId, msg.input);
+        this.contentApi.handleMediaVideoAddAudio(msg.requestId, msg.input);
         break;
       case "media_video_from_image_audio":
-        this.handleMediaVideoFromImageAudio(msg.requestId, msg.input);
+        this.contentApi.handleMediaVideoFromImageAudio(msg.requestId, msg.input);
         break;
       // ─── Personas (gated: "personas") ──────────────────────────────────
       case "personas_list":
-        this.handlePersonasList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handlePersonasList(msg.requestId, msg.limit, msg.offset, msg.userId);
         break;
       case "personas_get":
-        this.handlePersonasGet(msg.requestId, msg.personaId, msg.userId);
+        this.contentApi.handlePersonasGet(msg.requestId, msg.personaId, msg.userId);
         break;
       case "personas_get_default":
-        this.handlePersonasGetDefault(msg.requestId, msg.userId);
+        this.contentApi.handlePersonasGetDefault(msg.requestId, msg.userId);
         break;
       case "personas_get_active":
-        this.handlePersonasGetActive(msg.requestId, msg.userId);
+        this.contentApi.handlePersonasGetActive(msg.requestId, msg.userId);
         break;
       case "personas_create":
-        this.handlePersonasCreate(msg.requestId, msg.input, msg.userId);
+        this.contentApi.handlePersonasCreate(msg.requestId, msg.input, msg.userId);
         break;
       case "personas_update":
-        this.handlePersonasUpdate(msg.requestId, msg.personaId, msg.input, msg.userId);
+        this.contentApi.handlePersonasUpdate(msg.requestId, msg.personaId, msg.input, msg.userId);
         break;
       case "personas_delete":
-        this.handlePersonasDelete(msg.requestId, msg.personaId, msg.userId);
+        this.contentApi.handlePersonasDelete(msg.requestId, msg.personaId, msg.userId);
         break;
       case "personas_switch":
-        this.handlePersonasSwitch(msg.requestId, msg.personaId, msg.userId);
+        this.contentApi.handlePersonasSwitch(msg.requestId, msg.personaId, msg.userId);
         break;
       case "personas_get_world_book":
-        this.handlePersonasGetWorldBook(msg.requestId, msg.personaId, msg.userId);
+        this.contentApi.handlePersonasGetWorldBook(msg.requestId, msg.personaId, msg.userId);
         break;
       // ─── Global Add-ons (gated: "personas") ─────────────────────────
       case "global_addons_list":
-        this.handleGlobalAddonsList(msg.requestId, msg.limit, msg.offset, msg.userId);
+        this.contentApi.handleGlobalAddonsList(msg.requestId, msg.limit, msg.offset, msg.userId);
         break;
       case "global_addons_get":
-        this.handleGlobalAddonsGet(msg.requestId, msg.addonId, msg.userId);
+        this.contentApi.handleGlobalAddonsGet(msg.requestId, msg.addonId, msg.userId);
         break;
       case "global_addons_update":
-        this.handleGlobalAddonsUpdate(msg.requestId, msg.addonId, msg.input, msg.userId);
+        this.contentApi.handleGlobalAddonsUpdate(msg.requestId, msg.addonId, msg.input, msg.userId);
         break;
       // ─── Council (free tier, read-only) ─────────────────────────────
       case "council_get_settings":
-        this.handleCouncilGetSettings(msg.requestId, msg.userId);
+        this.presentationApi.handleCouncilGetSettings(msg.requestId, msg.userId);
         break;
       case "council_get_members":
-        this.handleCouncilGetMembers(msg.requestId, msg.userId);
+        this.presentationApi.handleCouncilGetMembers(msg.requestId, msg.userId);
         break;
       case "council_get_available_lumia_items":
-        this.handleCouncilGetAvailableLumiaItems(msg.requestId, msg.userId);
+        this.presentationApi.handleCouncilGetAvailableLumiaItems(msg.requestId, msg.userId);
         break;
       // ─── Lumia DLC (free tier, read-only) ───────────────────────────
       case "dlc_get_catalog":
-        this.handleDlcGetCatalog(msg.requestId, msg.userId);
+        this.presentationApi.handleDlcGetCatalog(msg.requestId, msg.userId);
         break;
       // ─── Toast (free tier) ────────────────────────────────────────────
       case "toast_show":
-        this.handleToastShow(
+        this.interactionApi.handleToastShow(
           msg.toastType,
           msg.message,
           msg.title,
@@ -2990,20 +2172,20 @@ export class WorkerHost {
         break;
       // ─── Commands (free tier) ─────────────────────────────────────────
       case "commands_register":
-        this.handleCommandsRegister(msg.commands);
+        this.interactionApi.handleCommandsRegister(msg.commands);
         break;
       case "commands_unregister":
-        this.handleCommandsUnregister(msg.commandIds);
+        this.interactionApi.handleCommandsUnregister(msg.commandIds);
         break;
       // ─── UI Automation (free tier) ────────────────────────────────────
       case "ui_get_drawer_tabs":
-        this.handleUIGetDrawerTabs(msg.requestId, msg.userId);
+        this.presentationApi.handleUIGetDrawerTabs(msg.requestId, msg.userId);
         break;
       case "ui_get_settings_tabs":
-        this.handleUIGetSettingsTabs(msg.requestId, msg.userId);
+        this.presentationApi.handleUIGetSettingsTabs(msg.requestId, msg.userId);
         break;
       case "ui_navigate":
-        this.handleUINavigate(msg.requestId, msg.action, msg.tabId, msg.viewId, msg.userId);
+        this.presentationApi.handleUINavigate(msg.requestId, msg.action, msg.tabId, msg.viewId, msg.userId);
         break;
       // ─── Version (free tier) ─────────────────────────────────────────
       case "version_get_backend":
@@ -3031,72 +2213,72 @@ export class WorkerHost {
         break;
       // ─── Push Notifications (gated: "push_notification") ──────────────
       case "push_send":
-        this.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle, msg.image);
+        this.presentationApi.handlePushSend(msg.requestId, msg.title, msg.body, msg.tag, msg.url, msg.userId, msg.icon, msg.rawTitle, msg.image);
         break;
       case "push_get_status":
-        this.handlePushGetStatus(msg.requestId, msg.userId);
+        this.presentationApi.handlePushGetStatus(msg.requestId, msg.userId);
         break;
       // ─── Web Search (gated: "web_search") ──────────────────────────────
       case "web_search_query":
-        void this.handleWebSearchQuery(msg.requestId, msg.query, msg.count, msg.scrape, msg.userId);
+        void this.presentationApi.handleWebSearchQuery(msg.requestId, msg.query, msg.count, msg.scrape, msg.userId);
         break;
       case "web_search_get_settings":
-        void this.handleWebSearchGetSettings(msg.requestId, msg.userId);
+        void this.presentationApi.handleWebSearchGetSettings(msg.requestId, msg.userId);
         break;
       // ─── User Context (free tier — no permission needed) ────────────────
       case "user_is_visible":
-        this.handleUserIsVisible(msg.requestId, msg.userId);
+        this.presentationApi.handleUserIsVisible(msg.requestId, msg.userId);
         break;
       case "user_get_role":
-        this.handleUserGetRole(msg.requestId, msg.userId);
+        this.presentationApi.handleUserGetRole(msg.requestId, msg.userId);
         break;
       // ─── Text Editor (free tier — no permission needed) ─────────────────
       case "text_editor_open":
-        this.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId);
+        this.presentationApi.handleTextEditorOpen(msg.requestId, msg.title, msg.value, msg.placeholder, msg.userId);
         break;
       // ─── Modal (free tier — no permission needed) ─────────────────────
       case "modal_open":
-        this.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId, (msg as any).modalRequestId);
+        this.presentationApi.handleModalOpen(msg.requestId, msg.title, msg.items, msg.width, msg.maxHeight, msg.persistent, msg.userId, (msg as any).modalRequestId);
         break;
       case "modal_close":
-        this.handleModalClose(msg.requestId, msg.openRequestId, msg.userId);
+        this.presentationApi.handleModalClose(msg.requestId, msg.openRequestId, msg.userId);
         break;
       case "confirm_open":
-        this.handleConfirmOpen(msg.requestId, msg.title, msg.message, msg.variant, msg.confirmLabel, msg.cancelLabel, msg.userId);
+        this.presentationApi.handleConfirmOpen(msg.requestId, msg.title, msg.message, msg.variant, msg.confirmLabel, msg.cancelLabel, msg.userId);
         break;
       case "input_prompt_open":
-        this.handleInputPromptOpen(msg.requestId, msg.title, msg.message, msg.placeholder, msg.defaultValue, msg.submitLabel, msg.cancelLabel, msg.multiline, msg.userId);
+        this.presentationApi.handleInputPromptOpen(msg.requestId, msg.title, msg.message, msg.placeholder, msg.defaultValue, msg.submitLabel, msg.cancelLabel, msg.multiline, msg.userId);
         break;
       // ─── Frontend Process Lifecycle (free tier) ───────────────────────
       case "frontend_process_spawn":
-        this.handleFrontendProcessSpawn(msg.requestId, msg.options);
+        this.processApi.handleFrontendProcessSpawn(msg.requestId, msg.options);
         break;
       case "frontend_process_list":
-        this.handleFrontendProcessList(msg.requestId, msg.filter);
+        this.processApi.handleFrontendProcessList(msg.requestId, msg.filter);
         break;
       case "frontend_process_get":
-        this.handleFrontendProcessGet(msg.requestId, msg.processId);
+        this.processApi.handleFrontendProcessGet(msg.requestId, msg.processId);
         break;
       case "frontend_process_stop":
-        this.handleFrontendProcessStop(msg.requestId, msg.processId, msg.options);
+        this.processApi.handleFrontendProcessStop(msg.requestId, msg.processId, msg.options);
         break;
       case "frontend_process_send":
-        this.handleFrontendProcessSend(msg.processId, msg.payload, msg.userId);
+        this.processApi.handleFrontendProcessSend(msg.processId, msg.payload, msg.userId);
         break;
       case "backend_process_spawn":
-        void this.handleBackendProcessSpawn(msg.requestId, msg.options);
+        void this.processApi.handleBackendProcessSpawn(msg.requestId, msg.options);
         break;
       case "backend_process_list":
-        this.handleBackendProcessList(msg.requestId, msg.filter);
+        this.processApi.handleBackendProcessList(msg.requestId, msg.filter);
         break;
       case "backend_process_get":
-        this.handleBackendProcessGet(msg.requestId, msg.processId);
+        this.processApi.handleBackendProcessGet(msg.requestId, msg.processId);
         break;
       case "backend_process_stop":
-        this.handleBackendProcessStop(msg.requestId, msg.processId, msg.options);
+        this.processApi.handleBackendProcessStop(msg.requestId, msg.processId, msg.options);
         break;
       case "backend_process_send":
-        this.handleBackendProcessSend(msg.processId, msg.payload, msg.userId);
+        this.processApi.handleBackendProcessSend(msg.processId, msg.payload, msg.userId);
         break;
       // ─── Macro Resolution (free tier — no permission needed) ────────────
       case "macros_resolve":
@@ -3127,26 +2309,26 @@ export class WorkerHost {
         break;
       // ─── Chat style mode (gated: "app_manipulation") ────────────────────
       case "chat_set_style_mode":
-        this.handleChatSetStyleMode(msg.requestId, msg.chatId, msg.mode, msg.userId);
+        this.presentationApi.handleChatSetStyleMode(msg.requestId, msg.chatId, msg.mode, msg.userId);
         break;
       // ─── Theme (gated: "app_manipulation") ──────────────────────────────
       case "theme_apply":
-        this.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
+        this.presentationApi.handleThemeApply(msg.requestId, msg.overrides, msg.userId);
         break;
       case "theme_apply_palette":
-        this.handleThemeApplyPalette((msg as any).requestId, (msg as any).palette, (msg as any).userId);
+        this.presentationApi.handleThemeApplyPalette((msg as any).requestId, (msg as any).palette, (msg as any).userId);
         break;
       case "theme_clear":
-        this.handleThemeClear(msg.requestId, msg.userId);
+        this.presentationApi.handleThemeClear(msg.requestId, msg.userId);
         break;
       case "theme_get_current":
-        this.handleThemeGetCurrent(msg.requestId, msg.userId);
+        this.presentationApi.handleThemeGetCurrent(msg.requestId, msg.userId);
         break;
       case "color_extract":
-        this.handleColorExtract(msg.requestId, msg.imageId, msg.userId);
+        this.presentationApi.handleColorExtract(msg.requestId, msg.imageId, msg.userId);
         break;
       case "theme_generate_variables":
-        this.handleThemeGenerateVariables(msg.requestId, msg.config);
+        this.presentationApi.handleThemeGenerateVariables(msg.requestId, msg.config);
         break;
       default:
         // Fail fast for unrecognized message types so the worker's
@@ -4042,1128 +3224,6 @@ export class WorkerHost {
     }
   }
 
-  // ─── Storage (scoped, path-traversal protected) ──────────────────────
-
-  private resolveStoragePath(requestedPath: string): string {
-    const base = resolve(this.getStorageRootPath(this.manifest.identifier));
-    const resolved = resolve(base, requestedPath);
-
-    // Path traversal protection
-    if (!(resolved === base || resolved.startsWith(`${base}${sep}`))) {
-      throw new Error("Path traversal detected");
-    }
-
-    return resolved;
-  }
-
-  private handleStorageRead(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath, "utf-8");
-      this.postToWorker({ type: "response", requestId, result: data });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageWrite(
-    requestId: string,
-    path: string,
-    data: string
-  ): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      const dir = resolve(fullPath, "..");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(fullPath, data, "utf-8");
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageReadBinary(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: new Uint8Array(data),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageWriteBinary(
-    requestId: string,
-    path: string,
-    data: Uint8Array
-  ): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      const dir = resolve(fullPath, "..");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(fullPath, data);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageDelete(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      if (existsSync(fullPath)) {
-        if (statSync(fullPath).isDirectory()) rmSync(fullPath, { recursive: true, force: true });
-        else unlinkSync(fullPath);
-      }
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageList(requestId: string, prefix?: string): void {
-    try {
-      const base = this.getStorageRootPath(this.manifest.identifier);
-      const searchDir = prefix ? this.resolveStoragePath(prefix) : base;
-
-      if (!existsSync(searchDir)) {
-        this.postToWorker({ type: "response", requestId, result: [] });
-        return;
-      }
-
-      const entries = readdirSync(searchDir, { recursive: true });
-      const files = entries
-        .map((e) => (typeof e === "string" ? e : e.toString()))
-        .filter((e) => {
-          const full = join(searchDir, e);
-          try {
-            return Bun.file(full).size >= 0;
-          } catch {
-            return false;
-          }
-        });
-
-      this.postToWorker({ type: "response", requestId, result: files });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageExists(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      this.postToWorker({ type: "response", requestId, result: existsSync(fullPath) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageMkdir(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      mkdirSync(fullPath, { recursive: true });
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageMove(requestId: string, from: string, to: string): void {
-    try {
-      const fromPath = this.resolveStoragePath(from);
-      const toPath = this.resolveStoragePath(to);
-      if (!existsSync(fromPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      mkdirSync(resolve(toPath, ".."), { recursive: true });
-      renameSync(fromPath, toPath);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleStorageStat(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveStoragePath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: {
-            exists: false,
-            isFile: false,
-            isDirectory: false,
-            sizeBytes: 0,
-            modifiedAt: new Date(0).toISOString(),
-          },
-        });
-        return;
-      }
-
-      const stat = statSync(fullPath);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          exists: true,
-          isFile: stat.isFile(),
-          isDirectory: stat.isDirectory(),
-          sizeBytes: stat.size,
-          modifiedAt: new Date(stat.mtimeMs).toISOString(),
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── User-scoped storage (per-user isolated) ─────────────────────────
-
-  private resolveUserScopedUserId(requestUserId?: string): string {
-    const scopedUserId = this.getScopedUserId();
-    if (scopedUserId) {
-      // User-scoped extension: always use the owner's userId
-      return scopedUserId;
-    }
-    // Operator-scoped: use the provided userId (required)
-    if (!requestUserId) {
-      throw new Error("userId is required for operator-scoped extensions");
-    }
-    return requestUserId;
-  }
-
-  private resolveUserStoragePath(requestedPath: string, userId: string): string {
-    const base = resolve(getUserExtensionPath(userId, this.manifest.identifier));
-    mkdirSync(base, { recursive: true });
-    const resolved = resolve(base, requestedPath);
-
-    // Path traversal protection
-    if (!(resolved === base || resolved.startsWith(`${base}${sep}`))) {
-      throw new Error("Path traversal detected");
-    }
-
-    return resolved;
-  }
-
-  private handleUserStorageRead(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath, "utf-8");
-      this.postToWorker({ type: "response", requestId, result: data });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageWrite(requestId: string, path: string, data: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      const dir = resolve(fullPath, "..");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(fullPath, data, "utf-8");
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageReadBinary(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: new Uint8Array(data),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageWriteBinary(
-    requestId: string,
-    path: string,
-    data: Uint8Array,
-    userId?: string
-  ): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      const dir = resolve(fullPath, "..");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(fullPath, data);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageDelete(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      if (existsSync(fullPath)) {
-        if (statSync(fullPath).isDirectory()) rmSync(fullPath, { recursive: true, force: true });
-        else unlinkSync(fullPath);
-      }
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageList(requestId: string, prefix?: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const base = resolve(getUserExtensionPath(resolvedUserId, this.manifest.identifier));
-      mkdirSync(base, { recursive: true });
-      const searchDir = prefix ? this.resolveUserStoragePath(prefix, resolvedUserId) : base;
-
-      if (!existsSync(searchDir)) {
-        this.postToWorker({ type: "response", requestId, result: [] });
-        return;
-      }
-
-      const entries = readdirSync(searchDir, { recursive: true });
-      const files = entries
-        .map((e) => (typeof e === "string" ? e : e.toString()))
-        .filter((e) => {
-          const full = join(searchDir, e);
-          try {
-            return Bun.file(full).size >= 0;
-          } catch {
-            return false;
-          }
-        });
-
-      this.postToWorker({ type: "response", requestId, result: files });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageExists(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: existsSync(fullPath) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageMkdir(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      mkdirSync(fullPath, { recursive: true });
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageMove(requestId: string, from: string, to: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fromPath = this.resolveUserStoragePath(from, resolvedUserId);
-      const toPath = this.resolveUserStoragePath(to, resolvedUserId);
-      if (!existsSync(fromPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      mkdirSync(resolve(toPath, ".."), { recursive: true });
-      renameSync(fromPath, toPath);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserStorageStat(requestId: string, path: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const fullPath = this.resolveUserStoragePath(path, resolvedUserId);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: {
-            exists: false,
-            isFile: false,
-            isDirectory: false,
-            sizeBytes: 0,
-            modifiedAt: new Date(0).toISOString(),
-          },
-        });
-        return;
-      }
-
-      const stat = statSync(fullPath);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          exists: true,
-          isFile: stat.isFile(),
-          isDirectory: stat.isDirectory(),
-          sizeBytes: stat.size,
-          modifiedAt: new Date(stat.mtimeMs).toISOString(),
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Secure enclave (encrypted secret storage) ─────────────────────
-
-  private static readonly ENCLAVE_KEY_PATTERN = /^[a-zA-Z0-9_\-.]{1,128}$/;
-  private static readonly ENCLAVE_MAX_VALUE_BYTES = 64 * 1024; // 64KB
-
-  private validateEnclaveKey(key: string): void {
-    if (!WorkerHost.ENCLAVE_KEY_PATTERN.test(key)) {
-      throw new Error(
-        "Invalid enclave key: must be 1-128 characters, alphanumeric/underscore/dash/dot only"
-      );
-    }
-  }
-
-  private validateEnclaveValue(value: string): void {
-    if (typeof value !== "string") {
-      throw new Error("Enclave value must be a string");
-    }
-    if (Buffer.byteLength(value, "utf-8") > WorkerHost.ENCLAVE_MAX_VALUE_BYTES) {
-      throw new Error("Enclave value exceeds maximum size of 64KB");
-    }
-    // Only allow printable chars + whitespace (no binary/control chars)
-    if (/[^\x20-\x7E\t\n\r]/.test(value)) {
-      throw new Error("Enclave value contains invalid characters (binary/control chars not allowed)");
-    }
-  }
-
-  private enclaveNamespacedKey(key: string): string {
-    return `spindle:${this.manifest.identifier}:${key}`;
-  }
-
-  private async handleEnclavePut(requestId: string, key: string, value: string, userId?: string): Promise<void> {
-    try {
-      this.validateEnclaveKey(key);
-      this.validateEnclaveValue(value);
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      await putSecret(resolvedUserId, this.enclaveNamespacedKey(key), value);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEnclaveGet(requestId: string, key: string, userId?: string): Promise<void> {
-    try {
-      this.validateEnclaveKey(key);
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const value = await getSecret(resolvedUserId, this.enclaveNamespacedKey(key));
-      this.postToWorker({ type: "response", requestId, result: value });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEnclaveDelete(requestId: string, key: string, userId?: string): void {
-    try {
-      this.validateEnclaveKey(key);
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const deleted = deleteSecret(resolvedUserId, this.enclaveNamespacedKey(key));
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEnclaveHas(requestId: string, key: string, userId?: string): Promise<void> {
-    try {
-      this.validateEnclaveKey(key);
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const exists = await validateSecret(resolvedUserId, this.enclaveNamespacedKey(key));
-      this.postToWorker({ type: "response", requestId, result: exists });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEnclaveList(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveUserScopedUserId(userId);
-      const prefix = `spindle:${this.manifest.identifier}:`;
-      const allKeys = listSecretKeys(resolvedUserId);
-      const keys = allKeys
-        .filter((k) => k.startsWith(prefix))
-        .map((k) => k.slice(prefix.length));
-      this.postToWorker({ type: "response", requestId, result: keys });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Ephemeral storage ────────────────────────────────────────────────
-
-  private getEphemeralBasePath(): string {
-    if (!this.hasPermission("ephemeral_storage")) {
-      throw new Error(`${PERMISSION_DENIED_PREFIX} ephemeral_storage — Ephemeral storage permission not granted`);
-    }
-    const base = resolve(this.getStorageRootPath(this.manifest.identifier), ".ephemeral");
-    mkdirSync(base, { recursive: true });
-    return base;
-  }
-
-  private resolveEphemeralPath(requestedPath: string): string {
-    const base = resolve(this.getEphemeralBasePath());
-    const resolved = resolve(base, requestedPath);
-    if (!(resolved === base || resolved.startsWith(`${base}${sep}`))) {
-      throw new Error("Path traversal detected");
-    }
-    return resolved;
-  }
-
-  private getEphemeralIndexPath(): string {
-    return join(this.getEphemeralBasePath(), ".index.json");
-  }
-
-  private getEphemeralReservationsPath(identifier: string = this.manifest.identifier): string {
-    if (
-      identifier === this.manifest.identifier &&
-      !this.hasPermission("ephemeral_storage")
-    ) {
-      throw new Error(`${PERMISSION_DENIED_PREFIX} ephemeral_storage — Ephemeral storage permission not granted`);
-    }
-    const base = resolve(this.getStorageRootPath(identifier), ".ephemeral");
-    mkdirSync(base, { recursive: true });
-    return join(base, ".reservations.json");
-  }
-
-  private getEphemeralReservationsPathForStorage(storageRoot: string): string {
-    const base = resolve(storageRoot, ".ephemeral");
-    mkdirSync(base, { recursive: true });
-    return join(base, ".reservations.json");
-  }
-
-  private readEphemeralReservations(
-    identifier: string = this.manifest.identifier,
-    storageRoot?: string
-  ): Array<{
-    id: string;
-    sizeBytes: number;
-    consumedBytes: number;
-    createdAt: string;
-    expiresAt: string;
-    reason?: string;
-  }> {
-    const path = storageRoot
-      ? this.getEphemeralReservationsPathForStorage(storageRoot)
-      : this.getEphemeralReservationsPath(identifier);
-    if (!existsSync(path)) return [];
-    try {
-      const parsed = JSON.parse(readFileSync(path, "utf-8"));
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((r) => {
-        return (
-          r &&
-          typeof r.id === "string" &&
-          typeof r.sizeBytes === "number" &&
-          typeof r.consumedBytes === "number" &&
-          typeof r.createdAt === "string" &&
-          typeof r.expiresAt === "string"
-        );
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  private writeEphemeralReservations(
-    reservations: Array<{
-      id: string;
-      sizeBytes: number;
-      consumedBytes: number;
-      createdAt: string;
-      expiresAt: string;
-      reason?: string;
-    }>,
-    identifier: string = this.manifest.identifier,
-    storageRoot?: string
-  ): void {
-    const path = storageRoot
-      ? this.getEphemeralReservationsPathForStorage(storageRoot)
-      : this.getEphemeralReservationsPath(identifier);
-    writeFileSync(path, JSON.stringify(reservations, null, 2), "utf-8");
-  }
-
-  private clearExpiredReservations(identifier: string = this.manifest.identifier): number {
-    const now = Date.now();
-    const existing = this.readEphemeralReservations(identifier);
-    const kept = existing.filter((r) => {
-      const expires = Date.parse(r.expiresAt);
-      if (Number.isNaN(expires)) return false;
-      return expires > now && r.consumedBytes < r.sizeBytes;
-    });
-    this.writeEphemeralReservations(kept, identifier);
-    return existing.length - kept.length;
-  }
-
-  private async getExtensionEphemeralMaxBytes(identifier: string): Promise<number> {
-    const cfg = await getEphemeralPoolConfig();
-    return cfg.extensionMaxOverrides[identifier] ?? cfg.extensionDefaultMaxBytes;
-  }
-
-  private getEphemeralPathKey(fullPath: string): string {
-    const base = this.getEphemeralBasePath();
-    return relative(base, fullPath).replaceAll("\\", "/");
-  }
-
-  private readEphemeralIndex(): Record<string, { createdAt: string; expiresAt?: string; sizeBytes: number }> {
-    const indexPath = this.getEphemeralIndexPath();
-    if (!existsSync(indexPath)) return {};
-    try {
-      return JSON.parse(readFileSync(indexPath, "utf-8"));
-    } catch {
-      return {};
-    }
-  }
-
-  private writeEphemeralIndex(index: Record<string, { createdAt: string; expiresAt?: string; sizeBytes: number }>): void {
-    const indexPath = this.getEphemeralIndexPath();
-    writeFileSync(indexPath, JSON.stringify(index, null, 2), "utf-8");
-  }
-
-  private upsertEphemeralIndex(pathKey: string, sizeBytes: number, ttlMs?: number): void {
-    const index = this.readEphemeralIndex();
-    const nowIso = new Date().toISOString();
-    const current = index[pathKey];
-    index[pathKey] = {
-      createdAt: current?.createdAt || nowIso,
-      expiresAt: ttlMs && ttlMs > 0 ? new Date(Date.now() + ttlMs).toISOString() : undefined,
-      sizeBytes,
-    };
-    this.writeEphemeralIndex(index);
-  }
-
-  private removeEphemeralIndex(pathKey: string): void {
-    const index = this.readEphemeralIndex();
-    delete index[pathKey];
-    this.writeEphemeralIndex(index);
-  }
-
-  private collectEphemeralUsage(): {
-    totalBytes: number;
-    fileCount: number;
-    filesByPath: Map<string, { sizeBytes: number }>;
-    reservedBytes: number;
-    reservations: Map<string, { sizeBytes: number; consumedBytes: number }>;
-  } {
-    const base = this.getEphemeralBasePath();
-    const indexPath = this.getEphemeralIndexPath();
-    const reservationsPath = this.getEphemeralReservationsPath();
-
-    const filesByPath = new Map<string, { sizeBytes: number }>();
-    if (existsSync(base)) {
-      const entries = readdirSync(base, { recursive: true });
-      for (const entry of entries) {
-        const rel = typeof entry === "string" ? entry : entry.toString();
-        const full = join(base, rel);
-        if (full === indexPath || full === reservationsPath) continue;
-        try {
-          const stat = statSync(full);
-          if (!stat.isFile()) continue;
-          const pathKey = this.getEphemeralPathKey(full);
-          filesByPath.set(pathKey, { sizeBytes: stat.size });
-        } catch {
-          // ignore unreadable entries
-        }
-      }
-    }
-
-    let totalBytes = 0;
-    for (const file of filesByPath.values()) {
-      totalBytes += file.sizeBytes;
-    }
-
-    const reservationsList = this.readEphemeralReservations();
-    const reservations = new Map<string, { sizeBytes: number; consumedBytes: number }>();
-    let reservedBytes = 0;
-    for (const r of reservationsList) {
-      const remaining = Math.max(0, r.sizeBytes - r.consumedBytes);
-      if (remaining <= 0) continue;
-      reservations.set(r.id, { sizeBytes: r.sizeBytes, consumedBytes: r.consumedBytes });
-      reservedBytes += remaining;
-    }
-
-    return {
-      totalBytes,
-      fileCount: filesByPath.size,
-      filesByPath,
-      reservedBytes,
-      reservations,
-    };
-  }
-
-  private collectEphemeralUsageForExtension(extension: ExtensionInfo): {
-    usedBytes: number;
-    reservedBytes: number;
-  } {
-    const base = resolve(managerSvc.getStoragePathForExtension(extension), ".ephemeral");
-    const indexPath = join(base, ".index.json");
-    const reservationsPath = join(base, ".reservations.json");
-
-    let usedBytes = 0;
-    if (existsSync(base)) {
-      const entries = readdirSync(base, { recursive: true });
-      for (const entry of entries) {
-        const rel = typeof entry === "string" ? entry : entry.toString();
-        const full = join(base, rel);
-        if (full === indexPath || full === reservationsPath) continue;
-        try {
-          const stat = statSync(full);
-          if (!stat.isFile()) continue;
-          usedBytes += stat.size;
-        } catch {
-          // ignore unreadable entries
-        }
-      }
-    }
-
-    const now = Date.now();
-    const reservations = this.readEphemeralReservations(
-      extension.identifier,
-      managerSvc.getStoragePathForExtension(extension)
-    );
-    const reservedBytes = reservations.reduce((sum, r) => {
-      const expires = Date.parse(r.expiresAt);
-      if (Number.isNaN(expires) || expires <= now) return sum;
-      return sum + Math.max(0, r.sizeBytes - r.consumedBytes);
-    }, 0);
-
-    return { usedBytes, reservedBytes };
-  }
-
-  private async getGlobalEphemeralPoolUsage(): Promise<{
-    usedBytes: number;
-    reservedBytes: number;
-  }> {
-    const extensions = await managerSvc.list();
-    let usedBytes = 0;
-    let reservedBytes = 0;
-
-    for (const ext of extensions) {
-      const usage = this.collectEphemeralUsageForExtension(ext);
-      usedBytes += usage.usedBytes;
-      reservedBytes += usage.reservedBytes;
-    }
-
-    return { usedBytes, reservedBytes };
-  }
-
-  private clearExpiredEphemeralEntriesInternal(): number {
-    const now = Date.now();
-    const base = this.getEphemeralBasePath();
-    const index = this.readEphemeralIndex();
-    let removed = 0;
-
-    for (const [pathKey, meta] of Object.entries(index)) {
-      if (!meta.expiresAt) continue;
-      const expires = Date.parse(meta.expiresAt);
-      if (!Number.isNaN(expires) && expires <= now) {
-        const fullPath = resolve(base, pathKey);
-        if (existsSync(fullPath)) unlinkSync(fullPath);
-        delete index[pathKey];
-        removed += 1;
-      }
-    }
-
-    this.writeEphemeralIndex(index);
-    return removed;
-  }
-
-  private async enforceEphemeralQuota(
-    pathKey: string,
-    incomingSizeBytes: number,
-    reservationId?: string
-  ): Promise<{ reservedConsumptionBytes: number }> {
-    this.clearExpiredEphemeralEntriesInternal();
-    this.clearExpiredReservations();
-
-    const usage = this.collectEphemeralUsage();
-    const global = await this.getGlobalEphemeralPoolUsage();
-    const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
-    const globalMax = (await getEphemeralPoolConfig()).globalMaxBytes;
-
-    const existingSize = usage.filesByPath.get(pathKey)?.sizeBytes || 0;
-    const isNewFile = !usage.filesByPath.has(pathKey);
-    const growthBytes = Math.max(0, incomingSizeBytes - existingSize);
-
-    let reservedConsumptionBytes = 0;
-    let reservationRemaining = 0;
-    if (reservationId) {
-      const reservation = usage.reservations.get(reservationId);
-      if (!reservation) {
-        throw new Error(`Reservation not found: ${reservationId}`);
-      }
-      reservationRemaining = Math.max(
-        0,
-        reservation.sizeBytes - reservation.consumedBytes
-      );
-      reservedConsumptionBytes = Math.min(reservationRemaining, growthBytes);
-    }
-
-    const extensionReservedAfter =
-      usage.reservedBytes - reservedConsumptionBytes;
-    const globalReservedAfter =
-      global.reservedBytes - reservedConsumptionBytes;
-
-    const nextTotal = usage.totalBytes - existingSize + incomingSizeBytes;
-    const nextCount = usage.fileCount + (isNewFile ? 1 : 0);
-    const nextGlobalUsed = global.usedBytes - existingSize + incomingSizeBytes;
-
-    if (nextCount > EPHEMERAL_MAX_FILES) {
-      throw new Error(
-        `Ephemeral storage file quota exceeded (${nextCount}/${EPHEMERAL_MAX_FILES})`
-      );
-    }
-
-    if (nextTotal + extensionReservedAfter > extensionMax) {
-      throw new Error(
-        `Ephemeral extension pool exceeded (${nextTotal + extensionReservedAfter}/${extensionMax} bytes)`
-      );
-    }
-
-    if (nextGlobalUsed + globalReservedAfter > globalMax) {
-      throw new Error(
-        `Ephemeral global pool exceeded (${nextGlobalUsed + globalReservedAfter}/${globalMax} bytes)`
-      );
-    }
-
-    return { reservedConsumptionBytes };
-  }
-
-  private consumeReservation(reservationId: string, consumeBytes: number): void {
-    if (consumeBytes <= 0) return;
-    const reservations = this.readEphemeralReservations();
-    const updated = reservations
-      .map((r) => {
-        if (r.id !== reservationId) return r;
-        const nextConsumed = Math.min(r.sizeBytes, r.consumedBytes + consumeBytes);
-        return { ...r, consumedBytes: nextConsumed };
-      })
-      .filter((r) => r.consumedBytes < r.sizeBytes);
-    this.writeEphemeralReservations(updated);
-  }
-
-  private handleEphemeralRead(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath, "utf-8");
-      this.postToWorker({ type: "response", requestId, result: data });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEphemeralWrite(
-    requestId: string,
-    path: string,
-    data: string,
-    ttlMs?: number,
-    reservationId?: string
-  ): Promise<void> {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      const pathKey = this.getEphemeralPathKey(fullPath);
-      const sizeBytes = Buffer.byteLength(data, "utf-8");
-      const quota = await this.enforceEphemeralQuota(pathKey, sizeBytes, reservationId);
-      mkdirSync(resolve(fullPath, ".."), { recursive: true });
-      writeFileSync(fullPath, data, "utf-8");
-      this.upsertEphemeralIndex(pathKey, sizeBytes, ttlMs);
-      if (reservationId) {
-        this.consumeReservation(reservationId, quota.reservedConsumptionBytes);
-      }
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralReadBinary(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const data = readFileSync(fullPath);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: new Uint8Array(data),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEphemeralWriteBinary(
-    requestId: string,
-    path: string,
-    data: Uint8Array,
-    ttlMs?: number,
-    reservationId?: string
-  ): Promise<void> {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      const pathKey = this.getEphemeralPathKey(fullPath);
-      const quota = await this.enforceEphemeralQuota(
-        pathKey,
-        data.byteLength,
-        reservationId
-      );
-      mkdirSync(resolve(fullPath, ".."), { recursive: true });
-      writeFileSync(fullPath, data);
-      this.upsertEphemeralIndex(pathKey, data.byteLength, ttlMs);
-      if (reservationId) {
-        this.consumeReservation(reservationId, quota.reservedConsumptionBytes);
-      }
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralDelete(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      const pathKey = this.getEphemeralPathKey(fullPath);
-      if (existsSync(fullPath)) unlinkSync(fullPath);
-      this.removeEphemeralIndex(pathKey);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralList(requestId: string, prefix?: string): void {
-    try {
-      const base = this.getEphemeralBasePath();
-      const searchDir = prefix ? this.resolveEphemeralPath(prefix) : base;
-      if (!existsSync(searchDir)) {
-        this.postToWorker({ type: "response", requestId, result: [] });
-        return;
-      }
-
-      const entries = readdirSync(searchDir, { recursive: true });
-      const files = entries
-        .map((e) => (typeof e === "string" ? e : e.toString()))
-        .filter((e) => e !== ".index.json")
-        .filter((e) => e !== ".reservations.json")
-        .filter((e) => {
-          const full = join(searchDir, e);
-          try {
-            return Bun.file(full).size >= 0;
-          } catch {
-            return false;
-          }
-        });
-
-      this.postToWorker({ type: "response", requestId, result: files });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralStat(requestId: string, path: string): void {
-    try {
-      const fullPath = this.resolveEphemeralPath(path);
-      if (!existsSync(fullPath)) {
-        this.postToWorker({ type: "response", requestId, error: "File not found" });
-        return;
-      }
-      const index = this.readEphemeralIndex();
-      const stat = statSync(fullPath);
-      const pathKey = this.getEphemeralPathKey(fullPath);
-      const indexed = index[pathKey];
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          sizeBytes: indexed?.sizeBytes ?? stat.size,
-          createdAt: indexed?.createdAt ?? new Date(stat.birthtimeMs || stat.mtimeMs).toISOString(),
-          expiresAt: indexed?.expiresAt,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralClearExpired(requestId: string): void {
-    try {
-      const removedFiles = this.clearExpiredEphemeralEntriesInternal();
-      const removedReservations = this.clearExpiredReservations();
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: removedFiles + removedReservations,
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEphemeralPoolStatus(requestId: string): Promise<void> {
-    try {
-      this.clearExpiredEphemeralEntriesInternal();
-      this.clearExpiredReservations();
-
-      const extensionUsage = this.collectEphemeralUsage();
-      const globalUsage = await this.getGlobalEphemeralPoolUsage();
-      const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
-      const globalMax = (await getEphemeralPoolConfig()).globalMaxBytes;
-
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          globalMaxBytes: globalMax,
-          globalUsedBytes: globalUsage.usedBytes,
-          globalReservedBytes: globalUsage.reservedBytes,
-          globalAvailableBytes: Math.max(
-            0,
-            globalMax - globalUsage.usedBytes - globalUsage.reservedBytes
-          ),
-          extensionMaxBytes: extensionMax,
-          extensionUsedBytes: extensionUsage.totalBytes,
-          extensionReservedBytes: extensionUsage.reservedBytes,
-          extensionAvailableBytes: Math.max(
-            0,
-            extensionMax - extensionUsage.totalBytes - extensionUsage.reservedBytes
-          ),
-          fileCount: extensionUsage.fileCount,
-          fileCountMax: EPHEMERAL_MAX_FILES,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleEphemeralRequestBlock(
-    requestId: string,
-    sizeBytes: number,
-    ttlMs?: number,
-    reason?: string
-  ): Promise<void> {
-    try {
-      if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
-        throw new Error("sizeBytes must be a positive number");
-      }
-
-      const now = Date.now();
-      const cfg = await getEphemeralPoolConfig();
-      const effectiveTtlMs =
-        ttlMs && ttlMs > 0 ? ttlMs : cfg.reservationTtlMs;
-      const expiresAt = new Date(now + effectiveTtlMs).toISOString();
-
-      this.clearExpiredEphemeralEntriesInternal();
-      this.clearExpiredReservations();
-
-      const extensionUsage = this.collectEphemeralUsage();
-      const globalUsage = await this.getGlobalEphemeralPoolUsage();
-      const extensionMax = await this.getExtensionEphemeralMaxBytes(this.manifest.identifier);
-      const globalMax = cfg.globalMaxBytes;
-
-      const extensionAvailable =
-        extensionMax - extensionUsage.totalBytes - extensionUsage.reservedBytes;
-      const globalAvailable =
-        globalMax - globalUsage.usedBytes - globalUsage.reservedBytes;
-
-      if (sizeBytes > extensionAvailable) {
-        throw new Error(
-          `Requested block exceeds extension available pool (${sizeBytes}/${Math.max(0, extensionAvailable)} bytes)`
-        );
-      }
-      if (sizeBytes > globalAvailable) {
-        throw new Error(
-          `Requested block exceeds global available pool (${sizeBytes}/${Math.max(0, globalAvailable)} bytes)`
-        );
-      }
-
-      const reservationId = crypto.randomUUID();
-      const reservations = this.readEphemeralReservations();
-      reservations.push({
-        id: reservationId,
-        sizeBytes,
-        consumedBytes: 0,
-        createdAt: new Date(now).toISOString(),
-        expiresAt,
-        reason,
-      });
-      this.writeEphemeralReservations(reservations);
-
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          reservationId,
-          sizeBytes,
-          expiresAt,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleEphemeralReleaseBlock(
-    requestId: string,
-    reservationId: string
-  ): void {
-    try {
-      const reservations = this.readEphemeralReservations();
-      const next = reservations.filter((r) => r.id !== reservationId);
-      this.writeEphemeralReservations(next);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
   // ─── Permissions ───────────────────────────────────────────────────────
 
   private handlePermissionsGetGranted(requestId: string): void {
@@ -6014,2518 +4074,7 @@ export class WorkerHost {
     });
   }
 
-  // ─── Variables (free tier — no permission gating) ────────────────────
-
-  private getLocalVars(chatId: string): Record<string, string> {
-    const userId = this.getChatOwnerId(chatId);
-    if (!userId) throw new Error("Chat not found");
-    this.enforceScopedUser(userId);
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (!chat) throw new Error("Chat not found");
-    return (chat.metadata?.macro_variables?.local as Record<string, string>) || {};
-  }
-
-  private setLocalVars(chatId: string, vars: Record<string, string>): void {
-    const userId = this.getChatOwnerId(chatId);
-    if (!userId) throw new Error("Chat not found");
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (!chat) throw new Error("Chat not found");
-    const metadata = { ...chat.metadata };
-    const macroVars = (metadata.macro_variables as Record<string, unknown>) || {};
-    macroVars.local = vars;
-    metadata.macro_variables = macroVars;
-    chatsSvc.updateChat(userId, chatId, { metadata });
-  }
-
-  private getGlobalVars(userId: string): Record<string, string> {
-    const setting = settingsSvc.getSetting(userId, "macro_variables_global");
-    return (setting?.value as Record<string, string>) || {};
-  }
-
-  private setGlobalVars(userId: string, vars: Record<string, string>): void {
-    settingsSvc.putSetting(userId, "macro_variables_global", vars);
-  }
-
-  private handleVarsGetLocal(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getLocalVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsSetLocal(requestId: string, chatId: string, key: string, value: string): void {
-    try {
-      const vars = this.getLocalVars(chatId);
-      vars[key] = value;
-      this.setLocalVars(chatId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsDeleteLocal(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getLocalVars(chatId);
-      delete vars[key];
-      this.setLocalVars(chatId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsListLocal(requestId: string, chatId: string): void {
-    try {
-      const vars = this.getLocalVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsHasLocal(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getLocalVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: key in vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsGetGlobal(requestId: string, key: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        throw new Error("userId is required for operator-scoped extensions");
-      }
-      this.enforceScopedUser(resolvedUserId);
-      const vars = this.getGlobalVars(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsSetGlobal(requestId: string, key: string, value: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        throw new Error("userId is required for operator-scoped extensions");
-      }
-      this.enforceScopedUser(resolvedUserId);
-      const vars = this.getGlobalVars(resolvedUserId);
-      vars[key] = value;
-      this.setGlobalVars(resolvedUserId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsDeleteGlobal(requestId: string, key: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        throw new Error("userId is required for operator-scoped extensions");
-      }
-      this.enforceScopedUser(resolvedUserId);
-      const vars = this.getGlobalVars(resolvedUserId);
-      delete vars[key];
-      this.setGlobalVars(resolvedUserId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsListGlobal(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        throw new Error("userId is required for operator-scoped extensions");
-      }
-      this.enforceScopedUser(resolvedUserId);
-      const vars = this.getGlobalVars(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsHasGlobal(requestId: string, key: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        throw new Error("userId is required for operator-scoped extensions");
-      }
-      this.enforceScopedUser(resolvedUserId);
-      const vars = this.getGlobalVars(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: key in vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Chat-Scoped Persisted Variables (free tier) ────────────────────
-
-  private getChatVars(chatId: string): Record<string, string> {
-    const userId = this.getChatOwnerId(chatId);
-    if (!userId) throw new Error("Chat not found");
-    this.enforceScopedUser(userId);
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (!chat) throw new Error("Chat not found");
-    return (chat.metadata?.chat_variables as Record<string, string>) || {};
-  }
-
-  private setChatVars(chatId: string, vars: Record<string, string>): void {
-    const userId = this.getChatOwnerId(chatId);
-    if (!userId) throw new Error("Chat not found");
-    const chat = chatsSvc.getChat(userId, chatId);
-    if (!chat) throw new Error("Chat not found");
-    const metadata = { ...chat.metadata, chat_variables: vars };
-    chatsSvc.updateChat(userId, chatId, { metadata });
-  }
-
-  private handleVarsGetChat(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getChatVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: vars[key] ?? "" });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsSetChat(requestId: string, chatId: string, key: string, value: string): void {
-    try {
-      const vars = this.getChatVars(chatId);
-      vars[key] = value;
-      this.setChatVars(chatId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsDeleteChat(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getChatVars(chatId);
-      delete vars[key];
-      this.setChatVars(chatId, vars);
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsListChat(requestId: string, chatId: string): void {
-    try {
-      const vars = this.getChatVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleVarsHasChat(requestId: string, chatId: string, key: string): void {
-    try {
-      const vars = this.getChatVars(chatId);
-      this.postToWorker({ type: "response", requestId, result: key in vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Presets CRUD (gated: "presets") ────────────────────────────────
-
-  private resolvePresetUserOrThrow(userId?: string): string {
-    if (!this.hasPermission("presets")) {
-      throw new Error(`${PERMISSION_DENIED_PREFIX} presets — Presets permission not granted`);
-    }
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-    this.enforceScopedUser(resolvedUserId);
-    return resolvedUserId;
-  }
-
-  private handlePresetsList(requestId: string, limit?: number, offset?: number, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const result = presetsSvc.listPresets(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: { data: result.data, total: result.total },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetsGet(requestId: string, presetId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.getPreset(resolvedUserId, presetId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetsCreate(requestId: string, input: CreatePresetInput, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Preset name is required");
-      }
-      if (!input?.provider || typeof input.provider !== "string" || !input.provider.trim()) {
-        throw new Error("Preset provider is required");
-      }
-      const preset = presetsSvc.createPreset(resolvedUserId, input);
-      this.postToWorker({ type: "response", requestId, result: preset });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetsUpdate(requestId: string, presetId: string, input: UpdatePresetInput, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const requestedInput = input || {};
-      if (requestedInput.expected_cache_revision === undefined) {
-        throw new Error("Preset revision is required for preset updates");
-      }
-      const preset = presetsSvc.updatePreset(resolvedUserId, presetId, requestedInput);
-      if (!preset) throw new Error("Preset not found");
-      this.postToWorker({ type: "response", requestId, result: preset });
-    } catch (err: any) {
-      const error: string | PresetConflictWorkerError = err instanceof PresetRevisionConflictError
-        ? {
-            code: err.code,
-            message: err.message,
-            presetId: err.presetId,
-            expectedCacheRevision: err.expectedCacheRevision,
-            actualCacheRevision: err.actualCacheRevision,
-          }
-        : err.message;
-      // The published 0.6.2 host contract types errors as strings; the
-      // revision-safe candidate widens this field to structured metadata.
-      this.postToWorker({ type: "response", requestId, error: error as unknown as string });
-    }
-  }
-
-  private handlePresetsDelete(requestId: string, presetId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.deletePreset(resolvedUserId, presetId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetBlocksList(requestId: string, presetId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const blocks = presetsSvc.listPromptBlocks(resolvedUserId, presetId);
-      if (!blocks) throw new Error("Preset not found");
-      this.postToWorker({ type: "response", requestId, result: blocks });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetBlocksGet(requestId: string, presetId: string, blockId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.getPromptBlock(resolvedUserId, presetId, blockId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetBlocksCreate(
-    requestId: string,
-    presetId: string,
-    input: presetsSvc.CreatePromptBlockInput,
-    index?: number,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const block = presetsSvc.createPromptBlock(resolvedUserId, presetId, input || {}, index);
-      if (!block) throw new Error("Preset not found");
-      this.postToWorker({ type: "response", requestId, result: block });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetBlocksUpdate(
-    requestId: string,
-    presetId: string,
-    blockId: string,
-    input: presetsSvc.UpdatePromptBlockInput,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const block = presetsSvc.updatePromptBlock(resolvedUserId, presetId, blockId, input || {});
-      if (!block) throw new Error("Prompt block not found");
-      this.postToWorker({ type: "response", requestId, result: block });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetBlocksDelete(requestId: string, presetId: string, blockId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      this.postToWorker({ type: "response", requestId, result: presetsSvc.deletePromptBlock(resolvedUserId, presetId, blockId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePresetCategoriesList(requestId: string, presetId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolvePresetUserOrThrow(userId);
-      const groups = presetsSvc.listPromptBlockCategories(resolvedUserId, presetId);
-      if (!groups) throw new Error("Preset not found");
-      this.postToWorker({ type: "response", requestId, result: groups });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
   // ─── Characters (gated: "characters") ──────────────────────────────
-
-  private toCharacterDTO(c: any): CharacterDTO {
-    return {
-      id: c.id,
-      name: c.name,
-      description: c.description || "",
-      personality: c.personality || "",
-      scenario: c.scenario || "",
-      first_mes: c.first_mes || "",
-      mes_example: c.mes_example || "",
-      creator_notes: c.creator_notes || "",
-      system_prompt: c.system_prompt || "",
-      post_history_instructions: c.post_history_instructions || "",
-      tags: Array.isArray(c.tags) ? c.tags : [],
-      alternate_greetings: Array.isArray(c.alternate_greetings) ? c.alternate_greetings : [],
-      creator: c.creator || "",
-      image_id: c.image_id || null,
-      world_book_ids: getCharacterWorldBookIds(c.extensions),
-      extensions: c.extensions || {},
-      created_at: c.created_at,
-      updated_at: c.updated_at,
-    };
-  }
-
-  /**
-   * Normalize and dedupe a `world_book_ids` input from an extension. Filters
-   * out non-string and empty entries, deduplicates while preserving order.
-   */
-  private sanitizeWorldBookIds(input: unknown): string[] {
-    if (!Array.isArray(input)) return [];
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const id of input) {
-      if (typeof id !== "string" || !id.trim()) continue;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      out.push(id);
-    }
-    return out;
-  }
-
-  private handleCharactersList(requestId: string, limit?: number, offset?: number, userId?: string): void {
-    try {
-      if (!this.hasPermission("characters")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = charactersSvc.listCharacters(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((c) => this.toCharacterDTO(c)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleCharactersGet(requestId: string, characterId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("characters")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const c = charactersSvc.getCharacter(resolvedUserId, characterId);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: c ? this.toCharacterDTO(c) : null,
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleCharactersCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("characters")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Character name is required");
-      }
-
-      const createInput: any = {
-        name: input.name,
-        description: input.description,
-        personality: input.personality,
-        scenario: input.scenario,
-        first_mes: input.first_mes,
-        mes_example: input.mes_example,
-        creator_notes: input.creator_notes,
-        system_prompt: input.system_prompt,
-        post_history_instructions: input.post_history_instructions,
-        tags: input.tags,
-        alternate_greetings: input.alternate_greetings,
-        creator: input.creator,
-      };
-      if (input.world_book_ids !== undefined || input.extensions !== undefined) {
-        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
-        createInput.extensions = setCharacterWorldBookIds(
-          input.extensions && typeof input.extensions === "object" && !Array.isArray(input.extensions)
-            ? input.extensions
-            : {},
-          ids,
-        );
-      }
-      const c = charactersSvc.createCharacter(resolvedUserId, createInput);
-      this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleCharactersSetAvatar(
-    requestId: string,
-    characterId: string,
-    avatar: CharacterAvatarUploadDTO,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("characters")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        if (!(avatar?.data instanceof Uint8Array) || avatar.data.byteLength === 0) {
-          throw new Error("Avatar data must be a non-empty Uint8Array");
-        }
-
-        const mimeType = typeof avatar.mime_type === "string" && avatar.mime_type.trim()
-          ? avatar.mime_type.trim()
-          : "image/png";
-        const filename = typeof avatar.filename === "string" && avatar.filename.trim()
-          ? avatar.filename.trim()
-          : "avatar.png";
-
-        const avatarBytes = Uint8Array.from(avatar.data);
-        const file = new File([avatarBytes.buffer], filename, { type: mimeType });
-        const updated = await charactersSvc.replaceCharacterAvatar(resolvedUserId, characterId, file);
-        if (!updated) throw new Error("Character not found");
-
-        this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(updated) });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleCharactersUpdate(requestId: string, characterId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("characters")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const update: any = {};
-      const passthroughFields = [
-        "name", "description", "personality", "scenario", "first_mes",
-        "mes_example", "creator_notes", "system_prompt", "post_history_instructions",
-        "tags", "alternate_greetings", "creator",
-      ] as const;
-      for (const field of passthroughFields) {
-        if (input?.[field] !== undefined) update[field] = input[field];
-      }
-
-      const existing = charactersSvc.getCharacter(resolvedUserId, characterId);
-      if (!existing) throw new Error("Character not found");
-
-      let mergedExtensions: Record<string, any> | undefined;
-      if (input?.extensions !== undefined) {
-        if (typeof input.extensions !== "object" || Array.isArray(input.extensions)) {
-          throw new Error("extensions must be a plain object");
-        }
-        mergedExtensions = { ...existing.extensions, ...input.extensions };
-      }
-
-      if (input?.world_book_ids !== undefined) {
-        const ids = this.sanitizeWorldBookIds(input.world_book_ids);
-        update.extensions = setCharacterWorldBookIds(mergedExtensions || existing.extensions || {}, ids);
-      } else if (mergedExtensions !== undefined) {
-        update.extensions = mergedExtensions;
-      }
-
-      const c = charactersSvc.updateCharacter(resolvedUserId, characterId, update);
-      if (!c) throw new Error("Character not found");
-      this.postToWorker({ type: "response", requestId, result: this.toCharacterDTO(c) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleCharactersDelete(requestId: string, characterId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("characters")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} characters — Characters permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = charactersSvc.deleteCharacter(resolvedUserId, characterId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Images CRUD (gated: "images") ─────────────────────────────────
-
-  private toImageDTO(img: any): ImageDTO {
-    return {
-      id: img.id,
-      original_filename: img.original_filename || "",
-      mime_type: img.mime_type || "",
-      width: img.width ?? null,
-      height: img.height ?? null,
-      has_thumbnail: !!img.has_thumbnail,
-      url: img.url,
-      specificity: img.specificity || "full",
-      owner_extension_identifier: img.owner_extension_identifier ?? null,
-      owner_character_id: img.owner_character_id ?? null,
-      owner_chat_id: img.owner_chat_id ?? null,
-      created_at: img.created_at,
-    };
-  }
-
-  private handleImagesList(
-    requestId: string,
-    limit?: number,
-    offset?: number,
-    specificity?: imagesSvc.ImageSpecificity,
-    onlyOwned?: boolean,
-    characterId?: string,
-    chatId?: string,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("images")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = imagesSvc.listImages(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-        specificity: specificity || "full",
-        owner_extension_identifier: onlyOwned ? this.manifest.identifier : undefined,
-        owner_character_id: characterId,
-        owner_chat_id: chatId,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((img) => this.toImageDTO(img)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImagesGet(
-    requestId: string,
-    imageId: string,
-    specificity?: imagesSvc.ImageSpecificity,
-    onlyOwned?: boolean,
-    characterId?: string,
-    chatId?: string,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("images")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const img = imagesSvc.getImage(resolvedUserId, imageId, {
-        specificity: specificity || "full",
-        owner_extension_identifier: onlyOwned ? this.manifest.identifier : undefined,
-        owner_character_id: characterId,
-        owner_chat_id: chatId,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: img ? this.toImageDTO(img) : null,
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImagesUpload(requestId: string, input: any, userId?: string): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("images")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        if (!(input?.data instanceof Uint8Array) || input.data.byteLength === 0) {
-          throw new Error("Image data must be a non-empty Uint8Array");
-        }
-
-        const mimeType = typeof input?.mime_type === "string" && input.mime_type.trim()
-          ? input.mime_type.trim()
-          : "image/png";
-        const filename = typeof input?.filename === "string" && input.filename.trim()
-          ? input.filename.trim()
-          : "image.png";
-
-        const imageBytes = Uint8Array.from(input.data);
-        const file = new File([imageBytes.buffer], filename, { type: mimeType });
-        const img = await imagesSvc.uploadImage(resolvedUserId, file, {
-          owner_extension_identifier: this.manifest.identifier,
-          owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
-            ? input.owner_character_id.trim()
-            : undefined,
-          owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
-            ? input.owner_chat_id.trim()
-            : undefined,
-        });
-
-        this.postToWorker({ type: "response", requestId, result: this.toImageDTO(img) });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleImagesUploadMany(
-    requestId: string,
-    items: any[],
-    userId?: string,
-    concurrency?: number,
-  ): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("images")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        if (!Array.isArray(items)) {
-          throw new Error("items must be an array of ImageUploadDTO");
-        }
-
-        const normalised: imagesSvc.UploadImagesItem[] = new Array(items.length);
-        const failures: Array<{ index: number; error: string }> = [];
-        for (let i = 0; i < items.length; i++) {
-          const input = items[i];
-          if (!input || typeof input !== "object") {
-            failures.push({ index: i, error: "item must be an object" });
-            continue;
-          }
-          if (!(input.data instanceof Uint8Array) || input.data.byteLength === 0) {
-            failures.push({ index: i, error: "Image data must be a non-empty Uint8Array" });
-            continue;
-          }
-          normalised[i] = {
-            data: input.data,
-            filename: typeof input.filename === "string" && input.filename.trim()
-              ? input.filename.trim()
-              : "image.png",
-            mime_type: typeof input.mime_type === "string" && input.mime_type.trim()
-              ? input.mime_type.trim()
-              : "image/png",
-            ...(typeof input.owner_character_id === "string" && input.owner_character_id.trim()
-              ? { owner_character_id: input.owner_character_id.trim() }
-              : {}),
-            ...(typeof input.owner_chat_id === "string" && input.owner_chat_id.trim()
-              ? { owner_chat_id: input.owner_chat_id.trim() }
-              : {}),
-          };
-        }
-
-        const validIndices: number[] = [];
-        const validItems: imagesSvc.UploadImagesItem[] = [];
-        for (let i = 0; i < normalised.length; i++) {
-          if (normalised[i] !== undefined) {
-            validIndices.push(i);
-            validItems.push(normalised[i]!);
-          }
-        }
-
-        const batchResults = await imagesSvc.uploadImages(resolvedUserId, validItems, {
-          owner_extension_identifier: this.manifest.identifier,
-          concurrency,
-        });
-
-        const results: Array<{ id?: string; error?: string }> = new Array(items.length);
-        for (const f of failures) results[f.index] = { error: f.error };
-        for (let k = 0; k < validIndices.length; k++) {
-          const out = batchResults[k]!;
-          results[validIndices[k]!] = out.id !== undefined
-            ? { id: out.id }
-            : { error: out.error ?? "unknown error" };
-        }
-
-        this.postToWorker({ type: "response", requestId, result: results });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleImagesUploadFromDataUrl(
-    requestId: string,
-    dataUrl: string,
-    originalFilename?: string,
-    ownerCharacterId?: string,
-    ownerChatId?: string,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("images")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        if (typeof dataUrl !== "string" || !dataUrl.trim()) {
-          throw new Error("dataUrl is required");
-        }
-
-        const img = await imagesSvc.saveImageFromDataUrl(resolvedUserId, dataUrl, originalFilename, {
-          owner_extension_identifier: this.manifest.identifier,
-          owner_character_id: typeof ownerCharacterId === "string" && ownerCharacterId.trim()
-            ? ownerCharacterId.trim()
-            : undefined,
-          owner_chat_id: typeof ownerChatId === "string" && ownerChatId.trim()
-            ? ownerChatId.trim()
-            : undefined,
-        });
-        this.postToWorker({ type: "response", requestId, result: this.toImageDTO(img) });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleImagesDelete(requestId: string, imageId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("images")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = imagesSvc.deleteImage(resolvedUserId, imageId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImagesDeleteMany(requestId: string, imageIds: string[], userId?: string): void {
-    void (async () => {
-      try {
-        if (!this.hasPermission("images")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} images — Images permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-        if (!Array.isArray(imageIds)) throw new Error("imageIds must be an array");
-
-        const deleted = await imagesSvc.deleteImagesBulk(resolvedUserId, imageIds);
-        this.postToWorker({ type: "response", requestId, result: deleted });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private tempExtensionForMediaSource(filename?: string, mimeType?: string): string {
-    const explicit = extname(filename || "").trim().toLowerCase();
-    if (/^\.[a-z0-9]{1,8}$/.test(explicit)) return explicit;
-
-    switch ((mimeType || "").trim().toLowerCase()) {
-      case "video/mp4":
-        return ".mp4";
-      case "video/webm":
-        return ".webm";
-      case "video/quicktime":
-        return ".mov";
-      case "video/x-m4v":
-        return ".m4v";
-      case "video/x-matroska":
-        return ".mkv";
-      case "audio/mpeg":
-      case "audio/mp3":
-        return ".mp3";
-      case "audio/wav":
-      case "audio/x-wav":
-        return ".wav";
-      case "audio/ogg":
-      case "audio/ogg; codecs=opus":
-      case "audio/opus":
-        return ".ogg";
-      case "audio/aac":
-        return ".aac";
-      case "audio/flac":
-        return ".flac";
-      case "audio/mp4":
-        return ".m4a";
-      case "audio/webm":
-        return ".webm";
-      case "image/png":
-        return ".png";
-      case "image/jpeg":
-        return ".jpg";
-      case "image/webp":
-        return ".webp";
-      case "image/gif":
-        return ".gif";
-      case "image/avif":
-        return ".avif";
-      case "image/svg+xml":
-        return ".svg";
-      default:
-        return ".bin";
-    }
-  }
-
-  private async resolveMediaSource(
-    source: mediaSvc.MediaSourceDTO,
-    resolvedUserId: string,
-  ): Promise<ResolvedWorkerMediaSource> {
-    if (!source || typeof source !== "object") {
-      throw new Error("input.source is required");
-    }
-
-    switch (source.kind) {
-      case "inline": {
-        if (!(source.data instanceof Uint8Array) || source.data.byteLength === 0) {
-          throw new Error("inline media source data must be a non-empty Uint8Array");
-        }
-        const workdir = mkdtempSync(join(tmpdir(), "lumiverse-spindle-media-src-"));
-        const filename = typeof source.filename === "string" && source.filename.trim()
-          ? source.filename.trim()
-          : `inline${this.tempExtensionForMediaSource(undefined, source.mime_type)}`;
-        const ext = this.tempExtensionForMediaSource(filename, source.mime_type);
-        const path = join(workdir, `input${ext}`);
-        await Bun.write(path, source.data);
-        return {
-          path,
-          filename,
-          mime_type: typeof source.mime_type === "string" && source.mime_type.trim()
-            ? source.mime_type.trim()
-            : undefined,
-          cleanup: () => {
-            try {
-              rmSync(workdir, { recursive: true, force: true });
-            } catch {
-              /* ignore cleanup failure */
-            }
-          },
-        };
-      }
-      case "upload": {
-        const uploadId = typeof source.upload_id === "string" ? source.upload_id.trim() : "";
-        if (!uploadId) throw new Error("upload media source requires upload_id");
-        const rec = spindleUploads.getUpload(uploadId);
-        if (!rec || rec.ownerUserId !== resolvedUserId || rec.extensionIdentifier !== this.manifest.identifier) {
-          throw new Error("upload media source not found");
-        }
-        return {
-          path: rec.path,
-          filename: (typeof source.filename === "string" && source.filename.trim()) ? source.filename.trim() : rec.fileName,
-          mime_type: typeof source.mime_type === "string" && source.mime_type.trim()
-            ? source.mime_type.trim()
-            : undefined,
-        };
-      }
-      case "image": {
-        const imageId = typeof source.image_id === "string" ? source.image_id.trim() : "";
-        if (!imageId) throw new Error("image media source requires image_id");
-        const image = imagesSvc.getImage(resolvedUserId, imageId);
-        if (!image) throw new Error("image media source not found");
-        const path = await imagesSvc.getImageFilePath(resolvedUserId, imageId);
-        if (!path) throw new Error("image media source file not found");
-        return {
-          path,
-          filename: image.original_filename || image.id,
-          mime_type: image.mime_type || undefined,
-        };
-      }
-      case "audio": {
-        const audioId = typeof source.audio_id === "string" ? source.audio_id.trim() : "";
-        if (!audioId) throw new Error("audio media source requires audio_id");
-        const audio = audioSvc.getAudio(resolvedUserId, audioId);
-        if (!audio) throw new Error("audio media source not found");
-        const path = audioSvc.getAudioFilePath(resolvedUserId, audioId);
-        if (!path) throw new Error("audio media source file not found");
-        return {
-          path,
-          filename: audio.original_filename || audio.filename,
-          mime_type: audio.mime_type || undefined,
-        };
-      }
-      default:
-        throw new Error("unsupported media source kind");
-    }
-  }
-
-  private cleanupResolvedMediaSource(source: ResolvedWorkerMediaSource | null | undefined): void {
-    try {
-      source?.cleanup?.();
-    } catch {
-      /* ignore cleanup failure */
-    }
-  }
-
-  private handleMediaAudioConvert(requestId: string, input: mediaSvc.MediaConvertAudioRequestDTO): void {
-    (async () => {
-      let source: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        source = await this.resolveMediaSource(input?.source as mediaSvc.MediaSourceDTO, resolvedUserId);
-        const result = await mediaSvc.convertAudio(source, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(source);
-      }
-    })();
-  }
-
-  private handleMediaVideoConvert(requestId: string, input: mediaSvc.MediaConvertVideoRequestDTO): void {
-    (async () => {
-      let source: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        source = await this.resolveMediaSource(input?.source as mediaSvc.MediaSourceDTO, resolvedUserId);
-        mediaSvc.assertLikelyVideoSource(source);
-        const result = await mediaSvc.convertVideo(source, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(source);
-      }
-    })();
-  }
-
-  private handleMediaVideoTranscode(requestId: string, input: mediaSvc.MediaTranscodeVideoRequestDTO): void {
-    (async () => {
-      let source: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        source = await this.resolveMediaSource(input?.source as mediaSvc.MediaSourceDTO, resolvedUserId);
-        mediaSvc.assertLikelyVideoSource(source);
-        const result = await mediaSvc.transcodeVideo(source, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(source);
-      }
-    })();
-  }
-
-  private handleMediaVideoRemoveAudio(requestId: string, input: mediaSvc.MediaRemoveAudioFromVideoRequestDTO): void {
-    (async () => {
-      let source: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        source = await this.resolveMediaSource(input?.source as mediaSvc.MediaSourceDTO, resolvedUserId);
-        mediaSvc.assertLikelyVideoSource(source);
-        const result = await mediaSvc.removeAudioFromVideo(source, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(source);
-      }
-    })();
-  }
-
-  private handleMediaVideoAddAudio(requestId: string, input: mediaSvc.MediaAddAudioToVideoRequestDTO): void {
-    (async () => {
-      let video: ResolvedWorkerMediaSource | null = null;
-      let audio: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        video = await this.resolveMediaSource(input?.video as mediaSvc.MediaSourceDTO, resolvedUserId);
-        audio = await this.resolveMediaSource(input?.audio as mediaSvc.MediaSourceDTO, resolvedUserId);
-        mediaSvc.assertLikelyVideoSource(video, "video");
-        const result = await mediaSvc.addAudioToVideo(video, audio, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(video);
-        this.cleanupResolvedMediaSource(audio);
-      }
-    })();
-  }
-
-  private handleMediaVideoFromImageAudio(requestId: string, input: mediaSvc.MediaCreateVideoFromImageAndAudioRequestDTO): void {
-    (async () => {
-      let image: ResolvedWorkerMediaSource | null = null;
-      let audio: ResolvedWorkerMediaSource | null = null;
-      try {
-        if (!this.hasPermission("media")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} media — Media permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(input?.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        image = await this.resolveMediaSource(input?.image as mediaSvc.MediaSourceDTO, resolvedUserId);
-        audio = await this.resolveMediaSource(input?.audio as mediaSvc.MediaSourceDTO, resolvedUserId);
-        mediaSvc.assertLikelyImageSource(image, "image");
-        const result = await mediaSvc.createVideoFromImageAndAudio(image, audio, input);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err?.message || String(err) });
-      } finally {
-        this.cleanupResolvedMediaSource(image);
-        this.cleanupResolvedMediaSource(audio);
-      }
-    })();
-  }
-
-  // ─── Chats CRUD (gated: "chats") ──────────────────────────────────
-
-  private toChatDTO(c: any): ChatDTO {
-    return {
-      id: c.id,
-      character_id: c.character_id,
-      name: c.name || "",
-      metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
-      created_at: c.created_at,
-      updated_at: c.updated_at,
-    };
-  }
-
-  private handleChatsList(
-    requestId: string,
-    characterId?: string,
-    limit?: number,
-    offset?: number,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = chatsSvc.listChats(
-        resolvedUserId,
-        { limit: Math.min(limit || 50, 200), offset: offset || 0 },
-        characterId,
-      );
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((c) => this.toChatDTO(c)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleChatsGet(requestId: string, chatId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const c = chatsSvc.getChat(resolvedUserId, chatId);
-      this.postToWorker({ type: "response", requestId, result: c ? this.toChatDTO(c) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleChatsGetActive(requestId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const setting = settingsSvc.getSetting(resolvedUserId, "activeChatId");
-      if (!setting?.value || typeof setting.value !== "string") {
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-
-      const chat = chatsSvc.getChat(resolvedUserId, setting.value);
-      this.postToWorker({ type: "response", requestId, result: chat ? this.toChatDTO(chat) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleChatsUpdate(requestId: string, chatId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const before = chatsSvc.getChat(resolvedUserId, chatId);
-      let c = chatsSvc.updateChat(resolvedUserId, chatId, input || {});
-      if (!c) throw new Error("Chat not found");
-      // Spindle metadata updates are full replaces, so book attachments can
-      // change (or vanish) on any metadata write — mirror the REST routes'
-      // orphaned wi_state pruning.
-      if (input?.metadata !== undefined) {
-        const beforeIds = JSON.stringify(before?.metadata?.chat_world_book_ids ?? []);
-        const afterIds = JSON.stringify(c.metadata?.chat_world_book_ids ?? []);
-        if (beforeIds !== afterIds) {
-          c = pruneOrphanedWiState(resolvedUserId, c);
-        }
-      }
-      this.postToWorker({ type: "response", requestId, result: this.toChatDTO(c) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleChatsDelete(requestId: string, chatId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = chatsSvc.deleteChat(resolvedUserId, chatId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── World Books CRUD (gated: "world_books") ─────────────────────────
-
-  private toWorldBookDTO(wb: any): WorldBookDTO {
-    return {
-      id: wb.id,
-      name: wb.name || "",
-      description: wb.description || "",
-      metadata: (typeof wb.metadata === "object" && wb.metadata) ? wb.metadata : {},
-      created_at: wb.created_at,
-      updated_at: wb.updated_at,
-    };
-  }
-
-  private toWorldBookEntryDTO(e: any): WorldBookEntryDTO {
-    return {
-      id: e.id,
-      world_book_id: e.world_book_id,
-      uid: e.uid || "",
-      key: Array.isArray(e.key) ? e.key : [],
-      keysecondary: Array.isArray(e.keysecondary) ? e.keysecondary : [],
-      content: e.content || "",
-      comment: e.comment || "",
-      position: e.position ?? 0,
-      depth: e.depth ?? 4,
-      role: e.role || null,
-      order_value: e.order_value ?? 100,
-      selective: !!e.selective,
-      constant: !!e.constant,
-      disabled: !!e.disabled,
-      group_name: e.group_name || "",
-      group_override: !!e.group_override,
-      group_weight: e.group_weight ?? 100,
-      probability: e.probability ?? 100,
-      scan_depth: e.scan_depth ?? null,
-      case_sensitive: !!e.case_sensitive,
-      match_whole_words: !!e.match_whole_words,
-      automation_id: e.automation_id || null,
-      use_regex: !!e.use_regex,
-      prevent_recursion: !!e.prevent_recursion,
-      exclude_recursion: !!e.exclude_recursion,
-      delay_until_recursion: !!e.delay_until_recursion,
-      priority: e.priority ?? 10,
-      sticky: e.sticky ?? 0,
-      cooldown: e.cooldown ?? 0,
-      delay: e.delay ?? 0,
-      selective_logic: e.selective_logic ?? 0,
-      use_probability: e.use_probability !== undefined ? !!e.use_probability : true,
-      vectorized: !!e.vectorized,
-      extensions: (typeof e.extensions === "object" && e.extensions) ? e.extensions : {},
-      created_at: e.created_at,
-      updated_at: e.updated_at,
-    };
-  }
-
-  private handleWorldBooksList(requestId: string, limit?: number, offset?: number, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = worldBooksSvc.listWorldBooks(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((wb) => this.toWorldBookDTO(wb)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksGet(requestId: string, worldBookId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const wb = worldBooksSvc.getWorldBook(resolvedUserId, worldBookId);
-      this.postToWorker({ type: "response", requestId, result: wb ? this.toWorldBookDTO(wb) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("World book name is required");
-      }
-
-      const wb = worldBooksSvc.createWorldBook(resolvedUserId, {
-        name: input.name,
-        description: input.description,
-        metadata: input.metadata,
-      });
-      this.postToWorker({ type: "response", requestId, result: this.toWorldBookDTO(wb) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksUpdate(requestId: string, worldBookId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const wb = worldBooksSvc.updateWorldBook(resolvedUserId, worldBookId, input || {});
-      if (!wb) throw new Error("World book not found");
-      this.postToWorker({ type: "response", requestId, result: this.toWorldBookDTO(wb) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleWorldBooksDelete(requestId: string, worldBookId: string, userId?: string): Promise<void> {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = await worldBooksSvc.deleteWorldBook(resolvedUserId, worldBookId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── World Book Entries CRUD (gated: "world_books") ───────────────────
-
-  private handleWorldBookEntriesList(
-    requestId: string,
-    worldBookId: string,
-    limit?: number,
-    offset?: number,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = worldBooksSvc.listEntriesPaginated(resolvedUserId, worldBookId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((e) => this.toWorldBookEntryDTO(e)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBookEntriesGet(requestId: string, entryId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const entry = worldBooksSvc.getEntry(resolvedUserId, entryId);
-      this.postToWorker({ type: "response", requestId, result: entry ? this.toWorldBookEntryDTO(entry) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBookEntriesCreate(requestId: string, worldBookId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const entry = worldBooksSvc.createEntry(resolvedUserId, worldBookId, input || {});
-      if (!entry) throw new Error("World book not found");
-      this.postToWorker({ type: "response", requestId, result: this.toWorldBookEntryDTO(entry) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBookEntriesUpdate(requestId: string, entryId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const entry = worldBooksSvc.updateEntry(resolvedUserId, entryId, input || {});
-      if (!entry) throw new Error("World book entry not found");
-      this.postToWorker({ type: "response", requestId, result: this.toWorldBookEntryDTO(entry) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleWorldBookEntriesDelete(requestId: string, entryId: string, userId?: string): Promise<void> {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = await worldBooksSvc.deleteEntry(resolvedUserId, entryId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Databanks CRUD (gated: "databanks") ─────────────────────────────
-
-  private toDatabankDTO(bank: any): DatabankDTO {
-    return {
-      id: bank.id,
-      name: bank.name || "",
-      description: bank.description || "",
-      scope: bank.scope,
-      scope_id: bank.scopeId ?? null,
-      enabled: !!bank.enabled,
-      metadata: (typeof bank.metadata === "object" && bank.metadata) ? bank.metadata : {},
-      document_count: typeof bank.documentCount === "number" ? bank.documentCount : undefined,
-      created_at: bank.createdAt,
-      updated_at: bank.updatedAt,
-    };
-  }
-
-  private toDatabankDocumentDTO(doc: any): DatabankDocumentDTO {
-    return {
-      id: doc.id,
-      databank_id: doc.databankId,
-      name: doc.name || "",
-      slug: doc.slug || "",
-      mime_type: doc.mimeType || "",
-      file_size: doc.fileSize ?? 0,
-      content_hash: doc.contentHash || "",
-      total_chunks: doc.totalChunks ?? 0,
-      status: doc.status,
-      error_message: doc.errorMessage ?? null,
-      metadata: (typeof doc.metadata === "object" && doc.metadata) ? doc.metadata : {},
-      created_at: doc.createdAt,
-      updated_at: doc.updatedAt,
-    };
-  }
-
-  private handleDatabanksList(
-    requestId: string,
-    limit?: number,
-    offset?: number,
-    scope?: string,
-    scopeId?: string | null,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const normalizedScope =
-        scope === undefined
-          ? undefined
-          : scope === "global" || scope === "character" || scope === "chat"
-            ? scope
-            : null;
-      if (normalizedScope === null) throw new Error("Databank scope must be 'global', 'character', or 'chat'");
-
-      const result = databanksSvc.listDatabanks(
-        resolvedUserId,
-        {
-          limit: Math.min(limit || 50, 200),
-          offset: offset || 0,
-        },
-        {
-          scope: normalizedScope,
-          scopeId: typeof scopeId === "string" ? scopeId : undefined,
-        },
-      );
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((bank) => this.toDatabankDTO(bank)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabanksGet(requestId: string, databankId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const bank = databanksSvc.getDatabank(resolvedUserId, databankId);
-      this.postToWorker({ type: "response", requestId, result: bank ? this.toDatabankDTO(bank) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabanksCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Databank name is required");
-      }
-      if (input.scope !== "global" && input.scope !== "character" && input.scope !== "chat") {
-        throw new Error("Databank scope must be 'global', 'character', or 'chat'");
-      }
-      if (input.scope !== "global" && (!input.scope_id || typeof input.scope_id !== "string")) {
-        throw new Error("scope_id is required for character and chat databanks");
-      }
-
-      const bank = databanksSvc.createDatabank(resolvedUserId, {
-        name: input.name.trim(),
-        description: typeof input.description === "string" ? input.description : undefined,
-        scope: input.scope,
-        scopeId: input.scope_id ?? null,
-      });
-      this.postToWorker({ type: "response", requestId, result: this.toDatabankDTO(bank) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabanksUpdate(requestId: string, databankId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const bank = databanksSvc.updateDatabank(resolvedUserId, databankId, {
-        name: typeof input?.name === "string" ? input.name : undefined,
-        description: typeof input?.description === "string" ? input.description : undefined,
-        enabled: typeof input?.enabled === "boolean" ? input.enabled : undefined,
-      });
-      if (!bank) throw new Error("Databank not found");
-
-      this.postToWorker({ type: "response", requestId, result: this.toDatabankDTO(bank) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabanksDelete(requestId: string, databankId: string, userId?: string): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("databanks")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        databanksSvc.abortDatabankProcessing(databankId);
-        await databanksSvc.deleteDatabankVectors(resolvedUserId, databankId);
-        const deleted = await databanksSvc.deleteDatabank(resolvedUserId, databankId);
-        this.postToWorker({ type: "response", requestId, result: deleted });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  // ─── Databank Documents CRUD (gated: "databanks") ────────────────────
-
-  private handleDatabankDocumentsList(
-    requestId: string,
-    databankId: string,
-    limit?: number,
-    offset?: number,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = databanksSvc.listDocuments(resolvedUserId, databankId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((doc) => this.toDatabankDocumentDTO(doc)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabankDocumentsGet(requestId: string, documentId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const doc = databanksSvc.getDocument(resolvedUserId, documentId);
-      this.postToWorker({ type: "response", requestId, result: doc ? this.toDatabankDocumentDTO(doc) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabankDocumentsCreate(
-    requestId: string,
-    databankId: string,
-    input: DatabankDocumentCreateDTO,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("databanks")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        const bank = databanksSvc.getDatabank(resolvedUserId, databankId);
-        if (!bank) throw new Error("Databank not found");
-        if (!(input?.data instanceof Uint8Array) || input.data.byteLength === 0) {
-          throw new Error("Document data must be a non-empty Uint8Array");
-        }
-        if (!input.filename || typeof input.filename !== "string" || !input.filename.trim()) {
-          throw new Error("Document filename is required");
-        }
-        const filename = input.filename.trim();
-        if (!databanksSvc.isSupportedFormat(filename)) {
-          throw new Error(`Unsupported file format. Supported: ${databanksSvc.getSupportedExtensions().join(", ")}`);
-        }
-        if (input.data.byteLength > 10 * 1024 * 1024) {
-          throw new Error("File too large. Maximum 10MB.");
-        }
-
-        const bytes = Uint8Array.from(input.data);
-        const mimeType = typeof input.mime_type === "string" ? input.mime_type.trim() : "";
-        const file = new File([bytes], filename, { type: mimeType || "application/octet-stream" });
-        const storedFilename = await filesSvc.saveUpload(file, resolvedUserId, "databank");
-        const hash = createHash("sha256").update(bytes).digest("hex");
-        const displayName = typeof input.name === "string" && input.name.trim()
-          ? input.name.trim()
-          : filename.replace(/\.[^.]+$/, "");
-
-        const doc = databanksSvc.createDocument(
-          resolvedUserId,
-          databankId,
-          displayName,
-          storedFilename,
-          mimeType,
-          bytes.byteLength,
-          hash,
-        );
-
-        databanksSvc.processDocument(resolvedUserId, doc.id).catch((err) => {
-          console.error(`[databank] Background processing failed for ${doc.id}:`, err);
-        });
-
-        this.postToWorker({ type: "response", requestId, result: this.toDatabankDocumentDTO(doc) });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleDatabankDocumentsUpdate(requestId: string, documentId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Document name is required");
-      }
-
-      const doc = databanksSvc.renameDocument(resolvedUserId, documentId, input.name.trim());
-      if (!doc) throw new Error("Document not found");
-
-      this.postToWorker({ type: "response", requestId, result: this.toDatabankDocumentDTO(doc) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabankDocumentsDelete(requestId: string, documentId: string, userId?: string): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("databanks")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        databanksSvc.abortDocumentProcessing(documentId);
-        await databanksSvc.deleteDocumentVectors(resolvedUserId, documentId);
-        const deleted = await databanksSvc.deleteDocument(resolvedUserId, documentId);
-        this.postToWorker({ type: "response", requestId, result: deleted });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleDatabankDocumentsGetContent(requestId: string, documentId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("databanks")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const content = databanksSvc.getDocumentContent(resolvedUserId, documentId);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: content === null ? null : { content },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleDatabankDocumentsReprocess(requestId: string, documentId: string, userId?: string): void {
-    (async () => {
-      try {
-        if (!this.hasPermission("databanks")) {
-          throw new Error(`${PERMISSION_DENIED_PREFIX} databanks — Databanks permission not granted`);
-        }
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-
-        const doc = databanksSvc.getDocument(resolvedUserId, documentId);
-        if (!doc) throw new Error("Document not found");
-
-        await databanksSvc.deleteDocumentVectors(resolvedUserId, documentId);
-        databanksSvc.updateDocumentStatus(documentId, "pending");
-        databanksSvc.processDocument(resolvedUserId, documentId).catch((err) => {
-          console.error(`[databank] Reprocessing failed for ${documentId}:`, err);
-        });
-
-        this.postToWorker({ type: "response", requestId, result: { success: true, status: "processing" } });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  // ─── Personas CRUD (gated: "personas") ────────────────────────────────
-
-  private toPersonaDTO(p: any): PersonaDTO {
-    return {
-      id: p.id,
-      name: p.name || "",
-      title: p.title || "",
-      description: p.description || "",
-      image_id: p.image_id || null,
-      attached_world_book_id: p.attached_world_book_id || null,
-      folder: p.folder || "",
-      is_default: !!p.is_default,
-      metadata: (typeof p.metadata === "object" && p.metadata) ? p.metadata : {},
-      created_at: p.created_at,
-      updated_at: p.updated_at,
-    };
-  }
-
-  private handlePersonasList(requestId: string, limit?: number, offset?: number, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = personasSvc.listPersonas(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((p) => this.toPersonaDTO(p)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasGet(requestId: string, personaId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const p = personasSvc.getPersona(resolvedUserId, personaId);
-      this.postToWorker({ type: "response", requestId, result: p ? this.toPersonaDTO(p) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasGetDefault(requestId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const p = personasSvc.getDefaultPersona(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: p ? this.toPersonaDTO(p) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasGetActive(requestId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const setting = settingsSvc.getSetting(resolvedUserId, "activePersonaId");
-      if (!setting?.value || typeof setting.value !== "string") {
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-
-      const persona = personasSvc.getPersona(resolvedUserId, setting.value);
-      this.postToWorker({ type: "response", requestId, result: persona ? this.toPersonaDTO(persona) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Persona name is required");
-      }
-
-      const p = personasSvc.createPersona(resolvedUserId, {
-        name: input.name,
-        title: input.title,
-        description: input.description,
-        folder: input.folder,
-        is_default: input.is_default,
-        attached_world_book_id: input.attached_world_book_id,
-        metadata: input.metadata,
-      });
-      this.postToWorker({ type: "response", requestId, result: this.toPersonaDTO(p) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasUpdate(requestId: string, personaId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const p = personasSvc.updatePersona(resolvedUserId, personaId, input || {});
-      if (!p) throw new Error("Persona not found");
-      this.postToWorker({ type: "response", requestId, result: this.toPersonaDTO(p) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasDelete(requestId: string, personaId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = personasSvc.deletePersona(resolvedUserId, personaId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasSwitch(requestId: string, personaId: string | null, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      // Validate persona exists if a non-null ID is provided
-      if (personaId !== null) {
-        const persona = personasSvc.getPersona(resolvedUserId, personaId);
-        if (!persona) throw new Error("Persona not found");
-      }
-
-      // Set the activePersonaId setting (putSetting emits SETTINGS_UPDATED)
-      settingsSvc.putSetting(resolvedUserId, "activePersonaId", personaId);
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handlePersonasGetWorldBook(requestId: string, personaId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const persona = personasSvc.getPersona(resolvedUserId, personaId);
-      if (!persona) throw new Error("Persona not found");
-
-      if (!persona.attached_world_book_id) {
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-
-      const wb = worldBooksSvc.getWorldBook(resolvedUserId, persona.attached_world_book_id);
-      this.postToWorker({ type: "response", requestId, result: wb ? this.toWorldBookDTO(wb) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Global Add-ons (gated: "personas") ──────────────────────────────
-
-  private toGlobalAddonDTO(a: any): GlobalAddonDTO {
-    return {
-      id: a.id,
-      label: a.label || "",
-      content: a.content || "",
-      sort_order: a.sort_order ?? 0,
-      metadata: (typeof a.metadata === "object" && a.metadata) ? a.metadata : {},
-      created_at: a.created_at,
-      updated_at: a.updated_at,
-    };
-  }
-
-  private handleGlobalAddonsList(requestId: string, limit?: number, offset?: number, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = globalAddonsSvc.listGlobalAddons(resolvedUserId, {
-        limit: Math.min(limit || 50, 200),
-        offset: offset || 0,
-      });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((a) => this.toGlobalAddonDTO(a)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleGlobalAddonsGet(requestId: string, addonId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const addon = globalAddonsSvc.getGlobalAddon(resolvedUserId, addonId);
-      this.postToWorker({ type: "response", requestId, result: addon ? this.toGlobalAddonDTO(addon) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleGlobalAddonsUpdate(requestId: string, addonId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("personas")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} personas — Personas permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const addon = globalAddonsSvc.updateGlobalAddon(resolvedUserId, addonId, input || {});
-      if (!addon) throw new Error("Global add-on not found");
-      this.postToWorker({ type: "response", requestId, result: this.toGlobalAddonDTO(addon) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Activated World Info (gated: "world_books") ─────────────────────
-
-  private async handleWorldBooksGetActivated(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): Promise<void> {
-    try {
-      if (!this.hasPermission("world_books")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const activated = await promptAssemblySvc.getActivatedWorldInfoForChat(resolvedUserId, chatId);
-
-      const result: ActivatedWorldInfoEntryDTO[] = activated.map((e) => ({
-        id: e.id,
-        comment: e.comment,
-        keys: e.keys,
-        source: e.source,
-        score: e.score,
-        bookId: e.bookId,
-        // The published Spindle SDK's WorldBookSourceDTO has no "peer" variant
-        // (a relayed multiplayer participant's persona lorebook). Surface it to
-        // extensions as its closest valid kind — "persona" — rather than bumping
-        // the SDK contract; the host's own Prompt Breakdown keeps the distinction.
-        bookSource: e.bookSource === "peer" ? "persona" : e.bookSource,
-      }));
-
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Global World Books (gated: "world_books") ───────────────────────
-
-  // Global activation lives in the per-user "globalWorldBooks" setting, the
-  // same store the frontend World Book panel writes. putSetting emits
-  // SETTINGS_UPDATED, which keeps open frontend tabs in sync.
-  private readGlobalWorldBookIds(userId: string): string[] {
-    const raw = settingsSvc.getSetting(userId, "globalWorldBooks")?.value;
-    return this.sanitizeWorldBookIds(raw);
-  }
-
-  private requireWorldBooksUser(userId?: string): string {
-    if (!this.hasPermission("world_books")) {
-      throw new Error(`${PERMISSION_DENIED_PREFIX} world_books — World Books permission not granted`);
-    }
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-    this.enforceScopedUser(resolvedUserId);
-    return resolvedUserId;
-  }
-
-  private handleWorldBooksGetGlobal(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.requireWorldBooksUser(userId);
-      this.postToWorker({ type: "response", requestId, result: this.readGlobalWorldBookIds(resolvedUserId) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksSetGlobal(requestId: string, worldBookIds: unknown, userId?: string): void {
-    try {
-      const resolvedUserId = this.requireWorldBooksUser(userId);
-      // Drop IDs that don't resolve to an existing book rather than throwing:
-      // the stored setting may carry stale IDs of since-deleted books, and a
-      // round-tripped getGlobal() → setGlobal() must not fail because of them.
-      const ids = this.sanitizeWorldBookIds(worldBookIds).filter((id) =>
-        worldBooksSvc.getWorldBook(resolvedUserId, id),
-      );
-      settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
-      this.postToWorker({ type: "response", requestId, result: ids });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksActivateGlobal(requestId: string, worldBookId: unknown, userId?: string): void {
-    try {
-      const resolvedUserId = this.requireWorldBooksUser(userId);
-      if (typeof worldBookId !== "string" || !worldBookId.trim()) {
-        throw new Error("worldBookId is required");
-      }
-      if (!worldBooksSvc.getWorldBook(resolvedUserId, worldBookId)) {
-        throw new Error("World book not found");
-      }
-      const ids = this.readGlobalWorldBookIds(resolvedUserId);
-      if (!ids.includes(worldBookId)) {
-        ids.push(worldBookId);
-        settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
-      }
-      this.postToWorker({ type: "response", requestId, result: ids });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleWorldBooksDeactivateGlobal(requestId: string, worldBookId: unknown, userId?: string): void {
-    try {
-      const resolvedUserId = this.requireWorldBooksUser(userId);
-      if (typeof worldBookId !== "string" || !worldBookId.trim()) {
-        throw new Error("worldBookId is required");
-      }
-      const current = this.readGlobalWorldBookIds(resolvedUserId);
-      const ids = current.filter((id) => id !== worldBookId);
-      if (ids.length !== current.length) {
-        settingsSvc.putSetting(resolvedUserId, "globalWorldBooks", ids);
-      }
-      this.postToWorker({ type: "response", requestId, result: ids });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Regex Scripts (gated: "regex_scripts") ──────────────────────────
-
-  private toRegexScriptDTO(s: any): RegexScriptDTO {
-    return {
-      id: s.id,
-      name: s.name,
-      script_id: s.script_id || "",
-      find_regex: s.find_regex,
-      replace_string: s.replace_string,
-      actions: s.actions || [],
-      flags: s.flags,
-      placement: s.placement,
-      scope: s.scope,
-      scope_id: s.scope_id,
-      target: s.target,
-      min_depth: s.min_depth,
-      max_depth: s.max_depth,
-      trim_strings: s.trim_strings,
-      run_on_edit: !!s.run_on_edit,
-      substitute_macros: s.substitute_macros,
-      disabled: !!s.disabled,
-      sort_order: s.sort_order,
-      description: s.description || "",
-      folder: s.folder || "",
-      metadata: s.metadata || {},
-      created_at: s.created_at,
-      updated_at: s.updated_at,
-    } as RegexScriptDTO;
-  }
-
-  private handleRegexScriptsList(
-    requestId: string,
-    scope?: RegexScopeDTO,
-    scopeId?: string,
-    target?: RegexTargetDTO,
-    limit?: number,
-    offset?: number,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (scope !== undefined && scope !== "global" && scope !== "character" && scope !== "chat") {
-        throw new Error("scope must be 'global', 'character', or 'chat'");
-      }
-      if (target !== undefined && target !== "prompt" && target !== "response" && target !== "display") {
-        throw new Error("target must be 'prompt', 'response', or 'display'");
-      }
-
-      const filters: { scope?: RegexScopeDTO; scope_id?: string; target?: RegexTargetDTO } = {};
-      if (target) filters.target = target;
-      if (scope) filters.scope = scope;
-      if (scopeId) filters.scope_id = scopeId;
-
-      const result = regexScriptsSvc.listRegexScripts(
-        resolvedUserId,
-        { limit: Math.min(limit || 50, 200), offset: offset || 0 },
-        filters,
-      );
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          data: result.data.map((s) => this.toRegexScriptDTO(s)),
-          total: result.total,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleRegexScriptsGet(requestId: string, scriptId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const s = regexScriptsSvc.getRegexScript(resolvedUserId, scriptId);
-      this.postToWorker({ type: "response", requestId, result: s ? this.toRegexScriptDTO(s) : null });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleRegexScriptsGetActive(
-    requestId: string,
-    target: RegexTargetDTO,
-    characterId?: string,
-    chatId?: string,
-    userId?: string,
-  ): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (target !== "prompt" && target !== "response" && target !== "display") {
-        throw new Error("target must be 'prompt', 'response', or 'display'");
-      }
-
-      const scripts = regexScriptsSvc.getActiveScripts(resolvedUserId, { characterId, chatId, target });
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: scripts.map((s) => this.toRegexScriptDTO(s)),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleRegexScriptsCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      if (!input?.name || typeof input.name !== "string" || !input.name.trim()) {
-        throw new Error("Regex script name is required");
-      }
-      if (typeof input.find_regex !== "string") {
-        throw new Error("find_regex is required");
-      }
-
-      const result = regexScriptsSvc.createRegexScript(resolvedUserId, input);
-      if (typeof result === "string") throw new Error(result);
-      this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleRegexScriptsUpdate(requestId: string, scriptId: string, input: any, userId?: string): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const result = regexScriptsSvc.updateRegexScript(resolvedUserId, scriptId, input || {});
-      if (result === null) throw new Error("Regex script not found");
-      if (typeof result === "string") throw new Error(result);
-      this.postToWorker({ type: "response", requestId, result: this.toRegexScriptDTO(result) });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleRegexScriptsDelete(requestId: string, scriptId: string, userId?: string): void {
-    try {
-      if (!this.hasPermission("regex_scripts")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} regex_scripts — Regex Scripts permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const deleted = regexScriptsSvc.deleteRegexScript(resolvedUserId, scriptId);
-      this.postToWorker({ type: "response", requestId, result: deleted });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Dry Run (gated: "generation") ──────────────────────────────────
 
   private async handleGenerateDryRun(
     requestId: string,
@@ -8631,1254 +4180,15 @@ export class WorkerHost {
     }
   }
 
-  // ─── Chat Memories (gated: "chats") ─────────────────────────────────
-
-  private async handleChatsGetMemories(
-    requestId: string,
-    chatId: string,
-    topK?: number,
-    userId?: string,
-  ): Promise<void> {
-    try {
-      if (!this.hasPermission("chats")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} chats — Chats permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const chat = chatsSvc.getChat(resolvedUserId, chatId);
-      if (!chat) throw new Error("Chat not found");
-
-      const messages = chatsSvc.getMessages(resolvedUserId, chatId);
-
-      // Load chat memory settings the same way prompt-assembly does
-      const chatMemSettingsRaw = settingsSvc.getSetting(resolvedUserId, "chatMemorySettings")?.value;
-      const chatMemSettings = chatMemSettingsRaw
-        ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
-        : null;
-
-      // Per-chat overrides from chat metadata
-      let perChatOverrides = (chat.metadata?.memory_settings as any) ?? null;
-
-      // Apply topK override from request
-      if (topK != null && topK > 0) {
-        perChatOverrides = { ...(perChatOverrides || {}), retrievalTopK: topK };
-      }
-
-      const memoryResult = await promptAssemblySvc.collectChatVectorMemory(
-        resolvedUserId, chatId, messages, chatMemSettings, perChatOverrides,
-      );
-
-      const result: ChatMemoryResultDTO = {
-        chunks: memoryResult.chunks.map((c) => ({
-          content: c.content,
-          score: c.score,
-          metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
-        })),
-        formatted: memoryResult.formatted,
-        count: memoryResult.count,
-        enabled: memoryResult.enabled,
-        queryPreview: memoryResult.queryPreview,
-        settingsSource: memoryResult.settingsSource,
-        chunksAvailable: memoryResult.chunksAvailable,
-        chunksPending: memoryResult.chunksPending,
-        retrievalMode: memoryResult.retrievalMode,
-      };
-
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Memory Cortex & Long-Term Chat Memory (gated: "memories") ───────
-
-  private requireMemoriesPermission(): void {
-    if (!this.hasPermission("memories")) {
-      throw new Error(`${PERMISSION_DENIED_PREFIX} memories — Memories permission not granted`);
-    }
-  }
-
-  /** Permission + userId resolution + chat ownership check used by every
-   *  chat-scoped memories.* handler. Returns the resolved userId. */
-  private resolveMemoriesChatContext(chatId: string, userId?: string): string {
-    this.requireMemoriesPermission();
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-    this.enforceScopedUser(resolvedUserId);
-    const chat = chatsSvc.getChat(resolvedUserId, chatId);
-    if (!chat) throw new Error("Chat not found");
-    return resolvedUserId;
-  }
-
-  /** Permission + userId resolution + entity ownership check (via chat). */
-  private resolveMemoriesEntityContext(
-    entityId: string,
-    userId?: string,
-  ): { userId: string; chatId: string } {
-    this.requireMemoriesPermission();
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-    this.enforceScopedUser(resolvedUserId);
-    const entity = entityGraphSvc.getEntity(entityId);
-    if (!entity) throw new Error("Entity not found");
-    const chat = chatsSvc.getChat(resolvedUserId, entity.chatId);
-    if (!chat) throw new Error("Entity not owned by caller");
-    return { userId: resolvedUserId, chatId: entity.chatId };
-  }
-
-  /** Permission + userId resolution + vault ownership check. */
-  private resolveMemoriesVaultContext(vaultId: string, userId?: string): string {
-    this.requireMemoriesPermission();
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-    this.enforceScopedUser(resolvedUserId);
-    const vault = cortexVaultSvc.getVaultRow(resolvedUserId, vaultId);
-    if (!vault) throw new Error("Vault not found");
-    return resolvedUserId;
-  }
-
-  private handleMemoriesConfigGet(requestId: string, userId?: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      const config = memoryCortexSvc.getCortexConfig(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: config });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesConfigPut(requestId: string, patch: any, userId?: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      if (!patch || typeof patch !== "object") throw new Error("patch must be an object");
-      const config = memoryCortexSvc.putCortexConfig(resolvedUserId, patch);
-      this.postToWorker({ type: "response", requestId, result: config });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesQueryCortex(requestId: string, query: any): void {
-    (async () => {
-      try {
-        this.requireMemoriesPermission();
-        if (!query || typeof query !== "object") throw new Error("query is required");
-        if (typeof query.chatId !== "string" || !query.chatId) throw new Error("query.chatId is required");
-        const resolvedUserId = this.resolveEffectiveUserId(query.userId);
-        if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-        this.enforceScopedUser(resolvedUserId);
-        const chat = chatsSvc.getChat(resolvedUserId, query.chatId);
-        if (!chat) throw new Error("Chat not found");
-
-        const result = await memoryCortexSvc.queryCortex({
-          chatId: query.chatId,
-          userId: resolvedUserId,
-          queryText: typeof query.queryText === "string" ? query.queryText : "",
-          entityFilter: Array.isArray(query.entityFilter) ? query.entityFilter : undefined,
-          timeRange: query.timeRange,
-          emotionalContext: Array.isArray(query.emotionalContext) ? query.emotionalContext : undefined,
-          generationType: typeof query.generationType === "string" ? query.generationType : "normal",
-          topK: typeof query.topK === "number" && query.topK > 0 ? query.topK : 10,
-          includeConsolidations: query.includeConsolidations !== false,
-          includeRelationships: query.includeRelationships !== false,
-          excludeMessageIds: Array.isArray(query.excludeMessageIds) ? query.excludeMessageIds : undefined,
-        });
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleMemoriesQueryLinked(
-    requestId: string,
-    chatId: string,
-    queryText: string | undefined,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-        const result = await memoryCortexSvc.queryLinkedCortex(chatId, resolvedUserId, undefined, queryText);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleMemoriesGetCached(requestId: string, chatId: string): void {
-    try {
-      this.requireMemoriesPermission();
-      // Cached reads return null for chats the caller never populated, and
-      // the cache is only filled by callers that already had ownership.
-      const result = memoryCortexSvc.getCachedCortexResult(chatId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesGetCachedLinked(requestId: string, chatId: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const result = memoryCortexSvc.getCachedLinkedCortexResult(chatId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesInvalidateCache(requestId: string, chatId: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId);
-      memoryCortexSvc.invalidateCortexCache(chatId);
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesInvalidateLinkedCache(requestId: string, chatId: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId);
-      memoryCortexSvc.invalidateLinkedCortexCache(chatId);
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesList(
-    requestId: string,
-    chatId: string,
-    activeOnly: boolean | undefined,
-    limit: number | undefined,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const entities = activeOnly === false
-        ? entityGraphSvc.getEntities(chatId)
-        : entityGraphSvc.getActiveEntities(chatId, typeof limit === "number" && limit > 0 ? limit : 500);
-      this.postToWorker({ type: "response", requestId, result: entities });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesGet(requestId: string, entityId: string, userId?: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      const entity = entityGraphSvc.getEntity(entityId);
-      if (!entity) {
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-      const chat = chatsSvc.getChat(resolvedUserId, entity.chatId);
-      if (!chat) {
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-      this.postToWorker({ type: "response", requestId, result: entity });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesFindByName(
-    requestId: string,
-    chatId: string,
-    name: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const entity = entityGraphSvc.findEntityByName(chatId, name);
-      this.postToWorker({ type: "response", requestId, result: entity });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesUpsert(
-    requestId: string,
-    chatId: string,
-    entity: any,
-    chunkId: string | null,
-    createdAt: number | undefined,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      if (!entity || typeof entity.name !== "string" || !entity.name.trim()) {
-        throw new Error("entity.name is required");
-      }
-      if (typeof entity.type !== "string") throw new Error("entity.type is required");
-      const ts = typeof createdAt === "number" && createdAt > 0 ? createdAt : Math.floor(Date.now() / 1000);
-      const id = entityGraphSvc.upsertEntity(
-        chatId,
-        {
-          name: entity.name,
-          type: entity.type,
-          aliases: Array.isArray(entity.aliases) ? entity.aliases : [],
-          confidence: typeof entity.confidence === "number" ? entity.confidence : 0.9,
-          role: entity.role,
-          provisional: !!entity.provisional,
-        },
-        // Empty-string sentinel matches the host's own ingestion path for
-        // mentions that aren't attributed to a chunk yet.
-        chunkId ?? "",
-        ts,
-      );
-      // Extensions can flag an upsert as a curated edit so future rebuilds
-      // preserve the row's curated fields. Mirrors the REST PUT semantics.
-      if (entity.markUserEdited === true) {
-        entityGraphSvc.markEntityUserEdited(id);
-      }
-      const result = entityGraphSvc.getEntity(id);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesUpdateStatus(
-    requestId: string,
-    entityId: string,
-    patch: any,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesEntityContext(entityId, userId);
-      if (!patch || typeof patch.status !== "string") throw new Error("patch.status is required");
-      entityGraphSvc.updateEntityStatus(entityId, patch.status);
-      const result = entityGraphSvc.getEntity(entityId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesAddFacts(
-    requestId: string,
-    entityId: string,
-    facts: string[],
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesEntityContext(entityId, userId);
-      if (!Array.isArray(facts)) throw new Error("facts must be an array of strings");
-      entityGraphSvc.addEntityFacts(entityId, facts);
-      const result = entityGraphSvc.getEntity(entityId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesGetFacts(
-    requestId: string,
-    entityId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesEntityContext(entityId, userId);
-      const facts = entityGraphSvc.getEntityFacts(entityId);
-      this.postToWorker({ type: "response", requestId, result: facts });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesEntitiesUpdateEmotionalValence(
-    requestId: string,
-    entityId: string,
-    valence: Record<string, number>,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesEntityContext(entityId, userId);
-      if (!valence || typeof valence !== "object") throw new Error("valence must be an object");
-      entityGraphSvc.updateEntityEmotionalValence(entityId, valence);
-      const result = entityGraphSvc.getEntity(entityId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesRelationsList(requestId: string, chatId: string, userId?: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const relations = entityGraphSvc.getRelations(chatId);
-      this.postToWorker({ type: "response", requestId, result: relations });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesRelationsListAll(requestId: string, chatId: string, userId?: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const relations = entityGraphSvc.getAllRelationsUnfiltered(chatId);
-      this.postToWorker({ type: "response", requestId, result: relations });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesRelationsForEntity(
-    requestId: string,
-    chatId: string,
-    entityId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const relations = entityGraphSvc.getActiveEdgesForEntity(chatId, entityId);
-      this.postToWorker({ type: "response", requestId, result: relations });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesRelationsForEntities(
-    requestId: string,
-    chatId: string,
-    entityIds: string[],
-    limit: number | undefined,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      if (!Array.isArray(entityIds)) throw new Error("entityIds must be an array");
-      const relations = entityGraphSvc.getRelationsForEntities(chatId, entityIds, limit);
-      this.postToWorker({ type: "response", requestId, result: relations });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesRelationsUpsert(
-    requestId: string,
-    chatId: string,
-    relation: any,
-    chunkId: string | null,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      if (!relation || typeof relation !== "object") throw new Error("relation is required");
-      if (typeof relation.source !== "string" || !relation.source) throw new Error("relation.source is required");
-      if (typeof relation.target !== "string" || !relation.target) throw new Error("relation.target is required");
-      if (typeof relation.type !== "string") throw new Error("relation.type is required");
-
-      const sourceEntity = entityGraphSvc.findEntityByName(chatId, relation.source);
-      const targetEntity = entityGraphSvc.findEntityByName(chatId, relation.target);
-      if (!sourceEntity || !targetEntity) {
-        // Silent drop matches the ingestion pipeline's behaviour for edges
-        // whose endpoints aren't in the graph yet.
-        this.postToWorker({ type: "response", requestId, result: null });
-        return;
-      }
-
-      entityGraphSvc.upsertRelation(
-        chatId,
-        {
-          source: relation.source,
-          target: relation.target,
-          type: relation.type,
-          label: typeof relation.label === "string" ? relation.label : "",
-          sentiment: typeof relation.sentiment === "number" ? relation.sentiment : 0,
-        },
-        sourceEntity.id,
-        targetEntity.id,
-        chunkId ?? "",
-      );
-
-      const created = entityGraphSvc
-        .getRelations(chatId)
-        .find(
-          (r) =>
-            r.sourceEntityId === sourceEntity.id &&
-            r.targetEntityId === targetEntity.id &&
-            r.relationType === relation.type,
-        ) ?? null;
-      // Extensions can flag a relation upsert as a curated edit so future
-      // rebuilds preserve the curated fields (label, strength, sentiment).
-      if (created && relation.markUserEdited === true) {
-        entityGraphSvc.markRelationUserEdited(created.id);
-      }
-      this.postToWorker({ type: "response", requestId, result: created });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesConsolidationsList(
-    requestId: string,
-    chatId: string,
-    tier: number | undefined,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const consolidations = cortexConsolidationSvc.getConsolidations(chatId, tier);
-      this.postToWorker({ type: "response", requestId, result: consolidations });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesConsolidationsLatestArc(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const arc = cortexConsolidationSvc.getLatestArc(chatId);
-      this.postToWorker({ type: "response", requestId, result: arc });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesConsolidationsRun(requestId: string, chatId: string, userId?: string): void {
-    (async () => {
-      try {
-        const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-        const cortexConfig = memoryCortexSvc.getCortexConfig(resolvedUserId);
-        if (!cortexConfig.consolidation?.enabled) {
-          throw new Error("Consolidation is disabled in cortex config");
-        }
-        // Fire-and-forget — never block the worker on background consolidation.
-        // Heuristic / extractive mode runs without a sidecar generate fn;
-        // sidecar mode requires route-layer plumbing to resolve a connection,
-        // which we don't replicate here on purpose (keeps the worker surface
-        // simple and predictable).
-        void cortexConsolidationSvc
-          .maybeConsolidate(resolvedUserId, chatId, cortexConfig.consolidation)
-          .catch((err) => console.warn("[Spindle:memories] consolidations.run() failed:", err));
-        this.postToWorker({ type: "response", requestId, result: undefined });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleMemoriesSalienceGet(
-    requestId: string,
-    chatId: string,
-    limit: number | undefined,
-    offset: number | undefined,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const lim = Math.min(typeof limit === "number" && limit > 0 ? limit : 100, 500);
-      const off = typeof offset === "number" && offset >= 0 ? offset : 0;
-      const rows = getDb()
-        .query(
-          `SELECT chunk_id, chat_id, score, score_source, emotional_tags, status_changes,
-                  narrative_flags, has_dialogue, has_action, has_internal_thought,
-                  word_count, scored_at, scored_by
-             FROM memory_salience
-            WHERE chat_id = ?
-            ORDER BY scored_at DESC
-            LIMIT ? OFFSET ?`,
-        )
-        .all(chatId, lim, off) as Array<{
-          chunk_id: string;
-          chat_id: string;
-          score: number;
-          score_source: string;
-          emotional_tags: string;
-          status_changes: string;
-          narrative_flags: string;
-          has_dialogue: number;
-          has_action: number;
-          has_internal_thought: number;
-          word_count: number;
-          scored_at: number;
-          scored_by: string | null;
-        }>;
-
-      const parseJsonArr = (raw: string): any[] => {
-        if (!raw) return [];
-        try { return JSON.parse(raw); } catch { return []; }
-      };
-
-      const result = rows.map((r) => ({
-        chunkId: r.chunk_id,
-        chatId: r.chat_id,
-        score: r.score,
-        scoreSource: r.score_source,
-        emotionalTags: parseJsonArr(r.emotional_tags),
-        statusChanges: parseJsonArr(r.status_changes),
-        narrativeFlags: parseJsonArr(r.narrative_flags),
-        hasDialogue: !!r.has_dialogue,
-        hasAction: !!r.has_action,
-        hasInternalThought: !!r.has_internal_thought,
-        wordCount: r.word_count,
-        scoredAt: r.scored_at,
-        scoredBy: r.scored_by,
-      }));
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsList(requestId: string, userId?: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      const vaults = cortexVaultSvc.listVaults(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: vaults });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsGet(requestId: string, vaultId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesVaultContext(vaultId, userId);
-      const contents = cortexVaultSvc.getVault(resolvedUserId, vaultId);
-      const vault = cortexVaultSvc.getVaultRow(resolvedUserId, vaultId);
-      const result = contents && vault
-        ? { vault, entities: contents.entities, relations: contents.relations }
-        : null;
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsGetChunks(
-    requestId: string,
-    vaultId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesVaultContext(vaultId, userId);
-      const chunks = cortexVaultSvc.getVaultChunks(vaultId);
-      this.postToWorker({ type: "response", requestId, result: chunks });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsCreate(requestId: string, input: any, userId?: string): void {
-    try {
-      this.requireMemoriesPermission();
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-      if (!input || typeof input.chatId !== "string" || !input.chatId) throw new Error("input.chatId is required");
-      if (typeof input.name !== "string" || !input.name.trim()) throw new Error("input.name is required");
-      const chat = chatsSvc.getChat(resolvedUserId, input.chatId);
-      if (!chat) throw new Error("Chat not found");
-      const vault = cortexVaultSvc.createVault(
-        resolvedUserId,
-        input.chatId,
-        input.name.trim(),
-        typeof input.description === "string" ? input.description : undefined,
-      );
-      this.postToWorker({ type: "response", requestId, result: vault });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsRename(
-    requestId: string,
-    vaultId: string,
-    name: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesVaultContext(vaultId, userId);
-      if (typeof name !== "string" || !name.trim()) throw new Error("name is required");
-      const ok = cortexVaultSvc.renameVault(resolvedUserId, vaultId, name.trim());
-      this.postToWorker({ type: "response", requestId, result: ok });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsDelete(requestId: string, vaultId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesVaultContext(vaultId, userId);
-      const ok = cortexVaultSvc.deleteVault(resolvedUserId, vaultId);
-      this.postToWorker({ type: "response", requestId, result: ok });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesVaultsReindex(
-    requestId: string,
-    vaultId: string,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        const resolvedUserId = this.resolveMemoriesVaultContext(vaultId, userId);
-        const result = await cortexVaultSvc.reindexVault(resolvedUserId, vaultId);
-        this.postToWorker({ type: "response", requestId, result });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleMemoriesLinksList(requestId: string, chatId: string, userId?: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const links = cortexVaultSvc.getChatLinks(chatId);
-      this.postToWorker({ type: "response", requestId, result: links });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesLinksAttach(requestId: string, input: any, userId?: string): void {
-    try {
-      if (!input || typeof input.chatId !== "string" || !input.chatId) throw new Error("input.chatId is required");
-      if (input.linkType !== "vault" && input.linkType !== "interlink") {
-        throw new Error("input.linkType must be 'vault' or 'interlink'");
-      }
-      const resolvedUserId = this.resolveMemoriesChatContext(input.chatId, userId);
-      const links = cortexVaultSvc.attachLink(resolvedUserId, input.chatId, input.linkType, {
-        vaultId: typeof input.vaultId === "string" ? input.vaultId : undefined,
-        targetChatId: typeof input.targetChatId === "string" ? input.targetChatId : undefined,
-        label: typeof input.label === "string" ? input.label : undefined,
-        bidirectional: !!input.bidirectional,
-      });
-      this.postToWorker({ type: "response", requestId, result: links });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesLinksRemove(
-    requestId: string,
-    chatId: string,
-    linkId: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-      const ok = cortexVaultSvc.removeLink(resolvedUserId, chatId, linkId);
-      this.postToWorker({ type: "response", requestId, result: ok });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesLinksToggle(
-    requestId: string,
-    chatId: string,
-    linkId: string,
-    enabled: boolean,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-      const ok = cortexVaultSvc.toggleLink(resolvedUserId, chatId, linkId, enabled);
-      this.postToWorker({ type: "response", requestId, result: ok });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesChatChunksList(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-      const rows = chatsSvc.getChatChunks(resolvedUserId, chatId);
-      const result = rows.map((row: any) => ({
-        id: row.id,
-        chatId: row.chat_id,
-        startMessageId: row.start_message_id,
-        endMessageId: row.end_message_id,
-        messageIds: row.message_ids,
-        content: row.content,
-        tokenCount: row.token_count,
-        messageCount: row.message_count,
-        vectorizedAt: row.vectorized_at,
-        vectorModel: row.vector_model,
-        retrievalCount: row.retrieval_count,
-        lastRetrievedAt: row.last_retrieved_at,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      }));
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleMemoriesChatMemoryGet(
-    requestId: string,
-    chatId: string,
-    topK: number | undefined,
-    userId?: string,
-  ): Promise<void> {
-    try {
-      const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-      const chat = chatsSvc.getChat(resolvedUserId, chatId);
-      if (!chat) throw new Error("Chat not found");
-
-      const messages = chatsSvc.getMessages(resolvedUserId, chatId);
-      const chatMemSettingsRaw = settingsSvc.getSetting(resolvedUserId, "chatMemorySettings")?.value;
-      const chatMemSettings = chatMemSettingsRaw
-        ? embeddingsSvc.normalizeChatMemorySettings(chatMemSettingsRaw)
-        : null;
-
-      let perChatOverrides = (chat.metadata?.memory_settings as any) ?? null;
-      if (topK != null && topK > 0) {
-        perChatOverrides = { ...(perChatOverrides || {}), retrievalTopK: topK };
-      }
-
-      const memoryResult = await promptAssemblySvc.collectChatVectorMemory(
-        resolvedUserId, chatId, messages, chatMemSettings, perChatOverrides,
-      );
-
-      const result: ChatMemoryResultDTO = {
-        chunks: memoryResult.chunks.map((c) => ({
-          content: c.content,
-          score: c.score,
-          metadata: (typeof c.metadata === "object" && c.metadata) ? c.metadata : {},
-        })),
-        formatted: memoryResult.formatted,
-        count: memoryResult.count,
-        enabled: memoryResult.enabled,
-        queryPreview: memoryResult.queryPreview,
-        settingsSource: memoryResult.settingsSource,
-        chunksAvailable: memoryResult.chunksAvailable,
-        chunksPending: memoryResult.chunksPending,
-        retrievalMode: memoryResult.retrievalMode,
-      };
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesChatMemoryWarm(
-    requestId: string,
-    chatId: string,
-    force: boolean | undefined,
-    userId?: string,
-  ): void {
-    (async () => {
-      try {
-        const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
-        const embeddings = await embeddingsSvc.getEmbeddingConfig(resolvedUserId);
-        if (!embeddings.enabled || !embeddings.vectorize_chat_messages) {
-          this.postToWorker({
-            type: "response",
-            requestId,
-            result: { status: "skipped", reason: "chat_vectorization_disabled" },
-          });
-          return;
-        }
-
-        if (chatsSvc.isChatChunkRebuildInProgress(chatId)) {
-          this.postToWorker({
-            type: "response",
-            requestId,
-            result: { status: "skipped", reason: "chunk_rebuild_in_progress" },
-          });
-          return;
-        }
-
-        if (force) {
-          await chatsSvc.rebuildChatChunks(resolvedUserId, chatId);
-          this.postToWorker({
-            type: "response",
-            requestId,
-            result: { status: "complete", reason: "chat_memory_rebuilt", rebuilt: true },
-          });
-          return;
-        }
-
-        const rebuilt = await chatsSvc.ensureChatMemoryFresh(resolvedUserId, chatId);
-        if (rebuilt) {
-          this.postToWorker({
-            type: "response",
-            requestId,
-            result: { status: "complete", reason: "chat_memory_warmed", rebuilt: true },
-          });
-          return;
-        }
-
-        const queued = vectorizationQueueSvc.queuePendingChatChunkVectorization(resolvedUserId, chatId, 4);
-        if (queued > 0) {
-          this.postToWorker({
-            type: "response",
-            requestId,
-            result: { status: "queued", reason: "chat_memory_warmup_resumed", vectorizationsQueued: queued },
-          });
-          return;
-        }
-
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: { status: "skipped", reason: "chat_memory_already_fresh" },
-        });
-      } catch (err: any) {
-        this.postToWorker({ type: "response", requestId, error: err.message });
-      }
-    })();
-  }
-
-  private handleMemoriesChatMemoryInvalidate(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      chatMemoryCacheSvc.invalidateChatMemoryCache(chatId);
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesStatsUsage(requestId: string, chatId: string, userId?: string): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const stats = memoryCortexSvc.getCortexUsageStats(chatId);
-      this.postToWorker({ type: "response", requestId, result: stats });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesStatsIngestionStatus(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const status = memoryCortexSvc.getIngestionStatus(chatId);
-      this.postToWorker({ type: "response", requestId, result: status });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleMemoriesStatsIngestionTelemetry(
-    requestId: string,
-    chatId: string,
-    userId?: string,
-  ): void {
-    try {
-      this.resolveMemoriesChatContext(chatId, userId);
-      const telemetry = memoryCortexSvc.getIngestionTelemetry(chatId);
-      this.postToWorker({ type: "response", requestId, result: telemetry });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
   // ─── Toast (free tier) ───────────────────────────────────────────────
 
-  private handleToastShow(
-    toastType: string,
-    message: string,
-    title?: string,
-    duration?: number,
-    userId?: string,
-  ): void {
-    const validTypes = ["success", "warning", "error", "info"];
-    if (!validTypes.includes(toastType)) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Invalid toast type: ${toastType}`);
-      return;
-    }
-
-    if (typeof message !== "string" || !message.trim()) {
-      console.warn(`[Spindle:${this.manifest.identifier}] Toast message must be a non-empty string`);
-      return;
-    }
-
-    // Sliding-window rate limit
-    const now = Date.now();
-    this.toastTimestamps = this.toastTimestamps.filter(
-      (t) => now - t < WorkerHost.TOAST_RATE_WINDOW_MS,
-    );
-    if (this.toastTimestamps.length >= WorkerHost.TOAST_RATE_LIMIT) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Toast rate limit exceeded (${WorkerHost.TOAST_RATE_LIMIT}/${WorkerHost.TOAST_RATE_WINDOW_MS}ms)`,
-      );
-      return;
-    }
-    this.toastTimestamps.push(now);
-
-    // Sanitize inputs
-    const sanitizedMessage = message.slice(0, 500);
-    const sanitizedTitle = title ? title.slice(0, 100) : undefined;
-    let sanitizedDuration = duration;
-    if (sanitizedDuration !== undefined) {
-      sanitizedDuration = Math.max(1000, Math.min(30_000, sanitizedDuration));
-    }
-
-    let targetUserId: string | undefined;
-    if (this.installScope === "user") {
-      targetUserId = this.installedByUserId ?? undefined;
-    } else if (typeof userId === "string" && userId.trim()) {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (resolvedUserId) {
-        this.enforceScopedUser(resolvedUserId);
-        targetUserId = resolvedUserId;
-      }
-    }
-
-    // Broadcast only when an operator-scoped extension omits userId.
-    eventBus.emit(
-      EventType.SPINDLE_TOAST,
-      {
-        extensionId: this.extensionId,
-        extensionName: this.manifest.name,
-        type: toastType,
-        message: sanitizedMessage,
-        title: sanitizedTitle,
-        duration: sanitizedDuration,
-      },
-      targetUserId,
-    );
-  }
-
-  // ─── Commands (free tier) ─────────────────────────────────────────────
-
-  private handleCommandsRegister(commands: SpindleCommandDTO[]): void {
-    if (!Array.isArray(commands)) {
-      console.warn(`[Spindle:${this.manifest.identifier}] commands_register: expected array`);
-      return;
-    }
-
-    if (commands.length > WorkerHost.MAX_COMMANDS_PER_EXTENSION) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Command limit exceeded (${commands.length}/${WorkerHost.MAX_COMMANDS_PER_EXTENSION}), truncating`,
-      );
-      commands = commands.slice(0, WorkerHost.MAX_COMMANDS_PER_EXTENSION);
-    }
-
-    // Validate and sanitize each command
-    const validated: SpindleCommandDTO[] = [];
-    const seenIds = new Set<string>();
-    const validScopes = ["global", "chat", "chat-idle", "landing", "character"];
-
-    for (const cmd of commands) {
-      if (!cmd || typeof cmd.id !== "string" || !cmd.id.trim()) continue;
-      if (!cmd.label || typeof cmd.label !== "string") continue;
-      if (seenIds.has(cmd.id)) continue;
-      seenIds.add(cmd.id);
-
-      validated.push({
-        id: cmd.id.slice(0, 100),
-        label: (cmd.label || "").slice(0, 80),
-        description: (cmd.description || "").slice(0, 200),
-        keywords: Array.isArray(cmd.keywords)
-          ? cmd.keywords.filter((k): k is string => typeof k === "string").slice(0, 10).map((k) => k.slice(0, 30))
-          : undefined,
-        scope: validScopes.includes(cmd.scope as string) ? cmd.scope : undefined,
-      });
-    }
-
-    this.registeredCommands = validated;
-    this.broadcastCommandsChanged();
-  }
-
-  private handleCommandsUnregister(commandIds: string[]): void {
-    if (!Array.isArray(commandIds) || commandIds.length === 0) {
-      // Remove all commands
-      this.registeredCommands = [];
-    } else {
-      const idsToRemove = new Set(commandIds.filter((id) => typeof id === "string"));
-      this.registeredCommands = this.registeredCommands.filter((c) => !idsToRemove.has(c.id));
-    }
-    this.broadcastCommandsChanged();
-  }
-
-  private broadcastCommandsChanged(): void {
-    eventBus.emit(
-      EventType.SPINDLE_COMMANDS_CHANGED,
-      {
-        extensionId: this.extensionId,
-        extensionName: this.manifest.name,
-        commands: this.registeredCommands,
-      },
-      this.installScope === "user" ? this.installedByUserId ?? undefined : undefined,
-    );
-  }
-
-  /** Called by the WS handler when the frontend invokes a command. */
   invokeCommand(commandId: string, context: SpindleCommandContextDTO, userId: string): void {
-    if (!this.runtime) return;
-    if (!this.registeredCommands.some((c) => c.id === commandId)) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Command "${commandId}" not registered`,
-      );
-      return;
-    }
-    this.postToWorker({
-      type: "command_invoked",
-      commandId,
-      context,
-      userId,
-    });
+    this.interactionApi.invokeCommand(commandId, context, userId);
   }
 
-  /** Expose registered commands for lookup from the WS handler. */
   getRegisteredCommands(): SpindleCommandDTO[] {
-    return this.registeredCommands;
+    return this.interactionApi.getRegisteredCommands();
   }
-
-  // ─── UI Automation (free tier) ────────────────────────────────────────
-
-  private handleUIGetDrawerTabs(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (resolvedUserId) this.enforceScopedUser(resolvedUserId);
-
-      const builtIn = BUILT_IN_DRAWER_TABS.map((tab) => ({
-        id: tab.id,
-        shortName: tab.shortName,
-        tabName: tab.tabName,
-        tabDescription: tab.tabDescription,
-        keywords: [...tab.keywords],
-        source: "builtin" as const,
-      }));
-      const extensions = getUserExtensionDrawerTabs(resolvedUserId).map((tab) => ({
-        id: tab.id,
-        shortName: tab.shortName ?? tab.tabName,
-        tabName: tab.tabName,
-        tabDescription: tab.tabDescription ?? `Open ${tab.tabName} extension tab`,
-        keywords: tab.keywords ?? [],
-        source: "extension" as const,
-        extensionId: tab.extensionId,
-      }));
-      this.postToWorker({ type: "response", requestId, result: [...builtIn, ...extensions] });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUIGetSettingsTabs(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (resolvedUserId) this.enforceScopedUser(resolvedUserId);
-
-      let role: string | null = null;
-      if (resolvedUserId) {
-        const row = getDb()
-          .query('SELECT role FROM "user" WHERE id = ?')
-          .get(resolvedUserId) as { role: string | null } | null;
-        role = row?.role ?? null;
-      }
-
-      const result = getVisibleUISettingsTabs(role).map((tab) => ({
-        id: tab.id,
-        shortName: tab.shortName,
-        tabName: tab.tabName,
-        tabDescription: tab.tabDescription,
-        keywords: [...tab.keywords],
-        ...(tab.role ? { role: tab.role } : {}),
-      }));
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUINavigate(
-    requestId: string,
-    action:
-      | "open_drawer_tab"
-      | "close_drawer"
-      | "open_settings"
-      | "close_settings"
-      | "open_command_palette"
-      | "close_command_palette",
-    tabId?: string,
-    viewId?: string,
-    userId?: string,
-  ): void {
-    try {
-      const validActions = new Set([
-        "open_drawer_tab",
-        "close_drawer",
-        "open_settings",
-        "close_settings",
-        "open_command_palette",
-        "close_command_palette",
-      ]);
-      if (!validActions.has(action)) {
-        throw new Error(`Invalid UI navigate action: ${action}`);
-      }
-      if (action === "open_drawer_tab") {
-        if (typeof tabId !== "string" || !tabId.trim()) {
-          throw new Error("tabId is required for open_drawer_tab");
-        }
-      }
-
-      let targetUserId: string | undefined;
-      if (this.installScope === "user") {
-        targetUserId = this.installedByUserId ?? undefined;
-      } else if (typeof userId === "string" && userId.trim()) {
-        const resolvedUserId = this.resolveEffectiveUserId(userId);
-        if (resolvedUserId) {
-          this.enforceScopedUser(resolvedUserId);
-          targetUserId = resolvedUserId;
-        }
-      }
-
-      const safeTabId = typeof tabId === "string" ? tabId.slice(0, 100) : undefined;
-      const safeViewId = typeof viewId === "string" ? viewId.slice(0, 100) : undefined;
-
-      eventBus.emit(
-        EventType.SPINDLE_UI_NAVIGATE,
-        {
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          action,
-          ...(safeTabId !== undefined ? { tabId: safeTabId } : {}),
-          ...(safeViewId !== undefined ? { viewId: safeViewId } : {}),
-        },
-        targetUserId,
-      );
-
-      this.postToWorker({ type: "response", requestId, result: { ok: true } });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Logging ─────────────────────────────────────────────────────────
 
   private handleLog(level: "info" | "warn" | "error", message: string): void {
     // Detect the ready signal from the worker
@@ -9911,219 +4221,6 @@ export class WorkerHost {
   }
 
   // ─── Push Notifications (gated: "push_notification") ─────────────────
-
-  private async handlePushSend(
-    requestId: string,
-    title: string,
-    body: string,
-    tag?: string,
-    url?: string,
-    userId?: string,
-    icon?: string,
-    rawTitle?: boolean,
-    image?: string,
-  ): Promise<void> {
-    try {
-      if (!this.hasPermission("push_notification")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} push_notification — Push notification permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      // Build the payload and enforce the 4 KB Web Push payload limit
-      const sanitizedTitle = rawTitle
-        ? (title || "").slice(0, 200)
-        : `${this.manifest.name}: ${(title || "").slice(0, 200)}`;
-
-      // Validate icon URL — must be a relative path (no external URLs)
-      let sanitizedIcon: string | undefined;
-      if (icon && typeof icon === "string" && icon.startsWith("/")) {
-        sanitizedIcon = icon;
-      }
-
-      // Validate image URL — must be a relative path (no external URLs)
-      let sanitizedImage: string | undefined;
-      if (image && typeof image === "string" && image.startsWith("/")) {
-        sanitizedImage = image;
-      }
-
-      const payload = {
-        title: sanitizedTitle,
-        body: body || "",
-        tag: tag ? `ext-${this.manifest.identifier}-${tag}`.slice(0, 100) : undefined,
-        data: {
-          url: normalizeSpindleAppNavigationPath(url),
-          characterName: this.manifest.name,
-        },
-        icon: sanitizedIcon,
-        image: sanitizedImage,
-      };
-
-      // Truncate body if the total payload exceeds PushForge's limit
-      // (4078 bytes minus 2 bytes padding prefix = 4076 bytes usable)
-      const MAX_PAYLOAD_BYTES = 4076;
-      const encoder = new TextEncoder();
-      const measure = () => encoder.encode(JSON.stringify(payload)).byteLength;
-
-      if (measure() > MAX_PAYLOAD_BYTES) {
-        // Calculate how many bytes are available for the body
-        const withoutBody = { ...payload, body: "" };
-        const overhead = encoder.encode(JSON.stringify(withoutBody)).byteLength;
-        const available = MAX_PAYLOAD_BYTES - overhead - 10; // 10 bytes margin for ellipsis + quotes
-
-        // Binary search for the right body length
-        let lo = 0, hi = payload.body.length;
-        while (lo < hi) {
-          const mid = (lo + hi + 1) >>> 1;
-          const candidate = { ...payload, body: payload.body.slice(0, mid) };
-          if (encoder.encode(JSON.stringify(candidate)).byteLength <= MAX_PAYLOAD_BYTES) {
-            lo = mid;
-          } else {
-            hi = mid - 1;
-          }
-        }
-
-        if (lo < payload.body.length) {
-          // Try to break at a sentence boundary
-          let trimmed = payload.body.slice(0, lo);
-          const lastSentence = Math.max(
-            trimmed.lastIndexOf('. '),
-            trimmed.lastIndexOf('! '),
-            trimmed.lastIndexOf('? '),
-          );
-          if (lastSentence > lo * 0.5) {
-            trimmed = trimmed.slice(0, lastSentence + 1);
-          }
-          payload.body = trimmed;
-        }
-      }
-
-      const pushSvc = await import("../services/push.service");
-      const sent = await pushSvc.sendPushToUser(resolvedUserId, payload);
-      this.postToWorker({ type: "response", requestId, result: { sent } });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handlePushGetStatus(requestId: string, userId?: string): Promise<void> {
-    try {
-      if (!this.hasPermission("push_notification")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} push_notification — Push notification permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const pushSvc = await import("../services/push.service");
-      const subs = pushSvc.listSubscriptions(resolvedUserId);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          available: subs.length > 0,
-          subscriptionCount: subs.length,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Web Search (gated: "web_search") ──────────────────────────────────
-
-  private async handleWebSearchQuery(
-    requestId: string,
-    query: string,
-    count?: number,
-    scrape?: boolean,
-    userId?: string,
-  ): Promise<void> {
-    try {
-      if (!this.hasPermission("web_search")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} web_search — Web search permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const webSearchSvc = await import("../services/web-search.service");
-      const response = await webSearchSvc.searchWeb(resolvedUserId, query, count, {
-        scrape: scrape !== false,
-      });
-
-      const payload: {
-        query: string;
-        results: typeof response.results;
-        documents?: typeof response.documents;
-        context?: string;
-      } = {
-        query: response.query,
-        results: response.results,
-      };
-      if (scrape !== false) {
-        payload.documents = response.documents;
-        payload.context = response.context;
-      }
-
-      this.postToWorker({ type: "response", requestId, result: payload });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleWebSearchGetSettings(requestId: string, userId?: string): Promise<void> {
-    try {
-      if (!this.hasPermission("web_search")) {
-        throw new Error(`${PERMISSION_DENIED_PREFIX} web_search — Web search permission not granted`);
-      }
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const settingsSvc = await import("../services/web-search-settings.service");
-      const settings = await settingsSvc.getWebSearchSettings(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: settings });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── User Context (free tier) ───────────────────────────────────────
-
-  private handleUserIsVisible(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: eventBus.isUserVisible(resolvedUserId),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleUserGetRole(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-      this.enforceScopedUser(resolvedUserId);
-
-      const row = getDb()
-        .query('SELECT role FROM "user" WHERE id = ?')
-        .get(resolvedUserId) as { role: string | null } | null;
-      if (!row) throw new Error("User not found");
-
-      const result: SpindleUserRole =
-        row.role === "owner" ? "operator" : row.role === "admin" ? "admin" : "user";
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
 
   // ─── Token Counting (free tier) ─────────────────────────────────────
 
@@ -10320,394 +4417,6 @@ export class WorkerHost {
 
   // ─── Frontend Process Lifecycle (free tier) ─────────────────────────
 
-  private handleFrontendProcessSpawn(
-    requestId: string,
-    options: {
-      kind: string;
-      key?: string;
-      payload?: unknown;
-      metadata?: Record<string, unknown>;
-      userId?: string;
-      startupTimeoutMs?: number;
-      heartbeatTimeoutMs?: number;
-      replaceExisting?: boolean;
-    }
-  ): void {
-    try {
-      const kind = typeof options?.kind === "string" ? options.kind.trim() : "";
-      if (!kind) throw new Error("kind is required");
-
-      const userId = this.resolveFrontendProcessUserId(options?.userId);
-      const processId = crypto.randomUUID();
-      const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
-      const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
-      const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));
-
-      if (key) {
-        const dedupeKey = this.buildFrontendProcessKey(userId, kind, key);
-        const existingId = this.frontendProcessKeyIndex.get(dedupeKey);
-        if (existingId) {
-          const existing = this.frontendProcesses.get(existingId);
-          if (existing) {
-            if (!options?.replaceExisting) {
-              throw new Error(`Frontend process already exists for kind \"${kind}\" and key \"${key}\"`);
-            }
-            this.requestFrontendProcessStop(existing, "replaced");
-            if (existing.state === "starting") {
-              this.rejectRequest(existing.requestId, new Error("Frontend process was replaced before it became ready"));
-            }
-            this.finalizeFrontendProcess(existing, "stopped", "replaced");
-          }
-        }
-      }
-
-      const record: FrontendProcessRecord = {
-        requestId,
-        processId,
-        kind,
-        ...(key ? { key } : {}),
-        state: "starting",
-        userId,
-        ...(options?.metadata ? { metadata: options.metadata } : {}),
-        startedAt: new Date().toISOString(),
-        startupTimer: null,
-        heartbeatTimer: null,
-        startupTimeoutMs,
-        heartbeatTimeoutMs,
-      };
-
-      this.frontendProcesses.set(processId, record);
-      if (key) {
-        this.frontendProcessKeyIndex.set(
-          this.buildFrontendProcessKey(userId, kind, key),
-          processId
-        );
-      }
-
-      this.emitFrontendProcessLifecycle(record);
-
-      record.startupTimer = setTimeout(() => {
-        const latest = this.frontendProcesses.get(processId);
-        if (!latest || latest.state !== "starting") return;
-        this.requestFrontendProcessStop(latest, "timed_out");
-        this.finalizeFrontendProcess(latest, "timed_out", "timed_out", "Frontend process startup timed out");
-        this.rejectRequest(requestId, new Error("Frontend process startup timed out"));
-      }, startupTimeoutMs);
-
-      this.sendFrontendProcessEvent(userId, {
-        action: "spawn",
-        processId,
-        kind,
-        ...(key ? { key } : {}),
-        payload: options?.payload,
-        ...(options?.metadata ? { metadata: options.metadata } : {}),
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleFrontendProcessList(
-    requestId: string,
-    filter?: { userId?: string; kind?: string; key?: string; state?: FrontendProcessState }
-  ): void {
-    try {
-      const userId =
-        this.installScope === "user"
-          ? this.installedByUserId ?? undefined
-          : typeof filter?.userId === "string" && filter.userId.trim()
-            ? filter.userId.trim()
-            : undefined;
-      const items = Array.from(this.frontendProcesses.values())
-        .filter((record) => {
-          if (userId && record.userId !== userId) return false;
-          if (filter?.kind && record.kind !== filter.kind) return false;
-          if (filter?.key && record.key !== filter.key) return false;
-          if (filter?.state && record.state !== filter.state) return false;
-          return true;
-        })
-        .map((record) => this.snapshotFrontendProcess(record));
-      this.postToWorker({ type: "response", requestId, result: items });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleFrontendProcessGet(requestId: string, processId: string): void {
-    try {
-      const record = this.getFrontendProcessRecord(processId);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: record ? this.snapshotFrontendProcess(record) : null,
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleFrontendProcessStop(
-    requestId: string,
-    processId: string,
-    options?: { userId?: string; reason?: string }
-  ): void {
-    try {
-      const record = this.getFrontendProcessRecord(processId);
-      if (!record) {
-        this.postToWorker({ type: "response", requestId, result: undefined });
-        return;
-      }
-      const resolvedUserId =
-        this.installScope === "user"
-          ? this.installedByUserId ?? undefined
-          : typeof options?.userId === "string" && options.userId.trim()
-            ? options.userId.trim()
-            : undefined;
-      if (resolvedUserId && record.userId !== resolvedUserId) {
-        throw new Error("processId does not belong to the requested userId");
-      }
-      if (record.state === "starting" || record.state === "running") {
-        record.stopReason = options?.reason;
-        if (record.startupTimer) {
-          clearTimeout(record.startupTimer);
-          record.startupTimer = null;
-        }
-        this.transitionFrontendProcess(record, "stopping");
-      }
-      this.requestFrontendProcessStop(record, options?.reason ?? "stopped");
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleFrontendProcessSend(processId: string, payload: unknown, userId?: string): void {
-    const record = this.getFrontendProcessRecord(processId);
-    if (!record) return;
-    if (this.installScope === "operator" && userId && record.userId !== userId) return;
-    this.sendFrontendProcessEvent(record.userId ?? this.resolveFrontendProcessUserId(userId), {
-      action: "message",
-      processId,
-      payload,
-    });
-  }
-
-  private async handleBackendProcessSpawn(
-    requestId: string,
-    options: {
-      entry: string;
-      kind?: string;
-      key?: string;
-      payload?: unknown;
-      metadata?: Record<string, unknown>;
-      userId?: string;
-      startupTimeoutMs?: number;
-      heartbeatTimeoutMs?: number;
-      replaceExisting?: boolean;
-    }
-  ): Promise<void> {
-    try {
-      const entryPath = await this.resolveBackendProcessEntryPath(options?.entry ?? "");
-      const entry = typeof options?.entry === "string" ? options.entry.trim().replace(/\\/g, "/") : "";
-      const kind = typeof options?.kind === "string" && options.kind.trim() ? options.kind.trim() : entry;
-      const userId = this.resolveFrontendProcessUserId(options?.userId);
-      const processId = crypto.randomUUID();
-      const key = typeof options?.key === "string" && options.key.trim() ? options.key.trim() : undefined;
-      const startupTimeoutMs = Math.max(1_000, Math.min(120_000, Math.round(options?.startupTimeoutMs ?? 15_000)));
-      const heartbeatTimeoutMs = Math.max(0, Math.min(120_000, Math.round(options?.heartbeatTimeoutMs ?? 15_000)));
-
-      if (key) {
-        const dedupeKey = this.buildBackendProcessKey(userId, kind, key);
-        const existingId = this.backendProcessKeyIndex.get(dedupeKey);
-        if (existingId) {
-          const existing = this.backendProcesses.get(existingId);
-          if (existing) {
-            if (!options?.replaceExisting) {
-              throw new Error(`Backend process already exists for kind \"${kind}\" and key \"${key}\"`);
-            }
-            if (existing.state === "starting") {
-              this.rejectRequest(existing.requestId, new Error("Backend process was replaced before it became ready"));
-            }
-            this.clearBackendProcessTimers(existing);
-            try {
-              existing.runtime.terminate(true);
-            } catch {
-              // ignore
-            }
-            this.finalizeBackendProcess(existing, "stopped", "replaced");
-          }
-        }
-      }
-
-      if (this.backendProcesses.size >= WorkerHost.MAX_BACKEND_PROCESSES) {
-        throw new Error(`Backend process limit reached (${WorkerHost.MAX_BACKEND_PROCESSES})`);
-      }
-
-      const runtimePath = join(import.meta.dir, "backend-process-runtime.ts");
-      const storagePath = this.getStorageRootPath(this.manifest.identifier);
-      const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
-      const runtime = createRuntimeTransport({
-        runtimePath,
-        extensionIdentifier: this.manifest.identifier,
-        repoPath,
-        storagePath,
-        mode: this.getBackendProcessRuntimeMode(),
-        onMessage: (message) => {
-          this.handleBackendProcessRuntimeMessage(processId, message as BackendProcessRuntimeToHost);
-        },
-        onError: (message) => {
-          const record = this.backendProcesses.get(processId);
-          if (!record) return;
-          this.finalizeBackendProcess(record, "failed", "failed", message);
-        },
-        onExit: (exitCode, signalCode, error) => {
-          this.handleBackendProcessRuntimeExit(processId, exitCode, signalCode, error);
-        },
-      });
-
-      const record: BackendProcessRecord = {
-        requestId,
-        runtime,
-        processId,
-        entry,
-        kind,
-        ...(key ? { key } : {}),
-        state: "starting",
-        userId,
-        ...(options?.metadata ? { metadata: options.metadata } : {}),
-        startedAt: new Date().toISOString(),
-        startupTimer: null,
-        heartbeatTimer: null,
-        stopTimer: null,
-        startupTimeoutMs,
-        heartbeatTimeoutMs,
-      };
-
-      this.backendProcesses.set(processId, record);
-      if (key) {
-        this.backendProcessKeyIndex.set(
-          this.buildBackendProcessKey(userId, kind, key),
-          processId
-        );
-      }
-
-      this.emitBackendProcessLifecycle(record);
-
-      record.startupTimer = setTimeout(() => {
-        const latest = this.backendProcesses.get(processId);
-        if (!latest || latest.state !== "starting") return;
-        try {
-          latest.runtime.terminate(true);
-        } catch {
-          // ignore
-        }
-        this.finalizeBackendProcess(latest, "timed_out", "timed_out", "Backend process startup timed out");
-        this.rejectRequest(requestId, new Error("Backend process startup timed out"));
-      }, startupTimeoutMs);
-
-      runtime.postMessage({
-        type: "init",
-        process: {
-          processId,
-          entry,
-          entryPath,
-          kind,
-          ...(key ? { key } : {}),
-          payload: options?.payload,
-          ...(options?.metadata ? { metadata: options.metadata } : {}),
-          ...(userId ? { userId } : {}),
-        },
-      } satisfies HostToBackendProcessRuntime);
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleBackendProcessList(
-    requestId: string,
-    filter?: { userId?: string; kind?: string; key?: string; state?: BackendProcessState }
-  ): void {
-    try {
-      const userId =
-        this.installScope === "user"
-          ? this.installedByUserId ?? undefined
-          : typeof filter?.userId === "string" && filter.userId.trim()
-            ? filter.userId.trim()
-            : undefined;
-      const items = Array.from(this.backendProcesses.values())
-        .filter((record) => {
-          if (userId && record.userId !== userId) return false;
-          if (filter?.kind && record.kind !== filter.kind) return false;
-          if (filter?.key && record.key !== filter.key) return false;
-          if (filter?.state && record.state !== filter.state) return false;
-          return true;
-        })
-        .map((record) => this.snapshotBackendProcess(record));
-      this.postToWorker({ type: "response", requestId, result: items });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleBackendProcessGet(requestId: string, processId: string): void {
-    try {
-      const record = this.getBackendProcessRecord(processId);
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: record ? this.snapshotBackendProcess(record) : null,
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleBackendProcessStop(
-    requestId: string,
-    processId: string,
-    options?: { userId?: string; reason?: string }
-  ): void {
-    try {
-      const record = this.getBackendProcessRecord(processId);
-      if (!record) {
-        this.postToWorker({ type: "response", requestId, result: undefined });
-        return;
-      }
-      const resolvedUserId =
-        this.installScope === "user"
-          ? this.installedByUserId ?? undefined
-          : typeof options?.userId === "string" && options.userId.trim()
-            ? options.userId.trim()
-            : undefined;
-      if (resolvedUserId && record.userId !== resolvedUserId) {
-        throw new Error("processId does not belong to the requested userId");
-      }
-      if (record.state === "starting" || record.state === "running") {
-        record.stopReason = options?.reason;
-        if (record.startupTimer) {
-          clearTimeout(record.startupTimer);
-          record.startupTimer = null;
-        }
-        this.transitionBackendProcess(record, "stopping");
-        this.armBackendStopTimer(record);
-      }
-      record.runtime.postMessage({
-        type: "stop",
-        ...(options?.reason ? { reason: options.reason } : {}),
-      } satisfies HostToBackendProcessRuntime);
-      this.postToWorker({ type: "response", requestId, result: undefined });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleBackendProcessSend(processId: string, payload: unknown, userId?: string): void {
-    const record = this.getBackendProcessRecord(processId);
-    if (!record) return;
-    if (this.installScope === "operator" && userId && record.userId !== userId) return;
-    record.runtime.postMessage({ type: "message", payload } satisfies HostToBackendProcessRuntime);
-  }
-
   // ─── Version (free tier) ────────────────────────────────────────────
 
   private async handleVersionGetBackend(requestId: string): Promise<void> {
@@ -10727,221 +4436,6 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
-
-  // ─── Text Editor (free tier) ────────────────────────────────────────
-
-  private handleTextEditorOpen(
-    requestId: string,
-    title?: string,
-    value?: string,
-    placeholder?: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-
-      const editorRequestId = `spindle-editor:${this.extensionId}:${requestId}`;
-
-      // Listen for the result from the frontend
-      const unsub = eventBus.on(EventType.SPINDLE_TEXT_EDITOR_RESULT, (msg) => {
-        if (msg.payload?.requestId !== editorRequestId) return;
-        unsub();
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: {
-            text: msg.payload.text ?? value ?? "",
-            cancelled: !!msg.payload.cancelled,
-          },
-        });
-      });
-
-      // Send the open request to the user's frontend
-      eventBus.emit(
-        EventType.SPINDLE_TEXT_EDITOR_OPEN,
-        {
-          requestId: editorRequestId,
-          extensionId: this.extensionId,
-          title: title ?? "Edit Text",
-          value: value ?? "",
-          placeholder: placeholder ?? "",
-        },
-        resolvedUserId,
-      );
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Modal (free tier) ──────────────────────────────────────────────
-
-  private handleModalOpen(
-    requestId: string,
-    title: string,
-    items: any[],
-    width?: number,
-    maxHeight?: number,
-    persistent?: boolean,
-    userId?: string,
-    callerModalRequestId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-
-      const modalRequestId = callerModalRequestId
-        ? `spindle-modal:${this.extensionId}:${callerModalRequestId}`
-        : `spindle-modal:${this.extensionId}:${requestId}`;
-
-      const unsub = eventBus.on(EventType.SPINDLE_MODAL_RESULT, (msg) => {
-        if (msg.payload?.requestId !== modalRequestId) return;
-        unsub();
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: { dismissedBy: msg.payload.dismissedBy ?? "user" },
-        });
-      });
-
-      eventBus.emit(
-        EventType.SPINDLE_MODAL_OPEN,
-        {
-          requestId: modalRequestId,
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          title,
-          items,
-          width,
-          maxHeight,
-          persistent: persistent ?? false,
-        },
-        resolvedUserId,
-      );
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleModalClose(
-    requestId: string,
-    openRequestId: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-
-      const modalRequestId = `spindle-modal:${this.extensionId}:${openRequestId}`;
-
-      eventBus.emit(
-        EventType.SPINDLE_MODAL_RESULT,
-        { requestId: modalRequestId, dismissedBy: "extension" },
-        resolvedUserId,
-      );
-
-      this.postToWorker({ type: "response", requestId, result: undefined });
-      } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleConfirmOpen(
-    requestId: string,
-    title: string,
-    message: string,
-    variant?: string,
-    confirmLabel?: string,
-    cancelLabel?: string,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-
-      const confirmRequestId = `spindle-confirm:${this.extensionId}:${requestId}`;
-
-      const unsub = eventBus.on(EventType.SPINDLE_CONFIRM_RESULT, (msg) => {
-        if (msg.payload?.requestId !== confirmRequestId) return;
-        unsub();
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: { confirmed: !!msg.payload.confirmed },
-        });
-      });
-
-      eventBus.emit(
-        EventType.SPINDLE_CONFIRM_OPEN,
-        {
-          requestId: confirmRequestId,
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          title,
-          message,
-          variant: variant ?? "info",
-          confirmLabel: confirmLabel ?? "Confirm",
-          cancelLabel: cancelLabel ?? "Cancel",
-        },
-        resolvedUserId,
-      );
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleInputPromptOpen(
-    requestId: string,
-    title: string,
-    message?: string,
-    placeholder?: string,
-    defaultValue?: string,
-    submitLabel?: string,
-    cancelLabel?: string,
-    multiline?: boolean,
-    userId?: string,
-  ): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) throw new Error("userId is required for operator-scoped extensions");
-
-      const promptRequestId = `spindle-input-prompt:${this.extensionId}:${requestId}`;
-
-      const unsub = eventBus.on(EventType.SPINDLE_INPUT_PROMPT_RESULT, (msg) => {
-        if (msg.payload?.requestId !== promptRequestId) return;
-        unsub();
-        this.postToWorker({
-          type: "response",
-          requestId,
-          result: {
-            value: msg.payload.cancelled ? null : (msg.payload.value ?? null),
-            cancelled: !!msg.payload.cancelled,
-          },
-        });
-      });
-
-      eventBus.emit(
-        EventType.SPINDLE_INPUT_PROMPT_OPEN,
-        {
-          requestId: promptRequestId,
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          title,
-          message,
-          placeholder,
-          defaultValue,
-          submitLabel: submitLabel ?? "Submit",
-          cancelLabel: cancelLabel ?? "Cancel",
-          multiline: !!multiline,
-        },
-        resolvedUserId,
-      );
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Macro Resolution (free tier) ───────────────────────────────────
 
   private async handleMacrosResolve(
     requestId: string,
@@ -11055,522 +4549,6 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result: { text: result.text, diagnostics: result.diagnostics } });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  // ─── Chat style mode (gated: "app_manipulation") ────────────────────
-
-  /** Per-user chat-style-mode claims, outer key userId, inner key chatId.
-   *  Bucketed by user so dispose can emit cleanup events per affected user. */
-  private chatStyleModes = new Map<string, Map<string, "bounded" | "extension-relaxed">>();
-
-  private handleChatSetStyleMode(
-    requestId: string,
-    chatId: unknown,
-    mode: unknown,
-    userId?: string,
-  ): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Chat style mode requires the app_manipulation permission`,
-      });
-      return;
-    }
-    if (typeof chatId !== "string" || chatId.length === 0) {
-      this.postToWorker({ type: "response", requestId, error: "chatId must be a non-empty string" });
-      return;
-    }
-    if (mode !== "bounded" && mode !== "extension-relaxed") {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `mode must be 'bounded' or 'extension-relaxed', got ${JSON.stringify(mode)}`,
-      });
-      return;
-    }
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        this.postToWorker({
-          type: "response",
-          requestId,
-          error: "userId is required for operator-scoped extensions",
-        });
-        return;
-      }
-      this.enforceScopedUser(resolvedUserId);
-
-      let userMap = this.chatStyleModes.get(resolvedUserId);
-      if (mode === "bounded") {
-        if (userMap) {
-          userMap.delete(chatId);
-          if (userMap.size === 0) this.chatStyleModes.delete(resolvedUserId);
-        }
-      } else {
-        if (!userMap) {
-          userMap = new Map();
-          this.chatStyleModes.set(resolvedUserId, userMap);
-        }
-        userMap.set(chatId, mode);
-      }
-
-      eventBus.emit(
-        EventType.SPINDLE_CHAT_STYLE_MODE,
-        {
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          chatId,
-          mode,
-        },
-        resolvedUserId,
-      );
-
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message || "Chat style mode set failed" });
-    }
-  }
-
-  /** Called on worker shutdown to clear chat-style-mode claims. Emits one
-   *  null-chatId event per affected user so frontend stores drop this
-   *  extension's claims without per-chat enumeration. */
-  clearChatStyleModes(): void {
-    if (this.chatStyleModes.size === 0) return;
-    for (const userId of this.chatStyleModes.keys()) {
-      eventBus.emit(
-        EventType.SPINDLE_CHAT_STYLE_MODE,
-        {
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          chatId: null,
-          mode: "bounded",
-        },
-        userId,
-      );
-    }
-    this.chatStyleModes.clear();
-  }
-
-  // ─── Theme (gated: "app_manipulation") ──────────────────────────────
-
-  /** Active CSS variable overrides for this extension, keyed by effective userId. */
-  private themeOverrides = new Map<string, ThemeOverrideDTO>();
-
-  private handleThemeApply(requestId: string, overrides: ThemeOverrideDTO, userId?: string): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme manipulation requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-        return;
-      }
-      this.enforceScopedUser(resolvedUserId);
-
-      // Validate: variables must be a Record<string, string> if provided
-      if (overrides.variables) {
-        if (typeof overrides.variables !== "object" || Array.isArray(overrides.variables)) {
-          this.postToWorker({ type: "response", requestId, error: "overrides.variables must be an object" });
-          return;
-        }
-        // Only allow CSS custom property keys (--*) and validate each value
-        for (const [key, value] of Object.entries(overrides.variables)) {
-          if (!key.startsWith("--")) {
-            this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key: "${key}" (must start with --)` });
-            return;
-          }
-          const issue = validateCssValue(value);
-          if (issue) {
-            this.postToWorker({ type: "response", requestId, error: `Invalid CSS value for "${key}": ${issue}` });
-            return;
-          }
-        }
-        // Limit to 200 variables per extension
-        if (Object.keys(overrides.variables).length > 200) {
-          this.postToWorker({ type: "response", requestId, error: "Too many variables (max 200)" });
-          return;
-        }
-      }
-
-      // Validate variablesByMode if provided
-      if (overrides.variablesByMode) {
-        for (const modeKey of ["dark", "light"] as const) {
-          const modeVars = overrides.variablesByMode[modeKey];
-          if (modeVars) {
-            if (typeof modeVars !== "object" || Array.isArray(modeVars)) {
-              this.postToWorker({ type: "response", requestId, error: `variablesByMode.${modeKey} must be an object` });
-              return;
-            }
-            for (const [key, value] of Object.entries(modeVars)) {
-              if (!key.startsWith("--")) {
-                this.postToWorker({ type: "response", requestId, error: `Invalid CSS variable key in variablesByMode.${modeKey}: "${key}"` });
-                return;
-              }
-              const issue = validateCssValue(value);
-              if (issue) {
-                this.postToWorker({ type: "response", requestId, error: `Invalid CSS value in variablesByMode.${modeKey}["${key}"]: ${issue}` });
-                return;
-              }
-            }
-          }
-        }
-      }
-
-      this.commitThemeOverrides(resolvedUserId, overrides);
-
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private shouldReplaceThemeScope(vars?: Record<string, string>): boolean {
-    if (!vars) return false;
-
-    const keys = Object.keys(vars);
-    if (keys.length >= WorkerHost.FULL_THEME_MIN_KEYS) {
-      return true;
-    }
-
-    return WorkerHost.FULL_THEME_SENTINEL_KEYS.every((key) => key in vars);
-  }
-
-  private commitThemeOverrides(userId: string, overrides: ThemeOverrideDTO): void {
-    const current = this.themeOverrides.get(userId);
-    const existingByMode = current?.variablesByMode ?? {};
-    const nextVariables = this.shouldReplaceThemeScope(overrides.variables)
-      ? { ...(overrides.variables ?? {}) }
-      : {
-          ...(current?.variables ?? {}),
-          ...(overrides.variables ?? {}),
-        };
-    const nextDarkVars = overrides.variablesByMode?.dark
-      ? this.shouldReplaceThemeScope(overrides.variablesByMode.dark)
-        ? { ...overrides.variablesByMode.dark }
-        : { ...existingByMode.dark, ...overrides.variablesByMode.dark }
-      : existingByMode.dark;
-    const nextLightVars = overrides.variablesByMode?.light
-      ? this.shouldReplaceThemeScope(overrides.variablesByMode.light)
-        ? { ...overrides.variablesByMode.light }
-        : { ...existingByMode.light, ...overrides.variablesByMode.light }
-      : existingByMode.light;
-
-    const nextOverrides: ThemeOverrideDTO = {
-      variables: nextVariables,
-      variablesByMode: (nextDarkVars || nextLightVars)
-        ? {
-            dark: nextDarkVars,
-            light: nextLightVars,
-          }
-        : undefined,
-    };
-
-    this.themeOverrides.set(userId, nextOverrides);
-
-    eventBus.emit(
-      EventType.SPINDLE_THEME_OVERRIDES,
-      {
-        extensionId: this.extensionId,
-        extensionName: this.manifest.name,
-        overrides: nextOverrides,
-      },
-      userId,
-    );
-  }
-
-  private handleThemeApplyPalette(
-    requestId: string,
-    palette: { accent?: { h?: number; s?: number; l?: number } } | null | undefined,
-    userId?: string,
-  ): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme palette application requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      if (palette == null) {
-        this.handleThemeClear(requestId, userId);
-        return;
-      }
-
-      if (!palette.accent || typeof palette.accent.h !== "number" || typeof palette.accent.s !== "number" || typeof palette.accent.l !== "number") {
-        this.postToWorker({ type: "response", requestId, error: "palette.accent must be { h: number, s: number, l: number }" });
-        return;
-      }
-      const accent: { h: number; s: number; l: number } = {
-        h: palette.accent.h,
-        s: palette.accent.s,
-        l: palette.accent.l,
-      };
-
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-        return;
-      }
-      this.enforceScopedUser(resolvedUserId);
-
-      this.emitPaletteColorOverrides(accent, resolvedUserId);
-
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message || "Theme palette application failed" });
-    }
-  }
-
-  private handleThemeClear(requestId: string, userId?: string): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme manipulation requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-        return;
-      }
-      this.enforceScopedUser(resolvedUserId);
-
-      this.themeOverrides.delete(resolvedUserId);
-
-      // Broadcast clear to frontend
-      eventBus.emit(
-        EventType.SPINDLE_THEME_OVERRIDES,
-        {
-          extensionId: this.extensionId,
-          extensionName: this.manifest.name,
-          overrides: null,
-        },
-        resolvedUserId,
-      );
-
-      this.postToWorker({ type: "response", requestId, result: true });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  /**
-   * Generate color-only theme variables from an accent and emit per-user.
-   *
-   * Each user's `enableGlass` is read so color variables that encode
-   * glass-dependent alpha (--lumiverse-bg, --lcs-glass-bg, etc.) get the
-   * correct opacity. User preference keys (blur, radii, fonts, scale,
-   * transitions) are stripped — applyPalette only changes colors.
-   */
-  private emitPaletteColorOverrides(accent: { h: number; s: number; l: number }, userId: string): void {
-    const strip = (vars: Record<string, string>) => {
-      const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(vars)) {
-        if (!WorkerHost.USER_PREFERENCE_KEYS.has(k)) out[k] = v;
-      }
-      return out;
-    };
-
-    const connectedUserIds = [userId];
-
-    for (const uid of connectedUserIds) {
-      const themeSetting = settingsSvc.getSetting(uid, "theme");
-      const enableGlass = typeof themeSetting?.value?.enableGlass === "boolean"
-        ? themeSetting.value.enableGlass : true;
-
-      const base = { accent, enableGlass };
-      const overrides = {
-        paletteAccent: accent,
-        variablesByMode: {
-          dark: strip(generateThemeVariablesFn({ ...base, mode: "dark" })),
-          light: strip(generateThemeVariablesFn({ ...base, mode: "light" })),
-        },
-      } as ThemeOverrideDTO & { paletteAccent: { h: number; s: number; l: number } };
-
-      this.themeOverrides.set(uid, overrides);
-
-      eventBus.emit(
-        EventType.SPINDLE_THEME_OVERRIDES,
-        { extensionId: this.extensionId, extensionName: this.manifest.name, overrides },
-        uid,
-      );
-    }
-  }
-
-  private handleThemeGetCurrent(requestId: string, userId?: string): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme access requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      if (!resolvedUserId) {
-        this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-        return;
-      }
-      this.enforceScopedUser(resolvedUserId);
-
-      const themeSetting = settingsSvc.getSetting(resolvedUserId, "theme");
-      const themeConfig = themeSetting?.value;
-
-      // Return a safe DTO snapshot
-      const mode = themeConfig?.mode === "system" ? "dark" : (themeConfig?.mode ?? "dark");
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: {
-          id: themeConfig?.id ?? "lumiverse-purple",
-          name: themeConfig?.name ?? "Lumiverse Purple",
-          mode,
-          accent: themeConfig?.accent ?? { h: 263, s: 55, l: 65 },
-          enableGlass: themeConfig?.enableGlass ?? true,
-          radiusScale: themeConfig?.radiusScale ?? 1,
-          fontScale: themeConfig?.fontScale ?? 1,
-          uiScale: themeConfig?.uiScale ?? 1,
-          characterAware: !!themeConfig?.characterAware,
-        },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleColorExtract(requestId: string, imageId: string, userId?: string): Promise<void> {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Color extraction requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      const result = await colorExtractionSvc.extractColorsFromImage(imageId);
-      this.postToWorker({ type: "response", requestId, result });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message || "Color extraction failed" });
-    }
-  }
-
-  private handleThemeGenerateVariables(requestId: string, config: any): void {
-    if (!this.hasPermission("app_manipulation")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} app_manipulation — Theme variable generation requires the app_manipulation permission`,
-      });
-      return;
-    }
-
-    try {
-      if (!config || typeof config !== "object") {
-        this.postToWorker({ type: "response", requestId, error: "config is required" });
-        return;
-      }
-      if (!config.accent || typeof config.accent.h !== "number" || typeof config.accent.s !== "number" || typeof config.accent.l !== "number") {
-        this.postToWorker({ type: "response", requestId, error: "config.accent must be { h: number, s: number, l: number }" });
-        return;
-      }
-      if (config.mode !== "dark" && config.mode !== "light") {
-        this.postToWorker({ type: "response", requestId, error: 'config.mode must be "dark" or "light"' });
-        return;
-      }
-
-      const vars = generateThemeVariablesFn(config);
-      this.postToWorker({ type: "response", requestId, result: vars });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message || "Variable generation failed" });
-    }
-  }
-
-  /** Called on worker shutdown to clean up theme overrides. */
-  clearThemeOverrides(): void {
-    if (this.themeOverrides.size > 0) {
-      for (const userId of this.themeOverrides.keys()) {
-        eventBus.emit(
-          EventType.SPINDLE_THEME_OVERRIDES,
-          {
-            extensionId: this.extensionId,
-            extensionName: this.manifest.name,
-            overrides: null,
-          },
-          userId,
-        );
-      }
-      this.themeOverrides.clear();
-    }
-  }
-
-  // ─── Council (free tier, read-only) ────────────────────────────────
-
-  private handleCouncilGetSettings(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      const settings = councilSettingsSvc.getCouncilSettings(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: settings });
-    } catch (err) {
-      this.postToWorker({ type: "response", requestId, error: String(err) });
-    }
-  }
-
-  private handleCouncilGetMembers(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      const settings = councilSettingsSvc.getCouncilSettings(resolvedUserId);
-      
-      // We need to fetch the LumiaItems to build the full context
-      const allLumiaItems = packsSvc.getAllLumiaItems(resolvedUserId);
-      const itemsById = new Map(allLumiaItems.map((item) => [item.id, item]));
-
-      const membersCtx = settings.members.map((member) => {
-        const item = itemsById.get(member.itemId) || null;
-        return buildCouncilMemberContext(member, item);
-      });
-
-      this.postToWorker({ type: "response", requestId, result: membersCtx });
-    } catch (err) {
-      this.postToWorker({ type: "response", requestId, error: String(err) });
-    }
-  }
-
-  private handleCouncilGetAvailableLumiaItems(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      const items = packsSvc.getAllLumiaItems(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: items });
-    } catch (err) {
-      this.postToWorker({ type: "response", requestId, error: String(err) });
-    }
-  }
-
-  private handleDlcGetCatalog(requestId: string, userId?: string): void {
-    try {
-      const resolvedUserId = this.resolveEffectiveUserId(userId);
-      const catalog = packsSvc.getLumiaDlcCatalog(resolvedUserId);
-      this.postToWorker({ type: "response", requestId, result: catalog });
-    } catch (err) {
-      this.postToWorker({ type: "response", requestId, error: String(err) });
     }
   }
 
