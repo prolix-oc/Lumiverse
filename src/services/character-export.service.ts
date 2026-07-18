@@ -1,6 +1,6 @@
 import sharp from "../utils/sharp-config";
 import { extname } from "path";
-import { zip } from "fflate";
+import { zipSync } from "fflate";
 import { LANDING_PERSPECTIVE_LAYERS_KEY, getCharacter, normalizeLandingPerspectiveLayers } from "./characters.service";
 import { getExpressionConfig, getExpressionGroups } from "./expressions.service";
 import { listGallery } from "./character-gallery.service";
@@ -395,17 +395,21 @@ function reportCharxProgress(options: CharxExportOptions, progress: CharxExportP
 }
 
 /**
- * fflate's async ZIP writer compresses archive entries in parallel workers.
- * Besides being faster for image-heavy cards, it keeps Bun's main event loop
- * available to send progress events and serve other requests.
+ * Create the archive in Bun's server process.
+ *
+ * fflate's callback-based `zip` API delegates sufficiently large entries to
+ * browser Web Workers. In Bun that worker callback can return no data, which
+ * surfaces as the opaque `dat.length` exception. `zipSync` is the supported
+ * server-side path; expensive image reads still happen through the bounded
+ * concurrent pool before this final compression step.
  */
-function zipAsync(entries: Record<string, Uint8Array>): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    zip(entries, (error, data) => {
-      if (error) reject(error);
-      else resolve(data);
-    });
-  });
+function zipCharx(entries: Record<string, Uint8Array>): Uint8Array {
+  for (const [path, bytes] of Object.entries(entries)) {
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error(`CHARX archive entry is not binary data: ${path}`);
+    }
+  }
+  return zipSync(entries);
 }
 
 /** Sanitize a string for use as a filename component inside the archive. */
@@ -631,7 +635,7 @@ export async function exportAsCharx(
   }
 
   reportCharxProgress(options, { phase: "compressing" });
-  const archive = await zipAsync(entries);
+  const archive = zipCharx(entries);
   reportCharxProgress(options, { phase: "complete", bytes: archive.byteLength });
   return archive;
 }

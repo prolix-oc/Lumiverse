@@ -31,7 +31,10 @@
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 4px 0;
+  /* Keep selected outlines and hover actions inside the scrollport. Without
+     this gutter, the first avatar's glow is clipped by the editor body's
+     horizontal overflow boundary. */
+  padding: 8px 6px;
   scrollbar-width: thin;
 }
 
