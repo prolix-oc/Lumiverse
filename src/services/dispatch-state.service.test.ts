@@ -246,6 +246,21 @@ describe("dispatch state and transaction authority", () => {
     }
   });
 
+  test("materializes registered provider defaults in dispatch snapshots", () => {
+    getDb()
+      .query("UPDATE connection_profiles SET provider = ?, api_url = ?, model = ? WHERE id = ? AND user_id = ?")
+      .run("deepseek", "", "deepseek-chat", CONNECTION_ID, USER_ID);
+
+    const resolved = resolveMainDispatchSnapshot(USER_ID, {
+      presetId: PRESET_ID,
+      reasoning: { effort: "low" },
+      settings: { locale: "en" },
+    });
+
+    expect(resolved.descriptor.endpointOrigin).toBe("https://api.deepseek.com/v1");
+    expect(resolved.connection.api_url).toBe("https://api.deepseek.com/v1");
+  });
+
   test("rejects foreign, unresolved, and roulette destinations", () => {
     expect(() => resolveDispatchDescriptor("missing-user", { source: "main" })).toThrow("user");
     expect(() => resolveDispatchDescriptor(USER_ID, { source: "slot", connectionId: "foreign" })).toThrow("connection");

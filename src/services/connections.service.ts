@@ -2,6 +2,7 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getProvider } from "../llm/registry";
+import { resolveEffectiveApiUrl } from "../llm/resolve-api-url";
 import { env } from "../env";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
@@ -19,8 +20,6 @@ import {
 } from "./dispatch-state.service";
 
 const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000;
-const ZAI_GENERAL_API_URL = "https://api.z.ai/api/paas/v4";
-const ZAI_CODING_PLAN_API_URL = "https://api.z.ai/api/coding/paas/v4";
 export const MODEL_ROULETTE_PROVIDER = "model_roulette";
 
 function finalizeConnectionDispatch(
@@ -54,26 +53,6 @@ function finalizeConnectionDispatch(
 
 export interface ConnectionRouletteConfig {
   connection_ids: string[];
-}
-
-function resolveZaiApiUrl(rawUrl: string, useCodingPlanEndpoint: boolean): string {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return useCodingPlanEndpoint ? ZAI_CODING_PLAN_API_URL : ZAI_GENERAL_API_URL;
-
-  try {
-    const url = new URL(trimmed);
-    const pathname = url.pathname.replace(/\/+$/, "") || "/";
-    if (pathname === "/v1" || pathname === "/api/paas/v4" || pathname === "/api/coding/paas/v4") {
-      url.pathname = useCodingPlanEndpoint ? "/api/coding/paas/v4" : "/api/paas/v4";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    }
-  } catch {
-    // Preserve custom raw URLs we can't safely normalize.
-  }
-
-  return trimmed;
 }
 
 export interface ConnectionTestResult {
@@ -167,36 +146,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 /** Secret key for a connection's API key. */
 export function connectionSecretKey(id: string): string {
   return `connection_${id}_api_key`;
-}
-
-/** Resolve effective API URL, accounting for provider-specific metadata flags. */
-export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: string | null; metadata?: Record<string, any> | null }): string {
-  const url = (profile.api_url || "").trim();
-  if (profile.provider === "nanogpt" && profile.metadata?.use_subscription_api) {
-    if (!url) return "https://nano-gpt.com/api/subscription/v1";
-    return url.replace("/api/v1", "/api/subscription/v1");
-  }
-  if (profile.provider === "zai") {
-    return resolveZaiApiUrl(url, profile.metadata?.use_coding_plan_endpoint === true);
-  }
-  if (profile.provider === "google_vertex") {
-    const region = profile.metadata?.vertex_region;
-    // Per Google's @google/genai SDK: `global` routes through the
-    // un-prefixed host, regional routes through `{region}-aiplatform`.
-    if (!region || region === "global") return "https://aiplatform.googleapis.com";
-    return `https://${region}-aiplatform.googleapis.com`;
-  }
-  if (profile.provider === "bedrock") {
-    // An explicit api_url wins so power users can pin a GovCloud or VPC
-    // PrivateLink host; otherwise derive from region + endpoint toggle.
-    if (url) return url;
-    const region = (profile.metadata?.region || "us-east-1").trim() || "us-east-1";
-    // mantle (default, recommended) vs runtime (cross-region inference profiles).
-    return profile.metadata?.bedrock_endpoint === "runtime"
-      ? `https://bedrock-runtime.${region}.amazonaws.com/v1`
-      : `https://bedrock-mantle.${region}.api.aws/v1`;
-  }
-  return url;
 }
 
 export function resolveNanoGptSubscriptionUsageUrl(profile: { api_url?: string | null }): string {

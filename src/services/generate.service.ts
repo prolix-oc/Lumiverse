@@ -1,4 +1,5 @@
 import { getProvider } from "../llm/registry";
+import { resolveEffectiveApiUrl } from "../llm/resolve-api-url";
 import type { LlmProvider } from "../llm/provider";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
@@ -1552,7 +1553,7 @@ async function resolveProviderAndKey(
   return {
     provider,
     apiKey: apiKey || "",
-    apiUrl: connectionsSvc.resolveEffectiveApiUrl(connection),
+    apiUrl: resolveEffectiveApiUrl(connection),
     connection,
   };
 }

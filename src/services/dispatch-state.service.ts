@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { getDb } from "../db/connection";
+import { resolveEffectiveApiUrl } from "../llm/resolve-api-url";
 import type { ConnectionProfile } from "../types/connection-profile";
 
 const DISPATCH_SCHEMA = "lumiverse.dispatch-state";
@@ -466,46 +467,6 @@ function parseJsonRecord(raw: string, label: string): Readonly<Record<string, un
   return parsed;
 }
 
-function effectiveEndpointOrigin(
-  provider: string,
-  rawUrl: string,
-  metadata: Readonly<Record<string, unknown>>,
-): string {
-  const url = rawUrl.trim();
-  if (provider === "nanogpt" && metadata.use_subscription_api === true) {
-    if (!url) return "https://nano-gpt.com/api/subscription/v1";
-    return url.replace("/api/v1", "/api/subscription/v1");
-  }
-  if (provider === "zai") {
-    const fallback = metadata.use_coding_plan_endpoint === true ? "/api/coding/paas/v4" : "/api/paas/v4";
-    if (!url) return `https://api.z.ai${fallback}`;
-    try {
-      const parsed = new URL(url);
-      const pathname = parsed.pathname.replace(/\/+$/u, "") || "/";
-      if (pathname === "/v1" || pathname === "/api/paas/v4" || pathname === "/api/coding/paas/v4") {
-        parsed.pathname = fallback;
-        parsed.search = "";
-        parsed.hash = "";
-        return parsed.toString();
-      }
-    } catch {
-      return url;
-    }
-    return url;
-  }
-  if (provider === "google_vertex") {
-    const region = typeof metadata.vertex_region === "string" ? metadata.vertex_region : "global";
-    return !region || region === "global" ? "https://aiplatform.googleapis.com" : `https://${region}-aiplatform.googleapis.com`;
-  }
-  if (provider === "bedrock" && !url) {
-    const region = typeof metadata.region === "string" && metadata.region.trim() ? metadata.region.trim() : "us-east-1";
-    return metadata.bedrock_endpoint === "runtime"
-      ? `https://bedrock-runtime.${region}.amazonaws.com/v1`
-      : `https://bedrock-mantle.${region}.api.aws/v1`;
-  }
-  return url;
-}
-
 function connectionSecretKey(id: string): string {
   return `connection_${id}_api_key`;
 }
@@ -615,7 +576,11 @@ function effectiveDescriptorData(
   const metadata = parseJsonRecord(profile.metadata, "connection metadata");
   const presetId = input.presetId !== undefined ? input.presetId : profile.preset_id;
   const preset = readPreset(db, userId, presetId);
-  const endpointOrigin = effectiveEndpointOrigin(profile.provider, profile.api_url, metadata);
+  const endpointOrigin = resolveEffectiveApiUrl({
+    provider: profile.provider,
+    api_url: profile.api_url,
+    metadata,
+  });
   const secret = readEncryptedSecret(db, userId, profile.id);
   const digestInput: DispatchDescriptorDigestInput = {
     userId,
