@@ -10,13 +10,14 @@ import { cancelJob, getJob, startImport } from "../src/services/user-data/import
 
 const USER_ID = "bounded-import-user";
 
-function manifest(): Record<string, unknown> {
+function manifest({ modern = true }: { modern?: boolean } = {}): Record<string, unknown> {
   return {
     schemaVersion: 1,
     producer: "lumiverse",
     exportedAt: 0,
     archiveId: crypto.randomUUID(),
     producerVersion: "test",
+    ...(modern ? { ndjsonFormatVersion: 1 } : {}),
     includeVectors: false,
     embeddingConfig: { provider: null, model: null, dimension: null },
     counts: {},
@@ -156,6 +157,33 @@ describe("user-data import bounded extraction", () => {
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("failed");
     expect(finished.error).toContain("NDJSON line exceeds");
+  });
+
+  test("imports an oversized NDJSON record from a pre-fixed-window archive", async () => {
+    const archivePath = join(workDir, "legacy-oversized-line.lvbak");
+    const value = "x".repeat(5 * 1024 * 1024);
+    const row = JSON.stringify({
+      key: "legacy_large_setting",
+      value,
+      user_id: "source-user",
+      updated_at: 0,
+    });
+    writeFileSync(
+      archivePath,
+      zipSync({
+        "manifest.json": strToU8(JSON.stringify(manifest({ modern: false }))),
+        "database/settings.ndjson": strToU8(`${row}\n`),
+      }),
+    );
+
+    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const finished = await waitForTerminal(job.jobId);
+    expect(finished.status).toBe("complete");
+    expect(
+      getDb()
+        .query("SELECT length(value) AS length FROM settings WHERE key = ? AND user_id = ?")
+        .get("legacy_large_setting", USER_ID),
+    ).toEqual({ length: value.length });
   });
 
 });

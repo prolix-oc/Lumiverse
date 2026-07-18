@@ -43,6 +43,7 @@ import { detectAudioFormat } from "../notification-sounds.service";
 import {
   parseManifest,
   embeddingConfigsMatch,
+  NDJSON_FORMAT_VERSION,
   type ArchiveManifest,
   type ArchiveEmbeddingConfig,
 } from "./manifest";
@@ -66,8 +67,17 @@ const IMPORT_DISK_HEADROOM_BYTES = 64 * 1024 * 1024;
 /** Reject archives over this compressed size at upload time. */
 export const MAX_COMPRESSED_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 
-/** Reject any NDJSON line longer than this. */
+/** Reject any NDJSON line longer than this in current-format archives. */
 const MAX_NDJSON_LINE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Archives created before the fixed-window importer can contain a single
+ * database row larger than the current 4 MiB line limit (typically an old
+ * message, card field, or settings blob). Keep a larger, still bounded cap
+ * for that historical data so it remains portable without weakening the
+ * normal import path for newly-created archives.
+ */
+const LEGACY_MAX_NDJSON_LINE_BYTES = 64 * 1024 * 1024;
 
 /** Read compressed archive data in fixed-size windows during extraction. */
 const ARCHIVE_READ_BYTES = 64 * 1024;
@@ -1295,13 +1305,30 @@ interface ApplyContext {
   userId: string;
   signal: AbortSignal;
   job: ImportJob;
+  /** Per-record cap selected from the archive manifest after extraction. */
+  ndjsonLineBytes: number;
+}
+
+/**
+ * New archives carry an explicit format marker and are limited to 4 MiB per
+ * record. Archives without it predate the fixed-window export format and use
+ * the compatibility ceiling. Both paths remain bounded.
+ */
+function ndjsonLineLimitForManifest(manifest: ArchiveManifest | null): number {
+  if ((manifest?.ndjsonFormatVersion ?? 0) >= NDJSON_FORMAT_VERSION) {
+    return MAX_NDJSON_LINE_BYTES;
+  }
+  return LEGACY_MAX_NDJSON_LINE_BYTES;
 }
 
 /**
  * Read an NDJSON file line-by-line, yielding parsed objects. Enforces the
  * per-line size cap.
  */
-async function* readNdjson(path: string): AsyncGenerator<Record<string, any>> {
+async function* readNdjson(
+  path: string,
+  maxLineBytes: number = MAX_NDJSON_LINE_BYTES,
+): AsyncGenerator<Record<string, any>> {
   const decoder = new TextDecoder();
   const buffer = new Uint8Array(ARCHIVE_READ_BYTES);
   const fragments: Uint8Array[] = [];
@@ -1311,8 +1338,8 @@ async function* readNdjson(path: string): AsyncGenerator<Record<string, any>> {
 
   const append = (chunk: Uint8Array) => {
     if (chunk.byteLength === 0) return;
-    if (lineBytes + chunk.byteLength > MAX_NDJSON_LINE_BYTES) {
-      throw new Error(`NDJSON line exceeds ${MAX_NDJSON_LINE_BYTES} bytes`);
+    if (lineBytes + chunk.byteLength > maxLineBytes) {
+      throw new Error(`NDJSON line exceeds ${maxLineBytes} bytes`);
     }
     // The read buffer is reused, so retain only this bounded copy.
     fragments.push(chunk.slice());
@@ -1459,7 +1486,7 @@ async function applySettingsTable(
   let skipped = 0;
   let lineCount = 0;
 
-  for await (const raw of readNdjson(stagingPath)) {
+  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
     const key = typeof raw.key === "string" ? raw.key : null;
     if (!key) continue;
@@ -1584,7 +1611,7 @@ async function applyTable(
   };
 
   let lineCount = 0;
-  for await (const raw of readNdjson(stagingPath)) {
+  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
 
     // Defensive filter for the settings table.
@@ -1781,7 +1808,7 @@ async function applyLancedbVectors(
 
     const batch: any[] = [];
     let restored = 0;
-    for await (const row of readNdjson(entry.stagingPath)) {
+    for await (const row of readNdjson(entry.stagingPath, ctx.ndjsonLineBytes)) {
       let vector: Float32Array | null = null;
       if (typeof row.vector_b64 === "string" && row.vector_b64.length > 0) {
         const bytes = Buffer.from(row.vector_b64, "base64");
@@ -1926,7 +1953,7 @@ async function applySecrets(
 ): Promise<{ restored: number; skipped: number }> {
   let restored = 0;
   let skipped = 0;
-  for await (const raw of readNdjson(stagingPath)) {
+  for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
     const entry = raw as Partial<EncryptedSecretEntry>;
     if (
@@ -2019,6 +2046,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     userId: job.userId,
     signal: job.abort.signal,
     job,
+    ndjsonLineBytes: MAX_NDJSON_LINE_BYTES,
   };
   emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "start" });
 
@@ -2033,6 +2061,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     // Phase 1: extract.
     const buf = await extractArchive(job);
     job.manifest = buf.manifest;
+    ctx.ndjsonLineBytes = ndjsonLineLimitForManifest(job.manifest);
     emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "extracted", entries: buf.entryCount });
 
     // Surface the list of secret keys the archive carries (read from

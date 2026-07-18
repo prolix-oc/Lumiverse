@@ -150,6 +150,7 @@ describe("user-data export ZIP64 round-trip", () => {
     const manifest = await verifyArchiveFast(archivePath);
     expect(manifest.producer).toBe("lumiverse");
     expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.ndjsonFormatVersion).toBe(1);
     expect(manifest.archiveId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
