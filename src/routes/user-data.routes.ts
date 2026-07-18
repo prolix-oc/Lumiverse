@@ -17,9 +17,9 @@ import {
   persistUploadedArchive,
   startImport,
   getJob,
-  isUserImportRunning,
+  reserveImportUpload,
+  releaseImportUpload,
   cancelJob,
-  verifyArchive,
   verifyArchiveFast,
   submitTicket,
   skipTicket,
@@ -227,108 +227,89 @@ app.get("/export/archive/:archiveId", (c) => {
 
 app.post("/import", async (c) => {
   const userId = c.get("userId");
-  if (isUserImportRunning(userId)) {
-    return c.json({ error: "an import is already running for this user" }, 409);
+  // Reserve before awaiting the body stream. A plain status check here is
+  // racy: two concurrent handlers can both pass it, then stage two huge
+  // archives before either one creates its background job.
+  const jobId = reserveImportUpload(userId);
+  if (!jobId) {
+    return c.json({ error: "an import is already in progress" }, 409);
   }
-  const declared = Number(c.req.header("content-length") || "0");
-  if (declared > MAX_COMPRESSED_BYTES) {
-    return c.json(
-      { error: `archive exceeds compressed size cap`, maxBytes: MAX_COMPRESSED_BYTES },
-      413,
-    );
-  }
+  let jobStarted = false;
+  let archivePath: string | null = null;
 
-  let archivePath: string;
-  let jobId: string;
   try {
-    const ct = c.req.header("content-type") || "";
-    if (ct.startsWith("multipart/form-data")) {
-      // Bun's formData() parser materializes the complete multipart body in
-      // memory. That is unsafe for account archives on low-memory hosts
-      // (especially Termux), where a single large upload can kill the server
-      // before persistUploadedArchive gets a chance to stream it to disk.
-      // The Data Portability UI has always sent the File as a raw body, so
-      // reject this legacy/undocumented shape instead of retaining an OOM
-      // footgun for direct API clients.
+    const declared = Number(c.req.header("content-length") || "0");
+    if (declared > MAX_COMPRESSED_BYTES) {
       return c.json(
-        {
-          error:
-            "multipart archive uploads are not supported; send the archive as the raw request body",
-          code: "multipart_not_supported",
-        },
-        415,
+        { error: "archive exceeds compressed size cap", maxBytes: MAX_COMPRESSED_BYTES },
+        413,
       );
     }
 
-    const body = c.req.raw.body;
-    const size = declared > 0 ? declared : null;
-    if (!body) return c.json({ error: "request body is empty" }, 400);
+    try {
+      const ct = c.req.header("content-type") || "";
+      if (ct.startsWith("multipart/form-data")) {
+        // Bun's formData() parser materializes the complete multipart body in
+        // memory. That is unsafe for account archives on low-memory hosts.
+        return c.json(
+          {
+            error:
+              "multipart archive uploads are not supported; send the archive as the raw request body",
+            code: "multipart_not_supported",
+          },
+          415,
+        );
+      }
 
-    const persisted = await persistUploadedArchive(userId, body, size);
-    archivePath = persisted.path;
-    jobId = persisted.jobId;
-  } catch (err: any) {
-    if (err instanceof ArchiveValidationError) {
-      const status =
-        err.code === "size" ? 413 : err.code === "not_zip" ? 415 : 400;
-      return c.json({ error: err.message, code: err.code }, status);
+      const body = c.req.raw.body;
+      const size = declared > 0 ? declared : null;
+      if (!body) return c.json({ error: "request body is empty" }, 400);
+
+      const persisted = await persistUploadedArchive(userId, body, size, jobId);
+      archivePath = persisted.path;
+    } catch (err: any) {
+      if (err instanceof ArchiveValidationError) {
+        const status =
+          err.code === "size" ? 413 : err.code === "not_zip" ? 415 : 400;
+        return c.json({ error: err.message, code: err.code }, status);
+      }
+      return c.json({ error: err?.message || "upload failed" }, 400);
     }
-    return c.json({ error: err?.message || "upload failed" }, 400);
-  }
 
-  // ── Pre-flight: confirm this is a real Lumiverse archive ───────────────
-  // Fast path: read the ZIP central directory at the tail of the file and
-  // decompress just the manifest.json bytes. The directory is scanned in
-  // fixed-size pages, so memory remains bounded even when an archive contains
-  // hundreds of thousands of files. Legacy archives that write manifest last
-  // avoid streaming the full archive body.
-  // Streaming fallback handles unusual cases (ZIP64, malformed CD) where
-  // the fast parser bails out.
-  eventBus.emit(
-    EventType.USER_IMPORT_PROGRESS,
-    { jobId, phase: "verifying" },
-    userId,
-  );
-  try {
+    eventBus.emit(
+      EventType.USER_IMPORT_PROGRESS,
+      { jobId, phase: "verifying" },
+      userId,
+    );
     try {
       await verifyArchiveFast(archivePath);
-    } catch (fastErr) {
-      // Fall back to the streaming verifier on shape errors (truncated tail,
-      // signature glitches). `verifyArchiveFast` itself handles ZIP64 in-tree
-      // now, so a fall-back here usually means a genuinely odd file — but
-      // the streaming path uses fflate.Unzip which is the reference
-      // implementation and is the safer retry. Genuine producer/schema
-      // mismatches should not be retried.
-      if (
-        fastErr instanceof ArchiveValidationError &&
-        (fastErr.code === "bad_manifest" ||
-          fastErr.code === "no_manifest" ||
-          fastErr.code === "not_zip") &&
-        /ZIP64|truncated|signature invalid|extends past|too small/i.test(fastErr.message)
-      ) {
-        await verifyArchive(archivePath);
-      } else {
-        throw fastErr;
+    } catch (err: any) {
+      try {
+        unlinkSync(archivePath);
+      } catch {
+        /* ignore */
       }
+      if (err instanceof ArchiveValidationError) {
+        const status = err.code === "no_manifest" || err.code === "bad_manifest" ? 422 : 400;
+        return c.json({ error: err.message, code: err.code }, status);
+      }
+      return c.json({ error: err?.message || "archive validation failed" }, 400);
     }
-  } catch (err: any) {
-    try {
-      unlinkSync(archivePath);
-    } catch {
-      /* ignore */
-    }
-    if (err instanceof ArchiveValidationError) {
-      const status = err.code === "no_manifest" || err.code === "bad_manifest" ? 422 : 400;
-      return c.json({ error: err.message, code: err.code }, status);
-    }
-    return c.json({ error: err?.message || "archive validation failed" }, 400);
-  }
 
-  try {
-    const job = startImport({ userId, archivePath, jobId });
-    return c.json({ jobId: job.jobId, status: job.status }, 202);
-  } catch (err: any) {
-    return c.json({ error: err?.message || "failed to start import" }, 500);
+    try {
+      const job = startImport({ userId, archivePath, jobId });
+      jobStarted = true;
+      return c.json({ jobId: job.jobId, status: job.status }, 202);
+    } catch (err: any) {
+      try {
+        unlinkSync(archivePath);
+      } catch {
+        /* ignore */
+      }
+      return c.json({ error: err?.message || "failed to start import" }, 500);
+    }
+  } finally {
+    if (!jobStarted) releaseImportUpload(userId, jobId);
   }
 });
 

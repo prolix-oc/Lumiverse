@@ -8,8 +8,7 @@
 // The import runs as a background job; the HTTP route returns a jobId and
 // progress flows over the WebSocket EventBus.
 
-import { inflateRawSync } from "node:zlib";
-import { Unzip, UnzipInflate, type UnzipFile } from "fflate";
+import { createInflateRaw, inflateRawSync } from "node:zlib";
 import {
   decryptSecret,
   lookupConsumedTicket,
@@ -22,9 +21,14 @@ import {
 import { putSecret } from "../secrets.service";
 import {
   closeSync,
+  constants as fsConstants,
+  copyFileSync,
+  createReadStream,
   existsSync,
   mkdirSync,
   openSync,
+  readSync,
+  statfsSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -56,11 +60,23 @@ import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./s
 /** Reject archives whose total decompressed size exceeds this cap. */
 export const MAX_DECOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024; // 20 GB
 
+/** Keep a small reserve for SQLite journals and normal server operation. */
+const IMPORT_DISK_HEADROOM_BYTES = 64 * 1024 * 1024;
+
 /** Reject archives over this compressed size at upload time. */
 export const MAX_COMPRESSED_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 
 /** Reject any NDJSON line longer than this. */
 const MAX_NDJSON_LINE_BYTES = 4 * 1024 * 1024;
+
+/** Read compressed archive data in fixed-size windows during extraction. */
+const ARCHIVE_READ_BYTES = 64 * 1024;
+
+/** Bound each zlib output allocation during archive extraction. */
+const INFLATE_OUTPUT_BYTES = 64 * 1024;
+
+/** Text entries are table-shaped metadata; there should never be thousands. */
+const MAX_TEXT_ENTRIES = 1_024;
 
 /** Reject archives with more than this many entries. */
 const MAX_ENTRIES = 500_000;
@@ -118,6 +134,8 @@ export interface ImportJob {
 
 const JOBS: Map<string, ImportJob> = new Map();
 const USER_RUNNING: Map<string, string> = new Map(); // userId -> jobId
+const USER_UPLOAD_RESERVATIONS: Map<string, string> = new Map();
+let globalImportSlot: string | null = null;
 
 export function getJob(jobId: string): ImportJob | undefined {
   return JOBS.get(jobId);
@@ -128,16 +146,48 @@ export function listJobsForUser(userId: string): ImportJob[] {
 }
 
 export function isUserImportRunning(userId: string): boolean {
-  const jobId = USER_RUNNING.get(userId);
-  if (!jobId) return false;
-  const job = JOBS.get(jobId);
-  return job?.status === "running" || job?.status === "queued";
+  return USER_RUNNING.has(userId) || USER_UPLOAD_RESERVATIONS.has(userId);
+}
+
+/**
+ * Reserve the single import lifecycle slot before the request body is read.
+ * Without this, async handlers can both pass a status check and stage
+ * multi-gigabyte archives concurrently before either one creates a job.
+ */
+export function reserveImportUpload(userId: string): string | null {
+  if (isUserImportRunning(userId) || globalImportSlot !== null) return null;
+  const jobId = crypto.randomUUID();
+  USER_UPLOAD_RESERVATIONS.set(userId, jobId);
+  globalImportSlot = jobId;
+  return jobId;
+}
+
+export function releaseImportUpload(userId: string, jobId: string): void {
+  if (USER_UPLOAD_RESERVATIONS.get(userId) === jobId) {
+    USER_UPLOAD_RESERVATIONS.delete(userId);
+  }
+  if (globalImportSlot === jobId) globalImportSlot = null;
+}
+
+/** Transfer a successful upload reservation into its background job. */
+function claimImportReservation(userId: string, jobId: string): void {
+  if (USER_UPLOAD_RESERVATIONS.get(userId) === jobId) {
+    USER_UPLOAD_RESERVATIONS.delete(userId);
+  }
+}
+
+function releaseGlobalImportSlot(jobId: string): void {
+  if (globalImportSlot === jobId) globalImportSlot = null;
 }
 
 export function cancelJob(jobId: string): boolean {
   const job = JOBS.get(jobId);
   if (!job) return false;
-  if (job.status !== "running" && job.status !== "queued") return false;
+  if (
+    job.status !== "running" &&
+    job.status !== "queued" &&
+    job.status !== "awaiting_ticket"
+  ) return false;
   try {
     job.abort.abort();
   } catch {
@@ -177,15 +227,17 @@ function startsWithZipMagic(prefix: Uint8Array): boolean {
 
 /**
  * Stream an HTTP request body into a temp archive under the user's import
- * directory, returning the archive path. The body is piped through a
- * `Bun.FileSink` so the JS heap stays bounded, and the first 4 bytes are
- * inspected mid-stream — anything that isn't a ZIP is rejected and the
- * partial file deleted before any further bytes are committed.
+ * directory, returning the archive path. Each request chunk is synchronously
+ * committed before the next is read, so slow storage cannot turn Bun's file
+ * writer into an unbounded native queue. The first 4 bytes are inspected
+ * mid-stream — anything that isn't a ZIP is rejected and the partial file is
+ * deleted before any further bytes are committed.
  */
 export async function persistUploadedArchive(
   userId: string,
   body: ReadableStream<Uint8Array>,
   declaredSize: number | null,
+  jobId: string = crypto.randomUUID(),
 ): Promise<{ path: string; jobId: string }> {
   if (declaredSize !== null && declaredSize > MAX_COMPRESSED_BYTES) {
     throw new ArchiveValidationError(
@@ -193,37 +245,35 @@ export async function persistUploadedArchive(
       `archive exceeds ${MAX_COMPRESSED_BYTES / (1024 * 1024 * 1024)} GB cap`,
     );
   }
-  const jobId = crypto.randomUUID();
   const dir = join(env.dataDir, "imports", userId, jobId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const path = join(dir, "archive.lvbak");
 
-  // Keep Bun's internal queue deliberately small. More importantly, every
-  // write below is awaited: FileSink.write() returns a Promise when the disk
-  // cannot keep pace with the request. Ignoring that Promise turns the sink
-  // into an unbounded RAM queue on slow Android/Termux storage.
-  const sink = Bun.file(path).writer({ highWaterMark: 256 * 1024 });
+  // Avoid Bun.FileSink for this failure-sensitive path. A synchronous fd
+  // write provides backpressure at the request-reader boundary and has no
+  // intermediate runtime-owned queue to grow under slow Android storage.
+  const fd = openSync(path, "w");
   const reader = body.getReader();
   const header = new Uint8Array(4);
   let headerBytes = 0;
   let magicChecked = false;
   let total = 0;
-  let sinkClosed = false;
+  let fdClosed = false;
 
-  const closeSink = async (ignoreError = false) => {
-    if (sinkClosed) return;
-    sinkClosed = true;
+  const closeFd = (ignoreError = false) => {
+    if (fdClosed) return;
+    fdClosed = true;
     try {
-      await sink.end();
+      closeSync(fd);
     } catch (err) {
       if (!ignoreError) throw err;
     }
   };
 
-  const cleanup = async () => {
+  const cleanup = () => {
     // Cleanup runs while another validation/write error is already in flight;
     // don't replace that useful error with a secondary close failure.
-    await closeSink(true);
+    closeFd(true);
     try {
       unlinkSync(path);
     } catch {
@@ -231,7 +281,7 @@ export async function persistUploadedArchive(
     }
   };
 
-  const writeChunk = async (chunk: Uint8Array) => {
+  const writeChunk = (chunk: Uint8Array) => {
     if (chunk.byteLength === 0) return;
     if (total + chunk.byteLength > MAX_COMPRESSED_BYTES) {
       throw new ArchiveValidationError(
@@ -239,7 +289,7 @@ export async function persistUploadedArchive(
         `archive exceeds compressed size cap (${total + chunk.byteLength} bytes)`,
       );
     }
-    await sink.write(chunk);
+    writeAllSync(fd, chunk);
     total += chunk.byteLength;
   };
 
@@ -267,12 +317,12 @@ export async function persistUploadedArchive(
         }
 
         magicChecked = true;
-        await writeChunk(header);
-        await writeChunk(value.subarray(take));
+        writeChunk(header);
+        writeChunk(value.subarray(take));
         continue;
       }
 
-      await writeChunk(value);
+      writeChunk(value);
     }
 
     // Body ended before we had 4 bytes — treat as invalid.
@@ -280,16 +330,16 @@ export async function persistUploadedArchive(
       throw new ArchiveValidationError("not_zip", "Upload is empty or shorter than a ZIP header.");
     }
 
-    await closeSink();
+    closeFd();
   } catch (err) {
     // Stop accepting network data immediately on validation/write failure,
-    // then remove the partial archive after the sink has actually closed.
+    // then remove the partial archive after its fd has actually closed.
     try {
       await reader.cancel(err);
     } catch {
       /* ignore */
     }
-    await cleanup();
+    cleanup();
     throw err;
   } finally {
     try {
@@ -322,6 +372,10 @@ export async function persistUploadedArchive(
  * ceiling and still reject anything obviously absurd.
  */
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
+
+/** Optional trailer and secret index are metadata, never bulk payloads. */
+const MAX_MANIFEST_STATS_BYTES = 16 * 1024 * 1024;
+const MAX_SECRETS_INDEX_BYTES = 16 * 1024 * 1024;
 
 /** A manifest should never be larger compressed than this. */
 const MAX_MANIFEST_COMPRESSED_BYTES = 32 * 1024 * 1024;
@@ -358,11 +412,10 @@ const ZIP64_EOCD_RECORD_BYTES = 56;
 const ZIP_COMMENT_MAX = 65535;
 /** Bounded read window used while scanning a potentially huge central directory. */
 const CENTRAL_DIRECTORY_READ_BYTES = 256 * 1024;
-/** Bounded compressed input window for the full-file fallback verifier. */
-const FALLBACK_VERIFY_READ_BYTES = 256 * 1024;
 
 interface CentralDirEntry {
   name: string;
+  flags: number;
   compression: number;        // 0 = store, 8 = deflate
   compressedSize: number;
   uncompressedSize: number;
@@ -404,17 +457,16 @@ function isSafeZipNumber(value: number): boolean {
 }
 
 /**
- * Scan central-directory records in fixed-size windows and return the
- * manifest record. A large account can contain enough individual files for
- * its central directory to reach tens or hundreds of megabytes; loading that
- * range with one arrayBuffer() defeats the otherwise-streaming import path.
+ * Yield central-directory records in fixed-size windows. The carry buffer is
+ * at most one maximum-size record, so callers can inspect every entry without
+ * retaining the directory or a list of archive metadata in memory.
  */
-async function findManifestInCentralDirectory(
+async function* scanCentralDirectory(
   file: Bun.BunFile,
   cdOffset: number,
   cdSize: number,
   totalEntries: number,
-): Promise<CentralDirEntry | null> {
+): AsyncGenerator<CentralDirEntry> {
   const decoder = new TextDecoder();
   let fetched = 0;
   let entriesRead = 0;
@@ -453,6 +505,7 @@ async function findManifestInCentralDirectory(
         );
       }
 
+      const flags = view.getUint16(8, true);
       const compression = view.getUint16(10, true);
       let compressedSize = view.getUint32(20, true);
       let uncompressedSize = view.getUint32(24, true);
@@ -509,9 +562,7 @@ async function findManifestInCentralDirectory(
       }
 
       entriesRead++;
-      if (name === "manifest.json") {
-        return { name, compression, compressedSize, uncompressedSize, localHeaderOffset };
-      }
+      yield { name, flags, compression, compressedSize, uncompressedSize, localHeaderOffset };
       pos += recordSize;
     }
 
@@ -523,7 +574,116 @@ async function findManifestInCentralDirectory(
   if (entriesRead < totalEntries) {
     throw new ArchiveValidationError("not_zip", "central directory entry is truncated");
   }
+}
+
+/** Find only manifest.json while preserving the bounded central-directory scan. */
+async function findManifestInCentralDirectory(
+  file: Bun.BunFile,
+  cdOffset: number,
+  cdSize: number,
+  totalEntries: number,
+): Promise<CentralDirEntry | null> {
+  for await (const entry of scanCentralDirectory(file, cdOffset, cdSize, totalEntries)) {
+    if (entry.name === "manifest.json") return entry;
+  }
   return null;
+}
+
+interface CentralDirectoryInfo {
+  size: number;
+  cdOffset: number;
+  cdSize: number;
+  totalEntries: number;
+}
+
+/** Locate and validate the central directory without reading it as one blob. */
+async function locateCentralDirectory(file: Bun.BunFile): Promise<CentralDirectoryInfo> {
+  const size = file.size;
+  if (size < EOCD_MIN_BYTES) {
+    throw new ArchiveValidationError("not_zip", "archive is too small to contain a ZIP EOCD record");
+  }
+
+  const tailWindow = Math.min(size, EOCD_MIN_BYTES + ZIP_COMMENT_MAX);
+  const tail = await readBytes(file, size - tailWindow, size);
+  let eocdOffsetInTail = -1;
+  for (let i = tail.length - EOCD_MIN_BYTES; i >= 0; i--) {
+    if (
+      tail[i] === 0x50 &&
+      tail[i + 1] === 0x4b &&
+      tail[i + 2] === 0x05 &&
+      tail[i + 3] === 0x06
+    ) {
+      // A signature may occur inside the ZIP comment. Only accept a record
+      // whose declared comment length lands exactly at end-of-file.
+      const candidate = new DataView(tail.buffer, tail.byteOffset + i, EOCD_MIN_BYTES);
+      if (i + EOCD_MIN_BYTES + candidate.getUint16(20, true) === tail.byteLength) {
+        eocdOffsetInTail = i;
+        break;
+      }
+    }
+  }
+  if (eocdOffsetInTail < 0) {
+    throw new ArchiveValidationError("not_zip", "ZIP End-of-Central-Directory record not found");
+  }
+
+  const eocdFileOffset = size - tailWindow + eocdOffsetInTail;
+  const eocd = new DataView(tail.buffer, tail.byteOffset + eocdOffsetInTail, EOCD_MIN_BYTES);
+  let totalEntries = eocd.getUint16(10, true);
+  let cdSize = eocd.getUint32(12, true);
+  let cdOffset = eocd.getUint32(16, true);
+  const eocdNeedsZip64 =
+    cdSize === 0xffffffff || cdOffset === 0xffffffff || totalEntries === 0xffff;
+
+  if (eocdNeedsZip64) {
+    if (eocdFileOffset < ZIP64_EOCD_LOCATOR_BYTES) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 End-of-Central-Directory locator truncated");
+    }
+    const locatorFileOffset = eocdFileOffset - ZIP64_EOCD_LOCATOR_BYTES;
+    let locatorView: DataView;
+    if (locatorFileOffset >= size - tailWindow) {
+      const localOff = locatorFileOffset - (size - tailWindow);
+      locatorView = new DataView(tail.buffer, tail.byteOffset + localOff, ZIP64_EOCD_LOCATOR_BYTES);
+    } else {
+      const locatorBytes = await readBytes(file, locatorFileOffset, locatorFileOffset + ZIP64_EOCD_LOCATOR_BYTES);
+      if (locatorBytes.byteLength !== ZIP64_EOCD_LOCATOR_BYTES) {
+        throw new ArchiveValidationError("not_zip", "ZIP64 EOCD locator truncated");
+      }
+      locatorView = new DataView(locatorBytes.buffer, locatorBytes.byteOffset, ZIP64_EOCD_LOCATOR_BYTES);
+    }
+    if (locatorView.getUint32(0, true) !== ZIP64_EOCD_LOCATOR_SIG) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD sentinel detected but locator not found");
+    }
+    const zip64EocdOffset = Number(locatorView.getBigUint64(8, true));
+    if (!isSafeZipNumber(zip64EocdOffset)) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record offset is unsafe");
+    }
+    const zip64EocdBytes = await readBytes(
+      file,
+      zip64EocdOffset,
+      zip64EocdOffset + ZIP64_EOCD_RECORD_BYTES,
+    );
+    if (zip64EocdBytes.byteLength !== ZIP64_EOCD_RECORD_BYTES) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record truncated");
+    }
+    const zip64Eocd = new DataView(zip64EocdBytes.buffer, zip64EocdBytes.byteOffset, ZIP64_EOCD_RECORD_BYTES);
+    if (zip64Eocd.getUint32(0, true) !== ZIP64_EOCD_RECORD_SIG) {
+      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record signature invalid");
+    }
+    totalEntries = Number(zip64Eocd.getBigUint64(32, true));
+    cdSize = Number(zip64Eocd.getBigUint64(40, true));
+    cdOffset = Number(zip64Eocd.getBigUint64(48, true));
+  }
+
+  if (!isSafeZipNumber(totalEntries) || !isSafeZipNumber(cdSize) || !isSafeZipNumber(cdOffset)) {
+    throw new ArchiveValidationError("not_zip", "ZIP central directory contains unsafe 64-bit values");
+  }
+  if (totalEntries > MAX_ENTRIES) {
+    throw new ArchiveValidationError("size", `archive contains too many entries (>${MAX_ENTRIES})`);
+  }
+  if (cdSize > size || cdOffset > size - cdSize) {
+    throw new ArchiveValidationError("not_zip", "central directory extends past end of file");
+  }
+  return { size, cdOffset, cdSize, totalEntries };
 }
 
 /**
@@ -542,121 +702,7 @@ async function findManifestInCentralDirectory(
  */
 export async function verifyArchiveFast(archivePath: string): Promise<ArchiveManifest> {
   const file = Bun.file(archivePath);
-  const size = file.size;
-  if (size < EOCD_MIN_BYTES) {
-    throw new ArchiveValidationError("not_zip", "archive is too small to contain a ZIP EOCD record");
-  }
-
-  // Scan the trailing window for the EOCD signature. The record is 22 bytes
-  // plus an optional comment of up to 65535 bytes, so we read at most ~64 KB.
-  const tailWindow = Math.min(size, EOCD_MIN_BYTES + ZIP_COMMENT_MAX);
-  const tail = await readBytes(file, size - tailWindow, size);
-  let eocdOffsetInTail = -1;
-  for (let i = tail.length - EOCD_MIN_BYTES; i >= 0; i--) {
-    if (
-      tail[i] === 0x50 &&
-      tail[i + 1] === 0x4b &&
-      tail[i + 2] === 0x05 &&
-      tail[i + 3] === 0x06
-    ) {
-      // A signature may occur inside the ZIP comment. Only accept a record
-      // whose declared comment length lands exactly at end-of-file.
-      const candidate = new DataView(tail.buffer, tail.byteOffset + i, EOCD_MIN_BYTES);
-      const commentLen = candidate.getUint16(20, true);
-      if (i + EOCD_MIN_BYTES + commentLen === tail.byteLength) {
-        eocdOffsetInTail = i;
-        break;
-      }
-    }
-  }
-  if (eocdOffsetInTail < 0) {
-    throw new ArchiveValidationError("not_zip", "ZIP End-of-Central-Directory record not found");
-  }
-  // Position of the standard EOCD's first byte within the file. The ZIP64
-  // EOCD locator (if present) sits exactly ZIP64_EOCD_LOCATOR_BYTES (20)
-  // bytes before the standard EOCD — no padding, per PKWARE spec.
-  const eocdFileOffset = size - tailWindow + eocdOffsetInTail;
-  const eocd = new DataView(tail.buffer, tail.byteOffset + eocdOffsetInTail, EOCD_MIN_BYTES);
-  let totalEntries = eocd.getUint16(10, true);
-  let cdSize = eocd.getUint32(12, true);
-  let cdOffset = eocd.getUint32(16, true);
-  // ZIP64 sentinel: a 0xFFFFFFFF / 0xFFFF in any of the three fields means
-  // "look at the ZIP64 EOCD record." The locator is positioned
-  // ZIP64_EOCD_LOCATOR_BYTES (20) bytes before the standard EOCD — but we
-  // may have paged it in via the same tail read, so check before fetching
-  // more bytes.
-  const eocdNeedsZip64 = cdSize === 0xffffffff || cdOffset === 0xffffffff || totalEntries === 0xffff;
-  if (eocdNeedsZip64) {
-    if (eocdFileOffset < ZIP64_EOCD_LOCATOR_BYTES) {
-      throw new ArchiveValidationError(
-        "not_zip",
-        "ZIP64 End-of-Central-Directory locator truncated (file too small)",
-      );
-    }
-    // We may already have the locator inside `tail` (if the EOCD's file
-    // offset is within tailWindow). Otherwise, fetch exactly those 20
-    // bytes. The locator signature is at locatorOffset (20 bytes before
-    // the EOCD's first byte).
-    const locatorFileOffset = eocdFileOffset - ZIP64_EOCD_LOCATOR_BYTES;
-    let locatorView: DataView;
-    if (locatorFileOffset >= size - tailWindow) {
-      // Already inside the tail read.
-      const localOff = locatorFileOffset - (size - tailWindow);
-      locatorView = new DataView(tail.buffer, tail.byteOffset + localOff, ZIP64_EOCD_LOCATOR_BYTES);
-    } else {
-      const locatorBytes = await readBytes(
-        file,
-        locatorFileOffset,
-        locatorFileOffset + ZIP64_EOCD_LOCATOR_BYTES,
-      );
-      if (locatorBytes.byteLength < ZIP64_EOCD_LOCATOR_BYTES) {
-        throw new ArchiveValidationError("not_zip", "ZIP64 EOCD locator truncated");
-      }
-      locatorView = new DataView(locatorBytes.buffer, locatorBytes.byteOffset, ZIP64_EOCD_LOCATOR_BYTES);
-    }
-    if (locatorView.getUint32(0, true) !== ZIP64_EOCD_LOCATOR_SIG) {
-      throw new ArchiveValidationError(
-        "not_zip",
-        "ZIP64 EOCD sentinel detected but ZIP64 EOCD locator not found",
-      );
-    }
-    const zip64EocdOffset = Number(locatorView.getBigUint64(8, true));
-    const zip64EocdBytes = await readBytes(
-      file,
-      zip64EocdOffset,
-      zip64EocdOffset + ZIP64_EOCD_RECORD_BYTES,
-    );
-    if (zip64EocdBytes.byteLength < ZIP64_EOCD_RECORD_BYTES) {
-      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record truncated");
-    }
-    const zip64Eocd = new DataView(
-      zip64EocdBytes.buffer,
-      zip64EocdBytes.byteOffset,
-      ZIP64_EOCD_RECORD_BYTES,
-    );
-    if (zip64Eocd.getUint32(0, true) !== ZIP64_EOCD_RECORD_SIG) {
-      throw new ArchiveValidationError("not_zip", "ZIP64 EOCD record signature invalid");
-    }
-    totalEntries = Number(zip64Eocd.getBigUint64(32, true));
-    cdSize = Number(zip64Eocd.getBigUint64(40, true));
-    cdOffset = Number(zip64Eocd.getBigUint64(48, true));
-  }
-  if (
-    !isSafeZipNumber(totalEntries) ||
-    !isSafeZipNumber(cdSize) ||
-    !isSafeZipNumber(cdOffset)
-  ) {
-    throw new ArchiveValidationError("not_zip", "ZIP central directory contains unsafe 64-bit values");
-  }
-  if (totalEntries > MAX_ENTRIES) {
-    throw new ArchiveValidationError(
-      "size",
-      `archive contains too many entries (>${MAX_ENTRIES})`,
-    );
-  }
-  if (cdSize > size || cdOffset > size - cdSize) {
-    throw new ArchiveValidationError("not_zip", "central directory extends past end of file");
-  }
+  const { size, cdOffset, cdSize, totalEntries } = await locateCentralDirectory(file);
 
   const manifestEntry = await findManifestInCentralDirectory(
     file,
@@ -738,149 +784,14 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
 }
 
 /**
- * Verify that a staged archive is a Lumiverse export by reading just the
- * `manifest.json` entry. Streams the whole file looking for the manifest
- * — slow for legacy archives where manifest is written last. Prefer
- * verifyArchiveFast() which reads only the central directory.
- *
- * Throws ArchiveValidationError on any mismatch (wrong producer, unsupported
- * schemaVersion, missing manifest, unreadable JSON).
+ * Compatibility entry point retained for callers and tests. The previous
+ * fallback fed arbitrary archive chunks through fflate, whose output allocation
+ * is not bounded by the input window. The ZIP64-aware central-directory
+ * verifier above handles Lumiverse archives directly, so malformed or exotic
+ * archives now fail closed instead of entering an unbounded fallback path.
  */
 export async function verifyArchive(archivePath: string): Promise<ArchiveManifest> {
-  return new Promise<ArchiveManifest>((resolve, reject) => {
-    const file = Bun.file(archivePath);
-    let manifestBytes = 0;
-    let manifestText = "";
-    let resolved = false;
-    let manifestStarted = false;
-
-    const fail = (err: any) => {
-      if (resolved) return;
-      resolved = true;
-      reject(err);
-    };
-    const succeed = (m: ArchiveManifest) => {
-      if (resolved) return;
-      resolved = true;
-      resolve(m);
-    };
-
-    const unzip = new Unzip((entry) => {
-      if (resolved) return;
-      if (entry.name === "manifest.json") {
-        manifestStarted = true;
-        const decoder = new TextDecoder();
-        entry.ondata = (err, chunk, final) => {
-          if (resolved) return;
-          if (err) {
-            fail(
-              new ArchiveValidationError(
-                "bad_manifest",
-                `manifest.json decode failed: ${(err as Error).message}`,
-              ),
-            );
-            return;
-          }
-          if (chunk && chunk.byteLength > 0) {
-            manifestBytes += chunk.byteLength;
-            if (manifestBytes > MAX_MANIFEST_BYTES) {
-              fail(
-                new ArchiveValidationError(
-                  "bad_manifest",
-                  `manifest.json exceeds ${MAX_MANIFEST_BYTES} bytes`,
-                ),
-              );
-              return;
-            }
-            manifestText += decoder.decode(chunk, { stream: !final });
-          }
-          if (final) {
-            try {
-              const parsed = parseManifest(JSON.parse(manifestText));
-              succeed(parsed);
-            } catch (parseErr) {
-              fail(
-                new ArchiveValidationError(
-                  "bad_manifest",
-                  (parseErr as Error).message,
-                ),
-              );
-            }
-          }
-        };
-        try {
-          entry.start();
-        } catch (startErr) {
-          fail(
-            new ArchiveValidationError(
-              "bad_manifest",
-              `manifest.json start failed: ${(startErr as Error).message}`,
-            ),
-          );
-        }
-        return;
-      }
-
-      // fflate retains every compressed chunk for an entry until start() is
-      // called. Leaving a large pre-manifest entry untouched therefore makes
-      // this "streaming" fallback hold most of the archive in RAM. Start and
-      // drain non-manifest entries immediately; their output is discarded.
-      entry.ondata = (err) => {
-        if (err && !resolved) {
-          fail(
-            new ArchiveValidationError(
-              "bad_manifest",
-              `archive entry ${entry.name} failed while locating manifest.json: ${(err as Error).message}`,
-            ),
-          );
-        }
-      };
-      try {
-        entry.start();
-      } catch (startErr) {
-        fail(
-          new ArchiveValidationError(
-            "bad_manifest",
-            `archive entry ${entry.name} could not be drained: ${(startErr as Error).message}`,
-          ),
-        );
-      }
-    });
-    unzip.register(UnzipInflate);
-
-    (async () => {
-      try {
-        // Read explicit windows rather than relying on Blob.stream() chunking,
-        // which is runtime-defined. This keeps both fflate's compressed input
-        // and each discarded decompression step bounded on every Bun build.
-        let offset = 0;
-        while (!resolved && offset < file.size) {
-          const end = Math.min(file.size, offset + FALLBACK_VERIFY_READ_BYTES);
-          const chunk = await readBytes(file, offset, end);
-          if (chunk.byteLength !== end - offset) {
-            throw new ArchiveValidationError("not_zip", "archive is truncated during verification");
-          }
-          offset = end;
-          unzip.push(chunk, offset === file.size);
-        }
-        if (!resolved && file.size === 0) {
-          unzip.push(new Uint8Array(0), true);
-        }
-        if (!resolved) {
-          fail(
-            new ArchiveValidationError(
-              "no_manifest",
-              manifestStarted
-                ? "manifest.json entry truncated"
-                : "archive does not contain manifest.json",
-            ),
-          );
-        }
-      } catch (e) {
-        fail(e instanceof ArchiveValidationError ? e : new ArchiveValidationError("bad_manifest", String((e as Error).message ?? e)));
-      }
-    })();
-  });
+  return verifyArchiveFast(archivePath);
 }
 
 /**
@@ -892,7 +803,13 @@ export function startImport(opts: {
   archivePath: string;
   jobId: string;
 }): ImportJob {
-  if (isUserImportRunning(opts.userId)) {
+  const existingJobId = USER_RUNNING.get(opts.userId);
+  const reservation = USER_UPLOAD_RESERVATIONS.get(opts.userId);
+  if (
+    existingJobId ||
+    (reservation !== undefined && reservation !== opts.jobId) ||
+    (globalImportSlot !== null && globalImportSlot !== opts.jobId)
+  ) {
     throw new Error("an import is already running for this user");
   }
   // Build the optional ticket gate up front so the route handlers can resolve
@@ -922,6 +839,8 @@ export function startImport(opts: {
   };
   JOBS.set(job.jobId, job);
   USER_RUNNING.set(job.userId, job.jobId);
+  globalImportSlot = job.jobId;
+  claimImportReservation(job.userId, job.jobId);
   void runImportJob(job).catch((err) => {
     console.error("[user-data import] uncaught:", err);
   });
@@ -979,11 +898,10 @@ function ensureDir(dir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Buffered entry sink
+// Staged entry metadata
 //
-// fflate.Unzip can deliver entries in any order; we buffer their decoded
-// bytes (or, for huge binaries, stream them to disk staging files) so the
-// phased apply step can consume them in the correct topological order.
+// Text entries are few and retained in memory for topological application.
+// Potentially numerous binary descriptors are journaled to disk instead.
 // ---------------------------------------------------------------------------
 
 interface BufferedTextEntry {
@@ -1003,10 +921,10 @@ interface BufferedBinaryEntry {
   byteSize: number;
 }
 
-type BufferedEntry = BufferedTextEntry | BufferedBinaryEntry;
-
 interface ImportBuffer {
-  entries: BufferedEntry[];
+  entries: BufferedTextEntry[];
+  binaryJournalPath: string;
+  binaryEntryCount: number;
   manifest: ArchiveManifest | null;
   totalDecompressed: number;
   entryCount: number;
@@ -1023,6 +941,163 @@ function writeAllSync(fd: number, chunk: Uint8Array): void {
   }
 }
 
+function readExactSync(fd: number, position: number, length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  while (offset < length) {
+    const read = readSync(fd, out, offset, length - offset, position + offset);
+    if (read <= 0) throw new ArchiveValidationError("not_zip", "archive is truncated");
+    offset += read;
+  }
+  return out;
+}
+
+function readCappedTextFile(path: string, maxBytes: number, label: string): string {
+  const size = statSync(path).size;
+  if (size > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes`);
+  }
+  const fd = openSync(path, "r");
+  try {
+    return new TextDecoder().decode(readExactSync(fd, 0, size));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function entryTextLimit(entry: BufferedTextEntry): number | null {
+  switch (entry.table) {
+    case "__manifest__":
+      return MAX_MANIFEST_BYTES;
+    case "__manifest_stats__":
+      return MAX_MANIFEST_STATS_BYTES;
+    case "__secrets_index__":
+      return MAX_SECRETS_INDEX_BYTES;
+    default:
+      return null;
+  }
+}
+
+function assertExtractionDiskCapacity(
+  stagingDir: string,
+  stagedBytes: number,
+  binaryBytes: number,
+): void {
+  try {
+    const fs = statfsSync(stagingDir);
+    // Binary files are staged first and copied into their final locations
+    // before staging is removed, so their bytes are briefly present twice.
+    const required = BigInt(stagedBytes) + BigInt(binaryBytes) + BigInt(IMPORT_DISK_HEADROOM_BYTES);
+    const available = BigInt(fs.bavail) * BigInt(fs.bsize);
+    if (available < required) {
+      throw new Error(
+        `insufficient free disk for import (need ${required} bytes, have ${available} bytes)`,
+      );
+    }
+  } catch (err) {
+    // The capacity error is actionable; an unsupported statfs implementation
+    // should not prevent an otherwise-valid import from attempting its normal
+    // write-time ENOSPC handling.
+    if (err instanceof Error && err.message.startsWith("insufficient free disk")) {
+      throw err;
+    }
+    console.warn("[user-data import] unable to preflight free disk space:", err);
+  }
+}
+
+/** Return the exact compressed-data range for one central-directory entry. */
+function getLocalDataOffset(
+  archiveFd: number,
+  archiveSize: number,
+  entry: CentralDirEntry,
+): number {
+  if ((entry.flags & 0x1) !== 0) {
+    throw new ArchiveValidationError("not_zip", `encrypted ZIP entries are not supported (${entry.name})`);
+  }
+  if (entry.compression !== 0 && entry.compression !== 8) {
+    throw new ArchiveValidationError("not_zip", `unsupported ZIP compression method ${entry.compression}`);
+  }
+  if (entry.localHeaderOffset > archiveSize - 30) {
+    throw new ArchiveValidationError("not_zip", `local file header is truncated for ${entry.name}`);
+  }
+  const header = readExactSync(archiveFd, entry.localHeaderOffset, 30);
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+  if (view.getUint32(0, true) !== LFH_SIG) {
+    throw new ArchiveValidationError("not_zip", `local file header signature invalid for ${entry.name}`);
+  }
+  const localFlags = view.getUint16(6, true);
+  const localCompression = view.getUint16(8, true);
+  if ((localFlags & 0x1) !== 0 || localCompression !== entry.compression) {
+    throw new ArchiveValidationError("not_zip", `local file header disagrees with directory for ${entry.name}`);
+  }
+  const nameLen = view.getUint16(26, true);
+  const extraLen = view.getUint16(28, true);
+  const dataStart = entry.localHeaderOffset + 30 + nameLen + extraLen;
+  if (!isSafeZipNumber(dataStart) || dataStart > archiveSize - entry.compressedSize) {
+    throw new ArchiveValidationError("not_zip", `entry data extends past end of archive (${entry.name})`);
+  }
+  const localName = new TextDecoder().decode(readExactSync(archiveFd, entry.localHeaderOffset + 30, nameLen));
+  if (localName !== entry.name) {
+    throw new ArchiveValidationError("not_zip", `local file name disagrees with directory for ${entry.name}`);
+  }
+  return dataStart;
+}
+
+async function copyStoredEntry(
+  archiveFd: number,
+  dataStart: number,
+  compressedSize: number,
+  onChunk: (chunk: Uint8Array) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const buffer = new Uint8Array(ARCHIVE_READ_BYTES);
+  let offset = 0;
+  let bytesSinceYield = 0;
+  while (offset < compressedSize) {
+    if (signal.aborted) throw signal.reason ?? new Error("import cancelled");
+    const wanted = Math.min(buffer.byteLength, compressedSize - offset);
+    const read = readSync(archiveFd, buffer, 0, wanted, dataStart + offset);
+    if (read <= 0) throw new ArchiveValidationError("not_zip", "archive entry is truncated");
+    onChunk(buffer.subarray(0, read));
+    offset += read;
+    bytesSinceYield += read;
+    if (bytesSinceYield >= 4 * 1024 * 1024) {
+      bytesSinceYield = 0;
+      await yieldAndCheck(signal);
+    }
+  }
+}
+
+async function inflateEntry(
+  archivePath: string,
+  dataStart: number,
+  compressedSize: number,
+  onChunk: (chunk: Uint8Array) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  if (compressedSize === 0) {
+    // Empty entries are valid when their central-directory output size is
+    // also zero; the caller validates that exact size after this returns.
+    return;
+  }
+  const source = createReadStream(archivePath, {
+    start: dataStart,
+    end: dataStart + compressedSize - 1,
+    highWaterMark: ARCHIVE_READ_BYTES,
+  });
+  const inflater = createInflateRaw({ chunkSize: INFLATE_OUTPUT_BYTES });
+  source.pipe(inflater);
+  try {
+    for await (const chunk of inflater) {
+      if (signal.aborted) throw signal.reason ?? new Error("import cancelled");
+      onChunk(chunk as Uint8Array);
+    }
+  } finally {
+    source.destroy();
+    inflater.destroy();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: extract archive into staging
 // ---------------------------------------------------------------------------
@@ -1030,218 +1105,157 @@ function writeAllSync(fd: number, chunk: Uint8Array): void {
 async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   const stagingDir = join(dirname(job.archivePath), "staging");
   ensureDir(stagingDir);
+  const binaryJournalPath = join(stagingDir, "binary-entries.ndjson");
 
   const buf: ImportBuffer = {
     entries: [],
+    binaryJournalPath,
+    binaryEntryCount: 0,
     manifest: null,
     totalDecompressed: 0,
     entryCount: 0,
     stagingDir,
   };
 
-  // Track per-entry size accumulation; abort if MAX_DECOMPRESSED_BYTES is exceeded.
-  const enforceQuota = (delta: number) => {
-    buf.totalDecompressed += delta;
-    if (buf.totalDecompressed > MAX_DECOMPRESSED_BYTES) {
-      throw new Error(
-        `archive exceeds decompressed size cap (${MAX_DECOMPRESSED_BYTES} bytes)`,
-      );
-    }
-  };
-
   const archive = Bun.file(job.archivePath);
-  const reader = archive.stream().getReader();
-
-  // fflate's Unzip is a sync API; we feed chunks as we read them, and it
-  // hands us files via the callback. Each file's `ondata` is wired to
-  // append to a staging file on disk.
-  // fflate's callbacks are synchronous and expose no pause/backpressure hook.
-  // A Bun.FileSink can therefore queue decompressed chunks faster than slow
-  // Android storage can flush them. Use synchronous file descriptors here:
-  // extraction is already CPU-synchronous, and this guarantees each chunk is
-  // on disk before fflate is allowed to produce the next one.
-  const openFiles = new Map<UnzipFile, { fd: number; entry: BufferedEntry; closed: boolean }>();
-  let openFileError: any = null;
-
-  const unzip = new Unzip((file) => {
-    // Reject unrecognized entry names before we open a sink.
-    let descriptor: SanitizedEntry;
-    try {
-      descriptor = sanitizeEntry(file.name);
-    } catch (err) {
-      // Abort the whole import on any malformed entry — better than silently
-      // skipping potentially malicious payloads.
-      openFileError = err;
-      try {
-        file.terminate?.();
-      } catch {
-        /* ignore */
-      }
-      return;
+  const { size: archiveSize, cdOffset, cdSize, totalEntries } = await locateCentralDirectory(archive);
+  let declaredDecompressedBytes = 0;
+  let declaredBinaryBytes = 0;
+  for await (const entry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
+    // Validate every name before allocating any staging files, and reject a
+    // declared expansion beyond the global cap before decompression begins.
+    const descriptor = sanitizeEntry(entry.name);
+    if (entry.uncompressedSize > MAX_DECOMPRESSED_BYTES - declaredDecompressedBytes) {
+      throw new Error(`archive exceeds decompressed size cap (${MAX_DECOMPRESSED_BYTES} bytes)`);
     }
+    declaredDecompressedBytes += entry.uncompressedSize;
+    if (descriptor.kind === "files") declaredBinaryBytes += entry.uncompressedSize;
+  }
+  assertExtractionDiskCapacity(stagingDir, declaredDecompressedBytes, declaredBinaryBytes);
 
-    buf.entryCount++;
-    if (buf.entryCount > MAX_ENTRIES) {
-      openFileError = new Error(`archive contains too many entries (>${MAX_ENTRIES})`);
-      try {
-        file.terminate?.();
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
+  const archiveFd = openSync(job.archivePath, "r");
+  const journalFd = openSync(binaryJournalPath, "w");
+  const encoder = new TextEncoder();
 
-    // Stage every entry as a real file on disk so the apply phase can re-read
-    // it in topological order without buffering anything in JS memory.
-    const stagingPath = join(buf.stagingDir, `${buf.entryCount.toString(36)}.bin`);
-    let fd: number;
-    try {
-      fd = openSync(stagingPath, "w");
-    } catch (err) {
-      openFileError = err;
-      try {
-        file.terminate?.();
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-
-    let entry: BufferedEntry;
-    switch (descriptor.kind) {
-      case "manifest":
-        // manifest.json or manifest-stats.json — both handled specially.
-        entry = {
-          kind: "text",
-          table:
-            descriptor.inner === "manifest-stats.json"
-              ? "__manifest_stats__"
-              : "__manifest__",
-          origin: "database",
-          stagingPath,
-          byteSize: 0,
-        };
-        break;
-      case "database":
-      case "lancedb":
-        entry = {
-          kind: "text",
-          table: descriptor.table ?? "manifest",
-          origin: descriptor.kind === "lancedb" ? "lancedb" : "database",
-          stagingPath,
-          byteSize: 0,
-        } as BufferedTextEntry;
-        break;
-      case "secrets":
-        entry = {
-          kind: "text",
-          table:
-            descriptor.inner === "encrypted.ndjson"
-              ? "__secrets_encrypted__"
-              : "__secrets_index__",
-          origin: "database",
-          stagingPath,
-          byteSize: 0,
-        };
-        break;
-      case "files":
-        entry = {
-          kind: "binary",
-          bucket: descriptor.bucket!,
-          inner: descriptor.inner,
-          stagingPath,
-          byteSize: 0,
-        };
-        break;
-    }
-
-    openFiles.set(file, { fd, entry, closed: false });
-    buf.entries.push(entry);
-
-    file.ondata = (err, chunk, final) => {
-      if (err) {
-        openFileError = err;
-        return;
-      }
-      const handle = openFiles.get(file);
-      if (!handle) return;
-      if (chunk && chunk.byteLength > 0) {
-        try {
-          enforceQuota(chunk.byteLength);
-          writeAllSync(handle.fd, chunk);
-          handle.entry.byteSize += chunk.byteLength;
-        } catch (writeErr) {
-          openFileError = writeErr;
-          return;
-        }
-      }
-      if (final) {
-        if (!handle.closed) {
-          handle.closed = true;
-          try {
-            closeSync(handle.fd);
-          } catch {
-            /* ignore */
-          }
-        }
-        openFiles.delete(file);
-      }
-    };
-
-    // ZIP files inside the archive use DEFLATE; register the decoder so
-    // fflate emits decompressed bytes through ondata.
-    try {
-      file.start();
-    } catch (err) {
-      openFileError = err;
-    }
-  });
-
-  // Register the DEFLATE decoder up-front. ZIP entries with compression=0
-  // (store) are handled by the built-in pass-through.
-  unzip.register(UnzipInflate);
-
-  let finished = false;
   try {
-    while (!finished) {
+    for await (const centralEntry of scanCentralDirectory(archive, cdOffset, cdSize, totalEntries)) {
       if (job.abort.signal.aborted) {
         throw job.abort.signal.reason ?? new Error("import cancelled");
       }
-      const { value, done } = await reader.read();
-      if (done) {
-        unzip.push(new Uint8Array(0), true);
-        finished = true;
-      } else if (value) {
-        unzip.push(value, false);
+      const descriptor = sanitizeEntry(centralEntry.name);
+      buf.entryCount++;
+
+      const stagingPath = join(stagingDir, `${buf.entryCount.toString(36)}.bin`);
+      let entry: BufferedTextEntry | BufferedBinaryEntry;
+      switch (descriptor.kind) {
+        case "manifest":
+          entry = {
+            kind: "text",
+            table: descriptor.inner === "manifest-stats.json" ? "__manifest_stats__" : "__manifest__",
+            origin: "database",
+            stagingPath,
+            byteSize: 0,
+          };
+          break;
+        case "database":
+        case "lancedb":
+          entry = {
+            kind: "text",
+            table: descriptor.table ?? "manifest",
+            origin: descriptor.kind === "lancedb" ? "lancedb" : "database",
+            stagingPath,
+            byteSize: 0,
+          };
+          break;
+        case "secrets":
+          entry = {
+            kind: "text",
+            table: descriptor.inner === "encrypted.ndjson" ? "__secrets_encrypted__" : "__secrets_index__",
+            origin: "database",
+            stagingPath,
+            byteSize: 0,
+          };
+          break;
+        case "files":
+          entry = {
+            kind: "binary",
+            bucket: descriptor.bucket!,
+            inner: descriptor.inner,
+            stagingPath,
+            byteSize: 0,
+          };
+          break;
       }
-      if (openFileError) throw openFileError;
+
+      const textLimit = entry.kind === "text" ? entryTextLimit(entry) : null;
+      if (textLimit !== null && centralEntry.uncompressedSize > textLimit) {
+        throw new Error(`${centralEntry.name} exceeds ${textLimit} bytes`);
+      }
+      if (entry.kind === "text" && buf.entries.length >= MAX_TEXT_ENTRIES) {
+        throw new Error(`archive contains too many text entries (>${MAX_TEXT_ENTRIES})`);
+      }
+
+      const dataStart = getLocalDataOffset(archiveFd, archiveSize, centralEntry);
+      const stagingFd = openSync(stagingPath, "w");
+      try {
+        const onChunk = (chunk: Uint8Array) => {
+          if (buf.totalDecompressed + chunk.byteLength > MAX_DECOMPRESSED_BYTES) {
+            throw new Error(`archive exceeds decompressed size cap (${MAX_DECOMPRESSED_BYTES} bytes)`);
+          }
+          if (textLimit !== null && entry.byteSize + chunk.byteLength > textLimit) {
+            throw new Error(`${centralEntry.name} exceeds ${textLimit} bytes`);
+          }
+          writeAllSync(stagingFd, chunk);
+          entry.byteSize += chunk.byteLength;
+          buf.totalDecompressed += chunk.byteLength;
+        };
+        if (centralEntry.compression === 0) {
+          await copyStoredEntry(
+            archiveFd,
+            dataStart,
+            centralEntry.compressedSize,
+            onChunk,
+            job.abort.signal,
+          );
+        } else {
+          await inflateEntry(
+            job.archivePath,
+            dataStart,
+            centralEntry.compressedSize,
+            onChunk,
+            job.abort.signal,
+          );
+        }
+      } finally {
+        closeSync(stagingFd);
+      }
+
+      if (entry.byteSize !== centralEntry.uncompressedSize) {
+        throw new ArchiveValidationError(
+          "not_zip",
+          `entry size disagrees with central directory (${centralEntry.name})`,
+        );
+      }
+      if (entry.kind === "binary") {
+        writeAllSync(journalFd, encoder.encode(`${JSON.stringify(entry)}\n`));
+        buf.binaryEntryCount++;
+      } else {
+        buf.entries.push(entry);
+      }
+
+      if ((buf.entryCount & 15) === 0) await yieldAndCheck(job.abort.signal);
     }
   } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* ignore */
-    }
-    // Force-close any still-open sinks (shouldn't happen for well-formed zips).
-    for (const handle of openFiles.values()) {
-      if (handle.closed) continue;
-      handle.closed = true;
-      try {
-        closeSync(handle.fd);
-      } catch {
-        /* ignore */
-      }
-    }
+    closeSync(journalFd);
+    closeSync(archiveFd);
   }
 
   // Find and parse the manifest. If absent the archive is invalid.
-  const manifestEntry = buf.entries.find((e) => e.kind === "text" && e.table === "__manifest__") as
-    | BufferedTextEntry
-    | undefined;
+  const manifestEntry = buf.entries.find((e) => e.table === "__manifest__");
   if (!manifestEntry) {
     throw new Error("archive is missing manifest.json");
   }
-  const manifestText = await Bun.file(manifestEntry.stagingPath).text();
+  const manifestText = readCappedTextFile(manifestEntry.stagingPath, MAX_MANIFEST_BYTES, "manifest.json");
   let raw: unknown;
   try {
     raw = JSON.parse(manifestText);
@@ -1251,12 +1265,14 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
   buf.manifest = parseManifest(raw);
 
   // Merge in the optional stats trailer (counts + missingFiles).
-  const statsEntry = buf.entries.find(
-    (e) => e.kind === "text" && e.table === "__manifest_stats__",
-  ) as BufferedTextEntry | undefined;
+  const statsEntry = buf.entries.find((e) => e.table === "__manifest_stats__");
   if (statsEntry) {
     try {
-      const statsText = await Bun.file(statsEntry.stagingPath).text();
+      const statsText = readCappedTextFile(
+        statsEntry.stagingPath,
+        MAX_MANIFEST_STATS_BYTES,
+        "manifest-stats.json",
+      );
       const stats = JSON.parse(statsText) as {
         counts?: Record<string, number>;
         missingFiles?: string[];
@@ -1286,35 +1302,55 @@ interface ApplyContext {
  * per-line size cap.
  */
 async function* readNdjson(path: string): AsyncGenerator<Record<string, any>> {
-  const file = Bun.file(path);
-  const reader = file.stream().getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const buffer = new Uint8Array(ARCHIVE_READ_BYTES);
+  const fragments: Uint8Array[] = [];
+  let lineBytes = 0;
+  const fd = openSync(path, "r");
+  let position = 0;
+
+  const append = (chunk: Uint8Array) => {
+    if (chunk.byteLength === 0) return;
+    if (lineBytes + chunk.byteLength > MAX_NDJSON_LINE_BYTES) {
+      throw new Error(`NDJSON line exceeds ${MAX_NDJSON_LINE_BYTES} bytes`);
+    }
+    // The read buffer is reused, so retain only this bounded copy.
+    fragments.push(chunk.slice());
+    lineBytes += chunk.byteLength;
+  };
+  const consumeLine = (): Record<string, any> | null => {
+    if (lineBytes === 0) return null;
+    const bytes = new Uint8Array(lineBytes);
+    let offset = 0;
+    for (const fragment of fragments) {
+      bytes.set(fragment, offset);
+      offset += fragment.byteLength;
+    }
+    fragments.length = 0;
+    lineBytes = 0;
+    const line = decoder.decode(bytes);
+    return line.trim().length > 0 ? JSON.parse(line) : null;
+  };
+
   try {
     while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) buffer += decoder.decode(value, { stream: true });
-      let nl = buffer.indexOf("\n");
-      while (nl !== -1) {
-        const line = buffer.slice(0, nl);
-        buffer = buffer.slice(nl + 1);
-        if (line.length > MAX_NDJSON_LINE_BYTES) {
-          throw new Error(
-            `NDJSON line exceeds ${MAX_NDJSON_LINE_BYTES} bytes`,
-          );
-        }
-        if (line.trim().length > 0) yield JSON.parse(line);
-        nl = buffer.indexOf("\n");
+      const read = readSync(fd, buffer, 0, buffer.byteLength, position);
+      if (read <= 0) break;
+      position += read;
+      let start = 0;
+      for (let i = 0; i < read; i++) {
+        if (buffer[i] !== 0x0a) continue;
+        append(buffer.subarray(start, i));
+        const row = consumeLine();
+        if (row) yield row;
+        start = i + 1;
       }
+      append(buffer.subarray(start, read));
     }
-    if (buffer.trim().length > 0) yield JSON.parse(buffer);
+    const finalRow = consumeLine();
+    if (finalRow) yield finalRow;
   } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      /* ignore */
-    }
+    closeSync(fd);
   }
 }
 
@@ -1624,7 +1660,14 @@ async function applyBinary(
 
   if (entry.bucket === "notification-sounds") {
     // Re-validate audio magic bytes. We don't trust the archive blindly.
-    const head = new Uint8Array(await Bun.file(entry.stagingPath).slice(0, 16).arrayBuffer());
+    const fd = openSync(entry.stagingPath, "r");
+    const head = new Uint8Array(16);
+    try {
+      const read = readSync(fd, head, 0, head.byteLength, 0);
+      if (read < head.byteLength) head.fill(0, Math.max(read, 0));
+    } finally {
+      closeSync(fd);
+    }
     if (!detectAudioFormat(head)) {
       ctx.job.summary[`reject:${entry.bucket}`] = ctx.job.summary[`reject:${entry.bucket}`] || {
         imported: 0,
@@ -1635,11 +1678,15 @@ async function applyBinary(
     }
   }
 
-  if (existsSync(dest)) {
-    // Non-destructive merge: keep existing file.
-    return false;
+  try {
+    // Keep this a filesystem copy instead of Bun.write(Bun.file(...)) so a
+    // large staged binary never re-enters Bun's Blob pipeline. EXCL makes the
+    // non-destructive merge atomic if another request creates the file first.
+    copyFileSync(entry.stagingPath, dest, fsConstants.COPYFILE_EXCL);
+  } catch (err: any) {
+    if (err?.code === "EEXIST") return false;
+    throw err;
   }
-  await Bun.write(dest, Bun.file(entry.stagingPath));
   ctx.job.fileSummary[entry.bucket] = (ctx.job.fileSummary[entry.bucket] || 0) + 1;
   return true;
 }
@@ -1975,16 +2022,12 @@ async function runImportJob(job: ImportJob): Promise<void> {
   };
   emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "start" });
 
-  // Bulk-load pattern: temporarily disable FK enforcement so we can apply
-  // tables in any order (including ones that participate in dependency
-  // cycles like images ↔ characters). Re-enabled in the finally block,
-  // after which a scrub pass NULLs out any orphan SET-NULL references.
-  // Note: foreign_keys is a per-connection PRAGMA, so this affects all
-  // concurrent requests on the singleton bun:sqlite connection for the
-  // duration of the import.
+  // FK enforcement is disabled only for the database-application phase. It
+  // must stay enabled while a large archive is extracting or waiting for a
+  // secrets ticket because this PRAGMA applies to the singleton connection.
   const db = getDb();
+  let fkDisabled = false;
   let fkRestored = false;
-  db.run("PRAGMA foreign_keys = OFF");
 
   try {
     // Phase 1: extract.
@@ -1995,12 +2038,14 @@ async function runImportJob(job: ImportJob): Promise<void> {
     // Surface the list of secret keys the archive carries (read from
     // secrets/index.json) so the ticket route can verify the binding hash
     // before resolving the gate.
-    const secretsIndexEntry = buf.entries.find(
-      (e) => e.kind === "text" && (e as BufferedTextEntry).table === "__secrets_index__",
-    ) as BufferedTextEntry | undefined;
+    const secretsIndexEntry = buf.entries.find((e) => e.table === "__secrets_index__");
     if (secretsIndexEntry) {
       try {
-        const text = await Bun.file(secretsIndexEntry.stagingPath).text();
+        const text = readCappedTextFile(
+          secretsIndexEntry.stagingPath,
+          MAX_SECRETS_INDEX_BYTES,
+          "secrets/index.json",
+        );
         const parsed = JSON.parse(text) as { keys?: string[] };
         if (Array.isArray(parsed.keys)) {
           job.archiveSecretKeys = parsed.keys.map(String);
@@ -2039,14 +2084,16 @@ async function runImportJob(job: ImportJob): Promise<void> {
 
     // Group entries by table / bucket for the apply phase.
     const tableEntries = new Map<string, BufferedTextEntry>();
-    const binaryEntries: BufferedBinaryEntry[] = [];
     for (const entry of buf.entries) {
-      if (entry.kind === "text" && entry.origin === "database") {
-        if (entry.table !== "__manifest__") tableEntries.set(entry.table, entry);
-      } else if (entry.kind === "binary") {
-        binaryEntries.push(entry);
+      if (entry.origin === "database" && entry.table !== "__manifest__") {
+        tableEntries.set(entry.table, entry);
       }
     }
+
+    // Bulk-load pattern: temporarily disable FK enforcement so tables can be
+    // applied in topological order even when they contain dependency cycles.
+    db.run("PRAGMA foreign_keys = OFF");
+    fkDisabled = true;
 
     // Phase 2a: apply images first (binary), then images table rows.
     // Image FILES go before image ROWS so the row's referenced filename is on
@@ -2071,12 +2118,22 @@ async function runImportJob(job: ImportJob): Promise<void> {
     }
 
     // Phase 2c: binary files.
-    emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "files", total: binaryEntries.length });
+    emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "files", total: buf.binaryEntryCount });
     let filesDone = 0;
-    for (const entry of binaryEntries) {
+    for await (const raw of readNdjson(buf.binaryJournalPath)) {
       if (job.abort.signal.aborted) throw job.abort.signal.reason ?? new Error("cancelled");
+      const entry = raw as Partial<BufferedBinaryEntry>;
+      if (
+        entry.kind !== "binary" ||
+        typeof entry.bucket !== "string" ||
+        typeof entry.inner !== "string" ||
+        typeof entry.stagingPath !== "string" ||
+        typeof entry.byteSize !== "number"
+      ) {
+        throw new Error("binary entry journal is malformed");
+      }
       try {
-        await applyBinary(ctx, entry);
+        await applyBinary(ctx, entry as BufferedBinaryEntry);
       } catch (err) {
         // Per-file failure is logged but doesn't kill the job.
         console.warn(`[user-data import] binary failed (${entry.bucket}/${entry.inner}):`, err);
@@ -2086,7 +2143,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
         emit(job, EventType.USER_IMPORT_PROGRESS, {
           phase: "files",
           processed: filesDone,
-          total: binaryEntries.length,
+          total: buf.binaryEntryCount,
         });
         await yieldAndCheck(job.abort.signal);
       }
@@ -2100,9 +2157,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     // Runs LAST so the secret keys (which reference connection IDs etc.)
     // are inserted only after the rows they reference exist in the target.
     if (ticketResult) {
-      const secretsEncryptedEntry = buf.entries.find(
-        (e) => e.kind === "text" && (e as BufferedTextEntry).table === "__secrets_encrypted__",
-      ) as BufferedTextEntry | undefined;
+      const secretsEncryptedEntry = buf.entries.find((e) => e.table === "__secrets_encrypted__");
       if (secretsEncryptedEntry) {
         emit(job, EventType.USER_IMPORT_PROGRESS, { phase: "secrets_apply_start" });
         const { restored, skipped } = await applySecrets(
@@ -2136,20 +2191,22 @@ async function runImportJob(job: ImportJob): Promise<void> {
     job.finishedAt = Math.floor(Date.now() / 1000);
     emit(job, EventType.USER_IMPORT_FAILED, { error: job.error, cancelled: job.status === "cancelled" });
   } finally {
-    // Scrub orphan FK references introduced by the bulk load before re-arming
-    // foreign-key enforcement. Wrapped in try/catch so a scrub failure can't
-    // strand the server with FKs disabled.
-    try {
-      scrubOrphanForeignKeys(job.userId);
-      scrubMemoryCortexOrphans(job.userId);
-    } catch (err) {
-      console.warn("[user-data import] orphan scrub raised:", err);
-    }
-    try {
-      db.run("PRAGMA foreign_keys = ON");
-      fkRestored = true;
-    } catch (err) {
-      console.error("[user-data import] failed to re-enable foreign_keys:", err);
+    if (fkDisabled) {
+      // Scrub orphan FK references introduced by the bulk load before
+      // re-arming enforcement. A scrub failure must not strand the server
+      // with FKs disabled.
+      try {
+        scrubOrphanForeignKeys(job.userId);
+        scrubMemoryCortexOrphans(job.userId);
+      } catch (err) {
+        console.warn("[user-data import] orphan scrub raised:", err);
+      }
+      try {
+        db.run("PRAGMA foreign_keys = ON");
+        fkRestored = true;
+      } catch (err) {
+        console.error("[user-data import] failed to re-enable foreign_keys:", err);
+      }
     }
     // Report any orphans the scrub didn't catch — informational only.
     if (fkRestored) {
@@ -2167,6 +2224,7 @@ async function runImportJob(job: ImportJob): Promise<void> {
     }
 
     USER_RUNNING.delete(job.userId);
+    releaseGlobalImportSlot(job.jobId);
     // Cleanup: remove staging files, keep the original archive for debug.
     try {
       const staging = join(dirname(job.archivePath), "staging");

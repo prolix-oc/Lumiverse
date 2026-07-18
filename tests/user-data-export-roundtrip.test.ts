@@ -9,8 +9,8 @@
  * `forceZip64: true`. This test pins the contract:
  *
  *   1. The export stream produces a well-formed ZIP.
- *   2. The manifest round-trips through both the fast-path ZIP central-
- *      directory verifier AND the streaming fallback verifier.
+ *   2. The manifest round-trips through the central-directory verifier and
+ *      its compatibility entry point.
  *   3. Pushing a realistic multi-row payload (10⁵ rows × ~1 KB each →
  *      ~100 MB) through the streaming pipeline produces a valid archive
  *      — proves the streaming path is healthy at scale, which is what
@@ -153,7 +153,7 @@ describe("user-data export ZIP64 round-trip", () => {
     expect(manifest.archiveId).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  test("streaming fallback verifier also accepts the export", async () => {
+  test("compatibility verifier also accepts the export", async () => {
     const stream = buildExportStream({
       userId: USER_ID,
       includeVectors: false,
@@ -161,12 +161,11 @@ describe("user-data export ZIP64 round-trip", () => {
     });
 
     const bytes = await readAll(stream);
-    const archivePath = join(workDir, "export-fallback.lvbak");
+    const archivePath = join(workDir, "export-compatibility.lvbak");
     writeFileSync(archivePath, bytes);
 
-    // Independent of the fast path — confirms the streaming Unzip
-    // (the same code path the import job uses for real archives) can
-    // re-parse what the export writer just produced.
+    // The public compatibility entry point intentionally uses the same
+    // bounded central-directory verifier as the import route.
     const manifest = await verifyArchive(archivePath);
     expect(manifest.producer).toBe("lumiverse");
     expect(manifest.schemaVersion).toBe(1);
@@ -192,7 +191,7 @@ describe("user-data export ZIP64 round-trip", () => {
     expect(manifest.archiveId).toBe(archiveId);
   });
 
-  test("streaming fallback drains large entries before a trailing manifest", async () => {
+  test("compatibility verifier finds a trailing manifest without reading leading data", async () => {
     const archiveId = crypto.randomUUID();
     const leadingData = new Uint8Array(8 * 1024 * 1024);
     const bytes = zipSync(
