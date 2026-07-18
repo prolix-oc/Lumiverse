@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   inspectDependencyTree,
+  packageInstallInputsChanged,
   planChangedDependencies,
   prepareDependencyInstall,
   restoreDependencyInstall,
@@ -132,4 +133,33 @@ test("does not duplicate the Termux binding repair after a frontend install", ()
 test("does not repair frontend bindings for backend-only or non-Termux updates", () => {
   expect(planChangedDependencies(["src/main.ts"], true).repairTermuxFrontendNativeDeps).toBe(false);
   expect(planChangedDependencies(["frontend/src/App.tsx"], false).repairTermuxFrontendNativeDeps).toBe(false);
+});
+
+test("does not reinstall for package metadata or script-only changes", () => {
+  const previous = JSON.stringify({
+    version: "1.0.0",
+    scripts: { build: "vite build" },
+    dependencies: { vite: "1.0.0" },
+  });
+  const current = JSON.stringify({
+    version: "1.0.1",
+    scripts: { build: "bun run build-frontend.ts" },
+    dependencies: { vite: "1.0.0" },
+  });
+
+  expect(packageInstallInputsChanged(previous, current)).toBe(false);
+});
+
+test("reinstalls when a package-resolution input changes or cannot be read", () => {
+  const previous = JSON.stringify({
+    dependencies: { vite: "1.0.0" },
+    optionalDependencies: { binding: "1.0.0" },
+  });
+  const current = JSON.stringify({
+    dependencies: { vite: "2.0.0" },
+    optionalDependencies: { binding: "1.0.0" },
+  });
+
+  expect(packageInstallInputsChanged(previous, current)).toBe(true);
+  expect(packageInstallInputsChanged("not json", current)).toBe(true);
 });

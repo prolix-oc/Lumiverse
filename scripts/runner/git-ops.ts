@@ -109,13 +109,109 @@ function summarizeFrontendChanges(changedFiles: string[]): string {
   return relevant.length > 5 ? `${preview}, ...` : preview;
 }
 
-function backendDependenciesChanged(changedFiles: string[] | null): boolean {
-  return changedFiles === null || changedFiles.some((file) => file === "package.json" || file === "bun.lock");
+interface DependencyManifestRefs {
+  fromRef: string;
+  toRef: string;
 }
 
-function frontendDependenciesChanged(changedFiles: string[] | null): boolean {
-  return changedFiles === null || changedFiles.some(
-    (file) => file === "frontend/package.json" || file === "frontend/bun.lock",
+type PackageManifest = Record<string, unknown>;
+
+const PACKAGE_INSTALL_INPUT_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "peerDependenciesMeta",
+  "bundledDependencies",
+  "overrides",
+  "resolutions",
+  "trustedDependencies",
+  "patchedDependencies",
+  "workspaces",
+  "catalog",
+  "catalogs",
+  "packageManager",
+] as const;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * A package.json can change its scripts, description, or version without
+ * changing anything Bun must resolve or install. Keep those updates from
+ * triggering a costly node_modules operation, while treating an unreadable
+ * manifest conservatively as changed.
+ */
+export function packageInstallInputsChanged(previous: string, current: string): boolean {
+  try {
+    const previousManifest = JSON.parse(previous) as PackageManifest;
+    const currentManifest = JSON.parse(current) as PackageManifest;
+    const installInputs = (manifest: PackageManifest) => Object.fromEntries(
+      PACKAGE_INSTALL_INPUT_FIELDS.map((field) => [field, manifest[field] ?? null]),
+    );
+    return stableJson(installInputs(previousManifest)) !== stableJson(installInputs(currentManifest));
+  } catch {
+    return true;
+  }
+}
+
+function packageInstallInputsChangedBetween(
+  fromRef: string,
+  toRef: string,
+  packagePath: string,
+): boolean {
+  const previous = runGit("show", `${fromRef}:${packagePath}`);
+  const current = runGit("show", `${toRef}:${packagePath}`);
+  if (!previous.ok || !current.ok) return true;
+  return packageInstallInputsChanged(previous.out, current.out);
+}
+
+function packageDependenciesChanged(
+  changedFiles: string[] | null,
+  packagePath: string,
+  lockfilePath: string,
+  installConfigPaths: string[],
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  if (changedFiles === null) return true;
+  if (changedFiles.some((file) => file === lockfilePath || installConfigPaths.includes(file))) return true;
+  if (!changedFiles.includes(packagePath)) return false;
+  if (!manifestRefs) return true;
+  return packageInstallInputsChangedBetween(manifestRefs.fromRef, manifestRefs.toRef, packagePath);
+}
+
+function backendDependenciesChanged(
+  changedFiles: string[] | null,
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  return packageDependenciesChanged(
+    changedFiles,
+    "package.json",
+    "bun.lock",
+    ["bunfig.toml", ".npmrc"],
+    manifestRefs,
+  );
+}
+
+function frontendDependenciesChanged(
+  changedFiles: string[] | null,
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  return packageDependenciesChanged(
+    changedFiles,
+    "frontend/package.json",
+    "frontend/bun.lock",
+    ["frontend/bunfig.toml", "frontend/.npmrc"],
+    manifestRefs,
   );
 }
 
@@ -133,9 +229,10 @@ export interface ChangedDependencyPlan {
 export function planChangedDependencies(
   changedFiles: string[] | null,
   termuxLike: boolean,
+  manifestRefs?: DependencyManifestRefs,
 ): ChangedDependencyPlan {
-  const installBackend = backendDependenciesChanged(changedFiles);
-  const installFrontend = frontendDependenciesChanged(changedFiles);
+  const installBackend = backendDependenciesChanged(changedFiles, manifestRefs);
+  const installFrontend = frontendDependenciesChanged(changedFiles, manifestRefs);
 
   return {
     installBackend,
@@ -195,9 +292,10 @@ async function runCommandOrThrow(
 
   if (result.exitCode === 0) return;
 
+  const output = result.stderr.trim() || result.stdout.trim();
   const reason = result.timedOut
-    ? `${opts.label} timed out after ${opts.timeoutMs / 1000}s`
-    : result.stderr.trim() || result.stdout.trim() || `${opts.label} failed`;
+    ? `${opts.label} timed out after ${opts.timeoutMs / 1000}s${output ? `\nLast output:\n${output}` : ""}`
+    : output || `${opts.label} failed`;
   throw new Error(reason);
 }
 
@@ -327,7 +425,10 @@ export async function applyUpdate(
       log("Could not inspect changed files; conservatively installing dependencies and rebuilding the frontend.");
     }
 
-    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress);
+    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress, {
+      fromRef: previousHead,
+      toRef: currentHead,
+    });
     if (shouldRebuildFrontend(changedFiles)) {
       const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
       reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
@@ -379,7 +480,10 @@ export async function switchBranch(
       log("Could not inspect changed files; conservatively installing dependencies and rebuilding the frontend.");
     }
 
-    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress);
+    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress, {
+      fromRef: previousHead,
+      toRef: currentHead,
+    });
     if (shouldRebuildFrontend(changedFiles)) {
       const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
       reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
@@ -586,10 +690,12 @@ async function ensureChangedDependencies(
   frontendDir: string,
   changedFiles: string[] | null,
   reportProgress?: ProgressReporter,
+  manifestRefs?: DependencyManifestRefs,
 ): Promise<void> {
   const plan = planChangedDependencies(
     changedFiles,
     isTermuxRuntime() || isProotRuntime(),
+    manifestRefs,
   );
 
   if (plan.installBackend) {

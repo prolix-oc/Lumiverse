@@ -23,5 +23,9 @@ export const TIMEOUT_GIT_FETCH_MS = 60_000;
 export const TIMEOUT_GIT_PULL_MS = 2 * 60_000;
 export const TIMEOUT_GIT_CHECKOUT_MS = 30_000;
 export const TIMEOUT_BUN_CACHE_MS = 30_000;
-export const TIMEOUT_BUN_INSTALL_MS = 5 * 60_000;
+// A cold dependency install can legitimately spend several minutes downloading
+// and unpacking platform packages, especially on slower Windows disks. Keep a
+// firm ceiling so an actual hang still recovers, but do not abort a healthy
+// install halfway through its normal work.
+export const TIMEOUT_BUN_INSTALL_MS = 10 * 60_000;
 export const TIMEOUT_BUN_BUILD_MS = 5 * 60_000;
