@@ -19,6 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { strToU8, zipSync } from "fflate";
 import { join } from "path";
 import { writeFileSync, mkdtempSync, rmSync, existsSync } from "fs";
 import { tmpdir } from "os";
@@ -31,6 +32,20 @@ import { buildExportStream } from "../src/services/user-data/export.service";
 import { verifyArchiveFast, verifyArchive } from "../src/services/user-data/import.service";
 
 const USER_ID = "export-roundtrip-user";
+
+function testManifest(archiveId: string): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    producer: "lumiverse",
+    exportedAt: 0,
+    archiveId,
+    producerVersion: "test",
+    includeVectors: false,
+    embeddingConfig: { provider: null, model: null, dimension: null },
+    counts: {},
+    missingFiles: [],
+  };
+}
 
 async function applyBaseline(): Promise<void> {
   const db = getDb();
@@ -155,6 +170,80 @@ describe("user-data export ZIP64 round-trip", () => {
     const manifest = await verifyArchive(archivePath);
     expect(manifest.producer).toBe("lumiverse");
     expect(manifest.schemaVersion).toBe(1);
+  });
+
+  test("fast verifier scans a multi-page central directory without loading it whole", async () => {
+    const archiveId = crypto.randomUUID();
+    const entries: Record<string, Uint8Array> = {};
+    const empty = new Uint8Array(0);
+    // Put the manifest last and make the directory comfortably larger than
+    // two verifier pages so records and names cross read boundaries.
+    for (let i = 0; i < 8_000; i++) {
+      entries[`files/images/${i.toString(36).padStart(6, "0")}-asset.bin`] = empty;
+    }
+    entries["manifest.json"] = strToU8(JSON.stringify(testManifest(archiveId)));
+
+    const bytes = zipSync(entries, { level: 0 });
+    expect(bytes.byteLength).toBeGreaterThan(512 * 1024);
+    const archivePath = join(workDir, "large-central-directory.lvbak");
+    writeFileSync(archivePath, bytes);
+
+    const manifest = await verifyArchiveFast(archivePath);
+    expect(manifest.archiveId).toBe(archiveId);
+  });
+
+  test("streaming fallback drains large entries before a trailing manifest", async () => {
+    const archiveId = crypto.randomUUID();
+    const leadingData = new Uint8Array(8 * 1024 * 1024);
+    const bytes = zipSync(
+      {
+        "files/images/large.bin": leadingData,
+        "manifest.json": strToU8(JSON.stringify(testManifest(archiveId))),
+      },
+      { level: 0 },
+    );
+    const archivePath = join(workDir, "manifest-last.lvbak");
+    writeFileSync(archivePath, bytes);
+
+    const manifest = await verifyArchive(archivePath);
+    expect(manifest.archiveId).toBe(archiveId);
+  });
+
+  test("fast verifier caps manifest inflation even when ZIP metadata lies", async () => {
+    const archiveId = crypto.randomUUID();
+    const oversized = {
+      ...testManifest(archiveId),
+      padding: "x".repeat(17 * 1024 * 1024),
+    };
+    const bytes = zipSync(
+      { "manifest.json": strToU8(JSON.stringify(oversized)) },
+      { level: 9 },
+    );
+
+    // Lie about the uncompressed size in the central-directory record so the
+    // preflight metadata check passes. The bounded inflater must still reject
+    // the actual >16 MB output rather than allocating it without limit.
+    let cdh = -1;
+    for (let i = bytes.byteLength - 46; i >= 0; i--) {
+      if (
+        bytes[i] === 0x50 &&
+        bytes[i + 1] === 0x4b &&
+        bytes[i + 2] === 0x01 &&
+        bytes[i + 3] === 0x02
+      ) {
+        cdh = i;
+        break;
+      }
+    }
+    expect(cdh).toBeGreaterThanOrEqual(0);
+    new DataView(bytes.buffer, bytes.byteOffset).setUint32(cdh + 24, 1, true);
+
+    const archivePath = join(workDir, "manifest-inflate-cap.lvbak");
+    writeFileSync(archivePath, bytes);
+    await expect(verifyArchiveFast(archivePath)).rejects.toMatchObject({
+      name: "ArchiveValidationError",
+      code: "bad_manifest",
+    });
   });
 
   test("export with 10⁵ character rows streams to ~100 MB without OOM", async () => {

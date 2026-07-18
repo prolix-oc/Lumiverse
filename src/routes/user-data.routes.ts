@@ -278,10 +278,10 @@ app.post("/import", async (c) => {
 
   // ── Pre-flight: confirm this is a real Lumiverse archive ───────────────
   // Fast path: read the ZIP central directory at the tail of the file and
-  // decompress just the manifest.json bytes (O(64 KB + manifest_size) for
-  // any archive size, location-independent — legacy archives that write
-  // manifest last verify in tens of milliseconds instead of streaming
-  // gigabytes).
+  // decompress just the manifest.json bytes. The directory is scanned in
+  // fixed-size pages, so memory remains bounded even when an archive contains
+  // hundreds of thousands of files. Legacy archives that write manifest last
+  // avoid streaming the full archive body.
   // Streaming fallback handles unusual cases (ZIP64, malformed CD) where
   // the fast parser bails out.
   eventBus.emit(
