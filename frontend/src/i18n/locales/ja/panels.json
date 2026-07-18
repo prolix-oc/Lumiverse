@@ -1922,6 +1922,10 @@
     "managedByOperator": "オペレーターによる管理",
     "enabled": "有効",
     "disabled": "無効",
+    "permissionNames": {
+      "final_response": "最終応答"
+    },
+    "frontendLoadFailed": "{{name}} のフロントエンドを読み込めませんでした。",
     "permissionStatus": "{{name}} ({{status}})",
     "update": "アップデート",
     "updateHint": "リモートからプルして再構築",

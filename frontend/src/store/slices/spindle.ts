@@ -39,6 +39,34 @@ function saveMutedThemes(muted: Record<string, boolean>) {
   try { localStorage.setItem(MUTED_THEMES_KEY, JSON.stringify(muted)) } catch {}
 }
 
+function reportBackgroundFrontendLoadFailure(
+  operation: 'hydrate' | 'enable',
+  extension: { id: string; name: string },
+  error: unknown,
+): void {
+  if (operation === 'hydrate') {
+    console.error(`[Spindle] Failed to hydrate frontend for ${extension.id}:`, error)
+  } else {
+    console.error('[Spindle] Failed to load frontend after enable:', error)
+  }
+
+  void Promise.all([
+    import('@/i18n'),
+    import('@/lib/toast'),
+  ])
+    .then(([{ default: i18n }, { toast }]) => {
+      const message = i18n.t('spindlePanel.frontendLoadFailed', {
+        ns: 'panels',
+        name: extension.name,
+        defaultValue: 'Could not load the frontend for {{name}}.',
+      })
+      toast.error(message)
+    })
+    .catch((diagnosticError) => {
+      console.error('[Spindle] Failed to show frontend load diagnostic:', diagnosticError)
+    })
+}
+
 export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
   extensions: [],
   extensionThemeOverrides: {},
@@ -97,11 +125,10 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
                 while (true) {
                   const ext = hydrationQueue[nextIndex++]
                   if (!ext) return
-
                   try {
                     await hydrateExtension(ext)
                   } catch (err) {
-                    console.error(`[Spindle] Failed to hydrate frontend for ${ext.id}:`, err)
+                    reportBackgroundFrontendLoadFailure('hydrate', ext, err)
                   }
 
                   await yieldToBrowser({ when: 'paint' })
@@ -185,7 +212,7 @@ export const createSpindleSlice: StateCreator<SpindleSlice> = (set, get) => ({
       scheduleLowPriorityTask(() => {
         void spindleApi.getManifest(id)
           .then((manifest) => loadFrontendExtension(id, manifest))
-          .catch((err) => console.error('[Spindle] Failed to load frontend after enable:', err))
+          .catch((err) => reportBackgroundFrontendLoadFailure('enable', ext, err))
       }, { label: 'spindle frontend enable hydration' })
     }
   },

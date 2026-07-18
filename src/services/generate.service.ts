@@ -11,6 +11,7 @@ import * as personasSvc from "./personas.service";
 import {
   assemblePrompt,
   applyCustomBodyParameters,
+  clipToContextBudget,
   applyProviderReasoningOffSwitch,
   injectReasoningParams,
   collectVectorActivatedWorldInfo,
@@ -20,6 +21,7 @@ import {
   shouldPreserveDisplayReasoningDelimiters,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
+import { attachParentRetrievalCapture, detachParentRetrievalCapture } from "../llm/types";
 import * as charactersSvc from "./characters.service";
 import { getEffectiveCharacterName } from "../types/character";
 import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
@@ -39,18 +41,52 @@ import {
   type ToolDefinition,
   type ToolCallResult,
   type LlmThinkingBlock,
+  type ContextClipStats,
 } from "../llm/types";
 import {
   buildInlineToolContinuation,
   type InlineCouncilToolResult,
 } from "./inline-tool-continuation";
 import type { Message } from "../types/message";
+import type { LlmMessageDTO } from "lumiverse-spindle-types";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { CustomBody } from "../types/preset";
 import {
   interceptorPipeline,
   type InterceptorBreakdownEntry,
 } from "../spindle/interceptor-pipeline";
+import {
+  attachInterceptorPrivateState,
+  finalizeInterceptorTerminalLeases,
+  type InterceptorPipelineAuthority,
+  type InterceptorTerminalLease,
+} from "../spindle/lifecycle";
+import {
+  selectInterceptorFinalResponse,
+  detachInterceptorFinalResponseCarrier,
+  refreshInterceptorFinalResponseCarrier,
+  type InterceptorFinalResponseState,
+  type ValidInterceptorFinalResponse,
+  type FinalResponseBreakdownReplacement,
+} from "../spindle/interceptor-final-response";
+import {
+  attachBoundParentPrefill,
+  captureMainDispatchSnapshot,
+  captureParentGenerationSnapshot,
+  captureParentRetrievalSnapshot,
+  createParentPrefillAttestation,
+} from "../spindle/bound-generation";
+import {
+  BOUND_INTERCEPTOR_RESERVE_MS,
+  BOUND_MAX_WORK_MS,
+  brandHostGenerationId,
+  type MainDispatchSnapshot,
+  type ParentGenerationSnapshot,
+  type ParentRetrievalSnapshot,
+} from "../spindle/bound-generation-types";
+import {
+  resolveMainDispatchSnapshot,
+} from "./dispatch-state.service";
 import { contextHandlerChain } from "../spindle/context-handler";
 import {
   executeCouncil,
@@ -139,6 +175,7 @@ import {
   resolveRenderedMessageContent,
 } from "./chat-macro-render.service";
 import { cloneEnv } from "../macros";
+import type { MacroEnv } from "../macros/types";
 import {
   assemblePromptInWorker,
   canUsePromptAssemblyWorker,
@@ -283,6 +320,30 @@ function omitChatHistoryTokenBreakdown(
     breakdown: omitChatHistoryBreakdownEntries(tokenCount.breakdown),
   };
 }
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isParentRetrievalSnapshotInput(
+  value: unknown,
+): value is Parameters<typeof captureParentRetrievalSnapshot>[0] {
+  if (!isRecordLike(value)) return false;
+  return (
+    typeof value.hostGeneration === "string" &&
+    typeof value.generationId === "string" &&
+    typeof value.userId === "string" &&
+    typeof value.chatId === "string" &&
+    Number.isFinite(value.expiresAt) &&
+    (value.capturedAt === undefined || Number.isFinite(value.capturedAt)) &&
+    isRecordLike(value.vectorWorldInfo) &&
+    isRecordLike(value.chatMemory) &&
+    isRecordLike(value.cortex) &&
+    isRecordLike(value.databank) &&
+    isRecordLike(value.settings) &&
+    isRecordLike(value.results)
+  );
+}
+
 
 function normalizeReasoningText(reasoning: unknown): string | undefined {
   return typeof reasoning === "string" && reasoning.trim().length > 0
@@ -406,10 +467,12 @@ export const __test__ = {
   extractReasoningDetailsText,
   extractThinkingBlockText,
   injectConnectionMetadataFlags,
+  normalizeInlineToolTimeoutMs,
   omitChatHistoryBreakdownEntries,
   omitChatHistoryTokenBreakdown,
   resolveDryRunMessageReasoning,
   sumChatHistoryBreakdownTokens,
+  isCallbackActiveProviderRoute,
 };
 
 export interface RawGenerateInput {
@@ -587,6 +650,13 @@ class GenerationCancelledByExtensionError extends Error {
   }
 }
 
+class FinalResponseOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FinalResponseOutputError";
+  }
+}
+
 /** Result of assembling + post-processing the prompt pipeline. */
 interface PromptPipelineResult {
   messages: LlmMessage[];
@@ -611,6 +681,204 @@ interface PromptPipelineResult {
   macroEnv?: import("../macros/types").MacroEnv;
   /** Snapshot of the macro environment before chat-history evaluation mutates it. */
   macroEnvSeed?: import("../macros/types").MacroEnv;
+  /** Host-owned immutable request-bound facts retained for the callback lifecycle. */
+  mainDispatchSnapshot?: MainDispatchSnapshot;
+  parentRetrievalSnapshot?: ParentRetrievalSnapshot;
+  parentGenerationSnapshot?: ParentGenerationSnapshot;
+  parentRetrievalSnapshotError?: Error;
+  /** Host-only leases returned by the callback pipeline in registration order. */
+  terminalLeases?: readonly InterceptorTerminalLease[];
+  /** Host-private normalized final-response winner/protected fallback state. */
+  finalResponse?: InterceptorFinalResponseState;
+}
+
+function findParentPrefillCarrierIndex(
+  messages: LlmMessage[],
+  assistantPrefill?: string,
+): number | undefined {
+  if (!assistantPrefill) return undefined;
+  let carrierIndex: number | undefined;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message.role === "assistant" &&
+      !isChatHistoryMessage(message) &&
+      typeof message.content === "string" &&
+      message.content === assistantPrefill
+    ) {
+      carrierIndex = index;
+    }
+  }
+  return carrierIndex;
+}
+
+function isCallbackActiveProviderRoute(
+  generationType: string,
+  isDryRun: boolean,
+): boolean {
+  return !isDryRun && (generationType === "normal" || generationType === "continue");
+}
+
+function buildInterceptorContextSeed(input: {
+  readonly spindleContext: SpindleContext;
+  readonly generationId: string;
+  readonly userId: string;
+  readonly chatId: string;
+  readonly generationType: string;
+  readonly isDryRun: boolean;
+  readonly presetId?: string | null;
+  readonly personaId?: string | null;
+  readonly personaAddonStates?: Record<string, boolean>;
+  readonly excludeMessageId?: string;
+  readonly rejectedSwipe?: string;
+  readonly targetCharacterId?: string;
+  readonly regenFeedback?: string;
+  readonly regenFeedbackPosition?: "system" | "user";
+}): Record<string, unknown> {
+  const safeSpindleContext: Record<string, unknown> = {
+    ...input.spindleContext,
+  };
+  for (const key of [
+    "mainDispatchSnapshot",
+    "parentGenerationSnapshot",
+    "parentPrefillAttestation",
+    "parentPrefillCarrier",
+    "mainApiKey",
+    "signal",
+    "presetMetadata",
+    "presetMetadataByExtension",
+  ]) {
+    delete safeSpindleContext[key];
+  }
+  return {
+    ...safeSpindleContext,
+    context: safeSpindleContext,
+    userId: input.userId,
+    chatId: input.chatId,
+    generationId: input.generationId,
+    generationType: input.generationType,
+    isDryRun: input.isDryRun,
+    presetId: input.presetId ?? null,
+    personaId: input.personaId ?? null,
+    characterId: input.targetCharacterId ?? null,
+    personaAddonStates: input.personaAddonStates ?? {},
+    ...(input.excludeMessageId
+      ? { excludeMessageId: input.excludeMessageId }
+      : {}),
+    ...(input.rejectedSwipe ? { rejectedSwipe: input.rejectedSwipe } : {}),
+    ...(input.regenFeedback ? { regenFeedback: input.regenFeedback } : {}),
+    ...(input.regenFeedbackPosition
+      ? { regenFeedbackPosition: input.regenFeedbackPosition }
+      : {}),
+  };
+}
+
+interface MainGenerationContext {
+  readonly snapshot: MainDispatchSnapshot;
+  readonly context: SpindleContext;
+}
+
+function applyMainContextHandlerResult(
+  baseContext: SpindleContext,
+  handled: unknown,
+): SpindleContext {
+  const effectiveContext =
+    handled && typeof handled === "object"
+      ? {
+          ...baseContext,
+          ...(handled as Record<string, unknown>),
+        }
+      : baseContext;
+  if (effectiveContext.cancelGeneration === true) {
+    throw new GenerationCancelledByExtensionError();
+  }
+  return effectiveContext;
+}
+
+async function resolveMainGenerationContext(input: {
+  userId: string;
+  chatId: string;
+  generationId: string;
+  generationType: string;
+  connectionId?: string;
+  resolvedConnectionId?: string;
+  personaId?: string;
+  presetId?: string;
+  parameters?: GenerationParameters;
+  signal?: AbortSignal;
+  isDryRun?: boolean;
+}): Promise<MainGenerationContext> {
+  const baseContext: SpindleContext = {
+    chatId: input.chatId,
+    connectionId: input.connectionId,
+    presetId: input.presetId,
+    personaId: input.personaId,
+    generationType: input.generationType,
+    dryRun: input.isDryRun === true,
+    userId: input.userId,
+  };
+  let effectiveContext = baseContext;
+  if (contextHandlerChain.count > 0) {
+    const handled = await contextHandlerChain.run(
+      baseContext,
+      input.userId,
+      input.signal,
+    );
+    effectiveContext = applyMainContextHandlerResult(baseContext, handled);
+  }
+  if (input.signal?.aborted) {
+    throw input.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+  const effectiveConnectionId =
+    typeof effectiveContext.connectionId === "string" &&
+    effectiveContext.connectionId.length > 0
+      ? effectiveContext.connectionId
+      : input.resolvedConnectionId ?? input.connectionId;
+  const effectivePresetId =
+    typeof effectiveContext.presetId === "string" &&
+    effectiveContext.presetId.length > 0
+      ? effectiveContext.presetId
+      : input.presetId;
+  const resolved = resolveMainDispatchSnapshot(input.userId, {
+    connectionId: effectiveConnectionId,
+    presetId: effectivePresetId,
+    reasoning: effectiveContext.reasoning,
+    settings: effectiveContext.settings,
+  });
+  const hostGeneration = brandHostGenerationId(input.generationId);
+  const snapshot = captureMainDispatchSnapshot({
+    hostGeneration,
+    generationId: input.generationId,
+    userId: input.userId,
+    chatId: input.chatId,
+    descriptor: resolved.descriptor,
+    parameters: (input.parameters ?? {}) as Record<string, unknown>,
+    reasoning:
+      effectiveContext.reasoning &&
+      typeof effectiveContext.reasoning === "object"
+        ? (effectiveContext.reasoning as Record<string, unknown>)
+        : {},
+    authoritativeContext: {
+      generationType: input.generationType,
+      connectionId: resolved.connectionId,
+      presetId: resolved.connection.preset_id,
+      reasoning: effectiveContext.reasoning ?? null,
+      settings: effectiveContext.settings ?? null,
+      personaId: effectiveContext.personaId ?? null,
+      isDryRun: input.isDryRun === true,
+    },
+  });
+  return {
+    snapshot,
+    context: {
+      ...effectiveContext,
+      chatId: input.chatId,
+      connectionId: resolved.connectionId,
+      generationType: input.generationType,
+      dryRun: input.isDryRun === true,
+      userId: input.userId,
+    },
+  };
 }
 
 /**
@@ -646,8 +914,9 @@ function appendInterceptorBreakdownEntries(
   breakdown: AssemblyBreakdownEntry[] | undefined,
   interceptorBreakdown: InterceptorBreakdownEntry[] | undefined,
 ): AssemblyBreakdownEntry[] | undefined {
-  if (!breakdown || !interceptorBreakdown || interceptorBreakdown.length === 0)
+  if (!interceptorBreakdown || interceptorBreakdown.length === 0) {
     return breakdown;
+  }
   const injected = interceptorBreakdown
     .slice()
     .sort((a, b) => a.messageIndex - b.messageIndex)
@@ -658,8 +927,42 @@ function appendInterceptorBreakdownEntries(
       content: entry.content,
       extensionId: entry.extensionId,
       extensionName: entry.extensionName,
+      extensionMessageIndex: entry.messageIndex,
     }));
-  return [...breakdown, ...injected];
+  return [...(breakdown ?? []), ...injected];
+}
+
+function applyFinalResponseBreakdownReplacement(
+  base: readonly AssemblyBreakdownEntry[] | undefined,
+  replacement: FinalResponseBreakdownReplacement | undefined,
+): AssemblyBreakdownEntry[] {
+  if (!replacement) return [...(base ?? [])];
+  const { from, to } = replacement;
+  let replaced = false;
+  return (base ?? []).map((entry) => {
+    const extensionMessageIndex = (entry as AssemblyBreakdownEntry & {
+      extensionMessageIndex?: number;
+    }).extensionMessageIndex;
+    if (
+      !replaced
+      && entry.type === "extension"
+      && extensionMessageIndex === from.messageIndex
+      && entry.extensionId === from.extensionId
+      && entry.extensionName === from.extensionName
+    ) {
+      replaced = true;
+      return {
+        ...entry,
+        name: to.name,
+        role: to.role,
+        content: to.content,
+        extensionId: to.extensionId,
+        extensionName: to.extensionName,
+        extensionMessageIndex: to.messageIndex,
+      };
+    }
+    return entry;
+  });
 }
 
 function applyDelimitedReasoningParsing(
@@ -901,6 +1204,21 @@ const INLINE_TOOL_MAX_ROUNDS = (() => {
   const raw = Number(process.env.LUMIVERSE_INLINE_TOOL_MAX_ROUNDS);
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 3;
 })();
+
+const INLINE_TOOL_TIMEOUT_MIN_MS = 15_000;
+const INLINE_TOOL_TIMEOUT_MAX_MS = 120_000;
+const INLINE_TOOL_TIMEOUT_FALLBACK_MS = 30_000;
+
+function normalizeInlineToolTimeoutMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return INLINE_TOOL_TIMEOUT_FALLBACK_MS;
+  }
+  return Math.min(
+    INLINE_TOOL_TIMEOUT_MAX_MS,
+    Math.max(INLINE_TOOL_TIMEOUT_MIN_MS, Math.round(value)),
+  );
+}
+
 
 function computeBackoffMs(attempt: number, retryAfterMs?: number): number {
   // Honor a server Retry-After hint when present, clamped to our ceiling.
@@ -1268,6 +1586,13 @@ async function runPromptPipeline(opts: {
   regenFeedbackPosition?: "system" | "user";
   signal?: AbortSignal;
   isDryRun?: boolean;
+  /** Host-resolved Main facts used only for live callback binding. */
+  preResolvedContext?: SpindleContext;
+  /** True only when the host resolved this context through the handler chain. */
+  preResolvedContextHandled?: boolean;
+  mainDispatchSnapshot?: MainDispatchSnapshot;
+  mainGenerationId?: string;
+  mainApiKey?: string;
 }): Promise<PromptPipelineResult> {
   // Yield to the event loop before entering the assembly pipeline so a stop
   // clicked in the first few ticks after the generation starts can actually
@@ -1279,25 +1604,29 @@ async function runPromptPipeline(opts: {
   if (opts.signal?.aborted)
     throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
 
-  // Build spindle context
-  let spindleContext: SpindleContext = {
-    chatId: opts.chatId,
-    connectionId: opts.connectionId,
-    personaId: opts.personaId,
-    generationType: opts.generationType,
-    dryRun: opts.isDryRun === true,
-    userId: opts.userId,
-  };
-  if (contextHandlerChain.count > 0) {
+  // A pre-resolved context is safe to reuse only when the host explicitly
+  // records that it already ran the handler chain. This prevents a caller from
+  // bypassing handler edits or cancellation merely by supplying a context.
+  let spindleContext: SpindleContext = opts.preResolvedContext
+    ? { ...opts.preResolvedContext, dryRun: opts.isDryRun === true }
+    : {
+        chatId: opts.chatId,
+        connectionId: opts.connectionId,
+        personaId: opts.personaId,
+        generationType: opts.generationType,
+        dryRun: opts.isDryRun === true,
+        userId: opts.userId,
+      };
+  if (contextHandlerChain.count > 0 && !opts.preResolvedContextHandled) {
     const handled = (await contextHandlerChain.run(
       spindleContext,
       opts.userId,
       opts.signal,
     )) as SpindleContext | undefined;
     if (handled) spindleContext = handled;
-    if (spindleContext.cancelGeneration === true) {
-      throw new GenerationCancelledByExtensionError();
-    }
+  }
+  if (spindleContext.cancelGeneration === true) {
+    throw new GenerationCancelledByExtensionError();
   }
 
   // Build messages: use explicit messages if provided, otherwise assemble from preset
@@ -1309,14 +1638,59 @@ async function runPromptPipeline(opts: {
   let activatedWorldInfo: ActivatedWorldInfoEntry[] | undefined;
   let worldInfoStats: DryRunResult["worldInfoStats"] | undefined;
   let memoryStats: import("../llm/types").MemoryStats | undefined;
+  let contextClipStats: ContextClipStats | undefined;
+
   let databankStats: import("../llm/types").DatabankStats | undefined;
-  let contextClipStats: import("../llm/types").ContextClipStats | undefined;
   let deferredWiState:
     | { chatId: string; partial: Record<string, any> }
     | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
 
   let deliberationHandledByMacro = false;
+  let parentRetrievalSnapshot: ParentRetrievalSnapshot | undefined;
+  let parentRetrievalSnapshotError: Error | undefined;
+  let parentGenerationSnapshot: ParentGenerationSnapshot | undefined;
+  const callbackActive = isCallbackActiveProviderRoute(
+    opts.generationType,
+    opts.isDryRun === true,
+  );
+  const retrievalCapturedAt = Date.now();
+  const retrievalSnapshotMeta =
+    callbackActive && opts.mainDispatchSnapshot && opts.mainGenerationId
+      ? {
+          hostGeneration: String(opts.mainDispatchSnapshot.hostGeneration),
+          generationId: opts.mainGenerationId,
+          userId: opts.userId,
+          chatId: opts.chatId,
+          capturedAt: retrievalCapturedAt,
+          expiresAt: retrievalCapturedAt + BOUND_MAX_WORK_MS,
+        }
+      : undefined;
+  const onParentRetrievalReady = retrievalSnapshotMeta
+    ? (captureInput: unknown): void => {
+        if (!isParentRetrievalSnapshotInput(captureInput)) {
+          parentRetrievalSnapshotError = new TypeError(
+            "Invalid parent retrieval capture input",
+          );
+          return;
+        }
+        try {
+          parentRetrievalSnapshot = captureParentRetrievalSnapshot({
+            ...captureInput,
+            hostGeneration: retrievalSnapshotMeta.hostGeneration,
+            generationId: retrievalSnapshotMeta.generationId,
+            userId: retrievalSnapshotMeta.userId,
+            chatId: retrievalSnapshotMeta.chatId,
+            capturedAt: retrievalSnapshotMeta.capturedAt,
+            expiresAt: retrievalSnapshotMeta.expiresAt,
+          });
+        } catch (error) {
+          parentRetrievalSnapshotError =
+            error instanceof Error ? error : new Error(String(error));
+        }
+      }
+    : undefined;
+
 
   if (opts.inputMessages) {
     messages = opts.inputMessages;
@@ -1324,11 +1698,12 @@ async function runPromptPipeline(opts: {
     const assemblyCtx = {
       userId: opts.userId,
       chatId: opts.chatId,
-      connectionId: opts.connectionId,
-      presetId: opts.presetId,
+      connectionId: spindleContext.connectionId ?? opts.connectionId,
+      presetId:
+        typeof spindleContext.presetId === "string"
+          ? spindleContext.presetId
+          : opts.presetId,
       forcePresetId: opts.forcePresetId,
-      personaId: opts.personaId,
-      personaAddonStates: opts.personaAddonStates,
       generationType: opts.generationType as GenerationType,
       impersonateMode: opts.impersonateMode,
       impersonateInput: opts.impersonateInput,
@@ -1346,36 +1721,74 @@ async function runPromptPipeline(opts: {
       signal: opts.signal,
     };
 
-    let assemblyResult: Awaited<ReturnType<typeof assemblePrompt>>;
+    if (retrievalSnapshotMeta && onParentRetrievalReady) {
+      attachParentRetrievalCapture(assemblyCtx, {
+        meta: retrievalSnapshotMeta,
+        onParentRetrievalReady,
+      });
+    }
 
-    if (canUsePromptAssemblyWorker()) {
-      try {
-        assemblyResult = await assemblePromptInWorker(assemblyCtx);
-      } catch (err: any) {
-        if (opts.signal?.aborted || err?.name === "AbortError") throw err;
-        console.warn(
-          "[generate] Prompt assembly worker failed; falling back to in-process assembly:",
-          err?.message || err,
-        );
+    let assemblyResult: Awaited<ReturnType<typeof assemblePrompt>>;
+    try {
+      if (canUsePromptAssemblyWorker() && !opts.mainDispatchSnapshot) {
+        try {
+          assemblyResult = await assemblePromptInWorker(assemblyCtx);
+        } catch (err: unknown) {
+          const error = err as { name?: unknown; message?: unknown };
+          if (opts.signal?.aborted || error?.name === "AbortError") throw err;
+          console.warn(
+            "[generate] Prompt assembly worker failed; falling back to in-process assembly:",
+            error?.message || err,
+          );
+          const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
+          const prefetched = await prefetchAssemblyData(assemblyCtx);
+          const effectiveAssemblyCtx = { ...assemblyCtx, prefetched };
+          if (retrievalSnapshotMeta && onParentRetrievalReady) {
+            detachParentRetrievalCapture(assemblyCtx);
+            attachParentRetrievalCapture(effectiveAssemblyCtx, {
+              meta: retrievalSnapshotMeta,
+              onParentRetrievalReady,
+            });
+          }
+          try {
+            assemblyResult = await assemblePrompt(effectiveAssemblyCtx);
+          } finally {
+            if (retrievalSnapshotMeta && onParentRetrievalReady) {
+              detachParentRetrievalCapture(effectiveAssemblyCtx);
+            }
+          }
+        }
+      } else {
+        // Batch-prefetch all data the assembly pipeline needs in ~7 queries
+        // instead of the ~35-40 scattered individual calls inside assemblePrompt.
         const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
         const prefetched = await prefetchAssemblyData(assemblyCtx);
-        assemblyResult = await assemblePrompt({ ...assemblyCtx, prefetched });
+        const effectiveAssemblyCtx = { ...assemblyCtx, prefetched };
+        if (retrievalSnapshotMeta && onParentRetrievalReady) {
+          detachParentRetrievalCapture(assemblyCtx);
+          attachParentRetrievalCapture(effectiveAssemblyCtx, {
+            meta: retrievalSnapshotMeta,
+            onParentRetrievalReady,
+          });
+        }
+        try {
+          assemblyResult = await assemblePrompt(effectiveAssemblyCtx);
+        } finally {
+          if (retrievalSnapshotMeta && onParentRetrievalReady) {
+            detachParentRetrievalCapture(effectiveAssemblyCtx);
+          }
+        }
       }
-    } else {
-      // Batch-prefetch all data the assembly pipeline needs in ~7 queries
-      // instead of the ~35-40 scattered individual calls inside assemblePrompt.
-      // Thread the signal so prefetch yields + bails out if the user aborts
-      // during its synchronous DB reads.
-      const { prefetchAssemblyData } = await import("./prompt-assembly-prefetch");
-      const prefetched = await prefetchAssemblyData(assemblyCtx);
-
-      // All presets (classic and lumi) go through the same assembly path
-      assemblyResult = await assemblePrompt({ ...assemblyCtx, prefetched });
+    } finally {
+      if (retrievalSnapshotMeta && onParentRetrievalReady) {
+        detachParentRetrievalCapture(assemblyCtx);
+      }
     }
 
     messages = assemblyResult.messages;
     assembledParams = assemblyResult.parameters;
     breakdown = assemblyResult.breakdown;
+
     assistantPrefill = assemblyResult.assistantPrefill;
     activatedWorldInfo = assemblyResult.activatedWorldInfo;
     worldInfoStats = assemblyResult.worldInfoStats;
@@ -1385,6 +1798,93 @@ async function runPromptPipeline(opts: {
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
+  }
+  let effectiveMainDispatchSnapshot = opts.mainDispatchSnapshot;
+  if (callbackActive && opts.mainDispatchSnapshot) {
+    effectiveMainDispatchSnapshot = captureMainDispatchSnapshot({
+      hostGeneration: opts.mainDispatchSnapshot.hostGeneration,
+      generationId: opts.mainDispatchSnapshot.generationId,
+      userId: opts.mainDispatchSnapshot.userId,
+      chatId: opts.mainDispatchSnapshot.chatId,
+      descriptor: opts.mainDispatchSnapshot.descriptor,
+      parameters: {
+        ...assembledParams,
+        ...opts.inputParameters,
+      },
+      reasoning: opts.mainDispatchSnapshot.reasoning,
+      authoritativeContext: {
+        ...opts.mainDispatchSnapshot.authoritativeContext,
+        connectionId: spindleContext.connectionId ?? opts.connectionId ?? null,
+        presetId:
+          typeof spindleContext.presetId === "string"
+            ? spindleContext.presetId
+            : opts.presetId ?? null,
+        settings: spindleContext.settings ?? null,
+      },
+    });
+  }
+  if (retrievalSnapshotMeta && effectiveMainDispatchSnapshot) {
+    if (parentRetrievalSnapshotError) {
+      throw parentRetrievalSnapshotError;
+    }
+    if (!parentRetrievalSnapshot) {
+      parentRetrievalSnapshot = captureParentRetrievalSnapshot({
+        hostGeneration: retrievalSnapshotMeta.hostGeneration,
+        generationId: retrievalSnapshotMeta.generationId,
+        userId: retrievalSnapshotMeta.userId,
+        chatId: retrievalSnapshotMeta.chatId,
+        capturedAt: retrievalSnapshotMeta.capturedAt,
+        expiresAt: retrievalSnapshotMeta.expiresAt,
+        vectorWorldInfo: {},
+        chatMemory: {},
+        cortex: {},
+        databank: {},
+        settings: {},
+        results: {},
+        multiplayerMacroContext: null,
+        multiplayerPersona: null,
+      });
+    }
+    try {
+      const parentPrefill = {
+        id: crypto.randomUUID(),
+        state: assistantPrefill ? ("available" as const) : ("absent" as const),
+      };
+      parentGenerationSnapshot = captureParentGenerationSnapshot({
+        hostGeneration: effectiveMainDispatchSnapshot.hostGeneration,
+        generationId: effectiveMainDispatchSnapshot.generationId,
+        userId: effectiveMainDispatchSnapshot.userId,
+        chatId: opts.chatId,
+        main: effectiveMainDispatchSnapshot,
+        retrieval: parentRetrievalSnapshot,
+        parentIdentities: {
+          chatId: opts.chatId,
+          connectionId: effectiveMainDispatchSnapshot.descriptor.connectionId,
+          personaId: spindleContext.personaId ?? null,
+          targetCharacterId: opts.targetCharacterId ?? null,
+        },
+        options: {
+          generationType: opts.generationType,
+          excludeMessageId: opts.excludeMessageId ?? null,
+          targetCharacterId: opts.targetCharacterId ?? null,
+        },
+        parentPrefill,
+        parentPrefillCarrier: assistantPrefill
+          ? [{ role: "assistant", content: assistantPrefill }]
+          : undefined,
+        parentPrefillCarrierIndex: findParentPrefillCarrierIndex(
+          messages,
+          assistantPrefill,
+        ),
+        interceptorDeadlineAt: retrievalSnapshotMeta.expiresAt,
+        boundWorkDeadlineAt:
+          retrievalSnapshotMeta.expiresAt - BOUND_INTERCEPTOR_RESERVE_MS,
+      });
+    } catch (error) {
+      parentRetrievalSnapshotError =
+        error instanceof Error ? error : new Error(String(error));
+      throw parentRetrievalSnapshotError;
+    }
   }
 
   // Snapshot chat history messages BEFORE interceptors/post-processing can
@@ -1405,30 +1905,158 @@ async function runPromptPipeline(opts: {
     spindleContext.activatedWorldInfo = activatedWorldInfo;
   }
 
-  // Run Spindle interceptor pipeline on assembled messages
+  // Run Spindle interceptor pipeline on assembled messages.
   // The pipeline uses LlmMessageDTO (string-only content) — at this stage
   // multimodal parts have already been serialised so the cast is safe.
   let interceptorParameters: Record<string, unknown> | undefined;
+  let interceptorTerminalLeases: readonly InterceptorTerminalLease[] | undefined;
+  let interceptorFinalResponse: InterceptorFinalResponseState | undefined;
+  let interceptorContext: object | SpindleContext = spindleContext;
+  let authority: InterceptorPipelineAuthority | undefined;
   if (interceptorPipeline.count > 0) {
+    if (callbackActive && effectiveMainDispatchSnapshot) {
+      if (!parentGenerationSnapshot) {
+        throw (
+          parentRetrievalSnapshotError ??
+          new Error("Main interceptor parent snapshot is unavailable")
+        );
+      }
+      const callbackConnection = connectionsSvc.resolveConnection(
+        opts.userId,
+        spindleContext.connectionId ??
+          effectiveMainDispatchSnapshot.descriptor.connectionId,
+      );
+      const presetId =
+        typeof spindleContext.presetId === "string"
+          ? spindleContext.presetId
+          : callbackConnection?.preset_id;
+      const presetMetadataByExtension = presetId
+        ? presetsSvc.getPreset(opts.userId, presetId)?.metadata
+        : undefined;
+      const seed = buildInterceptorContextSeed({
+        userId: opts.userId,
+        chatId: opts.chatId,
+        spindleContext,
+        generationId:
+          opts.mainGenerationId ?? effectiveMainDispatchSnapshot.generationId,
+        generationType: opts.generationType,
+        isDryRun: opts.isDryRun === true,
+        presetId,
+        personaId: spindleContext.personaId ?? opts.personaId,
+        personaAddonStates: opts.personaAddonStates,
+        excludeMessageId: opts.excludeMessageId,
+        rejectedSwipe: opts.rejectedSwipe,
+        targetCharacterId: opts.targetCharacterId,
+        regenFeedback: opts.regenFeedback,
+        regenFeedbackPosition: opts.regenFeedbackPosition,
+      });
+      const parentPrefillAttestation =
+        createParentPrefillAttestation(parentGenerationSnapshot);
+      authority = {
+        mainDispatchSnapshot: effectiveMainDispatchSnapshot,
+        parentGenerationSnapshot,
+        parentPrefillAttestation,
+        mainApiKey: opts.mainApiKey ?? "",
+        signal: opts.signal,
+        presetMetadataByExtension,
+      };
+      attachInterceptorPrivateState(seed, {
+        mainDispatchSnapshot: effectiveMainDispatchSnapshot,
+        parentGenerationSnapshot,
+        parentPrefillAttestation,
+        mainApiKey: opts.mainApiKey ?? "",
+        signal: opts.signal,
+      });
+
+      interceptorContext = seed;
+    }
     const interceptorResult = await interceptorPipeline.run(
       messages as import("lumiverse-spindle-types").LlmMessageDTO[],
-      spindleContext,
+      interceptorContext,
       opts.userId,
       opts.signal,
+      authority,
     );
+    interceptorTerminalLeases = interceptorResult.terminalLeases;
+    if (!callbackActive && interceptorTerminalLeases) {
+      for (const lease of interceptorTerminalLeases) {
+        try {
+          lease.release();
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      interceptorTerminalLeases = undefined;
+    }
     messages = interceptorResult.messages as unknown as LlmMessage[];
     interceptorParameters = interceptorResult.parameters;
     interceptorBreakdown = interceptorResult.breakdown;
+    interceptorFinalResponse = interceptorResult.finalResponseState;
   }
 
-  // Apply promptPostProcessing
+  // Native post-processing may merge or splice adjacent messages. Keep the
+  // final-response fallback carrier out of that destructive pass, then restore
+  // it at a deterministic index for either final dispatch or provider fallback.
+  try {
   const postProcessing = settingsSvc.getSetting(
     opts.userId,
     "promptPostProcessing",
   );
   if (postProcessing?.value) {
-    applyPostProcessing(messages, postProcessing.value);
+    if (interceptorFinalResponse?.status === "valid") {
+      const validFinalResponse = interceptorFinalResponse;
+      const carrierBreakdown = (interceptorBreakdown ?? []).filter((entry) =>
+        entry.messageIndex === validFinalResponse.fallbackMessageIndex
+        && entry.extensionId === validFinalResponse.extensionId
+        && entry.name === validFinalResponse.fallbackBreakdown.name
+      );
+      const detached = detachInterceptorFinalResponseCarrier(
+        validFinalResponse,
+        messages as LlmMessageDTO[],
+        interceptorBreakdown ?? [],
+      );
+      messages = detached.messages as unknown as LlmMessage[];
+      const postProcessingResult = applyPostProcessingAroundBarrier(
+        messages,
+        postProcessing.value,
+        detached.carrierInsertionIndex,
+      );
+      let postProcessedBreakdown = detached.breakdown.map((entry) => ({
+        ...entry,
+        messageIndex:
+          postProcessingResult.indexMap[entry.messageIndex] ?? entry.messageIndex,
+      }));
+      if (detached.prefillCarrier) {
+        postProcessedBreakdown = insertDetachedPrefillAtBarrier(
+          messages,
+          postProcessedBreakdown,
+          detached.prefillCarrier,
+          detached.prefillBreakdown,
+          postProcessingResult.barrierIndex,
+        );
+      }
+      const restored = refreshInterceptorFinalResponseCarrier(
+        {
+          ...validFinalResponse,
+          fallbackMessageIndex: postProcessingResult.barrierIndex,
+        },
+        messages as LlmMessageDTO[],
+        postProcessedBreakdown,
+      );
+      messages = restored.messages as unknown as LlmMessage[];
+      interceptorBreakdown = [
+        ...restored.breakdown,
+        ...carrierBreakdown.map((entry) => ({
+          ...entry,
+          messageIndex: restored.finalResponse.fallbackMessageIndex,
+        })),
+      ];
+      interceptorFinalResponse = restored.finalResponse;
+    } else {
+      applyPostProcessing(messages, postProcessing.value);
+    }
   }
+
 
   // Normal assembly applies prompt-target regexes before context clipping.
   // Keep this fallback for raw/explicit message callers that bypass assembly.
@@ -1445,6 +2073,17 @@ async function runPromptPipeline(opts: {
       target: "prompt",
     });
     if (promptScripts.length > 0) {
+      const protectedFinalResponseIndexes = new Set<number>();
+      if (interceptorFinalResponse?.status === "valid") {
+        protectedFinalResponseIndexes.add(
+          interceptorFinalResponse.fallbackMessageIndex,
+        );
+        if (interceptorFinalResponse.prefillCarrier) {
+          protectedFinalResponseIndexes.add(
+            interceptorFinalResponse.fallbackMessageIndex + 1,
+          );
+        }
+      }
       // Build a per-index depth map from the chat-history marker. Walk
       // messages in order, collect indices that carry the marker, then assign
       // depth = (totalChatHistory - 1 - positionInHistory) so the latest chat
@@ -1477,6 +2116,10 @@ async function runPromptPipeline(opts: {
         }
         const msg = messages[i];
         const wasChatHistory = isChatHistoryMessage(msg);
+        if (protectedFinalResponseIndexes.has(i)) {
+          if (wasChatHistory) regexedChatHistoryMessages.push(msg);
+          continue;
+        }
         const placement =
           msg.role === "user"
             ? ("user_input" as const)
@@ -1536,6 +2179,7 @@ async function runPromptPipeline(opts: {
 
       if (interceptorBreakdown && interceptorBreakdown.length > 0) {
         for (const entry of interceptorBreakdown) {
+          if (protectedFinalResponseIndexes.has(entry.messageIndex)) continue;
           const placement =
             entry.role === "user"
               ? ("user_input" as const)
@@ -1568,16 +2212,27 @@ async function runPromptPipeline(opts: {
     chatHistoryMessages = chatHistoryMessages.filter(hasNonEmptyContent);
   }
 
+  if (opts.isDryRun === true) {
+    const dryRunDispatch = selectInterceptorFinalResponse({
+      response: interceptorFinalResponse,
+      messages: messages as LlmMessageDTO[],
+      generationType: opts.generationType,
+      hasTools: false,
+      isDryRun: true,
+    });
+    messages = dryRunDispatch.messages as unknown as LlmMessage[];
+  }
   breakdown = appendInterceptorBreakdownEntries(
     breakdown,
     interceptorBreakdown,
   );
 
-  // Merge parameters: assembled (from preset) < interceptor overrides < request overrides
+  // Main keeps the host-captured post-assembly parameters authoritative; the
+  // interceptor result cannot mutate the host-captured provider request.
   const parameters: GenerationParameters = {
     ...assembledParams,
     ...interceptorParameters,
-    ...opts.inputParameters,
+    ...(effectiveMainDispatchSnapshot?.parameters ?? opts.inputParameters),
   };
   const effectiveConnection = resolveConnection(
     opts.userId,
@@ -1608,7 +2263,23 @@ async function runPromptPipeline(opts: {
     spindleContext,
     deliberationHandledByMacro,
     macroEnv,
+    mainDispatchSnapshot: effectiveMainDispatchSnapshot,
+    parentRetrievalSnapshot,
+    parentGenerationSnapshot,
+    terminalLeases: interceptorTerminalLeases,
+    finalResponse: interceptorFinalResponse,
+    parentRetrievalSnapshotError,
   };
+  } catch (error) {
+    for (const lease of interceptorTerminalLeases ?? []) {
+      try {
+        lease.release();
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    throw error;
+}
 }
 
 /** Resolve provider and key for raw generate: supports connection_id, direct api_key, or provider-name lookup. */
@@ -2031,6 +2702,7 @@ export async function startGeneration(
       // and delaying the response (and every other request) until that first
       // internal `await` yields.
       await new Promise<void>((r) => setTimeout(r, 0));
+      let setupTerminalLeases: readonly InterceptorTerminalLease[] = [];
       try {
         // Execute council if enabled (before prompt assembly so it doesn't slow the critical path visibly)
         const resolvedCouncilProfile = councilProfilesSvc.resolveProfile(
@@ -2623,6 +3295,52 @@ export async function startGeneration(
         }
 
         checkAborted();
+        const mainResolution = isCallbackActiveProviderRoute(genType, false)
+          ? await resolveMainGenerationContext({
+              userId: input.userId,
+              chatId: input.chat_id,
+              generationId,
+              generationType: genType,
+              connectionId: input.connection_id,
+              resolvedConnectionId: connection.id,
+              personaId: input.persona_id,
+              presetId: input.preset_id,
+              parameters: input.parameters,
+              signal: abortController.signal,
+            })
+          : undefined;
+        const dispatchProvider = mainResolution
+          ? getProvider(mainResolution.snapshot.provider)
+          : provider;
+        if (!dispatchProvider) {
+          throw new Error(
+            `Unknown provider: ${mainResolution?.snapshot.provider ?? connection.provider}`,
+          );
+        }
+        const dispatchApiKey =
+          mainResolution &&
+          mainResolution.snapshot.descriptor.connectionId !== connection.id
+            ? (
+                await resolveProviderAndKey(
+                  input.userId,
+                  mainResolution.snapshot.descriptor.connectionId,
+                )
+              ).apiKey
+            : apiKey;
+        const dispatchConnection = mainResolution
+          ? connectionsSvc.resolveConnection(
+              input.userId,
+              mainResolution.snapshot.descriptor.connectionId,
+            )
+          : connection;
+        if (!dispatchConnection) {
+          throw new Error("Dispatch connection is unavailable");
+        }
+        const dispatchApiUrl =
+          mainResolution?.snapshot.endpointOrigin ?? apiUrl;
+        const dispatchModel =
+          mainResolution?.snapshot.model ?? dispatchConnection.model;
+
 
         // Run shared prompt pipeline — cortex retrieval runs concurrently inside assembly.
         // Raced against the abort signal so a stop request tears down the setup phase
@@ -2634,7 +3352,9 @@ export async function startGeneration(
           runPromptPipeline({
             userId: input.userId,
             chatId: input.chat_id,
-            connectionId: input.connection_id,
+            connectionId:
+              mainResolution?.snapshot.descriptor.connectionId ??
+              input.connection_id,
             presetId: input.preset_id,
             forcePresetId: input.force_preset_id,
             personaId: input.persona_id,
@@ -2660,9 +3380,15 @@ export async function startGeneration(
             regenFeedback: input.regen_feedback,
             regenFeedbackPosition: input.regen_feedback_position,
             signal: abortController.signal,
+            preResolvedContext: mainResolution?.context,
+            preResolvedContextHandled: mainResolution !== undefined,
+            mainDispatchSnapshot: mainResolution?.snapshot,
+            mainGenerationId: generationId,
+            mainApiKey: dispatchApiKey,
           }),
           abortController.signal,
         );
+        setupTerminalLeases = pipeline.terminalLeases ?? [];
 
         let { messages } = pipeline;
         let { parameters: mergedParams } = pipeline;
@@ -2670,6 +3396,7 @@ export async function startGeneration(
           breakdown,
           activatedWorldInfo,
           deliberationHandledByMacro,
+          finalResponse,
         } = pipeline;
 
         // A context anchor is a strict guardrail: older history may be clipped,
@@ -2742,8 +3469,8 @@ export async function startGeneration(
         lifecycle.breakdown = breakdown;
         lifecycle.chatHistoryMessages = pipeline.chatHistoryMessages;
         lifecycle.messages = messages;
-        lifecycle.model = connection.model;
-        lifecycle.providerName = provider.name;
+        lifecycle.model = dispatchModel;
+        lifecycle.providerName = dispatchProvider.name;
         lifecycle.maxContext = mergedParams.max_context_length as
           | number
           | undefined;
@@ -2753,13 +3480,13 @@ export async function startGeneration(
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
 
-        injectConnectionMetadataFlags(connection, mergedParams);
+        injectConnectionMetadataFlags(dispatchConnection, mergedParams);
 
         const cached = applyPromptCaching(
           {
-            provider: provider.name,
-            model: connection.model,
-            metadata: connection.metadata,
+            provider: dispatchProvider.name,
+            model: dispatchModel,
+            metadata: dispatchConnection.metadata,
           },
           { params: mergedParams, messages, tools: inlineTools },
         );
@@ -2786,13 +3513,19 @@ export async function startGeneration(
             (mergedParams.seed + lifecycle.targetSwipeIdx) % MAX_SEED;
         }
 
-        // Resolve preset name for breakdown display
-        const presetId = input.preset_id || connection.preset_id;
-        if (presetId) {
-          const preset = presetsSvc.getPreset(input.userId, presetId);
+        const presetIdCandidate = [
+          pipeline.spindleContext.presetId,
+          input.preset_id,
+          dispatchConnection.preset_id,
+        ].find(
+          (value): value is string =>
+            typeof value === "string" && value.length > 0,
+        );
+        if (presetIdCandidate) {
+          const preset = presetsSvc.getPreset(input.userId, presetIdCandidate);
           if (preset) {
             lifecycle.presetName = preset.name;
-            lifecycle.presetId = presetId;
+            lifecycle.presetId = presetIdCandidate;
           }
         }
 
@@ -2804,10 +3537,10 @@ export async function startGeneration(
 
         await runGeneration(
           generationId,
-          provider,
-          apiKey,
-          apiUrl,
-          connection.model,
+          dispatchProvider,
+          dispatchApiKey,
+          dispatchApiUrl,
+          dispatchModel,
           messages,
           mergedParams,
           input.userId,
@@ -2821,7 +3554,12 @@ export async function startGeneration(
           pipeline.assistantPrefill,
           pipeline.macroEnv,
           pipeline.macroEnvSeed,
+          finalResponse,
+          pipeline.terminalLeases,
+          pipeline.parentGenerationSnapshot,
+          pipeline.mainDispatchSnapshot?.dispatchRevision,
         );
+        setupTerminalLeases = [];
       } catch (err: any) {
         // Clean up tracking maps if setup (council, assembly, etc.) fails or is aborted.
         // Only clear the per-chat mapping if it still points at THIS generation —
@@ -2886,6 +3624,14 @@ export async function startGeneration(
           input.userId,
         );
       } finally {
+        for (const lease of setupTerminalLeases) {
+          try {
+            lease.release();
+          } catch {
+            /* best-effort cleanup */
+          }
+        }
+        setupTerminalLeases = [];
         resolveCompletion();
       }
     })();
@@ -3066,6 +3812,10 @@ async function runGeneration(
   assistantPrefill?: string,
   macroEnv?: import("../macros/types").MacroEnv,
   macroEnvSeed?: import("../macros/types").MacroEnv,
+  finalResponse?: InterceptorFinalResponseState,
+  terminalLeases?: readonly InterceptorTerminalLease[],
+  parentGenerationSnapshot?: ParentGenerationSnapshot,
+  currentDispatchRevision?: string,
 ): Promise<void> {
   // GENERATION_STARTED was already emitted when the pool entry was created
   // (before assembly). Once the provider stream is live, emit a lighter
@@ -3368,9 +4118,6 @@ async function runGeneration(
   // the prefill is (or starts with) the configured reasoning prefix, it's
   // classified as reasoning from the first token instead of leaking into the
   // content bubble and then being re-extracted by the post-parse safety net.
-  if (assistantPrefill) {
-    processContentToken(assistantPrefill);
-  }
 
   // Determine streaming mode from _streaming parameter (defaults to true)
   const useStreaming = parameters._streaming !== false;
@@ -3380,12 +4127,155 @@ async function runGeneration(
   const poolEntry = pool.getPoolEntry(generationId);
   if (poolEntry) poolEntry.wasStreaming = useStreaming;
 
+  let emittedEnded = false;
   let emittedStopped = false;
+  let activeTerminalLeases = [...(terminalLeases ?? [])];
+  let usingFinalResponse = false;
   try {
     const inlineMcpTimeoutMs = tools?.length
-      ? inlineToolTimeoutMs ?? getCouncilSettings(userId).toolsSettings.timeoutMs
+      ? normalizeInlineToolTimeoutMs(
+          inlineToolTimeoutMs ?? getCouncilSettings(userId).toolsSettings.timeoutMs,
+        )
       : 30_000;
     let generationMessages = messages;
+    let nextAttemptPurpose: "thread-continuation" | "terminal-guidance" =
+      "terminal-guidance";
+    const liveDispatchRevision =
+      currentDispatchRevision && parentGenerationSnapshot
+        ? () =>
+            resolveMainDispatchSnapshot(userId, {
+              connectionId: parentGenerationSnapshot.main.descriptor.connectionId,
+              presetId:
+                typeof parentGenerationSnapshot.main.authoritativeContext
+                  .presetId === "string"
+                  ? parentGenerationSnapshot.main.authoritativeContext.presetId
+                  : undefined,
+              reasoning:
+                parentGenerationSnapshot.main.authoritativeContext.reasoning,
+              settings:
+                parentGenerationSnapshot.main.authoritativeContext.settings,
+            }).dispatchRevision
+        : undefined;
+    const baseBreakdown = (lifecycle.breakdown ?? []).map((entry) => ({
+      ...entry,
+    }));
+    const applyFinalizedBreakdown = (finalized: {
+      readonly breakdown: readonly unknown[];
+      readonly guidance: readonly unknown[];
+    } | undefined): void => {
+      if (!finalized) return;
+      const terminalBreakdown = finalized.breakdown
+        .slice(0, finalized.guidance.length)
+        .flatMap((entry) => {
+          if (!entry || typeof entry !== "object") return [];
+          const record = entry as Record<string, unknown>;
+          if (
+            typeof record.name !== "string" ||
+            typeof record.content !== "string" ||
+            typeof record.extensionId !== "string" ||
+            typeof record.extensionName !== "string"
+          ) {
+            return [];
+          }
+          return [{
+            type: "extension" as const,
+            name: record.name,
+            role:
+              typeof record.role === "string" ? record.role : "system",
+            content: record.content,
+            extensionId: record.extensionId,
+            extensionName: record.extensionName,
+          }];
+        });
+      lifecycle.breakdown = [...baseBreakdown, ...terminalBreakdown];
+    };
+    const finalizeProviderAttempt = async (
+      requestMessages: LlmMessage[],
+      purpose: "thread-continuation" | "terminal-guidance",
+    ) => {
+      if (activeTerminalLeases.length === 0) return undefined;
+      const attemptId = `${generationId}:provider:${crypto.randomUUID()}`;
+      const foundCarrierIndex = findParentPrefillCarrierIndex(
+        requestMessages,
+        assistantPrefill,
+      );
+      if (
+        parentGenerationSnapshot?.parentPrefill.state === "available" &&
+        foundCarrierIndex === undefined
+      ) {
+        throw new Error("Authenticated parent prefill carrier is missing");
+      }
+      const carrierIndex =
+        foundCarrierIndex ?? Math.max(0, requestMessages.length - 1);
+      const rebudget = async ({
+        request,
+        messages: finalizedMessages,
+        guidance,
+      }: {
+        request: { readonly messages: readonly LlmMessage[] };
+        messages: readonly LlmMessage[];
+        guidance: readonly { readonly content: string }[];
+      }) => {
+        const clippedMessages = [...finalizedMessages] as LlmMessage[];
+        const clipStats = await clipToContextBudget(
+          clippedMessages,
+          model,
+          lifecycle.maxContext,
+          typeof parameters.max_tokens === "number"
+            ? parameters.max_tokens
+            : undefined,
+          signal,
+        );
+        lifecycle.contextClipStats = clipStats;
+        if (foundCarrierIndex !== undefined) {
+          const carrierMessage = requestMessages[foundCarrierIndex];
+          const outputCarrierIndex = carrierMessage
+            ? clippedMessages.indexOf(carrierMessage)
+            : -1;
+          if (outputCarrierIndex < 0) {
+            throw new Error("Authenticated parent prefill carrier was not preserved");
+          }
+          const guidanceStart = outputCarrierIndex - guidance.length;
+          for (let index = 0; index < guidance.length; index += 1) {
+            const message = clippedMessages[guidanceStart + index];
+            if (
+              !message ||
+              message.role !== "system" ||
+              getTextContent(message) !== guidance[index]?.content
+            ) {
+              throw new Error("Terminal guidance was not preserved before carrier");
+            }
+          }
+        }
+        return {
+          request: {
+            ...request,
+            messages: clippedMessages,
+          },
+          messages: clippedMessages,
+          breakdown: baseBreakdown,
+        };
+      };
+      const finalized = await finalizeInterceptorTerminalLeases({
+        leases: activeTerminalLeases,
+        purpose,
+        attemptId,
+        currentParentGenerationSnapshot: parentGenerationSnapshot,
+        request: { messages: requestMessages },
+        carrierIndex,
+        currentDispatchRevision,
+        liveDispatchRevision,
+        expectedDispatchSource: "main",
+        liveDispatchSource: () => "main",
+        deadlineAt: parentGenerationSnapshot?.boundWorkDeadlineAt,
+        permissionGuard: () =>
+          activeTerminalLeases.every((lease) => lease.isActive()),
+        finalResponseState: finalResponse,
+        signal,
+        rebudget,
+      });
+      return finalized;
+    };
 
     // Providers that round-trip reasoning across tool calls (DeepSeek thinking
     // mode, etc.) get a native tool_use/tool_result continuation so the model
@@ -3396,6 +4286,107 @@ async function runGeneration(
     const interleavedStructured =
       !!tools?.length && provider.capabilities.interleavedThinking === true;
 
+    const throwIfFinalResponseAborted = (): void => {
+      if (usingFinalResponse && signal.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+    };
+    if (signal.aborted) {
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
+    let terminalFinalResponse = finalResponse;
+    let terminalFinalizationFailed = false;
+    const nativeFinalResponseEligible =
+      terminalFinalResponse?.status === "valid" &&
+      (lifecycle.generationType === "normal" ||
+        lifecycle.generationType === "continue") &&
+      !tools?.length;
+    if (nativeFinalResponseEligible) {
+      if (activeTerminalLeases.length === 0) {
+        terminalFinalizationFailed = true;
+        terminalFinalResponse = undefined;
+        console.warn(
+          "[generate] Final response has no active terminal lease; using provider fallback",
+        );
+      } else {
+        try {
+          const finalized = await finalizeProviderAttempt(
+            generationMessages,
+            "terminal-guidance",
+          );
+          if (!finalized) {
+            throw new Error("Final response terminal lease finalization returned no result");
+          }
+          applyFinalizedBreakdown(finalized);
+          generationMessages = finalized.messages as unknown as LlmMessage[];
+          terminalFinalResponse =
+            finalized.finalResponse?.status === "valid"
+              ? finalized.finalResponse
+              : undefined;
+        } catch (error) {
+          terminalFinalizationFailed = true;
+          terminalFinalResponse = undefined;
+          activeTerminalLeases = [];
+          console.warn(
+            "[generate] Final response terminal lease finalization failed; using provider fallback:",
+            error,
+          );
+        }
+      }
+    }
+
+    const responseDispatch = selectInterceptorFinalResponse({
+      response: terminalFinalizationFailed ? undefined : terminalFinalResponse,
+      messages: generationMessages as LlmMessageDTO[],
+      generationType: lifecycle.generationType,
+      hasTools: !!tools?.length,
+      isDryRun: false,
+    });
+    generationMessages = responseDispatch.messages as unknown as LlmMessage[];
+    throwIfFinalResponseAborted();
+    if (responseDispatch.kind === "final-response") {
+      usingFinalResponse = true;
+      lifecycle.breakdown = applyFinalResponseBreakdownReplacement(
+        lifecycle.breakdown,
+        responseDispatch.breakdownReplacement,
+      );
+      lifecycle.messages = generationMessages;
+      lifecycle.providerName = `Spindle: ${responseDispatch.response.extensionName}`;
+      eventBus.emit(
+        EventType.GENERATION_IN_PROGRESS,
+        {
+          generationId,
+          chatId,
+          model,
+          breakdown: lifecycle.breakdown,
+          targetMessageId: lifecycle.targetMessageId,
+          targetSwipeId: lifecycle.streamingSwipeId,
+          characterId: lifecycle.targetCharacterId,
+          characterName: lifecycle.characterName,
+          contextClipStats: lifecycle.contextClipStats,
+        },
+        userId,
+      );
+      if (lifecycle.stagedMessageId) {
+        chatsSvc.deleteMessage(userId, lifecycle.stagedMessageId);
+        lifecycle.stagedMessageId = undefined;
+      }
+      if (signal.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+      if (responseDispatch.response.reasoning) {
+        emitReasoningToken(responseDispatch.response.reasoning);
+      }
+      processContentToken(responseDispatch.response.content);
+      if (signal.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+    } else if (responseDispatch.warning) {
+      console.warn(`[generate] ${responseDispatch.warning}`);
+    }
+
+    if (!usingFinalResponse) {
+    let prefillEmitted = false;
     for (let inlineRound = 0; inlineRound < INLINE_TOOL_MAX_ROUNDS; inlineRound++) {
       // fullContent/fullReasoning accumulate across rounds for the final
       // persisted message; capture the start offsets so we can slice out just
@@ -3411,9 +4402,11 @@ async function runGeneration(
 
       // Non-streaming path: call generate() once, then synthesize a single-chunk stream.
       // Wrapped in a factory so the pre-token retry below can re-issue a clean request.
-      const makeStream = (): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
+      const makeStream = (
+        requestMessages: LlmMessage[],
+      ): AsyncGenerator<StreamChunk, void, unknown> => useStreaming
         ? provider.generateStream(apiKey, apiUrl, {
-            messages: generationMessages,
+            messages: requestMessages,
             model,
             parameters,
             stream: true,
@@ -3422,7 +4415,7 @@ async function runGeneration(
           })
         : (async function* () {
             const result = await provider.generate(apiKey, apiUrl, {
-              messages: generationMessages,
+              messages: requestMessages,
               model,
               parameters,
               stream: false,
@@ -3448,9 +4441,32 @@ async function runGeneration(
       let iter!: AsyncIterator<StreamChunk, void>;
       let firstResult!: IteratorResult<StreamChunk, void>;
       for (let attempt = 0; ; attempt++) {
-        const candidate = makeStream()[Symbol.asyncIterator]();
+        // Finalize the host-held leases for every distinct provider attempt.
+        // The callback pipeline has already run exactly once; each call here
+        // only revalidates and re-materializes its ordered guidance.
+        const finalizedAttempt = await finalizeProviderAttempt(
+          generationMessages,
+          nextAttemptPurpose,
+        );
+        applyFinalizedBreakdown(finalizedAttempt);
+        if (finalizedAttempt?.prefillChild) {
+          attachBoundParentPrefill(
+            finalizedAttempt.prefillChild,
+            finalizedAttempt.attemptId,
+            nextAttemptPurpose,
+          );
+        }
+        const requestMessages = finalizedAttempt
+          ? (finalizedAttempt.messages as unknown as LlmMessage[])
+          : generationMessages;
+        lifecycle.messages = requestMessages;
+        const candidate = makeStream(requestMessages)[Symbol.asyncIterator]();
         try {
           firstResult = await raceWithSignal(candidate.next(), signal);
+          if (assistantPrefill && !prefillEmitted) {
+            processContentToken(assistantPrefill);
+            prefillEmitted = true;
+          }
           iter = candidate;
           break;
         } catch (err) {
@@ -3598,31 +4614,36 @@ async function runGeneration(
             )
           : [];
 
-      if (inlineCouncilResults.length === 0) {
+      const hasInlineContinuation = inlineCouncilResults.length > 0;
+      const continuationMessages = hasInlineContinuation
+        ? [
+            ...generationMessages,
+            ...buildInlineToolContinuation({
+              structured: interleavedStructured,
+              legacyAssistantOutput: fullAssistantOutput,
+              roundContent,
+              roundReasoning,
+              toolCalls: pendingToolCalls ?? [],
+              results: inlineCouncilResults,
+              thinkingBlocks: pendingThinkingBlocks,
+              reasoningDetails: pendingReasoningDetails,
+            }),
+          ]
+        : inlineContextMessages;
+      if (!hasInlineContinuation) {
         break;
       }
-
-      generationMessages = [
-        ...generationMessages,
-        ...buildInlineToolContinuation({
-          structured: interleavedStructured,
-          legacyAssistantOutput: fullAssistantOutput,
-          roundContent,
-          roundReasoning,
-          toolCalls: pendingToolCalls ?? [],
-          results: inlineCouncilResults,
-          thinkingBlocks: pendingThinkingBlocks,
-          reasoningDetails: pendingReasoningDetails,
-        }),
-      ];
+      generationMessages = continuationMessages;
+      nextAttemptPurpose = "thread-continuation";
+    }
     }
 
     // Clean exit after abort — the stream may have returned done:true via
     // readWithAbort without ever re-entering the for-await body, so the
-    // in-loop STOPPED emission above never fired. Emit now so the frontend
-    // gets its completion signal and can unblock its streaming UI.
     if (signal.aborted && !emittedStopped) {
-      const persisted = await persistPartialContent();
+      const persisted = usingFinalResponse
+        ? { content: "" }
+        : await persistPartialContent();
       pool.stopPool(generationId);
       eventBus.emit(
         EventType.GENERATION_STOPPED,
@@ -3634,7 +4655,9 @@ async function runGeneration(
 
     if (!signal.aborted) {
       // Flush any remaining CoT detection buffers before saving
+      throwIfFinalResponseAborted();
       flushCotBuffers();
+      throwIfFinalResponseAborted();
 
       // Post-parse: extract any reasoning tags that slipped through streaming
       // detection. Handles edge cases where prefix/suffix split across chunks
@@ -3653,6 +4676,7 @@ async function runGeneration(
           }
         }
       }
+      throwIfFinalResponseAborted();
 
       // Apply regex scripts (response target) to completed content
       {
@@ -3662,6 +4686,7 @@ async function runGeneration(
           target: "response",
         });
         if (responseScripts.length > 0) {
+          throwIfFinalResponseAborted();
           fullContent = await regexScriptsSvc.applyRegexScripts(
             fullContent,
             responseScripts,
@@ -3671,7 +4696,9 @@ async function runGeneration(
             undefined,
             { source: "response_backend" },
           );
+          throwIfFinalResponseAborted();
           if (fullReasoning) {
+            throwIfFinalResponseAborted();
             fullReasoning = await regexScriptsSvc.applyRegexScripts(
               fullReasoning,
               responseScripts,
@@ -3681,9 +4708,42 @@ async function runGeneration(
               undefined,
               { source: "response_backend" },
             );
+            throwIfFinalResponseAborted();
           }
         }
       }
+
+      throwIfFinalResponseAborted();
+      let finalResponseMacroEnv: MacroEnv | undefined;
+      if (usingFinalResponse && fullContent.trim().length === 0) {
+        throw new FinalResponseOutputError(
+          "Interceptor final response became empty after response processing",
+        );
+      }
+      if (usingFinalResponse && (macroEnv || macroEnvSeed)) {
+        const assistantEnv = cloneEnv(macroEnv ?? macroEnvSeed!);
+        throwIfFinalResponseAborted();
+        fullContent = await resolveRenderedMessageContent(fullContent, assistantEnv);
+        throwIfFinalResponseAborted();
+        if (fullContent.trim().length === 0) {
+          throw new FinalResponseOutputError(
+            "Interceptor final response became empty after macro processing",
+          );
+        }
+        finalResponseMacroEnv = assistantEnv;
+      }
+      if (usingFinalResponse && (lifecycle.sourceUserMessageIds?.length ?? 0) > 0) {
+        throwIfFinalResponseAborted();
+        await reconcileChatMessageMacros({
+          userId,
+          chatId,
+          messageIds: lifecycle.sourceUserMessageIds ?? [],
+          macroEnvSeed,
+          persistVariables: false,
+        });
+        throwIfFinalResponseAborted();
+      }
+      throwIfFinalResponseAborted();
 
       let messageId: string | undefined;
 
@@ -3761,7 +4821,13 @@ async function runGeneration(
         messageId = message.id;
       }
 
-      if ((lifecycle.sourceUserMessageIds?.length ?? 0) > 0) {
+      if (finalResponseMacroEnv) {
+        throwIfFinalResponseAborted();
+        persistMacroVariableState(userId, chatId, finalResponseMacroEnv);
+        throwIfFinalResponseAborted();
+      }
+
+      if (!usingFinalResponse && (lifecycle.sourceUserMessageIds?.length ?? 0) > 0) {
         await reconcileChatMessageMacros({
           userId,
           chatId,
@@ -3770,6 +4836,7 @@ async function runGeneration(
           persistVariables: false,
         });
       }
+      throwIfFinalResponseAborted();
 
       if (messageId) {
         const savedMessage = chatsSvc.getMessage(userId, messageId);
@@ -3789,7 +4856,7 @@ async function runGeneration(
             ? savedMessage!.swipes[genSwipeId]
             : (savedMessage?.content ?? fullContent);
         let resolvedMessage = baseContent ?? fullContent;
-        if (macroEnv || macroEnvSeed) {
+        if (!usingFinalResponse && (macroEnv || macroEnvSeed)) {
           const assistantEnv = cloneEnv(macroEnv ?? macroEnvSeed!);
           resolvedMessage = await resolveRenderedMessageContent(
             baseContent ?? fullContent,
@@ -3806,6 +4873,7 @@ async function runGeneration(
         fullContent = resolvedMessage;
       }
 
+      throwIfFinalResponseAborted();
       // Compute reasoning duration if content tokens never arrived (reasoning-only response)
       if (reasoningStartedAt && !reasoningDurationMs) {
         reasoningDurationMs = Date.now() - reasoningStartedAt;
@@ -3818,8 +4886,8 @@ async function runGeneration(
       {
         const immediateExtra: Record<string, any> = {};
         if (fullReasoning) immediateExtra.reasoning = fullReasoning;
-        if (streamUsage) immediateExtra.usage = streamUsage;
-        if (reasoningDurationMs > 0)
+        if (!usingFinalResponse && streamUsage) immediateExtra.usage = streamUsage;
+        if (!usingFinalResponse && reasoningDurationMs > 0)
           immediateExtra.reasoningDuration = reasoningDurationMs;
         if (messageId && Object.keys(immediateExtra).length > 0) {
           // Anchor reasoning/usage to the generated swipe, not the displayed one —
@@ -3832,9 +4900,12 @@ async function runGeneration(
           );
         }
       }
+      throwIfFinalResponseAborted();
 
+      throwIfFinalResponseAborted();
       flushPendingStreamSegments();
       pool.completePool(generationId, messageId);
+      throwIfFinalResponseAborted();
       eventBus.emit(
         EventType.GENERATION_ENDED,
         {
@@ -3842,20 +4913,25 @@ async function runGeneration(
           chatId,
           messageId,
           content: fullContent,
-          usage: streamUsage,
+          ...(usingFinalResponse ? {} : { usage: streamUsage }),
           generationType: lifecycle.generationType,
           impersonateDraft: lifecycle.impersonateDraft || undefined,
         },
         userId,
       );
+      emittedEnded = true;
+      throwIfFinalResponseAborted();
 
       // Non-critical post-processing can be expensive on low-power/mobile
       // hosts (tokenizer startup, full breakdown counting). Run it after the
       // terminal WS event so the UI doesn't sit in a fake "still generating"
       // state after the final token already rendered.
       void (async () => {
+        if (signal.aborted) return;
         await yieldToEventLoop();
+        if (signal.aborted) return;
 
+        if (!usingFinalResponse) {
         // ── Generation metrics (tokenCount, TTFT, TPS) ───────────────────
         const finalPoolEntry = pool.getPoolEntry(generationId);
         let resolvedTokenCount: number | undefined;
@@ -3953,17 +5029,20 @@ async function runGeneration(
           );
         }
 
+        }
         if (
           lifecycle.breakdown &&
           lifecycle.breakdown.length > 0 &&
           lifecycle.model
         ) {
           try {
+            if (signal.aborted) return;
             const tokenResult = await tokenizerSvc.countBreakdown(
               lifecycle.model,
               lifecycle.breakdown,
               lifecycle.chatHistoryMessages,
             );
+            if (signal.aborted) return;
             const entries = tokenResult.breakdown.map((entry, index) => ({
               ...entry,
               content: lifecycle.breakdown?.[index]?.content,
@@ -3986,12 +5065,13 @@ async function runGeneration(
               model: lifecycle.model,
               provider: lifecycle.providerName || "",
               parameters,
-              usage: streamUsage,
+              ...(usingFinalResponse ? {} : { usage: streamUsage }),
               presetName: lifecycle.presetName,
               presetId: lifecycle.presetId,
               tokenizer_name: tokenResult.tokenizer_name,
             };
             if (messageId) {
+              if (signal.aborted) return;
               breakdownSvc.storeBreakdown(
                 userId,
                 messageId,
@@ -4011,6 +5091,7 @@ async function runGeneration(
                 { generationId, chatId, messageId, breakdown: breakdownForClient },
                 userId,
               );
+              if (signal.aborted) return;
             }
           } catch {
             // non-fatal
@@ -4020,8 +5101,15 @@ async function runGeneration(
         console.warn("[generate] Deferred post-processing failed:", err);
       });
 
-      // Fire-and-forget expression detection after successful generation
-      fireExpressionDetection(userId, chatId, lifecycle).catch(() => {});
+      // Fire-and-forget expression detection after successful generation.
+      // Native final responses may reuse local council attribution, but never
+      // trigger a second network-backed detector request.
+      fireExpressionDetection(
+        userId,
+        chatId,
+        lifecycle,
+        { allowNetwork: !usingFinalResponse },
+      ).catch(() => {});
     }
   } catch (err: unknown) {
     // If the stream iterator threw because the abort signal fired (rather than
@@ -4032,20 +5120,20 @@ async function runGeneration(
       // Skip if the post-loop / in-loop branch already emitted — catches
       // the case where a later .next() race threw AFTER the loop body's
       // STOPPED emission had already fired.
-      if (!emittedStopped) {
-        // Persist whatever was already streamed — same recovery as the
-        // non-abort error path. Without this, cancelling mid-stream wiped the
-        // message even though the tokens had already rendered for the user.
-        // Yield a macrotask first so the provider's stream teardown finishes
-        // before we kick off SQLite writes; on Bun-Windows, interleaving DB
-        // work with ReadableStream teardown was a reproducible panic trigger.
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        let savedContent = fullContent;
-        try {
-          const persisted = await persistPartialContent();
-          savedContent = persisted.content;
-        } catch {
-          /* best-effort; fall back to in-memory content */
+      if (!emittedStopped && !emittedEnded) {
+        // A native final response has no provider partial to recover. Stop
+        // before persistence discards the candidate and emits one terminal stop.
+        let savedContent = usingFinalResponse ? "" : fullContent;
+        if (!usingFinalResponse) {
+          // Yield a macrotask first so the provider's stream teardown finishes
+          // before SQLite writes on the ordinary stream path.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          try {
+            const persisted = await persistPartialContent();
+            savedContent = persisted.content;
+          } catch {
+            /* best-effort; fall back to in-memory content */
+          }
         }
         flushPendingStreamSegments();
         pool.stopPool(generationId);
@@ -4060,6 +5148,20 @@ async function runGeneration(
         );
         emittedStopped = true;
       }
+    } else if (usingFinalResponse) {
+      flushPendingStreamSegments();
+      pool.errorPool(generationId, errorMessage(err));
+      eventBus.emit(
+        EventType.GENERATION_ENDED,
+        {
+          generationId,
+          chatId,
+          content: "",
+          error: errorMessage(err),
+          generationType: lifecycle.generationType,
+        },
+        userId,
+      );
     } else {
       const msg = errorMessage(err);
       abortChatBackground(userId, chatId);
@@ -4091,6 +5193,8 @@ async function runGeneration(
       );
     }
   } finally {
+    for (const lease of activeTerminalLeases) lease.release();
+    activeTerminalLeases = [];
     flushPendingStreamSegments();
     activeGenerations.delete(generationId);
     // Clean up per-chat lock (only if this generation still owns it — a newer
@@ -4112,7 +5216,9 @@ async function fireExpressionDetection(
   userId: string,
   chatId: string,
   lifecycle: GenerationLifecycle,
+  options?: { allowNetwork?: boolean },
 ): Promise<void> {
+  const allowNetwork = options?.allowNetwork !== false;
   const chat = chatsSvc.getChat(userId, chatId);
   if (!chat) return;
 
@@ -4129,6 +5235,7 @@ async function fireExpressionDetection(
     if (detectionSettings.mode === "off") return;
 
     const allMessages = chatsSvc.getMessages(userId, chatId);
+    if (!allowNetwork) return;
     const recentMessages: LlmMessage[] = allMessages
       .slice(-detectionSettings.contextWindow)
       .map((m) => ({
@@ -4190,9 +5297,13 @@ async function fireExpressionDetection(
 
   // Standalone auto-detect mode
   const detectionSettings = getExpressionDetectionSettings(userId);
-  if (detectionSettings.mode === "off" || detectionSettings.mode === "council")
+  if (
+    detectionSettings.mode === "off"
+    || detectionSettings.mode === "council"
+    || !allowNetwork
+  ) {
     return;
-
+  }
   const allMessages = chatsSvc.getMessages(userId, chatId);
   const recentMessages: LlmMessage[] = allMessages
     .slice(-detectionSettings.contextWindow)
@@ -5181,7 +6292,8 @@ export async function startRebuildSummary(
  * - "strict": enforce strict user/assistant alternation by merging violations
  * - "single": collapse entire prompt into a single system message
  */
-function applyPostProcessing(messages: LlmMessage[], mode: string): void {
+function applyPostProcessing(messages: LlmMessage[], mode: string): number[] {
+  const originalIndexes = messages.map((_, index) => [index]);
   if (mode === "merge" || mode === "semi" || mode === "strict") {
     let i = 1;
     while (i < messages.length) {
@@ -5194,17 +6306,83 @@ function applyPostProcessing(messages: LlmMessage[], mode: string): void {
             getTextContent(messages[i]),
         };
         messages.splice(i, 1);
+        originalIndexes[i - 1].push(...originalIndexes[i]);
+        originalIndexes.splice(i, 1);
       } else {
         i++;
       }
     }
-  } else if (mode === "single") {
-    if (messages.length > 1) {
-      const combined = messages.map((m) => getTextContent(m)).join("\n\n");
-      messages.length = 0;
-      messages.push({ role: "system", content: combined });
+  } else if (mode === "single" && messages.length > 1) {
+    const combined = messages.map((m) => getTextContent(m)).join("\n\n");
+    messages.length = 0;
+    messages.push({ role: "system", content: combined });
+    originalIndexes.splice(
+      0,
+      originalIndexes.length,
+      originalIndexes.flat(),
+    );
+  }
+
+  const indexMap: number[] = [];
+  for (let outputIndex = 0; outputIndex < originalIndexes.length; outputIndex++) {
+    for (const originalIndex of originalIndexes[outputIndex]) {
+      indexMap[originalIndex] = outputIndex;
     }
   }
+  return indexMap;
+}
+
+function applyPostProcessingAroundBarrier(
+  messages: LlmMessage[],
+  mode: string,
+  requestedBarrierIndex: number,
+): { indexMap: number[]; barrierIndex: number } {
+  const barrierInputIndex = Math.max(
+    0,
+    Math.min(requestedBarrierIndex, messages.length),
+  );
+  const before = messages.slice(0, barrierInputIndex);
+  const after = messages.slice(barrierInputIndex);
+  const beforeIndexMap = applyPostProcessing(before, mode);
+  const afterIndexMap = applyPostProcessing(after, mode);
+  const barrierIndex = before.length;
+  const indexMap = messages.map((_, index) =>
+    index < barrierInputIndex
+      ? beforeIndexMap[index]
+      : barrierIndex + afterIndexMap[index - barrierInputIndex],
+  );
+  messages.splice(0, messages.length, ...before, ...after);
+  return { indexMap, barrierIndex };
+}
+
+function insertDetachedPrefillAtBarrier<T extends { messageIndex: number }>(
+  messages: LlmMessage[],
+  breakdown: readonly T[],
+  prefillCarrier: LlmMessageDTO,
+  prefillBreakdown: readonly T[],
+  requestedInsertionIndex: number,
+): T[] {
+  const insertionIndex = Math.max(
+    0,
+    Math.min(requestedInsertionIndex, messages.length),
+  );
+  messages.splice(
+    insertionIndex,
+    0,
+    prefillCarrier as unknown as LlmMessage,
+  );
+  return [
+    ...breakdown.map((entry) => ({
+      ...entry,
+      messageIndex: entry.messageIndex >= insertionIndex
+        ? entry.messageIndex + 1
+        : entry.messageIndex,
+    }) as T),
+    ...prefillBreakdown.map((entry) => ({
+      ...entry,
+      messageIndex: insertionIndex,
+    }) as T),
+  ];
 }
 
 export async function batchGenerate(

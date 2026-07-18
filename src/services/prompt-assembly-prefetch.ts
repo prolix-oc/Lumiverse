@@ -7,7 +7,11 @@
  * of making 30+ individual service calls.
  */
 
-import type { AssemblyContext, PrefetchedData } from "../llm/types";
+import {
+  isAssemblyContextBound,
+  type AssemblyContext,
+  type PrefetchedData,
+} from "../llm/types";
 import { makeAssistantCharacter } from "../types/character";
 import { isNoPresetChatMetadata, isTemporaryChatMetadata } from "../types/chat";
 import * as chatsSvc from "./chats.service";
@@ -56,6 +60,9 @@ const ALL_SETTINGS_KEYS = [
 ];
 
 export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<PrefetchedData> {
+  if (isAssemblyContextBound(ctx)) {
+    throw new Error("Bound assembly cannot prefetch live retrieval data");
+  }
   const profiler = createPromptAssemblyProfiler("prefetch", {
     chatId: ctx.chatId,
     generationType: ctx.generationType,

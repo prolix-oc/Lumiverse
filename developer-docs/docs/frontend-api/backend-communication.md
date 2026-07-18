@@ -26,21 +26,18 @@ The transport is runtime-mode independent: `process`, `sandbox`, and `worker` al
 
 ## Startup readiness
 
-Lumiverse auto-readies legacy frontends as soon as `setup(ctx)` returns. That preserves existing extensions, but it also means startup messages can be replayed immediately after setup completes.
-
-If your frontend keeps booting asynchronously and is not ready to receive startup traffic yet, opt into manual readiness:
+The loader invokes `setup(ctx)` before completing the frontend load. `setup` may return a cleanup function directly or a `Promise` resolving to `void` or a cleanup function; the loader awaits a returned promise before the load settles. Startup-message delivery is separately controlled by `ctx.ready()` and `ctx.deferReady()`.
 
 ```ts
-export function setup(ctx: SpindleFrontendContext) {
+export async function setup(ctx: SpindleFrontendContext) {
   ctx.deferReady()
 
   const unsub = ctx.onBackendMessage((payload: any) => {
-    // Register handlers synchronously before calling ready().
+    // Install handlers synchronously before calling ready().
   })
 
-  void initializeUi().finally(() => {
-    ctx.ready()
-  })
+  await initializeUi()
+  ctx.ready()
 
   return () => {
     unsub()
@@ -50,8 +47,9 @@ export function setup(ctx: SpindleFrontendContext) {
 
 Rules:
 
-- Call `ctx.deferReady()` during `setup()` before it returns.
-- Call `ctx.ready()` once your handlers and initial UI shell are safe to receive queued startup messages.
-- If your startup flow depends on backend replies, call `ctx.ready()` as soon as those handlers are installed instead of waiting on the replies themselves.
-- If you do nothing, Lumiverse falls back to legacy auto-ready behavior.
-- If you call `ctx.deferReady()` but never call `ctx.ready()`, Lumiverse eventually auto-recovers and flushes the queue after a timeout.
+- Call `ctx.deferReady()` during `setup()` before setup settles when asynchronous initialization must keep startup messages queued.
+- Call `ctx.ready()` after handlers and the initial UI shell are safe to receive queued startup traffic. `ready()` is idempotent, and it may be called before an asynchronous setup promise settles once those handlers are safe.
+- If `setup()` does not call `deferReady()`, the loader auto-readies only after setup has settled successfully. This preserves legacy synchronous setup behavior while still awaiting asynchronous setup.
+- If setup throws or its returned promise rejects, the load rejects and the host runs the extension's teardown/cleanup. The extension is not auto-readied.
+- The host applies a bounded 10-second readiness deadline. If `deferReady()` was used but `ready()` is not called in time, the readiness promise rejects and the frontend is unloaded. Queued startup messages are discarded; the host does not auto-recover by flushing them.
+- If startup depends on backend replies, call `ready()` as soon as the reply handlers are installed rather than waiting for those replies.

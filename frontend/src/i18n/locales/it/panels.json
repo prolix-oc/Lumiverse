@@ -1923,6 +1923,10 @@
     "managedByOperator": "Gestita dall'operatore",
     "enabled": "Abilitata",
     "disabled": "Disabilitata",
+    "permissionNames": {
+      "final_response": "Risposta finale"
+    },
+    "frontendLoadFailed": "Impossibile caricare il frontend dell'estensione «{{name}}».",
     "permissionStatus": "{{name}} ({{status}})",
     "update": "Aggiorna",
     "updateHint": "Recupera e ricompila da remoto",

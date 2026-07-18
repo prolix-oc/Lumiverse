@@ -1,6 +1,13 @@
 import { getDb } from "../db/connection";
 import * as settingsSvc from "../services/settings.service";
 import { DEFAULT_PROMPT_BEHAVIOR } from "../services/prompt-behavior";
+import { eventBus } from "../ws/bus";
+import { EventType } from "../ws/events";
+import {
+  DispatchStateError,
+  withDispatchStateTransactionInExistingTransaction,
+  type DispatchStateTransaction,
+} from "../services/dispatch-state.service";
 
 export const DEFAULT_PRESET_BLOCKS = [
   {
@@ -440,10 +447,45 @@ function getActivePresetId(userId: string): string | null {
     : null;
 }
 
+function finalizeDefaultPresetDispatch(transaction: DispatchStateTransaction): void {
+  const before = transaction.read();
+  try {
+    transaction.resolve({ source: "main" });
+  } catch (error) {
+    if (
+      error instanceof DispatchStateError
+      && (
+        error.code === "DISPATCH_CONNECTION_NOT_FOUND"
+        || error.code === "DISPATCH_CONNECTION_UNRESOLVED"
+        || error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+        || error.code === "DISPATCH_PRESET_NOT_FOUND"
+      )
+    ) {
+      transaction.mutate({ incrementGeneration: true });
+      return;
+    }
+    throw error;
+  }
+  if (transaction.read().revision === before.revision) {
+    transaction.mutate({ incrementGeneration: true });
+  }
+}
+
+function putDefaultPresetSetting(userId: string, key: string, value: unknown): void {
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query(
+      `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(key, JSON.stringify(value), userId, now);
+  eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
+}
+
 function markSeeded(userId: string): boolean {
   const current = settingsSvc.getSetting(userId, BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY);
   if (current?.value === BUILTIN_DEFAULT_PRESET_SEED_VERSION) return false;
-  settingsSvc.putSetting(
+  putDefaultPresetSetting(
     userId,
     BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY,
     BUILTIN_DEFAULT_PRESET_SEED_VERSION,
@@ -453,7 +495,7 @@ function markSeeded(userId: string): boolean {
 
 function activatePreset(userId: string, presetId: string): boolean {
   if (getActivePresetId(userId) === presetId) return false;
-  settingsSvc.putSetting(userId, "activeLoomPresetId", presetId);
+  putDefaultPresetSetting(userId, "activeLoomPresetId", presetId);
   return true;
 }
 
@@ -467,56 +509,64 @@ export function seedDefaultPreset(
   options: SeedDefaultPresetOptions = {},
 ): SeedDefaultPresetResult {
   const db = getDb();
-  const presetCountBefore = countUserPresets(userId);
-  let row = getBuiltInDefaultPresetRow(userId);
-  let seeded = false;
-  let upgradedLegacy = false;
+  return db.transaction(() => {
+    const presetCountBefore = countUserPresets(userId);
+    let row = getBuiltInDefaultPresetRow(userId);
+    let seeded = false;
+    let upgradedLegacy = false;
 
-  if (!row) {
-    const legacyRow = getLegacyBuiltInDefaultPresetRow(userId);
-    if (legacyRow) {
-      upgradeLegacyPresetMetadata(userId, legacyRow);
-      row = legacyRow;
-      upgradedLegacy = true;
+    if (!row) {
+      const legacyRow = getLegacyBuiltInDefaultPresetRow(userId);
+      if (legacyRow) {
+        upgradeLegacyPresetMetadata(userId, legacyRow);
+        row = legacyRow;
+        upgradedLegacy = true;
+      }
     }
-  }
 
-  if (!row) {
-    const id = crypto.randomUUID();
-    const now = Math.floor(Date.now() / 1000);
-    db.query(
-      "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      id,
-      "Default",
-      "loom",
-      "classic",
-      JSON.stringify(DEFAULT_PRESET_PARAMETERS),
-      JSON.stringify(DEFAULT_PRESET_BLOCKS),
-      JSON.stringify(DEFAULT_PRESET_PROMPTS),
-      JSON.stringify(DEFAULT_PRESET_METADATA),
-      userId,
-      now,
-      now,
-    );
-    row = { id, metadata: JSON.stringify(DEFAULT_PRESET_METADATA) };
-    seeded = true;
-  }
+    if (!row) {
+      const id = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      db.query(
+        "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        id,
+        "Default",
+        "loom",
+        "classic",
+        JSON.stringify(DEFAULT_PRESET_PARAMETERS),
+        JSON.stringify(DEFAULT_PRESET_BLOCKS),
+        JSON.stringify(DEFAULT_PRESET_PROMPTS),
+        JSON.stringify(DEFAULT_PRESET_METADATA),
+        userId,
+        now,
+        now,
+      );
+      row = { id, metadata: JSON.stringify(DEFAULT_PRESET_METADATA) };
+      seeded = true;
+    }
 
-  const activated = options.setActive
-    ? activatePreset(userId, row.id)
-    : options.setActiveIfNoPresets && presetCountBefore === 0
+    const activated = options.setActive
       ? activatePreset(userId, row.id)
-      : false;
+      : options.setActiveIfNoPresets && presetCountBefore === 0
+        ? activatePreset(userId, row.id)
+        : false;
 
-  markSeeded(userId);
+    markSeeded(userId);
 
-  return {
-    presetId: row.id,
-    seeded,
-    upgradedLegacy,
-    activated,
-  };
+    if (seeded || upgradedLegacy || activated) {
+      withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+        finalizeDefaultPresetDispatch(transaction);
+      });
+    }
+
+    return {
+      presetId: row.id,
+      seeded,
+      upgradedLegacy,
+      activated,
+    };
+  })();
 }
 
 export function backfillDefaultPresets(): DefaultPresetBackfillResult {

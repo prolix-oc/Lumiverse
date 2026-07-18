@@ -9,6 +9,9 @@ import {
   type MemoryStats,
   type DatabankStats,
   type ContextClipStats,
+  getParentRetrievalCapture,
+  isAssemblyContextBound,
+  markAssemblyContextBound,
 } from "../llm/types";
 import {
   resolveCounter,
@@ -121,6 +124,17 @@ import {
   getGroupCardMode,
   type BookSource,
 } from "./world-info-sources.service";
+import type {
+  BoundMessageDTO,
+  BoundPromptBlockDTO,
+  ParentGenerationSnapshot,
+  ParentRetrievalSnapshot,
+} from "../spindle/bound-generation-types";
+import {
+  BOUND_MAX_RETRIEVAL_BYTES,
+  cloneAndFreeze,
+} from "../spindle/bound-generation-types";
+import type { ParentRetrievalSnapshotInput } from "../spindle/bound-generation-types";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
 import {
   isGenuinelyNewChat,
@@ -928,8 +942,9 @@ export function resolvePromptVariables(
   env: MacroEnv,
   blocks: PromptBlock[],
   preset: Preset | null,
+  promptVariableValues?: Record<string, Record<string, unknown>>,
 ): void {
-  const stored = (preset?.metadata?.promptVariables ?? {}) as Record<
+  const stored = (promptVariableValues ?? preset?.metadata?.promptVariables ?? {}) as Record<
     string,
     Record<string, PromptVariableValue>
   >;
@@ -1222,9 +1237,533 @@ export function setMultiplayerMacroContextProvider(
   multiplayerMacroContextProvider = fn;
 }
 
+interface BoundParentAssemblyContext {
+  readonly snapshot: ParentGenerationSnapshot;
+  readonly retrieval: ParentRetrievalSnapshot;
+  readonly promptVariableValues?: Record<string, Record<string, unknown>>;
+  readonly hookFailureMode: "degrade" | "reject";
+  readonly macroFailureMode: "degrade" | "reject";
+}
+
+const boundParentAssemblyContexts = new WeakMap<
+  object,
+  BoundParentAssemblyContext
+>();
+
+function boundRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Bound retrieval snapshot is missing ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function boundArray<T>(value: unknown, label: string): T[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Bound retrieval snapshot is missing ${label}`);
+  }
+  return value as T[];
+}
+
+function assertBoundParentSnapshot(
+  snapshot: ParentGenerationSnapshot,
+  now = Date.now(),
+): void {
+  const candidate = snapshot as unknown as Record<string, unknown>;
+  if (candidate.kind !== "parent-generation") {
+    throw new Error("Bound assembly requires a parent generation snapshot");
+  }
+  const main = boundRecord(candidate.main, "main");
+  const retrieval = boundRecord(candidate.retrieval, "retrieval");
+  if (main.kind !== "main" || retrieval.kind !== "parent-retrieval") {
+    throw new Error("Bound assembly snapshot kind mismatch");
+  }
+  const hostGeneration = candidate.hostGeneration;
+  const generationId = candidate.generationId;
+  const userId = candidate.userId;
+  const chatId = candidate.chatId;
+  if (
+    typeof hostGeneration !== "string" ||
+    typeof generationId !== "string" ||
+    typeof userId !== "string" ||
+    typeof chatId !== "string" ||
+    hostGeneration.length === 0 ||
+    generationId.length === 0 ||
+    userId.length === 0 ||
+    chatId.length === 0
+  ) {
+    throw new Error("Bound assembly snapshot identity is invalid");
+  }
+  if (
+    main.hostGeneration !== hostGeneration ||
+    main.generationId !== generationId ||
+    main.userId !== userId ||
+    retrieval.hostGeneration !== hostGeneration ||
+    retrieval.generationId !== generationId ||
+    retrieval.userId !== userId ||
+    retrieval.chatId !== chatId
+  ) {
+    throw new Error("Bound assembly snapshot identity mismatch");
+  }
+  const expiresAt = retrieval.expiresAt;
+  const capturedAt = retrieval.capturedAt;
+  if (
+    typeof capturedAt !== "number" ||
+    !Number.isFinite(capturedAt) ||
+    typeof expiresAt !== "number" ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= capturedAt ||
+    now >= expiresAt
+  ) {
+    throw new Error("Bound assembly retrieval snapshot is absent or expired");
+  }
+  if (
+    typeof retrieval.bytes !== "number" ||
+    !Number.isInteger(retrieval.bytes) ||
+    retrieval.bytes < 0 ||
+    retrieval.bytes > BOUND_MAX_RETRIEVAL_BYTES
+  ) {
+    throw new Error("Bound assembly retrieval snapshot is oversized or invalid");
+  }
+  for (const [label, value] of [
+    ["vectorWorldInfo", retrieval.vectorWorldInfo],
+    ["chatMemory", retrieval.chatMemory],
+    ["cortex", retrieval.cortex],
+    ["databank", retrieval.databank],
+    ["settings", retrieval.settings],
+    ["results", retrieval.results],
+  ] as const) {
+    boundRecord(value, `retrieval.${label}`);
+  }
+}
+
+function snapshotAssemblyMessage(message: Message): Record<string, unknown> {
+  return {
+    id: message.id,
+    chatId: message.chat_id,
+    indexInChat: message.index_in_chat,
+    isUser: message.is_user,
+    name: message.name,
+    content: message.content,
+    sendDate: message.send_date,
+    swipeId: message.swipe_id,
+    swipes: message.swipes,
+    swipeDates: message.swipe_dates,
+    extra: message.extra,
+    parentMessageId: message.parent_message_id,
+    branchId: message.branch_id,
+    createdAt: message.created_at,
+  };
+}
+
+function restoreBoundMessages(value: unknown): Message[] {
+  return boundArray<Record<string, unknown>>(value, "results.messages").map(
+    (source, index) => {
+      const id = typeof source.id === "string" ? source.id : "";
+      const chatId =
+        typeof source.chatId === "string"
+          ? source.chatId
+          : typeof source.chat_id === "string"
+            ? source.chat_id
+            : "";
+      if (!id || !chatId || typeof source.content !== "string") {
+        throw new Error(`Bound retrieval snapshot message ${index} is invalid`);
+      }
+      return {
+        id,
+        chat_id: chatId,
+        index_in_chat:
+          typeof source.indexInChat === "number"
+            ? source.indexInChat
+            : typeof source.index_in_chat === "number"
+              ? source.index_in_chat
+              : index,
+        is_user:
+          typeof source.isUser === "boolean"
+            ? source.isUser
+            : source.is_user === true,
+        name: typeof source.name === "string" ? source.name : "",
+        content: source.content,
+        send_date:
+          typeof source.sendDate === "number"
+            ? source.sendDate
+            : typeof source.send_date === "number"
+              ? source.send_date
+              : 0,
+        swipe_id:
+          typeof source.swipeId === "number"
+            ? source.swipeId
+            : typeof source.swipe_id === "number"
+              ? source.swipe_id
+              : 0,
+        swipes: Array.isArray(source.swipes)
+          ? source.swipes.filter((entry): entry is string => typeof entry === "string")
+          : [],
+        swipe_dates: Array.isArray(source.swipeDates)
+          ? source.swipeDates.filter((entry): entry is number => typeof entry === "number")
+          : Array.isArray(source.swipe_dates)
+            ? source.swipe_dates.filter((entry): entry is number => typeof entry === "number")
+            : [],
+        extra:
+          source.extra &&
+          typeof source.extra === "object" &&
+          !Array.isArray(source.extra)
+            ? source.extra
+            : {},
+        parent_message_id:
+          typeof source.parentMessageId === "string"
+            ? source.parentMessageId
+            : typeof source.parent_message_id === "string"
+              ? source.parent_message_id
+              : null,
+        branch_id:
+          typeof source.branchId === "string"
+            ? source.branchId
+            : typeof source.branch_id === "string"
+              ? source.branch_id
+              : null,
+        created_at:
+          typeof source.createdAt === "number"
+            ? source.createdAt
+            : typeof source.created_at === "number"
+              ? source.created_at
+              : 0,
+      } satisfies Message;
+    },
+  );
+}
+
+function captureParentRetrievalAtBoundary(
+  ctx: AssemblyContext,
+  input: {
+    messages: Message[];
+    chat: Chat;
+    character: Character;
+    persona: Persona | null;
+    connection: ConnectionProfile | null;
+    preset: Preset | null;
+    settings: Map<string, unknown>;
+    wiEntries: unknown[];
+    wiSources: {
+      entries: unknown[];
+      worldBookIds: string[];
+      bookSourceMap?: Map<string, BookSource>;
+      bookNameMap?: Map<string, string>;
+    };
+    worldInfoSettings: unknown;
+    vectorQueryPreview: string;
+    vectorActivated: unknown[];
+    wiCache: unknown;
+    vectorRetrievalDetails: unknown;
+    activatedWorldInfo: unknown[];
+    worldInfoStats: unknown;
+    wiState: unknown;
+    cortexConfig: unknown;
+    cortexResult: unknown;
+    linkedCortexResult: unknown;
+    chatMemSettings: unknown;
+    perChatOverrides: unknown;
+    memoryResult: unknown;
+    linkedMemoryText: string;
+    activeDatabankIds: string[];
+    databankQueryPreview: string;
+    databankSettings: unknown;
+    databankEmbeddingConfig: unknown;
+    databankRetrievalState: DatabankStats["retrievalState"];
+    databankResult: unknown;
+    databankMentionAppendix: string;
+    groupCharacters?: Map<string, Character>;
+    multiplayerMacroContext: MultiplayerMacroContext | null;
+    multiplayerPersona: Array<{ name: string; description?: string }> | null;
+  },
+): void {
+  const capture = getParentRetrievalCapture(ctx);
+  if (!capture) return;
+  const { meta } = capture;
+  if (meta.userId !== ctx.userId || meta.chatId !== ctx.chatId) {
+    throw new Error("Parent retrieval capture identity mismatch");
+  }
+  const parentMessages = input.messages.map(snapshotAssemblyMessage);
+  const databankEmbeddingConfigObject =
+    input.databankEmbeddingConfig !== null &&
+    typeof input.databankEmbeddingConfig === "object" &&
+    !Array.isArray(input.databankEmbeddingConfig)
+      ? input.databankEmbeddingConfig
+      : null;
+  const databankEmbeddingsEnabled =
+    databankEmbeddingConfigObject !== null &&
+    "enabled" in databankEmbeddingConfigObject &&
+    databankEmbeddingConfigObject.enabled === true;
+  const settings = Object.fromEntries(input.settings.entries());
+  const retrievalInput = {
+    hostGeneration: meta.hostGeneration,
+    generationId: meta.generationId,
+    userId: meta.userId,
+    chatId: meta.chatId,
+    capturedAt: meta.capturedAt,
+    expiresAt: meta.expiresAt,
+    vectorWorldInfo: {
+      entries: input.wiEntries,
+      sources: input.wiSources,
+      settings: input.worldInfoSettings,
+      queryPreview: input.vectorQueryPreview,
+      activated: input.vectorActivated,
+      cache: input.wiCache,
+      retrieval: input.vectorRetrievalDetails,
+      activatedWorldInfo: input.activatedWorldInfo,
+      stats: input.worldInfoStats,
+      state: input.wiState,
+    },
+    chatMemory: {
+      settings: input.chatMemSettings,
+      perChatOverrides: input.perChatOverrides,
+      result: input.memoryResult,
+      linkedFormatted: input.linkedMemoryText,
+      messages: parentMessages,
+    },
+    cortex: {
+      config: input.cortexConfig,
+      result: input.cortexResult,
+      linkedResult: input.linkedCortexResult,
+    },
+    databank: {
+      activeIds: input.activeDatabankIds,
+      queryPreview: input.databankQueryPreview,
+      settings: input.databankSettings,
+      embeddingConfig: input.databankEmbeddingConfig,
+      embeddingsEnabled: databankEmbeddingsEnabled,
+      result: input.databankResult,
+      mentionAppendix: input.databankMentionAppendix,
+      retrievalState: input.databankRetrievalState,
+    },
+    settings,
+    results: {
+      messages: parentMessages,
+      chat: input.chat,
+      character: input.character,
+      persona: input.persona,
+      connection: input.connection,
+      preset: input.preset,
+      groupCharacters: input.groupCharacters,
+    },
+    multiplayerMacroContext: input.multiplayerMacroContext,
+    multiplayerPersona: input.multiplayerPersona,
+  } satisfies ParentRetrievalSnapshotInput;
+  capture.onParentRetrievalReady(retrievalInput);
+}
+
+export interface BoundParentAssemblyInput {
+  readonly snapshot: ParentGenerationSnapshot;
+  readonly blocks: readonly BoundPromptBlockDTO[];
+  readonly promptVariableValues?: Record<string, Record<string, unknown>>;
+  readonly signal: AbortSignal;
+  readonly hookFailureMode: "degrade" | "reject";
+  readonly macroFailureMode: "degrade" | "reject";
+}
+
+export interface BoundParentAssemblyResult {
+  readonly messages: readonly BoundMessageDTO[];
+  readonly breakdown: readonly AssemblyBreakdownEntry[];
+}
+
+export async function assembleBoundParentPrompt(
+  input: BoundParentAssemblyInput,
+): Promise<BoundParentAssemblyResult> {
+  assertBoundParentSnapshot(input.snapshot);
+  if (input.signal.aborted) {
+    throw input.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+  const snapshot = cloneAndFreeze(
+    input.snapshot,
+    BOUND_MAX_RETRIEVAL_BYTES,
+  ) as ParentGenerationSnapshot;
+  assertBoundParentSnapshot(snapshot);
+  const retrieval = snapshot.retrieval;
+  const retrievalResults = boundRecord(retrieval.results, "results");
+  const chat = boundRecord(retrievalResults.chat, "results.chat") as unknown as Chat;
+  const character = boundRecord(
+    retrievalResults.character,
+    "results.character",
+  ) as unknown as Character;
+  const persona =
+    retrievalResults.persona === null
+      ? null
+      : (boundRecord(retrievalResults.persona, "results.persona") as unknown as Persona);
+  const connection =
+    retrievalResults.connection === null
+      ? null
+      : (boundRecord(
+          retrievalResults.connection,
+          "results.connection",
+        ) as unknown as ConnectionProfile);
+  const parentPreset =
+    retrievalResults.preset === null
+      ? null
+      : (boundRecord(
+          retrievalResults.preset,
+          "results.preset",
+        ) as unknown as Preset);
+  const messages = restoreBoundMessages(retrievalResults.messages);
+  if (chat.id !== snapshot.chatId) {
+    throw new Error("Bound retrieval snapshot chat mismatch");
+  }
+  const vectorWorldInfo = boundRecord(
+    retrieval.vectorWorldInfo,
+    "vectorWorldInfo",
+  );
+  const vectorSources = boundRecord(
+    vectorWorldInfo.sources,
+    "vectorWorldInfo.sources",
+  );
+  const worldInfoEntries = boundArray(
+    vectorWorldInfo.entries,
+    "vectorWorldInfo.entries",
+  );
+  const worldBookIds = boundArray<string>(
+    vectorSources.worldBookIds,
+    "vectorWorldInfo.sources.worldBookIds",
+  );
+  const bookSourceMap =
+    vectorSources.bookSourceMap instanceof Map
+      ? new Map(vectorSources.bookSourceMap as Map<string, BookSource>)
+      : new Map<string, BookSource>();
+  const bookNameMap =
+    vectorSources.bookNameMap instanceof Map
+      ? new Map(vectorSources.bookNameMap as Map<string, string>)
+      : new Map<string, string>();
+  const chatMemory = boundRecord(retrieval.chatMemory, "chatMemory");
+  const cortex = boundRecord(retrieval.cortex, "cortex");
+  const databank = boundRecord(retrieval.databank, "databank");
+  const settingsMap = new Map<string, any>(
+    Object.entries(boundRecord(retrieval.settings, "settings")),
+  );
+  const cortexConfig = boundRecord(cortex.config, "cortex.config");
+  const databankEmbeddingConfig = boundRecord(
+    databank.embeddingConfig,
+    "databank.embeddingConfig",
+  );
+  const memoryResult = boundRecord(chatMemory.result, "chatMemory.result");
+  const databankResult = boundRecord(databank.result, "databank.result");
+  const parentBlocks = structuredClone(input.blocks) as PromptBlock[];
+  const promptVariableValues = input.promptVariableValues
+    ? (structuredClone(input.promptVariableValues) as Record<string, Record<string, unknown>>)
+    : undefined;
+  const preset = parentPreset
+    ? {
+        ...structuredClone(parentPreset),
+        prompt_order: parentBlocks,
+        metadata: {
+          ...(structuredClone(parentPreset.metadata ?? {}) as Record<string, unknown>),
+          ...(promptVariableValues ? { promptVariables: promptVariableValues } : {}),
+        },
+      }
+    : {
+        id: `bound-parent:${snapshot.generationId}`,
+        name: "Bound parent assembly",
+        provider: snapshot.main.provider,
+        engine: "classic",
+        parameters: structuredClone(snapshot.main.parameters),
+        prompt_order: parentBlocks,
+        prompts: {},
+        metadata: promptVariableValues ? { promptVariables: promptVariableValues } : {},
+        created_at: 0,
+        updated_at: 0,
+      };
+  settingsMap.set("worldInfoSettings", vectorWorldInfo.settings ?? {});
+  settingsMap.set("chatMemorySettings", chatMemory.settings ?? null);
+  settingsMap.set("databankSettings", databank.settings ?? null);
+  settingsMap.set("memoryCortexConfig", cortexConfig);
+  if (!settingsMap.has("reasoningSettings")) {
+    settingsMap.set("reasoningSettings", snapshot.main.reasoning);
+  }
+  const groupCharacters =
+    retrievalResults.groupCharacters instanceof Map
+      ? new Map(retrievalResults.groupCharacters as Map<string, Character>)
+      : undefined;
+  const embeddingConfig = structuredClone(databankEmbeddingConfig) as unknown as NonNullable<
+    NonNullable<AssemblyContext["prefetched"]>["embeddingConfig"]
+  >;
+  const prefetched = {
+    chat,
+    messages,
+    character,
+    persona,
+    connection,
+    preset,
+    allSettings: settingsMap,
+    embeddingConfig,
+    worldInfoSources: {
+      entries: worldInfoEntries,
+      worldBookIds,
+      bookSourceMap,
+      bookNameMap,
+    },
+    ...(groupCharacters ? { groupCharacters } : {}),
+    cortexConfig,
+  } as unknown as NonNullable<AssemblyContext["prefetched"]>;
+  const options = boundRecord(snapshot.options, "options");
+  const generationTypeValue = options.generationType;
+  const generationType: GenerationType =
+    generationTypeValue === "continue" ||
+    generationTypeValue === "regenerate" ||
+    generationTypeValue === "swipe" ||
+    generationTypeValue === "impersonate" ||
+    generationTypeValue === "quiet"
+      ? generationTypeValue
+      : "normal";
+  const identities = boundRecord(snapshot.parentIdentities, "parentIdentities");
+  const context: AssemblyContext = {
+    userId: snapshot.userId,
+    chatId: snapshot.chatId,
+    connectionId: snapshot.main.descriptor.connectionId,
+    presetId: preset.id,
+    presetOverride: preset,
+    forcePresetId: true,
+    skipPresetProfileBinding: true,
+    personaId:
+      typeof identities.personaId === "string" ? identities.personaId : undefined,
+    targetCharacterId:
+      typeof identities.targetCharacterId === "string"
+        ? identities.targetCharacterId
+        : undefined,
+    excludeMessageId:
+      typeof options.excludeMessageId === "string"
+        ? options.excludeMessageId
+        : undefined,
+    generationType,
+    macroCommit: false,
+    skipPromptRegex: true,
+    signal: input.signal,
+    prefetched,
+  };
+  markAssemblyContextBound(context);
+  boundParentAssemblyContexts.set(context, {
+    snapshot,
+    retrieval,
+    promptVariableValues,
+    hookFailureMode: input.hookFailureMode,
+    macroFailureMode: input.macroFailureMode,
+  });
+  try {
+    const assembled = await assemblePrompt(context);
+    return {
+      messages: assembled.messages as readonly BoundMessageDTO[],
+      breakdown: assembled.breakdown,
+    };
+  } finally {
+    boundParentAssemblyContexts.delete(context);
+  }
+}
+
 export async function assemblePrompt(
   ctx: AssemblyContext,
 ): Promise<AssemblyResult> {
+  const boundParent = boundParentAssemblyContexts.get(ctx);
+  if (isAssemblyContextBound(ctx) && !boundParent) {
+    throw new Error("Bound assembly context is unavailable");
+  }
+  if (boundParent) {
+    assertBoundParentSnapshot(boundParent.snapshot);
+  }
   const profiler = createPromptAssemblyProfiler("assembly", {
     chatId: ctx.chatId,
     generationType: ctx.generationType,
@@ -1253,6 +1792,9 @@ export async function assemblePrompt(
     throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
 
   const pf = ctx.prefetched; // shorthand for prefetched data
+  if (boundParent && !pf) {
+    throw new Error("Bound assembly requires a frozen prefetched snapshot");
+  }
   let phaseStartedAt = performance.now();
 
   // ---- Load data (use prefetched when available, fallback to DB) ----
@@ -1370,6 +1912,9 @@ export async function assemblePrompt(
 
   // If no blocks, fall back to legacy mapping
   if (!blocks.length) {
+    if (boundParent) {
+      throw new Error("Bound assembly requires explicit prompt blocks");
+    }
     return await legacyAssembly(
       messages,
       ctx.generationType,
@@ -1392,8 +1937,12 @@ export async function assemblePrompt(
   // to the assembly-loop phase. Prompt assembly only ever consumes warm-cache
   // hits from the prefetch on this request path; on a cold miss we fall back
   // immediately so cortex never blocks generation or dry-run rendering.
-  const cortexConfig =
-    pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
+  const cortexConfig = boundParent
+    ? (boundRecord(
+        boundParent.retrieval.cortex,
+        "retrieval.cortex",
+      ).config as memoryCortex.MemoryCortexConfig)
+    : pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
   let cortexChatMemSettings:
     | import("./embeddings.service").ChatMemorySettings
     | null = null;
@@ -1406,7 +1955,7 @@ export async function assemblePrompt(
   // would otherwise spawn a nested cortex worker from in here. Cortex warming
   // runs only on the in-process assembly path (where it reaches the real cache),
   // matching prior behavior — the per-call worker killed this task anyway.
-  if (cortexConfig.enabled && !runningInAssemblyWorker()) {
+  if (!boundParent && cortexConfig.enabled && !runningInAssemblyWorker()) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ??
@@ -1572,16 +2121,23 @@ export async function assemblePrompt(
     chatDatabankIds:
       (chat.metadata?.chat_databank_ids as string[] | undefined) ?? [],
   };
-  const activeDatabankIds = databankSvc.resolveActiveDatabankIds(
-    ctx.userId,
-    ctx.chatId,
-    databankCharIds,
-    databankCrossRefs,
-  );
-  const databankQueryPreview = messages
-    .slice(-6)
-    .map((m) => m.content)
-    .join(" ");
+  const boundDatabank = boundParent
+    ? boundRecord(boundParent.retrieval.databank, "retrieval.databank")
+    : null;
+  const activeDatabankIds = boundParent
+    ? boundArray<string>(boundDatabank?.activeIds, "databank.activeIds")
+    : databankSvc.resolveActiveDatabankIds(
+        ctx.userId,
+        ctx.chatId,
+        databankCharIds,
+        databankCrossRefs,
+      );
+  const databankQueryPreview = boundParent
+    ? String(boundDatabank?.queryPreview ?? "")
+    : messages
+        .slice(-6)
+        .map((m) => m.content)
+        .join(" ");
   let databankEmbeddingConfigPromise: Promise<
     Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>
   > | null = null;
@@ -1599,112 +2155,125 @@ export async function assemblePrompt(
   let databankPrefetchPromise: Promise<
     import("./databank").DatabankRetrievalResult
   > | null = null;
-  {
-    if (activeDatabankIds.length > 0) {
-      const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
-      const dbSignal = ctx.signal
-        ? AbortSignal.any([ctx.signal, chatBgSignal])
-        : chatBgSignal;
+  if (!boundParent && activeDatabankIds.length > 0) {
+    const chatBgSignal = getChatBackgroundSignal(ctx.userId, ctx.chatId);
+    const dbSignal = ctx.signal
+      ? AbortSignal.any([ctx.signal, chatBgSignal])
+      : chatBgSignal;
 
-      databankPrefetchPromise = (async () => {
-        const embCfg = await getDatabankEmbeddingConfig();
-        if (!embCfg.enabled) return { chunks: [], formatted: "", count: 0 };
-        if (dbSignal.aborted) return { chunks: [], formatted: "", count: 0 };
-        const retrievalTopK = databankSvc.loadDatabankSettings(
-          ctx.userId,
-        ).retrievalTopK;
-        return await databankSvc.searchDatabanks(
-          ctx.userId,
-          ctx.chatId,
-          activeDatabankIds,
-          databankQueryPreview,
-          retrievalTopK,
-          dbSignal,
-          (phase, ms) => profiler.addPhase(phase, ms),
-        );
-      })();
+    databankPrefetchPromise = (async () => {
+      const embCfg = await getDatabankEmbeddingConfig();
+      if (!embCfg.enabled) return { chunks: [], formatted: "", count: 0 };
+      if (dbSignal.aborted) return { chunks: [], formatted: "", count: 0 };
+      const retrievalTopK = databankSvc.loadDatabankSettings(
+        ctx.userId,
+      ).retrievalTopK;
+      return await databankSvc.searchDatabanks(
+        ctx.userId,
+        ctx.chatId,
+        activeDatabankIds,
+        databankQueryPreview,
+        retrievalTopK,
+        dbSignal,
+        (phase, ms) => profiler.addPhase(phase, ms),
+      );
+    })();
 
-      const dbBgTask = databankPrefetchPromise.then(() => {}, () => {});
-      trackChatBackgroundTask(ctx.userId, ctx.chatId, dbBgTask);
+    const dbBgTask = databankPrefetchPromise.then(() => {}, () => {});
+    trackChatBackgroundTask(ctx.userId, ctx.chatId, dbBgTask);
 
-      void databankPrefetchPromise.catch((err) => {
-        if (dbSignal.aborted) return;
-        console.warn(
-          "[prompt-assembly] Background databank query failed:",
-          err,
-        );
-      });
-    }
+    void databankPrefetchPromise.catch((err) => {
+      if (dbSignal.aborted) return;
+      console.warn(
+        "[prompt-assembly] Background databank query failed:",
+        err,
+      );
+    });
   }
 
   // ---- World Info activation ----
   phaseStartedAt = performance.now();
+  const globalWorldBooksValue = pf?.allSettings.get("globalWorldBooks");
   const globalWorldBooks =
-    pf?.allSettings.get("globalWorldBooks") ??
-    (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as
-      | string[]
-      | undefined) ??
-    [];
+    globalWorldBooksValue ??
+    (boundParent
+      ? []
+      : (settingsSvc.getSetting(ctx.userId, "globalWorldBooks")?.value as
+          | string[]
+          | undefined) ?? []);
   const chatWorldBookIds =
     (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
   const wiSources =
     pf?.worldInfoSources ??
-    collectWorldInfoSources(
-      ctx.userId,
-      character,
-      persona,
-      globalWorldBooks,
-      chatWorldBookIds,
-      { chat, groupCharacters: pf?.groupCharacters },
-    );
-  let wiEntries = wiSources.entries;
-  // Multiplayer: splice in active peers' attached persona lorebooks (relayed
-  // from each peer's own instance, materialized into runtime entries). No-op for
-  // single-user chats (provider returns null). These flow through the normal
-  // interceptor + activation path below, so keyword matching / positions / token
-  // budgeting all apply identically to host-owned world info.
-  const mpWorldInfo = multiplayerWorldInfoProvider?.(ctx.chatId);
+    (boundParent
+      ? (() => {
+          throw new Error("Bound assembly is missing world-info sources");
+        })()
+      : collectWorldInfoSources(
+          ctx.userId,
+          character,
+          persona,
+          globalWorldBooks,
+          chatWorldBookIds,
+          { chat, groupCharacters: pf?.groupCharacters },
+        ));
+  let wiEntries = boundParent
+    ? (structuredClone(wiSources.entries) as typeof wiSources.entries)
+    : wiSources.entries;
+  // Multiplayer world-info is captured in the parent retrieval snapshot. A
+  // bound invocation must not consult a live peer provider.
+  const mpWorldInfo = boundParent
+    ? null
+    : multiplayerWorldInfoProvider?.(ctx.chatId);
   if (mpWorldInfo && mpWorldInfo.entries.length > 0) {
     wiEntries = wiEntries.concat(mpWorldInfo.entries);
     for (const bookId of mpWorldInfo.bookIds) wiSources.bookSourceMap.set(bookId, "peer");
   }
-  const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
+  const boundVectorWorldInfo = boundParent
+    ? boundRecord(boundParent.retrieval.vectorWorldInfo, "retrieval.vectorWorldInfo")
+    : null;
+  const wiState: WiState = boundParent
+    ? ((boundVectorWorldInfo?.state ?? {}) as WiState)
+    : (chat.metadata?.wi_state as WiState) ?? {};
   const worldInfoSettings =
     pf?.allSettings.get("worldInfoSettings") ??
-    (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
-      | Partial<WorldInfoSettings>
-      | undefined) ??
-    {};
-  const intercepted = await worldInfoInterceptorChain.run(
-    wiEntries,
-    {
-      chatId: ctx.chatId,
-      characterId: character.id,
-      userId: ctx.userId,
-      messages: messages.map((m) => {
-        const extra = (m.extra ?? {}) as { greeting?: unknown; greeting_index?: unknown };
-        const isGreeting = extra.greeting === true;
-        const greetingIndex =
-          isGreeting && typeof extra.greeting_index === "number"
-            ? extra.greeting_index
-            : undefined;
-        return {
-          id: m.id,
-          role: m.is_user ? ("user" as const) : ("assistant" as const),
-          content: m.content,
-          is_user: m.is_user,
-          is_greeting: isGreeting,
-          ...(greetingIndex !== undefined ? { greeting_index: greetingIndex } : {}),
-          swipe_id: m.swipe_id,
-          index_in_chat: m.index_in_chat,
-        };
-      }),
-      chatTurn: messages.length,
-      chatMetadata: chat.metadata ?? {},
-    },
-    ctx.userId,
-    wiSources.bookSourceMap
-  );
+    (boundParent
+      ? (boundVectorWorldInfo?.settings as Partial<WorldInfoSettings> | undefined) ?? {}
+      : (settingsSvc.getSetting(ctx.userId, "worldInfoSettings")?.value as
+          | Partial<WorldInfoSettings>
+          | undefined) ?? {});
+  const intercepted = boundParent
+    ? wiEntries
+    : await worldInfoInterceptorChain.run(
+        wiEntries,
+        {
+          chatId: ctx.chatId,
+          characterId: character.id,
+          userId: ctx.userId,
+          messages: messages.map((m) => {
+            const extra = (m.extra ?? {}) as { greeting?: unknown; greeting_index?: unknown };
+            const isGreeting = extra.greeting === true;
+            const greetingIndex =
+              isGreeting && typeof extra.greeting_index === "number"
+                ? extra.greeting_index
+                : undefined;
+            return {
+              id: m.id,
+              role: m.is_user ? ("user" as const) : ("assistant" as const),
+              content: m.content,
+              is_user: m.is_user,
+              is_greeting: isGreeting,
+              ...(greetingIndex !== undefined ? { greeting_index: greetingIndex } : {}),
+              swipe_id: m.swipe_id,
+              index_in_chat: m.index_in_chat,
+            };
+          }),
+          chatTurn: messages.length,
+          chatMetadata: chat.metadata ?? {},
+        },
+        ctx.userId,
+        wiSources.bookSourceMap,
+      );
   const wiResult = activateWorldInfo({
     entries: intercepted,
     messages,
@@ -1725,19 +2294,29 @@ export async function assemblePrompt(
   // These entries are merged with keyword-activated entries when enabled.
   // When pre-computed results are available (from the generation pipeline's
   // council enrichment phase), reuse them to avoid redundant embedding queries.
-  const vectorQueryPreview = await getWorldInfoVectorQueryPreview(
-    ctx.userId,
-    messages,
-    ctx.chatId,
-    worldInfoSettings,
-  );
+  const vectorQueryPreview = boundParent
+    ? String(boundVectorWorldInfo?.queryPreview ?? "")
+    : await getWorldInfoVectorQueryPreview(
+        ctx.userId,
+        messages,
+        ctx.chatId,
+        worldInfoSettings,
+      );
   const currentWorldInfoEntryIds = new Set(wiEntries.map((entry) => entry.id));
-  let vectorActivated = ctx.precomputedVectorEntries
-    ? ctx.precomputedVectorEntries.filter((item) =>
-        currentWorldInfoEntryIds.has(item.entry.id),
+  let vectorActivated = boundParent
+    ? boundArray<VectorActivatedEntry>(
+        boundVectorWorldInfo?.activated,
+        "vectorWorldInfo.activated",
       )
-    : null;
-  let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null = null;
+    : ctx.precomputedVectorEntries
+      ? ctx.precomputedVectorEntries.filter((item) =>
+          currentWorldInfoEntryIds.has(item.entry.id),
+        )
+      : null;
+  let vectorRetrievalDetails: VectorWorldInfoRetrievalResult | null =
+    boundParent && boundVectorWorldInfo?.retrieval
+      ? (boundVectorWorldInfo.retrieval as VectorWorldInfoRetrievalResult)
+      : null;
   if (!vectorActivated) {
     try {
       const detailed = await collectVectorActivatedWorldInfoDetailed(
@@ -1848,7 +2427,8 @@ export async function assemblePrompt(
   const groupCharsMap = pf?.groupCharacters;
   const resolveCharName = (cid: string) => {
     const char =
-      groupCharsMap?.get(cid) ?? charactersSvc.getCharacter(ctx.userId, cid);
+      groupCharsMap?.get(cid) ??
+      (boundParent ? undefined : charactersSvc.getCharacter(ctx.userId, cid));
     return char ? getEffectiveCharacterName(char) : undefined;
   };
   const groupCharacterNames = resolveGroupCharacterNames(chat, resolveCharName);
@@ -1860,19 +2440,18 @@ export async function assemblePrompt(
         )
       : undefined;
   const focusedCharacter = resolveCharacterWithAlternateFields(character, chat);
-  // Resolve alternate field overrides, apply group card merge/swap mode, then
-  // group scenario override. This is done at assembly time so chat settings and
-  // mute state cannot be ignored by an older client payload.
-  const effectiveCharacter = resolveGroupScenarioOverride(
-    buildGroupMergedCharacter(
-      focusedCharacter,
-      chat,
-      ctx.userId,
-      groupCharsMap,
-    ),
-    chat,
-    ctx.userId,
-  );
+  const effectiveCharacter = boundParent
+    ? focusedCharacter
+    : resolveGroupScenarioOverride(
+        buildGroupMergedCharacter(
+          focusedCharacter,
+          chat,
+          ctx.userId,
+          groupCharsMap,
+        ),
+        chat,
+        ctx.userId,
+      );
 
   const macroEnv: MacroEnv = buildEnv({
     character: effectiveCharacter,
@@ -1901,7 +2480,12 @@ export async function assemblePrompt(
   // Prompt variables — resolve creator-defined schemas + end-user overrides and
   // surface them on env.extra so {{var::name}} / {{hasVar::name}} / {{varDefault::name}}
   // can read consistent values across every block in this assembly.
-  resolvePromptVariables(macroEnv, blocks, preset);
+  resolvePromptVariables(
+    macroEnv,
+    blocks,
+    preset,
+    boundParent?.promptVariableValues,
+  );
 
   // A select variable may choose an in-memory insertion profile for its own
   // block. Project that configuration before ordering/rendering, rather than
@@ -1961,7 +2545,14 @@ export async function assemblePrompt(
   // Populate multiplayer room state for {{isMultiplayer}} / {{players}} /
   // {{playerCount}} / {{hostName}} / {{currentPlayer}}. Resolved via the
   // inverted provider so assembly stays decoupled from the multiplayer service.
-  const multiplayerContext = multiplayerMacroContextProvider?.(ctx.chatId) ?? null;
+  const multiplayerContext = boundParent
+    ? boundParent.retrieval.multiplayerMacroContext
+      ? {
+          ...boundParent.retrieval.multiplayerMacroContext,
+          playerNames: [...boundParent.retrieval.multiplayerMacroContext.playerNames],
+        }
+      : null
+    : multiplayerMacroContextProvider?.(ctx.chatId) ?? null;
   if (multiplayerContext) {
     macroEnv.extra.multiplayer = multiplayerContext;
   }
@@ -2012,14 +2603,25 @@ export async function assemblePrompt(
       | undefined) ??
     null;
 
-  // Memory Cortex: use warm cache hits only. On a cold miss, fall back
-  // immediately to vector retrieval so background cortex work never stalls the
-  // generation path.
+  // Bound assembly consumes captured results only. It never consults the
+  // Cortex cache or falls back to a fresh vector query.
   let cortexResult: memoryCortex.CortexResult | null = null;
-
   let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
-
-  if (cortexConfig.enabled) {
+  if (boundParent) {
+    const boundChatMemory = boundRecord(
+      boundParent.retrieval.chatMemory,
+      "retrieval.chatMemory",
+    );
+    const boundCortex = boundRecord(
+      boundParent.retrieval.cortex,
+      "retrieval.cortex",
+    );
+    memoryResult = boundRecord(
+      boundChatMemory.result,
+      "chatMemory.result",
+    ) as unknown as Awaited<ReturnType<typeof collectChatVectorMemory>>;
+    cortexResult = (boundCortex.result ?? null) as memoryCortex.CortexResult | null;
+  } else if (cortexConfig.enabled) {
     // Fast path: warm cache from a previous generation (synchronous, no I/O).
     // Require the cached entry to have excluded the current live-context tail
     // (and regen target, if any), otherwise it may re-inject recent messages as
@@ -2046,7 +2648,6 @@ export async function assemblePrompt(
       if (hasCortexContent(cortexResult, macroEnv)) {
         memoryResult = cortexMemoryResult;
       } else {
-        // Genuinely no cortex context (new chat, no chunks, etc.) - fall back to vector retrieval.
         memoryResult = await safeCollectChatVectorMemory(
           ctx.userId,
           ctx.chatId,
@@ -2057,7 +2658,6 @@ export async function assemblePrompt(
         );
       }
     } else {
-      // Genuinely no memories (new chat, no chunks, etc.) — fall back to vector retrieval
       memoryResult = await safeCollectChatVectorMemory(
         ctx.userId,
         ctx.chatId,
@@ -2068,7 +2668,6 @@ export async function assemblePrompt(
       );
     }
   } else {
-    // Existing path: pure vector retrieval
     memoryResult = await safeCollectChatVectorMemory(
       ctx.userId,
       ctx.chatId,
@@ -2079,10 +2678,12 @@ export async function assemblePrompt(
     );
   }
 
-  // Merge linked cortex data (vaults + interlinks) if available
-  const linkedCortexResult = memoryCortex.getCachedLinkedCortexResult(
-    ctx.chatId,
-  );
+  // Merge linked cortex data from the captured parent in bound mode. The
+  // ordinary path retains its warm-cache behavior unchanged.
+  const linkedCortexResult = boundParent
+    ? ((boundRecord(boundParent.retrieval.cortex, "retrieval.cortex").linkedResult ??
+        null) as memoryCortex.LinkedCortexResult | null)
+    : memoryCortex.getCachedLinkedCortexResult(ctx.chatId);
   let linkedMemoryText = "";
   if (
     linkedCortexResult &&
@@ -2129,17 +2730,36 @@ export async function assemblePrompt(
   // Use the warm-cache pattern: check if a previous generation cached results.
   // On a cold miss, await the pre-flight query so the current generation still
   // gets databank context instead of only warming the cache for the next send.
-  const databankEmbCfg = await getDatabankEmbeddingConfig();
-  let databankResult = databankSvc.getCachedDatabankResult(
-    ctx.userId,
-    ctx.chatId,
-    activeDatabankIds,
-    databankQueryPreview,
-    databankSettings.retrievalTopK,
-  );
+  const databankEmbCfg = boundParent
+    ? (boundRecord(
+        boundDatabank?.embeddingConfig,
+        "databank.embeddingConfig",
+      ) as unknown as Awaited<ReturnType<typeof embeddingsSvc.getEmbeddingConfig>>)
+    : await getDatabankEmbeddingConfig();
+  let databankResult = boundParent
+    ? (boundRecord(
+        boundDatabank?.result,
+        "databank.result",
+      ) as unknown as import("./databank").DatabankRetrievalResult)
+    : databankSvc.getCachedDatabankResult(
+        ctx.userId,
+        ctx.chatId,
+        activeDatabankIds,
+        databankQueryPreview,
+        databankSettings.retrievalTopK,
+      );
   let databankRetrievalState: DatabankStats["retrievalState"] =
-    "skipped_no_active_banks";
-  if (activeDatabankIds.length === 0) {
+    boundParent
+      ? (boundDatabank?.retrievalState as DatabankStats["retrievalState"]) ??
+        "skipped_no_active_banks"
+      : "skipped_no_active_banks";
+  if (boundParent) {
+    // The snapshot contains the exact parent result, including an empty result
+    // when the native path observed no active banks or disabled embeddings.
+    if (!databankResult) {
+      throw new Error("Bound retrieval snapshot is missing databank.result");
+    }
+  } else if (activeDatabankIds.length === 0) {
     databankResult = { chunks: [], formatted: "", count: 0 };
   } else if (!databankEmbCfg.enabled) {
     databankRetrievalState = "skipped_embeddings_disabled";
@@ -2188,8 +2808,10 @@ export async function assemblePrompt(
   //   3. Strip resolved #tags from every user message.
   //   4. Expensive content fetch + vector search runs ONCE, only for the LAST
   //      user message's slugs (the only ones that contribute to the appendix).
-  let databankMentionAppendix = "";
-  {
+  let databankMentionAppendix = boundParent
+    ? String(boundDatabank?.mentionAppendix ?? "")
+    : "";
+  if (!boundParent) {
     const charIds = databankCharIds;
     let lastUserIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -2318,6 +2940,50 @@ export async function assemblePrompt(
   }
 
   profiler.addPhase("macro-prepass", performance.now() - phaseStartedAt);
+  if (getParentRetrievalCapture(ctx)) {
+    const parentMultiplayerPersona = boundParent
+      ? boundParent.retrieval.multiplayerPersona?.map((entry) => ({
+          name: entry.name,
+          ...(entry.description === undefined ? {} : { description: entry.description }),
+        })) ?? null
+      : multiplayerPersonaProvider?.(ctx.chatId) ?? null;
+    captureParentRetrievalAtBoundary(ctx, {
+      messages,
+      chat,
+      character,
+      persona,
+      connection,
+      preset,
+      settings: settingsMap,
+      wiEntries,
+      wiSources,
+      worldInfoSettings,
+      vectorQueryPreview,
+      vectorActivated: vectorActivated ?? [],
+      wiCache,
+      vectorRetrievalDetails,
+      activatedWorldInfo,
+      worldInfoStats,
+      wiState: wiResult.wiState,
+      cortexConfig,
+      cortexResult,
+      linkedCortexResult,
+      chatMemSettings,
+      perChatOverrides,
+      memoryResult,
+      linkedMemoryText,
+      activeDatabankIds,
+      databankQueryPreview,
+      databankSettings,
+      databankRetrievalState,
+      databankEmbeddingConfig: databankEmbCfg,
+      databankResult,
+      databankMentionAppendix,
+      groupCharacters: pf?.groupCharacters,
+      multiplayerMacroContext: multiplayerContext,
+      multiplayerPersona: parentMultiplayerPersona,
+    });
+  }
 
   // Yield before the main block iteration — WI macro evaluation above can run
   // 100s of macro expansions back-to-back with only microtask yields between
@@ -2468,7 +3134,9 @@ export async function assemblePrompt(
       // Multiplayer: inject the cast of remote participants (name + persona)
       // just before chat history, so the model can tell the co-located humans
       // apart. No-op for normal single-user chats (provider returns []).
-      const mpCast = multiplayerPersonaProvider?.(ctx.chatId);
+      const mpCast = boundParent
+        ? boundParent.retrieval.multiplayerPersona
+        : multiplayerPersonaProvider?.(ctx.chatId);
       if (mpCast && mpCast.length > 0) {
         const castContent =
           "[Other people in this chat]\n" +
@@ -2532,6 +3200,11 @@ export async function assemblePrompt(
         for (const att of atts) {
           if (att.image_id) attachmentImageIds.add(att.image_id);
         }
+      }
+      if (boundParent && attachmentImageIds.size > 0) {
+        throw new Error(
+          "Bound assembly requires attachment content in the parent snapshot",
+        );
       }
       const attachmentCache = new Map<string, string | null>();
       if (attachmentImageIds.size > 0) {
@@ -3674,22 +4347,54 @@ export function populateLumiaLoomContext(
     excludeLastMessage: true,
     includeMessageInPrompt: true,
   });
+  // ---- Loom summary from chat metadata ----
+  const loomSummary = (chat.metadata?.loom_summary as string) ?? "";
 
-  // ---- Council ----
-  const councilSettings = councilProfilesSvc.resolveProfile(
-    userId,
-    chat.id,
-    chat.character_id,
-    { isGroup: chat.metadata?.group === true },
-  ).council_settings;
-
-  // Batch-load full Lumia items for council members (single query)
-  const memberItemIds = councilSettings.members.map((m: any) => m.itemId);
+  // Bound assembly uses the captured council settings and never resolves the
+  // live profile or Lumia rows.
+  const bound = ctx ? isAssemblyContextBound(ctx) : false;
+  const rawCouncilSettings = s("council_settings");
+  const rawCouncilRecord =
+    rawCouncilSettings === null || rawCouncilSettings === undefined
+      ? {}
+      : boundRecord(rawCouncilSettings, "council_settings");
+  const rawMembers = Array.isArray(rawCouncilRecord.members)
+    ? rawCouncilRecord.members
+    : [];
+  const councilSettings = bound
+    ? {
+        councilMode:
+          typeof rawCouncilRecord.councilMode === "boolean"
+            ? rawCouncilRecord.councilMode
+            : false,
+        members: rawMembers,
+        toolsSettings:
+          rawCouncilRecord.toolsSettings &&
+          typeof rawCouncilRecord.toolsSettings === "object" &&
+          !Array.isArray(rawCouncilRecord.toolsSettings)
+            ? rawCouncilRecord.toolsSettings
+            : {},
+      }
+    : councilProfilesSvc.resolveProfile(
+        userId,
+        chat.id,
+        chat.character_id,
+        { isGroup: chat.metadata?.group === true },
+      ).council_settings;
+  const memberItemIds = councilSettings.members
+    .map((member: unknown) => {
+      if (!member || typeof member !== "object" || Array.isArray(member)) {
+        return null;
+      }
+      const itemId = (member as Record<string, unknown>).itemId;
+      return typeof itemId === "string" && itemId.length > 0 ? itemId : null;
+    })
+    .filter((itemId): itemId is string => itemId !== null);
   const memberItemsMap =
-    memberItemIds.length > 0
+    !bound && memberItemIds.length > 0
       ? packsSvc.getLumiaItemsByIds(userId, memberItemIds)
-      : new Map<string, any>();
-  const memberItems: Record<string, any> = {};
+      : new Map<string, unknown>();
+  const memberItems: Record<string, unknown> = {};
   for (const [id, item] of memberItemsMap) {
     memberItems[id] = item;
   }
@@ -3698,15 +4403,12 @@ export function populateLumiaLoomContext(
   const selectedLoomStyles = s("selectedLoomStyles", []);
   const selectedLoomUtils = s("selectedLoomUtils", []);
   const selectedLoomRetrofits = s("selectedLoomRetrofits", []);
-
-  // ---- Loom summary from chat metadata ----
-  const loomSummary = (chat.metadata?.loom_summary as string) ?? "";
-
   // ---- Lazy-load all Lumia items (only fetched if {{randomLumia}} is evaluated) ----
-  let _allLumiaItems: any[] | null = null;
+  let _allLumiaItems: unknown[] | null = null;
   const allItemsLoader = () => {
-    if (_allLumiaItems === null)
-      _allLumiaItems = packsSvc.getAllLumiaItems(userId);
+    if (_allLumiaItems === null) {
+      _allLumiaItems = bound ? [] : packsSvc.getAllLumiaItems(userId);
+    }
     return _allLumiaItems;
   };
 

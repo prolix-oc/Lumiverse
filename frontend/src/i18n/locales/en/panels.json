@@ -2071,6 +2071,10 @@
     "managedByOperator": "Managed by operator",
     "enabled": "Enabled",
     "disabled": "Disabled",
+    "permissionNames": {
+      "final_response": "Final Response"
+    },
+    "frontendLoadFailed": "Couldn’t load the frontend for {{name}}.",
     "permissionsLabel": "Permissions",
     "permissionStatus": "{{name}} ({{status}})",
     "enableAllPermissions": "Enable All",

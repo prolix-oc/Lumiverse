@@ -50,6 +50,7 @@ interface InterceptorResultDTO {
   messages: LlmMessageDTO[]
   parameters?: Record<string, unknown>
   breakdown?: InterceptorBreakdownEntryDTO[]
+  finalResponse?: FinalResponseDTO
 }
 
 interface InterceptorBreakdownEntryDTO {
@@ -109,6 +110,56 @@ Use `breakdown` when you want the injected content to appear in:
 - saved `/generate/breakdown/:messageId` snapshots after the message is stored
 
 If you omit `breakdown`, the injected message still reaches the model normally — it just will not be represented as its own breakdown block.
+
+### Authoritative final response
+
+!!! warning "Additional privileged permission required: `final_response`"
+
+An interceptor may propose the assistant response itself instead of sending the assembled request to the Main provider. The permission is separate from `interceptor`; declaring it in `spindle.json` is not enough to grant it.
+
+```ts
+spindle.registerInterceptor(async (messages) => {
+  const fallbackMessageIndex = messages.length
+  const fallback = {
+    role: 'system' as const,
+    content: 'Continue with the native provider request if this override is not eligible.',
+  }
+
+  return {
+    messages: [...messages, fallback],
+    breakdown: [{
+      messageIndex: fallbackMessageIndex,
+      name: 'Native provider fallback',
+    }],
+    finalResponse: {
+      content: 'A validated extension-authored response.',
+      fallbackMessageIndex,
+    },
+  }
+})
+```
+
+```ts
+interface FinalResponseDTO {
+  content: string
+  reasoning?: string
+  fallbackMessageIndex: number
+}
+```
+
+The host accepts a candidate only when all of these invariants hold:
+
+- `content` is non-whitespace text. `reasoning`, when present, is text and may be empty. Each field is independently limited to 1,048,576 UTF-8 bytes.
+- `fallbackMessageIndex` is a safe integer within the returned `messages` array. It must identify one non-whitespace string-content `system` message added by this interceptor. Removing exactly that message must deep-equal the handler's input messages, so the interceptor may add no other message for this result.
+- Exactly one breakdown entry in the same result identifies the fallback index.
+- If the parent has an authoritative assistant prefill, the fallback must be immediately before that one unchanged nonempty assistant text carrier. A missing, duplicated, or displaced carrier is rejected.
+- The host supplies callback attribution and user-scope provenance. Worker-returned identity or provenance fields are not trusted and cannot authorize a response.
+
+The last valid authorized proposal wins. A malformed or unauthorized later result cannot erase an earlier valid proposal. The host checks the live `final_response` grant both when the result arrives and again at terminal selection. If permission is revoked, the protected native fallback is restored; with a prefill, it is restored exactly before the unchanged carrier.
+
+The shortcut is eligible only for a live, non-dry `normal` or `continue` Main generation with no active tools. Dry runs, `regenerate`, `swipe`, `impersonate`, `quiet`, and tool-active routes use the ordinary provider path. Direct extension calls such as `spindle.generate.quiet()`, `raw`, and `batch` do not re-enter this interceptor chain.
+
+An accepted final response makes no Main provider network call and does not fabricate provider usage. Lumiverse still runs native response regex/macro post-processing, message persistence, prompt-breakdown storage, generation events, and normal abort cleanup. If the request aborts before commit, the extension response is not persisted. When the permission is absent, the candidate is invalid, or the route is ineligible, ordinary provider behavior remains unchanged.
 
 ### Parameter merge order
 

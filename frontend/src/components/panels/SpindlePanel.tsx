@@ -582,9 +582,11 @@ export default function SpindlePanel() {
                       {allPerms.map((perm) => {
                         const granted = ext.granted_permissions.includes(perm)
                         const isToggling = togglingPerm === `${ext.id}:${perm}`
-                        const pretty = perm
-                          .replaceAll('_', ' ')
-                          .replace(/\b\w/g, (ch) => ch.toUpperCase())
+                        const pretty = t(`spindlePanel.permissionNames.${perm}`, {
+                          defaultValue: perm
+                            .replaceAll('_', ' ')
+                            .replace(/\b\w/g, (ch) => ch.toUpperCase()),
+                        })
                         return (
                           <button
                             key={perm}

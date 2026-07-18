@@ -33,9 +33,15 @@ Every extension needs a `spindle.json` at the repository root.
 | `requested_capabilities` | No | Array of declared backend capabilities that suppress specific install-time scanner blocks. See [Backend Capabilities](capabilities.md) |
 | `entry_backend` | No | Path to backend entry. Default: `"dist/backend.js"` |
 | `entry_frontend` | No | Path to frontend entry. Default: `"dist/frontend.js"` |
-| `minimum_lumiverse_version` | No | Minimum Lumiverse version required |
+| `minimum_lumiverse_version` | No | Minimum Lumiverse application version required |
 | `storage_seed_files` | No | Files/directories to copy into extension storage on install (see below) |
 | `interceptorTimeoutMs` | No | Per-extension override (in milliseconds) for how long the host will wait for this extension's interceptor to return. See [Interceptor Timeout](#interceptor-timeout) below |
+
+`minimum_lumiverse_version` is optional for backward compatibility. When present, it must be a canonical semantic-version string, including canonical prerelease and build syntax when used. The host compares it with its own canonical Lumiverse application version and enforces it during install, import, update, and enable, and again before loading backend or frontend source. This is a host-application compatibility requirement, independent of the release version of the `lumiverse-spindle-types` npm package used for compile-time types.
+
+A malformed requirement or a host below the minimum fails closed with the structured `SPINDLE_COMPATIBILITY_ERROR` failure (`SPINDLE_COMPATIBILITY_ERROR_CODE` in the public package). The extension source is not loaded or evaluated, backend setup does not begin, and the frontend is not mounted. Omitting the field preserves the existing compatibility behavior. SemVer precedence applies, so for example `1.0.0-beta.2` is lower than `1.0.0`.
+
+The runtime descriptor exposed to loaded extensions is documented in [Frontend API → Host compatibility and startup](../frontend-api/index.md#host-compatibility-and-startup).
 
 ## Requested Capabilities
 

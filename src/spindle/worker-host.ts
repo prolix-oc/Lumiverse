@@ -4,13 +4,22 @@ import type {
   HostToWorker,
   LlmMessageDTO,
   InterceptorBreakdownEntryDTO,
+  InterceptorResultDTO,
+  InterceptorContextDTO,
+  SpindleHostDescriptorV1,
+  BoundAssembleRequestDTO,
+  BoundAssemblyOutcomeDTO,
+  QuietTrackedRequestDTO,
+  QuietTrackedResultDTO,
+  ConnectionDispatchDescriptorDTO,
+  ConnectionReasoningBindingsDTO,
+  ConnectionProfileDTO,
   ToolRegistration,
   ExtensionInfo,
-  ConnectionProfileDTO,
-  ConnectionReasoningBindingsDTO,
   ReasoningSettingsDTO,
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
+  DeferredGuidanceDTO,
   DatabankDocumentCreateDTO,
   DryRunResultDTO,
   SpindleCommandDTO,
@@ -18,7 +27,19 @@ import type {
   CouncilMemberContext,
   ImageUploadDTO,
 } from "lumiverse-spindle-types";
-import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
+import {
+  PERMISSION_DENIED_PREFIX,
+} from "lumiverse-spindle-types";
+import {
+  assertManifestCompatibility,
+  createSpindleHostDescriptor,
+  validateSpindleHostDescriptor,
+} from "./host-compatibility";
+import {
+  normalizeInterceptorFinalResponse,
+  stripInterceptorFinalResponseCarrier,
+  type InterceptorFinalResponseState,
+} from "./interceptor-final-response";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
@@ -26,6 +47,32 @@ import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { registry as macroRegistry } from "../macros";
 import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
+import {
+  attachInterceptorPrivateState,
+  compileInterceptorMatcher,
+  prepareInterceptorContext,
+  readInterceptorPrivateState,
+  type InterceptorPipelineAuthority,
+  type InterceptorPrivateState,
+  type CompiledInterceptorMatcher,
+  createInterceptorTerminalLease,
+  type InterceptorTerminalLease,
+} from "./lifecycle";
+import {
+  runBoundAssembly,
+  runBoundQuietTracked,
+  createParentPrefillAttestation,
+  mintParentPrefillChildUse,
+  type ParentPrefillChildUse,
+} from "./bound-generation";
+import {
+  createHostBoundGenerationCallbacks,
+  type HostBoundGenerationCallbacks,
+} from "./bound-generation-host";
+import {
+  brandInvocationToken,
+  type BoundInvocationContext,
+} from "./bound-generation-types";
 import { contextHandlerChain } from "./context-handler";
 import {
   messageContentProcessorChain,
@@ -269,9 +316,79 @@ type BackendProcessRuntimeToHost =
   | { type: "fail"; error: string }
   | { type: "stopped" };
 
+type BoundRuntimeEnvelope = {
+  readonly workerId: string;
+  readonly registrationGeneration: string;
+  readonly callbackUserId: string;
+  readonly hostGeneration: string;
+  readonly requestId: string;
+  readonly token: string;
+  readonly operationRequestId?: string;
+};
+
 type RuntimeWorkerToHost =
-  | WorkerToHost
-  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
+  | Exclude<
+      WorkerToHost,
+      {
+        type:
+          | "register_interceptor"
+          | "unregister_interceptor"
+          | "intercept_result"
+          | "generate_assemble"
+          | "generate_quiet_tracked"
+          | "connections_resolve_dispatch"
+          | "cancel_generation";
+      }
+    >
+  | {
+      type: "startup_failure";
+      code: string;
+      message: string;
+    }
+  | {
+      type: "register_interceptor";
+      registrationId: string;
+      priority?: number;
+      match?: unknown;
+    }
+  | { type: "unregister_interceptor"; registrationId: string }
+  | {
+      type: "intercept_result";
+      requestId: string;
+      registrationId: string;
+      registrationGeneration?: string;
+      workerId?: string;
+      hostGeneration?: string;
+      messages: LlmMessageDTO[];
+      parameters?: Record<string, unknown>;
+      breakdown?: InterceptorBreakdownEntryDTO[];
+      deferredGuidance?: unknown;
+      finalResponse?: unknown;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "generate_assemble";
+      requestId: string;
+      input: BoundAssembleRequestDTO;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "generate_quiet_tracked";
+      requestId: string;
+      input: QuietTrackedRequestDTO;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "connections_resolve_dispatch";
+      requestId: string;
+      connectionId: string;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "cancel_generation";
+      requestId: string;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
   | {
       type: "assemble_prompt";
       requestId: string;
@@ -528,6 +645,17 @@ type RuntimeWorkerToHost =
 type RuntimeHostToWorker =
   | HostToWorker
   | {
+      type: "intercept_request";
+      requestId: string;
+      registrationId: string;
+      registrationGeneration: string;
+      workerId: string;
+      hostGeneration: string;
+      messages: LlmMessageDTO[];
+      context: Omit<InterceptorContextDTO, "signal">;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
       type: "rpc_pool_request";
       requestId: string;
       endpoint: string;
@@ -736,9 +864,45 @@ const THINKING_DISPLAY_VALUES = new Set<ThinkingDisplayDTO>([
   "omitted",
 ]);
 
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function isPreparedInterceptorContext(value: unknown): value is InterceptorContextDTO {
+  if (!isRecordValue(value)) return false;
+  return (
+    typeof value.userId === "string"
+    && typeof value.chatId === "string"
+    && typeof value.generationId === "string"
+    && typeof value.generationType === "string"
+    && typeof value.isDryRun === "boolean"
+    && (value.presetId === null || typeof value.presetId === "string")
+    && isRecordValue(value.mainDispatch)
+    && typeof value.interceptorDeadlineAt === "number"
+    && typeof value.boundWorkDeadlineAt === "number"
+    && isRecordValue(value.signal)
+    && typeof value.signal.aborted === "boolean"
+    && typeof value.signal.addEventListener === "function"
+  );
+}
+
+function isLlmMessageValue(value: unknown): value is LlmMessageDTO {
+  if (!isRecordValue(value)) return false;
+  if (value.role !== "system" && value.role !== "user" && value.role !== "assistant") {
+    return false;
+  }
+  if (typeof value.content === "string") return true;
+  return Array.isArray(value.content) && value.content.every((part) =>
+    isRecordValue(part) && typeof part.type === "string",
+  );
+}
+
+function isLlmMessageArray(value: unknown): value is LlmMessageDTO[] {
+  return Array.isArray(value) && value.every(isLlmMessageValue);
+}
+
 function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw as Record<string, unknown>;
+  if (!isRecordValue(raw)) return null;
+  const r = raw;
   const effort = REASONING_EFFORT_VALUES.has(r.reasoningEffort as ReasoningEffortDTO)
     ? (r.reasoningEffort as ReasoningEffortDTO)
     : "auto";
@@ -763,17 +927,42 @@ function coerceReasoningSettings(raw: unknown): ReasoningSettingsDTO | null {
  * user's global reasoning setting" during generation.
  */
 function extractReasoningBindingsDTO(
-  metadata: Record<string, any> | null | undefined,
+  metadata: Record<string, unknown> | null | undefined,
 ): ConnectionReasoningBindingsDTO | null {
   const blob = metadata?.reasoningBindings;
-  if (!blob || typeof blob !== "object" || Array.isArray(blob)) return null;
-  const settings = coerceReasoningSettings((blob as any).settings);
+  if (!isRecordValue(blob)) return null;
+  const settings = coerceReasoningSettings(blob.settings);
   if (!settings) return null;
-  const promptBias = (blob as any).promptBias;
+  const promptBias = blob.promptBias;
   return {
     settings,
     ...(typeof promptBias === "string" ? { promptBias } : {}),
   };
+}
+
+function narrowDeferredGuidance(value: unknown): DeferredGuidanceDTO[] | undefined {
+  if (value === undefined || !Array.isArray(value)) return undefined;
+  const entries: unknown[] = value;
+  const guidance: DeferredGuidanceDTO[] = [];
+  for (const entry of entries) {
+    if (!isRecordValue(entry)) return undefined;
+    if (Object.keys(entry).some((key) => key !== "id" && key !== "content" && key !== "role")) {
+      return undefined;
+    }
+    if (
+      typeof entry.id !== "string" ||
+      typeof entry.content !== "string" ||
+      entry.role !== "system"
+    ) {
+      return undefined;
+    }
+    guidance.push({
+      id: entry.id,
+      content: entry.content,
+      role: "system",
+    });
+  }
+  return guidance;
 }
 
 function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
@@ -785,9 +974,34 @@ function concatChunks(chunks: Uint8Array[], total: number): Uint8Array {
   }
   return out;
 }
+type HostInterceptorRegistration = {
+  readonly registrationId: string;
+  readonly priority: number;
+  readonly matcher?: CompiledInterceptorMatcher;
+  readonly unregister: () => void;
+  readonly generation: string;
+};
+
+type HostInterceptorInvocation = {
+  readonly requestId: string;
+  readonly registrationId: string;
+  readonly generation: string;
+  readonly workerId: string;
+  readonly hostGeneration: string;
+  readonly inputMessages: readonly LlmMessageDTO[];
+  boundToken?: string;
+  readonly controller: AbortController;
+  readonly context: InterceptorContextDTO;
+  readonly privateState: Readonly<InterceptorPrivateState>;
+  timeout?: ReturnType<typeof setTimeout>;
+  resolve?: (value: InterceptorResult) => void;
+  reject?: (reason: unknown) => void;
+  settled: boolean;
+};
 
 export class WorkerHost {
   private runtime: RuntimeTransport | null = null;
+  private runtimeToken: symbol | null = null;
   private eventUnsubscribers = new Map<string, () => void>();
   private pendingRequests = new Map<
     string,
@@ -801,6 +1015,14 @@ export class WorkerHost {
    */
   private generationAbortControllers = new Map<string, AbortController>();
   private interceptorUnregister: (() => void) | null = null;
+  private readonly interceptorRegistrations = new Map<string, HostInterceptorRegistration>();
+  private readonly interceptorInvocations = new Map<string, HostInterceptorInvocation>();
+  private workerId = crypto.randomUUID();
+  private registrationGeneration = crypto.randomUUID();
+  private hostGeneration = crypto.randomUUID();
+  private readonly boundOperationControllers = new Map<string, AbortController>();
+  private hostDescriptor: SpindleHostDescriptorV1 | null = null;
+  private readonly interceptorControllersBySignal = new Map<AbortSignal, AbortController>();
   private contextHandlerUnregister: (() => void) | null = null;
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
@@ -809,7 +1031,7 @@ export class WorkerHost {
   private macroValueCache = new Map<string, string>();
   private static readonly MAX_BACKEND_PROCESSES = 16;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
-  private onWorkerReady: (() => void) | null = null;
+  private onWorkerReady: ((error?: Error) => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
   private onRuntimeExit: (() => void) | null = null;
   private runtimeExitPromise: Promise<void> | null = null;
@@ -1013,14 +1235,24 @@ export class WorkerHost {
   }
 
   async start(): Promise<void> {
+    await assertManifestCompatibility(this.manifest);
+    const descriptor = await createSpindleHostDescriptor(this.extensionId);
+    const hostDescriptor = validateSpindleHostDescriptor(descriptor);
+    this.hostDescriptor = hostDescriptor;
+
     const entryPath = await managerSvc.getBackendEntryPath(this.manifest.identifier);
     if (!entryPath) {
       console.log(
-        `[Spindle:${this.manifest.identifier}] No backend entry, skipping worker`
+        `[Spindle:${this.manifest.identifier}] No backend entry, skipping worker`,
       );
       return;
     }
 
+    this.workerId = crypto.randomUUID();
+    this.registrationGeneration = crypto.randomUUID();
+    this.hostGeneration = crypto.randomUUID();
+    const runtimeToken = Symbol(`spindle-runtime:${this.manifest.identifier}`);
+    this.runtimeToken = runtimeToken;
     const runtimePath = join(import.meta.dir, "worker-runtime.ts");
     const storagePath = this.getStorageRootPath(this.manifest.identifier);
     const repoPath = managerSvc.getRepoPath(this.manifest.identifier);
@@ -1030,82 +1262,121 @@ export class WorkerHost {
     });
     const startTime = performance.now();
 
-    this.runtime = createRuntimeTransport({
-      runtimePath,
-      extensionIdentifier: this.manifest.identifier,
-      repoPath,
-      storagePath,
-      onMessage: (message) => {
-        this.handleMessage(message as RuntimeWorkerToHost);
-      },
-      onError: (message) => {
-        console.error(
-          `[Spindle:${this.manifest.identifier}] Worker error:`,
-          message
-        );
-        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-          extensionId: this.extensionId,
-          identifier: this.manifest.identifier,
-          error: message,
-        });
-
-        try {
-          this.runtime?.postMessage({ type: "ping" } as any);
-        } catch {
-          console.warn(
-            `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`
+    try {
+      this.runtime = createRuntimeTransport({
+        runtimePath,
+        extensionIdentifier: this.manifest.identifier,
+        repoPath,
+        storagePath,
+        onMessage: (message) => {
+          if (this.runtimeToken !== runtimeToken) return;
+          this.handleMessage(message as RuntimeWorkerToHost);
+        },
+        onError: (message) => {
+          if (this.runtimeToken !== runtimeToken) return;
+          console.error(
+            `[Spindle:${this.manifest.identifier}] Worker error:`,
+            message,
           );
+          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+            extensionId: this.extensionId,
+            identifier: this.manifest.identifier,
+            error: message,
+          });
+
+          try {
+            this.runtime?.postMessage({ type: "ping" } as unknown as RuntimeHostToWorker);
+          } catch {
+            console.warn(
+              `[Spindle:${this.manifest.identifier}] Worker appears dead after error, cleaning up registrations`,
+            );
+            this.cleanup();
+          }
+        },
+        onExit: (exitCode, signalCode, error) => {
+          if (this.runtimeToken !== runtimeToken) return;
+          const wasStopping = this.runtimeStopping;
+          this.onWorkerShutdownAck?.();
+          this.onWorkerShutdownAck = null;
+          const details =
+            error?.message ||
+            `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
+          if (!wasStopping) {
+            this.onWorkerReady?.(new Error(details));
+            this.onWorkerReady = null;
+          }
+          this.onRuntimeExit?.();
+          this.onRuntimeExit = null;
+          if (wasStopping) {
+            this.cleanup();
+            return;
+          }
+          console.error(
+            `[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`,
+            details,
+          );
+          eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
+            extensionId: this.extensionId,
+            identifier: this.manifest.identifier,
+            error: details,
+          });
           this.cleanup();
-        }
-      },
-      onExit: (exitCode, signalCode, error) => {
-        const wasStopping = this.runtimeStopping;
-        this.onWorkerShutdownAck?.();
-        this.onWorkerShutdownAck = null;
-        this.onRuntimeExit?.();
-        this.onRuntimeExit = null;
-        if (wasStopping) {
-          this.cleanup();
-          return;
-        }
-        const details = error?.message || `Runtime exited (code=${exitCode ?? "null"}, signal=${signalCode ?? "null"})`;
-        console.error(`[Spindle:${this.manifest.identifier}] Runtime exited unexpectedly:`, details);
-        eventBus.emit(EventType.SPINDLE_EXTENSION_ERROR, {
-          extensionId: this.extensionId,
-          identifier: this.manifest.identifier,
-          error: details,
-        });
-        this.cleanup();
-      },
-    });
+        },
+      });
+    } catch (error) {
+      this.cleanup();
+      throw error;
+    }
 
     // Wait for the worker to finish loading the extension and registering
     // all macros/interceptors before resolving, so callers know the
     // extension is ready.
-    const readyPromise = new Promise<void>((resolve) => {
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      let settled = false;
       const readyTimeout = setTimeout(() => {
-        console.warn(
-          `[Spindle:${this.manifest.identifier}] Worker ready timeout (10s) — proceeding`
+        if (settled) return;
+        settled = true;
+        this.onWorkerReady = null;
+        reject(
+          new Error(
+            `[Spindle:${this.manifest.identifier}] Worker ready timeout`,
+          ),
         );
-        resolve();
       }, 10_000);
 
-      this.onWorkerReady = () => {
+      this.onWorkerReady = (error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(readyTimeout);
-        resolve();
+        this.onWorkerReady = null;
+        if (error) reject(error);
+        else resolve();
       };
     });
 
-    // Send init message with the extension's backend entry path
+    // Send init message with the extension's backend entry path.
     this.postToWorker({
       type: "init",
       manifest: { ...this.manifest, entry_backend: entryPath },
+      host: hostDescriptor,
       storagePath,
     });
 
-    await readyPromise;
-    await this.emitRuntimeStats("startup", performance.now() - startTime);
-    this.startRuntimeStatsSampling();
+    try {
+      await readyPromise;
+      await this.emitRuntimeStats("startup", performance.now() - startTime);
+      this.startRuntimeStatsSampling();
+    } catch (error) {
+      this.runtimeStopping = true;
+      const runtime = this.runtime;
+      try {
+        runtime?.terminate(true);
+      } catch {
+        // Best-effort termination before clearing host state.
+      }
+      this.cleanup();
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
@@ -1203,9 +1474,19 @@ export class WorkerHost {
     }
     this.eventUnsubscribers.clear();
 
-    // Unregister interceptor
-    this.interceptorUnregister?.();
+    for (const registration of this.interceptorRegistrations.values()) {
+      registration.unregister();
+    }
+    this.interceptorRegistrations.clear();
     this.interceptorUnregister = null;
+    for (const invocation of this.interceptorInvocations.values()) {
+      if (invocation.timeout) clearTimeout(invocation.timeout);
+      invocation.settled = true;
+      invocation.controller.abort();
+      invocation.reject?.(new Error("Interceptor host unloaded"));
+    }
+    this.interceptorInvocations.clear();
+    this.interceptorControllersBySignal.clear();
 
     // Unregister context handler
     this.contextHandlerUnregister?.();
@@ -1260,8 +1541,8 @@ export class WorkerHost {
     }
     this.generationAbortControllers.clear();
 
+    this.runtimeToken = null;
     this.runtime = null;
-    this.runtimeStopping = false;
   }
 
   private handleRuntimeTransportFailure(error: unknown): void {
@@ -1557,31 +1838,23 @@ export class WorkerHost {
         this.handleUpdateMacroValue(msg.name, msg.value);
         break;
       case "register_interceptor":
-        this.handleRegisterInterceptor(msg.priority);
+        this.handleRegisterInterceptor(msg.registrationId, msg.priority, msg.match);
         break;
-      case "intercept_result": {
-        // Strip parameters if the extension lacks the generation_parameters permission
-        let interceptParams = msg.parameters;
-        if (interceptParams && Object.keys(interceptParams).length > 0) {
-          if (!this.hasPermission("generation_parameters")) {
-            console.warn(
-              `[Spindle:${this.manifest.identifier}] Stripping interceptor parameters — generation_parameters permission not granted`
-            );
-            interceptParams = undefined;
-          }
-        }
-        const interceptBreakdown = Array.isArray(msg.breakdown)
-          ? msg.breakdown
-              .map((entry) => this.normalizeInterceptorBreakdownEntry(entry, msg.messages))
-              .filter((entry): entry is NonNullable<typeof entry> => !!entry)
-          : undefined;
-        this.resolveRequest(msg.requestId, {
-          messages: msg.messages,
-          parameters: interceptParams,
-          ...(interceptBreakdown && interceptBreakdown.length > 0 ? { breakdown: interceptBreakdown } : {}),
-        });
+      case "unregister_interceptor":
+        this.handleUnregisterInterceptor(msg.registrationId);
         break;
-      }
+      case "intercept_result":
+        this.handleInterceptorResult(msg);
+        break;
+      case "generate_assemble":
+        void this.handleBoundAssemble(msg);
+        break;
+      case "generate_quiet_tracked":
+        void this.handleBoundQuietTracked(msg);
+        break;
+      case "connections_resolve_dispatch":
+        void this.handleBoundDispatch(msg);
+        break;
       case "register_tool":
         this.handleRegisterTool(msg.tool);
         break;
@@ -1595,7 +1868,7 @@ export class WorkerHost {
         this.handleGenerationStream(msg.requestId, msg.input);
         break;
       case "cancel_generation":
-        this.handleCancelGeneration(msg.requestId);
+        this.handleCancelGeneration(msg.requestId, msg.__spindle_private_bound);
         break;
       // ─── Dry Run (gated: "generation") ───────────────────────────────
       case "generate_dry_run":
@@ -2167,6 +2440,9 @@ export class WorkerHost {
       case "log":
         this.handleLog(msg.level, msg.message);
         break;
+      case "startup_failure":
+        this.handleStartupFailure(msg.code, msg.message);
+        break;
       case "prompt_regex_set_owned":
         setPromptRegexOwnedChats(this.extensionId, msg.chatIds);
         break;
@@ -2569,13 +2845,38 @@ export class WorkerHost {
     this.macroValueCache.set(macroName, String(value ?? ""));
   }
 
+  private scopedInterceptorContext(
+    raw: unknown,
+    authority?: InterceptorPipelineAuthority,
+  ): Record<string, unknown> {
+    const source = raw && typeof raw === "object" && !Array.isArray(raw)
+      ? raw as Record<string, unknown>
+      : {};
+    const byExtension = authority?.presetMetadataByExtension ??
+      (source.presetMetadataByExtension && typeof source.presetMetadataByExtension === "object"
+        ? source.presetMetadataByExtension as Record<string, unknown>
+        : undefined);
+    const hasPresetPermission = this.hasPermission("presets");
+    const ownMetadata = hasPresetPermission && byExtension &&
+      Object.prototype.hasOwnProperty.call(byExtension, this.manifest.identifier)
+      ? byExtension[this.manifest.identifier]
+      : null;
+    const { presetMetadataByExtension: _private, ...publicContext } = source;
+    void _private;
+    return {
+      ...publicContext,
+      presetMetadata: ownMetadata === undefined ? null : structuredClone(ownMetadata),
+    };
+  }
+
   // ─── Interceptor registration ────────────────────────────────────────
 
-  private handleRegisterInterceptor(priority?: number): void {
+  private handleRegisterInterceptor(
+    registrationId: string,
+    priority?: number,
+    match?: unknown,
+  ): void {
     if (!this.hasPermission("interceptor")) {
-      console.warn(
-        `[Spindle:${this.manifest.identifier}] Interceptor permission not granted`
-      );
       this.postToWorker({
         type: "permission_denied",
         permission: "interceptor",
@@ -2583,81 +2884,393 @@ export class WorkerHost {
       });
       return;
     }
-
+    if (typeof registrationId !== "string" || registrationId.length === 0) return;
+    const matcher = match === undefined ? undefined : compileInterceptorMatcher(match);
+    this.handleUnregisterInterceptor(registrationId);
     const scopedUserId = this.getScopedUserId();
-    // Resolve per-run so user-level spindleSettings changes (and any future
-    // hot-reloaded manifest changes) propagate without requiring the
-    // extension to tear down and re-register its interceptor.
     const resolveTimeoutMs = () =>
-      resolveInterceptorTimeout(
-        this.manifest.interceptorTimeoutMs,
-        this.getScopedUserId(),
-      );
-
-    this.interceptorUnregister?.();
-    this.interceptorUnregister = interceptorPipeline.register({
+      resolveInterceptorTimeout(this.manifest.interceptorTimeoutMs, scopedUserId);
+    const registrationGeneration = this.registrationGeneration;
+    const unregister = interceptorPipeline.register({
       extensionId: this.extensionId,
       extensionName: this.manifest.name || this.manifest.identifier,
       userId: scopedUserId,
       priority: priority ?? 100,
+      registrationId,
+      matcher: matcher ? (rawContext, authority) => matcher.matches(this.scopedInterceptorContext(rawContext, authority)) : undefined,
       resolveTimeoutMs,
+      contextPreparer: (rawContext, outerSignal, authority) => {
+        const callbackController = new AbortController();
+        const onOuterAbort = () => callbackController.abort(outerSignal?.reason);
+        if (outerSignal) {
+          if (outerSignal.aborted) onOuterAbort();
+          else outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+        }
+        const scopedContext = this.scopedInterceptorContext(rawContext, authority);
+        const prepared = prepareInterceptorContext({
+          context: scopedContext,
+          userId: scopedUserId,
+          signal: callbackController.signal,
+          parentGenerationSnapshot: authority?.parentGenerationSnapshot,
+          mainDispatchSnapshot: authority?.mainDispatchSnapshot,
+          presetMetadata: scopedContext.presetMetadata,
+        });
+        this.interceptorControllersBySignal.set(callbackController.signal, callbackController);
+        return attachInterceptorPrivateState(prepared, {
+          parentGenerationSnapshot: authority?.parentGenerationSnapshot,
+          mainDispatchSnapshot: authority?.mainDispatchSnapshot,
+          parentPrefillAttestation: authority?.parentPrefillAttestation,
+          signal: callbackController.signal,
+          mainApiKey: authority?.mainApiKey ?? "",
+        });
+      },
       handler: async (messages, context) => {
+        if (!isPreparedInterceptorContext(context)) {
+          throw new Error("Interceptor context failed host validation");
+        }
+        const typedContext = context;
         const requestId = crypto.randomUUID();
-        const timeoutMs = resolveTimeoutMs();
-
-        // Expose assembly-source membership explicitly on the DTO so extensions
-        // can distinguish real chat turns and standalone World Info blocks
-        // from other prompt material. Shallow-copy so the synthetic flags never
-        // leak onto the outbound LLM payload.
-        const messagesWithSourceFlags = messages.map((m) => {
-          const llm = m as unknown as LlmMessage;
+        const privateState = readInterceptorPrivateState(typedContext) ?? { mainApiKey: "" };
+        const controller = privateState.signal
+          ? this.interceptorControllersBySignal.get(privateState.signal) ?? new AbortController()
+          : new AbortController();
+        const messagesWithSourceFlags = messages.map((message) => {
+          const llm = message as unknown as LlmMessage;
           const isChatHistory = promptAssemblySvc.isChatHistoryMessage(llm);
           const isWorldInfoEntry = promptAssemblySvc.isWorldInfoEntryMessage(llm);
-          if (!isChatHistory && !isWorldInfoEntry) return m;
-          const sourceMessageId = promptAssemblySvc.getSourceMessageId(llm);
-          const sourceIndexInChat = promptAssemblySvc.getSourceIndexInChat(llm);
+          if (!isChatHistory && !isWorldInfoEntry) return message;
           return {
-            ...m,
+            ...message,
             ...(isChatHistory ? { __isChatHistory: true } : {}),
             ...(isWorldInfoEntry ? { __isWorldInfoEntry: true } : {}),
-            ...(sourceMessageId !== undefined ? { sourceMessageId } : {}),
-            ...(sourceIndexInChat !== undefined ? { sourceIndexInChat } : {}),
+            ...(promptAssemblySvc.getSourceMessageId(llm) !== undefined
+              ? { sourceMessageId: promptAssemblySvc.getSourceMessageId(llm) }
+              : {}),
+            ...(promptAssemblySvc.getSourceIndexInChat(llm) !== undefined
+              ? { sourceIndexInChat: promptAssemblySvc.getSourceIndexInChat(llm) }
+              : {}),
           };
         });
-
+        const workerMessages = stripInterceptorFinalResponseCarrier(messagesWithSourceFlags);
+        const parent = privateState.parentGenerationSnapshot;
+        const invocation: HostInterceptorInvocation = {
+          requestId,
+          registrationId,
+          generation: registrationGeneration,
+          workerId: this.workerId,
+          hostGeneration: parent?.hostGeneration ?? this.hostGeneration,
+          inputMessages: structuredClone(workerMessages),
+          controller,
+          context: typedContext,
+          privateState,
+          settled: false,
+        };
+        const timeoutMs = resolveTimeoutMs();
+        invocation.timeout = setTimeout(() => this.handleInterceptorTimeout(requestId), timeoutMs);
+        this.interceptorInvocations.set(requestId, invocation);
+        const token = crypto.randomUUID();
+        invocation.boundToken = token;
+        const bound: BoundRuntimeEnvelope | undefined = parent
+          ? {
+              workerId: this.workerId,
+              registrationGeneration,
+              callbackUserId: invocation.context.userId,
+              hostGeneration: parent.hostGeneration,
+              requestId,
+              token,
+            }
+          : undefined;
         this.postToWorker({
           type: "intercept_request",
           requestId,
-          messages: messagesWithSourceFlags,
-          context,
+          registrationId,
+          registrationGeneration,
+          workerId: invocation.workerId,
+          messages: workerMessages,
+          context: invocation.context,
+          ...(bound ? { __spindle_private_bound: bound } : {}),
         });
-
         return new Promise<InterceptorResult>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            setTimeout(() => {
-              if (!this.pendingRequests.has(requestId)) return;
-              this.pendingRequests.delete(requestId);
-              reject(
-                new Error(
-                  `Interceptor timeout from ${this.manifest.identifier} (${Math.round(timeoutMs / 1000)}s)`
-                )
-              );
-            }, 0);
-          }, timeoutMs);
-
-          this.pendingRequests.set(requestId, {
-            resolve: (val) => {
-              clearTimeout(timeout);
-              resolve(val as InterceptorResult);
-            },
-            reject: (err) => {
-              clearTimeout(timeout);
-              reject(err);
-            },
-          });
+          (invocation as HostInterceptorInvocation & {
+            resolve?: (value: InterceptorResult) => void;
+            reject?: (reason: unknown) => void;
+          }).resolve = resolve;
+          (invocation as HostInterceptorInvocation & {
+            resolve?: (value: InterceptorResult) => void;
+            reject?: (reason: unknown) => void;
+          }).reject = reject;
         });
       },
     });
+    this.interceptorRegistrations.set(registrationId, {
+      registrationId,
+      priority: priority ?? 100,
+      matcher,
+      unregister,
+      generation: registrationGeneration,
+    });
+    this.interceptorUnregister = unregister;
+  }
+
+  private handleUnregisterInterceptor(registrationId: string): void {
+    const registration = this.interceptorRegistrations.get(registrationId);
+    if (!registration) return;
+    registration.unregister();
+    this.interceptorRegistrations.delete(registrationId);
+    for (const invocation of this.interceptorInvocations.values()) {
+      if (invocation.registrationId !== registrationId) continue;
+      invocation.settled = true;
+      invocation.controller.abort();
+      try {
+        this.postToWorker({
+          type: "intercept_abort",
+          requestId: invocation.requestId,
+          registrationId,
+          reason: "Interceptor registration revoked",
+        });
+      } catch {
+        // Worker teardown is already in progress.
+      }
+      invocation.reject?.(new Error("Interceptor registration revoked"));
+      this.interceptorInvocations.delete(invocation.requestId);
+    }
+  }
+
+  private handleInterceptorTimeout(requestId: string): void {
+    const invocation = this.interceptorInvocations.get(requestId);
+    if (!invocation || invocation.settled) return;
+    invocation.settled = true;
+    invocation.controller.abort(new Error("Interceptor timeout"));
+    try {
+      this.postToWorker({
+        type: "intercept_abort",
+        requestId,
+        registrationId: invocation.registrationId,
+        reason: "Interceptor timeout",
+      });
+    } catch {
+      // Worker teardown is already in progress.
+    }
+    invocation.reject?.(new Error(`Interceptor timeout from ${this.manifest.identifier}`));
+    this.interceptorInvocations.delete(requestId);
+  }
+
+  private handleInterceptorResult(msg: Extract<RuntimeWorkerToHost, { type: "intercept_result" }>): void {
+    const invocation = this.interceptorInvocations.get(msg.requestId);
+    if (
+      !invocation
+      || invocation.registrationId !== msg.registrationId
+      || msg.registrationGeneration !== invocation.generation
+      || msg.workerId !== invocation.workerId
+      || msg.hostGeneration !== invocation.hostGeneration
+      || this.workerId !== invocation.workerId
+      || this.hostGeneration !== invocation.hostGeneration
+      || this.registrationGeneration !== invocation.generation
+      || this.runtimeStopping
+    ) {
+      return;
+    }
+    const registration = this.interceptorRegistrations.get(msg.registrationId);
+    if (!registration || registration.generation !== invocation.generation) return;
+    // Capture the concrete grant rows at callback receipt. A later
+    // revoke+grant therefore produces a different identity and cannot
+    // reactivate this callback's final-response or interceptor lease.
+    const capturedInterceptorGrantId = managerSvc.getPermissionGrantId(
+      this.manifest.identifier,
+      "interceptor",
+    );
+    const capturedFinalResponseGrantId = managerSvc.getPermissionGrantId(
+      this.manifest.identifier,
+      "final_response",
+    );
+    const hasCapturedGrant = (
+      permission: ManagedSpindlePermission,
+      grantId: string | undefined,
+    ): boolean =>
+      grantId !== undefined
+      && this.hasPermission(permission)
+      && managerSvc.getPermissionGrantId(this.manifest.identifier, permission) === grantId;
+
+    const isRegistrationLive = () =>
+      this.interceptorRegistrations.get(msg.registrationId) === registration
+      && registration.generation === invocation.generation;
+    const isGenerationLive = () =>
+      !this.runtimeStopping
+      && this.runtime !== null
+      && this.workerId === invocation.workerId
+      && this.hostGeneration === invocation.hostGeneration
+      && this.registrationGeneration === invocation.generation;
+    const finalPermissionGuard = () =>
+      hasCapturedGrant("final_response", capturedFinalResponseGrantId)
+      && isRegistrationLive()
+      && isGenerationLive();
+    const interceptorPermissionGuard = () =>
+      hasCapturedGrant("interceptor", capturedInterceptorGrantId);
+    const outputMessages = isLlmMessageArray(msg.messages)
+      ? stripInterceptorFinalResponseCarrier(msg.messages)
+      : invocation.inputMessages;
+    const rawBreakdown = Array.isArray(msg.breakdown) ? msg.breakdown : [];
+    const normalized = normalizeInterceptorFinalResponse({
+      result: msg.finalResponse,
+      inputMessages: invocation.inputMessages,
+      outputMessages,
+      breakdown: rawBreakdown,
+      parent: invocation.privateState.parentGenerationSnapshot,
+      permissionGranted: hasCapturedGrant(
+        "final_response",
+        capturedFinalResponseGrantId,
+      ),
+      permissionGuard: finalPermissionGuard,
+      extensionId: this.manifest.identifier,
+      extensionName: this.manifest.name || this.manifest.identifier,
+      workerId: invocation.workerId,
+      registrationId: invocation.registrationId,
+      callbackUserId: invocation.context.userId,
+      hostGeneration: invocation.hostGeneration,
+    });
+
+    invocation.settled = true;
+    if (invocation.timeout) clearTimeout(invocation.timeout);
+    this.interceptorInvocations.delete(msg.requestId);
+    let parameters = msg.parameters;
+    if (parameters && Object.keys(parameters).length > 0 && !this.hasPermission("generation_parameters")) {
+      parameters = undefined;
+    }
+    const breakdown = normalized.breakdown
+      .map((entry) => this.normalizeInterceptorBreakdownEntry(entry, normalized.messages))
+      .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+    const deferredGuidance = narrowDeferredGuidance(msg.deferredGuidance);
+    let terminalLease: InterceptorTerminalLease | undefined;
+    if (capturedInterceptorGrantId !== undefined) {
+      try {
+        const privateState = invocation.privateState;
+        terminalLease = createInterceptorTerminalLease({
+          registrationId: msg.registrationId,
+          generationId: invocation.context.generationId,
+          callbackUserId: invocation.context.userId,
+          extensionId: this.manifest.identifier,
+          extensionName: this.manifest.name || this.manifest.identifier,
+          parentGenerationSnapshot: privateState.parentGenerationSnapshot,
+          parentPrefillAttestation: privateState.parentPrefillAttestation,
+          guidance: deferredGuidance,
+          finalResponseState: normalized.finalResponse,
+          permissionGuard: interceptorPermissionGuard,
+          isRegistrationLive,
+          isGenerationLive,
+          signal: invocation.controller.signal,
+          onDispose: () => undefined,
+        });
+      } catch {
+        terminalLease = undefined;
+      }
+    }
+    const result: InterceptorResult & {
+      finalResponseState?: InterceptorFinalResponseState;
+    } = {
+      messages: normalized.messages,
+      ...(parameters ? { parameters } : {}),
+      ...(breakdown.length > 0 ? { breakdown } : {}),
+      ...(terminalLease ? { terminalLeases: [terminalLease] } : {}),
+      ...(normalized.finalResponse ? { finalResponseState: normalized.finalResponse } : {}),
+    };
+    invocation.resolve?.(result);
+  }
+
+  private boundInvocation(
+    requestId: string,
+    envelope: BoundRuntimeEnvelope | undefined,
+  ): { invocation: HostInterceptorInvocation; context: BoundInvocationContext; controller: AbortController; callbacks: HostBoundGenerationCallbacks } | null {
+    if (!envelope || envelope.operationRequestId !== requestId) return null;
+    const invocation = this.interceptorInvocations.get(envelope.requestId);
+    if (!invocation || invocation.settled || invocation.boundToken !== envelope.token) return null;
+    const registration = this.interceptorRegistrations.get(invocation.registrationId);
+    const parent = invocation.privateState.parentGenerationSnapshot;
+    if (!registration || registration.generation !== invocation.generation || !parent ||
+      envelope.workerId !== this.workerId ||
+      envelope.registrationGeneration !== this.registrationGeneration ||
+      envelope.callbackUserId !== invocation.context.userId ||
+      envelope.hostGeneration !== parent.hostGeneration) return null;
+    if (this.boundOperationControllers.has(envelope.operationRequestId)) return null;
+    const controller = new AbortController();
+    const abort = () => controller.abort(invocation.controller.signal.reason);
+    if (invocation.controller.signal.aborted) abort();
+    else invocation.controller.signal.addEventListener("abort", abort, { once: true });
+    this.boundOperationControllers.set(envelope.operationRequestId, controller);
+    const context: BoundInvocationContext = {
+      workerId: envelope.workerId,
+      registrationGeneration: envelope.registrationGeneration,
+      callbackUserId: envelope.callbackUserId,
+      hostGeneration: parent.hostGeneration,
+      requestId: envelope.requestId,
+      invocationToken: brandInvocationToken(envelope.token),
+      parent,
+      signal: controller.signal,
+    };
+    const callbacks = createHostBoundGenerationCallbacks({
+      parent,
+      extensionIdentifier: this.manifest.identifier,
+      signal: controller.signal,
+      mainApiKey: invocation.privateState.mainApiKey,
+    });
+    return { invocation, context, controller, callbacks };
+  }
+
+  private async handleBoundAssemble(msg: Extract<RuntimeWorkerToHost, { type: "generate_assemble" }>): Promise<void> {
+    const bound = this.boundInvocation(msg.requestId, msg.__spindle_private_bound);
+    if (!bound) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: "BOUND_BINDING_REQUIRED" });
+      return;
+    }
+    try {
+      const result = await runBoundAssembly({
+        context: bound.context,
+        request: { ...msg.input, signal: bound.controller.signal },
+        resolveDispatch: bound.callbacks.resolveDispatch,
+        assemble: bound.callbacks.assemble,
+      });
+      this.postToWorker({ type: "response", requestId: msg.requestId, result });
+    } catch (error) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+    }
+  }
+
+  private async handleBoundQuietTracked(msg: Extract<RuntimeWorkerToHost, { type: "generate_quiet_tracked" }>): Promise<void> {
+    const bound = this.boundInvocation(msg.requestId, msg.__spindle_private_bound);
+    if (!bound) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: "BOUND_BINDING_REQUIRED" });
+      return;
+    }
+    try {
+      const result = await runBoundQuietTracked({
+        context: bound.context,
+        request: { ...msg.input, signal: bound.controller.signal },
+        resolveDispatch: bound.callbacks.resolveDispatch,
+        provider: bound.callbacks.provider,
+      });
+      this.postToWorker({ type: "response", requestId: msg.requestId, result });
+    } catch (error) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+    }
+  }
+
+  private async handleBoundDispatch(msg: Extract<RuntimeWorkerToHost, { type: "connections_resolve_dispatch" }>): Promise<void> {
+    const bound = this.boundInvocation(msg.requestId, msg.__spindle_private_bound);
+    if (!bound) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: "BOUND_BINDING_REQUIRED" });
+      return;
+    }
+    try {
+      const result = await bound.callbacks.inspectDispatch(msg.connectionId);
+      this.postToWorker({ type: "response", requestId: msg.requestId, result });
+    } catch (error) {
+      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+    }
   }
 
   private normalizeInterceptorBreakdownEntry(
@@ -2788,12 +3401,27 @@ export class WorkerHost {
     }
   }
 
-  private handleCancelGeneration(requestId: string): void {
+  private handleCancelGeneration(
+    requestId: string,
+    envelope?: BoundRuntimeEnvelope,
+  ): void {
+    if (envelope?.operationRequestId) {
+      const invocation = this.interceptorInvocations.get(envelope.requestId);
+      const operation = this.boundOperationControllers.get(envelope.operationRequestId);
+      if (
+        invocation &&
+        operation &&
+        invocation.boundToken === envelope.token &&
+        invocation.registrationId.length > 0
+      ) {
+        operation.abort();
+        this.boundOperationControllers.delete(envelope.operationRequestId);
+      }
+      return;
+    }
     const controller = this.generationAbortControllers.get(requestId);
     if (!controller) return;
     controller.abort();
-    // The map entry is cleared in handleGeneration / handleGenerationStream's
-    // finally block once the awaited service call rejects.
   }
 
   /**
@@ -4218,6 +4846,21 @@ export class WorkerHost {
         console.error(prefix, message);
         break;
     }
+  }
+  private handleStartupFailure(code: string, message: string): void {
+    const error = new Error(
+      `[Spindle:${this.manifest.identifier}] Worker startup failed (${code}): ${message}`,
+    );
+    this.onWorkerReady?.(error);
+    this.onWorkerReady = null;
+    this.runtimeStopping = true;
+    const runtime = this.runtime;
+    try {
+      runtime?.terminate(true);
+    } catch {
+      // Best-effort termination; cleanup below still rejects registrations.
+    }
+    this.cleanup();
   }
 
   // ─── Push Notifications (gated: "push_notification") ─────────────────

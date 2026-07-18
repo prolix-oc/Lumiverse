@@ -1922,6 +1922,10 @@
     "managedByOperator": "由运营方管理",
     "enabled": "已启用",
     "disabled": "已禁用",
+    "permissionNames": {
+      "final_response": "最终响应"
+    },
+    "frontendLoadFailed": "无法加载扩展“{{name}}”的前端。",
     "permissionStatus": "{{name}}（{{status}}）",
     "update": "更新",
     "updateHint": "从远程拉取并重建",

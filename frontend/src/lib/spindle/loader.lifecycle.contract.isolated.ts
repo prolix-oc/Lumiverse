@@ -1,5 +1,5 @@
 import type { SpindleManifest } from 'lumiverse-spindle-types'
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { PendingConfirmRequest, SpindlePlacementSlice, SpindleSlice } from '@/types/store'
@@ -12,6 +12,11 @@ import {
   subscribeLiveRoot,
   unregisterLiveRoot,
 } from './live-root-registry'
+import {
+  SPINDLE_HOST_CAPABILITIES,
+  digestSpindleHostDescriptor,
+  validateSpindleHostDescriptor,
+} from './host-compatibility'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -32,7 +37,7 @@ const originalGlobals = {
   fetch: globalThis.fetch,
 }
 const originalGlobalDescriptors = new Map<string, PropertyDescriptor | undefined>(
-  ['window', 'document', 'Element', 'HTMLElement', 'Node', 'MutationObserver', 'Event', 'CustomEvent', 'MouseEvent', 'requestAnimationFrame', 'cancelAnimationFrame', 'fetch']
+  ['window', 'document', 'Element', 'HTMLElement', 'Node', 'MutationObserver', 'Event', 'CustomEvent', 'MouseEvent', 'requestAnimationFrame', 'cancelAnimationFrame', 'fetch', '__APP_VERSION__']
     .map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
 )
 Object.assign(globalThis, {
@@ -47,6 +52,7 @@ Object.assign(globalThis, {
   MouseEvent: dom.window.MouseEvent,
   requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
   cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
+  __APP_VERSION__: '1.0.8',
 })
 const confirmWindowListeners = new Set<EventListenerOrEventListenerObject>()
 const nativeWindowAddEventListener = dom.window.addEventListener.bind(dom.window)
@@ -59,6 +65,10 @@ dom.window.removeEventListener = ((type: string, listener: EventListenerOrEventL
   if (type === 'spindle:confirm-resolved') confirmWindowListeners.delete(listener)
   nativeWindowRemoveEventListener(type, listener, options)
 }) as typeof dom.window.removeEventListener
+
+function testInstallationId(sequence: number): string {
+  return `00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`
+}
 
 type TestStoreState = SpindlePlacementSlice & SpindleSlice
 const createPlacementStore = (): StoreApi<SpindlePlacementSlice> => createStore<SpindlePlacementSlice>(createSpindlePlacementSlice)
@@ -138,6 +148,19 @@ let mockedGrantedPermissions = ['ui_panels', 'presets']
 mock.module('@/ws/client', () => ({ wsClient: loaderWsClient }))
 mock.module('@/api/spindle', () => ({
   spindleApi: {
+    compatibilityHandshake: async (installationId: string, nonce: string) => {
+      const descriptor = validateSpindleHostDescriptor({
+        descriptorVersion: 1,
+        lumiverseVersion: '1.0.8',
+        capabilities: SPINDLE_HOST_CAPABILITIES,
+        extensionInstallationId: installationId,
+      })
+      return {
+        nonce,
+        descriptor,
+        digest: await digestSpindleHostDescriptor(descriptor),
+      }
+    },
     getPermissions: async () => {
       permissionApiCalls += 1
       return { granted: [...mockedGrantedPermissions] }
@@ -227,7 +250,7 @@ const {
   destroyAllUIEventBindingsForExtension,
   destroyUIEventBindingsForExtensionPermission,
 } = await import('./ui-events-helper')
-const extensionId = 'lifecycle-contract-extension'
+const extensionId = testInstallationId(1)
 const generation = 11
 const nextGeneration = 12
 
@@ -384,7 +407,7 @@ describe('loader-owned roots', () => {
     const loaderMountDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderMount')
     const loaderModalDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderModal')
     const loaderInjectionDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__loaderInjection')
-    const extensionId = 'loader-root-contract'
+    const extensionId = testInstallationId(2)
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Loader root contract',
@@ -511,6 +534,14 @@ async function loadPlacementBundle(
 async function flushMicrotasks(turns = 4): Promise<void> {
   for (let index = 0; index < turns; index += 1) await Promise.resolve()
 }
+async function waitForCondition(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 1_000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await Bun.sleep(1)
+  }
+  throw new Error(`Timed out waiting for ${label}`)
+}
 function restoreGlobalProperty(key: string, descriptor: PropertyDescriptor | undefined): void {
   if (descriptor) Object.defineProperty(globalThis, key, descriptor)
   else Reflect.deleteProperty(globalThis, key)
@@ -518,7 +549,7 @@ function restoreGlobalProperty(key: string, descriptor: PropertyDescriptor | und
 
 describe('startup queue and force-load lifecycle', () => {
   test('replays backend and process events queued during one active bootstrap exactly once', async () => {
-    const queueId = 'startup-queue-generation-contract'
+    const queueId = testInstallationId(3)
     const manifest = placementManifest(queueId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const source = `
@@ -554,8 +585,7 @@ describe('startup queue and force-load lifecycle', () => {
 
     try {
       loadPromise = loadFrontendExtension(queueId, manifest)
-      await flushMicrotasks(2)
-      expect(fetchStarted).toBe(true)
+      await waitForCondition(() => fetchStarted, 'the gated frontend fetch')
 
       routeBackendMessage(queueId, { kind: 'queued-backend', value: 1 })
       routeFrontendProcessEvent(queueId, {
@@ -568,12 +598,16 @@ describe('startup queue and force-load lifecycle', () => {
 
       fetchReleased = true
       releaseFetch(new Response(source))
-      await loadPromise
+      await waitForCondition(
+        () => typeof loaderGlobals.__startupQueueReady === 'function',
+        'the manual readiness callback',
+      )
       const loaded = getLoadedExtensions().get(queueId)
       expect(loaded?.isReady).toBe(false)
       expect(loaderGlobals.__startupQueueEvents).toEqual({ backend: [], process: [] })
 
       loaderGlobals.__startupQueueReady()
+      await loadPromise
       await flushMicrotasks()
       expect(loaderGlobals.__startupQueueEvents).toEqual({
         backend: [{ kind: 'queued-backend', value: 1 }],
@@ -601,7 +635,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('does not deliver late backend or process events queued after unload to a reload', async () => {
-    const lateId = 'startup-queue-late-event-contract'
+    const lateId = testInstallationId(4)
     const manifest = placementManifest(lateId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const lateEventsDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__lateQueueEvents')
@@ -640,7 +674,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('reloads a same-signature force load after unload inside the dedupe window', async () => {
-    const forceId = 'force-reload-dedupe-contract'
+    const forceId = testInstallationId(5)
     const manifest = placementManifest(forceId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const forceSetupDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__forceSetupCount')
@@ -677,7 +711,7 @@ describe('startup queue and force-load lifecycle', () => {
   })
 
   test('retries a failed force load when no frontend was loaded', async () => {
-    const retryId = 'force-failed-retry-contract'
+    const retryId = testInstallationId(6)
     const manifest = placementManifest(retryId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
     const forceRetryDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__forceRetrySetupCount')
@@ -696,7 +730,7 @@ describe('startup queue and force-load lifecycle', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} })
 
     try {
-      await loadFrontendExtension(retryId, manifest, true)
+      await expect(loadFrontendExtension(retryId, manifest, true)).rejects.toThrow('HTTP 500')
       expect(fetchCalls).toBe(1)
       expect(getLoadedExtensions().has(retryId)).toBe(false)
 
@@ -711,12 +745,100 @@ describe('startup queue and force-load lifecycle', () => {
       Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL })
     }
   })
+
+  test('keeps a delayed module import in flight instead of allowing a retry to duplicate module startup', async () => {
+    const delayedId = testInstallationId(16)
+    const manifest = placementManifest(delayedId)
+    const loaderGlobals = globalThis as typeof globalThis & Record<string, any>
+    const delayedImportStartsDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__delayedImportStarts')
+    const delayedImportStartedDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__delayedImportStarted')
+    const delayedImportGateDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__delayedImportGate')
+    const delayedSetupCountDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__delayedSetupCount')
+    const source = `
+      globalThis.__delayedImportStarts = (globalThis.__delayedImportStarts || 0) + 1;
+      globalThis.__delayedImportStarted?.();
+      await globalThis.__delayedImportGate;
+      export function setup() {
+        globalThis.__delayedSetupCount = (globalThis.__delayedSetupCount || 0) + 1;
+      }
+    `
+    const originalFetch = globalThis.fetch
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    let fetchCalls = 0
+    let releaseDelayedImport!: () => void
+    const delayedImportGate = new Promise<void>((resolve) => {
+      releaseDelayedImport = resolve
+    })
+    let resolveDelayedImportStarted!: () => void
+    const delayedImportStarted = new Promise<void>((resolve) => {
+      resolveDelayedImportStarted = resolve
+    })
+    let firstLoad: Promise<void> | undefined
+    let retryLoad: Promise<void> | undefined
+    let firstSettled = false
+    loaderGlobals.__delayedImportStarts = 0
+    loaderGlobals.__delayedImportStarted = resolveDelayedImportStarted
+    loaderGlobals.__delayedImportGate = delayedImportGate
+    loaderGlobals.__delayedSetupCount = 0
+    globalThis.fetch = (async () => {
+      fetchCalls += 1
+      return new Response(source)
+    }) as unknown as typeof fetch
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} })
+
+    jest.useFakeTimers()
+    try {
+      firstLoad = loadFrontendExtension(delayedId, manifest, true).then(
+        () => {
+          firstSettled = true
+        },
+        () => {
+          firstSettled = true
+        },
+      )
+      await delayedImportStarted
+      jest.advanceTimersByTime(10_001)
+      await flushMicrotasks()
+      const firstSettledAfterTimeout = firstSettled
+
+      retryLoad = loadFrontendExtension(delayedId, manifest, true)
+      jest.useRealTimers()
+      await flushMicrotasks(8)
+      if (firstSettledAfterTimeout) {
+        await waitForCondition(
+          () => loaderGlobals.__delayedImportStarts === 2,
+          'the retry module import',
+        )
+      }
+      releaseDelayedImport()
+      await Promise.all([firstLoad, retryLoad])
+
+      expect(firstSettledAfterTimeout).toBe(false)
+      expect(loaderGlobals.__delayedImportStarts).toBe(1)
+      expect(loaderGlobals.__delayedSetupCount).toBe(1)
+      expect(fetchCalls).toBe(1)
+    } finally {
+      jest.useRealTimers()
+      releaseDelayedImport()
+      const pendingLoads = [firstLoad, retryLoad].filter(
+        (load): load is Promise<void> => Boolean(load),
+      )
+      if (pendingLoads.length > 0) await Promise.allSettled(pendingLoads)
+      await unloadFrontendExtension(delayedId)
+      globalThis.fetch = originalFetch
+      Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevokeObjectURL })
+      restoreGlobalProperty('__delayedImportStarts', delayedImportStartsDescriptor)
+      restoreGlobalProperty('__delayedImportStarted', delayedImportStartedDescriptor)
+      restoreGlobalProperty('__delayedImportGate', delayedImportGateDescriptor)
+      restoreGlobalProperty('__delayedSetupCount', delayedSetupCountDescriptor)
+    }
+  })
 })
 
 describe('permission-free drawer and input placements', () => {
   test('registers drawer tabs and input actions when ui_panels is not granted', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'free-placement-registration'
+    const extensionId = testInstallationId(7)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const freePlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__freePlacementHandles')
@@ -747,7 +869,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('keeps drawer tabs and input actions after unrelated privileged permission revoke cleanup passes', async () => {
     mockedGrantedPermissions = ['ui_panels', 'app_manipulation']
-    const extensionId = 'free-placement-revoke'
+    const extensionId = testInstallationId(8)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const revokePlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__revokePlacementHandles')
@@ -791,7 +913,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('removes free placements on unload and starts a clean set on reload', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'free-placement-reload'
+    const extensionId = testInstallationId(9)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const reloadPlacementDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__reloadPlacementHandles')
@@ -834,7 +956,7 @@ describe('permission-free drawer and input placements', () => {
 
   test('keeps every privileged placement and mobility gate closed without permissions', async () => {
     mockedGrantedPermissions = []
-    const extensionId = 'privileged-placement-gate'
+    const extensionId = testInstallationId(10)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const privilegedDeniedDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__privilegedPlacementDenied')
@@ -878,7 +1000,7 @@ describe('permission-free drawer and input placements', () => {
 describe('tab mobility permission gate', () => {
   test('allows tab movement with app_manipulation only', async () => {
     mockedGrantedPermissions = ['app_manipulation']
-    const extensionId = 'mobility-app-manipulation'
+    const extensionId = testInstallationId(11)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const mobilityDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__appMobilityTab')
@@ -905,7 +1027,7 @@ describe('tab mobility permission gate', () => {
 
   test('allows tab movement with ui_panels only', async () => {
     mockedGrantedPermissions = ['ui_panels']
-    const extensionId = 'mobility-ui-panels'
+    const extensionId = testInstallationId(12)
     const manifest = placementManifest(extensionId)
     const loaderGlobals = globalThis as typeof globalThis & Record<string, unknown>
     const mobilityDescriptor = Object.getOwnPropertyDescriptor(globalThis, '__uiPanelsMobilityTab')
@@ -1103,7 +1225,7 @@ describe('generation rollover', () => {
 })
 describe('retained non-UI context lifecycle', () => {
   test('rejects every retained generation-A capability after unload/reload without host side effects', async () => {
-    const retainedId = 'retained-context-contract'
+    const retainedId = testInstallationId(13)
     const manifest: SpindleManifest = {
       version: '1.0.0',
       name: 'Retained context contract',
@@ -1221,7 +1343,7 @@ describe('retained non-UI context lifecycle', () => {
   })
 
   test('settles overlapping showConfirm requests independently and releases modal capacity', async () => {
-    const confirmId = 'overlapping-confirm-contract'
+    const confirmId = testInstallationId(14)
     const manifest = placementManifest(confirmId)
     const source = `
       export function setup(context) {
@@ -1301,7 +1423,7 @@ describe('retained non-UI context lifecycle', () => {
   })
 
   test('drains character onChange subscriptions on revoke/unload and regrants a fresh listener', async () => {
-    const characterId = 'character-subscription-contract'
+    const characterId = testInstallationId(15)
     mockedGrantedPermissions = ['characters']
     const manifest: SpindleManifest = { ...placementManifest(characterId), permissions: ['characters'] }
     const source = `

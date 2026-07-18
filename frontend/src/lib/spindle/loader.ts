@@ -5,6 +5,8 @@ import type {
   PermissionRequestOptions,
   SpindleMountPoint,
   SpindleTabLocation as TabLocation,
+  SpindleHostDescriptorV1,
+  SpindleHostLocale,
 } from 'lumiverse-spindle-types'
 import type { MacroCatalogResponse } from '@/api/macros'
 import type { SpindleCharacterEditorUI } from './character-editor-types'
@@ -58,6 +60,16 @@ import {
   type FrontendUIEventsHelper,
 } from './ui-events-helper'
 import { wsClient } from '@/ws/client'
+import {
+  assertManifestCompatibility,
+  digestSpindleHostDescriptor,
+  generateSpindleCompatibilityNonce,
+  SPINDLE_HOST_CAPABILITIES,
+  SpindleCompatibilityError,
+  validateFrontendExtensionCompatibility,
+  validateSpindleHostDescriptor,
+} from './host-compatibility'
+import { getHostLocale, subscribeHostLocale } from '@/i18n/host-locale'
 import { spindleApi } from '@/api/spindle'
 import { charactersApi } from '@/api/characters'
 import { messagesApi } from '@/api/chats'
@@ -67,12 +79,114 @@ import {
   createFrontendExtensionCleanup,
   finalizeFrontendLoadFailure,
   isPermissionBootstrapCurrent,
-  observeFrontendSetupTeardown,
 } from './frontend-extension-cleanup'
 import {
   clearLiveRootsForExtension,
   registerLiveRoot,
 } from './live-root-registry'
+declare const __APP_VERSION__: unknown
+
+function getFrontendAppVersion(): unknown {
+  if (typeof __APP_VERSION__ !== 'undefined') return __APP_VERSION__
+  return (globalThis as typeof globalThis & { __APP_VERSION__?: unknown }).__APP_VERSION__
+}
+
+function compatibilityFailure(error: unknown, fallback: string): SpindleCompatibilityError {
+  if (error instanceof SpindleCompatibilityError) return error
+  if (error && typeof error === 'object') {
+    const candidate = error as { message?: unknown; body?: unknown }
+    const body = candidate.body
+    if (body && typeof body === 'object') {
+      const detail = (body as { error?: unknown; message?: unknown }).error
+        ?? (body as { error?: unknown; message?: unknown }).message
+      if (typeof detail === 'string' && detail.trim()) return new SpindleCompatibilityError(detail)
+    }
+    if (typeof candidate.message === 'string' && candidate.message.trim()) {
+      return new SpindleCompatibilityError(candidate.message)
+    }
+  }
+  return new SpindleCompatibilityError(fallback)
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBytes = new TextEncoder().encode(left)
+  const rightBytes = new TextEncoder().encode(right)
+  let difference = leftBytes.length ^ rightBytes.length
+  const length = Math.max(leftBytes.length, rightBytes.length)
+  for (let index = 0; index < length; index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0)
+  }
+  return difference === 0
+}
+function requiredCapabilityDescriptor(descriptor: SpindleHostDescriptorV1): SpindleHostDescriptorV1 {
+  const capabilities: Record<string, number> = {}
+  for (const name of Object.keys(SPINDLE_HOST_CAPABILITIES)) {
+    capabilities[name] = descriptor.capabilities[name]
+  }
+  return Object.freeze({
+    descriptorVersion: descriptor.descriptorVersion,
+    lumiverseVersion: descriptor.lumiverseVersion,
+    extensionInstallationId: descriptor.extensionInstallationId,
+    capabilities: Object.freeze(capabilities),
+  })
+}
+
+async function performCompatibilityHandshake(
+  extensionId: string,
+  manifest: SpindleManifest,
+  localDescriptor: SpindleHostDescriptorV1,
+): Promise<SpindleHostDescriptorV1> {
+  const nonce = generateSpindleCompatibilityNonce()
+  let response: unknown
+  try {
+    response = await spindleApi.compatibilityHandshake(extensionId, nonce)
+  } catch (error) {
+    throw compatibilityFailure(error, 'Spindle compatibility handshake failed')
+  }
+
+  try {
+    if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+      throw new SpindleCompatibilityError('Spindle compatibility handshake returned an invalid response')
+    }
+    const payload = response as Record<string, unknown>
+    if (payload.nonce !== nonce) {
+      throw new SpindleCompatibilityError('Spindle compatibility handshake nonce mismatch')
+    }
+    if (typeof payload.descriptor !== 'object' || payload.descriptor === null || Array.isArray(payload.descriptor)) {
+      throw new SpindleCompatibilityError('Spindle compatibility handshake response is missing its descriptor')
+    }
+    const descriptor = validateSpindleHostDescriptor(payload.descriptor, extensionId)
+    assertManifestCompatibility(manifest, descriptor.lumiverseVersion)
+    const localRequired = requiredCapabilityDescriptor(localDescriptor)
+    const backendRequired = requiredCapabilityDescriptor(descriptor)
+    if (
+      descriptor.descriptorVersion !== localRequired.descriptorVersion
+      || descriptor.lumiverseVersion !== localRequired.lumiverseVersion
+      || descriptor.extensionInstallationId !== localRequired.extensionInstallationId
+    ) {
+      throw new SpindleCompatibilityError('Spindle compatibility handshake descriptor does not match this frontend')
+    }
+    for (const name of Object.keys(SPINDLE_HOST_CAPABILITIES)) {
+      if (backendRequired.capabilities[name] !== localRequired.capabilities[name]) {
+        throw new SpindleCompatibilityError(`Spindle compatibility handshake capability mismatch: ${name}`)
+      }
+    }
+    const localDigest = await digestSpindleHostDescriptor(localRequired)
+    const backendRequiredDigest = await digestSpindleHostDescriptor(backendRequired)
+    const backendFullDigest = await digestSpindleHostDescriptor(descriptor)
+    if (
+      !timingSafeStringEqual(localDigest, backendRequiredDigest)
+      || typeof payload.digest !== 'string'
+      || (!timingSafeStringEqual(payload.digest, backendRequiredDigest)
+        && !timingSafeStringEqual(payload.digest, backendFullDigest))
+    ) {
+      throw new SpindleCompatibilityError('Spindle compatibility handshake descriptor digest mismatch')
+    }
+    return descriptor
+  } catch (error) {
+    throw compatibilityFailure(error, 'Spindle compatibility handshake validation failed')
+  }
+}
 
 function isMacroCatalogResponse(value: unknown): value is MacroCatalogResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !('categories' in value) || !Array.isArray(value.categories)) {
@@ -115,12 +229,12 @@ interface LoadedExtension {
   manifestSignature: string
   module: SpindleFrontendModule
   context: SpindleFrontendContext
-  teardown?: () => void
+  teardown?: () => void | Promise<void>
   teardownClaimed: boolean
   staleTeardowns: Set<() => void>
+  backendHandlers: Set<(payload: unknown) => void>
   eventUnsubs: (() => void)[]
   deactivatePresetEditor(): void
-  backendHandlers: Set<(payload: unknown) => void>
   macroCatalogHandlers: Map<string, (payload: unknown) => void>
   processHandlers: Map<string, FrontendProcessHandler>
   activeProcesses: Map<string, ActiveFrontendProcess>
@@ -130,12 +244,19 @@ interface LoadedExtension {
   holdReady: boolean
   setupComplete: boolean
   readyTimeout: ReturnType<typeof setTimeout> | null
+  readyPromise: Promise<void>
+  resolveReady(): void
+  rejectReady(error: unknown): void
+  teardownSettled: Promise<void>
   cleanup(reportTeardownError?: boolean): void
 }
 
 type FrontendProcessHandler = (
   process: FrontendProcessContextLocal,
 ) => void | (() => void) | Promise<void | (() => void)>
+function isFrontendTeardown(value: unknown): value is () => void | Promise<void> {
+  return typeof value === 'function'
+}
 
 interface FrontendProcessContextLocal {
   processId: string
@@ -252,7 +373,6 @@ const pendingPermissionBootstraps = new Map<string, () => void>()
 const MAX_PENDING_STARTUP_ITEMS = 100
 const FRONTEND_READY_TIMEOUT_MS = 10_000
 const FRONTEND_BUNDLE_TIMEOUT_MS = 15_000
-const FRONTEND_MODULE_IMPORT_TIMEOUT_MS = 10_000
 const extensionMountPoints = new Map<string, Set<SpindleMountPoint>>()
 const extensionMountPointListeners = new Set<() => void>()
 let extensionMountPointsVersion = 0
@@ -368,10 +488,10 @@ function armReadyTimeout(loaded: LoadedExtension): void {
   if (loaded.readyTimeout || loaded.isReady || !isCurrentLoadedExtension(loaded)) return
   loaded.readyTimeout = setTimeout(() => {
     if (!isCurrentLoadedExtension(loaded) || loaded.isReady) return
-    console.warn(
-      `[Spindle] Frontend ready() timeout for ${loaded.identifier}; auto-releasing queued startup events`
-    )
-    markExtensionReady(loaded, 'timeout')
+    const error = frontendLoadTimeout(loaded.identifier, 'ready()', FRONTEND_READY_TIMEOUT_MS)
+    console.warn(`[Spindle] Frontend ready() timeout for ${loaded.identifier}`)
+    loaded.rejectReady(error)
+    void unloadFrontendExtension(loaded.id).catch(() => {})
   }, FRONTEND_READY_TIMEOUT_MS)
 }
 
@@ -398,6 +518,7 @@ function markExtensionReady(
 ): void {
   if (loaded.isReady || !isCurrentLoadedExtension(loaded)) return
   loaded.isReady = true
+  loaded.resolveReady()
   if (bootstrappingGenerations.get(loaded.id) === loaded.generation) {
     bootstrappingGenerations.delete(loaded.id)
   }
@@ -426,29 +547,10 @@ function frontendLoadTimeout(identifier: string, phase: string, timeoutMs: numbe
   )
 }
 
-async function importFrontendModule(
-  blobUrl: string,
-  identifier: string,
-): Promise<SpindleFrontendModule> {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  try {
-    return await Promise.race([
-      import(/* @vite-ignore */ blobUrl) as Promise<SpindleFrontendModule>,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(frontendLoadTimeout(identifier, 'module evaluation', FRONTEND_MODULE_IMPORT_TIMEOUT_MS))
-        }, FRONTEND_MODULE_IMPORT_TIMEOUT_MS)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
-
-
 async function doLoadFrontendExtension(
   extensionId: string,
   manifest: SpindleManifest,
+  localDescriptor: SpindleHostDescriptorV1,
   force = false
 ): Promise<void> {
   let loaded!: LoadedExtension
@@ -460,6 +562,7 @@ async function doLoadFrontendExtension(
     return
   }
 
+  const hostDescriptor = await performCompatibilityHandshake(extensionId, manifest, localDescriptor)
   if (existing) {
     await unloadFrontendExtension(extensionId)
   }
@@ -480,6 +583,18 @@ async function doLoadFrontendExtension(
   }
   const bundleUrl = getFrontendBundleUrl(extensionId, manifest)
   const eventUnsubs: (() => void)[] = []
+  const trackLocaleSubscription = (unsubscribe: () => void): (() => void) => {
+    let active = true
+    const tracked = () => {
+      if (!active) return
+      active = false
+      const index = eventUnsubs.indexOf(tracked)
+      if (index !== -1) eventUnsubs.splice(index, 1)
+      try { unsubscribe() } catch { /* no-op */ }
+    }
+    eventUnsubs.push(tracked)
+    return tracked
+  }
   let cachedGrantedPermissions: string[] = []
   let permissionEventVersion = 0
   let presetEditorActive = true
@@ -625,8 +740,9 @@ async function doLoadFrontendExtension(
     try {
       const response = await responsePromise
       if (!response.ok) {
-        cleanupPermissionBootstrap()
-        return // No frontend bundle
+        throw new Error(
+          `Failed to load the Spindle frontend bundle for ${manifest.identifier}: HTTP ${response.status}`,
+        )
       }
       blob = await response.blob()
     } catch (error) {
@@ -647,7 +763,7 @@ async function doLoadFrontendExtension(
       if (currentGeneration()) {
         await yieldToBrowser({ when: 'paint' })
         if (currentGeneration()) {
-          mod = await importFrontendModule(blobUrl, manifest.identifier)
+          mod = await import(/* @vite-ignore */ blobUrl) as SpindleFrontendModule
         }
       }
     } finally {
@@ -663,9 +779,7 @@ async function doLoadFrontendExtension(
     // opt into ctx.dom.createSandboxFrame() instead of replacing the base UI path.
 
     if (typeof mod.setup !== 'function') {
-      console.warn(`[Spindle:${manifest.identifier}] Frontend module missing setup()`)
-      cleanupPermissionBootstrap()
-      return
+      throw new TypeError(`Spindle frontend ${manifest.identifier} must export a setup() function`)
     }
 
     const backendHandlers = new Set<(payload: unknown) => void>()
@@ -933,7 +1047,19 @@ async function doLoadFrontendExtension(
       clearExtensionMountPoints(extensionId)
     }
 
+    const scopedLocale = Object.freeze({
+      get() {
+        assertFrontendActive()
+        return getHostLocale()
+      },
+      subscribe(listener: (locale: SpindleHostLocale) => void) {
+        assertFrontendActive()
+        return trackLocaleSubscription(subscribeHostLocale(listener))
+      },
+    })
     const context: FrontendExtensionContext = {
+      host: hostDescriptor,
+      locale: scopedLocale,
       dom,
       ready() {
         assertFrontendActive()
@@ -1580,6 +1706,20 @@ async function doLoadFrontendExtension(
       },
       manifest,
     }
+    Object.defineProperties(context, {
+      host: {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: hostDescriptor,
+      },
+      locale: {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: scopedLocale,
+      },
+    })
 
     const cleanup = createFrontendExtensionCleanup({
       deactivatePresetEditor: () => {
@@ -1617,7 +1757,16 @@ async function doLoadFrontendExtension(
         if (!teardown) return
         // Claim before invoking so a late async setup result cannot repeat it.
         loaded.teardownClaimed = true
-        teardown()
+        try {
+          const result = teardown()
+          if (result && typeof (result as PromiseLike<void>).then === 'function') {
+            loaded.teardownSettled = Promise.resolve(result).catch((error) => {
+              console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, error)
+            })
+          }
+        } catch (error) {
+          throw error
+        }
       },
       reportTeardownError: (error) => {
         console.error(`[Spindle] Teardown error for ${loaded.identifier}:`, error)
@@ -1658,6 +1807,7 @@ async function doLoadFrontendExtension(
       },
       cleanupRegistries: () => {
         discardPendingStartupItems(extensionId, generation)
+        loaded.resolveReady()
         if (bootstrappingGenerations.get(extensionId) === generation) {
           bootstrappingGenerations.delete(extensionId)
         }
@@ -1715,6 +1865,13 @@ async function doLoadFrontendExtension(
     cleanupLoadedExtension = cleanup
     pendingPermissionBootstraps.delete(extensionId)
 
+    let readySettled = false
+    let resolveReadyPromise!: () => void
+    let rejectReadyPromise!: (error: unknown) => void
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReadyPromise = resolve
+      rejectReadyPromise = reject
+    })
     loaded = {
       id: extensionId,
       generation,
@@ -1740,6 +1897,18 @@ async function doLoadFrontendExtension(
       holdReady: false,
       setupComplete: false,
       readyTimeout: null,
+      readyPromise,
+      resolveReady() {
+        if (readySettled) return
+        readySettled = true
+        resolveReadyPromise()
+      },
+      rejectReady(error) {
+        if (readySettled) return
+        readySettled = true
+        rejectReadyPromise(error)
+      },
+      teardownSettled: Promise.resolve(),
       cleanup,
     }
 
@@ -1755,51 +1924,44 @@ async function doLoadFrontendExtension(
         finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: true })
         return
       }
-      teardownResult = mod.setup(context)
+      teardownResult = await mod.setup(context)
+      if (!currentGeneration()) {
+        finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, {
+          superseded: true,
+          teardownResult,
+        })
+        await loaded.teardownSettled
+        return
+      }
+      loaded.setupComplete = true
+      loaded.mountRoots = Array.from(mountRoots.values())
+      if (isFrontendTeardown(teardownResult)) {
+        loaded.teardown = teardownResult
+      }
+
+      if (!loaded.isReady) {
+        if (loaded.holdReady) {
+          armReadyTimeout(loaded)
+        } else {
+          markExtensionReady(loaded, 'legacy-auto')
+        }
+      }
+      await loaded.readyPromise
+      if (!currentGeneration()) return
+      console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
     } catch (err) {
       finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, { superseded: false })
       throw err
     }
-    observeFrontendSetupTeardown(
-      teardownResult,
-      loaded,
-      () => isCurrentLoadedExtension(loaded),
-      (error) => {
-        console.error(`[Spindle] Async setup error for ${loaded.identifier}:`, error)
-        void unloadFrontendExtension(loaded.id)
-      },
-      (error) => {
-        console.error(`[Spindle] Stale async setup teardown error for ${loaded.identifier}:`, error)
-      },
-    )
-    if (!currentGeneration()) {
-      finalizeFrontendLoadFailure(cleanupLoadedExtension, loaded, {
-        superseded: true,
-        teardownResult,
-      })
-      return
-    }
-
-    loaded.setupComplete = true
-    loaded.mountRoots = Array.from(mountRoots.values())
-    if (typeof teardownResult === 'function') {
-      loaded.teardown = teardownResult as () => void
-    }
-
-
-    console.debug(`[Spindle] Loaded frontend: ${manifest.identifier}`)
-    if (!loaded.isReady) {
-      if (loaded.holdReady) {
-        armReadyTimeout(loaded)
-      } else {
-        markExtensionReady(loaded, 'legacy-auto')
-      }
-    }
   } catch (err) {
     if (!cleanupLoadedExtension) {
       cleanupPermissionBootstrap()
+    } else {
+      cleanupLoadedExtension(true)
+      await loaded.teardownSettled
     }
     console.error(`[Spindle] Failed to load frontend for ${manifest.identifier}:`, err)
+    throw err
   }
 }
 
@@ -1808,6 +1970,11 @@ export async function loadFrontendExtension(
   manifest: SpindleManifest,
   force = false
 ): Promise<void> {
+  const localDescriptor = validateFrontendExtensionCompatibility(
+    extensionId,
+    manifest,
+    getFrontendAppVersion(),
+  )
   const manifestSignature = getManifestSignature(manifest)
   const pending = loadInFlight.get(extensionId)
 
@@ -1834,7 +2001,7 @@ export async function loadFrontendExtension(
     .catch(() => {
       // continue queue even after previous failure
     })
-    .then(() => doLoadFrontendExtension(extensionId, manifest, force))
+    .then(() => doLoadFrontendExtension(extensionId, manifest, localDescriptor, force))
 
   loadInFlight.set(extensionId, { promise: next, force, manifestSignature, invalidated: false })
   try {
@@ -1874,6 +2041,7 @@ export async function unloadFrontendExtension(
   if (!loaded) return
 
   loaded.cleanup(true)
+  await loaded.teardownSettled
 
   console.debug(`[Spindle] Unloaded frontend: ${loaded.identifier}`)
 }
