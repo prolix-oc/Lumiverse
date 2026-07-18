@@ -341,25 +341,25 @@ function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, i
             {block.sealed === true && <Shield size={10} className={clsx(s.blockNameIcon, s.blockNameIconSealed)} />}
             <span className={s.blockNameText}>{block.name}</span>
           </span>
-          <span className={s.blockMetaRow}>
-            {!isMarker && (
-              <span className={clsx(s.badge, ROLE_BADGES[displayedRole] || s.badgeSystem)}>{ROLE_DISPLAY_LABELS[displayedRole] || displayedRole}</span>
-            )}
-            {isMarker && (
-              <span className={clsx(s.badge, s.badgeMarker)}>{t('block.marker')}</span>
-            )}
-            {block.injectionTrigger?.length > 0 && (
-              <span className={s.triggerBadgeList}>
-                {block.injectionTrigger.map(t => {
-                  const meta = INJECTION_TRIGGER_TYPES.find(tt => tt.value === t)
-                  return meta ? <span key={t} className={s.triggerBadge}>{meta.shortLabel}</span> : null
-                })}
-              </span>
-            )}
-          </span>
         </div>
         {preview && !isMarker && <span className={s.blockPreview}>{preview}</span>}
       </div>
+      <span className={s.blockMetaRow}>
+        {!isMarker && (
+          <span className={clsx(s.badge, ROLE_BADGES[displayedRole] || s.badgeSystem)}>{ROLE_DISPLAY_LABELS[displayedRole] || displayedRole}</span>
+        )}
+        {isMarker && (
+          <span className={clsx(s.badge, s.badgeMarker)}>{t('block.marker')}</span>
+        )}
+        {block.injectionTrigger?.length > 0 && (
+          <span className={s.triggerBadgeList}>
+            {block.injectionTrigger.map(t => {
+              const meta = INJECTION_TRIGGER_TYPES.find(tt => tt.value === t)
+              return meta ? <span key={t} className={s.triggerBadge}>{meta.shortLabel}</span> : null
+            })}
+          </span>
+        )}
+      </span>
       <Button size="icon-sm" variant="ghost" onClick={() => onToggle(block.id)} title={block.enabled ? t('block.disable') : t('block.enable')}>
         {block.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
       </Button>
@@ -1049,11 +1049,6 @@ export function ControlledLoomBlockEditor({
               <div className={s.blockContent}>
                 <div className={s.blockNameRow}>
                   <span className={s.blockName}>{block.name}</span>
-                  <span className={s.blockMetaRow}>
-                    <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
-                      {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
-                    </span>
-                  </span>
                 </div>
                 {block.content && (
                   <span className={s.blockPreview}>
@@ -1061,6 +1056,11 @@ export function ControlledLoomBlockEditor({
                   </span>
                 )}
               </div>
+              <span className={s.blockMetaRow}>
+                <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
+                  {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
+                </span>
+              </span>
               {!readOnly && (
                 <Button
                   size="icon-sm"

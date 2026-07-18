@@ -1691,10 +1691,7 @@
 
 .blockNameRow {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
   min-width: 0;
 }
 
@@ -1702,7 +1699,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 160px;
+  flex: 1 1 auto;
   min-width: 0;
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
@@ -1730,9 +1727,10 @@
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   min-width: 0;
+  align-self: center;
 }
 
 .triggerBadgeList {
