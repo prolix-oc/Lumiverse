@@ -8,7 +8,8 @@
 // The import runs as a background job; the HTTP route returns a jobId and
 // progress flows over the WebSocket EventBus.
 
-import { Unzip, UnzipInflate, inflateSync, type UnzipFile } from "fflate";
+import { inflateRawSync } from "node:zlib";
+import { Unzip, UnzipInflate, type UnzipFile } from "fflate";
 import {
   decryptSecret,
   lookupConsumedTicket,
@@ -322,6 +323,9 @@ export async function persistUploadedArchive(
  */
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
+/** A manifest should never be larger compressed than this. */
+const MAX_MANIFEST_COMPRESSED_BYTES = 32 * 1024 * 1024;
+
 // ─── ZIP central-directory primitives ──────────────────────────────────
 //
 // Every ZIP file ends with an End-of-Central-Directory (EOCD) record, which
@@ -352,6 +356,10 @@ const EOCD_MIN_BYTES = 22;
 const ZIP64_EOCD_LOCATOR_BYTES = 20;
 const ZIP64_EOCD_RECORD_BYTES = 56;
 const ZIP_COMMENT_MAX = 65535;
+/** Bounded read window used while scanning a potentially huge central directory. */
+const CENTRAL_DIRECTORY_READ_BYTES = 256 * 1024;
+/** Bounded compressed input window for the full-file fallback verifier. */
+const FALLBACK_VERIFY_READ_BYTES = 256 * 1024;
 
 interface CentralDirEntry {
   name: string;
@@ -378,6 +386,7 @@ function readZip64Extra(
     const view = new DataView(extra.buffer, extra.byteOffset, extra.byteLength);
     const tag = view.getUint16(pos, true);
     const size = view.getUint16(pos + 2, true);
+    if (pos + 4 + size > end) return null;
     if (tag === ZIP64_EXTRA_TAG) {
       return new DataView(extra.buffer, extra.byteOffset + pos + 4, size);
     }
@@ -390,11 +399,139 @@ async function readBytes(file: Bun.BunFile, start: number, end: number): Promise
   return new Uint8Array(await file.slice(start, end).arrayBuffer());
 }
 
+function isSafeZipNumber(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Scan central-directory records in fixed-size windows and return the
+ * manifest record. A large account can contain enough individual files for
+ * its central directory to reach tens or hundreds of megabytes; loading that
+ * range with one arrayBuffer() defeats the otherwise-streaming import path.
+ */
+async function findManifestInCentralDirectory(
+  file: Bun.BunFile,
+  cdOffset: number,
+  cdSize: number,
+  totalEntries: number,
+): Promise<CentralDirEntry | null> {
+  const decoder = new TextDecoder();
+  let fetched = 0;
+  let entriesRead = 0;
+  let pending = new Uint8Array(0);
+
+  while (fetched < cdSize && entriesRead < totalEntries) {
+    const readSize = Math.min(CENTRAL_DIRECTORY_READ_BYTES, cdSize - fetched);
+    const chunk = await readBytes(
+      file,
+      cdOffset + fetched,
+      cdOffset + fetched + readSize,
+    );
+    if (chunk.byteLength !== readSize) {
+      throw new ArchiveValidationError("not_zip", "central directory is truncated");
+    }
+    fetched += chunk.byteLength;
+
+    let data: Uint8Array;
+    if (pending.byteLength === 0) {
+      data = chunk;
+    } else {
+      // A CD record is bounded by its three uint16 length fields, so this
+      // carry buffer stays below ~192 KB regardless of total archive size.
+      data = new Uint8Array(pending.byteLength + chunk.byteLength);
+      data.set(pending, 0);
+      data.set(chunk, pending.byteLength);
+    }
+
+    let pos = 0;
+    while (pos + 46 <= data.byteLength && entriesRead < totalEntries) {
+      const view = new DataView(data.buffer, data.byteOffset + pos);
+      if (view.getUint32(0, true) !== CDH_SIG) {
+        throw new ArchiveValidationError(
+          "not_zip",
+          `central directory header signature invalid at entry ${entriesRead}`,
+        );
+      }
+
+      const compression = view.getUint16(10, true);
+      let compressedSize = view.getUint32(20, true);
+      let uncompressedSize = view.getUint32(24, true);
+      const nameLen = view.getUint16(28, true);
+      const extraLen = view.getUint16(30, true);
+      const commentLen = view.getUint16(32, true);
+      let localHeaderOffset = view.getUint32(42, true);
+      const recordSize = 46 + nameLen + extraLen + commentLen;
+      if (pos + recordSize > data.byteLength) break;
+
+      const name = decoder.decode(data.subarray(pos + 46, pos + 46 + nameLen));
+      if (
+        extraLen > 0 &&
+        (uncompressedSize === 0xffffffff ||
+          compressedSize === 0xffffffff ||
+          localHeaderOffset === 0xffffffff)
+      ) {
+        const zip64 = readZip64Extra(data, pos + 46 + nameLen, extraLen);
+        if (!zip64) {
+          throw new ArchiveValidationError(
+            "not_zip",
+            `ZIP64 extra field missing or truncated for ${name || `entry ${entriesRead}`}`,
+          );
+        }
+        let cursor = 0;
+        if (uncompressedSize === 0xffffffff) {
+          if (cursor + 8 > zip64.byteLength) {
+            throw new ArchiveValidationError("not_zip", "ZIP64 uncompressed size is truncated");
+          }
+          uncompressedSize = Number(zip64.getBigUint64(cursor, true));
+          cursor += 8;
+        }
+        if (compressedSize === 0xffffffff) {
+          if (cursor + 8 > zip64.byteLength) {
+            throw new ArchiveValidationError("not_zip", "ZIP64 compressed size is truncated");
+          }
+          compressedSize = Number(zip64.getBigUint64(cursor, true));
+          cursor += 8;
+        }
+        if (localHeaderOffset === 0xffffffff) {
+          if (cursor + 8 > zip64.byteLength) {
+            throw new ArchiveValidationError("not_zip", "ZIP64 local-header offset is truncated");
+          }
+          localHeaderOffset = Number(zip64.getBigUint64(cursor, true));
+        }
+      }
+
+      if (
+        !isSafeZipNumber(compressedSize) ||
+        !isSafeZipNumber(uncompressedSize) ||
+        !isSafeZipNumber(localHeaderOffset)
+      ) {
+        throw new ArchiveValidationError("not_zip", "central directory contains unsafe ZIP64 values");
+      }
+
+      entriesRead++;
+      if (name === "manifest.json") {
+        return { name, compression, compressedSize, uncompressedSize, localHeaderOffset };
+      }
+      pos += recordSize;
+    }
+
+    // Copy only the partial record at the page boundary. Do not retain the
+    // full page (or the entire central directory) through a subarray view.
+    pending = data.slice(pos);
+  }
+
+  if (entriesRead < totalEntries) {
+    throw new ArchiveValidationError("not_zip", "central directory entry is truncated");
+  }
+  return null;
+}
+
 /**
  * Fast-path verifier: parses the ZIP central directory, finds manifest.json,
- * reads only its bytes, and parses the manifest. O(64 KB + manifest_size)
- * regardless of total archive size. Throws ArchiveValidationError if the
- * archive's central directory can't be located or manifest.json is absent.
+ * reads only its bytes, and parses the manifest. Memory stays bounded to the
+ * tail window, one central-directory page, and the manifest bytes regardless
+ * of total archive size. Throws ArchiveValidationError if the archive's
+ * central directory can't be located or manifest.json is absent.
  *
  * Supports ZIP64 (PPAPP 6.2): when the standard EOCD reports 0xFFFFFFFF /
  * 0xFFFF sentinels, we read the ZIP64 EOCD locator sitting immediately
@@ -422,8 +559,14 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
       tail[i + 2] === 0x05 &&
       tail[i + 3] === 0x06
     ) {
-      eocdOffsetInTail = i;
-      break;
+      // A signature may occur inside the ZIP comment. Only accept a record
+      // whose declared comment length lands exactly at end-of-file.
+      const candidate = new DataView(tail.buffer, tail.byteOffset + i, EOCD_MIN_BYTES);
+      const commentLen = candidate.getUint16(20, true);
+      if (i + EOCD_MIN_BYTES + commentLen === tail.byteLength) {
+        eocdOffsetInTail = i;
+        break;
+      }
     }
   }
   if (eocdOffsetInTail < 0) {
@@ -498,63 +641,29 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
     cdSize = Number(zip64Eocd.getBigUint64(40, true));
     cdOffset = Number(zip64Eocd.getBigUint64(48, true));
   }
-  if (cdOffset + cdSize > size) {
+  if (
+    !isSafeZipNumber(totalEntries) ||
+    !isSafeZipNumber(cdSize) ||
+    !isSafeZipNumber(cdOffset)
+  ) {
+    throw new ArchiveValidationError("not_zip", "ZIP central directory contains unsafe 64-bit values");
+  }
+  if (totalEntries > MAX_ENTRIES) {
+    throw new ArchiveValidationError(
+      "size",
+      `archive contains too many entries (>${MAX_ENTRIES})`,
+    );
+  }
+  if (cdSize > size || cdOffset > size - cdSize) {
     throw new ArchiveValidationError("not_zip", "central directory extends past end of file");
   }
 
-  // Load the entire central directory (typically a few hundred KB even for
-  // an archive with tens of thousands of entries).
-  const cd = await readBytes(file, cdOffset, cdOffset + cdSize);
-  const decoder = new TextDecoder();
-  let pos = 0;
-  let manifestEntry: CentralDirEntry | null = null;
-  while (pos + 46 <= cd.length) {
-    const view = new DataView(cd.buffer, cd.byteOffset + pos);
-    if (view.getUint32(0, true) !== CDH_SIG) break;
-    const compression = view.getUint16(10, true);
-    let compressedSize = view.getUint32(20, true);
-    let uncompressedSize = view.getUint32(24, true);
-    const nameLen = view.getUint16(28, true);
-    const extraLen = view.getUint16(30, true);
-    const commentLen = view.getUint16(32, true);
-    let localHeaderOffset = view.getUint32(42, true);
-    const name = decoder.decode(cd.subarray(pos + 46, pos + 46 + nameLen));
-
-    // ZIP64: when the standard 32-bit fields hold the 0xFFFFFFFF sentinel,
-    // the real value lives in the ZIP64 extra block (tag 0x0001) of the
-    // central directory header's extra field. Order inside the block per
-    // PKWARE APPNOTE 4.5: uncompressed size, compressed size, local header
-    // offset, disk number start. Only the fields that would otherwise be
-    // 0xFFFFFFFF are emitted.
-    if (
-      extraLen > 0 &&
-      (uncompressedSize === 0xffffffff ||
-        compressedSize === 0xffffffff ||
-        localHeaderOffset === 0xffffffff)
-    ) {
-      const zip64 = readZip64Extra(cd, pos + 46 + nameLen, extraLen);
-      if (zip64) {
-        let cursor = 0;
-        if (uncompressedSize === 0xffffffff && cursor + 8 <= zip64.byteLength) {
-          uncompressedSize = Number(zip64.getBigUint64(cursor, true));
-          cursor += 8;
-        }
-        if (compressedSize === 0xffffffff && cursor + 8 <= zip64.byteLength) {
-          compressedSize = Number(zip64.getBigUint64(cursor, true));
-          cursor += 8;
-        }
-        if (localHeaderOffset === 0xffffffff && cursor + 8 <= zip64.byteLength) {
-          localHeaderOffset = Number(zip64.getBigUint64(cursor, true));
-        }
-      }
-    }
-
-    if (name === "manifest.json") {
-      manifestEntry = { name, compression, compressedSize, uncompressedSize, localHeaderOffset };
-      break;
-    }
-    pos += 46 + nameLen + extraLen + commentLen;
-  }
+  const manifestEntry = await findManifestInCentralDirectory(
+    file,
+    cdOffset,
+    cdSize,
+    totalEntries,
+  );
   if (!manifestEntry) {
     throw new ArchiveValidationError("no_manifest", "archive central directory has no manifest.json");
   }
@@ -562,6 +671,12 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
     throw new ArchiveValidationError(
       "bad_manifest",
       `manifest.json declares ${manifestEntry.uncompressedSize} bytes (cap ${MAX_MANIFEST_BYTES})`,
+    );
+  }
+  if (manifestEntry.compressedSize > MAX_MANIFEST_COMPRESSED_BYTES) {
+    throw new ArchiveValidationError(
+      "bad_manifest",
+      `manifest.json declares ${manifestEntry.compressedSize} compressed bytes (cap ${MAX_MANIFEST_COMPRESSED_BYTES})`,
     );
   }
   if (manifestEntry.compression !== 0 && manifestEntry.compression !== 8) {
@@ -593,10 +708,18 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
     throw new ArchiveValidationError("bad_manifest", "manifest data extends past end of file");
   }
   const compressed = await readBytes(file, dataStart, dataEnd);
-  const bytes =
-    manifestEntry.compression === 0
-      ? compressed
-      : inflateSync(compressed);
+  let bytes: Uint8Array;
+  try {
+    bytes =
+      manifestEntry.compression === 0
+        ? compressed
+        : inflateRawSync(compressed, { maxOutputLength: MAX_MANIFEST_BYTES });
+  } catch (err) {
+    throw new ArchiveValidationError(
+      "bad_manifest",
+      `manifest.json decompression failed: ${(err as Error).message}`,
+    );
+  }
   if (bytes.byteLength > MAX_MANIFEST_BYTES) {
     throw new ArchiveValidationError(
       "bad_manifest",
@@ -626,8 +749,6 @@ export async function verifyArchiveFast(archivePath: string): Promise<ArchiveMan
 export async function verifyArchive(archivePath: string): Promise<ArchiveManifest> {
   return new Promise<ArchiveManifest>((resolve, reject) => {
     const file = Bun.file(archivePath);
-    // Inferred reader type so Bun's stream variance lines up with TS lib types.
-    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let manifestBytes = 0;
     let manifestText = "";
     let resolved = false;
@@ -636,21 +757,11 @@ export async function verifyArchive(archivePath: string): Promise<ArchiveManifes
     const fail = (err: any) => {
       if (resolved) return;
       resolved = true;
-      try {
-        reader?.cancel();
-      } catch {
-        /* ignore */
-      }
       reject(err);
     };
     const succeed = (m: ArchiveManifest) => {
       if (resolved) return;
       resolved = true;
-      try {
-        reader?.cancel();
-      } catch {
-        /* ignore */
-      }
       resolve(m);
     };
 
@@ -707,45 +818,66 @@ export async function verifyArchive(archivePath: string): Promise<ArchiveManifes
             ),
           );
         }
+        return;
       }
-      // Any other entry is silently skipped (no entry.start() call).
+
+      // fflate retains every compressed chunk for an entry until start() is
+      // called. Leaving a large pre-manifest entry untouched therefore makes
+      // this "streaming" fallback hold most of the archive in RAM. Start and
+      // drain non-manifest entries immediately; their output is discarded.
+      entry.ondata = (err) => {
+        if (err && !resolved) {
+          fail(
+            new ArchiveValidationError(
+              "bad_manifest",
+              `archive entry ${entry.name} failed while locating manifest.json: ${(err as Error).message}`,
+            ),
+          );
+        }
+      };
+      try {
+        entry.start();
+      } catch (startErr) {
+        fail(
+          new ArchiveValidationError(
+            "bad_manifest",
+            `archive entry ${entry.name} could not be drained: ${(startErr as Error).message}`,
+          ),
+        );
+      }
     });
     unzip.register(UnzipInflate);
 
-    reader = file.stream().getReader() as ReadableStreamDefaultReader<Uint8Array>;
     (async () => {
       try {
-        while (!resolved) {
-          const { value, done } = await reader!.read();
-          if (done) {
-            unzip.push(new Uint8Array(0), true);
-            if (!resolved) {
-              fail(
-                new ArchiveValidationError(
-                  "no_manifest",
-                  manifestStarted
-                    ? "manifest.json entry truncated"
-                    : "archive does not contain manifest.json",
-                ),
-              );
-            }
-            break;
+        // Read explicit windows rather than relying on Blob.stream() chunking,
+        // which is runtime-defined. This keeps both fflate's compressed input
+        // and each discarded decompression step bounded on every Bun build.
+        let offset = 0;
+        while (!resolved && offset < file.size) {
+          const end = Math.min(file.size, offset + FALLBACK_VERIFY_READ_BYTES);
+          const chunk = await readBytes(file, offset, end);
+          if (chunk.byteLength !== end - offset) {
+            throw new ArchiveValidationError("not_zip", "archive is truncated during verification");
           }
-          if (value) {
-            // Coerce Bun's typed buffer view to a plain Uint8Array so fflate's
-            // push() signature matches.
-            const view = value as unknown as Uint8Array;
-            unzip.push(view, false);
-          }
+          offset = end;
+          unzip.push(chunk, offset === file.size);
+        }
+        if (!resolved && file.size === 0) {
+          unzip.push(new Uint8Array(0), true);
+        }
+        if (!resolved) {
+          fail(
+            new ArchiveValidationError(
+              "no_manifest",
+              manifestStarted
+                ? "manifest.json entry truncated"
+                : "archive does not contain manifest.json",
+            ),
+          );
         }
       } catch (e) {
         fail(e instanceof ArchiveValidationError ? e : new ArchiveValidationError("bad_manifest", String((e as Error).message ?? e)));
-      } finally {
-        try {
-          reader?.releaseLock();
-        } catch {
-          /* ignore */
-        }
       }
     })();
   });
