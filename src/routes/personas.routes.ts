@@ -6,6 +6,12 @@ import { parsePagination } from "../services/pagination";
 import { createAvatarResolverResponse } from "../utils/avatar-cache";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import * as chats from "../services/chats.service";
+import {
+  getChatPersonaAddonStates,
+  getChatPersonaAddonToggleOrder,
+  personaHasAddon,
+} from "../services/persona-addon-states";
 
 const app = new Hono();
 
@@ -22,6 +28,14 @@ function collectPersonaImageIds(persona: { image_id?: string | null; metadata?: 
     ? persona.metadata.original_image_id
     : null;
   if (originalImageId) ids.add(originalImageId);
+
+  for (const addons of [persona.metadata?.addons, persona.metadata?.attached_global_addons]) {
+    if (!Array.isArray(addons)) continue;
+    for (const addon of addons) {
+      if (typeof addon?.avatar_image_id === "string") ids.add(addon.avatar_image_id);
+      if (typeof addon?.avatar_crop_image_id === "string") ids.add(addon.avatar_crop_image_id);
+    }
+  }
 
   return [...ids];
 }
@@ -149,7 +163,17 @@ app.delete("/:id", async (c) => {
 
 app.get("/:id/avatar", async (c) => {
   const userId = c.get("userId");
-  const info = svc.getPersonaAvatarInfo(userId, c.req.param("id"));
+  const personaId = c.req.param("id");
+  const chatId = c.req.query("chat_id");
+  let addonStates;
+  let addonToggleOrder;
+  if (chatId) {
+    const chat = chats.getChat(userId, chatId);
+    if (!chat) return c.json({ error: "Chat not found" }, 404);
+    addonStates = getChatPersonaAddonStates(chat.metadata, personaId);
+    addonToggleOrder = getChatPersonaAddonToggleOrder(chat.metadata, personaId);
+  }
+  const info = svc.getPersonaAvatarInfo(userId, personaId, { addonStates, addonToggleOrder });
   if (!info) return c.json({ error: "Not found" }, 404);
 
   const sizeParam = c.req.query("size") as images.ThumbTier | undefined;
@@ -179,6 +203,82 @@ app.get("/:id/avatar", async (c) => {
   }
 
   return c.json({ error: "No avatar" }, 404);
+});
+
+/** Assign an already-uploaded image to an add-on's persona avatar override. */
+app.put("/:id/addons/:addonId/avatar", async (c) => {
+  const userId = c.get("userId");
+  const persona = svc.getPersona(userId, c.req.param("id"));
+  if (!persona) return c.json({ error: "Not found" }, 404);
+  if (!personaHasAddon(persona, c.req.param("addonId"))) {
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body.image_id !== "string" || !body.image_id) {
+    return c.json({ error: "image_id is required" }, 400);
+  }
+  if (!images.getImage(userId, body.image_id)) return c.json({ error: "Image not found" }, 404);
+  if (body.avatar_crop_image_id !== undefined && body.avatar_crop_image_id !== null) {
+    if (typeof body.avatar_crop_image_id !== "string" || !images.getImage(userId, body.avatar_crop_image_id)) {
+      return c.json({ error: "Avatar crop image not found" }, 404);
+    }
+  }
+
+  const oldImageIds = collectPersonaImageIds(persona);
+  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), {
+    image_id: body.image_id,
+    avatar_crop_image_id: typeof body.avatar_crop_image_id === "string" ? body.avatar_crop_image_id : null,
+  });
+  if (!updated) return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  return c.json(updated);
+});
+
+/** Upload an alternative avatar for one add-on. `original_avatar` mirrors the
+ * base-avatar crop flow: it preserves the source while `avatar` is displayed. */
+app.post("/:id/addons/:addonId/avatar", async (c) => {
+  const userId = c.get("userId");
+  const persona = svc.getPersona(userId, c.req.param("id"));
+  if (!persona) return c.json({ error: "Not found" }, 404);
+  if (!personaHasAddon(persona, c.req.param("addonId"))) {
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+
+  const formData = await c.req.formData();
+  const file = formData.get("avatar") as File | null;
+  const originalFile = formData.get("original_avatar") as File | null;
+  if (!file) return c.json({ error: "avatar file is required" }, 400);
+
+  const oldImageIds = collectPersonaImageIds(persona);
+  const originalImage = await images.uploadImage(userId, originalFile ?? file);
+  const cropImage = originalFile ? await images.uploadImage(userId, file) : null;
+  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), {
+    image_id: originalImage.id,
+    avatar_crop_image_id: cropImage?.id ?? null,
+  });
+  if (!updated) {
+    images.deleteImageIfUnreferenced(userId, originalImage.id);
+    if (cropImage) images.deleteImageIfUnreferenced(userId, cropImage.id);
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  return c.json(updated);
+});
+
+app.delete("/:id/addons/:addonId/avatar", (c) => {
+  const userId = c.get("userId");
+  const persona = svc.getPersona(userId, c.req.param("id"));
+  if (!persona) return c.json({ error: "Not found" }, 404);
+  if (!personaHasAddon(persona, c.req.param("addonId"))) {
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+
+  const oldImageIds = collectPersonaImageIds(persona);
+  const updated = svc.setPersonaAddonAvatar(userId, persona.id, c.req.param("addonId"), { image_id: null });
+  if (!updated) return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  for (const imageId of oldImageIds) images.deleteImageIfUnreferenced(userId, imageId);
+  return c.json(updated);
 });
 
 app.post("/:id/duplicate", (c) => {

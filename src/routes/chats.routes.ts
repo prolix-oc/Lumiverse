@@ -20,6 +20,10 @@ import {
   resolveWorldInfoOutlets,
 } from "../services/prompt-assembly.service";
 import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import {
+  personaHasAddon,
+  withChatPersonaAddonState,
+} from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
 
 async function runMessageContentProcessors(
@@ -297,6 +301,38 @@ app.patch("/:id/members/:characterId/alternate-fields", async (c) => {
   if (!updated) {
     return c.json({ error: "Not found, not a group chat/member, or invalid alternate field selection" }, 400);
   }
+  return c.json(updated);
+});
+
+/**
+ * Atomically toggle one persona add-on in this chat. Besides the existing
+ * boolean override, this records toggle recency so that the newest enabled
+ * add-on with alternative art owns the active persona avatar.
+ */
+app.put("/:id/persona-addons/:personaId/:addonId", async (c) => {
+  const userId = c.get("userId");
+  const chat = svc.getChat(userId, c.req.param("id"));
+  if (!chat) return c.json({ error: "Not found" }, 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body.enabled !== "boolean") {
+    return c.json({ error: "enabled must be a boolean" }, 400);
+  }
+
+  const persona = personasSvc.getPersona(userId, c.req.param("personaId"));
+  if (!persona) return c.json({ error: "Persona not found" }, 404);
+  if (!personaHasAddon(persona, c.req.param("addonId"))) {
+    return c.json({ error: "Add-on is not attached to this persona" }, 404);
+  }
+
+  const metadata = withChatPersonaAddonState(
+    chat.metadata,
+    persona.id,
+    c.req.param("addonId"),
+    body.enabled,
+  );
+  const updated = svc.updateChat(userId, chat.id, { metadata });
+  if (!updated) return c.json({ error: "Not found" }, 404);
   return c.json(updated);
 });
 

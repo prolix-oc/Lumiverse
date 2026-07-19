@@ -1,16 +1,17 @@
 /**
  * A preset profile binding captures both the preset selection and a snapshot of
  * which prompt blocks are enabled/disabled in that preset. These snapshots can
- * be bound to a specific character or chat so that Lumiverse can switch to the
- * bound preset first, then restore its block states when the user switches
+ * be bound to a persona, character, or chat so that Lumiverse can switch to
+ * the bound preset first, then restore its block states when the user switches
  * context.
  *
  * Resolution order during prompt assembly:
  *   1. Chat binding   (presetProfile:chat:{chatId})
- *   2. Character binding (presetProfile:character:{characterId})
- *   3. Connection binding (presetProfile:connection:{connectionId})
- *   4. Default snapshot   (presetProfileDefaults:{presetId})
- *   5. Raw preset block states (no override)
+ *   2. Persona binding   (presetProfile:persona:{personaId})
+ *   3. Character binding (presetProfile:character:{characterId})
+ *   4. Connection binding (presetProfile:connection:{connectionId})
+ *   5. Default snapshot   (presetProfileDefaults:{presetId})
+ *   6. Raw preset block states (no override)
  */
 export interface PresetProfileBinding {
   /** Which preset this snapshot was taken from */
@@ -33,5 +34,5 @@ export interface ResolvedPresetProfile {
   /** The binding that was applied, or null if none matched */
   binding: PresetProfileBinding | null;
   /** Where the binding came from */
-  source: "chat" | "character" | "connection" | "defaults" | "none";
+  source: "chat" | "persona" | "character" | "connection" | "defaults" | "none";
 }

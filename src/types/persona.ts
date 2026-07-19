@@ -4,6 +4,22 @@ export interface PersonaAddon {
   content: string;
   enabled: boolean;
   sort_order: number;
+  /** Optional persona-specific avatar selected while this add-on is active. */
+  avatar_image_id?: string;
+  /** Optional cropped variant of avatar_image_id, preferred for avatar rendering. */
+  avatar_crop_image_id?: string;
+}
+
+/**
+ * A reference to a reusable global add-on as attached to one persona. Avatar
+ * overrides intentionally live here, rather than on the shared add-on, so the
+ * same global text can represent a different look on each persona.
+ */
+export interface AttachedGlobalPersonaAddon {
+  id: string;
+  enabled: boolean;
+  avatar_image_id?: string;
+  avatar_crop_image_id?: string;
 }
 
 export interface Persona {

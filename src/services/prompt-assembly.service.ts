@@ -1411,7 +1411,11 @@ export async function assemblePrompt(
             requestedPresetId,
             chat.id,
             characterId,
-            { isGroup: chat.metadata?.group === true, connectionId: connection?.id ?? null },
+            {
+              isGroup: chat.metadata?.group === true,
+              connectionId: connection?.id ?? null,
+              personaId: persona?.id ?? null,
+            },
           );
   const resolvedPresetId = resolvedProfile.preset_id;
 

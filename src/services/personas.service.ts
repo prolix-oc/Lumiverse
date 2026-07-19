@@ -5,6 +5,12 @@ import type { Persona, CreatePersonaInput, UpdatePersonaInput } from "../types/p
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import { getSetting as getUserSetting } from "./settings.service";
+import {
+  resolvePersonaAvatarInfo,
+  type PersonaAddonStateMap,
+  type PersonaAddonToggleOrder,
+  type PersonaAvatarInfo,
+} from "./persona-addon-states";
 
 function rowToPersona(row: any): Persona {
   return {
@@ -41,24 +47,17 @@ export function getPersona(userId: string, id: string): Persona | null {
 
 export function getPersonaAvatarInfo(
   userId: string,
-  id: string
-): { image_id: string | null; avatar_path: string | null; avatar_crop_image_id: string | null } | null {
-  const row = getDb()
-    .query("SELECT image_id, avatar_path, metadata FROM personas WHERE id = ? AND user_id = ?")
-    .get(id, userId) as any;
-  if (!row) return null;
-  let avatarCropImageId: string | null = null;
-  try {
-    const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata;
-    avatarCropImageId = typeof metadata?.avatar_crop_image_id === "string" ? metadata.avatar_crop_image_id : null;
-  } catch {
-    avatarCropImageId = null;
-  }
-  return {
-    image_id: row.image_id || null,
-    avatar_path: row.avatar_path || null,
-    avatar_crop_image_id: avatarCropImageId,
-  };
+  id: string,
+  options: {
+    addonStates?: PersonaAddonStateMap;
+    addonToggleOrder?: PersonaAddonToggleOrder;
+  } = {},
+): PersonaAvatarInfo | null {
+  return resolvePersonaAvatarInfo(
+    getPersona(userId, id),
+    options.addonStates,
+    options.addonToggleOrder,
+  );
 }
 
 export function createPersona(userId: string, input: CreatePersonaInput): Persona {
@@ -238,6 +237,47 @@ export function setPersonaImage(userId: string, id: string, imageId: string): bo
     .query("UPDATE personas SET image_id = ?, updated_at = ? WHERE id = ? AND user_id = ?")
     .run(imageId, Math.floor(Date.now() / 1000), id, userId);
   return result.changes > 0;
+}
+
+/**
+ * Attach or clear a persona-specific avatar override for an add-on. The image
+ * lives on the persona's add-on reference, including attached global add-ons,
+ * so a shared global add-on never dictates another persona's appearance.
+ */
+export function setPersonaAddonAvatar(
+  userId: string,
+  personaId: string,
+  addonId: string,
+  avatar: { image_id: string | null; avatar_crop_image_id?: string | null },
+): Persona | null {
+  const existing = getPersona(userId, personaId);
+  if (!existing) return null;
+
+  const metadata = existing.metadata ?? {};
+  let found = false;
+  const updateAddons = (addons: unknown): unknown => {
+    if (!Array.isArray(addons)) return addons;
+    return addons.map((addon: any) => {
+      if (!addon || addon.id !== addonId) return addon;
+      found = true;
+      const next = { ...addon };
+      if (avatar.image_id) next.avatar_image_id = avatar.image_id;
+      else delete next.avatar_image_id;
+      if (avatar.avatar_crop_image_id) next.avatar_crop_image_id = avatar.avatar_crop_image_id;
+      else delete next.avatar_crop_image_id;
+      return next;
+    });
+  };
+
+  const nextMetadata = {
+    ...metadata,
+    ...(Array.isArray(metadata.addons) ? { addons: updateAddons(metadata.addons) } : {}),
+    ...(Array.isArray(metadata.attached_global_addons)
+      ? { attached_global_addons: updateAddons(metadata.attached_global_addons) }
+      : {}),
+  };
+  if (!found) return null;
+  return updatePersona(userId, personaId, { metadata: nextMetadata });
 }
 
 export function duplicatePersona(userId: string, id: string): Persona | null {

@@ -11,6 +11,10 @@ import * as imageGenConnSvc from "./image-gen-connections.service";
 import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
 import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
 import * as characterLoraSvc from "./character-lora.service";
+import {
+  getChatPersonaAddonStates,
+  getChatPersonaAddonToggleOrder,
+} from "./persona-addon-states";
 import { buildMacroEnvForChat } from "./chats.service";
 import { getActivatedWorldInfoEntriesForChat, resolveWorldInfoOutlets } from "./prompt-assembly.service";
 import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros";
@@ -1251,8 +1255,9 @@ export function substitutePersonaPromptMacro(
 
 /**
  * Looks up the active persona for a chat. Prefers the persona referenced by
- * the most recent user message's `extra.persona_id`, then falls back to the
- * user's default persona. Returns null if neither is available.
+ * the most recent user message's `extra.persona_id`, then falls back through
+ * the regular active/default persona resolver. Returns null if neither is
+ * available.
  */
 function resolveActivePersonaId(userId: string, chatId: string): string | null {
   const messages = chatsSvc.getMessages(userId, chatId);
@@ -1261,8 +1266,7 @@ function resolveActivePersonaId(userId: string, chatId: string): string | null {
     const pid = m?.is_user && (m.extra as any)?.persona_id;
     if (typeof pid === "string" && pid) return pid;
   }
-  const def = personasSvc.getDefaultPersona(userId);
-  return def?.id ?? null;
+  return personasSvc.resolvePersonaOrDefault(userId)?.id ?? null;
 }
 
 /**
@@ -1718,9 +1722,18 @@ async function loadConfiguredAvatarImages(
   }
 
   if (params.includePersonaAvatar) {
-    const personas = personasSvc.listPersonas(userId, { limit: 100, offset: 0 }).data;
-    const persona = personas.find((p) => p.is_default) || personas[0];
-    if (persona?.image_id) await loadById(persona.image_id);
+    const chat = chatsSvc.getChat(userId, chatId);
+    const personaId = resolveActivePersonaId(userId, chatId);
+    if (personaId) {
+      const info = personasSvc.getPersonaAvatarInfo(userId, personaId, {
+        addonStates: getChatPersonaAddonStates(chat?.metadata, personaId),
+        addonToggleOrder: getChatPersonaAddonToggleOrder(chat?.metadata, personaId),
+      });
+      // Match the HTTP avatar resolver: a cropped add-on image is the visible
+      // avatar and should therefore be the one supplied as img2img/reference.
+      const imageId = info?.avatar_crop_image_id || info?.image_id;
+      if (imageId) await loadById(imageId);
+    }
   }
 
   return out;

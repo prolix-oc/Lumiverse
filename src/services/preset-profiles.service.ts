@@ -3,6 +3,7 @@ import * as chatsSvc from "./chats.service";
 import * as charactersSvc from "./characters.service";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
+import * as personasSvc from "./personas.service";
 import type { PresetProfileBinding, ResolvedPresetProfile } from "../types/preset-profile";
 import type { PromptBlock } from "../types/preset";
 
@@ -16,6 +17,9 @@ function defaultsKey(presetId: string): string {
 }
 function characterKey(characterId: string): string {
   return `presetProfile:character:${characterId}`;
+}
+function personaKey(personaId: string): string {
+  return `presetProfile:persona:${personaId}`;
 }
 function chatKey(chatId: string): string {
   return `presetProfile:chat:${chatId}`;
@@ -80,7 +84,7 @@ function getValidBinding(
 
 function resolveSpecificBinding(
   userId: string,
-  source: "chat" | "character" | "connection",
+  source: "chat" | "persona" | "character" | "connection",
   binding: PresetProfileBinding
 ): ResolvedPresetProfile {
   if (binding.linked_to_defaults) {
@@ -151,6 +155,35 @@ export function deleteCharacterBinding(
   characterId: string
 ): boolean {
   return settingsSvc.deleteSetting(userId, characterKey(characterId));
+}
+
+// ---------------------------------------------------------------------------
+// Persona bindings
+// ---------------------------------------------------------------------------
+
+export function getPersonaBinding(
+  userId: string,
+  personaId: string,
+): PresetProfileBinding | null {
+  return getValidBinding(userId, personaKey(personaId));
+}
+
+export function setPersonaBinding(
+  userId: string,
+  personaId: string,
+  presetId: string,
+  blockStates: Record<string, boolean>,
+): PresetProfileBinding {
+  if (!personasSvc.getPersona(userId, personaId)) throw new Error("Persona not found");
+  assertPresetExists(userId, presetId);
+
+  const binding = createBinding(presetId, blockStates);
+  settingsSvc.putSetting(userId, personaKey(personaId), binding);
+  return binding;
+}
+
+export function deletePersonaBinding(userId: string, personaId: string): boolean {
+  return settingsSvc.deleteSetting(userId, personaKey(personaId));
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +263,7 @@ export function resolveProfile(
   fallbackPresetId: string | null,
   chatId: string,
   characterId: string | null,
-  options: { isGroup?: boolean; connectionId?: string | null } = {}
+  options: { isGroup?: boolean; connectionId?: string | null; personaId?: string | null } = {}
 ): ResolvedPresetProfile {
   // 1. Chat-level binding (most specific)
   const chatBinding = getChatBinding(userId, chatId);
@@ -238,7 +271,17 @@ export function resolveProfile(
     return resolveSpecificBinding(userId, "chat", chatBinding);
   }
 
-  // 2. Character-level binding — skipped in group chats. Per-member bindings
+  // 2. Persona-level binding. It deliberately outranks a character profile:
+  // switching personas is expected to restore that persona's preset state in
+  // one action. Chat bindings remain the explicit per-conversation override.
+  if (options.personaId) {
+    const personaBinding = getPersonaBinding(userId, options.personaId);
+    if (personaBinding) {
+      return resolveSpecificBinding(userId, "persona", personaBinding);
+    }
+  }
+
+  // 3. Character-level binding — skipped in group chats. Per-member bindings
   //    would be ambiguous (which member wins?), so group chats are chat-only.
   if (!options.isGroup && characterId) {
     const charBinding = getCharacterBinding(userId, characterId);
@@ -247,7 +290,7 @@ export function resolveProfile(
     }
   }
 
-  // 3. Connection-level binding — applies across chats for the active model
+  // 4. Connection-level binding — applies across chats for the active model
   //    environment when there isn't a more specific chat/character binding.
   if (options.connectionId) {
     const connectionBinding = getConnectionBinding(userId, options.connectionId);
@@ -256,7 +299,7 @@ export function resolveProfile(
     }
   }
 
-  // 4. Default snapshot — defaults are stored per preset, so they only apply
+  // 5. Default snapshot — defaults are stored per preset, so they only apply
   //    when there isn't a more specific chat/character/connection binding.
   if (fallbackPresetId) {
     const defaults = getDefaults(userId, fallbackPresetId);
@@ -265,7 +308,7 @@ export function resolveProfile(
     }
   }
 
-  // 5. No matching binding — use raw preset block states
+  // 6. No matching binding — use raw preset block states
   return { preset_id: fallbackPresetId, binding: null, source: "none" };
 }
 

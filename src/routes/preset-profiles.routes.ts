@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import * as svc from "../services/preset-profiles.service";
 import * as chatsSvc from "../services/chats.service";
+import * as personasSvc from "../services/personas.service";
 
 const app = new Hono();
 
@@ -78,6 +79,46 @@ app.delete("/character/:characterId", (c) => {
   const userId = c.get("userId");
   if (!svc.deleteCharacterBinding(userId, c.req.param("characterId"))) {
     return c.json({ error: "No binding for this character" }, 404);
+  }
+  return c.json({ success: true });
+});
+
+// ---------------------------------------------------------------------------
+// Persona bindings
+// ---------------------------------------------------------------------------
+
+app.get("/persona/:personaId", (c) => {
+  const userId = c.get("userId");
+  const binding = svc.getPersonaBinding(userId, c.req.param("personaId"));
+  if (!binding) return c.json({ error: "No binding for this persona" }, 404);
+  return c.json(binding);
+});
+
+app.put("/persona/:personaId", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json();
+  if (!body.preset_id || !body.block_states) {
+    return c.json({ error: "preset_id and block_states are required" }, 400);
+  }
+  try {
+    const binding = svc.setPersonaBinding(
+      userId,
+      c.req.param("personaId"),
+      body.preset_id,
+      body.block_states,
+    );
+    return c.json(binding);
+  } catch (e: any) {
+    if (e.message === "Persona not found") return c.json({ error: e.message }, 404);
+    if (e.message === "Preset not found") return c.json({ error: e.message }, 404);
+    throw e;
+  }
+});
+
+app.delete("/persona/:personaId", (c) => {
+  const userId = c.get("userId");
+  if (!svc.deletePersonaBinding(userId, c.req.param("personaId"))) {
+    return c.json({ error: "No binding for this persona" }, 404);
   }
   return c.json({ success: true });
 });
@@ -174,6 +215,7 @@ app.get("/resolve/:chatId", (c) => {
   const userId = c.get("userId");
   const presetId = c.req.query("preset_id");
   const connectionId = c.req.query("connection_id") || null;
+  const requestedPersonaId = c.req.query("persona_id") || null;
 
   const chatId = c.req.param("chatId");
 
@@ -183,6 +225,7 @@ app.get("/resolve/:chatId", (c) => {
   const resolved = svc.resolveProfile(userId, presetId ?? null, chatId, chat.character_id, {
     isGroup: chat.metadata?.group === true,
     connectionId,
+    personaId: requestedPersonaId ?? personasSvc.resolvePersonaOrDefault(userId)?.id ?? null,
   });
   return c.json(resolved);
 });
