@@ -103,6 +103,14 @@ export function shouldInjectEmptySendNudge(input: {
   );
 }
 
-export function shouldInjectGroupNudge(targetCharacterId?: string): boolean {
-  return typeof targetCharacterId === "string" && targetCharacterId.length > 0;
+export function shouldInjectGroupNudge(input: {
+  isGroupChat: boolean;
+  groupCharacterIds: string[];
+  targetCharacterId?: string;
+}): boolean {
+  return (
+    input.isGroupChat &&
+    typeof input.targetCharacterId === "string" &&
+    input.groupCharacterIds.includes(input.targetCharacterId)
+  );
 }

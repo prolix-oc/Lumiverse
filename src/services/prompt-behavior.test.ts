@@ -109,8 +109,41 @@ describe("Loom prompt behavior", () => {
   });
 
   test("uses group nudges only for a concrete targeted group member", () => {
-    expect(shouldInjectGroupNudge("group-member-1")).toBe(true);
-    expect(shouldInjectGroupNudge("")).toBe(false);
-    expect(shouldInjectGroupNudge()).toBe(false);
+    expect(
+      shouldInjectGroupNudge({
+        isGroupChat: true,
+        groupCharacterIds: ["group-member-1"],
+        targetCharacterId: "group-member-1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldInjectGroupNudge({
+        isGroupChat: false,
+        groupCharacterIds: ["direct-chat-character"],
+        targetCharacterId: "direct-chat-character",
+      }),
+    ).toBe(false);
+    expect(
+      shouldInjectGroupNudge({
+        isGroupChat: true,
+        groupCharacterIds: ["group-member-1"],
+        targetCharacterId: "not-a-member",
+      }),
+    ).toBe(false);
+    expect(
+      shouldInjectGroupNudge({
+        isGroupChat: true,
+        groupCharacterIds: ["group-member-1"],
+        targetCharacterId: "",
+      }),
+    ).toBe(
+      false,
+    );
+    expect(
+      shouldInjectGroupNudge({
+        isGroupChat: true,
+        groupCharacterIds: ["group-member-1"],
+      }),
+    ).toBe(false);
   });
 });

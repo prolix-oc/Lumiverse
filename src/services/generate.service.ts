@@ -1814,7 +1814,8 @@ export async function startGeneration(
     let characterName = "Assistant";
     const requestedTargetCharId =
       input.target_character_id &&
-      (!isGroupChat || groupCharacterIds.includes(input.target_character_id))
+      isGroupChat &&
+      groupCharacterIds.includes(input.target_character_id)
         ? input.target_character_id
         : undefined;
     const messageTargetCharId =
@@ -2929,6 +2930,17 @@ export async function dryRunGeneration(
   // No-preset temp chats bypass preset resolution/assertion (same as
   // startGeneration); assembly falls back to raw message mapping.
   const dryRunChat = chatsSvc.getChat(input.userId, input.chat_id);
+  const dryRunIsGroupChat = dryRunChat?.metadata?.group === true;
+  const dryRunGroupCharacterIds =
+    dryRunIsGroupChat && Array.isArray(dryRunChat?.metadata?.character_ids)
+      ? (dryRunChat.metadata.character_ids as string[])
+      : [];
+  const dryRunTargetCharacterId =
+    dryRunIsGroupChat &&
+    typeof input.target_character_id === "string" &&
+    dryRunGroupCharacterIds.includes(input.target_character_id)
+      ? input.target_character_id
+      : undefined;
   const isNoPresetChat = isNoPresetChatMetadata(dryRunChat?.metadata);
   if (isNoPresetChat) {
     input.preset_id = undefined;
@@ -2981,7 +2993,7 @@ export async function dryRunGeneration(
     inputMessages: input.messages,
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,
-    targetCharacterId: input.target_character_id,
+    targetCharacterId: dryRunTargetCharacterId,
     signal: input.signal,
     isDryRun: true,
   });

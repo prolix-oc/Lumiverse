@@ -3258,7 +3258,15 @@ export async function assemblePrompt(
   let assistantPrefill: string | undefined;
 
   // Group chat nudge from preset (e.g. "[Write next reply only as {{char}}]")
-  if (shouldInjectGroupNudge(ctx.targetCharacterId)) {
+  if (
+    shouldInjectGroupNudge({
+      isGroupChat: chat.metadata?.group === true,
+      groupCharacterIds: Array.isArray(chat.metadata?.character_ids)
+        ? (chat.metadata.character_ids as string[])
+        : [],
+      targetCharacterId: ctx.targetCharacterId,
+    })
+  ) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
       const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
