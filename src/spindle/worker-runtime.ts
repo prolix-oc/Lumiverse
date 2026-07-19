@@ -10,6 +10,14 @@ import type {
   HostToWorker,
   LlmMessageDTO,
   InterceptorResultDTO,
+  InterceptorBreakdownEntryDTO,
+  InterceptorContextDTO,
+  SpindleHostDescriptorV1,
+  BoundAssembleRequestDTO,
+  BoundAssemblyOutcomeDTO,
+  QuietTrackedRequestDTO,
+  QuietTrackedResultDTO,
+  ConnectionDispatchDescriptorDTO,
   SpindleAPI,
   ConnectionProfileDTO,
   PermissionDeniedDetail,
@@ -88,6 +96,7 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import { validateSpindleHostDescriptor } from "./host-compatibility";
 import { deserializeWorkerResponseError } from "./worker-response-error";
 import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
@@ -256,10 +265,86 @@ type ChatAppendMessageOptions =
     };
 
 type SpindleUserRole = "operator" | "admin" | "user";
-
+type BoundRuntimeEnvelope = {
+  readonly workerId: string;
+  readonly registrationGeneration: string;
+  readonly callbackUserId: string;
+  readonly hostGeneration: string;
+  readonly requestId: string;
+  readonly token: string;
+  readonly operationRequestId?: string;
+};
+type FrontendMessageScopeEnvelope = {
+  readonly token: string;
+  readonly operationRequestId?: string;
+};
 type RuntimeWorkerToHost =
-  | WorkerToHost
-  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
+  | Exclude<
+      WorkerToHost,
+      {
+        type:
+          | "register_interceptor"
+          | "unregister_interceptor"
+          | "intercept_result"
+          | "generate_assemble"
+          | "generate_quiet_tracked"
+          | "connections_resolve_dispatch"
+          | "cancel_generation";
+      }
+    >
+  | {
+      type: "startup_failure";
+      code: string;
+      message: string;
+    }
+  | {
+      type: "register_interceptor";
+      registrationId: string;
+      priority?: number;
+      match?: unknown;
+    }
+  | { type: "unregister_interceptor"; registrationId: string }
+  | {
+      type: "intercept_result";
+      requestId: string;
+      registrationId: string;
+      registrationGeneration?: string;
+      workerId?: string;
+      hostGeneration?: string;
+      messages: LlmMessageDTO[];
+      parameters?: Record<string, unknown>;
+      breakdown?: InterceptorBreakdownEntryDTO[];
+      deferredGuidance?: unknown;
+      finalResponse?: unknown;
+    }
+  | {
+      type: "generate_assemble";
+      requestId: string;
+      input: Omit<BoundAssembleRequestDTO, "signal">;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "generate_quiet_tracked";
+      requestId: string;
+      input: Omit<QuietTrackedRequestDTO, "signal">;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "connections_resolve_dispatch";
+      requestId: string;
+      connectionId: string;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+      __spindle_private_frontend?: FrontendMessageScopeEnvelope;
+    }
+  | {
+      type: "frontend_message_scope_complete";
+      token: string;
+    }
+  | {
+      type: "cancel_generation";
+      requestId: string;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
   | {
       type: "assemble_prompt";
       requestId: string;
@@ -491,7 +576,40 @@ type RuntimeWorkerToHost =
     };
 
 type RuntimeHostToWorker =
-  | HostToWorker
+  | Exclude<
+      HostToWorker,
+      { type: "init" | "intercept_request" | "intercept_abort" | "frontend_message" }
+    >
+  | {
+      type: "init";
+      manifest: SpindleManifest;
+      storagePath: string;
+      host: SpindleHostDescriptorV1;
+    }
+  | {
+      type: "intercept_request";
+      requestId: string;
+      registrationId: string;
+      registrationGeneration?: string;
+      workerId?: string;
+      hostGeneration?: string;
+      messages: LlmMessageDTO[];
+      context: Omit<InterceptorContextDTO, "signal">;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "intercept_abort";
+      requestId: string;
+      registrationId: string;
+      reason?: string;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "frontend_message";
+      payload: unknown;
+      userId: string;
+      __spindle_private_frontend?: FrontendMessageScopeEnvelope;
+    }
   | {
       type: "rpc_pool_request";
       requestId: string;
@@ -784,6 +902,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
 // ─── State ───────────────────────────────────────────────────────────────
 
 let manifest: SpindleManifest;
+let hostDescriptor: SpindleHostDescriptorV1 | null = null;
 let storagePath: string;
 
 const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) => void>>();
@@ -801,6 +920,27 @@ let interceptHandler:
       context: unknown
     ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>)
   | null = null;
+
+type RuntimeInterceptorRegistration = {
+  readonly handler: (
+    messages: LlmMessageDTO[],
+    context: InterceptorContextDTO,
+  ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>;
+};
+
+type RuntimeInterceptorRequest = {
+  readonly registrationId: string;
+  readonly registrationGeneration?: string;
+  readonly workerId?: string;
+  readonly hostGeneration?: string;
+  readonly controller: AbortController;
+  settled: boolean;
+};
+
+const interceptorRegistrations = new Map<string, RuntimeInterceptorRegistration>();
+const interceptorRequests = new Map<string, RuntimeInterceptorRequest>();
+const interceptorBindingStorage = new AsyncLocalStorage<BoundRuntimeEnvelope | undefined>();
+const frontendMessageScopeStorage = new AsyncLocalStorage<FrontendMessageScopeEnvelope | undefined>();
 let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
 let messageContentProcessorFn:
   | ((ctx: unknown) => Promise<unknown>)
@@ -814,7 +954,8 @@ let worldInfoInterceptorFn:
 let oauthCallbackHandler:
   | ((params: Record<string, string>) => Promise<{ html?: string } | void>)
   | null = null;
-const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
+type FrontendMessageHandler = (payload: unknown, userId: string) => void | Promise<void>;
+const frontendMessageHandlers = new Set<FrontendMessageHandler>();
 const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
@@ -1027,6 +1168,225 @@ function requestAssembly(input: AssembleRequest, userId?: string): Promise<Assem
   });
 }
 
+function currentBoundRuntimeEnvelope(): BoundRuntimeEnvelope | undefined {
+  return interceptorBindingStorage.getStore();
+}
+
+function boundAssemblyBindingFailure(): BoundAssemblyOutcomeDTO {
+  return {
+    ok: false,
+    error: {
+      kind: "security",
+      code: "BOUND_BINDING_REQUIRED",
+      message: "This generation operation requires an active authenticated interceptor binding",
+    },
+  };
+}
+
+function boundQuietBindingFailure(): QuietTrackedResultDTO {
+  return {
+    ok: false,
+    phase: "preflight",
+    providerInvoked: false,
+    receipt: null,
+    error: {
+      kind: "security",
+      code: "BOUND_BINDING_REQUIRED",
+      name: "SecurityError",
+      message: "This generation operation requires an active authenticated interceptor binding",
+    },
+  };
+}
+
+function boundAssemblyAbort(reason: unknown): BoundAssemblyOutcomeDTO {
+  return {
+    ok: false,
+    error: {
+      kind: "abort",
+      code: "ASSEMBLY_ABORTED",
+      name: "AbortError",
+      message: reason instanceof Error && reason.message ? reason.message : "Assembly aborted",
+    },
+  };
+}
+
+function boundQuietAbort(reason: unknown): QuietTrackedResultDTO {
+  return {
+    ok: false,
+    phase: "preflight",
+    providerInvoked: false,
+    receipt: null,
+    error: {
+      kind: "security",
+      code: "BOUND_REQUEST_ABORTED",
+      name: "AbortError",
+      message: reason instanceof Error && reason.message ? reason.message : "Generation aborted",
+    },
+  };
+}
+
+function requestBoundGeneration<T>(
+  type: "generate_assemble" | "generate_quiet_tracked",
+  input: BoundAssembleRequestDTO | QuietTrackedRequestDTO,
+  noBinding: () => T,
+  abortFailure: (reason: unknown) => T,
+): Promise<T> {
+  const envelope = currentBoundRuntimeEnvelope();
+  if (!envelope) return Promise.resolve(noBinding());
+  const signal = input.signal;
+  if (signal?.aborted) return Promise.resolve(abortFailure(signal.reason));
+  const requestId = crypto.randomUUID();
+  const operationEnvelope: BoundRuntimeEnvelope = Object.freeze({
+    ...envelope,
+    operationRequestId: requestId,
+  });
+  const { signal: _signal, ...payload } = input;
+  void _signal;
+  const { promise, resolve, reject } = Promise.withResolvers<T>();
+  let settled = false;
+  const cleanup = (): void => {
+    signal?.removeEventListener("abort", onAbort);
+    pendingResponses.delete(requestId);
+  };
+  const onAbort = (): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    reject(abortFailure(signal?.reason));
+    post({ type: "cancel_generation", requestId, __spindle_private_bound: operationEnvelope });
+  };
+  pendingResponses.set(requestId, {
+    resolve: (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value as T);
+    },
+    reject: (reason) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(reason);
+    },
+  });
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    post({
+      type,
+      requestId,
+      input: payload,
+      __spindle_private_bound: operationEnvelope,
+    } as RuntimeWorkerToHost);
+  }
+  return promise;
+}
+
+function requestBoundAssembly(input: BoundAssembleRequestDTO): Promise<BoundAssemblyOutcomeDTO> {
+  return requestBoundGeneration(
+    "generate_assemble",
+    input,
+    boundAssemblyBindingFailure,
+    boundAssemblyAbort,
+  );
+}
+
+function requestBoundQuietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
+  return requestBoundGeneration(
+    "generate_quiet_tracked",
+    input,
+    boundQuietBindingFailure,
+    boundQuietAbort,
+  );
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isConnectionDispatchDescriptor(value: unknown): value is ConnectionDispatchDescriptorDTO {
+  if (!isRecordValue(value)) return false;
+  return (
+    typeof value.connectionId === "string" &&
+    typeof value.connectionName === "string" &&
+    typeof value.provider === "string" &&
+    typeof value.model === "string" &&
+    typeof value.endpointOrigin === "string" &&
+    (value.dispatchKind === "concrete" || value.dispatchKind === "roulette") &&
+    (value.connectionDispatchRevision === null || typeof value.connectionDispatchRevision === "string")
+  );
+}
+function requestDispatchInspection(
+  connectionId: string,
+): Promise<ConnectionDispatchDescriptorDTO | null> {
+  if (typeof connectionId !== "string" || connectionId.trim().length === 0) {
+    return Promise.reject(new TypeError("connectionId must be a non-empty string"));
+  }
+  const boundEnvelope = currentBoundRuntimeEnvelope();
+  const frontendEnvelope = frontendMessageScopeStorage.getStore();
+  if (!boundEnvelope && !frontendEnvelope) {
+    return Promise.reject(new Error(
+      "CONNECTION_DISPATCH_SCOPE_REQUIRED: connection dispatch resolution requires an active authenticated interceptor or frontend-message callback",
+    ));
+  }
+  const requestId = crypto.randomUUID();
+  const boundOperationEnvelope = boundEnvelope
+    ? Object.freeze({
+        ...boundEnvelope,
+        operationRequestId: requestId,
+      })
+    : undefined;
+  const frontendOperationEnvelope = frontendEnvelope
+    ? Object.freeze({
+        token: frontendEnvelope.token,
+        operationRequestId: requestId,
+      })
+    : undefined;
+  return request({
+    type: "connections_resolve_dispatch",
+    requestId,
+    connectionId,
+    __spindle_private_bound: boundOperationEnvelope,
+    __spindle_private_frontend: frontendOperationEnvelope,
+  }).then((result) => {
+    if (result === null) return null;
+    if (!isConnectionDispatchDescriptor(result)) {
+      throw new TypeError("Invalid connection dispatch descriptor");
+    }
+    return result;
+  });
+}
+
+function deepFreezeInterceptorData(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) deepFreezeInterceptorData(item, seen);
+  } else if (isRecordValue(value)) {
+    for (const key of Object.keys(value)) {
+      deepFreezeInterceptorData(value[key], seen);
+    }
+  }
+  return Object.freeze(value);
+}
+
+function createInterceptorCallbackContext(
+  context: unknown,
+  signal: AbortSignal,
+): InterceptorContextDTO {
+  const cloned = context && typeof context === "object"
+    ? structuredClone(context)
+    : {};
+  deepFreezeInterceptorData(cloned);
+  const callback = {
+    ...(cloned as Record<string, unknown>),
+    signal,
+  };
+  return Object.freeze(callback) as unknown as InterceptorContextDTO;
+}
+
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
  * that yields `StreamChunkDTO` values as the host forwards them. The
@@ -1187,10 +1547,53 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "update_macro_value", name, value: String(value ?? "") });
   },
 
-  registerInterceptor(handler, priority?): void {
+  registerInterceptor(
+    handler: (
+      messages: LlmMessageDTO[],
+      context: InterceptorContextDTO,
+    ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>,
+    priorityOrOptions?: number | { priority?: number; match?: unknown },
+    trailingOptions?: { match?: unknown },
+  ): () => void {
     assertMutationAllowed("spindle.registerInterceptor()");
-    interceptHandler = handler;
-    post({ type: "register_interceptor", priority });
+    if (typeof handler !== "function") {
+      throw new TypeError("spindle.registerInterceptor() handler must be a function");
+    }
+    const registrationId = crypto.randomUUID();
+    const registration: RuntimeInterceptorRegistration = { handler };
+    interceptorRegistrations.set(registrationId, registration);
+    const priority = typeof priorityOrOptions === "number"
+      ? priorityOrOptions
+      : priorityOrOptions?.priority;
+    const match = typeof priorityOrOptions === "number"
+      ? trailingOptions?.match
+      : priorityOrOptions?.match;
+    try {
+      post({
+        type: "register_interceptor",
+        registrationId,
+        ...(priority === undefined ? {} : { priority }),
+        ...(match === undefined ? {} : { match }),
+      });
+    } catch (error) {
+      interceptorRegistrations.delete(registrationId);
+      throw error;
+    }
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      if (interceptorRegistrations.get(registrationId) === registration) {
+        interceptorRegistrations.delete(registrationId);
+      }
+      for (const [requestId, request] of interceptorRequests) {
+        if (request.registrationId !== registrationId) continue;
+        request.settled = true;
+        request.controller.abort(makeAbortError("Interceptor registration revoked"));
+        interceptorRequests.delete(requestId);
+      }
+      post({ type: "unregister_interceptor", registrationId });
+    };
   },
 
   assemble(input, userId?: string) {
@@ -1208,6 +1611,12 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   generate: {
+    assemble(input: BoundAssembleRequestDTO) {
+      return requestBoundAssembly(input);
+    },
+    quietTracked(input: QuietTrackedRequestDTO) {
+      return requestBoundQuietTracked(input);
+    },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
     },
@@ -1822,6 +2231,9 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
+    },
+    async resolveDispatch(connectionId: string): Promise<ConnectionDispatchDescriptorDTO | null> {
+      return requestDispatchInspection(connectionId);
     },
   },
 
@@ -3391,7 +3803,7 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "frontend_message", payload, userId });
   },
 
-  onFrontendMessage(handler: (payload: unknown, userId: string) => void): () => void {
+  onFrontendMessage(handler: FrontendMessageHandler): () => void {
     frontendMessageHandlers.add(handler);
     return () => {
       frontendMessageHandlers.delete(handler);
@@ -3732,6 +4144,10 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  get host(): SpindleHostDescriptorV1 {
+    if (!hostDescriptor) throw new Error("Spindle host descriptor is not initialized");
+    return hostDescriptor;
+  },
   get manifest() {
     return manifest;
   },
@@ -3743,45 +4159,61 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
   switch (msg.type) {
     case "init": {
+      let validatedHost: SpindleHostDescriptorV1;
+      try {
+        validatedHost = validateSpindleHostDescriptor(msg.host);
+      } catch (error) {
+        post({
+          type: "startup_failure",
+          code: "INVALID_HOST_DESCRIPTOR",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        nativeProcessExit(1);
+        return;
+      }
+
       manifest = msg.manifest;
+      hostDescriptor = validatedHost;
       storagePath = msg.storagePath;
 
-      // Expose the API globally
+      // Expose the API globally only after the host descriptor has been
+      // validated and defensively frozen.
       (globalThis as any).spindle = spindleApi;
 
-      // Seed the permission cache so has() works immediately
+      // Seed the permission cache so has() works immediately.
       try {
         const perms = await spindleApi.permissions.getGranted();
         grantedPermissions.clear();
         for (const p of perms) grantedPermissions.add(p);
       } catch {
-        // Non-fatal — cache starts empty, host still enforces
+        // Non-fatal — cache starts empty, host still enforces.
       }
 
-      // Initialize runtime sandbox before loading untrusted extension code.
-      // This patches eval, the Function constructor, and sensitive Bun/process
-      // APIs (real property overrides that take effect). It CANNOT block the
-      // native `import()` operator or `node:` builtins — those resolve through
-      // Bun internals that neither a global override nor a loader plugin can
-      // intercept. Dangerous module access is therefore enforced upstream by
-      // the static scan (detectDangerousBackendCapabilities, run before this
-      // entry is loaded) and, when enabled, by the OS-level sandbox (sandbox
-      // mode). The sandbox here is a cooperative speed bump, not the boundary.
-      initializeSandbox();
-
-      // Dynamically import the extension's backend entry
       try {
+        // Initialize runtime sandbox before loading untrusted extension code.
+        initializeSandbox();
         const entryPath = manifest.entry_backend || "dist/backend.js";
         await import(entryPath);
-      } catch (err: any) {
+      } catch (error) {
+        for (const request of interceptorRequests.values()) {
+          request.settled = true;
+          request.controller.abort(makeAbortError("Extension startup failed"));
+        }
+        interceptorRequests.clear();
+        interceptorRegistrations.clear();
+        eventHandlers.clear();
+        extensionMacroHandlers.clear();
         post({
-          type: "log",
-          level: "error",
-          message: `Failed to load extension: ${err.message}`,
+          type: "startup_failure",
+          code: "EXTENSION_LOAD_FAILED",
+          message: error instanceof Error ? error.message : String(error),
         });
+        nativeProcessExit(1);
+        return;
       }
-      // Signal that the extension has finished loading and all
-      // synchronous registrations (macros, interceptors, etc.) are queued
+
+      // Signal that the extension has finished loading and all synchronous
+      // registrations (macros, interceptors, etc.) are queued.
       post({ type: "log", level: "info", message: "__worker_ready__" });
       break;
     }
@@ -3845,34 +4277,91 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "intercept_request": {
-      if (interceptHandler) {
+      const registration = interceptorRegistrations.get(msg.registrationId);
+      if (!registration) break;
+      const request: RuntimeInterceptorRequest = {
+        registrationId: msg.registrationId,
+        registrationGeneration: msg.registrationGeneration,
+        workerId: msg.workerId,
+        hostGeneration: msg.hostGeneration,
+        controller: new AbortController(),
+        settled: false,
+      };
+      interceptorRequests.set(msg.requestId, request);
+      const callbackContext = createInterceptorCallbackContext(
+        msg.context,
+        request.controller.signal,
+      );
+      const bound = msg.__spindle_private_bound;
+      const run = async (): Promise<void> => {
         try {
-          const result = await interceptHandler(msg.messages, msg.context);
-          // Normalize: handler may return LlmMessageDTO[] or { messages, parameters? }
+          const result = await interceptorBindingStorage.run(
+            bound,
+            () => registration.handler(msg.messages, callbackContext),
+          );
+          if (request.settled) return;
+          request.settled = true;
           const normalized: InterceptorResultDTO = Array.isArray(result)
             ? { messages: result }
             : result;
           post({
             type: "intercept_result",
             requestId: msg.requestId,
+            registrationId: msg.registrationId,
+            ...(request.registrationGeneration
+              ? { registrationGeneration: request.registrationGeneration }
+              : {}),
+            ...(request.workerId ? { workerId: request.workerId } : {}),
+            ...(request.hostGeneration
+              ? { hostGeneration: request.hostGeneration }
+              : {}),
             messages: normalized.messages,
             ...(normalized.parameters ? { parameters: normalized.parameters } : {}),
             ...(normalized.breakdown ? { breakdown: normalized.breakdown } : {}),
+            ...(normalized.deferredGuidance
+              ? { deferredGuidance: normalized.deferredGuidance }
+              : {}),
+            ...(normalized.finalResponse
+              ? { finalResponse: normalized.finalResponse }
+              : {}),
           });
-        } catch (err: any) {
+        } catch (error) {
+          if (request.settled) return;
+          request.settled = true;
           post({
             type: "log",
             level: "error",
-            message: `Interceptor error: ${err.message}`,
+            message: `Interceptor error: ${error instanceof Error ? error.message : String(error)}`,
           });
-          // Return original messages on error
           post({
             type: "intercept_result",
             requestId: msg.requestId,
+            registrationId: msg.registrationId,
+            ...(request.registrationGeneration
+              ? { registrationGeneration: request.registrationGeneration }
+              : {}),
+            ...(request.workerId ? { workerId: request.workerId } : {}),
+            ...(request.hostGeneration
+              ? { hostGeneration: request.hostGeneration }
+              : {}),
             messages: msg.messages,
           });
+        } finally {
+          if (interceptorRequests.get(msg.requestId) === request) {
+            interceptorRequests.delete(msg.requestId);
+          }
         }
-      }
+      };
+      void run();
+      break;
+    }
+
+    case "intercept_abort": {
+      const request = interceptorRequests.get(msg.requestId);
+      if (!request || request.registrationId !== msg.registrationId) break;
+      request.settled = true;
+      request.controller.abort(makeAbortError(msg.reason));
+      interceptorRequests.delete(msg.requestId);
       break;
     }
 
@@ -4161,44 +4650,63 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "frontend_message": {
-      // Built-in CORS proxy bridge for sandboxed widgets
-      if (
-        typeof msg.payload === "object" &&
-        msg.payload !== null &&
-        (msg.payload as any).type === "__cors_proxy_request"
-      ) {
-        const p = msg.payload as { requestId: string; url: string; options?: any }
-        spindleApi.cors(p.url, { ...(p.options || {}), responseType: "arraybuffer" }).then(
-          (result) => {
-            spindleApi.sendToFrontend({
-              type: "__cors_proxy_response",
-              requestId: p.requestId,
-              result,
-            }, msg.userId)
-          },
-          (err: any) => {
-            spindleApi.sendToFrontend({
-              type: "__cors_proxy_response",
-              requestId: p.requestId,
-              error: err?.message || "CORS proxy request failed",
-            }, msg.userId)
-          }
-        )
-        break
-      }
-
-      for (const handler of frontendMessageHandlers) {
+      const rawScope = msg.__spindle_private_frontend;
+      const scope = rawScope &&
+        typeof rawScope.token === "string" &&
+        rawScope.token.length > 0
+        ? Object.freeze({ token: rawScope.token })
+        : undefined;
+      const run = async (): Promise<void> => {
         try {
-          handler(msg.payload, msg.userId)
-        } catch (err: any) {
-          post({
-            type: "log",
-            level: "error",
-            message: `Frontend message handler error: ${err.message}`,
-          })
+          await frontendMessageScopeStorage.run(scope, async () => {
+            const payload = msg.payload;
+            if (
+              isRecordValue(payload) &&
+              payload.type === "__cors_proxy_request" &&
+              typeof payload.requestId === "string" &&
+              typeof payload.url === "string"
+            ) {
+              const options = isRecordValue(payload.options) ? payload.options : {};
+              try {
+                const result = await spindleApi.cors(
+                  payload.url,
+                  { ...options, responseType: "arraybuffer" as const },
+                );
+                spindleApi.sendToFrontend({
+                  type: "__cors_proxy_response",
+                  requestId: payload.requestId,
+                  result,
+                }, msg.userId);
+              } catch (error) {
+                spindleApi.sendToFrontend({
+                  type: "__cors_proxy_response",
+                  requestId: payload.requestId,
+                  error: error instanceof Error ? error.message : String(error),
+                }, msg.userId);
+              }
+              return;
+            }
+
+            await Promise.all([...frontendMessageHandlers].map(async (handler) => {
+              try {
+                await handler(msg.payload, msg.userId);
+              } catch (error) {
+                post({
+                  type: "log",
+                  level: "error",
+                  message: `Frontend message handler error: ${error instanceof Error ? error.message : String(error)}`,
+                });
+              }
+            }));
+          });
+        } finally {
+          if (scope) {
+            post({ type: "frontend_message_scope_complete", token: scope.token });
+          }
         }
-      }
-      break
+      };
+      void run();
+      break;
     }
 
     case "frontend_process_lifecycle": {
@@ -4303,6 +4811,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "shutdown": {
+      for (const request of interceptorRequests.values()) {
+        request.settled = true;
+        request.controller.abort(makeAbortError("Extension worker stopped"));
+      }
+      interceptorRequests.clear();
+      interceptorRegistrations.clear();
       // Signal the host so it doesn't have to wait for the 5s fallback
       // timeout in WorkerHost.stop(). Posting via the existing log channel
       // matches the __worker_ready__ pattern and avoids touching the

@@ -11,6 +11,8 @@ import {
   useDroppable,
   useSensor,
   useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
 } from '@dnd-kit/core'
 import {
   arrayMove,
@@ -65,7 +67,7 @@ import { RangeSlider } from '@/components/shared/RangeSlider'
 import { resolveMacros as resolveMacrosApi } from '@/api/macros'
 import { useLoomBuilder } from '@/hooks/useLoomBuilder'
 import { usePresetProfiles } from '@/hooks/usePresetProfiles'
-import { computeGroups, createBlock, createMarkerBlock, resolvePromptBlockPlacements } from '@/lib/loom/service'
+import { computeGroups, createBlock, createMarkerBlock, normalizeCategoryBlockState, resolvePromptBlockPlacements, toggleBlockWithCategoryRules } from '@/lib/loom/service'
 import { sanitizeCharacterTagTrigger, splitCharacterTagTriggerInput } from '@/lib/loom/characterTagTrigger'
 import {
   PROMPT_TEMPLATES,
@@ -93,6 +95,7 @@ import SpindlePresetEditorTabContent from '@/components/spindle/SpindlePresetEdi
 import SpindlePresetEditorToolbarItem from '@/components/spindle/SpindlePresetEditorToolbarItem'
 import { applyPresetEditorDraft, toPresetEditorDraft } from '@/lib/spindle/preset-editor-adapter'
 import { setPresetEditorController, syncPresetEditorState } from '@/lib/spindle/preset-editor-helper'
+import { LOOM_DTO_LIMITS } from '@/lib/spindle/loom-dto'
 import s from './LoomBuilder.module.css'
 
 function useLb() {
@@ -128,6 +131,17 @@ const ROLE_DISPLAY_LABELS: Record<string, string> = {
 }
 
 const ROOT_DROP_PREFIX = 'root-drop:'
+const BLOCK_DRAG_PREFIX = 'loom-block:'
+
+function blockDragId(id: string) {
+  return `${BLOCK_DRAG_PREFIX}${id}`
+}
+
+function parseBlockDragId(id: unknown) {
+  return typeof id === 'string' && id.startsWith(BLOCK_DRAG_PREFIX)
+    ? id.slice(BLOCK_DRAG_PREFIX.length)
+    : null
+}
 
 function parseRootDropId(id: unknown) {
   if (typeof id !== 'string' || !id.startsWith(ROOT_DROP_PREFIX)) return null
@@ -207,6 +221,103 @@ function parseRootDropCategoryId(id: unknown) {
   return markerIndex === -1 ? null : id.slice(markerIndex + marker.length) || null
 }
 
+function reorderLoomBlocks(
+  blocks: PromptBlock[],
+  activeId: unknown,
+  overId: unknown,
+  armedAppendRootDropId: string | null,
+): PromptBlock[] | null {
+  const draggedId = parseBlockDragId(activeId)
+  const overBlockId = parseBlockDragId(overId)
+  if (!draggedId || draggedId === overBlockId) return null
+  const draggedBlock = blocks.find((block) => block.id === draggedId)
+  if (!draggedBlock) return null
+
+  const rootDropIndex = parseRootDropId(overId)
+  const armedAppendCategoryId = armedAppendRootDropId === overId
+    ? parseRootDropCategoryId(overId)
+    : null
+
+  if (draggedBlock.marker === 'category') {
+    const categoryIndex = blocks.findIndex((block) => block.id === draggedId)
+    let endIndex = blocks.length
+    for (let index = categoryIndex + 1; index < blocks.length; index += 1) {
+      if (
+        blocks[index].marker === 'category'
+        || (hasExplicitGroup(blocks[index]) && blockGroup(blocks[index]) !== draggedBlock.id)
+      ) {
+        endIndex = index
+        break
+      }
+    }
+
+    const categoryGroup = blocks.slice(categoryIndex, endIndex)
+    const remaining = [...blocks.slice(0, categoryIndex), ...blocks.slice(endIndex)]
+    let overIndex: number
+    if (rootDropIndex != null) {
+      overIndex = Math.max(
+        0,
+        Math.min(
+          remaining.length,
+          rootDropIndex > categoryIndex ? rootDropIndex - categoryGroup.length : rootDropIndex,
+        ),
+      )
+    } else {
+      const targetIndex = blocks.findIndex((block) => block.id === overBlockId)
+      const targetCategoryId = targetIndex === -1 ? null : inferGroupAtIndex(blocks, targetIndex)
+      if (targetCategoryId === draggedBlock.id) return null
+      overIndex = remaining.findIndex((block) => (
+        block.id === (targetCategoryId ?? overBlockId)
+      ))
+    }
+    if (overIndex === -1) return null
+    remaining.splice(overIndex, 0, ...categoryGroup)
+    return remaining
+  }
+
+  const oldIndex = blocks.findIndex((block) => block.id === draggedId)
+  if (oldIndex === -1) return null
+
+  if (armedAppendCategoryId) {
+    const categoryEndIndex = getCategoryEndIndex(blocks, armedAppendCategoryId)
+    if (categoryEndIndex === -1) return null
+    const nextBlocks = [...blocks]
+    const [moved] = nextBlocks.splice(oldIndex, 1)
+    const insertAt = Math.max(
+      0,
+      Math.min(nextBlocks.length, categoryEndIndex > oldIndex ? categoryEndIndex - 1 : categoryEndIndex),
+    )
+    nextBlocks.splice(insertAt, 0, { ...moved, group: armedAppendCategoryId })
+    return nextBlocks
+  }
+
+  if (rootDropIndex != null) {
+    const nextBlocks = [...blocks]
+    const [moved] = nextBlocks.splice(oldIndex, 1)
+    const insertAt = Math.max(
+      0,
+      Math.min(nextBlocks.length, rootDropIndex > oldIndex ? rootDropIndex - 1 : rootDropIndex),
+    )
+    nextBlocks.splice(insertAt, 0, { ...moved, group: null })
+    return nextBlocks
+  }
+
+  const newIndex = blocks.findIndex((block) => block.id === overBlockId)
+  if (newIndex === -1) return null
+  if (blocks[newIndex].marker === 'category') {
+    const nextBlocks = [...blocks]
+    const [moved] = nextBlocks.splice(oldIndex, 1)
+    const insertAt = newIndex > oldIndex ? newIndex : newIndex + 1
+    nextBlocks.splice(insertAt, 0, { ...moved, group: blocks[newIndex].id })
+    return nextBlocks
+  }
+
+  const movedGroup = inferGroupAtIndex(blocks, newIndex)
+  return arrayMove(blocks, oldIndex, newIndex).map((block) => (
+    block.id === draggedBlock.id ? { ...block, group: movedGroup } : block
+  ))
+}
+
 function RootDropSlot({ id, active, appendArmed }: { id: string; active: boolean; appendArmed?: boolean }) {
   const { t } = useLb()
   const { setNodeRef, isOver } = useDroppable({ id, disabled: !active })
@@ -247,7 +358,7 @@ function SortableCategoryItem({
   block, isCollapsed, onToggleCollapse, onEdit, onDelete, onToggle, childCount, dragDisabled = false,
 }: SortableCategoryItemProps) {
   const { t } = useLb()
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: blockDragId(block.id), disabled: dragDisabled })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isDisabled = !block.enabled
   const displayName = block.name.replace(/^\u2501\s*/, '')
@@ -312,7 +423,7 @@ interface SortableBlockItemProps {
 function SortableBlockItem({ block, effectiveRole, onEdit, onDelete, onToggle, indented, dragDisabled = false }: SortableBlockItemProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: block.id, disabled: dragDisabled })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id: blockDragId(block.id), disabled: dragDisabled })
   const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
   const isMarker = block.marker && block.marker !== 'category'
   const isDisabled = !block.enabled
@@ -980,21 +1091,211 @@ export function ControlledLoomBlockEditor({
 }: ControlledLoomBlockEditorProps) {
   const { t } = useLb()
   const { t: tc } = useTranslation('common')
+  const { addableMarkers, markerLabel, markerSectionLabel } = useLoomOptionLabels()
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [promptMenuOpen, setPromptMenuOpen] = useState(false)
+  const [markerMenuOpen, setMarkerMenuOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const [hoveredAppendRootDropId, setHoveredAppendRootDropId] = useState<string | null>(null)
+  const [armedAppendRootDropId, setArmedAppendRootDropId] = useState<string | null>(null)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
   const editingBlock = editingBlockId
     ? blocks.find((block) => block.id === editingBlockId) ?? null
     : null
+  const groups = useMemo(() => computeGroups(blocks), [blocks])
+  const visibleBlockIds = useMemo(() => {
+    const ids: string[] = []
+    for (const group of groups) {
+      if (group.categoryBlock) {
+        ids.push(blockDragId(group.categoryBlock.id))
+        if (!collapsedCategories.has(group.categoryBlock.id)) {
+          for (const child of group.children) ids.push(blockDragId(child.id))
+        }
+      } else {
+        for (const child of group.children) ids.push(blockDragId(child.id))
+      }
+    }
+    return ids
+  }, [collapsedCategories, groups])
   const effectiveRoles = useMemo(() => new Map(
     resolvePromptBlockPlacements(blocks, promptVariables)
       .map((block) => [block.id, block.role] as const),
   ), [blocks, promptVariables])
+  const activeDraggedBlock = useMemo(() => (
+    activeDragId ? blocks.find((block) => block.id === activeDragId) ?? null : null
+  ), [activeDragId, blocks])
+  const blockLimitReached = blocks.length >= LOOM_DTO_LIMITS.maxBlocks
+
+  const commitBlocks = useCallback((nextBlocks: PromptBlock[]): boolean => {
+    const callbackBlocks = structuredClone(normalizeCategoryBlockState(nextBlocks))
+    let callbackResult: unknown
+    try {
+      callbackResult = onChange(callbackBlocks) as unknown
+    } catch (error) {
+      reportLoomCallbackFailure(error)
+      return true
+    }
+    observeLoomCallbackResult(callbackResult)
+    return callbackResult !== false
+  }, [onChange])
 
   useEffect(() => {
     if (editingBlockId && !blocks.some((block) => block.id === editingBlockId)) {
       setEditingBlockId(null)
+      setValidationError(null)
     }
-  }, [blocks, editingBlockId])
+    if (confirmDelete && !blocks.some((block) => block.id === confirmDelete)) {
+      setConfirmDelete(null)
+    }
+  }, [blocks, confirmDelete, editingBlockId])
+
+  useEffect(() => {
+    if (!readOnly) return
+    setEditingBlockId(null)
+    setValidationError(null)
+    setPromptMenuOpen(false)
+    setMarkerMenuOpen(false)
+    setConfirmDelete(null)
+    setActiveDragId(null)
+    setHoveredAppendRootDropId(null)
+    setArmedAppendRootDropId(null)
+  }, [readOnly])
+
+  useEffect(() => {
+    if (!blockLimitReached) return
+    setPromptMenuOpen(false)
+    setMarkerMenuOpen(false)
+  }, [blockLimitReached])
+
+  useEffect(() => {
+    if (!hoveredAppendRootDropId) {
+      setArmedAppendRootDropId(null)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setArmedAppendRootDropId(hoveredAppendRootDropId)
+    }, 3000)
+    return () => {
+      window.clearTimeout(timer)
+      setArmedAppendRootDropId(null)
+    }
+  }, [hoveredAppendRootDropId])
+
+  const toggleCollapse = useCallback((categoryId: string) => {
+    setCollapsedCategories((current) => {
+      const next = new Set(current)
+      if (next.has(categoryId)) next.delete(categoryId)
+      else next.add(categoryId)
+      return next
+    })
+  }, [])
+
+  const rootDropIndexAfterGroup = useCallback((group: CategoryGroup) => {
+    if (group.categoryBlock) {
+      const endIndex = getCategoryEndIndex(blocks, group.categoryBlock.id)
+      return endIndex === -1 ? blocks.length : endIndex
+    }
+    const childIndexes = group.children
+      .map((child) => blocks.findIndex((block) => block.id === child.id))
+      .filter((index) => index >= 0)
+    return childIndexes.length > 0 ? Math.max(...childIndexes) + 1 : blocks.length
+  }, [blocks])
+
+  const handleEdit = useCallback((block: PromptBlock) => {
+    setValidationError(null)
+    setEditingBlockId(block.id)
+  }, [])
+
+  const handleToggle = useCallback((blockId: string) => {
+    commitBlocks(toggleBlockWithCategoryRules(blocks, blockId))
+  }, [blocks, commitBlocks])
+
+  const handleAddTemplate = useCallback((template: { name: string; content: string; role: string }) => {
+    if (blockLimitReached) return
+    const accepted = commitBlocks([
+      ...blocks,
+      createBlock({
+        name: template.name,
+        content: template.content,
+        role: template.role as PromptBlock['role'],
+      }),
+    ])
+    if (accepted) setPromptMenuOpen(false)
+  }, [blockLimitReached, blocks, commitBlocks])
+
+  const handleAddCategory = useCallback(() => {
+    if (blockLimitReached) return
+    commitBlocks([...blocks, createMarkerBlock('category', t('actions.newCategory'))])
+  }, [blockLimitReached, blocks, commitBlocks, t])
+
+  const handleAddMarker = useCallback((markerType: string) => {
+    if (blockLimitReached) return
+    const accepted = commitBlocks([...blocks, createMarkerBlock(markerType)])
+    if (accepted) setMarkerMenuOpen(false)
+  }, [blockLimitReached, blocks, commitBlocks])
+
+  const confirmDeleteBlock = useCallback(() => {
+    if (!confirmDelete) return
+    const target = blocks.find((block) => block.id === confirmDelete)
+    if (!target || (target.isLocked && target.marker !== 'category')) {
+      setConfirmDelete(null)
+      return
+    }
+    const detachedChildIds = target.marker === 'category'
+      ? new Set(
+        computeGroups(blocks)
+          .find((group) => group.categoryBlock?.id === target.id)
+          ?.children.map((block) => block.id) ?? [],
+      )
+      : null
+    const nextBlocks = blocks
+      .filter((block) => block.id !== target.id)
+      .map((block) => (
+        detachedChildIds?.has(block.id) || block.group === target.id
+          ? { ...block, group: null }
+          : block
+      ))
+    if (commitBlocks(nextBlocks)) setConfirmDelete(null)
+  }, [blocks, commitBlocks, confirmDelete])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    setActiveDragId(null)
+    setHoveredAppendRootDropId(null)
+    setArmedAppendRootDropId(null)
+    if (!event.over) return
+    const nextBlocks = reorderLoomBlocks(
+      blocks,
+      event.active.id,
+      event.over.id,
+      armedAppendRootDropId,
+    )
+    if (nextBlocks) commitBlocks(nextBlocks)
+  }, [armedAppendRootDropId, blocks, commitBlocks])
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const overId = event.over?.id
+    const activeBlockId = parseBlockDragId(event.active.id)
+    const activeBlock = blocks.find((block) => block.id === activeBlockId)
+    const appendCategoryId = parseRootDropCategoryId(overId)
+    setHoveredAppendRootDropId(
+      appendCategoryId && activeBlock?.marker !== 'category' && typeof overId === 'string'
+        ? overId
+        : null,
+    )
+  }, [blocks])
+
+  const handleDragCancel = useCallback(() => {
+    setActiveDragId(null)
+    setHoveredAppendRootDropId(null)
+    setArmedAppendRootDropId(null)
+  }, [])
 
   if (editingBlock && !readOnly) {
     return (
@@ -1008,15 +1309,7 @@ export function ControlledLoomBlockEditor({
           const nextBlocks = blocks.map((block) => (
             block.id === editingBlock.id ? { ...block, ...updates } : block
           ))
-          const callbackBlocks = structuredClone(nextBlocks)
-          let callbackResult: unknown = undefined
-          try {
-            callbackResult = onChange(callbackBlocks) as unknown
-          } catch (error) {
-            reportLoomCallbackFailure(error)
-          }
-          observeLoomCallbackResult(callbackResult)
-          if (callbackResult === false) {
+          if (!commitBlocks(nextBlocks)) {
             setValidationError(t('blockEditor.validationFailed'))
             return
           }
@@ -1035,6 +1328,41 @@ export function ControlledLoomBlockEditor({
     )
   }
 
+  if (readOnly) {
+    return (
+      <div className={clsx(s.layout, compact && s.layoutCompact)}>
+        <div className={s.toolbar}>
+          <span className={s.title}>{t('preset.blocks', { count: blocks.length })}</span>
+        </div>
+        <div className={s.scrollArea}>
+          <div className={s.blockList}>
+            {blocks.length === 0 ? (
+              <div className={s.emptyState}>{t('empty.noBlocksTitle')}</div>
+            ) : blocks.map((block) => (
+              <div key={block.id} className={clsx(s.item, !block.enabled && s.itemDisabled)}>
+                <div className={s.blockContent}>
+                  <div className={s.blockNameRow}>
+                    <span className={s.blockName}>{block.name}</span>
+                  </div>
+                  {block.content && (
+                    <span className={s.blockPreview}>
+                      {block.content.slice(0, 100)}{block.content.length > 100 ? '…' : ''}
+                    </span>
+                  )}
+                </div>
+                <span className={s.blockMetaRow}>
+                  <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
+                    {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={clsx(s.layout, compact && s.layoutCompact)}>
       <div className={s.toolbar}>
@@ -1043,41 +1371,159 @@ export function ControlledLoomBlockEditor({
       <div className={s.scrollArea}>
         <div className={s.blockList}>
           {blocks.length === 0 ? (
-            <div className={s.empty}>{t('empty.noBlocksTitle')}</div>
-          ) : blocks.map((block) => (
-            <div key={block.id} className={clsx(s.item, !block.enabled && s.itemDisabled)}>
-              <div className={s.blockContent}>
-                <div className={s.blockNameRow}>
-                  <span className={s.blockName}>{block.name}</span>
-                </div>
-                {block.content && (
-                  <span className={s.blockPreview}>
-                    {block.content.slice(0, 100)}{block.content.length > 100 ? '…' : ''}
-                  </span>
-                )}
-              </div>
-              <span className={s.blockMetaRow}>
-                <span className={clsx(s.badge, ROLE_BADGES[effectiveRoles.get(block.id) ?? block.role] || s.badgeSystem)}>
-                  {ROLE_DISPLAY_LABELS[effectiveRoles.get(block.id) ?? block.role] || effectiveRoles.get(block.id) || block.role}
-                </span>
-              </span>
-              {!readOnly && (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setValidationError(null)
-                    setEditingBlockId(block.id)
-                  }}
-                  title={tc('actions.edit')}
-                >
-                  <Edit2 size={14} />
-                </Button>
-              )}
+            <div className={s.emptyState}>
+              <div>{t('empty.noBlocksTitle')}</div>
+              <div>{t('empty.noBlocksHint')}</div>
             </div>
-          ))}
+          ) : (
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={(event) => setActiveDragId(parseBlockDragId(event.active.id))}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <SortableContext items={visibleBlockIds} strategy={verticalListSortingStrategy}>
+                <RootDropSlot id={rootDropId(0)} active={!!activeDragId} />
+                {groups.map((group) => (
+                  <Fragment key={group.categoryBlock?.id || group.children[0]?.id || 'ungrouped'}>
+                    {group.categoryBlock && (
+                      <SortableCategoryItem
+                        block={group.categoryBlock}
+                        isCollapsed={collapsedCategories.has(group.categoryBlock.id)}
+                        onToggleCollapse={() => toggleCollapse(group.categoryBlock!.id)}
+                        onEdit={handleEdit}
+                        onDelete={setConfirmDelete}
+                        onToggle={handleToggle}
+                        childCount={group.children.length}
+                      />
+                    )}
+                    {(!group.categoryBlock || !collapsedCategories.has(group.categoryBlock.id))
+                      && group.children.map((block) => (
+                        <SortableBlockItem
+                          key={block.id}
+                          block={block}
+                          effectiveRole={effectiveRoles.get(block.id)}
+                          onEdit={handleEdit}
+                          onDelete={setConfirmDelete}
+                          onToggle={handleToggle}
+                          indented={!!group.categoryBlock}
+                        />
+                      ))}
+                    <RootDropSlot
+                      id={rootDropId(rootDropIndexAfterGroup(group), group.categoryBlock?.id)}
+                      active={!!activeDragId}
+                      appendArmed={
+                        !!activeDraggedBlock
+                        && activeDraggedBlock.marker !== 'category'
+                        && armedAppendRootDropId === rootDropId(
+                          rootDropIndexAfterGroup(group),
+                          group.categoryBlock?.id,
+                        )
+                      }
+                    />
+                  </Fragment>
+                ))}
+              </SortableContext>
+            </DndContext>
+          )}
         </div>
       </div>
+      <div className={s.actionBar}>
+        <div style={{ position: 'relative' }}>
+          <button
+            className={clsx(s.btn, s.btnPrimary)}
+            onClick={() => {
+              setPromptMenuOpen(!promptMenuOpen)
+              setMarkerMenuOpen(false)
+            }}
+            type="button"
+            disabled={blockLimitReached}
+          >
+            <Plus size={14} /> {t('actions.addPrompt')} <ChevronDown size={12} />
+          </button>
+          {promptMenuOpen && !blockLimitReached && (
+            <div className={s.dropdownMenu} style={{ bottom: '100%', left: 0, marginBottom: '4px' }}>
+              {PROMPT_TEMPLATES.map((item, index) => {
+                if ('section' in item && item.section) {
+                  return (
+                    <div key={item.section}>
+                      {index > 0 && <hr className={s.menuDivider} />}
+                      <div className={s.sectionLabel}>{item.section}</div>
+                    </div>
+                  )
+                }
+                if ('name' in item && item.name) {
+                  return (
+                    <MenuButton
+                      key={item.name}
+                      icon={item.content
+                        ? <Zap size={14} style={{ opacity: 0.5 }} />
+                        : <FileText size={14} style={{ opacity: 0.5 }} />}
+                      label={item.name}
+                      onClick={() => handleAddTemplate(item as { name: string; content: string; role: string })}
+                    />
+                  )
+                }
+                return null
+              })}
+            </div>
+          )}
+        </div>
+        <button
+          className={s.btn}
+          onClick={handleAddCategory}
+          type="button"
+          disabled={blockLimitReached}
+        >
+          <ChevronRight size={14} /> {t('actions.addCategory')}
+        </button>
+        <div style={{ position: 'relative' }}>
+          <button
+            className={s.btn}
+            onClick={() => {
+              setMarkerMenuOpen(!markerMenuOpen)
+              setPromptMenuOpen(false)
+            }}
+            type="button"
+            disabled={blockLimitReached}
+          >
+            <Hash size={14} /> {t('actions.addMarker')} <ChevronDown size={12} />
+          </button>
+          {markerMenuOpen && !blockLimitReached && (
+            <div className={s.dropdownMenu} style={{ bottom: '100%', left: 0, marginBottom: '4px', minWidth: '200px' }}>
+              {addableMarkers.map((item, index) => {
+                if (typeof item === 'object' && 'section' in item) {
+                  return (
+                    <div key={item.section}>
+                      {index > 0 && <hr className={s.menuDivider} />}
+                      <div className={s.sectionLabel}>{markerSectionLabel(item.section)}</div>
+                    </div>
+                  )
+                }
+                return (
+                  <MenuButton
+                    key={item as string}
+                    icon={<Hash size={14} />}
+                    label={markerLabel(item as string)}
+                    onClick={() => handleAddMarker(item as string)}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      <ConfirmationModal
+        isOpen={!!confirmDelete}
+        title={t('confirm.deleteBlockTitle')}
+        message={t('confirm.deleteBlockMessage')}
+        variant="danger"
+        confirmText={tc('actions.delete')}
+        onConfirm={confirmDeleteBlock}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   )
 }
@@ -2095,12 +2541,12 @@ export default function LoomBuilder({
     const ids: string[] = []
     for (const group of displayedGroups) {
       if (group.categoryBlock) {
-        ids.push(group.categoryBlock.id)
+        ids.push(blockDragId(group.categoryBlock.id))
         if (isSearchActive || !collapsedCategories.has(group.categoryBlock.id)) {
-          for (const child of group.children) ids.push(child.id)
+          for (const child of group.children) ids.push(blockDragId(child.id))
         }
       } else {
-        for (const child of group.children) ids.push(child.id)
+        for (const child of group.children) ids.push(blockDragId(child.id))
       }
     }
     return ids
@@ -2174,79 +2620,32 @@ export default function LoomBuilder({
     setIsSearchOpen(false)
   }, [trimmedSearchQuery])
 
-  const handleDragEnd = useCallback((event: any) => {
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     setActiveDragId(null)
     setHoveredAppendRootDropId(null)
     setArmedAppendRootDropId(null)
-    if (!over || active.id === over.id || !activePreset) return
+    if (!over || !activePreset) return
 
-    const blocks = activePreset.blocks
-    const draggedBlock = blocks.find(b => b.id === active.id)
-    if (!draggedBlock) return
-    const rootDropIndex = parseRootDropId(over.id)
-    const armedAppendCategoryId = armedAppendRootDropId === over.id ? parseRootDropCategoryId(over.id) : null
-
-    if (draggedBlock.marker === 'category') {
-      const catIdx = blocks.findIndex(b => b.id === active.id)
-      let endIdx = blocks.length
-      for (let i = catIdx + 1; i < blocks.length; i++) {
-        if (blocks[i].marker === 'category') { endIdx = i; break }
-        if (hasExplicitGroup(blocks[i]) && blockGroup(blocks[i]) !== draggedBlock.id) { endIdx = i; break }
-      }
-      const group = blocks.slice(catIdx, endIdx)
-      const remaining = [...blocks.slice(0, catIdx), ...blocks.slice(endIdx)]
-      const overIdx = rootDropIndex == null
-        ? remaining.findIndex(b => b.id === over.id)
-        : Math.max(0, Math.min(remaining.length, rootDropIndex > catIdx ? rootDropIndex - group.length : rootDropIndex))
-      if (overIdx === -1) return
-      remaining.splice(overIdx, 0, ...group)
-      saveBlocks(remaining)
-    } else {
-      const oldIndex = blocks.findIndex(b => b.id === active.id)
-      if (oldIndex === -1) return
-
-      if (armedAppendCategoryId) {
-        const endIndex = getCategoryEndIndex(blocks, armedAppendCategoryId)
-        if (endIndex === -1) return
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = Math.max(0, Math.min(nextBlocks.length, endIndex > oldIndex ? endIndex - 1 : endIndex))
-        nextBlocks.splice(insertAt, 0, { ...moved, group: armedAppendCategoryId })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      if (rootDropIndex != null) {
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = Math.max(0, Math.min(nextBlocks.length, rootDropIndex > oldIndex ? rootDropIndex - 1 : rootDropIndex))
-        nextBlocks.splice(insertAt, 0, { ...moved, group: null })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      const newIndex = blocks.findIndex(b => b.id === over.id)
-      if (newIndex === -1) return
-      if (blocks[newIndex].marker === 'category') {
-        const nextBlocks = [...blocks]
-        const [moved] = nextBlocks.splice(oldIndex, 1)
-        const insertAt = newIndex > oldIndex ? newIndex : newIndex + 1
-        nextBlocks.splice(insertAt, 0, { ...moved, group: blocks[newIndex].id })
-        saveBlocks(nextBlocks)
-        return
-      }
-
-      const movedGroup = inferGroupAtIndex(blocks, newIndex)
-      const reordered = arrayMove(blocks, oldIndex, newIndex)
-      saveBlocks(reordered.map(block => block.id === draggedBlock.id ? { ...block, group: movedGroup } : block))
-    }
+    const nextBlocks = reorderLoomBlocks(
+      activePreset.blocks,
+      active.id,
+      over.id,
+      armedAppendRootDropId,
+    )
+    if (nextBlocks) saveBlocks(nextBlocks)
   }, [activePreset, armedAppendRootDropId, saveBlocks])
 
-  const handleDragOver = useCallback((event: any) => {
-    const activeBlock = activePreset?.blocks.find((block) => block.id === event.active?.id)
-    const appendCategoryId = parseRootDropCategoryId(event.over?.id)
-    setHoveredAppendRootDropId(appendCategoryId && activeBlock?.marker !== 'category' ? event.over.id : null)
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const overId = event.over?.id
+    const activeBlockId = parseBlockDragId(event.active.id)
+    const activeBlock = activePreset?.blocks.find((block) => block.id === activeBlockId)
+    const appendCategoryId = parseRootDropCategoryId(overId)
+    setHoveredAppendRootDropId(
+      appendCategoryId && activeBlock?.marker !== 'category' && typeof overId === 'string'
+        ? overId
+        : null,
+    )
   }, [activePreset?.blocks])
 
   const handleDragCancel = useCallback(() => {
@@ -2751,7 +3150,7 @@ export default function LoomBuilder({
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
-              onDragStart={(event) => setActiveDragId(String(event.active.id))}
+              onDragStart={(event) => setActiveDragId(parseBlockDragId(event.active.id))}
               onDragOver={handleDragOver}
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}

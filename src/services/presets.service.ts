@@ -10,6 +10,12 @@ import { paginatedQuery } from "./pagination";
 import { deleteRegexScriptsByPresetId } from "./regex-scripts.service";
 import { sanitizePromptBlockCharacterTagTrigger } from "../utils/prompt-block-character-tags";
 import * as settingsSvc from "./settings.service";
+import {
+  DispatchStateError,
+  withDispatchStateTransactionInExistingTransaction,
+  type DispatchStateTransaction,
+} from "./dispatch-state.service";
+import { stableJson } from "../spindle/bound-generation-types";
 
 /**
  * Drop entries in metadata.promptVariables that no longer correspond to a
@@ -42,6 +48,37 @@ function prunePromptVariableOrphans(
   }
 
   return { ...(metadata as Record<string, unknown>), promptVariables: cleaned };
+}
+
+function finalizePresetDispatch(
+  userId: string,
+  transaction: DispatchStateTransaction,
+): void {
+  const active = settingsSvc.getSetting(userId, "activeLoomPresetId");
+  const presetId = typeof active?.value === "string" && active.value.trim()
+    ? active.value
+    : undefined;
+  const before = transaction.read();
+  try {
+    transaction.resolve({ source: "main", presetId });
+  } catch (error) {
+    if (
+      error instanceof DispatchStateError
+      && (
+        error.code === "DISPATCH_CONNECTION_NOT_FOUND"
+        || error.code === "DISPATCH_CONNECTION_UNRESOLVED"
+        || error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+        || error.code === "DISPATCH_PRESET_NOT_FOUND"
+      )
+    ) {
+      transaction.mutate({ incrementGeneration: true });
+      return;
+    }
+    throw error;
+  }
+  if (transaction.read().revision === before.revision) {
+    transaction.mutate({ incrementGeneration: true });
+  }
 }
 export interface PresetRegistryRow {
   id: string;
@@ -283,21 +320,31 @@ export function assertUsablePreset(
 export function createPreset(userId: string, input: CreatePresetInput): Preset {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-
   const cleanedMetadata = prunePromptVariableOrphans(input.prompt_order, input.metadata) || {};
+  const db = getDb();
 
-  getDb()
-    .query(
-      "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      id, input.name, input.provider, input.engine || "classic",
-      JSON.stringify(input.parameters || {}),
-      JSON.stringify(input.prompt_order || []),
-      JSON.stringify(input.prompts || {}),
-      JSON.stringify(cleanedMetadata),
-      userId, now, now
-    );
+  db.transaction(() => {
+    db
+      .query(
+        "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        id,
+        input.name,
+        input.provider,
+        input.engine || "classic",
+        JSON.stringify(input.parameters || {}),
+        JSON.stringify(input.prompt_order || []),
+        JSON.stringify(input.prompts || {}),
+        JSON.stringify(cleanedMetadata),
+        userId,
+        now,
+        now,
+      );
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizePresetDispatch(userId, transaction);
+    });
+  })();
 
   return getPreset(userId, id)!;
 }
@@ -307,30 +354,49 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   if (!existing) return null;
 
   const fields: string[] = [];
-  const values: any[] = [];
+  const values: Array<string | number | null> = [];
 
   // Orphan-GC: if prompt_order or metadata is being written, re-derive a cleaned
   // metadata.promptVariables so stale values (orphaned by a removed def) don't stick.
-  // When prompt_order changes alone, persist the cleaned metadata even if the
-  // caller didn't touch it — otherwise the orphans would live forever.
-  let writeMetadata: Record<string, any> | undefined;
+  let writeMetadata: Record<string, unknown> | undefined;
   if (input.metadata !== undefined) {
     const resolvedOrder = input.prompt_order !== undefined ? input.prompt_order : existing.prompt_order;
-    writeMetadata = (prunePromptVariableOrphans(resolvedOrder, input.metadata) as Record<string, any>) ?? input.metadata;
+    writeMetadata = prunePromptVariableOrphans(resolvedOrder, input.metadata);
   } else if (input.prompt_order !== undefined) {
     const cleaned = prunePromptVariableOrphans(input.prompt_order, existing.metadata as Record<string, unknown>);
-    if (cleaned && JSON.stringify(cleaned) !== JSON.stringify(existing.metadata)) {
-      writeMetadata = cleaned as Record<string, any>;
+    if (cleaned && stableJson(cleaned) !== stableJson(existing.metadata)) {
+      writeMetadata = cleaned;
     }
   }
 
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
-  if (input.engine !== undefined) { fields.push("engine = ?"); values.push(input.engine); }
-  if (input.parameters !== undefined) { fields.push("parameters = ?"); values.push(JSON.stringify(input.parameters)); }
-  if (input.prompt_order !== undefined) { fields.push("prompt_order = ?"); values.push(JSON.stringify(input.prompt_order)); }
-  if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
-  if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
+  if (input.name !== undefined && input.name !== existing.name) {
+    fields.push("name = ?");
+    values.push(input.name);
+  }
+  if (input.provider !== undefined && input.provider !== existing.provider) {
+    fields.push("provider = ?");
+    values.push(input.provider);
+  }
+  if (input.engine !== undefined && input.engine !== existing.engine) {
+    fields.push("engine = ?");
+    values.push(input.engine);
+  }
+  if (input.parameters !== undefined && stableJson(input.parameters) !== stableJson(existing.parameters)) {
+    fields.push("parameters = ?");
+    values.push(JSON.stringify(input.parameters));
+  }
+  if (input.prompt_order !== undefined && stableJson(input.prompt_order) !== stableJson(existing.prompt_order)) {
+    fields.push("prompt_order = ?");
+    values.push(JSON.stringify(input.prompt_order));
+  }
+  if (input.prompts !== undefined && stableJson(input.prompts) !== stableJson(existing.prompts)) {
+    fields.push("prompts = ?");
+    values.push(JSON.stringify(input.prompts));
+  }
+  if (writeMetadata !== undefined && stableJson(writeMetadata) !== stableJson(existing.metadata)) {
+    fields.push("metadata = ?");
+    values.push(JSON.stringify(writeMetadata));
+  }
 
   const expectedCacheRevision = input.expected_cache_revision;
   if (fields.length === 0) {
@@ -341,30 +407,35 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   }
 
   fields.push("updated_at = ?", "cache_revision = cache_revision + 1");
-  values.push(Math.floor(Date.now() / 1000));
+  values.push(Math.floor(Date.now() / 1000), id, userId);
 
   const where = ["id = ?", "user_id = ?"];
-  values.push(id, userId);
   if (expectedCacheRevision !== undefined) {
     where.push("cache_revision = ?");
     values.push(expectedCacheRevision);
   }
 
-  const changes = getDb()
-    .query(`UPDATE presets SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
-    .run(...values)
-    .changes;
-  if (changes === 0) {
-    // A conditional miss is either a deleted row (the normal not-found result)
-    // or a stale writer. Read the current revision only after the atomic update
-    // has failed so the distinction cannot race the mutation itself.
-    const current = getPreset(userId, id);
-    if (!current) return null;
-    if (expectedCacheRevision !== undefined) {
-      throw new PresetRevisionConflictError(id, expectedCacheRevision, current.cache_revision ?? 0);
+  const db = getDb();
+  let changes = 0;
+  let current: Preset | null = null;
+  db.transaction(() => {
+    changes = db
+      .query(`UPDATE presets SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
+      .run(...values)
+      .changes;
+    if (changes === 0) {
+      current = getPreset(userId, id);
+      if (!current) return;
+      if (expectedCacheRevision !== undefined) {
+        throw new PresetRevisionConflictError(id, expectedCacheRevision, current.cache_revision ?? 0);
+      }
+      return;
     }
-    return null;
-  }
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizePresetDispatch(userId, transaction);
+    });
+  })();
+  if (changes === 0) return current;
 
   const updated = getPreset(userId, id);
   if (!updated) return null;
@@ -375,46 +446,67 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
 export function deletePreset(userId: string, id: string): boolean {
   const db = getDb();
 
-  // Capture connection profiles that reference this preset. The FK on
-  // connection_profiles.preset_id (ON DELETE SET NULL) will clear the
-  // references when the preset row is removed, but we need the list up front
-  // so we can broadcast refreshed profiles to subscribers afterwards.
   const affectedConnectionIds = (
     db
       .query("SELECT id FROM connection_profiles WHERE user_id = ? AND preset_id = ?")
       .all(userId, id) as Array<{ id: string }>
-  ).map((r) => r.id);
+  ).map((row) => row.id);
 
-  // Cascade-delete any regex scripts that were imported from this preset so
-  // they don't linger as orphaned "preset regexes" in the user's list.
-  deleteRegexScriptsByPresetId(userId, id);
+  let deleted = false;
+  db.transaction(() => {
+    deleted = db
+      .query("DELETE FROM presets WHERE id = ? AND user_id = ?")
+      .run(id, userId)
+      .changes > 0;
+    if (!deleted) return;
 
-  const deleted = db.query("DELETE FROM presets WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+    deleteRegexScriptsByPresetId(userId, id);
+    db
+      .query(
+        `DELETE FROM settings
+         WHERE user_id = ?
+           AND (
+             (key = 'activeLoomPresetId' AND value = ?)
+             OR (
+               (
+                 key = 'presetProfileDefaults'
+                 OR key LIKE 'presetProfileDefaults:%'
+                 OR key LIKE 'presetProfile:character:%'
+                 OR key LIKE 'presetProfile:chat:%'
+                 OR key LIKE 'presetProfile:connection:%'
+               )
+               AND json_extract(value, '$.preset_id') = ?
+             )
+           )`,
+      )
+      .run(userId, JSON.stringify(id), id);
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizePresetDispatch(userId, transaction);
+    });
+  })();
   if (!deleted) return false;
 
-  // Clean up preset_profile bindings (setting-keyed, no FK) that referenced
-  // the now-deleted preset. Covers defaults, per-character, per-chat, and
-  // per-connection profile bindings.
-  for (const s of settingsSvc.getAllSettings(userId)) {
-    if (s.key !== "presetProfileDefaults"
-      && !s.key.startsWith("presetProfileDefaults:")
-      && !s.key.startsWith("presetProfile:character:")
-      && !s.key.startsWith("presetProfile:chat:")
-      && !s.key.startsWith("presetProfile:connection:")) continue;
-    if (s.value && typeof s.value === "object" && (s.value as any).preset_id === id) {
-      settingsSvc.deleteSetting(userId, s.key);
-    }
-  }
-
-  // Broadcast refreshed connection profiles so frontends drop stale preset_id
-  // references from their in-memory stores.
   for (const connId of affectedConnectionIds) {
     const row = db
       .query("SELECT * FROM connection_profiles WHERE id = ? AND user_id = ?")
-      .get(connId, userId) as any;
+      .get(connId, userId) as {
+        id: string;
+        name: string;
+        provider: string;
+        api_url: string | null;
+        model: string | null;
+        preset_id: string | null;
+        is_default: number;
+        has_api_key: number;
+        metadata: string;
+        created_at: number;
+        updated_at: number;
+      } | null;
     if (!row) continue;
     const profile: ConnectionProfile = {
       ...row,
+      api_url: row.api_url || "",
+      model: row.model || "",
       preset_id: row.preset_id || null,
       is_default: !!row.is_default,
       has_api_key: !!row.has_api_key,

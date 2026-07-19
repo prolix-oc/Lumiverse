@@ -85,15 +85,16 @@ When enabled, Lumiverse emits `SPINDLE_RUNTIME_STATS` events and backend log lin
 
 This is intended for benchmarking and rollout validation, not normal production operation.
 
-## Frontend Startup Expectations
+## Frontend startup and readiness
 
-Frontend extension loading is intentionally decoupled from backend runtime start.
+Frontend bundle loading remains decoupled from backend runtime start, so an extension's UI may finish loading later. The loader awaits any `setup(ctx)` promise before completing the frontend load; startup-message delivery is separately controlled by `ctx.ready()` and `ctx.deferReady()`. With manual readiness, `ready()` may flush queued messages before an asynchronous setup promise settles once handlers are safe; the load operation still awaits that promise.
 
-- enabling an extension updates extension state immediately
-- frontend bundle loading may complete slightly later
-- extension list refreshes do not block on all frontend modules finishing setup
+- `setup(ctx)` may return a cleanup function directly or return a `Promise` for `void` or a cleanup function. The loader awaits that promise before completing setup.
+- A setup that does not call `ctx.deferReady()` is auto-readied only after setup has settled successfully. This preserves legacy synchronous setup behavior; a synchronous throw or asynchronous rejection instead fails the load and runs teardown/cleanup.
+- Call `ctx.deferReady()` during setup when startup messages must remain queued. The extension must later call the idempotent `ctx.ready()` explicitly after its handlers and initial UI are safe to receive those messages.
+- The host uses a bounded 10-second readiness deadline. If `ctx.ready()` is not called in time, the readiness promise rejects and the frontend is unloaded; the queue is discarded rather than auto-flushed or auto-recovered.
 
-That improves perceived startup performance, but it means frontend-capable extensions should not assume their UI is fully mounted the instant the backend runtime becomes ready.
+Frontend-capable extensions should not assume their UI is mounted the instant the backend runtime becomes ready. If setup or readiness fails, the extension remains unloaded and does not receive startup traffic.
 
 ## Developer Guidance
 

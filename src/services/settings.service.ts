@@ -5,6 +5,13 @@ import {
   worldBookVectorDesiredStatusSql,
 } from "./world-book-vector-state";
 import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
+import {
+  DispatchStateError,
+  withDispatchStateTransactionInExistingTransaction,
+  stableDispatchJson,
+  type DispatchDescriptorResolutionInput,
+  type DispatchStateTransaction,
+} from "./dispatch-state.service";
 
 export interface Setting {
   key: string;
@@ -67,6 +74,72 @@ function serializeValueOrThrow(key: string, value: unknown): string {
   return json;
 }
 
+function settingValueChanged(
+  existingRaw: string | undefined,
+  value: unknown,
+  serialized: string,
+): boolean {
+  if (existingRaw === undefined) return true;
+  try {
+    return stableDispatchJson(JSON.parse(existingRaw)) !== stableDispatchJson(value);
+  } catch {
+    return existingRaw !== serialized;
+  }
+}
+
+export function isDispatchAffectingSettingKey(key: string): boolean {
+  return key === "activeLoomPresetId"
+    || key === "reasoningSettings"
+    || key === "presetProfileDefaults"
+    || key.startsWith("presetProfileDefaults:")
+    || key.startsWith("presetProfile:character:")
+    || key.startsWith("presetProfile:chat:")
+    || key.startsWith("presetProfile:connection:");
+}
+
+function dispatchInputForSetting(
+  key: string,
+  value: unknown,
+): DispatchDescriptorResolutionInput {
+  if (key === "activeLoomPresetId") {
+    return {
+      source: "main",
+      presetId: typeof value === "string" && value.trim() ? value : undefined,
+    };
+  }
+  if (key === "reasoningSettings") {
+    return { source: "main", reasoning: value ?? null };
+  }
+  return { source: "main", settings: { [key]: value ?? null } };
+}
+
+function finalizeDispatchMutation(
+  transaction: DispatchStateTransaction,
+  input: DispatchDescriptorResolutionInput,
+): void {
+  const before = transaction.read();
+  try {
+    transaction.resolve(input);
+  } catch (error) {
+    if (
+      error instanceof DispatchStateError
+      && (
+        error.code === "DISPATCH_CONNECTION_NOT_FOUND"
+        || error.code === "DISPATCH_CONNECTION_UNRESOLVED"
+        || error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+        || error.code === "DISPATCH_PRESET_NOT_FOUND"
+      )
+    ) {
+      transaction.mutate({ incrementGeneration: true });
+      return;
+    }
+    throw error;
+  }
+  if (transaction.read().revision === before.revision) {
+    transaction.mutate({ incrementGeneration: true });
+  }
+}
+
 export function getAllSettings(userId: string): Setting[] {
   const rows = getDb().query("SELECT key, value, updated_at FROM settings WHERE user_id = ?").all(userId) as any[];
   return rows.map((r) => ({ ...r, value: JSON.parse(r.value) }));
@@ -95,18 +168,32 @@ export function putSetting(userId: string, key: string, value: any): Setting {
   assertValidKey(key);
   const json = serializeValueOrThrow(key, value);
   const now = Math.floor(Date.now() / 1000);
-  const existingRow = key === WORLD_BOOK_VECTOR_SETTINGS_KEY
-    ? getDb().query("SELECT value FROM settings WHERE key = ? AND user_id = ?").get(key, userId) as { value: string } | null
-    : null;
+  const db = getDb();
+  const existingRow = db
+    .query("SELECT value FROM settings WHERE key = ? AND user_id = ?")
+    .get(key, userId) as { value: string } | null;
+  const changed = settingValueChanged(existingRow?.value, value, json);
+  const write = (): void => {
+    db
+      .query(
+        `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, json, userId, now);
+  };
 
-  getDb()
-    .query(
-      `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    )
-    .run(key, json, userId, now);
+  if (isDispatchAffectingSettingKey(key) && changed) {
+    db.transaction(() => {
+      write();
+      withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+        finalizeDispatchMutation(transaction, dispatchInputForSetting(key, value));
+      });
+    })();
+  } else {
+    write();
+  }
 
-  if (key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingRow?.value !== json) {
+  if (key === WORLD_BOOK_VECTOR_SETTINGS_KEY && changed) {
     markWorldBookVectorStatesStaleForSettingsChange(userId);
   }
 
@@ -141,30 +228,78 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const results: Setting[] = [];
-  const existingValues = prepared.some((entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY)
-    ? new Map(
-        (db
-          .query(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${prepared.map(() => "?").join(", ")})`)
-          .all(userId, ...prepared.map((entry) => entry.key)) as Array<{ key: string; value: string }>)
-          .map((row) => [row.key, row.value]),
-      )
-    : null;
+  const existingValues = new Map<string, string>();
+  if (prepared.length > 0) {
+    const rows = db
+      .query(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${prepared.map(() => "?").join(", ")})`)
+      .all(userId, ...prepared.map((entry) => entry.key)) as Array<{ key: string; value: string }>;
+    for (const row of rows) existingValues.set(row.key, row.value);
+  }
 
   const upsert = db.query(
     `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+     ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
-
-  const transaction = db.transaction(() => {
+  const write = (): void => {
     for (const { key, value, json } of prepared) {
       upsert.run(key, json, userId, now);
       results.push({ key, value, updated_at: now });
     }
-  });
-  transaction();
+  };
+
+  const changedDispatch = prepared.filter(
+    (entry) => isDispatchAffectingSettingKey(entry.key)
+      && settingValueChanged(existingValues.get(entry.key), entry.value, entry.json),
+  );
+  if (changedDispatch.length > 0) {
+    db.transaction(() => {
+      write();
+
+      const activeEntry = changedDispatch.find((entry) => entry.key === "activeLoomPresetId");
+      const reasoningEntry = changedDispatch.find((entry) => entry.key === "reasoningSettings");
+      let activeValue: unknown = activeEntry?.value;
+      let reasoningValue: unknown = reasoningEntry?.value;
+      if (activeEntry === undefined) {
+        const storedActive = existingValues.get("activeLoomPresetId");
+        if (storedActive !== undefined) {
+          try {
+            activeValue = JSON.parse(storedActive);
+          } catch {
+            activeValue = undefined;
+          }
+        }
+      }
+      if (reasoningEntry === undefined) {
+        const storedReasoning = existingValues.get("reasoningSettings");
+        if (storedReasoning !== undefined) {
+          try {
+            reasoningValue = JSON.parse(storedReasoning);
+          } catch {
+            reasoningValue = undefined;
+          }
+        }
+      }
+      const profileSettings = Object.fromEntries(
+        changedDispatch
+          .filter((entry) => entry.key !== "activeLoomPresetId" && entry.key !== "reasoningSettings")
+          .map((entry) => [entry.key, entry.value]),
+      );
+      withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+        finalizeDispatchMutation(transaction, {
+          source: "main",
+          presetId: typeof activeValue === "string" && activeValue.trim() ? activeValue : undefined,
+          reasoning: reasoningValue,
+          settings: Object.keys(profileSettings).length > 0 ? profileSettings : undefined,
+        });
+      });
+    })();
+  } else {
+    db.transaction(write)();
+  }
 
   const worldBookVectorSettingsChanged = prepared.some(
-    (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingValues?.get(entry.key) !== entry.json,
+    (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY
+      && settingValueChanged(existingValues.get(entry.key), entry.value, entry.json),
   );
   if (worldBookVectorSettingsChanged) {
     markWorldBookVectorStatesStaleForSettingsChange(userId);
@@ -179,6 +314,21 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
 }
 
 export function deleteSetting(userId: string, key: string): boolean {
-  const result = getDb().query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId);
-  return result.changes > 0;
+  const db = getDb();
+  let deleted = false;
+  if (isDispatchAffectingSettingKey(key)) {
+    db.transaction(() => {
+      deleted = db
+        .query("DELETE FROM settings WHERE key = ? AND user_id = ?")
+        .run(key, userId)
+        .changes > 0;
+      if (!deleted) return;
+      withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+        finalizeDispatchMutation(transaction, dispatchInputForSetting(key, undefined));
+      });
+    })();
+    return deleted;
+  }
+  deleted = db.query("DELETE FROM settings WHERE key = ? AND user_id = ?").run(key, userId).changes > 0;
+  return deleted;
 }

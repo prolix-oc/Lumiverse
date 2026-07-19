@@ -2,43 +2,57 @@ import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getProvider } from "../llm/registry";
+import { resolveEffectiveApiUrl } from "../llm/resolve-api-url";
 import { env } from "../env";
 import * as settingsSvc from "./settings.service";
 import * as secretsSvc from "./secrets.service";
+import type { PreparedSecret } from "./secrets.service";
 import type {
   ConnectionProfile, CreateConnectionProfileInput, UpdateConnectionProfileInput,
 } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import { describeProviderError } from "../utils/provider-errors";
+import {
+  DispatchStateError,
+  withDispatchStateTransactionInExistingTransaction,
+  type DispatchStateTransaction,
+} from "./dispatch-state.service";
 
 const DEFAULT_CONNECTION_TEST_TIMEOUT_MS = 15_000;
-const ZAI_GENERAL_API_URL = "https://api.z.ai/api/paas/v4";
-const ZAI_CODING_PLAN_API_URL = "https://api.z.ai/api/coding/paas/v4";
 export const MODEL_ROULETTE_PROVIDER = "model_roulette";
+
+function finalizeConnectionDispatch(
+  transaction: DispatchStateTransaction,
+  connectionId?: string,
+): void {
+  const before = transaction.read();
+  try {
+    transaction.resolve(connectionId
+      ? { source: "slot", connectionId }
+      : { source: "main" });
+  } catch (error) {
+    if (
+      error instanceof DispatchStateError
+      && (
+        error.code === "DISPATCH_CONNECTION_NOT_FOUND"
+        || error.code === "DISPATCH_CONNECTION_UNRESOLVED"
+        || error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+        || error.code === "DISPATCH_PRESET_NOT_FOUND"
+      )
+    ) {
+      transaction.mutate({ incrementGeneration: true });
+      return;
+    }
+    throw error;
+  }
+  if (transaction.read().revision === before.revision) {
+    transaction.mutate({ incrementGeneration: true });
+  }
+}
 
 export interface ConnectionRouletteConfig {
   connection_ids: string[];
-}
-
-function resolveZaiApiUrl(rawUrl: string, useCodingPlanEndpoint: boolean): string {
-  const trimmed = rawUrl.trim();
-  if (!trimmed) return useCodingPlanEndpoint ? ZAI_CODING_PLAN_API_URL : ZAI_GENERAL_API_URL;
-
-  try {
-    const url = new URL(trimmed);
-    const pathname = url.pathname.replace(/\/+$/, "") || "/";
-    if (pathname === "/v1" || pathname === "/api/paas/v4" || pathname === "/api/coding/paas/v4") {
-      url.pathname = useCodingPlanEndpoint ? "/api/coding/paas/v4" : "/api/paas/v4";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    }
-  } catch {
-    // Preserve custom raw URLs we can't safely normalize.
-  }
-
-  return trimmed;
 }
 
 export interface ConnectionTestResult {
@@ -132,36 +146,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 /** Secret key for a connection's API key. */
 export function connectionSecretKey(id: string): string {
   return `connection_${id}_api_key`;
-}
-
-/** Resolve effective API URL, accounting for provider-specific metadata flags. */
-export function resolveEffectiveApiUrl(profile: { provider: string; api_url?: string | null; metadata?: Record<string, any> | null }): string {
-  const url = (profile.api_url || "").trim();
-  if (profile.provider === "nanogpt" && profile.metadata?.use_subscription_api) {
-    if (!url) return "https://nano-gpt.com/api/subscription/v1";
-    return url.replace("/api/v1", "/api/subscription/v1");
-  }
-  if (profile.provider === "zai") {
-    return resolveZaiApiUrl(url, profile.metadata?.use_coding_plan_endpoint === true);
-  }
-  if (profile.provider === "google_vertex") {
-    const region = profile.metadata?.vertex_region;
-    // Per Google's @google/genai SDK: `global` routes through the
-    // un-prefixed host, regional routes through `{region}-aiplatform`.
-    if (!region || region === "global") return "https://aiplatform.googleapis.com";
-    return `https://${region}-aiplatform.googleapis.com`;
-  }
-  if (profile.provider === "bedrock") {
-    // An explicit api_url wins so power users can pin a GovCloud or VPC
-    // PrivateLink host; otherwise derive from region + endpoint toggle.
-    if (url) return url;
-    const region = (profile.metadata?.region || "us-east-1").trim() || "us-east-1";
-    // mantle (default, recommended) vs runtime (cross-region inference profiles).
-    return profile.metadata?.bedrock_endpoint === "runtime"
-      ? `https://bedrock-runtime.${region}.amazonaws.com/v1`
-      : `https://bedrock-mantle.${region}.api.aws/v1`;
-  }
-  return url;
 }
 
 export function resolveNanoGptSubscriptionUsageUrl(profile: { api_url?: string | null }): string {
@@ -313,30 +297,42 @@ export function resolveConnection(userId: string, id?: string): ConnectionProfil
 export async function createConnection(userId: string, input: CreateConnectionProfileInput): Promise<ConnectionProfile> {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
+  const preparedApiKey = input.api_key
+    ? await secretsSvc.prepareSecret(input.api_key)
+    : null;
+  const db = getDb();
 
-  if (input.is_default) {
-    getDb().query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-  }
+  db.transaction(() => {
+    if (input.is_default) {
+      db.query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ?")
+        .run(userId);
+    }
 
-  let hasApiKey = 0;
-  if (input.api_key) {
-    await secretsSvc.putSecret(userId, connectionSecretKey(id), input.api_key);
-    hasApiKey = 1;
-  }
-
-  getDb()
-    .query(
-      "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      id, userId, input.name, input.provider,
-      input.api_url || "", input.model || "",
-      input.preset_id || null,
-      input.is_default ? 1 : 0,
-      hasApiKey,
-      JSON.stringify(input.metadata || {}),
-      now, now
-    );
+    db
+      .query(
+        "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        id,
+        userId,
+        input.name,
+        input.provider,
+        input.api_url || "",
+        input.model || "",
+        input.preset_id || null,
+        input.is_default ? 1 : 0,
+        preparedApiKey ? 1 : 0,
+        JSON.stringify(input.metadata || {}),
+        now,
+        now,
+      );
+    if (preparedApiKey) {
+      secretsSvc.putPreparedSecret(userId, connectionSecretKey(id), preparedApiKey);
+    }
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction, id);
+    });
+  })();
 
   return getConnection(userId, id)!;
 }
@@ -345,39 +341,106 @@ export async function updateConnection(userId: string, id: string, input: Update
   const existing = getConnection(userId, id);
   if (!existing) return null;
 
-  if (input.is_default) {
-    getDb().query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ?").run(userId);
-  }
+  const fields: string[] = [];
+  const values: Array<string | number | null> = [];
 
-  // Handle api_key: non-empty stores new key, empty string deletes key
-  if (input.api_key !== undefined) {
-    if (input.api_key) {
-      await setConnectionApiKey(userId, id, input.api_key);
-    } else {
-      await clearConnectionApiKey(userId, id);
+  if (input.name !== undefined && input.name !== existing.name) {
+    fields.push("name = ?");
+    values.push(input.name);
+  }
+  if (input.provider !== undefined && input.provider !== existing.provider) {
+    fields.push("provider = ?");
+    values.push(input.provider);
+  }
+  if (input.api_url !== undefined && input.api_url !== existing.api_url) {
+    fields.push("api_url = ?");
+    values.push(input.api_url);
+  }
+  if (input.model !== undefined && input.model !== existing.model) {
+    fields.push("model = ?");
+    values.push(input.model);
+  }
+  if (
+    input.preset_id !== undefined
+    && (input.preset_id || null) !== (existing.preset_id || null)
+  ) {
+    fields.push("preset_id = ?");
+    values.push(input.preset_id || null);
+  }
+  if (
+    input.is_default !== undefined
+    && (input.is_default ? 1 : 0) !== (existing.is_default ? 1 : 0)
+  ) {
+    fields.push("is_default = ?");
+    values.push(input.is_default ? 1 : 0);
+  }
+  if (input.metadata !== undefined) {
+    const serialized = JSON.stringify(input.metadata);
+    if (serialized !== JSON.stringify(existing.metadata)) {
+      fields.push("metadata = ?");
+      values.push(serialized);
     }
   }
 
-  const fields: string[] = [];
-  const values: any[] = [];
+  let preparedApiKey: PreparedSecret | null = null;
+  let secretChanged = false;
+  if (input.api_key !== undefined) {
+    let currentApiKey: string | null = null;
+    try {
+      currentApiKey = await secretsSvc.getSecret(userId, connectionSecretKey(id));
+    } catch {
+      currentApiKey = null;
+    }
+    if (input.api_key) {
+      secretChanged = currentApiKey !== input.api_key || !existing.has_api_key;
+      if (secretChanged) {
+        preparedApiKey = await secretsSvc.prepareSecret(input.api_key);
+      }
+    } else {
+      secretChanged = existing.has_api_key || currentApiKey !== null;
+    }
+    if (secretChanged) {
+      fields.push("has_api_key = ?");
+      values.push(input.api_key ? 1 : 0);
+    }
+  }
 
-  if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
-  if (input.provider !== undefined) { fields.push("provider = ?"); values.push(input.provider); }
-  if (input.api_url !== undefined) { fields.push("api_url = ?"); values.push(input.api_url); }
-  if (input.model !== undefined) { fields.push("model = ?"); values.push(input.model); }
-  if (input.preset_id !== undefined) { fields.push("preset_id = ?"); values.push(input.preset_id || null); }
-  if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default ? 1 : 0); }
-  if (input.metadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(input.metadata)); }
-
-  if (fields.length === 0 && input.api_key === undefined) return existing;
+  if (fields.length === 0) return existing;
 
   fields.push("updated_at = ?");
-  values.push(Math.floor(Date.now() / 1000));
-  values.push(id);
-  values.push(userId);
+  values.push(Math.floor(Date.now() / 1000), id, userId);
 
-  getDb().query(`UPDATE connection_profiles SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getConnection(userId, id)!;
+  const db = getDb();
+  let changed = false;
+  db.transaction(() => {
+    if (input.is_default === true && !existing.is_default) {
+      changed = db
+        .query("UPDATE connection_profiles SET is_default = 0 WHERE is_default = 1 AND user_id = ? AND id <> ?")
+        .run(userId, id)
+        .changes > 0;
+    }
+
+    changed = db
+      .query(`UPDATE connection_profiles SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`)
+      .run(...values)
+      .changes > 0 || changed;
+
+    if (!changed) return;
+    if (secretChanged) {
+      if (preparedApiKey) {
+        secretsSvc.putPreparedSecret(userId, connectionSecretKey(id), preparedApiKey);
+      } else {
+        secretsSvc.deleteSecret(userId, connectionSecretKey(id));
+      }
+    }
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction, id);
+    });
+  })();
+
+  if (!changed) return existing;
+  const updated = getConnection(userId, id);
+  if (!updated) return null;
   eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id, profile: updated }, userId);
   return updated;
 }
@@ -388,37 +451,48 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
 
   const newId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
-
-  // Strip reasoningBindings from metadata copy to avoid bound state conflicts
   const cleanMetadata = { ...existing.metadata };
   delete cleanMetadata.reasoningBindings;
 
-  let hasApiKey = 0;
+  let preparedApiKey: PreparedSecret | null = null;
   if (existing.has_api_key) {
     try {
       const apiKey = await secretsSvc.getSecret(userId, connectionSecretKey(id));
       if (apiKey) {
-        await secretsSvc.putSecret(userId, connectionSecretKey(newId), apiKey);
-        hasApiKey = 1;
+        preparedApiKey = await secretsSvc.prepareSecret(apiKey);
       }
     } catch {
-      // If key read fails, duplicate without the key
+      // If key read or preparation fails, duplicate without the key.
     }
   }
 
-  getDb()
-    .query(
-      "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .run(
-      newId, userId, `${existing.name} (Copy)`, existing.provider,
-      existing.api_url, existing.model,
-      existing.preset_id || null,
-      0, // never default
-      hasApiKey,
-      JSON.stringify(cleanMetadata),
-      now, now
-    );
+  const db = getDb();
+  db.transaction(() => {
+    db
+      .query(
+        "INSERT INTO connection_profiles (id, user_id, name, provider, api_url, model, preset_id, is_default, has_api_key, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        newId,
+        userId,
+        `${existing.name} (Copy)`,
+        existing.provider,
+        existing.api_url,
+        existing.model,
+        existing.preset_id || null,
+        0,
+        preparedApiKey ? 1 : 0,
+        JSON.stringify(cleanMetadata),
+        now,
+        now,
+      );
+    if (preparedApiKey) {
+      secretsSvc.putPreparedSecret(userId, connectionSecretKey(newId), preparedApiKey);
+    }
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction, newId);
+    });
+  })();
 
   const profile = getConnection(userId, newId)!;
   eventBus.emit(EventType.CONNECTION_PROFILE_LOADED, { id: newId, profile }, userId);
@@ -426,25 +500,70 @@ export async function duplicateConnection(userId: string, id: string): Promise<C
 }
 
 export async function deleteConnection(userId: string, id: string): Promise<boolean> {
-  const deleted = getDb().query("DELETE FROM connection_profiles WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
-  if (deleted) {
-    // Cleanup the connection's secret
+  const db = getDb();
+  let deleted = false;
+  db.transaction(() => {
+    deleted = db
+      .query("DELETE FROM connection_profiles WHERE id = ? AND user_id = ?")
+      .run(id, userId)
+      .changes > 0;
+    if (!deleted) return;
     secretsSvc.deleteSecret(userId, connectionSecretKey(id));
-    settingsSvc.deleteSetting(userId, `presetProfile:connection:${id}`);
-  }
+    db
+      .query("DELETE FROM settings WHERE key = ? AND user_id = ?")
+      .run(`presetProfile:connection:${id}`, userId);
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction);
+    });
+  })();
   return deleted;
 }
 
 export async function setConnectionApiKey(userId: string, id: string, key: string): Promise<void> {
-  await secretsSvc.putSecret(userId, connectionSecretKey(id), key);
-  getDb().query("UPDATE connection_profiles SET has_api_key = 1, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(Math.floor(Date.now() / 1000), id, userId);
+  const existing = getConnection(userId, id);
+  if (!existing) return;
+  let current: string | null = null;
+  try {
+    current = await secretsSvc.getSecret(userId, connectionSecretKey(id));
+  } catch {
+    current = null;
+  }
+  if (current === key && existing.has_api_key) return;
+
+  const prepared = await secretsSvc.prepareSecret(key);
+  const db = getDb();
+  db.transaction(() => {
+    secretsSvc.putPreparedSecret(userId, connectionSecretKey(id), prepared);
+    db
+      .query("UPDATE connection_profiles SET has_api_key = 1, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(Math.floor(Date.now() / 1000), id, userId);
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction, id);
+    });
+  })();
 }
 
 export async function clearConnectionApiKey(userId: string, id: string): Promise<void> {
-  secretsSvc.deleteSecret(userId, connectionSecretKey(id));
-  getDb().query("UPDATE connection_profiles SET has_api_key = 0, updated_at = ? WHERE id = ? AND user_id = ?")
-    .run(Math.floor(Date.now() / 1000), id, userId);
+  const existing = getConnection(userId, id);
+  if (!existing) return;
+  let current: string | null = null;
+  try {
+    current = await secretsSvc.getSecret(userId, connectionSecretKey(id));
+  } catch {
+    current = null;
+  }
+  if (!existing.has_api_key && current === null) return;
+
+  const db = getDb();
+  db.transaction(() => {
+    secretsSvc.deleteSecret(userId, connectionSecretKey(id));
+    db
+      .query("UPDATE connection_profiles SET has_api_key = 0, updated_at = ? WHERE id = ? AND user_id = ?")
+      .run(Math.floor(Date.now() / 1000), id, userId);
+    withDispatchStateTransactionInExistingTransaction(userId, (transaction) => {
+      finalizeConnectionDispatch(transaction, id);
+    });
+  })();
 }
 
 export async function testConnection(

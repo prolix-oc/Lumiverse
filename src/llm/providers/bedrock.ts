@@ -13,7 +13,7 @@ import { COMMON_PARAMS, type ProviderCapabilities } from "../param-schema";
  *
  * The effective host is derived per-connection from `metadata.region` and the
  * `metadata.bedrock_endpoint` toggle by `resolveEffectiveApiUrl()` in
- * connections.service.ts:
+ * `resolve-api-url.ts`:
  *   - mantle  (default, AWS-recommended, broadest catalog):
  *       https://bedrock-mantle.{region}.api.aws/v1
  *   - runtime (supports cross-region inference profiles, e.g. us.anthropic.*):

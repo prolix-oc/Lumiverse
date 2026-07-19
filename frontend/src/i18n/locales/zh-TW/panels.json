@@ -1922,6 +1922,10 @@
     "managedByOperator": "由運營方管理",
     "enabled": "已啟用",
     "disabled": "已禁用",
+    "permissionNames": {
+      "final_response": "最終回應"
+    },
+    "frontendLoadFailed": "無法載入擴充功能「{{name}}」的前端。",
     "permissionStatus": "{{name}}（{{status}}）",
     "update": "更新",
     "updateHint": "從遠程拉取並重建",

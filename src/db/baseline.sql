@@ -1087,3 +1087,21 @@ CREATE TRIGGER world_book_entries_fts_update_after AFTER UPDATE ON world_book_en
   INSERT INTO world_book_entries_fts(rowid, comment, content, key, keysecondary)
     VALUES (new.rowid, new.comment, new.content, new.key, new.keysecondary);
 END;
+
+CREATE TABLE dispatch_state (
+  user_id TEXT PRIMARY KEY NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  base_token TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 0),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  descriptor_digest TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  CHECK (length(base_token) >= 32),
+  CHECK (descriptor_digest = '' OR (length(descriptor_digest) = 64 AND descriptor_digest NOT GLOB '*[^0-9a-f]*'))
+);
+
+CREATE UNIQUE INDEX idx_dispatch_state_base_token
+  ON dispatch_state(base_token);
+
+CREATE INDEX idx_dispatch_state_updated
+  ON dispatch_state(updated_at DESC);

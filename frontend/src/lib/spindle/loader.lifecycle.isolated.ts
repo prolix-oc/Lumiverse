@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
-import type { SpindleManifest } from 'lumiverse-spindle-types'
+import type { SpindleManifest, SpindleHostDescriptorV1 } from 'lumiverse-spindle-types'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createSpindleHostDescriptor, digestSpindleHostDescriptor } from './host-compatibility'
 
 type FakeRoot = {
   parentElement: object | null
@@ -169,7 +170,13 @@ const wsClientMock = {
   },
 }
 function dispatchWs(event: string, payload: unknown): void {
-  for (const handler of wsHandlers.get(`ws:${event}`) ?? []) handler(payload)
+  const routedPayload = payload !== null
+    && typeof payload === 'object'
+    && 'extensionId' in payload
+    && typeof payload.extensionId === 'string'
+    ? { ...payload, extensionId: canonicalInstallationId(payload.extensionId) }
+    : payload
+  for (const handler of wsHandlers.get(`ws:${event}`) ?? []) handler(routedPayload)
 }
 function dispatchWindow(event: string, detail: unknown): void {
   windowMock.dispatchEvent(new windowMock.CustomEvent(event, { detail }))
@@ -207,9 +214,41 @@ const presetAccessMock = {
   },
 }
 
+const SUPPORTED_LUMIVERSE_VERSION = '1.0.8'
+const CANONICAL_INSTALLATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const installationIds = new Map<string, string>()
+function canonicalInstallationId(label: string): string {
+  if (CANONICAL_INSTALLATION_ID.test(label)) return label
+  const cached = installationIds.get(label)
+  if (cached) return cached
+  const words = [0, 1, 2, 3].map((seed) => {
+    let hash = (2166136261 ^ (seed * 0x9e3779b9)) >>> 0
+    for (let index = 0; index < label.length; index += 1) {
+      hash = Math.imul(hash ^ label.charCodeAt(index), 16777619) >>> 0
+    }
+    return hash.toString(16).padStart(8, '0')
+  })
+  const raw = words.join('')
+  const id = `${raw.slice(0, 8)}-${raw.slice(8, 12)}-4${raw.slice(13, 16)}-8${raw.slice(17, 20)}-${raw.slice(20)}`
+  installationIds.set(label, id)
+  return id
+}
+function lifecycleHostDescriptor(extensionId: string): SpindleHostDescriptorV1 {
+  return createSpindleHostDescriptor(canonicalInstallationId(extensionId), SUPPORTED_LUMIVERSE_VERSION)
+}
+lifecycleGlobals.__APP_VERSION__ = SUPPORTED_LUMIVERSE_VERSION
+
 mock.module('@/store', () => ({ useStore: useStoreMock }))
 mock.module('@/ws/client', () => ({ wsClient: wsClientMock }))
-mock.module('@/api/spindle', () => ({ spindleApi: { getPermissions: () => permissionPromise } }))
+mock.module('@/api/spindle', () => ({
+  spindleApi: {
+    getPermissions: () => permissionPromise,
+    compatibilityHandshake: async (extensionId: string, nonce: string) => {
+      const descriptor = lifecycleHostDescriptor(extensionId)
+      return { nonce, descriptor, digest: await digestSpindleHostDescriptor(descriptor) }
+    },
+  },
+}))
 mock.module('@/api/characters', () => ({ charactersApi: { get: async () => null } }))
 mock.module('@/api/chats', () => ({ messagesApi: { update: async () => ({ id: 'message' }) } }))
 mock.module('./dom-helper', () => ({ createDOMHelper: () => ({ cleanup() {} }) }))
@@ -304,7 +343,25 @@ globalThis.fetch = (async () => new Response(lifecycleModuleSource)) as unknown 
 
 
 
-const { getLoadedExtensions, loadFrontendExtension, unloadFrontendExtension, routeBackendMessage, routeFrontendProcessEvent } = await import('./loader')
+const {
+  getLoadedExtensions,
+  loadFrontendExtension: loadRawFrontendExtension,
+  unloadFrontendExtension: unloadRawFrontendExtension,
+  routeBackendMessage: routeBackendMessageRaw,
+  routeFrontendProcessEvent: routeFrontendProcessEventRaw,
+} = await import('./loader')
+async function loadFrontendExtension(extensionId: string, extensionManifest: SpindleManifest, force = false): Promise<void> {
+  return loadRawFrontendExtension(canonicalInstallationId(extensionId), extensionManifest, force)
+}
+async function unloadFrontendExtension(extensionId: string, options: { invalidateGeneration?: boolean } = {}): Promise<void> {
+  return unloadRawFrontendExtension(canonicalInstallationId(extensionId), options)
+}
+function routeBackendMessage(extensionId: string, payload: unknown): void {
+  routeBackendMessageRaw(canonicalInstallationId(extensionId), payload)
+}
+function routeFrontendProcessEvent(extensionId: string, payload: Parameters<typeof routeFrontendProcessEventRaw>[1]): void {
+  routeFrontendProcessEventRaw(canonicalInstallationId(extensionId), payload)
+}
 mock.restore()
 trackWindowHandlers = true
 
@@ -381,6 +438,7 @@ function assertNoTrackedWindowHandlers(): void {
 }
 
 function resetHarness(): void {
+  lifecycleGlobals.__APP_VERSION__ = SUPPORTED_LUMIVERSE_VERSION
   permissionPromise = Promise.resolve({ granted: [] })
   lifecycleGlobals.__lifecycleSetupResult = undefined
   lifecycleGlobals.__lifecycleModuleSource = lifecycleModuleSource
@@ -419,15 +477,24 @@ async function flushLifecycleTasks(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
 }
+async function waitForLifecycle(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 1_000
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await Bun.sleep(1)
+  }
+  throw new Error(`Timed out waiting for ${label}`)
+}
 function assertFailedLoadCleanup(extensionId: string, expectResources: boolean): void {
-  expect(getLoadedExtensions().has(extensionId)).toBe(false)
+  const installationId = canonicalInstallationId(extensionId)
+  expect(getLoadedExtensions().has(installationId)).toBe(false)
   expect([...wsHandlers.values()].every((handlers) => handlers.size === 0)).toBe(true)
   expect([...windowHandlers.values()].every((handlers) => handlers.size === 0)).toBe(true)
   expect([...presetEditorSubscribers]).toEqual([])
   if (expectResources) {
     expect(removedRoots.length).toBeGreaterThan(0)
     expect(removedRoots.every((root) => root.removed)).toBe(true)
-    expect(placementDestroyCalls).toContain(extensionId)
+    expect(placementDestroyCalls).toContain(installationId)
   } else {
     expect(removedRoots).toEqual([])
   }
@@ -500,6 +567,7 @@ afterAll(async () => {
 describe('loader lifecycle orchestration', () => {
   test('force-stop cleans up when onStop returns without completing', async () => {
     const extensionId = 'stalled_stop'
+    const installationId = canonicalInstallationId(extensionId)
     let stopCalls = 0
     let cleanupCalls = 0
     let messageCalls = 0
@@ -528,10 +596,10 @@ describe('loader lifecycle orchestration', () => {
       payload: { source: 'test' },
     })
     await flushLifecycleTasks()
-    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has('stalled-process')).toBe(true)
+    expect(getLoadedExtensions().get(installationId)?.activeProcesses.has('stalled-process')).toBe(true)
     expect(frontendProcessEvents).toContainEqual({
       type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-      extensionId,
+      extensionId: installationId,
       processId: 'stalled-process',
       event: 'ready',
     })
@@ -567,7 +635,7 @@ describe('loader lifecycle orchestration', () => {
       force: true,
     })
     await flushLifecycleTasks()
-    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has('stalled-process')).toBe(false)
+    expect(getLoadedExtensions().get(installationId)?.activeProcesses.has('stalled-process')).toBe(false)
     expect(cleanupCalls).toBe(1)
     expect(frontendProcessEvents.filter((event) =>
       typeof event === 'object' &&
@@ -579,7 +647,7 @@ describe('loader lifecycle orchestration', () => {
     )).toEqual([
       {
         type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-        extensionId,
+        extensionId: installationId,
         processId: 'stalled-process',
         event: 'complete',
       },
@@ -621,8 +689,10 @@ describe('loader lifecycle orchestration', () => {
       resolvePermissions = resolve
     })
     const loading = loadFrontendExtension('revoke_before_get', manifest)
-    await Promise.resolve()
-    await Promise.resolve()
+    await waitForLifecycle(
+      () => (wsHandlers.get('ws:SPINDLE_PERMISSION_CHANGED')?.size ?? 0) > 0,
+      'the permission-change listener',
+    )
     dispatchWs('SPINDLE_PERMISSION_CHANGED', {
       extensionId: 'revoke_before_get',
       allGranted: [],
@@ -643,7 +713,7 @@ describe('loader lifecycle orchestration', () => {
 
   test('starts a fresh generation after unload invalidates a pending load', async () => {
     const originalFetch = globalThis.fetch
-    let resolveFirstFetch!: (response: Response) => void
+    let resolveFirstFetch: ((response: Response) => void) | undefined
     let fetchCount = 0
     globalThis.fetch = (async () => {
       fetchCount += 1
@@ -661,17 +731,19 @@ describe('loader lifecycle orchestration', () => {
       })
       await Promise.resolve()
       await Promise.resolve()
+      await waitForLifecycle(() => resolveFirstFetch !== undefined, 'the first frontend bundle fetch')
       await unloadFrontendExtension('reload_after_invalidation')
 
       const second = loadFrontendExtension('reload_after_invalidation', {
         ...manifest,
         identifier: 'reload_after_invalidation',
       })
+      if (!resolveFirstFetch) throw new Error('First frontend bundle fetch did not start')
       resolveFirstFetch(new Response(lifecycleModuleSource))
       await Promise.all([first, second])
 
       expect(fetchCount).toBe(2)
-      expect(getLoadedExtensions().has('reload_after_invalidation')).toBe(true)
+      expect(getLoadedExtensions().has(canonicalInstallationId('reload_after_invalidation'))).toBe(true)
       await unloadFrontendExtension('reload_after_invalidation')
     } finally {
       globalThis.fetch = originalFetch
@@ -689,7 +761,7 @@ describe('loader lifecycle orchestration', () => {
       extensionId: 'request_regrant',
       allGranted: [],
     })
-    expect(uiEventDestroyPermissionCalls).toEqual([{ extensionId: 'request_regrant', permission: 'presets' }])
+    expect(uiEventDestroyPermissionCalls).toEqual([{ extensionId: canonicalInstallationId('request_regrant'), permission: 'presets' }])
     expect(() => retained.getState()).toThrow('PRESET_EDITOR_DISPOSED')
 
     const request = context.permissions.request(['presets'])
@@ -704,7 +776,7 @@ describe('loader lifecycle orchestration', () => {
     await unloadFrontendExtension('request_regrant')
     expect(windowHandlers.get('spindle:permission-resolved')?.size ?? 0).toBe(0)
     expect(uiEventDestroyAllCalls.length).toBeGreaterThan(0)
-    expect(uiEventDestroyAllCalls.every((extensionId) => extensionId === 'request_regrant')).toBe(true)
+    expect(uiEventDestroyAllCalls.every((extensionId) => extensionId === canonicalInstallationId('request_regrant'))).toBe(true)
   })
 
   test('revoking presets disposes the retained subscription and makes its helper unusable', async () => {
@@ -793,12 +865,16 @@ describe('loader lifecycle orchestration', () => {
     })
     lifecycleGlobals.__lifecycleMount = true
     const loading = loadFrontendExtension('late_setup_failure', { ...manifest, identifier: 'late_setup_failure' })
-    await loading
+    await waitForLifecycle(
+      () => getLoadedExtensions().has(canonicalInstallationId('late_setup_failure')),
+      'late setup registration',
+    )
     rejectSetup(new Error('late setup failure'))
+    await expect(loading).rejects.toThrow('late setup failure')
     await flushLifecycleTasks()
 
-    expect(getLoadedExtensions().has('late_setup_failure')).toBe(false)
-    expect(placementDestroyCalls).toContain('late_setup_failure')
+    expect(getLoadedExtensions().has(canonicalInstallationId('late_setup_failure'))).toBe(false)
+    expect(placementDestroyCalls).toContain(canonicalInstallationId('late_setup_failure'))
     expect(removedRoots.some((root) => root.removed)).toBe(true)
     expect(wsHandlers.get('ws:SPINDLE_PERMISSION_CHANGED')?.size ?? 0).toBe(0)
     expect(windowHandlers.get('spindle:permission-resolved')?.size ?? 0).toBe(0)
@@ -810,9 +886,14 @@ describe('loader lifecycle orchestration', () => {
     lifecycleGlobals.__lifecycleSetupResult = new Promise<void>((resolve) => {
       resolveSetup = resolve
     })
-    await loadFrontendExtension('same_teardown', { ...manifest, identifier: 'same_teardown' })
+    const loading = loadFrontendExtension('same_teardown', { ...manifest, identifier: 'same_teardown' })
+    await waitForLifecycle(
+      () => getLoadedExtensions().has(canonicalInstallationId('same_teardown')),
+      'async setup registration',
+    )
     await unloadFrontendExtension('same_teardown')
     resolveSetup()
+    await loading
     await flushLifecycleTasks()
 
     expect(lifecycleGlobals.__lifecycleTeardownCalls).toBe(1)
@@ -864,12 +945,12 @@ describe('loader lifecycle orchestration', () => {
     await expect(second).resolves.toEqual({ categories: [] })
     await unloadFrontendExtension('catalog_reload')
   })
-  test('HTTP load failure resolves without leaving lifecycle residue', async () => {
+  test('HTTP load failure rejects without leaving lifecycle residue', async () => {
     const extensionId = 'http_failure'
     const previousFetch = globalThis.fetch
     globalThis.fetch = (async () => new Response('unavailable', { status: 503 })) as unknown as typeof fetch
     try {
-      await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+      await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).rejects.toThrow('503')
       assertFailedLoadCleanup(extensionId, false)
 
       const eventCount = frontendProcessEvents.length
@@ -890,7 +971,7 @@ describe('loader lifecycle orchestration', () => {
     }
   })
 
-  test('missing and invalid setup exports resolve without leaving lifecycle residue', async () => {
+  test('missing and invalid setup exports reject without leaving lifecycle residue', async () => {
     const cases = [
       ['missing_setup', 'export const value = 1;'],
       ['invalid_setup', 'export const setup = 42;'],
@@ -900,7 +981,7 @@ describe('loader lifecycle orchestration', () => {
       for (const [suffix, source] of cases) {
         const extensionId = `setup_export_${suffix}`
         lifecycleGlobals.__lifecycleModuleSource = source
-        await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+        await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).rejects.toThrow('must export a setup() function')
         assertFailedLoadCleanup(extensionId, false)
 
         const eventCount = frontendProcessEvents.length
@@ -918,7 +999,7 @@ describe('loader lifecycle orchestration', () => {
     }
   })
 
-  test('synchronous setup throw resolves after cleaning every owned resource', async () => {
+  test('synchronous setup throw rejects after cleaning every owned resource', async () => {
     const extensionId = 'sync_setup_failure'
     const processId = 'sync-failure-process'
     const processCleanupCalls = { value: 0 }
@@ -926,14 +1007,14 @@ describe('loader lifecycle orchestration', () => {
     installFailureResources(extensionId, processId, processCleanupCalls)
     lifecycleGlobals.__lifecycleThrowSetup = true
 
-    await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).resolves.toBeUndefined()
+    await expect(loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })).rejects.toThrow('sync setup failure')
     await flushLifecycleTasks()
 
     assertFailedLoadCleanup(extensionId, true)
     expect(processCleanupCalls.value).toBe(1)
     expect(frontendProcessEvents).toContainEqual({
       type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-      extensionId,
+      extensionId: canonicalInstallationId(extensionId),
       processId,
       event: 'frontend_unloaded',
     })
@@ -953,7 +1034,7 @@ describe('loader lifecycle orchestration', () => {
     expect(frontendProcessEvents).toHaveLength(eventCount)
   })
 
-  test('asynchronous setup rejection unloads a resolved generation and every owned resource', async () => {
+  test('asynchronous setup rejection rejects and cleans every owned resource', async () => {
     const extensionId = 'async_setup_failure'
     const processId = 'async-failure-process'
     const processCleanupCalls = { value: 0 }
@@ -964,21 +1045,24 @@ describe('loader lifecycle orchestration', () => {
     })
     installFailureResources(extensionId, processId, processCleanupCalls)
 
-    await loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
-    await flushLifecycleTasks()
-    expect(getLoadedExtensions().has(extensionId)).toBe(true)
-    expect(getLoadedExtensions().get(extensionId)?.activeProcesses.has(processId)).toBe(true)
+    const loading = loadFrontendExtension(extensionId, { ...manifest, identifier: extensionId })
+    await waitForLifecycle(
+      () => getLoadedExtensions().has(canonicalInstallationId(extensionId)),
+      'async setup failure registration',
+    )
+    expect(getLoadedExtensions().get(canonicalInstallationId(extensionId))?.activeProcesses.has(processId)).toBe(true)
     expect([...presetEditorSubscribers]).not.toEqual([])
     expect(windowHandlers.get('spindle:permission-resolved')?.size ?? 0).toBe(1)
 
     rejectSetup(new Error('async setup failure'))
+    await expect(loading).rejects.toThrow('async setup failure')
     await flushLifecycleTasks()
 
     assertFailedLoadCleanup(extensionId, true)
     expect(processCleanupCalls.value).toBe(1)
     expect(frontendProcessEvents).toContainEqual({
       type: 'SPINDLE_FRONTEND_PROCESS_EVENT',
-      extensionId,
+      extensionId: canonicalInstallationId(extensionId),
       processId,
       event: 'frontend_unloaded',
     })

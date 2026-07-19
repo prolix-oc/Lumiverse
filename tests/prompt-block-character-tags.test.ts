@@ -44,6 +44,11 @@ describe("prompt block character tag triggers", () => {
     closeDatabase();
     initDatabase(":memory:");
     await applyBaseline();
+    getDb().run('INSERT INTO "user" (id, name, email) VALUES (?, ?, ?)', [
+      USER_ID,
+      "Prompt Tag Trigger User",
+      "prompt-tag-trigger-user@example.test",
+    ]);
   });
 
   test("activates on loose character tag matches and skips unmatched blocks", async () => {

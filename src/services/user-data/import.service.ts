@@ -18,7 +18,7 @@ import {
   type DecryptionTicket,
   type EncryptedSecretEntry,
 } from "./secret-ticket.service";
-import { putSecret } from "../secrets.service";
+import { prepareSecret, putPreparedSecret, putSecret } from "../secrets.service";
 import {
   closeSync,
   constants as fsConstants,
@@ -53,6 +53,12 @@ import {
   SECRET_SETTING_KEY_PATTERNS,
 } from "./table-registry";
 import { sanitizeEntry, safeJoin, SanitizeError, type SanitizedEntry } from "./sanitize";
+import { isDispatchAffectingSettingKey } from "../settings.service";
+import {
+  DispatchStateError,
+  withDispatchStateTransactionInExistingTransaction,
+  type DispatchStateTransaction,
+} from "../dispatch-state.service";
 
 // ---------------------------------------------------------------------------
 // Tunables / safety caps
@@ -1301,6 +1307,34 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
 // Phase 2: apply database rows in topological order
 // ---------------------------------------------------------------------------
 
+function finalizeImportedDispatch(transaction: DispatchStateTransaction): void {
+  const before = transaction.read();
+  try {
+    transaction.resolve({ source: "main" });
+  } catch (error) {
+    if (
+      error instanceof DispatchStateError
+      && (
+        error.code === "DISPATCH_CONNECTION_NOT_FOUND"
+        || error.code === "DISPATCH_CONNECTION_UNRESOLVED"
+        || error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+        || error.code === "DISPATCH_PRESET_NOT_FOUND"
+      )
+    ) {
+      transaction.mutate({ incrementGeneration: true });
+      return;
+    }
+    throw error;
+  }
+  if (transaction.read().revision === before.revision) {
+    transaction.mutate({ incrementGeneration: true });
+  }
+}
+
+function isConnectionSecretKey(key: string): boolean {
+  return /^connection_.+_api_key$/.test(key);
+}
+
 interface ApplyContext {
   userId: string;
   signal: AbortSignal;
@@ -1497,10 +1531,18 @@ async function applySettingsTable(
 
     const importedValueText = typeof raw.value === "string" ? raw.value : JSON.stringify(raw.value);
     const updatedAt = Math.floor(Date.now() / 1000);
-
     const existing = selectStmt.get(key, ctx.userId) as { value: string } | null;
     if (!existing) {
-      insertStmt.run(key, importedValueText, ctx.userId, updatedAt);
+      if (isDispatchAffectingSettingKey(key)) {
+        db.transaction(() => {
+          insertStmt.run(key, importedValueText, ctx.userId, updatedAt);
+          withDispatchStateTransactionInExistingTransaction(ctx.userId, (transaction) => {
+            finalizeImportedDispatch(transaction);
+          });
+        })();
+      } else {
+        insertStmt.run(key, importedValueText, ctx.userId, updatedAt);
+      }
       imported++;
     } else {
       // Both rows present — attempt a deep merge.
@@ -1522,7 +1564,16 @@ async function applySettingsTable(
       if (mergedText === existing.value) {
         skipped++;
       } else {
-        updateStmt.run(mergedText, updatedAt, key, ctx.userId);
+        if (isDispatchAffectingSettingKey(key)) {
+          db.transaction(() => {
+            updateStmt.run(mergedText, updatedAt, key, ctx.userId);
+            withDispatchStateTransactionInExistingTransaction(ctx.userId, (transaction) => {
+              finalizeImportedDispatch(transaction);
+            });
+          })();
+        } else {
+          updateStmt.run(mergedText, updatedAt, key, ctx.userId);
+        }
         merged++;
       }
     }
@@ -1593,7 +1644,9 @@ async function applyTable(
 
   const commitBatch = () => {
     if (batch.length === 0) return;
+    const dispatchTable = table === "presets" || table === "connection_profiles";
     const txn = db.transaction((rows: Record<string, any>[]) => {
+      let dispatchChanged = false;
       for (const row of rows) {
         const values = columns.map((c) => {
           const v = row[c];
@@ -1602,8 +1655,17 @@ async function applyTable(
           return v;
         });
         const res = insert.run(...values);
-        if (res.changes > 0) imported++;
-        else skipped++;
+        if (res.changes > 0) {
+          imported++;
+          dispatchChanged ||= dispatchTable;
+        } else {
+          skipped++;
+        }
+      }
+      if (dispatchChanged) {
+        withDispatchStateTransactionInExistingTransaction(ctx.userId, (transaction) => {
+          finalizeImportedDispatch(transaction);
+        });
       }
     });
     txn(batch);
@@ -1956,28 +2018,44 @@ async function applySecrets(
   for await (const raw of readNdjson(stagingPath, ctx.ndjsonLineBytes)) {
     if (ctx.signal.aborted) throw ctx.signal.reason ?? new Error("import cancelled");
     const entry = raw as Partial<EncryptedSecretEntry>;
+    const key = entry.key;
+    const iv = entry.iv;
+    const tag = entry.tag;
+    const ciphertext = entry.ciphertext;
     if (
-      typeof entry.key !== "string" ||
-      typeof entry.iv !== "string" ||
-      typeof entry.tag !== "string" ||
-      typeof entry.ciphertext !== "string"
+      typeof key !== "string" ||
+      typeof iv !== "string" ||
+      typeof tag !== "string" ||
+      typeof ciphertext !== "string"
     ) {
       skipped++;
       continue;
     }
+    const encryptedEntry: EncryptedSecretEntry = { key, iv, tag, ciphertext };
     let plaintext: string;
     try {
-      plaintext = await decryptSecret(smk, entry as EncryptedSecretEntry);
+      plaintext = await decryptSecret(smk, encryptedEntry);
     } catch (err) {
-      console.warn(`[user-data import] secret decrypt failed for ${entry.key}:`, err);
+      console.warn(`[user-data import] secret decrypt failed for ${key}:`, err);
       skipped++;
       continue;
     }
     try {
-      await putSecret(ctx.userId, entry.key, plaintext);
+      if (isConnectionSecretKey(key)) {
+        const prepared = await prepareSecret(plaintext);
+        const db = getDb();
+        db.transaction(() => {
+          putPreparedSecret(ctx.userId, key, prepared);
+          withDispatchStateTransactionInExistingTransaction(ctx.userId, (transaction) => {
+            finalizeImportedDispatch(transaction);
+          });
+        })();
+      } else {
+        await putSecret(ctx.userId, key, plaintext);
+      }
       restored++;
     } catch (err) {
-      console.warn(`[user-data import] secret re-encrypt failed for ${entry.key}:`, err);
+      console.warn(`[user-data import] secret re-encrypt failed for ${key}:`, err);
       skipped++;
     }
     // Zero the plaintext local — best-effort; JS engines may keep copies.

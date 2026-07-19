@@ -153,3 +153,28 @@ spindle.log.info('Structured Prefill loaded!')
 3. If found, removes the prefill message and returns an `InterceptorResultDTO` with a `response_format` parameter that forces the LLM output to begin with the prefill text
 4. The `generation_parameters` permission allows the `parameters` field to be merged into the outgoing request
 5. Works with any OpenAI-compatible provider that supports `response_format: { type: "json_schema" }`
+
+## Authoritative final response (optional)
+
+An extension may return a validated assistant response instead of using the Main provider only with the separately granted `final_response` permission. The result must also preserve one native fallback message:
+
+```ts
+spindle.registerInterceptor(async (messages) => {
+  const fallbackMessageIndex = messages.length
+  const fallback = {
+    role: 'system' as const,
+    content: 'Continue with the native provider request if the override is not eligible.',
+  }
+
+  return {
+    messages: [...messages, fallback],
+    breakdown: [{ messageIndex: fallbackMessageIndex, name: 'Native provider fallback' }],
+    finalResponse: {
+      content: 'An extension-authored response.',
+      fallbackMessageIndex,
+    },
+  }
+})
+```
+
+The host accepts this only for eligible non-dry `normal` and `continue` Main generations without tools, and only while the live permission and callback provenance remain valid. Other routes continue through the ordinary provider path. See [Interceptors → Authoritative final response](../backend-api/interceptors.md#authoritative-final-response) for the DTO bounds, fallback and prefill rules, permission rechecks, native persistence, and event behavior.

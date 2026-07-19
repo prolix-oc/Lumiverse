@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
+import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { presetsRoutes } from "./presets.routes";
 
-function initPresetsTestDb(): void {
+async function initPresetsTestDb(): Promise<void> {
   closeDatabase();
   initDatabase(":memory:");
   getDb().run(`CREATE TABLE presets (
@@ -20,6 +21,32 @@ function initPresetsTestDb(): void {
     engine TEXT NOT NULL DEFAULT 'classic',
     cache_revision INTEGER NOT NULL DEFAULT 0
   )`);
+  getDb().run(`CREATE TABLE "user" (id TEXT PRIMARY KEY NOT NULL)`);
+  getDb().run(`INSERT INTO "user" (id) VALUES ('u1'), ('u2')`);
+  getDb().run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (key, user_id)
+  )`);
+  getDb().run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    preset_id TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    has_api_key INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`);
+  getDb().run(
+    await Bun.file(join(import.meta.dir, "..", "db", "migrations", "094_dispatch_state.sql")).text(),
+  );
 }
 
 function insertPreset(id: string, userId: string, cacheRevision = 0): void {

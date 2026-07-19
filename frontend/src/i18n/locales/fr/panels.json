@@ -1922,6 +1922,10 @@
     "managedByOperator": "Géré par l'opérateur",
     "enabled": "Activé",
     "disabled": "Désactivé",
+    "permissionNames": {
+      "final_response": "Réponse finale"
+    },
+    "frontendLoadFailed": "Impossible de charger le frontend de l’extension « {{name}} ».",
     "permissionStatus": "{{name}} ({{status}})",
     "update": "Mise à jour",
     "updateHint": "Extraire et reconstruire à distance",
