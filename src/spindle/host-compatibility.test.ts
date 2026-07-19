@@ -138,18 +138,31 @@ describe("Spindle host compatibility", () => {
   });
 
   test("enforces missing, equal, older, newer, and prerelease manifest minimums", async () => {
+    const backendPackage = JSON.parse(
+      await Bun.file(new URL("../../package.json", import.meta.url)).text(),
+    ) as { version: string };
+    const hostVersion = parseCanonicalSemver(backendPackage.version, "backend package version");
+    const hostCore = `${hostVersion.major}.${hostVersion.minor}.${hostVersion.patch}`;
+    const olderCore = BigInt(hostVersion.major) > 0n
+      ? `${BigInt(hostVersion.major) - 1n}.0.0`
+      : BigInt(hostVersion.minor) > 0n
+        ? `0.${BigInt(hostVersion.minor) - 1n}.0`
+        : `0.0.${BigInt(hostVersion.patch) - 1n}`;
+    const equalBuild = `${backendPackage.version.split("+", 1)[0]}+build.1`;
+    const newerCore = `${BigInt(hostVersion.major) + 1n}.0.0`;
+
     await expect(assertManifestCompatibility(manifest())).resolves.toBeUndefined();
-    await expect(assertManifestCompatibility(manifest("1.0.8"))).resolves.toBeUndefined();
-    await expect(assertManifestCompatibility(manifest("1.0.7"))).resolves.toBeUndefined();
-    await expect(assertManifestCompatibility(manifest("1.0.8-0"))).resolves.toBeUndefined();
-    await expect(assertManifestCompatibility(manifest("1.0.8+build.1"))).resolves.toBeUndefined();
-    await expect(assertManifestCompatibility(manifest("1.0.9-0"))).rejects.toMatchObject({
+    await expect(assertManifestCompatibility(manifest(backendPackage.version))).resolves.toBeUndefined();
+    await expect(assertManifestCompatibility(manifest(olderCore))).resolves.toBeUndefined();
+    await expect(assertManifestCompatibility(manifest(`${olderCore}-0`))).resolves.toBeUndefined();
+    await expect(assertManifestCompatibility(manifest(equalBuild))).resolves.toBeUndefined();
+    await expect(assertManifestCompatibility(manifest(`${newerCore}-0`))).rejects.toMatchObject({
       code: SPINDLE_COMPATIBILITY_ERROR_CODE,
     });
-    await expect(assertManifestCompatibility(manifest("1.0.9"))).rejects.toBeInstanceOf(
+    await expect(assertManifestCompatibility(manifest(newerCore))).rejects.toBeInstanceOf(
       SpindleCompatibilityError,
     );
-    await expect(assertManifestCompatibility(manifest("v1.0.8"))).rejects.toBeInstanceOf(
+    await expect(assertManifestCompatibility(manifest(`v${hostCore}`))).rejects.toBeInstanceOf(
       SpindleCompatibilityError,
     );
   });
