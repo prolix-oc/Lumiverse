@@ -226,10 +226,15 @@ export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOve
  * never sacrificed to a small one, and genuinely bimodal bands are flagged
  * instead of silently failing.
  */
-export function deriveHeroTextVars(palette: ImagePalette): Record<string, string> {
+export function deriveHeroTextVars(
+  palette: ImagePalette,
+  /** A live DOM sample of the rendered title can replace the palette's static
+   * name zone. Meta content keeps its stable lower-hero band. */
+  options: { nameBand?: TextZoneBand } = {},
+): Record<string, string> {
   const { dominant } = palette
 
-  const nameBand = palette.textZone?.name ?? fallbackBand(palette)
+  const nameBand = options.nameBand ?? palette.textZone?.name ?? fallbackBand(palette)
   const metaBand = palette.textZone?.meta ?? fallbackBand(palette)
 
   const nameDark = deriveBandColors(nameBand, palette.ui.dark.surface, 'dark')
@@ -246,6 +251,16 @@ export function deriveHeroTextVars(palette: ImagePalette): Record<string, string
     ? 'rgba(0, 0, 0, 0.38)'
     : 'rgba(255, 255, 255, 0.40)'
 
+  // A title can genuinely straddle bright and dark artwork. In that case no
+  // foreground alone is honest; give only the title a compact, polarity-aware
+  // backing. At 55% this is strong enough to make either extreme safe while
+  // still leaving the art visible around the label.
+  const nameScrim = (text: RGB, bimodal: boolean) => !bimodal
+    ? 'transparent'
+    : luminance(text) > 128
+      ? 'rgba(0, 0, 0, 0.55)'
+      : 'rgba(255, 255, 255, 0.55)'
+
   // Prefer the engine's Vibrant swatch for the hero accent: it's the most
   // intentional, saturated color in the image (hair, eyes, costume detail).
   // Fall back to the raw dominant so cached/older palettes still work.
@@ -260,13 +275,15 @@ export function deriveHeroTextVars(palette: ImagePalette): Record<string, string
     // Name band (topmost text, over the least-faded image).
     '--hero-contrast-name-dark': rgbToCss(nameDark.text),
     '--hero-contrast-name-light': rgbToCss(nameLight.text),
+    '--hero-name-scrim-dark': nameScrim(nameDark.text, nameDark.bimodal),
+    '--hero-name-scrim-light': nameScrim(nameLight.text, nameLight.bimodal),
     // Meta band (edit button, creator, tags — over the fade zone).
     '--hero-contrast-dark': rgbToCss(metaDark.text),
     '--hero-contrast-light': rgbToCss(metaLight.text),
     '--hero-contrast-muted-dark': rgbToCss(metaDark.muted),
     '--hero-contrast-muted-light': rgbToCss(metaLight.muted),
-    // '1' when the band is bimodal and no single color clears 4.5 everywhere —
-    // CSS may opt into a chip backing behind the text as the honest fix.
+    // '1' when the band is bimodal and no single color clears 4.5 everywhere.
+    // The profile uses the name-specific result above to show a compact scrim.
     '--hero-text-bimodal-dark': nameDark.bimodal || metaDark.bimodal ? '1' : '0',
     '--hero-text-bimodal-light': nameLight.bimodal || metaLight.bimodal ? '1' : '0',
     '--hero-text-scrim-dark': darkScrim,

@@ -15,7 +15,7 @@ import {
   Pencil, Settings2, ChevronRight,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { extractPalette, type ImagePalette } from '@/lib/colorExtraction'
+import { extractPalette, extractRenderedHeroTitleBand, type ImagePalette } from '@/lib/colorExtraction'
 import { deriveHeroTextVars } from '@/lib/characterTheme'
 import type { Character } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
@@ -114,7 +114,8 @@ function SingleCharacterProfile({
   const [heroTextVars, setHeroTextVars] = useState<CSSProperties | undefined>(undefined)
   const [heroImageLoadedUrl, setHeroImageLoadedUrl] = useState<string | null>(null)
   const [activeView, setActiveView] = useState<ProfileViewMode>('profile')
-  const heroMetaRef = useRef<HTMLDivElement>(null)
+  const heroImageRef = useRef<HTMLDivElement>(null)
+  const heroNameRef = useRef<HTMLHeadingElement>(null)
 
   const handleEditCharacter = useCallback(() => {
     if (!charId) return
@@ -169,44 +170,86 @@ function SingleCharacterProfile({
   }, [hasCreatorNotes, activeView])
 
   useEffect(() => {
-    if (!heroSampleUrl || heroImageLoadedUrl !== avatarUrl) {
+    if (activeView !== 'profile' || !heroSampleUrl || heroImageLoadedUrl !== avatarUrl) {
       setHeroTextVars(undefined)
       return
     }
 
     let cancelled = false
+    let animationFrame: number | null = null
+    let resizeObserver: ResizeObserver | null = null
+    let scheduleRenderedTitleSample: (() => void) | null = null
 
     const sampleHeroImage = async () => {
-      // The hero text sits directly on the hero image, not on the page
-      // background. The palette's bottom/center region already models that
-      // backing, so we don't blend in the DOM surface (which would pull the
-      // result toward the page background and away from the image's actual
-      // colors).
+      // Keep the palette-derived zone as an immediate, cacheable fallback.
+      // Once the image and title have been laid out, we replace only the name
+      // colors with a sample of the actual rendered title footprint.
       const varsCacheKey = heroSampleUrl
-      const cachedVars = heroTextVarsCache.get(varsCacheKey)
-      if (cachedVars) {
-        setHeroTextVars(cachedVars)
-        return
-      }
 
       try {
         const palette = await getCachedPalette(heroSampleUrl)
         if (cancelled) return
 
-        const vars = rememberCacheEntry(
+        const baseVars = heroTextVarsCache.get(varsCacheKey) ?? rememberCacheEntry(
           heroTextVarsCache,
           varsCacheKey,
           deriveHeroTextVars(palette) as CSSProperties,
         )
-        setHeroTextVars(vars)
+        setHeroTextVars(baseVars)
+
+        const applyRenderedTitleSample = () => {
+          animationFrame = null
+          if (cancelled) return
+
+          const image = heroImageRef.current?.querySelector('img')
+          const title = heroNameRef.current
+          if (!image || !title) return
+
+          const nameBand = extractRenderedHeroTitleBand(image, title)
+          if (!nameBand || nameBand.clusters.length === 0) return
+
+          const renderedVars = deriveHeroTextVars(palette, { nameBand })
+          setHeroTextVars({
+            ...baseVars,
+            '--hero-contrast-name-dark': renderedVars['--hero-contrast-name-dark'],
+            '--hero-contrast-name-light': renderedVars['--hero-contrast-name-light'],
+            '--hero-name-scrim-dark': renderedVars['--hero-name-scrim-dark'],
+            '--hero-name-scrim-light': renderedVars['--hero-name-scrim-light'],
+          } as CSSProperties)
+        }
+
+        scheduleRenderedTitleSample = () => {
+          if (cancelled) return
+          if (animationFrame !== null) cancelAnimationFrame(animationFrame)
+          animationFrame = requestAnimationFrame(applyRenderedTitleSample)
+        }
+
+        // A second frame lets the image paint and lets font/layout metrics
+        // settle before the DOM Range is read.
+        requestAnimationFrame(scheduleRenderedTitleSample)
+
+        if (typeof ResizeObserver !== 'undefined' && heroImageRef.current && heroNameRef.current) {
+          resizeObserver = new ResizeObserver(scheduleRenderedTitleSample)
+          resizeObserver.observe(heroImageRef.current)
+          resizeObserver.observe(heroNameRef.current)
+        }
+        window.addEventListener('resize', scheduleRenderedTitleSample)
+        void document.fonts?.ready.then(scheduleRenderedTitleSample)
       } catch {
         if (!cancelled) setHeroTextVars(undefined)
       }
     }
 
     sampleHeroImage()
-    return () => { cancelled = true }
-  }, [avatarUrl, heroSampleUrl, heroImageLoadedUrl])
+    return () => {
+      cancelled = true
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame)
+      resizeObserver?.disconnect()
+      if (scheduleRenderedTitleSample) {
+        window.removeEventListener('resize', scheduleRenderedTitleSample)
+      }
+    }
+  }, [avatarUrl, heroSampleUrl, heroImageLoadedUrl, activeView, character?.name])
 
   if (!charId) {
     return (
@@ -289,7 +332,7 @@ function SingleCharacterProfile({
             >
               {/* Hero avatar */}
               <div className={styles.hero}>
-                <div className={styles.heroImage}>
+                <div className={styles.heroImage} ref={heroImageRef}>
                   <LazyImage
                     src={avatarUrl}
                     alt={character.name}
@@ -302,8 +345,8 @@ function SingleCharacterProfile({
                     }
                   />
                 </div>
-                <div className={styles.heroMeta} style={heroTextVars} ref={heroMetaRef}>
-                  <h2 className={styles.name}>{character.name}</h2>
+                <div className={styles.heroMeta} style={heroTextVars}>
+                  <h2 className={styles.name} ref={heroNameRef}>{character.name}</h2>
                   <button type="button" className={styles.editBtn} onClick={handleEditCharacter}>
                     <Pencil size={12} />
                     <span>{t('characterProfile.editCharacter')}</span>

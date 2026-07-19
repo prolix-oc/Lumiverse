@@ -158,6 +158,7 @@
   --hero-contrast-shifted: var(--lumiverse-text);
   --hero-contrast-muted-shifted: var(--lumiverse-text-muted);
   --hero-contrast-name-shifted: var(--lumiverse-text);
+  --hero-name-scrim: transparent;
   --hero-text-scrim: rgba(0, 0, 0, 0.28);
   --hero-ambient: var(--hero-ambient-dark, none);
 }
@@ -166,6 +167,7 @@
   --hero-contrast-shifted: var(--hero-contrast-dark, var(--lumiverse-text));
   --hero-contrast-muted-shifted: var(--hero-contrast-muted-dark, var(--lumiverse-text-muted));
   --hero-contrast-name-shifted: var(--hero-contrast-name-dark, var(--hero-contrast-shifted));
+  --hero-name-scrim: var(--hero-name-scrim-dark, transparent);
   --hero-text-scrim: var(--hero-text-scrim-dark, rgba(0, 0, 0, 0.28));
 }
 
@@ -173,6 +175,7 @@
   --hero-contrast-shifted: var(--hero-contrast-light, var(--lumiverse-text));
   --hero-contrast-muted-shifted: var(--hero-contrast-muted-light, var(--lumiverse-text-muted));
   --hero-contrast-name-shifted: var(--hero-contrast-name-light, var(--hero-contrast-shifted));
+  --hero-name-scrim: var(--hero-name-scrim-light, transparent);
   --hero-text-scrim: var(--hero-text-scrim-light, rgba(255, 255, 255, 0.35));
   --hero-ambient: var(--hero-ambient-light, none);
 }
@@ -191,12 +194,24 @@
 
 .name {
   margin: 0;
+  position: relative;
+  isolation: isolate;
   font-size: calc(22px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-align: center;
   /* The name sits highest in the hero overlay, over the least-faded image —
    * it gets its own band-specific contrast color. */
   color: var(--hero-contrast-name-shifted);
+}
+
+.name::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -2px -8px;
+  border-radius: 6px;
+  background: var(--hero-name-scrim);
+  pointer-events: none;
 }
 
 .creator {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { deriveHeroTextVars } from './characterTheme'
-import { contrastRatio, relativeLuminance } from './colorExtraction'
+import { contrastRatio, extractTextZoneBandFromData, heroMaskAlpha, relativeLuminance } from './colorExtraction'
 import type { ImagePalette, RGB, TextZoneBand, TextZoneCluster } from './colorExtraction'
 
 function rgb(r: number, g: number, b: number): RGB {
@@ -79,6 +79,22 @@ function makePalette(overrides?: Partial<ImagePalette>): ImagePalette {
 }
 
 describe('deriveHeroTextVars', () => {
+  test('maps a cropped title sample back to the hero mask position', () => {
+    const data = new Uint8ClampedArray(2 * 2 * 4)
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = 64
+      data[index + 1] = 72
+      data[index + 2] = 88
+      data[index + 3] = 255
+    }
+
+    const band = extractTextZoneBandFromData(data, 2, 2, (sampleY) => 0.70 + sampleY * 0.01)
+    expect(band.clusters).toHaveLength(1)
+    expect(band.clusters[0].meanY).toBeGreaterThan(0.70)
+    expect(band.clusters[0].meanY).toBeLessThan(0.72)
+    expect(band.clusters[0].alpha).toBe(heroMaskAlpha(band.clusters[0].meanY))
+  })
+
   test('prefers the Vibrant swatch for the hero dominant accent', () => {
     const palette = makePalette({
       dominant: rgb(80, 80, 80),
@@ -198,6 +214,33 @@ describe('deriveHeroTextVars', () => {
     expect(vars['--hero-text-bimodal-dark']).toBe('0')
   })
 
+  test('a rendered title band overrides the broad static name band', () => {
+    const paleSurroundingArt = rgb(250, 244, 246)
+    const darkClothingUnderTitle = rgb(56, 50, 70)
+    const palette = makePalette({
+      textZone: {
+        // This mirrors Cissia: the old broad lower-hero zone is mostly pale,
+        // while the narrow title footprint lands over darker costume detail.
+        name: band(cluster(paleSurroundingArt, 1, 0.52)),
+        meta: band(cluster(paleSurroundingArt, 1, 0.1)),
+      },
+    })
+
+    const staticVars = deriveHeroTextVars(palette)
+    const renderedVars = deriveHeroTextVars(palette, {
+      nameBand: band(cluster(darkClothingUnderTitle, 1, 0.62)),
+    })
+
+    const staticName = parseRgbVar(staticVars['--hero-contrast-name-dark'])
+    const renderedName = parseRgbVar(renderedVars['--hero-contrast-name-dark'])
+    expect(relativeLuminance(staticName.r, staticName.g, staticName.b)).toBeLessThan(0.2)
+    expect(relativeLuminance(renderedName.r, renderedName.g, renderedName.b)).toBeGreaterThan(0.35)
+    expect(renderedVars['--hero-name-scrim-dark']).toBe('transparent')
+    // Only the name gets the live override; the lower metadata still uses its
+    // stable palette band.
+    expect(renderedVars['--hero-contrast-dark']).toBe(staticVars['--hero-contrast-dark'])
+  })
+
   // A band split evenly between near-black and near-white admits no single
   // winning color — the engine must say so instead of silently failing.
   test('evenly split dark/light band sets the bimodal flag', () => {
@@ -211,6 +254,8 @@ describe('deriveHeroTextVars', () => {
     const vars = deriveHeroTextVars(palette)
     expect(vars['--hero-text-bimodal-dark']).toBe('1')
     expect(vars['--hero-text-bimodal-light']).toBe('1')
+    expect(vars['--hero-name-scrim-dark']).not.toBe('transparent')
+    expect(vars['--hero-name-scrim-light']).not.toBe('transparent')
   })
 
   test('empty bands fall back to the page surface as the backing', () => {

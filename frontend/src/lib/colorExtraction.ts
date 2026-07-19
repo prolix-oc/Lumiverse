@@ -1269,6 +1269,9 @@ const TEXT_ZONE_META_Y1 = 1.0
 const TEXT_ZONE_LAB_STEP = 10
 const TEXT_ZONE_MIN_WEIGHT = 0.05
 const TEXT_ZONE_MAX_CLUSTERS = 8
+const RENDERED_TITLE_PADDING_X = 8
+const RENDERED_TITLE_PADDING_Y = 4
+const RENDERED_TITLE_MAX_SAMPLE_DIMENSION = 192
 
 /**
  * Opacity of `.heroImage`'s CSS mask at a given fraction of image height.
@@ -1286,10 +1289,16 @@ function extractTextZoneBand(
   width: number,
   height: number,
   y0Frac: number,
-  y1Frac: number
+  y1Frac: number,
+  /** Maps a row in this sample back to its rendered position in the full hero.
+   * The static palette sampler uses the identity mapping; the live title
+   * sampler supplies the object-fit-correct mapping. */
+  toHeroY: (sampleY: number) => number = (sampleY) => sampleY / height,
+  x0Frac = TEXT_ZONE_X0,
+  x1Frac = TEXT_ZONE_X1,
 ): TextZoneBand {
-  const x0 = Math.max(0, Math.floor(TEXT_ZONE_X0 * width))
-  const x1 = Math.min(width, Math.ceil(TEXT_ZONE_X1 * width))
+  const x0 = Math.max(0, Math.floor(x0Frac * width))
+  const x1 = Math.min(width, Math.ceil(x1Frac * width))
   const y0 = Math.max(0, Math.floor(y0Frac * height))
   const y1 = Math.min(height, Math.ceil(y1Frac * height))
 
@@ -1372,7 +1381,7 @@ function extractTextZoneBand(
 
   return {
     clusters: significant.map((b) => {
-      const meanY = (b.y / b.weight + 0.5) / height
+      const meanY = clamp(toHeroY(b.y / b.weight + 0.5), 0, 1)
       return {
         color: {
           r: Math.round(b.r / b.weight),
@@ -1388,6 +1397,21 @@ function extractTextZoneBand(
 }
 
 /**
+ * Extract one text-zone band from a supplied pixel buffer. This is the shared
+ * primitive behind the static palette zones and the live, title-footprint
+ * sampler below. `toHeroY` is useful when the buffer is a crop of the rendered
+ * image rather than the whole hero.
+ */
+export function extractTextZoneBandFromData(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  toHeroY?: (sampleY: number) => number,
+): TextZoneBand {
+  return extractTextZoneBand(data, width, height, 0, 1, toHeroY, 0, 1)
+}
+
+/**
  * Sample the hero text footprint from a raw RGBA buffer into cluster
  * statistics for the name and meta bands. Pure — works on any RGBA buffer
  * (canvas `getImageData` in the browser, sharp raw output in tooling).
@@ -1400,6 +1424,140 @@ export function extractTextZoneFromData(
   return {
     name: extractTextZoneBand(data, width, height, TEXT_ZONE_NAME_Y0, TEXT_ZONE_NAME_Y1),
     meta: extractTextZoneBand(data, width, height, TEXT_ZONE_NAME_Y1, TEXT_ZONE_META_Y1),
+  }
+}
+
+interface RectLike {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+/**
+ * Return the union of the title's line boxes. A flex item's border box can be
+ * wider than the glyphs it contains, especially after a long name wraps, so a
+ * DOM Range gives us a much closer approximation of the pixels beneath the
+ * text itself.
+ */
+function textContentRect(element: HTMLElement): RectLike {
+  const fallback = element.getBoundingClientRect()
+  if (!element.firstChild || typeof document === 'undefined') return fallback
+
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0)
+  if (rects.length === 0) return fallback
+
+  const left = Math.min(...rects.map((rect) => rect.left))
+  const top = Math.min(...rects.map((rect) => rect.top))
+  const right = Math.max(...rects.map((rect) => rect.right))
+  const bottom = Math.max(...rects.map((rect) => rect.bottom))
+  return { left, top, right, bottom, width: right - left, height: bottom - top }
+}
+
+function objectPositionFraction(value: string): { x: number; y: number } {
+  const tokens = value.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  let x = 0.5
+  let y = 0.5
+
+  const fraction = (token: string): number | null => {
+    if (token.endsWith('%')) {
+      const percentage = Number.parseFloat(token)
+      return Number.isFinite(percentage) ? clamp(percentage / 100, 0, 1) : null
+    }
+    return null
+  }
+
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]
+    if (token === 'left') x = 0
+    else if (token === 'right') x = 1
+    else if (token === 'top') y = 0
+    else if (token === 'bottom') y = 1
+    else if (token !== 'center') {
+      const value = fraction(token)
+      if (value !== null) {
+        // Computed object-position is normally `x y`; a single percentage is
+        // the x position and leaves y at its default center.
+        if (index === 0) x = value
+        else y = value
+      }
+    }
+  }
+
+  return { x, y }
+}
+
+/**
+ * Sample the pixels directly under a rendered hero title.
+ *
+ * Palette extraction cannot know the final title width, wrapping, UI scale, or
+ * the small crop introduced by `object-fit: cover`. This browser-only helper
+ * reads the laid-out DOM geometry, maps the title's glyph bounds back through
+ * that crop, and returns a mask-aware text zone. Callers should retain their
+ * static palette band as a fallback because a cross-origin image may not be
+ * readable from a canvas.
+ */
+export function extractRenderedHeroTitleBand(
+  image: HTMLImageElement,
+  title: HTMLElement,
+): TextZoneBand | null {
+  if (typeof document === 'undefined' || image.naturalWidth <= 0 || image.naturalHeight <= 0) return null
+
+  const imageRect = image.getBoundingClientRect()
+  if (imageRect.width <= 0 || imageRect.height <= 0) return null
+
+  const style = getComputedStyle(image)
+  // The profile hero explicitly uses cover. Keeping this narrow is safer than
+  // silently sampling the wrong source rectangle if another consumer changes
+  // its image-fit behavior later.
+  if (style.objectFit !== 'cover') return null
+
+  const titleRect = textContentRect(title)
+  const left = Math.max(imageRect.left, titleRect.left - RENDERED_TITLE_PADDING_X)
+  const right = Math.min(imageRect.right, titleRect.right + RENDERED_TITLE_PADDING_X)
+  const top = Math.max(imageRect.top, titleRect.top - RENDERED_TITLE_PADDING_Y)
+  const bottom = Math.min(imageRect.bottom, titleRect.bottom + RENDERED_TITLE_PADDING_Y)
+  if (right <= left || bottom <= top) return null
+
+  const sourceWidth = image.naturalWidth
+  const sourceHeight = image.naturalHeight
+  const scale = Math.max(imageRect.width / sourceWidth, imageRect.height / sourceHeight)
+  const renderedWidth = sourceWidth * scale
+  const renderedHeight = sourceHeight * scale
+  const position = objectPositionFraction(style.objectPosition)
+  const offsetX = (imageRect.width - renderedWidth) * position.x
+  const offsetY = (imageRect.height - renderedHeight) * position.y
+
+  const cropX = (left - imageRect.left - offsetX) / scale
+  const cropY = (top - imageRect.top - offsetY) / scale
+  const cropWidth = (right - left) / scale
+  const cropHeight = (bottom - top) / scale
+  if (cropX < 0 || cropY < 0 || cropX + cropWidth > sourceWidth || cropY + cropHeight > sourceHeight) return null
+
+  const sampleScale = Math.min(2, RENDERED_TITLE_MAX_SAMPLE_DIMENSION / Math.max(cropWidth, cropHeight))
+  const sampleWidth = Math.max(1, Math.round(cropWidth * sampleScale))
+  const sampleHeight = Math.max(1, Math.round(cropHeight * sampleScale))
+  const canvas = document.createElement('canvas')
+  canvas.width = sampleWidth
+  canvas.height = sampleHeight
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+
+  try {
+    ctx.drawImage(image, cropX, cropY, cropWidth, cropHeight, 0, 0, sampleWidth, sampleHeight)
+    const data = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data
+    return extractTextZoneBandFromData(data, sampleWidth, sampleHeight, (sampleY) => {
+      const sourceYAtSample = cropY + (sampleY / sampleHeight) * cropHeight
+      return (offsetY + sourceYAtSample * scale) / imageRect.height
+    })
+  } catch {
+    // Tainted canvases and transient decode failures are both safe to ignore:
+    // the original palette-derived band remains in effect.
+    return null
   }
 }
 
