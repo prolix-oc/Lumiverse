@@ -9,7 +9,11 @@ import {
 } from "lumiverse-spindle-types";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { env } from "../env";
-import { digestSpindleHostDescriptor } from "../spindle/host-compatibility";
+import {
+  digestSpindleHostDescriptor,
+  getBackendLumiverseVersion,
+  parseCanonicalSemver,
+} from "../spindle/host-compatibility";
 
 // Keep the production auth middleware importable without constructing a real
 // BetterAuth instance; the handshake itself uses the authenticated session
@@ -185,7 +189,9 @@ describe("Spindle compatibility handshake route", () => {
   });
 
   test("returns a typed compatibility failure for an incompatible manifest", async () => {
-    writeManifest("1.0.9");
+    const hostVersion = parseCanonicalSemver(await getBackendLumiverseVersion(), "Lumiverse version");
+    const requiredVersion = `${BigInt(hostVersion.major) + 1n}.0.0`;
+    writeManifest(requiredVersion);
     const response = await appForVisibleUser().request(`/${INSTALLATION_ID}/compatibility-handshake`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -195,6 +201,6 @@ describe("Spindle compatibility handshake route", () => {
     expect(response.status).toBe(400);
     const body = await response.json() as { error: string; code: string };
     expect(body.code).toBe(SPINDLE_COMPATIBILITY_ERROR_CODE);
-    expect(body.error).toContain("requires Lumiverse 1.0.9 or newer");
+    expect(body.error).toContain(`requires Lumiverse ${requiredVersion} or newer`);
   });
 });
