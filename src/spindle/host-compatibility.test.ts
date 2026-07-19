@@ -99,8 +99,11 @@ describe("Spindle host compatibility", () => {
 
   test("creates the current immutable descriptor from backend package metadata", async () => {
     const value = await createSpindleHostDescriptor(INSTALLATION_ID);
+    const backendPackage = JSON.parse(
+      await Bun.file(new URL("../../package.json", import.meta.url)).text(),
+    ) as { version: string };
     expect(value.descriptorVersion).toBe(1);
-    expect(value.lumiverseVersion).toBe(HOST_VERSION);
+    expect(value.lumiverseVersion).toBe(backendPackage.version);
     expect(value.extensionInstallationId).toBe(INSTALLATION_ID);
     expect(Object.keys(value.capabilities).sort()).toEqual(
       Object.keys(SPINDLE_HOST_CAPABILITIES).sort(),
