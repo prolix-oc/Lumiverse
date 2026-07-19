@@ -73,7 +73,28 @@ export const personasApi = {
     return upload<Persona>(`/personas/${id}/avatar`, form)
   },
 
-  avatarUrl(id: string) {
-    return `${BASE_URL}/personas/${id}/avatar`
+  uploadAddonAvatar(personaId: string, addonId: string, file: File, originalFile?: File) {
+    const form = new FormData()
+    form.append('avatar', file)
+    if (originalFile) form.append('original_avatar', originalFile)
+    return upload<Persona>(`/personas/${personaId}/addons/${addonId}/avatar`, form)
+  },
+
+  deleteAddonAvatar(personaId: string, addonId: string) {
+    return del<Persona>(`/personas/${personaId}/addons/${addonId}/avatar`)
+  },
+
+  avatarUrl(id: string, options?: {
+    chatId?: string | null
+    size?: 'sm' | 'lg'
+    /** Changes whenever a chat add-on toggle changes the resolved avatar. */
+    version?: string | null
+  }) {
+    const params = new URLSearchParams()
+    if (options?.chatId) params.set('chat_id', options.chatId)
+    if (options?.size) params.set('size', options.size)
+    if (options?.version) params.set('v', options.version)
+    const query = params.toString()
+    return `${BASE_URL}/personas/${id}/avatar${query ? `?${query}` : ''}`
   },
 }

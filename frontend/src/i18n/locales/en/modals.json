@@ -668,6 +668,11 @@
     "detachTitle": "Detach from persona",
     "dragTitle": "Drag to reorder",
     "dragAria": "Drag to reorder add-on",
+    "setAvatar": "Set alternate persona art",
+    "replaceAvatar": "Replace alternate persona art",
+    "removeAvatar": "Remove alternate persona art",
+    "avatarUploadFailed": "Failed to upload alternate persona art",
+    "avatarRemoveFailed": "Failed to remove alternate persona art",
     "namePlaceholder": "Add-on name...",
     "deleteTitle": "Delete add-on",
     "contentPlaceholder": "Add-on content (appended to persona description when enabled)..."

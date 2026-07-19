@@ -1792,8 +1792,8 @@ export default function LoomBuilder({
   const suppressNextProfileApplyRef = useRef<string | null>(null)
 
   const getProfileContextKey = useCallback(() => (
-    `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
-  ), [presetProfiles.activeChatId, presetProfiles.activeCharacterId, presetProfiles.activeProfileId])
+    `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activePersonaId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
+  ), [presetProfiles.activeChatId, presetProfiles.activePersonaId, presetProfiles.activeCharacterId, presetProfiles.activeProfileId])
 
   const captureDefaults = useCallback(() => {
     suppressNextProfileApplyRef.current = getProfileContextKey()
@@ -1833,7 +1833,7 @@ export default function LoomBuilder({
   useEffect(() => {
     if (!presetProfiles.isResolved) return
 
-    const contextKey = `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
+    const contextKey = `${activePresetRef.current?.id ?? 'none'}:${presetProfiles.activeChatId ?? 'none'}:${presetProfiles.activePersonaId ?? 'none'}:${presetProfiles.activeCharacterId ?? 'none'}:${presetProfiles.activeProfileId ?? 'none'}`
     const contextChanged = lastProfileContextRef.current !== contextKey
 
     if (
@@ -1874,6 +1874,7 @@ export default function LoomBuilder({
     presetProfiles.activeBinding,
     presetProfiles.activeSource,
     presetProfiles.activeChatId,
+    presetProfiles.activePersonaId,
     presetProfiles.activeCharacterId,
     presetProfiles.activeProfileId,
     presetProfiles,
@@ -2574,6 +2575,43 @@ export default function LoomBuilder({
               </button>
             )}
 
+            {/* Bind / unbind active persona. Persona profiles outrank character
+                profiles, so switching persona restores its own writing mode. */}
+            {!presetProfiles.hasPersonaBinding ? (
+              <button
+                className={s.profileBtn}
+                onClick={presetProfiles.bindToPersona}
+                disabled={!presetProfiles.hasDefaults || presetProfiles.isLoading || !activePreset || !presetProfiles.activePersonaId}
+                title={
+                  !presetProfiles.activePersonaId ? lb('profiles.noPersona')
+                    : !presetProfiles.hasDefaults ? lb('profiles.captureFirst')
+                      : lb('profiles.bindPersona')
+                }
+                type="button"
+              >
+                <Link size={10} /> {lb('profiles.persona')}
+              </button>
+            ) : (
+              <button
+                className={clsx(s.profileBtn, s.profileBtnActive)}
+                onClick={presetProfiles.bindToPersona}
+                disabled={presetProfiles.isLoading || !presetProfiles.activePersonaId}
+                title={lb('profiles.rebindPersona')}
+                type="button"
+              >
+                <RotateCcw size={10} /> {lb('profiles.persona')}
+                <span
+                  className={s.profileBtnDismiss}
+                  onClick={(e) => { e.stopPropagation(); presetProfiles.unbindPersona() }}
+                  title={lb('profiles.removePersona')}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <X size={8} />
+                </span>
+              </button>
+            )}
+
             {/* Bind / unbind character — hidden in group chats (chat-only) */}
             {presetProfiles.characterBindingEnabled && (!presetProfiles.hasCharacterBinding ? (
               <button
@@ -2687,6 +2725,7 @@ export default function LoomBuilder({
           {presetProfiles.activeSource !== 'none' && (
             <span className={s.profileSourceBadge}>
               {presetProfiles.activeSource === 'chat' ? lb('profiles.sourceChat') :
+               presetProfiles.activeSource === 'persona' ? lb('profiles.sourcePersona') :
                presetProfiles.activeSource === 'character' ? lb('profiles.sourceCharacter') :
                presetProfiles.activeSource === 'connection' ? lb('profiles.sourceConnection') : lb('profiles.sourceDefault')}
             </span>

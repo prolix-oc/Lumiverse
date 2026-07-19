@@ -160,6 +160,58 @@
   gap: 8px;
 }
 
+.addonAvatarControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.addonAvatarThumb {
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle, rgba(0, 0, 0, 0.06));
+}
+
+.avatarFileInput {
+  display: none;
+}
+
+.addonAvatarBtn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: all var(--lumiverse-transition-fast);
+}
+
+.addonAvatarBtn:hover:not(:disabled) {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-010);
+}
+
+.addonAvatarBtn:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.addonAvatarRemoveBtn:hover:not(:disabled) {
+  color: var(--lumiverse-error);
+  border-color: var(--lumiverse-error);
+  background: color-mix(in srgb, var(--lumiverse-error) 8%, transparent);
+}
+
 /* -- Drag handle --
  * touch-action: none lets dnd-kit's TouchSensor own the gesture.
  * -webkit-touch-callout / user-select: none stop iOS & Android from popping

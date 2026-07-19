@@ -7,6 +7,7 @@ export function useBoundPresetSelection() {
   const isAuthenticated = useStore((s) => s.isAuthenticated)
   const fullSettingsLoaded = useStore((s) => s.fullSettingsLoaded)
   const activeChatId = useStore((s) => s.activeChatId)
+  const activePersonaId = useStore((s) => s.activePersonaId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
@@ -19,11 +20,12 @@ export function useBoundPresetSelection() {
     const selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
     const fallbackPresetId = useStore.getState().activeLoomPresetId
 
-    presetProfilesApi.resolve(activeChatId, fallbackPresetId, activeProfileId)
+    presetProfilesApi.resolve(activeChatId, fallbackPresetId, activeProfileId, activePersonaId)
       .then((resolved) => {
         if (cancelled) return
         if (
           resolved.source !== 'chat'
+          && resolved.source !== 'persona'
           && resolved.source !== 'character'
           && resolved.source !== 'connection'
         ) {
@@ -47,5 +49,5 @@ export function useBoundPresetSelection() {
       selection.cancel()
       selectionAbort.abort()
     }
-  }, [activeChatId, activeCharacterId, activeLoomPresetId, activeProfileId, isAuthenticated, fullSettingsLoaded])
+  }, [activeChatId, activePersonaId, activeCharacterId, activeLoomPresetId, activeProfileId, isAuthenticated, fullSettingsLoaded])
 }

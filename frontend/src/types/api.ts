@@ -626,6 +626,10 @@ export interface PersonaAddon {
   content: string
   enabled: boolean
   sort_order: number
+  /** Persona-specific artwork shown while this add-on is active. */
+  avatar_image_id?: string
+  /** Optional square crop of avatar_image_id, preferred for avatar surfaces. */
+  avatar_crop_image_id?: string
 }
 
 export interface GlobalAddon {
@@ -641,6 +645,9 @@ export interface GlobalAddon {
 export interface AttachedGlobalAddon {
   id: string
   enabled: boolean
+  /** Avatar overrides belong to the persona attachment, not the shared add-on. */
+  avatar_image_id?: string
+  avatar_crop_image_id?: string
 }
 
 export interface CharacterPersonaBinding {

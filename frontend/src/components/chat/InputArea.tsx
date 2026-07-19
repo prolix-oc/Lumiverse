@@ -14,7 +14,7 @@ import { expressionsApi } from '@/api/expressions'
 import { personasApi } from '@/api/personas'
 import { globalAddonsApi } from '@/api/global-addons'
 import { imagesApi } from '@/api/images'
-import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import { getPersonaAvatarThumbUrl, getPersonaAvatarThumbUrlById, getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
@@ -636,6 +636,13 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       .catch(() => setChatAddonStatesByPersona({}))
   }, [chatId])
 
+  // Keep quick-toggle state coherent when another tab (or a websocket chat
+  // update) changes the active chat's add-ons and avatar version.
+  useEffect(() => {
+    const states = activeChatMetadata?.persona_addon_states
+    if (states && typeof states === 'object') setChatAddonStatesByPersona(states)
+  }, [activeChatMetadata?.persona_addon_states])
+
   const activeCharacter = activeCharacterId ? characters.find((c) => c.id === activeCharacterId) : null
   const resolvedPersonaBinding = useMemo(() => resolveAutoPersonaBinding({
     characterId: activeCharacterId,
@@ -778,10 +785,10 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
         if (refs.length > 0) {
           try {
             const globalRes = await globalAddonsApi.list({ limit: 200, offset: 0 })
-            const refMap = new Map(refs.map(r => [r.id, r.enabled]))
+            const refMap = new Map(refs.map(r => [r.id, r]))
             const resolved = globalRes.data
               .filter(g => refMap.has(g.id))
-              .map(g => ({ ...g, enabled: refMap.get(g.id)! }))
+              .map(g => ({ ...g, ...refMap.get(g.id)! }))
             setAttachedGlobalAddons(resolved)
           } catch {
             setAttachedGlobalAddons([])
@@ -804,21 +811,21 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       // Update global addon enabled state from store
       const refs: AttachedGlobalAddon[] = Array.isArray(p.metadata?.attached_global_addons) ? p.metadata.attached_global_addons : []
       setAttachedGlobalAddons(prev => {
-        const refMap = new Map(refs.map(r => [r.id, r.enabled]))
+        const refMap = new Map(refs.map(r => [r.id, r]))
         return prev
           .filter(g => refMap.has(g.id))
-          .map(g => ({ ...g, enabled: refMap.get(g.id)! }))
+          .map(g => ({ ...g, ...refMap.get(g.id)! }))
       })
     }
   }, [storePersonas, activePersonaId])
 
-  // Mirror per-chat add-on states into the shared chat metadata so other
-  // surfaces (notably the Persona editor's "rebind add-ons" snapshot) read the
-  // live selections rather than the copy captured when the chat first opened.
-  const syncChatAddonMetadata = useCallback((states: Record<string, Record<string, boolean>>) => {
+  // Mirror the server-returned metadata into the shared chat state. The
+  // dedicated toggle endpoint records both boolean state and recency/version,
+  // which keeps avatar override selection and image cache-busting in sync.
+  const syncChatAddonMetadata = useCallback((metadata: Record<string, any>) => {
     const store = useStore.getState()
     if (store.activeChatId !== chatId) return
-    store.setActiveChatMetadata({ ...(store.activeChatMetadata ?? {}), persona_addon_states: states })
+    store.setActiveChatMetadata(metadata)
   }, [chatId])
 
   const persistChatAddonOverride = useCallback(async (addonId: string, enabled: boolean) => {
@@ -832,13 +839,16 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
       },
     }
     setChatAddonStatesByPersona(nextByPersona)
-    syncChatAddonMetadata(nextByPersona)
     try {
-      await chatsApi.patchMetadata(chatId, { persona_addon_states: nextByPersona })
+      const updated = await chatsApi.setPersonaAddonState(chatId, activePersonaId, addonId, enabled)
+      const serverStates = updated.metadata?.persona_addon_states
+      if (serverStates && typeof serverStates === 'object') {
+        setChatAddonStatesByPersona(serverStates)
+      }
+      syncChatAddonMetadata(updated.metadata ?? {})
       return true
     } catch {
       setChatAddonStatesByPersona(previous)
-      syncChatAddonMetadata(previous)
       toast.error(t('toast.failedSaveAddonState'))
       return false
     }
@@ -3150,7 +3160,14 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
                           {p.avatar_path || p.image_id ? (
                             <img
                               className={styles.personaAvatarImg}
-                              src={getPersonaAvatarThumbUrl(p) || undefined}
+                              src={(
+                                p.id === activePersonaId
+                                  ? getPersonaAvatarThumbUrlById(p.id, null, {
+                                      chatId,
+                                      version: activeChatMetadata?.persona_addon_avatar_versions?.[p.id],
+                                    })
+                                  : getPersonaAvatarThumbUrl(p)
+                              ) || undefined}
                               alt={p.name}
                               loading="lazy"
                             />

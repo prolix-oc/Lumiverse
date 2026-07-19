@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   getPersonaAvatarLargeUrl,
+  getPersonaAvatarThumbUrlById,
   getPersonaAvatarThumbUrl,
   getPersonaAvatarUrl,
   pickPersonaOriginalImageId,
@@ -44,5 +45,14 @@ describe('persona avatar URL helpers', () => {
     expect(pickPersonaOriginalImageId(persona)).toBe('persona-image')
     expect(getPersonaAvatarThumbUrl(persona)).toBe('/api/v1/images/persona-image?size=sm')
     expect(getPersonaAvatarUrl(persona)).toBe('/api/v1/images/persona-image')
+  })
+
+  test('uses the chat-scoped resolver and toggle version for active persona art', () => {
+    expect(
+      getPersonaAvatarThumbUrlById('persona-mode', 'base-image', {
+        chatId: 'chat-1',
+        version: 'toggle-2',
+      }),
+    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&v=toggle-2')
   })
 })

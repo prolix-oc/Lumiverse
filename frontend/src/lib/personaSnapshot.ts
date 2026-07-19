@@ -16,7 +16,7 @@
  */
 
 import { useStore } from '@/store'
-import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
+import { getPersonaAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { compressAvatarToWebP } from '@/lib/webpAvatar'
 import { globalAddonsApi } from '@/api/global-addons'
 import type { PersonaSnapshot } from '@/types/multiplayer'
@@ -129,16 +129,20 @@ export async function buildActivePersonaSnapshot(): Promise<PersonaSnapshot | nu
     avatarUrl: null,
   }
 
-  if (persona.image_id) {
-    try {
-      const src = getPersonaAvatarLargeUrl(persona)
-      if (!src) return snapshot
-      const blob = await compressAvatarToWebP(src, 128, 0.72)
-      const dataUrl = await blobToDataUrl(blob)
-      if (dataUrl.length <= MAX_DATA_URL_LEN) snapshot.avatarUrl = dataUrl
-    } catch {
-      // Avatar load/compress failed — fall back to name only.
-    }
+  try {
+    const version = typeof s.activeChatMetadata?.persona_addon_avatar_versions?.[persona.id] === 'string'
+      ? s.activeChatMetadata.persona_addon_avatar_versions[persona.id]
+      : null
+    const src = getPersonaAvatarLargeUrlById(persona.id, null, {
+      chatId: s.activeChatId,
+      version,
+    })
+    if (!src) return snapshot
+    const blob = await compressAvatarToWebP(src, 128, 0.72)
+    const dataUrl = await blobToDataUrl(blob)
+    if (dataUrl.length <= MAX_DATA_URL_LEN) snapshot.avatarUrl = dataUrl
+  } catch {
+    // Avatar load/compress failed — fall back to name only.
   }
 
   return snapshot

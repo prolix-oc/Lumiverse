@@ -10,10 +10,9 @@ import {
   getPersonaAvatarThumbUrlById,
   getPersonaAvatarLargeUrlById,
   getPersonaAvatarUrlById,
+  getPersonaAvatarTiers,
   getCharacterAvatarTiers,
   getImageTiers,
-  pickPersonaOriginalImageId,
-  pickPersonaThumbImageId,
   type AvatarTierUrls,
 } from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
@@ -208,13 +207,16 @@ export function useMessageCard(message: Message, chatId: string) {
   const characterAvatarCropImageId = typeof effectiveCharacter?.extensions?.avatar_crop_image_id === 'string'
     ? effectiveCharacter.extensions.avatar_crop_image_id
     : null
-  const effectivePersona = messagePersona ?? activePersona
   const personaAvatarId = userPersonaId ?? activePersona?.id ?? null
-  const personaCropImageId = pickPersonaThumbImageId(effectivePersona)
-  const personaOriginalImageId = pickPersonaOriginalImageId(effectivePersona)
+  const personaAvatarVersion = personaAvatarId && typeof activeChatMetadata?.persona_addon_avatar_versions?.[personaAvatarId] === 'string'
+    ? activeChatMetadata.persona_addon_avatar_versions[personaAvatarId]
+    : null
+  const personaAvatarContext = !isTemporaryChat && personaAvatarId
+    ? { chatId, version: personaAvatarVersion }
+    : undefined
   const personaAvatarFallbackUrl = isBubbleMode
-    ? getPersonaAvatarLargeUrlById(personaAvatarId, null)
-    : getPersonaAvatarThumbUrlById(personaAvatarId, null)
+    ? getPersonaAvatarLargeUrlById(personaAvatarId, null, personaAvatarContext)
+    : getPersonaAvatarThumbUrlById(personaAvatarId, null, personaAvatarContext)
   const activeAltAvatar = activeChatAvatarId && effectiveCharId === activeCharacterId
     ? (effectiveCharacter?.extensions?.alternate_avatars as Array<{ image_id: string; original_image_id?: string }> | undefined)
         ?.find((avatar) => avatar.image_id === activeChatAvatarId)
@@ -226,7 +228,7 @@ export function useMessageCard(message: Message, chatId: string) {
   const peerBotAvatar = !isUser && mpRoomId && !mpIsHost ? mpCharacterAvatar : null
 
   const avatarUrl = isUser
-    ? (personaCropImageId ? getImageUrl(personaCropImageId) : personaAvatarFallbackUrl)
+    ? personaAvatarFallbackUrl
     : peerBotAvatar
       ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
         ? getImageUrl(activeChatAvatarId)
@@ -234,7 +236,7 @@ export function useMessageCard(message: Message, chatId: string) {
 
   // Full-size avatar URL for lightbox/floating viewer (no resize)
   const fullAvatarUrl = isUser
-    ? (personaOriginalImageId ? imagesApi.url(personaOriginalImageId) : getPersonaAvatarUrlById(personaAvatarId, null))
+    ? getPersonaAvatarUrlById(personaAvatarId, null, personaAvatarContext)
     : peerBotAvatar
       ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
         ? imagesApi.url(activeAltAvatar?.original_image_id || activeChatAvatarId)
@@ -254,13 +256,13 @@ export function useMessageCard(message: Message, chatId: string) {
   const usesChatAvatar = !!activeChatAvatarId && effectiveCharId === activeCharacterId
 
   const croppedAvatarTiers: AvatarTierUrls = isUser
-    ? getImageTiers(personaCropImageId)
+    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext)
     : usesChatAvatar
       ? getImageTiers(activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
 
   const originalAvatarTiers: AvatarTierUrls = isUser
-    ? getImageTiers(personaOriginalImageId)
+    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext)
     : usesChatAvatar
       ? getImageTiers(activeAltAvatar?.original_image_id || activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterOriginalImageId)

@@ -79,6 +79,14 @@ export const chatsApi = {
     return patch<Chat>(`/chats/${id}/metadata`, partial)
   },
 
+  /**
+   * Toggle one persona add-on for this chat. The server also records toggle
+   * recency so competing avatar overrides resolve deterministically.
+   */
+  setPersonaAddonState(chatId: string, personaId: string, addonId: string, enabled: boolean) {
+    return put<Chat>(`/chats/${chatId}/persona-addons/${personaId}/${addonId}`, { enabled })
+  },
+
   delete(id: string) {
     return del<void>(`/chats/${id}`)
   },

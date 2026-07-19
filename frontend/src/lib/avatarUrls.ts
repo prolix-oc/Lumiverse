@@ -12,6 +12,13 @@ type AvatarEntity = {
   } & Record<string, any>
 } | null | undefined
 
+/** Chat context is required to resolve persona add-on avatar overrides. */
+export interface PersonaAvatarContext {
+  chatId?: string | null
+  /** Server-issued value changed by every chat-level add-on toggle. */
+  version?: string | null
+}
+
 function asImageId(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
@@ -83,7 +90,14 @@ export function getPersonaAvatarUrl(entity: AvatarEntity) {
   return getPersonaAvatarUrlById(entity?.id, pickPersonaOriginalImageId(entity))
 }
 
-export function getPersonaAvatarUrlById(personaId?: string | null, imageId?: string | null) {
+export function getPersonaAvatarUrlById(
+  personaId?: string | null,
+  imageId?: string | null,
+  context?: PersonaAvatarContext,
+) {
+  if (personaId && context?.chatId) {
+    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version })
+  }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl)
 }
 
@@ -110,7 +124,14 @@ export function getPersonaAvatarThumbUrl(entity: AvatarEntity) {
   return getPersonaAvatarThumbUrlById(entity?.id, pickPersonaThumbImageId(entity))
 }
 
-export function getPersonaAvatarThumbUrlById(personaId?: string | null, imageId?: string | null) {
+export function getPersonaAvatarThumbUrlById(
+  personaId?: string | null,
+  imageId?: string | null,
+  context?: PersonaAvatarContext,
+) {
+  if (personaId && context?.chatId) {
+    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'sm' })
+  }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl, 'sm')
 }
 
@@ -137,7 +158,14 @@ export function getPersonaAvatarLargeUrl(entity: AvatarEntity) {
   return getPersonaAvatarLargeUrlById(entity?.id, pickPersonaThumbImageId(entity))
 }
 
-export function getPersonaAvatarLargeUrlById(personaId?: string | null, imageId?: string | null) {
+export function getPersonaAvatarLargeUrlById(
+  personaId?: string | null,
+  imageId?: string | null,
+  context?: PersonaAvatarContext,
+) {
+  if (personaId && context?.chatId) {
+    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'lg' })
+  }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl, 'lg')
 }
 
@@ -178,7 +206,18 @@ export function getCharacterAvatarTiers(characterId?: string | null, imageId?: s
   return buildTierUrls(characterId, imageId, charactersApi.avatarUrl)
 }
 
-export function getPersonaAvatarTiers(personaId?: string | null, imageId?: string | null): AvatarTierUrls {
+export function getPersonaAvatarTiers(
+  personaId?: string | null,
+  imageId?: string | null,
+  context?: PersonaAvatarContext,
+): AvatarTierUrls {
+  if (personaId && context?.chatId) {
+    return {
+      sm: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'sm' }),
+      lg: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'lg' }),
+      full: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version }),
+    }
+  }
   return buildTierUrls(personaId, imageId, personasApi.avatarUrl)
 }
 
