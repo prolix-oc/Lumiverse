@@ -72,6 +72,8 @@ function dragId(blockId: string): string {
 }
 
 let latestDragEnd: ((event: TestDragEvent) => void) | null = null
+const droppableIds: string[] = []
+const sortableIds: string[] = []
 
 function moveItems<T>(items: T[], oldIndex: number, newIndex: number): T[] {
   const next = [...items]
@@ -116,7 +118,10 @@ mock.module('@dnd-kit/core', () => ({
   MouseSensor: () => null,
   TouchSensor: () => null,
   KeyboardSensor: () => null,
-  useDroppable: () => ({ setNodeRef: () => {}, isOver: false }),
+  useDroppable: ({ id }: { id: string }) => {
+    droppableIds.push(id)
+    return { setNodeRef: () => {}, isOver: false }
+  },
   useSensor: () => ({}),
   useSensors: () => [],
 }))
@@ -125,14 +130,17 @@ mock.module('@dnd-kit/sortable', () => ({
   SortableContext: ({ children }: { children?: ReactNode }) => children ?? null,
   sortableKeyboardCoordinates: () => undefined,
   verticalListSortingStrategy: {},
-  useSortable: () => ({
-    attributes: {},
-    listeners: {},
-    setNodeRef: () => {},
-    transform: null,
-    transition: undefined,
-    isDragging: false,
-  }),
+  useSortable: ({ id }: { id: string }) => {
+    sortableIds.push(id)
+    return {
+      attributes: {},
+      listeners: {},
+      setNodeRef: () => {},
+      transform: null,
+      transition: undefined,
+      isDragging: false,
+    }
+  },
 }))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: translation, i18n: { language: 'en' } }),
@@ -483,6 +491,8 @@ afterEach(() => {
   resolverCalls = 0
   resolverRequests.length = 0
   latestDragEnd = null
+  droppableIds.length = 0
+  sortableIds.length = 0
 })
 afterAll(async () => {
   await act(async () => {})
@@ -943,7 +953,7 @@ describe('controlled Loom editor trust boundary', () => {
     unmountRoot(root)
   })
 
-  test('moves a block into the destination category with native reorder semantics', () => {
+  test('reorders a hostile root-drop block ID through the private sortable namespace', () => {
     const category = block({ id: 'category', name: 'Modes', marker: 'category' })
     const child = block({ id: 'child', name: 'Child', group: category.id })
     const rootBlock = block({ id: 'root-drop:0', name: 'Root block', group: null })
@@ -951,6 +961,9 @@ describe('controlled Loom editor trust boundary', () => {
     const { root } = renderControlled([category, child, rootBlock], (next) => {
       emitted = next
     })
+    expect(droppableIds).toContain(rootBlock.id)
+    expect(sortableIds).toContain(dragId(rootBlock.id))
+    expect(sortableIds).not.toContain(rootBlock.id)
     const dragEnd = latestDragEnd
     expect(dragEnd).not.toBeNull()
 
@@ -1025,29 +1038,61 @@ describe('controlled Loom editor trust boundary', () => {
     unmountRoot(root)
   })
 
-  test('disables every add action at the public block limit', () => {
-    const blocks = Array.from(
-      { length: LOOM_DTO_LIMITS.maxBlocks },
-      (_, index) => block({ id: `limit-${index}` }),
+  test('closes open add menus and keeps every add action inert at the public block limit', () => {
+    const belowLimit = Array.from(
+      { length: LOOM_DTO_LIMITS.maxBlocks - 1 },
+      (_, index) => block({ id: `limit-${index}`, name: `Limit block ${index}` }),
     )
-    let callbacks = 0
-    const { container, root } = renderControlled(blocks, () => {
-      callbacks += 1
-    })
+    const atLimit = [
+      ...belowLimit,
+      block({ id: 'limit-final', name: 'Final limit block' }),
+    ]
+    const emissions: PromptBlock[][] = []
+    const onChange = (next: PromptBlock[]) => {
+      emissions.push(next)
+    }
+    const { container, root } = renderControlled(belowLimit, onChange)
+    const renderAt = (nextBlocks: PromptBlock[]) => {
+      flushSync(() => {
+        root.render(createElement(ControlledLoomBlockEditor, {
+          blocks: nextBlocks,
+          promptVariables,
+          onChange,
+          availableMacros: [],
+          compact: true,
+        }))
+      })
+    }
+
+    flushSync(() => buttonWithText(container, 'actions.addPrompt').click())
+    expect(container.textContent).toContain('Blank Prompt')
+    renderAt(atLimit)
+
     const addPrompt = buttonWithText(container, 'actions.addPrompt')
     const addCategory = buttonWithText(container, 'actions.addCategory')
     const addMarker = buttonWithText(container, 'actions.addMarker')
-
     expect(addPrompt.disabled).toBe(true)
     expect(addCategory.disabled).toBe(true)
     expect(addMarker.disabled).toBe(true)
+    expect(container.textContent).not.toContain('Blank Prompt')
     flushSync(() => {
       addPrompt.click()
       addCategory.click()
       addMarker.click()
     })
-    expect(callbacks).toBe(0)
+    expect(emissions).toHaveLength(0)
+
+    renderAt(belowLimit)
     expect(container.textContent).not.toContain('Blank Prompt')
+    flushSync(() => buttonWithText(container, 'actions.addMarker').click())
+    expect(container.textContent).toContain('marker.chat_history')
+    renderAt(atLimit)
+
+    expect(buttonWithText(container, 'actions.addPrompt').disabled).toBe(true)
+    expect(buttonWithText(container, 'actions.addCategory').disabled).toBe(true)
+    expect(buttonWithText(container, 'actions.addMarker').disabled).toBe(true)
+    expect(container.textContent).not.toContain('marker.chat_history')
+    expect(emissions).toHaveLength(0)
     unmountRoot(root)
   })
 

@@ -1169,6 +1169,12 @@ export function ControlledLoomBlockEditor({
   }, [readOnly])
 
   useEffect(() => {
+    if (!blockLimitReached) return
+    setPromptMenuOpen(false)
+    setMarkerMenuOpen(false)
+  }, [blockLimitReached])
+
+  useEffect(() => {
     if (!hoveredAppendRootDropId) {
       setArmedAppendRootDropId(null)
       return
