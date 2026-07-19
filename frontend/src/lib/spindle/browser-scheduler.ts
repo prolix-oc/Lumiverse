@@ -43,7 +43,19 @@ export function yieldToBrowser(options?: { when?: SchedulerPhase; timeoutMs?: nu
 
   if (when === 'paint') {
     return new Promise((resolve) => {
-      window.requestAnimationFrame(() => resolve())
+      let settled = false
+      let frameId: number | null = null
+      let fallbackId: ReturnType<typeof setTimeout> | null = null
+      const finish = () => {
+        if (settled) return
+        settled = true
+        if (frameId != null) window.cancelAnimationFrame(frameId)
+        if (fallbackId != null) globalThis.clearTimeout(fallbackId)
+        resolve()
+      }
+
+      frameId = window.requestAnimationFrame(finish)
+      if (!settled) fallbackId = globalThis.setTimeout(finish, timeoutMs)
     })
   }
 

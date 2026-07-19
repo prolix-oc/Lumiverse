@@ -140,7 +140,7 @@ export default function CommandPalette() {
     }
 
     return { grouped: groups, orderedFlat: flat, flatIndexMap: idxMap }
-  }, [query, userRole, drawerTabs, drawerSettings.hiddenTabIds, hiddenPlacements, extensionCommands, activeScopes, location.pathname, hiddenTabIds, hiddenPlacementIds, i18n.language])
+  }, [query, userRole, drawerTabs, extensionCommands, activeScopes, location.pathname, hiddenTabIds, hiddenPlacementIds])
 
   // Clamp active index when filtered list shrinks
   useEffect(() => {
@@ -182,7 +182,8 @@ export default function CommandPalette() {
       case 'Escape':
         e.preventDefault()
         e.stopPropagation()
-        close()
+        if (query) clearQuery()
+        else close()
         break
       case 'Tab':
         e.preventDefault()

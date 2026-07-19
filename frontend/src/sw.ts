@@ -159,16 +159,30 @@ self.addEventListener('notificationclick', (event) => {
 
   const focusOrOpen = self.clients
     .matchAll({ type: 'window', includeUncontrolled: true })
-    .then((clients) => {
-      // Try to find an existing Lumiverse tab
-      for (const client of clients) {
-        if (client.url.includes(self.location.origin)) {
-          client.focus()
-          client.postMessage({ type: 'NAVIGATE', url })
+    .then(async (clients) => {
+      // Focus an existing app client first. Awaiting focus keeps the service
+      // worker alive until the app is foregrounded, which is especially
+      // important for a suspended PWA receiving a notification click.
+      const client = clients.find((candidate) => {
+        try {
+          return new URL(candidate.url).origin === self.location.origin
+        } catch {
+          return false
+        }
+      })
+
+      if (client) {
+        try {
+          const focusedClient = await client.focus()
+          focusedClient.postMessage({ type: 'NAVIGATE', url })
           return
+        } catch {
+          // A discarded client can still appear in matchAll(). Open a fresh
+          // route in that case so the notification always remains actionable.
         }
       }
-      return self.clients.openWindow(url)
+
+      await self.clients.openWindow(url)
     })
 
   event.waitUntil(focusOrOpen)

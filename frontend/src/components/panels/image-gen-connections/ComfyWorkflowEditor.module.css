@@ -351,6 +351,80 @@
   background: var(--lumiverse-bg-hover);
 }
 
+.wfRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.wfName {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--lumiverse-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfMeta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--lumiverse-text-dim);
+}
+
+.wfActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.wfActions .ghostBtn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.wfBadge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary-text, var(--lumiverse-primary));
+}
+
+.saveRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.textInput {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg-darker, rgba(0, 0, 0, 0.25));
+  color: var(--lumiverse-text);
+  font-size: 13px;
+}
+
+.textInput:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary-050);
+}
+
+.textInput:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .error {
   margin: 0 20px 16px;
   padding: 10px 12px;

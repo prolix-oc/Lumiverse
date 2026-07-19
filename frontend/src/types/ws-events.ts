@@ -112,6 +112,7 @@ export enum EventType {
 
   // Avatar
   CHARACTER_AVATAR_CHANGED = 'CHARACTER_AVATAR_CHANGED',
+  CHARACTER_EXPORT_PROGRESS = 'CHARACTER_EXPORT_PROGRESS',
 
   // Wallpaper uploads
   WALLPAPER_UPLOAD_PROGRESS = 'WALLPAPER_UPLOAD_PROGRESS',
@@ -170,6 +171,7 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = 'SYSTEM_DISK_LOW',
+  SYSTEM_SMART_ALERT = 'SYSTEM_SMART_ALERT',
 }
 
 export interface SystemDiskLowPayload {
@@ -181,6 +183,19 @@ export interface SystemDiskLowPayload {
   /** 0..1, the threshold that was crossed */
   thresholdPercent: number
   thresholdFreeBytes: number
+}
+
+export interface SystemSmartAlertPayload {
+  checkedAt: string
+  drives: Array<{
+    device: string
+    model: string | null
+    status: 'warning' | 'failing'
+    conditions: Array<{
+      severity: 'warning' | 'failing'
+      message: string
+    }>
+  }>
 }
 
 export interface WallpaperUploadProgressPayload {
@@ -298,6 +313,10 @@ export interface ContextClipStats {
   tokenizerUsed: string
   budgetInvalid?: boolean
   fixedOverBudget?: boolean
+  anchorActive?: boolean
+  protectedHistoryTokens?: number
+  remainingBeforeAnchor?: number
+  anchorOverflow?: boolean
 }
 
 export interface GenerationStartedPayload {

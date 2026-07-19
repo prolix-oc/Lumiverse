@@ -119,4 +119,6 @@ const unbind = ctx.ui.events.bindActionHandlers(root, {
 })
 ```
 
-*Note: The target root element must be owned by the calling extension (e.g. marked with `data-spindle-extension-root` internally). The helper will throw an error if you attempt to bind action listeners to system UI or another extension's DOM.*
+*Note: The binding target may be the owned placement root or any owned descendant inside a registered placement root (for example, a mounted action container). The helper throws if you target system UI or another extension's DOM.*
+
+The target must be connected and live when binding. `detail.root` (the `event.root` value) is the exact target supplied to `bindActionHandlers`, while liveness, permission, and revocation follow its nearest registered owner root. Removing or revoking that owner root automatically unbinds the listener; the returned unbind function remains safe to call after automatic cleanup.

@@ -27,7 +27,7 @@ await spindle.push.send({
   title: 'New Message',
   body: 'Alice sent you a reply',
   tag: 'chat-update',
-  url: '/#/chat/abc123',    // Where the notification click navigates
+  url: '/chat/abc123',      // Where the notification click navigates
 })
 ```
 
@@ -98,7 +98,7 @@ if (result.imageUrl) {
     title: 'Scene Generated',
     body: 'A new background image is ready',
     image: result.imageUrl,               // large image in notification body
-    url: '/#/gallery',                     // click navigates to gallery
+    url: '/gallery',                        // click navigates to gallery
     tag: 'scene-gen',
   })
 }
@@ -126,7 +126,7 @@ spindle.on('GENERATION_ENDED', async (payload) => {
       title: 'Missing You',
       body: 'Hey, are you still there? I was thinking about what you said...',
       tag: `nudge-${chatId}`,
-      url: `/#/chat/${chatId}`,
+      url: `/chat/${chatId}`,
     })
   }, 5 * 60 * 1000)
 })
@@ -146,7 +146,7 @@ async function runLongAnalysis(chatId: string) {
     title: 'Analysis Complete',
     body: `Found ${result.insights.length} insights across ${result.messagesScanned} messages`,
     tag: `analysis-${chatId}`,
-    url: `/#/chat/${chatId}`,
+    url: `/chat/${chatId}`,
   })
 }
 ```

@@ -7,7 +7,7 @@ import * as chatsSvc from "./chats.service";
 import * as worldBooksSvc from "./world-books.service";
 import * as personasSvc from "./personas.service";
 import * as settingsSvc from "./settings.service";
-import { buildContextMessages, getImageGenSettings } from "./image-gen.service";
+import { buildContextMessages, buildSceneSubjectInstructions, getImageGenSettings } from "./image-gen.service";
 import { setCharacterWorldBookIds } from "../utils/character-world-books";
 
 const USER_ID = "image-gen-context-macros-user";
@@ -71,7 +71,8 @@ describe("image-gen parser context macro resolution", () => {
     });
     const chatId = insertChat(USER_ID, char.id);
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
-      includeCharacters: false,
+      includeCharacters: true,
+      includePersona: false,
       promptContextMessageLimit: 3,
     });
 
@@ -109,6 +110,7 @@ describe("image-gen parser context macro resolution", () => {
     );
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
       includeCharacters: false,
+      includePersona: false,
       promptContextMessageLimit: 3,
     });
 
@@ -118,7 +120,7 @@ describe("image-gen parser context macro resolution", () => {
     expect(assistant?.content).toBe("Welcome, Traveler. I am Elara.");
   });
 
-  test("resolves persona block macros when Include Characters is on", async () => {
+  test("resolves persona block macros independently of Include Characters", async () => {
     seedDefaultPersona(USER_ID, {
       name: "Traveler",
       title: "Traveler the Brave",
@@ -127,7 +129,8 @@ describe("image-gen parser context macro resolution", () => {
     const char = charactersSvc.createCharacter(USER_ID, { name: "Elara" });
     const chatId = insertChat(USER_ID, char.id);
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
-      includeCharacters: true,
+      includeCharacters: false,
+      includePersona: true,
       promptContextMessageLimit: 3,
     });
 
@@ -142,6 +145,9 @@ describe("image-gen parser context macro resolution", () => {
     const content = persona?.content as string;
     expect(content).toContain("Description: Wandering as Traveler does.");
     expect(content).not.toContain("{{");
+    expect(messages.some(
+      (message) => message.role === "system" && String(message.content).startsWith("## Character Information"),
+    )).toBe(false);
   });
 
   test("passes macro-free messages through verbatim", async () => {
@@ -160,6 +166,7 @@ describe("image-gen parser context macro resolution", () => {
     );
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
       includeCharacters: false,
+      includePersona: false,
       promptContextMessageLimit: 3,
     });
 
@@ -218,7 +225,8 @@ describe("image-gen parser context macro resolution", () => {
     const cardChatId = chatsSvc.createChat(USER_ID, { character_id: character.id }).id;
 
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
-      includeCharacters: false,
+      includeCharacters: true,
+      includePersona: false,
       promptContextMessageLimit: 3,
     });
 
@@ -233,5 +241,54 @@ describe("image-gen parser context macro resolution", () => {
     const content = charInfo?.content as string;
     expect(content).toContain(`Description: Wields a relic. ${OUTLET_CONTENT}`);
     expect(content).toContain(`Scenario: The ${OUTLET_CONTENT} shines.`);
+  });
+});
+
+describe("image-gen character and persona inclusion", () => {
+  beforeEach(async () => {
+    closeDatabase();
+    initDatabase(":memory:");
+    await applyBaseline();
+  });
+
+  test("keeps legacy Include Characters rows equivalent to the old combined switch", () => {
+    settingsSvc.putSetting(USER_ID, "imageGeneration", { includeCharacters: true });
+
+    const settings = getImageGenSettings(USER_ID);
+    expect(settings.includeCharacters).toBe(true);
+    expect(settings.includePersona).toBe(true);
+  });
+
+  test("honors an explicit independent persona setting", () => {
+    settingsSvc.putSetting(USER_ID, "imageGeneration", {
+      includeCharacters: true,
+      includePersona: false,
+    });
+
+    const settings = getImageGenSettings(USER_ID);
+    expect(settings.includeCharacters).toBe(true);
+    expect(settings.includePersona).toBe(false);
+  });
+
+  test("builds character-only scene instructions without persona inclusion", () => {
+    const instructions = buildSceneSubjectInstructions(true, false);
+
+    expect(instructions).toContain("include visible roleplay characters");
+    expect(instructions).toContain("Do not include the user persona as image subjects.");
+  });
+
+  test("builds combined scene instructions when both switches are enabled", () => {
+    const instructions = buildSceneSubjectInstructions(true, true);
+
+    expect(instructions).toContain("roleplay characters and the user persona");
+    expect(instructions).not.toContain("Do not include");
+  });
+
+  test("supports persona-only and background-only scene instructions", () => {
+    const personaOnly = buildSceneSubjectInstructions(false, true);
+
+    expect(personaOnly).toContain("include the visible user persona");
+    expect(personaOnly).toContain("Do not include roleplay characters as image subjects.");
+    expect(buildSceneSubjectInstructions(false, false)).toBe("");
   });
 });

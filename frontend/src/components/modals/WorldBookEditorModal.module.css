@@ -68,6 +68,26 @@
   border-color: var(--lumiverse-primary);
 }
 
+.searchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
 .sidebarControlRow {
   display: flex;
   align-items: center;
@@ -464,6 +484,13 @@
 
 .fieldInput:focus {
   border-color: var(--lumiverse-primary);
+}
+
+/* Avoid iOS browser zoom when editing a lorebook in the pop-out modal. */
+@media (pointer: coarse) {
+  .fieldInput {
+    font-size: max(16px, calc(13px * var(--lumiverse-font-scale, 1)));
+  }
 }
 
 /* ── Entry list ── */

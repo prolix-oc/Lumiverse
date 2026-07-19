@@ -196,7 +196,7 @@ async function buildGenerationEndedNotification(
     }
   }
 
-  const targetUrl = chatId ? `/#/chat/${chatId}` : "/";
+  const targetUrl = chatId ? `/chat/${chatId}` : "/";
 
   return isError
     ? {

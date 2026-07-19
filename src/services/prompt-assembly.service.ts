@@ -19,6 +19,7 @@ import type {
   PromptBehavior,
   CompletionSettings,
   SamplerOverrides,
+  CustomBody,
   AuthorsNote,
   AdvancedSettings,
   PromptVariableDef,
@@ -40,10 +41,12 @@ import {
   resolveGroupCharacterNames,
   registry,
   initMacros,
+  withPromptBlockContext,
 } from "../macros";
 import type { MacroEnv } from "../macros";
 import {
   activateWorldInfo,
+  applyWorldInfoGroupLogic,
   finalizeActivatedWorldInfoEntries,
   type WiState,
   type WorldInfoSettings,
@@ -78,7 +81,14 @@ import * as worldBooksSvc from "./world-books.service";
 import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
-import { loadWorldBookVectorSettings } from "./world-book-vector-settings.service";
+import {
+  loadWorldBookVectorSettings,
+  type WorldBookVectorSettings,
+} from "./world-book-vector-settings.service";
+import {
+  getResolvedVectorStoreConfig,
+  type VectorStoreConfig,
+} from "./vector-store-config.service";
 import { isWorldBookEntryVectorSearchReady } from "./world-book-vector-state";
 import * as imagesSvc from "./images.service";
 import * as presetProfilesSvc from "./preset-profiles.service";
@@ -99,9 +109,11 @@ import * as regexScriptsSvc from "./regex-scripts.service";
 import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
 import { rankVectorWorldInfoCandidatesInWorker } from "./world-info-vector-ranking-worker-host";
 import {
+  buildWorldInfoLexicalQueryBatches,
   getWorldInfoVectorCandidateRecallLimit,
   type VectorActivatedEntry,
   type VectorRetrievalTraceEntry,
+  type WorldInfoVectorQueryScope,
   type VectorWorldInfoRetrievalResult,
 } from "./world-info-vector-ranking";
 import {
@@ -110,6 +122,13 @@ import {
   type BookSource,
 } from "./world-info-sources.service";
 import { promptBlockMatchesCharacterTags } from "../utils/prompt-block-character-tags";
+import {
+  isGenuinelyNewChat,
+  resolveNewChatPromptConfig,
+  resolvePromptBehavior,
+  shouldInjectEmptySendNudge,
+  shouldInjectGroupNudge,
+} from "./prompt-behavior";
 
 export type {
   VectorActivatedEntry,
@@ -141,14 +160,20 @@ const CHAT_HISTORY_KEY = "__chatHistorySource";
 const WORLD_INFO_KEY = "__worldInfoSource";
 const SOURCE_ID_KEY = "__sourceMessageId";
 const SOURCE_INDEX_KEY = "__sourceIndexInChat";
+const CONTEXT_ANCHOR_PROTECTED_KEY = "__contextAnchorProtected";
 const PRESERVE_DISPLAY_REASONING_DELIMS_KEY =
   "__preserveDisplayReasoningDelimiters";
+const CONTINUE_NUDGE_KEY = "__continueNudge";
 
 function markAsChatHistory(
   msg: LlmMessage,
   source?: { id: string; index_in_chat: number },
+  contextAnchorProtected = false,
 ): LlmMessage {
   (msg as any)[CHAT_HISTORY_KEY] = true;
+  if (contextAnchorProtected) {
+    (msg as any)[CONTEXT_ANCHOR_PROTECTED_KEY] = true;
+  }
   if (source) {
     (msg as any)[SOURCE_ID_KEY] = source.id;
     (msg as any)[SOURCE_INDEX_KEY] = source.index_in_chat;
@@ -158,6 +183,10 @@ function markAsChatHistory(
 
 export function isChatHistoryMessage(msg: LlmMessage): boolean {
   return (msg as any)[CHAT_HISTORY_KEY] === true;
+}
+
+function isContextAnchorProtected(msg: LlmMessage): boolean {
+  return (msg as any)[CONTEXT_ANCHOR_PROTECTED_KEY] === true;
 }
 
 function markAsWorldInfoEntry(msg: LlmMessage): LlmMessage {
@@ -246,6 +275,34 @@ async function yieldAndCheckAbort(signal?: AbortSignal): Promise<void> {
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
 }
 
+const REGEX_APPEND_ITEM_MAX = 10_000;
+const REGEX_APPEND_TOTAL_MAX = 50_000;
+
+/** Read the client-selected, chat-invisible appendix attached to a user turn. */
+export function getAssociativeRegexAppend(extra: Record<string, any> | null | undefined): string {
+  const raw = extra?.associative_regex_append;
+  if (!Array.isArray(raw)) return "";
+  const parts: string[] = [];
+  let total = 0;
+  for (const item of raw.slice(0, 20)) {
+    if (!item || typeof item !== "object" || typeof item.content !== "string") continue;
+    const content = item.content.trim().slice(0, REGEX_APPEND_ITEM_MAX);
+    if (!content) continue;
+    const remaining = REGEX_APPEND_TOTAL_MAX - total;
+    if (remaining <= 0) break;
+    const bounded = content.slice(0, remaining);
+    parts.push(bounded);
+    total += bounded.length;
+  }
+  return parts.join("\n");
+}
+
+function appendAssociativeRegexContext(content: string, msg: Message): string {
+  if (!msg.is_user) return content;
+  const appendix = getAssociativeRegexAppend(msg.extra);
+  return appendix ? `${content}\n\n${appendix}` : content;
+}
+
 /** True when assemblePrompt is executing inside the prompt-assembly worker
  *  isolate (flag set by prompt-assembly-worker.ts at module load). */
 function runningInAssemblyWorker(): boolean {
@@ -309,10 +366,29 @@ function stripEmptyTextParts(result: LlmMessage[]): void {
   result.length = write;
 }
 
-function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
+export function resolveContinuePostfix(
+  originalContent: string,
+  configuredPostfix: string,
+): string {
+  if (!configuredPostfix || originalContent.endsWith(configuredPostfix)) {
+    return "";
+  }
+  return configuredPostfix;
+}
+
+export function rtrimLastHistoryAssistant(
+  result: LlmMessage[],
+  preserveSourceMessageId?: string,
+): void {
   for (let i = result.length - 1; i >= 0; i--) {
     const msg = result[i];
     if (msg.role !== "assistant" || !isChatHistoryMessage(msg)) continue;
+    if (
+      preserveSourceMessageId &&
+      getSourceMessageId(msg) === preserveSourceMessageId
+    ) {
+      return;
+    }
 
     if (typeof msg.content === "string") {
       const trimmed = msg.content.replace(/\s+$/, "");
@@ -337,6 +413,68 @@ function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
     }
     return;
   }
+}
+
+function markAsContinueNudge(msg: LlmMessage): LlmMessage {
+  (msg as any)[CONTINUE_NUDGE_KEY] = true;
+  return msg;
+}
+
+function isContinueNudge(msg: LlmMessage): boolean {
+  return (msg as any)[CONTINUE_NUDGE_KEY] === true;
+}
+
+function appendTextToMessage(message: LlmMessage, text: string): LlmMessage {
+  if (!text) return message;
+  if (typeof message.content === "string") {
+    return { ...message, content: message.content + text };
+  }
+
+  const parts = [...message.content];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.type !== "text") continue;
+    parts[i] = { ...part, text: part.text + text };
+    return { ...message, content: parts };
+  }
+  parts.push({ type: "text", text });
+  return { ...message, content: parts };
+}
+
+/**
+ * Put the actual assistant turn being continued at the end of the assembled
+ * request. This preserves its postfix, keeps it adjacent to the continuation
+ * nudge, and lets continuePrefill use it as a real assistant prefill.
+ */
+export function finalizeContinuePrompt(
+  result: LlmMessage[],
+  continueMessageId: string | undefined,
+  continuePostfix: string,
+): boolean {
+  let targetIndex = -1;
+  for (let i = result.length - 1; i >= 0; i--) {
+    const message = result[i];
+    if (message.role !== "assistant" || !isChatHistoryMessage(message)) continue;
+    if (continueMessageId && getSourceMessageId(message) !== continueMessageId) continue;
+    targetIndex = i;
+    break;
+  }
+  if (targetIndex < 0) return false;
+
+  const [target] = result.splice(targetIndex, 1);
+  const continued = appendTextToMessage(target, continuePostfix);
+  // It is now fixed prompt overhead rather than chat history, so it survives
+  // history clipping and is not trimmed after we deliberately add a postfix.
+  delete (continued as any)[CHAT_HISTORY_KEY];
+  delete (continued as any)[CONTEXT_ANCHOR_PROTECTED_KEY];
+  result.push(continued);
+
+  const nudgeIndex = result.findIndex(isContinueNudge);
+  if (nudgeIndex >= 0) {
+    const [nudge] = result.splice(nudgeIndex, 1);
+    result.push(nudge);
+  }
+  return true;
 }
 
 async function applyPromptRegexScriptsBeforeClipping(
@@ -457,32 +595,6 @@ function isDecorativeNewChatSeparator(text: string): boolean {
   if (trimmed === "[Start a new Chat]") return true;
   return /^\[Start a new group chat(?:\. Group members:.*)?\]$/i.test(trimmed);
 }
-
-function isGenuinelyNewChat(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.extra?.hidden === true) continue;
-    if (!msg.is_user && msg.extra?.greeting !== true) return false;
-  }
-  return true;
-}
-
-function resolveNewChatPromptConfig(
-  promptBehavior: PromptBehavior,
-  chat: Chat,
-): { prompt: string | undefined; label: string } {
-  if (chat.metadata?.group === true) {
-    return {
-      prompt: promptBehavior.newGroupChatPrompt ?? promptBehavior.newChatPrompt,
-      label: "New Group Chat Prompt",
-    };
-  }
-  return {
-    prompt: promptBehavior.newChatPrompt,
-    label: "New Chat Prompt",
-  };
-}
-
-const DEFAULT_EMPTY_SEND_NUDGE = "[Write the next reply only as {{char}}.]";
 
 // ---------------------------------------------------------------------------
 // Attachment resolution — read image/audio files from disk into base64
@@ -869,6 +981,21 @@ function appendBaseRole(role: string): "user" | "assistant" {
 }
 
 /**
+ * Resolve one preset block within its own placement context. This deliberately
+ * wraps the existing single macro evaluation rather than scheduling a second
+ * pass, so the placement macros are strictly observational.
+ */
+async function evaluatePromptBlockContent(
+  content: string,
+  macroEnv: MacroEnv,
+  block: Pick<PromptBlock, "role" | "position" | "depth">,
+): Promise<string> {
+  return withPromptBlockContext(macroEnv, block, async () =>
+    (await evaluate(content, macroEnv, registry)).text,
+  );
+}
+
+/**
  * Walk enabled prompt blocks, merge stored overrides over creator defaults,
  * coerce + clamp per variable type, and publish the result on env.extra so
  * {{var::name}} / {{hasVar::name}} / {{varDefault::name}} resolve consistently
@@ -1018,6 +1145,83 @@ export function coercePromptVariable(
   }
 }
 
+const PROMPT_BLOCK_ROLES = new Set<PromptBlock["role"]>([
+  "system",
+  "user",
+  "assistant",
+  "user_append",
+  "assistant_append",
+]);
+const PROMPT_BLOCK_POSITIONS = new Set<PromptBlock["position"]>([
+  "pre_history",
+  "post_history",
+  "in_history",
+]);
+
+function isPromptBlockPlacement(value: unknown): value is Pick<PromptBlock, "role" | "position" | "depth"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const placement = value as Partial<Pick<PromptBlock, "role" | "position" | "depth">>;
+  return (
+    typeof placement.role === "string" &&
+    PROMPT_BLOCK_ROLES.has(placement.role as PromptBlock["role"]) &&
+    typeof placement.position === "string" &&
+    PROMPT_BLOCK_POSITIONS.has(placement.position as PromptBlock["position"]) &&
+    typeof placement.depth === "number" &&
+    Number.isFinite(placement.depth) &&
+    placement.depth >= 0
+  );
+}
+
+/**
+ * Resolve select-variable placement bindings without rendering any macros.
+ * This is deliberately a lightweight configuration projection before the
+ * existing single content-render pass; the persisted block remains unchanged.
+ */
+export function resolvePromptBlockPlacements(
+  blocks: PromptBlock[],
+  preset: Pick<Preset, "metadata"> | null,
+): PromptBlock[] {
+  const stored = (preset?.metadata?.promptVariables ?? {}) as Record<
+    string,
+    Record<string, PromptVariableValue>
+  >;
+
+  return blocks.map((block) => {
+    const binding = block.placementBinding;
+    if (
+      !binding ||
+      typeof binding.variableId !== "string" ||
+      !binding.variableId ||
+      !binding.options ||
+      typeof binding.options !== "object" ||
+      Array.isArray(binding.options)
+    ) {
+      return block;
+    }
+    const selector = block.variables?.find(
+      (variable) => variable.id === binding.variableId && variable.type === "select",
+    );
+    if (!selector) return block;
+
+    const selectedId = coercePromptVariable(
+      selector,
+      stored[block.id]?.[selector.name],
+    ).selectedIds[0];
+    if (!selectedId || !Object.prototype.hasOwnProperty.call(binding.options, selectedId)) {
+      return block;
+    }
+    const placement = binding.options[selectedId];
+    if (!isPromptBlockPlacement(placement)) return block;
+
+    return {
+      ...block,
+      role: placement.role,
+      position: placement.position,
+      depth: Math.floor(placement.depth),
+    };
+  });
+}
+
 function clampNumber(
   value: number,
   min: number | undefined,
@@ -1144,6 +1348,20 @@ export async function assemblePrompt(
   const messages = ctx.excludeMessageId
     ? allMessages.filter((m) => m.id !== ctx.excludeMessageId)
     : allMessages;
+  const contextAnchorMessageId =
+    typeof chat.metadata?.context_history_anchor_message_id === "string"
+      ? chat.metadata.context_history_anchor_message_id
+      : null;
+  const contextAnchorMessage = contextAnchorMessageId
+    ? allMessages.find(
+        (message) =>
+          message.id === contextAnchorMessageId && message.extra?.hidden !== true,
+      )
+    : undefined;
+  // Use the stored chat index rather than the filtered-message position so an
+  // anchor still protects following history during regenerate/swipe, where the
+  // target message itself is temporarily excluded from prompt assembly.
+  const contextAnchorIndex = contextAnchorMessage?.index_in_chat;
   // For group chats, resolve the target character; fall back to the chat's primary character
   const characterId = ctx.targetCharacterId || chat.character_id;
   // Temporary chats have no character: a synthetic "Assistant" stands in so
@@ -1179,10 +1397,12 @@ export async function assemblePrompt(
   // preset selection for the active chat/character context. No-preset temp
   // chats opt out entirely — no preset blocks or parameters, no bindings, no
   // fallback — so assembly drops to the raw legacy message mapping below.
-  const noPreset = isNoPresetChatMetadata(chat.metadata);
+  const noPreset = isNoPresetChatMetadata(chat.metadata) && !ctx.presetOverride;
   const requestedPresetId = noPreset ? null : ctx.presetId || connection?.preset_id || null;
   const resolvedProfile =
-    noPreset
+    ctx.presetOverride || ctx.skipPresetProfileBinding
+      ? { preset_id: ctx.presetOverride?.id ?? requestedPresetId, binding: null, source: "none" as const }
+      : noPreset
       ? { preset_id: null, binding: null, source: "none" as const }
       : ctx.forcePresetId && ctx.presetId
         ? { preset_id: ctx.presetId, binding: null, source: "none" as const }
@@ -1195,9 +1415,11 @@ export async function assemblePrompt(
           );
   const resolvedPresetId = resolvedProfile.preset_id;
 
-  let preset: Preset | null = null;
+  let preset: Preset | null = ctx.presetOverride ?? null;
   const prefetchedPreset = noPreset ? null : pf?.preset !== undefined ? pf.preset : null;
-  if (resolvedPresetId) {
+  if (ctx.presetOverride) {
+    preset = ctx.presetOverride;
+  } else if (resolvedPresetId) {
     preset =
       prefetchedPreset?.id === resolvedPresetId
         ? prefetchedPreset
@@ -1211,7 +1433,10 @@ export async function assemblePrompt(
     (b: PromptBlock) => ({ ...b }),
   );
   const prompts = preset?.prompts ?? {};
-  const promptBehavior: PromptBehavior = prompts.promptBehavior ?? {};
+  // Presets may predate a behavior field, arrive from a partial import, or
+  // never have been opened by the Loom editor. Resolve their behavior values
+  // at the generation boundary so every mode shares the same reliable defaults.
+  const promptBehavior = resolvePromptBehavior(prompts.promptBehavior);
   const completionSettings: CompletionSettings =
     prompts.completionSettings ?? {};
   const samplerOverrides: SamplerOverrides | null =
@@ -1223,9 +1448,6 @@ export async function assemblePrompt(
   }
   presetProfilesSvc.normalizeCategoryBlockStates(blocks);
 
-  // Reorder blocks so the position field (pre_history / post_history /
-  // in_history) is honoured relative to the chat_history marker.
-  reorderBlocksByPosition(blocks);
   profiler.addPhase("load-core-data", performance.now() - phaseStartedAt);
 
   // If no blocks, fall back to legacy mapping
@@ -1238,6 +1460,7 @@ export async function assemblePrompt(
       chat,
       connection,
       ctx.userId,
+      ctx.userInput,
       ctx.signal,
     );
   }
@@ -1588,6 +1811,7 @@ export async function assemblePrompt(
     ctx.userId,
     messages,
     ctx.chatId,
+    worldInfoSettings,
   );
   const currentWorldInfoEntryIds = new Set(wiEntries.map((entry) => entry.id));
   let vectorActivated = ctx.precomputedVectorEntries
@@ -1605,6 +1829,7 @@ export async function assemblePrompt(
         wiEntries,
         messages,
         ctx.signal,
+        worldInfoSettings,
       );
       vectorActivated = detailed.entries;
       vectorRetrievalDetails = detailed;
@@ -1648,6 +1873,7 @@ export async function assemblePrompt(
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
   const wiCache = mergedWorldInfo.cache;
   wiResult.activatedEntries = mergedWorldInfo.activatedEntries;
@@ -1737,8 +1963,10 @@ export async function assemblePrompt(
     chat,
     messages,
     generationType: ctx.generationType,
+    commit: ctx.macroCommit,
     connection,
     rejectedSwipe: ctx.rejectedSwipe,
+    userInput: ctx.userInput,
     groupCharacterNames,
     groupNotMutedNames,
     targetCharacterId: ctx.targetCharacterId,
@@ -1756,6 +1984,12 @@ export async function assemblePrompt(
   // surface them on env.extra so {{var::name}} / {{hasVar::name}} / {{varDefault::name}}
   // can read consistent values across every block in this assembly.
   resolvePromptVariables(macroEnv, blocks, preset);
+
+  // A select variable may choose an in-memory insertion profile for its own
+  // block. Project that configuration before ordering/rendering, rather than
+  // asking macro output to mutate placement during the render pass.
+  const effectiveBlocks = resolvePromptBlockPlacements(blocks, preset);
+  reorderBlocksByPosition(effectiveBlocks);
 
   // Use prefetched settings or batch-load all needed settings in a single query
   const settingsMap =
@@ -1786,8 +2020,15 @@ export async function assemblePrompt(
       "council_settings",
     ]);
 
-  // Populate reasoning macros from user settings
-  const reasoningVal = settingsMap.get("reasoningSettings");
+  // A connection's reasoning binding is the effective source for all
+  // reasoning settings, including its custom request body. Fall back to the
+  // user's global setting when the connection is unbound.
+  const reasoningVal = resolveEffectiveReasoningSettings(
+    connection,
+    settingsMap.get("reasoningSettings"),
+  );
+
+  // Populate reasoning macros from the effective settings.
   if (reasoningVal) {
     macroEnv.extra.reasoningPrefix = reasoningVal.prefix ?? "";
     macroEnv.extra.reasoningSuffix = reasoningVal.suffix ?? "";
@@ -1950,11 +2191,17 @@ export async function assemblePrompt(
       : linkedMemoryText
     : memoryResult.formatted;
 
+  const memoryInjectionStrategy =
+    chatMemSettings?.injectionStrategy ??
+    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
+  const effectiveMemoryEnabled =
+    memoryResult.enabled && memoryInjectionStrategy !== "disabled";
+
   macroEnv.extra.memory = {
     chunks: memoryResult.chunks,
     formatted: combinedFormatted,
     count: memoryResult.count,
-    enabled: memoryResult.enabled,
+    enabled: effectiveMemoryEnabled,
     settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
   };
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
@@ -2006,12 +2253,12 @@ export async function assemblePrompt(
   profiler.addPhase("databank-retrieval", performance.now() - phaseStartedAt);
 
   // Detect if any enabled block uses the {{memories}} macro
-  const macroHandlesMemory = blocks.some(
+  const macroHandlesMemory = effectiveBlocks.some(
     (b) => b.enabled && b.content && /\{\{memories(\b|::|\}\})/.test(b.content),
   );
 
   // Detect if any enabled block uses the {{databank}} macro
-  const macroHandlesDatabank = blocks.some(
+  const macroHandlesDatabank = effectiveBlocks.some(
     (b) => b.enabled && b.content && /\{\{databank(\b|::|\}\})/.test(b.content),
   );
 
@@ -2201,7 +2448,7 @@ export async function assemblePrompt(
   // advances. The final block's after-entries are flushed after the loop.
   let pendingPinnedAfter: PinnedMarkerEntry[] | null = null;
 
-  for (const block of blocks) {
+  for (const block of effectiveBlocks) {
     // Flush the previous block's marker-pinned "after" entries before this
     // iteration emits anything. Runs unconditionally — it belongs to the
     // previous block, so it must land even if this block is skipped below.
@@ -2246,8 +2493,13 @@ export async function assemblePrompt(
     // ---- Handle by marker type ----
 
     if (block.marker === "chat_history") {
-      // Inject memories as system message ONLY if no macro handles them
-      if (!macroHandlesMemory && memoryResult.count > 0) {
+      // Inject memories as system message ONLY if no macro handles them AND
+      // the global injection strategy allows fallback injection.
+      if (
+        !macroHandlesMemory &&
+        memoryResult.count > 0 &&
+        memoryInjectionStrategy === "fallback"
+      ) {
         const memoryContent = memoryResult.formatted;
         result.push({ role: "system", content: memoryContent });
         breakdown.push({
@@ -2275,7 +2527,10 @@ export async function assemblePrompt(
         const {
           prompt: newChatPrompt,
           label: newChatPromptLabel,
-        } = resolveNewChatPromptConfig(promptBehavior, chat);
+        } = resolveNewChatPromptConfig(
+          promptBehavior,
+          chat.metadata?.group === true,
+        );
         if (newChatPrompt) {
           const resolved = (await evaluate(newChatPrompt, macroEnv, registry))
             .text;
@@ -2325,9 +2580,22 @@ export async function assemblePrompt(
         summarizationSettings.messageLimitCount != null &&
         summarizationSettings.messageLimitCount > 0
       ) {
-        effectiveMessages = messages.slice(
-          -summarizationSettings.messageLimitCount,
+        const requestedStart = Math.max(
+          0,
+          messages.length - summarizationSettings.messageLimitCount,
         );
+        const anchorStart = contextAnchorIndex == null
+          ? -1
+          : messages.findIndex(
+              (message) => message.index_in_chat >= contextAnchorIndex,
+            );
+        // An anchor tail always wins over the count-based Message Limit. This
+        // may include more than N messages, but never slices the marked
+        // message or anything newer out of model context.
+        const start = anchorStart >= 0
+          ? Math.min(requestedStart, anchorStart)
+          : requestedStart;
+        effectiveMessages = messages.slice(start);
       }
       const generatedImageContextPolicy = resolveGeneratedImageContextPolicy(
         settingsMap.get("imageGeneration"),
@@ -2386,11 +2654,12 @@ export async function assemblePrompt(
           rawContent.includes("<USER>") ||
           rawContent.includes("<BOT>") ||
           rawContent.includes("<CHAR>");
-        const resolvedContent = needsEval
+        const visibleResolvedContent = needsEval
           ? healFormattingArtifacts(
               (await evaluate(rawContent, macroEnv, registry)).text,
             )
           : rawContent;
+        const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
         const attachments = attachmentsForContext(msg, generatedImageContextPolicy);
         if (msg.extra?.image_gen && resolvedContent.trim().length === 0 && attachments.length === 0) {
           continue;
@@ -2432,16 +2701,33 @@ export async function assemblePrompt(
             }
           }
           const source = { id: msg.id, index_in_chat: msg.index_in_chat };
+          const contextAnchorProtected =
+            contextAnchorIndex != null &&
+            msg.index_in_chat >= contextAnchorIndex;
           if (parts.length > 0) {
-            result.push(markAsChatHistory({ role, content: parts }, source));
+            result.push(
+              markAsChatHistory(
+                { role, content: parts },
+                source,
+                contextAnchorProtected,
+              ),
+            );
           } else {
-            result.push(markAsChatHistory({ role, content: contentForPrompt }, source));
+            result.push(
+              markAsChatHistory(
+                { role, content: contentForPrompt },
+                source,
+                contextAnchorProtected,
+              ),
+            );
           }
         } else {
           result.push(
             markAsChatHistory(
               { role, content: contentForPrompt },
               { id: msg.id, index_in_chat: msg.index_in_chat },
+              contextAnchorIndex != null &&
+                msg.index_in_chat >= contextAnchorIndex,
             ),
           );
         }
@@ -2575,7 +2861,7 @@ export async function assemblePrompt(
     ) {
       const macro = MARKER_TO_MACRO[block.marker];
       const resolved = normalizePromptBlockText(
-        (await evaluate(macro, macroEnv, registry)).text,
+        await evaluatePromptBlockContent(macro, macroEnv, block),
       );
       if (resolved) {
         const role = (block.role || "system") as LlmMessage["role"];
@@ -2602,7 +2888,11 @@ export async function assemblePrompt(
     ) {
       phiMacroReferenced = true;
     }
-    const rawResolved = (await evaluate(content, macroEnv, registry)).text;
+    const rawResolved = await evaluatePromptBlockContent(
+      content,
+      macroEnv,
+      block,
+    );
 
     // Append roles: collect for deferred application after full assembly.
     // Check BEFORE the trim gate so whitespace-only appends (e.g. lone
@@ -2870,10 +3160,11 @@ export async function assemblePrompt(
         content: oocContent,
       });
     } else {
-      // Append to the last user message
+      // Append to the last real chat-history user message so preset-added
+      // user prompts (e.g. CoT instructions placed after history) don't steal it.
       let injected = false;
       for (let i = result.length - 1; i >= 0; i--) {
-        if (result[i].role === "user") {
+        if (result[i].role === "user" && isChatHistoryMessage(result[i])) {
           if (typeof result[i].content === "string") {
             result[i] = {
               ...result[i],
@@ -2918,7 +3209,10 @@ export async function assemblePrompt(
     }
   }
 
-  // Continue type: append continueNudge (unless continuePrefill is on)
+  // Continue nudge is tagged now and moved after the continued assistant turn
+  // once prompt regexes/macros have run. Keeping it in the assembly until then
+  // preserves normal prompt-regex behavior without letting later prompt blocks
+  // separate it from the message it refers to.
   if (
     ctx.generationType === "continue" &&
     !completionSettings.continuePrefill
@@ -2927,46 +3221,13 @@ export async function assemblePrompt(
     if (nudge) {
       const resolved = (await evaluate(nudge, macroEnv, registry)).text;
       if (resolved) {
-        result.push({ role: "system", content: resolved });
+        result.push(markAsContinueNudge({ role: "system", content: resolved }));
         breakdown.push({
           type: "utility",
           name: "Continue Nudge",
           role: "system",
           content: resolved,
         });
-      }
-    }
-  }
-
-  // Continue type: apply continuePostfix to last assistant message
-  if (ctx.generationType === "continue" && completionSettings.continuePostfix) {
-    for (let i = result.length - 1; i >= 0; i--) {
-      if (result[i].role === "assistant") {
-        if (typeof result[i].content === "string") {
-          result[i] = {
-            ...result[i],
-            content: result[i].content + completionSettings.continuePostfix,
-          };
-        } else {
-          const parts = [
-            ...(result[i].content as import("../llm/types").LlmMessagePart[]),
-          ];
-          const textIdx = parts.findIndex((p) => p.type === "text");
-          if (textIdx >= 0) {
-            const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
-            parts[textIdx] = {
-              type: "text",
-              text: tp.text + completionSettings.continuePostfix,
-            };
-          } else {
-            parts.push({
-              type: "text",
-              text: completionSettings.continuePostfix,
-            });
-          }
-          result[i] = { ...result[i], content: parts };
-        }
-        break;
       }
     }
   }
@@ -3022,18 +3283,15 @@ export async function assemblePrompt(
   // Empty-send nudge: normal generations that start from an assistant-ending
   // chat need a fresh user turn so providers produce a new reply instead of
   // relying on continue semantics. Group/member-targeted nudges use groupNudge.
-  const lastVisibleChatMessage = [...messages]
-    .reverse()
-    .find((msg) => msg.extra?.hidden !== true);
   if (
-    ctx.generationType === "normal" &&
-    !ctx.targetCharacterId &&
-    lastVisibleChatMessage &&
-    !lastVisibleChatMessage.is_user &&
     result.length > 0 &&
-    result[result.length - 1].role !== "user"
+    shouldInjectEmptySendNudge({
+      generationType: ctx.generationType,
+      targetCharacterId: ctx.targetCharacterId,
+      messages,
+    })
   ) {
-    const nudge = promptBehavior.emptySendNudge ?? DEFAULT_EMPTY_SEND_NUDGE;
+    const nudge = promptBehavior.emptySendNudge;
     if (nudge) {
       const resolved = (await evaluate(nudge, macroEnv, registry)).text;
       if (resolved) {
@@ -3052,7 +3310,15 @@ export async function assemblePrompt(
   let assistantPrefill: string | undefined;
 
   // Group chat nudge from preset (e.g. "[Write next reply only as {{char}}]")
-  if (ctx.targetCharacterId) {
+  if (
+    shouldInjectGroupNudge({
+      isGroupChat: chat.metadata?.group === true,
+      groupCharacterIds: Array.isArray(chat.metadata?.character_ids)
+        ? (chat.metadata.character_ids as string[])
+        : [],
+      targetCharacterId: ctx.targetCharacterId,
+    })
+  ) {
     const groupNudge = promptBehavior.groupNudge;
     if (groupNudge) {
       const resolved = (await evaluate(groupNudge, macroEnv, registry)).text;
@@ -3068,7 +3334,10 @@ export async function assemblePrompt(
     }
   }
 
-  // Collect assistant prefill: promptBias (Start Reply With) + assistantPrefill/assistantImpersonation
+  // A continuation owns its assistant prefill: the assistant turn being
+  // continued is moved to the end of the request below. Adding a second generic
+  // assistant prefill would make the provider continue that text instead, while
+  // the response still gets appended to the original chat message.
   const prefillParts: string[] = [];
 
   // A connection profile can bind its own Start Reply With value alongside its
@@ -3080,6 +3349,7 @@ export async function assemblePrompt(
     ? boundPromptBias
     : settingsMap.get("promptBias");
   if (
+    ctx.generationType !== "continue" &&
     promptBiasVal &&
     typeof promptBiasVal === "string" &&
     promptBiasVal.trim()
@@ -3090,10 +3360,11 @@ export async function assemblePrompt(
   }
 
   const csPrefill =
-    ctx.generationType === "impersonate" &&
-    completionSettings.assistantImpersonation
-      ? completionSettings.assistantImpersonation
-      : completionSettings.assistantPrefill;
+    ctx.generationType === "continue"
+      ? ""
+      : ctx.generationType === "impersonate" && completionSettings.assistantImpersonation
+        ? completionSettings.assistantImpersonation
+        : completionSettings.assistantPrefill;
   if (csPrefill) {
     const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
       .text;
@@ -3108,20 +3379,6 @@ export async function assemblePrompt(
       name: "Assistant Prefill",
       role: "assistant",
       content: assistantPrefill,
-    });
-  } else if (
-    ctx.generationType === "continue" &&
-    result.length > 0 &&
-    result[result.length - 1].role === "assistant"
-  ) {
-    // Continue generation with no explicit prefill — add a minimal nudge so the
-    // conversation ends on a user message (required by most providers).
-    result.push({ role: "user", content: "[Continue]" });
-    breakdown.push({
-      type: "utility",
-      name: "User Nudge",
-      role: "user",
-      content: "[Continue]",
     });
   }
 
@@ -3155,7 +3412,10 @@ export async function assemblePrompt(
   // Strip trailing whitespace from the last chat-history assistant message.
   // Anthropic (and other strict providers) reject turns ending in whitespace;
   // explicit prefills are left alone so users can intentionally seed responses.
-  rtrimLastHistoryAssistant(result);
+  rtrimLastHistoryAssistant(
+    result,
+    ctx.generationType === "continue" ? ctx.continueMessageId : undefined,
+  );
 
   // Drop blank text parts from multipart messages — caption-less attachments,
   // fully-stripped regex output, etc. can otherwise produce empty content blocks
@@ -3199,6 +3459,31 @@ export async function assemblePrompt(
   );
   stripEmptyTextParts(result);
 
+  if (ctx.generationType === "continue") {
+    const finalized = finalizeContinuePrompt(
+      result,
+      ctx.continueMessageId,
+      ctx.continuePostfix ?? "",
+    );
+    if (finalized) {
+      const continued = [...result].reverse().find(
+        (message) =>
+          message.role === "assistant" &&
+          !isChatHistoryMessage(message) &&
+          (!ctx.continueMessageId ||
+            getSourceMessageId(message) === ctx.continueMessageId),
+      );
+      if (continued) {
+        breakdown.push({
+          type: "utility",
+          name: "Continue Target",
+          role: "assistant",
+          content: getTextContent(continued),
+        });
+      }
+    }
+  }
+
   // ---- Context budget clipping ----
   // Drop oldest chat history messages until the assembly fits under the
   // configured `max_context_length` (minus response headroom + safety margin).
@@ -3220,15 +3505,17 @@ export async function assemblePrompt(
 
   // Build memory stats for dry-run diagnostics
   const memoryStats: MemoryStats = {
-    enabled: memoryResult.enabled,
+    enabled: effectiveMemoryEnabled,
     chunksRetrieved: memoryResult.count,
     chunksAvailable: memoryResult.chunksAvailable,
     chunksPending: memoryResult.chunksPending,
-    injectionMethod: !memoryResult.enabled
+    injectionMethod: !effectiveMemoryEnabled
       ? "disabled"
       : macroHandlesMemory
         ? "macro"
-        : "fallback",
+        : memoryInjectionStrategy === "fallback"
+          ? "fallback"
+          : "disabled",
     retrievedChunks: memoryResult.chunks.map((c) => ({
       score: c.score,
       tokenEstimate: Math.ceil(c.content.length / 4),
@@ -3562,6 +3849,7 @@ export interface MergedWorldInfoEntriesResult {
   evictedByBudget: number;
   deduplicated: number;
   deduplicationDetails: import("./world-info-dedup.service").DedupRemovalRecord[];
+  vectorDispositions: Map<string, WorldInfoVectorMergeDisposition>;
   mergeDurationMs?: number;
 }
 
@@ -3683,97 +3971,54 @@ export function vectorPriorityBoost(finalScore: number | undefined): number {
   return Math.max(0, Math.min(VECTOR_PRIORITY_BOOST_MAX, raw));
 }
 
-/**
- * Returns a shallow-cloned array where vector-sourced entries have their
- * priority increased by a bounded, score-derived boost. Used only when the
- * entry-count budget is full so vectors can compete on their retrieval
- * score rather than losing to equal-priority keyword entries on the
- * order_value tiebreaker. Originals are never mutated.
- */
-export function applyVectorPriorityBoost<
-  T extends { id: string; priority: number },
->(
-  entries: T[],
-  sources: Map<string, { source: "keyword" | "vector"; score?: number }>,
-  candidate?: { entry: { id: string }; finalScore: number },
-): T[] {
-  return entries.map((entry) => {
-    const src =
-      candidate && entry.id === candidate.entry.id
-        ? { source: "vector" as const, score: candidate.finalScore }
-        : sources.get(entry.id);
-    if (!src || src.source !== "vector") return entry;
-    const boost = vectorPriorityBoost(src.score);
-    if (boost === 0) return entry;
-    return { ...entry, priority: entry.priority + boost };
-  });
+export type WorldInfoVectorMergeDispositionCode =
+  | "already_keyword"
+  | "blocked_by_min_priority"
+  | "blocked_by_group"
+  | "blocked_by_max_entries"
+  | "blocked_by_token_budget"
+  | "deduplicated"
+  | "activated";
+
+export interface WorldInfoVectorMergeDisposition {
+  code: WorldInfoVectorMergeDispositionCode;
+  conflictingEntry?: WorldBookEntryModel;
+  conflictingSource?: "keyword" | "vector";
+  dedupRecord?: import("./world-info-dedup.service").DedupRemovalRecord;
 }
 
-/**
- * `finalizeActivatedWorldInfoEntries` receives priority-boosted clones when
- * `applyVectorPriorityBoost` was used; rebuild its `activatedEntries` from
- * the original (unboosted) entries so downstream consumers read the user's
- * configured priority, not the internal competition value.
- */
-function remapFinalizedToOriginalEntries(
-  finalized: FinalizedWorldInfoEntries,
-  originals: WorldBookEntryModel[],
-): FinalizedWorldInfoEntries {
-  const byId = new Map(originals.map((e) => [e.id, e]));
-  const activatedEntries = finalized.activatedEntries
-    .map((e) => byId.get(e.id))
-    .filter((e): e is WorldBookEntryModel => !!e);
-  return { ...finalized, activatedEntries };
+export interface WorldInfoMergeSelection {
+  finalized: FinalizedWorldInfoEntries;
+  sources: Map<string, { source: "keyword" | "vector"; score?: number }>;
+  dedupResult: ReturnType<typeof deduplicateWorldInfoEntries>;
+  dispositions: Map<string, WorldInfoVectorMergeDisposition>;
 }
 
-export function mergeActivatedWorldInfoEntries(
+export function selectMergedWorldInfoEntries(
   keywordEntries: WorldBookEntryModel[],
   vectorEntries: VectorActivatedEntry[],
   settingsInput?: Partial<WorldInfoSettings>,
   bookSourceMap?: Map<string, BookSource>,
-): MergedWorldInfoEntriesResult {
-  const mergeStartedAt = performance.now();
+): WorldInfoMergeSelection {
   const settings = normalizeWorldInfoSettings(settingsInput);
   const mergedEntries: WorldBookEntryModel[] = [];
-  const sources = new Map<
-    string,
-    { source: "keyword" | "vector"; score?: number }
-  >();
+  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
+  const dispositions = new Map<string, WorldInfoVectorMergeDisposition>();
   const seen = new Set<string>();
-  const occupiedGroups = new Set<string>();
-  const maxActivatedTarget =
-    settings.maxActivatedEntries > 0
-      ? settings.maxActivatedEntries
-      : Number.POSITIVE_INFINITY;
-  const getGroupKey = (entry: WorldBookEntryModel): string | null => {
-    const groupName =
-      typeof entry.group_name === "string" ? entry.group_name.trim() : "";
-    return groupName ? groupName.toLowerCase() : null;
-  };
+  const vectorEntryIds = new Set(vectorEntries.map((item) => item.entry.id));
 
   for (const entry of keywordEntries) {
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
     mergedEntries.push(entry);
     sources.set(entry.id, { source: "keyword" });
-    const groupKey = getGroupKey(entry);
-    if (groupKey) occupiedGroups.add(groupKey);
   }
-
-  let finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings, {
-    skipGroupLogic: true,
-    preserveOrder: true,
-  });
-
-  let vectorSkippedBudget = 0;
-  let vectorSkippedMinPriority = 0;
-  let vectorSkippedGroup = 0;
-  let vectorSkippedDedup = 0;
-  let vectorSkippedBudgetSim = 0;
 
   for (const item of vectorEntries) {
     if (seen.has(item.entry.id)) {
-      vectorSkippedDedup++;
+      if (sources.get(item.entry.id)?.source === "keyword") {
+        dispositions.set(item.entry.id, { code: "already_keyword" });
+      }
       continue;
     }
     if (
@@ -3781,107 +4026,121 @@ export function mergeActivatedWorldInfoEntries(
       item.entry.priority < settings.minPriority &&
       !item.entry.constant
     ) {
-      vectorSkippedMinPriority++;
+      dispositions.set(item.entry.id, { code: "blocked_by_min_priority" });
       continue;
     }
-
-    const groupKey = getGroupKey(item.entry);
-    if (groupKey && occupiedGroups.has(groupKey)) {
-      vectorSkippedGroup++;
-      continue;
-    }
-
-    // When the entry-count budget is already full from keyword entries, use
-    // priority ordering so higher-priority vector entries can displace
-    // lower-priority keyword entries instead of being blanket-rejected.
-    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
-    const nextMergedEntries = [...mergedEntries, item.entry];
-    // When budget is full and priorities tie, order_value-ascending alone
-    // decides — and vector candidates (drawn from big books with large
-    // order_values) always lose. Apply a score-derived priority boost to
-    // vector entries so genuinely relevant hits can displace equal-priority
-    // keyword entries. The boost is bounded so it never overrides a
-    // meaningful user-set priority gap. We clone the entries for the
-    // finalize call and map back to originals afterwards so downstream
-    // consumers still see the user's configured priority.
-    const finalizeInput = budgetFull
-      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
-      : nextMergedEntries;
-    const rawNextFinalized = finalizeActivatedWorldInfoEntries(
-      finalizeInput,
-      settings,
-      {
-        skipGroupLogic: true,
-        preserveOrder: !budgetFull,
-      },
-    );
-    const nextFinalized = budgetFull
-      ? remapFinalizedToOriginalEntries(rawNextFinalized, nextMergedEntries)
-      : rawNextFinalized;
-    const itemSurvived = nextFinalized.activatedEntries.some(
-      (entry) => entry.id === item.entry.id,
-    );
-    const grewActivationSet =
-      nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
-
-    if (!itemSurvived) {
-      if (budgetFull) vectorSkippedBudget++;
-      else vectorSkippedBudgetSim++;
-      continue;
-    }
-    // When budget has room, require growth to avoid unnecessary displacement
-    // from token budget enforcement. When budget is full, displacement is
-    // expected — priority ordering ensures only deserving entries win.
-    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
-      vectorSkippedBudgetSim++;
-      continue;
-    }
-
-    mergedEntries.push(item.entry);
     seen.add(item.entry.id);
-    if (groupKey) occupiedGroups.add(groupKey);
+    mergedEntries.push(item.entry);
     sources.set(item.entry.id, { source: "vector", score: item.finalScore });
-    finalized = nextFinalized;
   }
 
+  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
+  for (const removed of dedupResult.removed) {
+    sources.delete(removed.removedEntryId);
+    if (vectorEntryIds.has(removed.removedEntryId)) {
+      dispositions.set(removed.removedEntryId, {
+        code: "deduplicated",
+        dedupRecord: removed,
+      });
+    }
+  }
+
+  // Group selection uses configured priorities and weights. Retrieval-score
+  // boosts are intentionally introduced only after this step.
+  const groupSelected = applyWorldInfoGroupLogic(dedupResult.entries);
+  const groupSelectedIds = new Set(groupSelected.map((entry) => entry.id));
+  for (const item of vectorEntries) {
+    if (dispositions.has(item.entry.id) || groupSelectedIds.has(item.entry.id)) continue;
+    const conflictingEntry = groupSelected.find(
+      (entry) => entry.group_name && entry.group_name === item.entry.group_name,
+    );
+    dispositions.set(item.entry.id, {
+      code: "blocked_by_group",
+      conflictingEntry,
+      conflictingSource: conflictingEntry
+        ? sources.get(conflictingEntry.id)?.source
+        : undefined,
+    });
+  }
+
+  const hasBudget = settings.maxActivatedEntries > 0 || settings.maxTokenBudget > 0;
+  const budgetPriorityById = new Map<string, number>();
+  if (hasBudget) {
+    for (const entry of groupSelected) {
+      const source = sources.get(entry.id);
+      budgetPriorityById.set(
+        entry.id,
+        entry.priority + (source?.source === "vector" ? vectorPriorityBoost(source.score) : 0),
+      );
+    }
+  }
+
+  const competitionOrder = [...groupSelected].sort((a, b) => {
+    const aPriority = budgetPriorityById.get(a.id) ?? a.priority;
+    const bPriority = budgetPriorityById.get(b.id) ?? b.priority;
+    if (bPriority !== aPriority) return bPriority - aPriority;
+    return a.order_value - b.order_value;
+  });
+  let entryCapSurvivorIds = new Set(competitionOrder.map((entry) => entry.id));
+  if (settings.maxActivatedEntries > 0 && competitionOrder.length > settings.maxActivatedEntries) {
+    const constants = competitionOrder.filter((entry) => entry.constant);
+    const nonConstants = competitionOrder.filter((entry) => !entry.constant);
+    const remaining = Math.max(0, settings.maxActivatedEntries - constants.length);
+    entryCapSurvivorIds = new Set([
+      ...constants,
+      ...nonConstants.slice(0, remaining),
+    ].map((entry) => entry.id));
+  }
+
+  const finalized = finalizeActivatedWorldInfoEntries(groupSelected, settings, {
+    skipGroupLogic: true,
+    preserveOrder: !hasBudget,
+    budgetPriorityById,
+  });
+  const activatedIds = new Set(finalized.activatedEntries.map((entry) => entry.id));
+  for (const item of vectorEntries) {
+    if (dispositions.has(item.entry.id)) continue;
+    if (activatedIds.has(item.entry.id)) {
+      dispositions.set(item.entry.id, { code: "activated" });
+    } else if (!entryCapSurvivorIds.has(item.entry.id)) {
+      dispositions.set(item.entry.id, { code: "blocked_by_max_entries" });
+    } else {
+      dispositions.set(item.entry.id, { code: "blocked_by_token_budget" });
+    }
+  }
+
+  return { finalized, sources, dedupResult, dispositions };
+}
+
+export function mergeActivatedWorldInfoEntries(
+  keywordEntries: WorldBookEntryModel[],
+  vectorEntries: VectorActivatedEntry[],
+  settingsInput?: Partial<WorldInfoSettings>,
+  bookSourceMap?: Map<string, BookSource>,
+  bookNameMap?: Map<string, string>,
+): MergedWorldInfoEntriesResult {
+  const mergeStartedAt = performance.now();
+  const selection = selectMergedWorldInfoEntries(
+    keywordEntries,
+    vectorEntries,
+    settingsInput,
+    bookSourceMap,
+  );
+  const { finalized, sources, dedupResult, dispositions } = selection;
+
   if (vectorEntries.length > 0) {
-    const accepted =
-      vectorEntries.length -
-      vectorSkippedBudget -
-      vectorSkippedMinPriority -
-      vectorSkippedGroup -
-      vectorSkippedDedup -
-      vectorSkippedBudgetSim;
+    const count = (code: WorldInfoVectorMergeDispositionCode) =>
+      Array.from(dispositions.values()).filter((item) => item.code === code).length;
+    const accepted = count("activated");
     console.log(
       "[WI merge] vector candidates=%d → accepted=%d, skipped: dedup=%d, minPriority=%d, group=%d, budgetCap=%d, budgetSim=%d",
       vectorEntries.length,
       accepted,
-      vectorSkippedDedup,
-      vectorSkippedMinPriority,
-      vectorSkippedGroup,
-      vectorSkippedBudget,
-      vectorSkippedBudgetSim,
-    );
-  }
-
-  // Content-level deduplication: remove exact, near-exact, and fuzzy
-  // duplicate content across entries from different books/sources.
-  const dedupResult = deduplicateWorldInfoEntries(
-    mergedEntries,
-    sources,
-    bookSourceMap,
-  );
-  for (const r of dedupResult.removed) sources.delete(r.removedEntryId);
-
-  // Re-finalize with deduplicated set so budget is recalculated
-  if (dedupResult.removed.length > 0) {
-    finalized = finalizeActivatedWorldInfoEntries(
-      dedupResult.entries,
-      settings,
-      {
-        skipGroupLogic: true,
-        preserveOrder: true,
-      },
+      count("already_keyword") + count("deduplicated"),
+      count("blocked_by_min_priority"),
+      count("blocked_by_group"),
+      count("blocked_by_max_entries"),
+      count("blocked_by_token_budget"),
     );
   }
 
@@ -3896,6 +4155,7 @@ export function mergeActivatedWorldInfoEntries(
         score: source?.score,
         bookId: entry.world_book_id,
         bookSource: bookSourceMap?.get(entry.world_book_id),
+        bookName: bookNameMap?.get(entry.world_book_id),
       };
     });
 
@@ -3917,51 +4177,114 @@ export function mergeActivatedWorldInfoEntries(
     evictedByBudget: finalized.evictedByBudget,
     deduplicated: dedupResult.removed.length,
     deduplicationDetails: dedupResult.removed,
+    vectorDispositions: dispositions,
     mergeDurationMs: performance.now() - mergeStartedAt,
   };
 }
 
-function truncateToContextSize(text: string, maxTokens: number): string {
+function truncateToContextSizeWithStatus(
+  text: string,
+  maxTokens: number,
+): { text: string; truncated: boolean } {
   const maxChars = maxTokens * 3;
-  if (text.length <= maxChars) return text;
-  return text.slice(-maxChars);
+  if (text.length <= maxChars) return { text, truncated: false };
+  return { text: text.slice(-maxChars), truncated: true };
 }
 
-async function buildWorldInfoVectorQueryPreview(
+function truncateToContextSize(text: string, maxTokens: number): string {
+  return truncateToContextSizeWithStatus(text, maxTokens).text;
+}
+
+const WORLD_INFO_VECTOR_QUERY_MAX_TOKENS = 8000;
+
+export async function buildWorldInfoVectorQuery(
   messages: Message[],
-  contextSize: number,
+  globalScanDepth: number | null,
   env: MacroEnv | null,
   reasoningStrip?: SanitizeOptions,
-): Promise<string> {
-  const queryMessages = messages
-    .filter((m) => !m.extra?.hidden && m.content.trim().length > 0)
-    .slice(-Math.max(1, contextSize));
+): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
+  const visibleMessages = messages.filter(
+    (m) => !m.extra?.hidden && m.content.trim().length > 0,
+  );
+  const queryMessages = globalScanDepth === null
+    ? visibleMessages
+    : visibleMessages.slice(-globalScanDepth);
   const parts = await Promise.all(queryMessages.map(async (m) => {
     const sanitized = await resolveAndSanitizeForVectorization(stripReasoningTags(m.content), env, reasoningStrip);
     return `[${m.is_user ? "USER" : "CHARACTER"} | ${m.name}]: ${sanitized}`;
   }));
-  return truncateToContextSize(parts.join("\n").trim(), 8000);
+  const truncated = truncateToContextSizeWithStatus(
+    parts.join("\n").trim(),
+    WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+  );
+  return {
+    queryPreview: truncated.text,
+    queryScope: {
+      configuredScanDepth: globalScanDepth,
+      visibleMessagesAvailable: visibleMessages.length,
+      messagesSelected: queryMessages.length,
+      maxTokens: WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+      tokenTruncated: truncated.truncated,
+    },
+  };
+}
+
+function resolveWorldInfoVectorSettings(
+  userId: string,
+  settingsInput?: Partial<WorldInfoSettings>,
+): WorldInfoSettings {
+  if (settingsInput !== undefined) {
+    return normalizeWorldInfoSettings(settingsInput);
+  }
+  const stored = settingsSvc.getSetting(userId, "worldInfoSettings")?.value as
+    | Partial<WorldInfoSettings>
+    | undefined;
+  return normalizeWorldInfoSettings(stored);
+}
+
+export async function getWorldInfoVectorQueryDetails(
+  userId: string,
+  messages: Message[],
+  chatId?: string,
+  settingsInput?: Partial<WorldInfoSettings>,
+): Promise<{ queryPreview: string; queryScope: WorldInfoVectorQueryScope }> {
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  const env = chatId ? buildMacroEnvForChat(userId, chatId) : null;
+  return buildWorldInfoVectorQuery(
+    messages,
+    worldInfoSettings.globalScanDepth,
+    env,
+    getReasoningStripOptions(userId),
+  );
 }
 
 export async function getWorldInfoVectorQueryPreview(
   userId: string,
   messages: Message[],
   chatId?: string,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<string> {
-  const cfg = await embeddingsSvc.getEmbeddingConfig(userId);
-  const env = chatId ? buildMacroEnvForChat(userId, chatId) : null;
-  return buildWorldInfoVectorQueryPreview(
-    messages,
-    cfg.preferred_context_size || 3,
-    env,
-    getReasoningStripOptions(userId),
-  );
+  return (
+    await getWorldInfoVectorQueryDetails(userId, messages, chatId, settingsInput)
+  ).queryPreview;
 }
 
 function isVectorEligibleWorldInfoEntry(
   entry: import("../types/world-book").WorldBookEntry,
 ): boolean {
   return isWorldBookEntryVectorSearchReady(entry);
+}
+
+function getVectorSearchableWorldBookIds(
+  worldBookIds: string[],
+  entries: WorldBookEntryModel[],
+): string[] {
+  const eligibleBookIds = new Set(
+    entries
+      .filter(isVectorEligibleWorldInfoEntry)
+      .map((entry) => entry.world_book_id),
+  );
+  return worldBookIds.filter((bookId) => eligibleBookIds.has(bookId));
 }
 
 // ─── Vector WI retrieval cache (short-TTL for rapid dry-run optimization) ───
@@ -3975,6 +4298,68 @@ interface CachedVectorWiResult {
 }
 
 const vectorWiCache = new Map<string, CachedVectorWiResult>();
+
+interface VectorWiCacheFingerprintInput {
+  userId: string;
+  chatId: string;
+  worldBookIds: string[];
+  entries: WorldBookEntryModel[];
+  queryText: string;
+  queryScope: WorldInfoVectorQueryScope;
+  embeddingConfig: embeddingsSvc.EmbeddingConfigWithStatus;
+  worldBookVectorSettings: WorldBookVectorSettings;
+  vectorStoreConfig: VectorStoreConfig;
+}
+
+function stableVectorWiCacheValue(value: unknown): string {
+  if (value === undefined) return "u;";
+  if (value === null) return "l;";
+  if (typeof value === "string") return `s${value.length}:${value};`;
+  if (typeof value === "number") {
+    return `n${Number.isFinite(value) ? value : String(value)};`;
+  }
+  if (typeof value === "boolean") return value ? "b1;" : "b0;";
+  if (Array.isArray(value)) {
+    return `a${value.length}[${value.map(stableVectorWiCacheValue).join("")}]`;
+  }
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    const keys = Object.keys(object).sort();
+    return `o${keys.length}{${keys
+      .map((key) => `${stableVectorWiCacheValue(key)}${stableVectorWiCacheValue(object[key])}`)
+      .join("")}}`;
+  }
+  return `${typeof value}:${String(value)};`;
+}
+
+function buildVectorWiCacheFingerprint(input: VectorWiCacheFingerprintInput): string {
+  const snapshot = {
+    userId: input.userId,
+    chatId: input.chatId,
+    worldBookIds: [...input.worldBookIds].sort(),
+    queryText: input.queryText,
+    queryScope: input.queryScope,
+    embeddingConfig: input.embeddingConfig,
+    worldBookVectorSettings: input.worldBookVectorSettings,
+    vectorStoreConfig: input.vectorStoreConfig,
+    worldBookVectorWriteFingerprint:
+      embeddingsSvc.getWorldBookVectorWriteFingerprint(input.embeddingConfig),
+  };
+  const hasher = new Bun.CryptoHasher("sha256");
+  hasher.update(stableVectorWiCacheValue(snapshot));
+  for (const entry of [...input.entries].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  )) {
+    hasher.update(stableVectorWiCacheValue(entry));
+  }
+  return hasher.digest("hex");
+}
+
+function cloneVectorWiResult(
+  result: VectorWorldInfoRetrievalResult,
+): VectorWorldInfoRetrievalResult {
+  return structuredClone(result);
+}
 
 function pruneVectorWiCache(now = Date.now()): void {
   for (const [key, cached] of vectorWiCache) {
@@ -3999,7 +4384,7 @@ function getCachedVectorWiResult(
     vectorWiCache.delete(cacheKey);
     return null;
   }
-  return cached.result;
+  return cloneVectorWiResult(cached.result);
 }
 
 function setCachedVectorWiResult(
@@ -4007,8 +4392,22 @@ function setCachedVectorWiResult(
   result: VectorWorldInfoRetrievalResult,
 ): void {
   pruneVectorWiCache();
-  vectorWiCache.set(cacheKey, { result, cachedAt: Date.now() });
+  vectorWiCache.set(cacheKey, {
+    result: cloneVectorWiResult(result),
+    cachedAt: Date.now(),
+  });
 }
+
+export const __vectorWiCacheTest = {
+  buildFingerprint: buildVectorWiCacheFingerprint,
+  clear: () => vectorWiCache.clear(),
+  get: getCachedVectorWiResult,
+  set: setCachedVectorWiResult,
+};
+
+export const __vectorWiRetrievalTest = {
+  getSearchableWorldBookIds: getVectorSearchableWorldBookIds,
+};
 
 export async function collectVectorActivatedWorldInfoDetailed(
   userId: string,
@@ -4017,12 +4416,21 @@ export async function collectVectorActivatedWorldInfoDetailed(
   entries: WorldBookEntryModel[],
   messages: Message[],
   signal?: AbortSignal,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<VectorWorldInfoRetrievalResult> {
   const startedAt = performance.now();
   const emptyResult: VectorWorldInfoRetrievalResult = {
     entries: [],
     candidateTrace: [],
     queryPreview: "",
+    queryScope: {
+      configuredScanDepth: null,
+      visibleMessagesAvailable: 0,
+      messagesSelected: 0,
+      maxTokens: WORLD_INFO_VECTOR_QUERY_MAX_TOKENS,
+      tokenTruncated: false,
+    },
+    lexicalQueryPreviews: [],
     eligibleCount: 0,
     hitsBeforeThreshold: 0,
     hitsAfterThreshold: 0,
@@ -4056,30 +4464,38 @@ export async function collectVectorActivatedWorldInfoDetailed(
   const topK = Math.max(1, worldBookVectorSettings.retrievalTopK || cfg.retrieval_top_k || 4);
   const queryBuildStartedAt = performance.now();
   const env = buildMacroEnvForChat(userId, chatId);
-  const queryText = await buildWorldInfoVectorQueryPreview(
+  const worldInfoSettings = resolveWorldInfoVectorSettings(userId, settingsInput);
+  const { queryPreview: queryText, queryScope } = await buildWorldInfoVectorQuery(
     messages,
-    cfg.preferred_context_size || 3,
+    worldInfoSettings.globalScanDepth,
     env,
     getReasoningStripOptions(userId),
   );
   const queryBuildMs = performance.now() - queryBuildStartedAt;
   const eligibleEntries = entries.filter(isVectorEligibleWorldInfoEntry);
+  const searchableWorldBookIds = getVectorSearchableWorldBookIds(
+    worldBookIds,
+    entries,
+  );
+  const lexicalQueryPreviews = buildWorldInfoLexicalQueryBatches(
+    queryText,
+    eligibleEntries,
+  );
 
-  // Check short-TTL cache for rapid dry-run reuse.
-  const cacheConfigSig = [
-    cfg.enabled ? 1 : 0,
-    cfg.vectorize_world_books ? 1 : 0,
-    cfg.dimensions ?? 0,
-    topK,
-    cfg.hybrid_weight_mode,
-    cfg.similarity_threshold,
-    cfg.rerank_cutoff,
-  ].join(":");
-  const cacheKey = `${userId}:${chatId}:${worldBookIds.join(",")}:${eligibleEntries
-    .map((e) => `${e.id}:${e.content?.length ?? 0}`)
-    .join(
-      ",",
-    )}:${queryText}:${cacheConfigSig}`;
+  // Check short-TTL cache for rapid dry-run reuse. Hash the complete retrieval
+  // snapshot so same-length lore edits, activation fields, index commits, and
+  // provider/config changes cannot reuse stale candidates.
+  const cacheKey = buildVectorWiCacheFingerprint({
+    userId,
+    chatId,
+    worldBookIds,
+    entries,
+    queryText,
+    queryScope,
+    embeddingConfig: cfg,
+    worldBookVectorSettings,
+    vectorStoreConfig: getResolvedVectorStoreConfig(),
+  });
   const cached = getCachedVectorWiResult(cacheKey);
   if (cached) {
     console.debug("[prompt-assembly] Vector WI cache hit for chat %s", chatId);
@@ -4113,6 +4529,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
     const result = {
       ...emptyResult,
       queryPreview: queryText,
+      queryScope,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
       cap: topK,
@@ -4161,6 +4579,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
       const result = {
         ...emptyResult,
         queryPreview: queryText,
+        queryScope,
+        lexicalQueryPreviews,
         eligibleCount: eligibleEntries.length,
         topK,
         cap: topK,
@@ -4194,24 +4614,26 @@ export async function collectVectorActivatedWorldInfoDetailed(
     >();
 
     const searchStartedAt = performance.now();
-    // Bound how many world-book vector searches hit LanceDB concurrently. Each
-    // call is a hybrid (vector + FTS) pair of native queries; firing one per
-    // lorebook unbounded floods the native engine on large contexts (a prime
-    // segfault amplifier). A small worker pool caps in-flight native queries
-    // while preserving the PromiseSettledResult[] shape the loop below expects.
+    // Search only books represented by a search-ready SQLite entry. Attached
+    // keyword-only/pending books cannot contribute a usable hit and querying
+    // them produces misleading zero-row provider diagnostics.
+    //
+    // Bound how many world-book vector searches run concurrently. A small
+    // worker pool caps in-flight native queries while preserving the
+    // PromiseSettledResult[] shape the loop below expects.
     const WI_VECTOR_SEARCH_CONCURRENCY = 4;
     const searchResults: PromiseSettledResult<
       Awaited<ReturnType<typeof embeddingsSvc.searchWorldBookEntriesHybridWithVector>>
-    >[] = new Array(worldBookIds.length);
+    >[] = new Array(searchableWorldBookIds.length);
     {
       let nextIdx = 0;
       const runWorker = async () => {
-        for (let i = nextIdx++; i < worldBookIds.length; i = nextIdx++) {
+        for (let i = nextIdx++; i < searchableWorldBookIds.length; i = nextIdx++) {
           try {
             const value = await embeddingsSvc.searchWorldBookEntriesHybridWithVector(
               userId,
-              worldBookIds[i],
-              queryText,
+              searchableWorldBookIds[i],
+              lexicalQueryPreviews.map((batch) => batch.text),
               queryVector,
               candidateLimit,
               cfg.hybrid_weight_mode,
@@ -4226,7 +4648,7 @@ export async function collectVectorActivatedWorldInfoDetailed(
       };
       await Promise.all(
         Array.from(
-          { length: Math.min(WI_VECTOR_SEARCH_CONCURRENCY, worldBookIds.length) },
+          { length: Math.min(WI_VECTOR_SEARCH_CONCURRENCY, searchableWorldBookIds.length) },
           runWorker,
         ),
       );
@@ -4279,6 +4701,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
       entries: shortlistedEntries,
       candidateTrace,
       queryPreview: queryText,
+      queryScope,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       hitsBeforeThreshold,
       hitsAfterThreshold,
@@ -4306,6 +4730,8 @@ export async function collectVectorActivatedWorldInfoDetailed(
     return {
       ...emptyResult,
       queryPreview: queryText,
+      queryScope,
+      lexicalQueryPreviews,
       eligibleCount: eligibleEntries.length,
       topK,
       cap: topK,
@@ -4332,6 +4758,7 @@ export async function collectVectorActivatedWorldInfo(
   entries: import("../types/world-book").WorldBookEntry[],
   messages: Message[],
   signal?: AbortSignal,
+  settingsInput?: Partial<WorldInfoSettings>,
 ): Promise<VectorActivatedEntry[]> {
   const result = await collectVectorActivatedWorldInfoDetailed(
     userId,
@@ -4340,6 +4767,7 @@ export async function collectVectorActivatedWorldInfo(
     entries,
     messages,
     signal,
+    settingsInput,
   );
   return result.entries;
 }
@@ -4401,12 +4829,15 @@ async function computeActivatedWorldInfoForChat(
     wiSources.worldBookIds,
     wiSources.entries,
     messages,
+    undefined,
+    worldInfoSettings,
   );
   return mergeActivatedWorldInfoEntries(
     wiResult.activatedEntries,
     vectorActivated,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
 }
 
@@ -4945,6 +5376,9 @@ function mergeConsecutiveUserMessages(
       const wasWorldInfo =
         isWorldInfoEntryMessage(result[i]) ||
         isWorldInfoEntryMessage(result[i + 1]);
+      const wasContextAnchorProtected =
+        isContextAnchorProtected(result[i]) ||
+        isContextAnchorProtected(result[i + 1]);
       const mergedSourceId =
         getSourceMessageId(result[i]) ?? getSourceMessageId(result[i + 1]);
       const mergedSourceIndex =
@@ -4963,6 +5397,7 @@ function mergeConsecutiveUserMessages(
           typeof mergedSourceId === "string" && typeof mergedSourceIndex === "number"
             ? { id: mergedSourceId, index_in_chat: mergedSourceIndex }
             : undefined,
+          wasContextAnchorProtected,
         );
       }
       if (wasWorldInfo) markAsWorldInfoEntry(result[i]);
@@ -5276,6 +5711,7 @@ function applyCompletionSettings(
     if (
       squash &&
       isSystem &&
+      !isContinueNudge(msg) &&
       write > 0 &&
       (result[write - 1] as any)._fromSystem
     ) {
@@ -5414,6 +5850,7 @@ const MIN_CLIP_SAFETY_MARGIN = 256;
 const CLIP_SAFETY_MARGIN_RATIO = 0.02;
 /** Fallback response headroom when `max_tokens` is unset. Matches the industry default. */
 const FALLBACK_MAX_RESPONSE_TOKENS = 4096;
+const CLIP_YIELD_CHAR_BUDGET = 262_144;
 
 /**
  * Clip oldest chat-history messages from the assembled prompt so the total
@@ -5481,27 +5918,31 @@ export async function clipToContextBudget(
   const n = result.length;
   const historyIndices: number[] = [];
   let fixedTokens = 0;
+  let charsSinceYield = 0;
+  const yieldWhenDue = async (): Promise<void> => {
+    if (charsSinceYield < CLIP_YIELD_CHAR_BUDGET) return;
+    charsSinceYield = 0;
+    await new Promise<void>((r) => setTimeout(r, 0));
+    if (signal?.aborted)
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  };
   for (let i = 0; i < n; i++) {
-    // Cheap classification pass — history is just index-pushed, so only the
-    // (few) fixed messages are tokenized here. The expensive tokenization now
-    // lives in the newest→oldest walk below, which yields by tokenization count;
-    // this loop only needs a coarse safety yield so a stop can still land on a
-    // pathologically long chat. Yielding per-iteration here would add macrotask
-    // overhead that, on fast hardware, costs more than the work it interrupts.
-    if (i > 0 && (i & 4095) === 0) {
-      await new Promise<void>((r) => setTimeout(r, 0));
-      if (signal?.aborted)
-        throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    }
     const msg = result[i];
     if (isChatHistoryMessage(msg)) {
       historyIndices.push(i);
-    } else {
-      fixedTokens += counter.count(`${msg.role}\n${getTextContent(msg)}`);
+      continue;
     }
+    const text = `${msg.role}\n${getTextContent(msg)}`;
+    charsSinceYield += text.length;
+    await yieldWhenDue();
+    fixedTokens += counter.count(text);
   }
 
   const remainingHistoryBudget = inputBudget - fixedTokens;
+  const protectedHistoryStart = historyIndices.findIndex((index) =>
+    isContextAnchorProtected(result[index]),
+  );
+  const anchorActive = protectedHistoryStart >= 0;
 
   // char/4 approximation for history we intentionally never tokenize (the
   // clipped-away prefix). Feeds the display-only "N messages / ~M tokens
@@ -5530,21 +5971,53 @@ export async function clipToContextBudget(
     messagesDropped: 0,
     tokensDropped: 0,
     tokenizerUsed: counter.name,
+    anchorActive,
+    protectedHistoryTokens: 0,
+    remainingBeforeAnchor: remainingHistoryBudget,
     ...overrides,
   });
+
+  const countProtectedHistory = async (): Promise<number> => {
+    if (!anchorActive) return 0;
+    let tokens = 0;
+    for (let i = protectedHistoryStart; i < historyIndices.length; i++) {
+      const msg = result[historyIndices[i]];
+      const text = `${msg.role}\n${getTextContent(msg)}`;
+      charsSinceYield += text.length;
+      await yieldWhenDue();
+      tokens += counter.count(text);
+    }
+    return tokens;
+  };
 
   // Misconfigured budget (e.g. maxContext smaller than max_tokens + margin).
   // Don't clip silently — surface the misconfiguration via `budgetInvalid`.
   if (inputBudget <= 0) {
     const allHistory = approxHistoryTokens(0, historyIndices.length);
+    const protectedHistoryTokens = await countProtectedHistory();
     return makeStats({
       budgetInvalid: true,
       chatHistoryTokensBefore: allHistory,
       chatHistoryTokensAfter: allHistory,
+      protectedHistoryTokens,
+      remainingBeforeAnchor: remainingHistoryBudget - protectedHistoryTokens,
+      anchorOverflow: anchorActive && protectedHistoryTokens > 0,
     });
   }
 
   if (remainingHistoryBudget <= 0) {
+    const protectedHistoryTokens = await countProtectedHistory();
+    if (anchorActive && protectedHistoryTokens > 0) {
+      const allHistory = approxHistoryTokens(0, historyIndices.length);
+      return makeStats({
+        chatHistoryTokensBefore: allHistory,
+        chatHistoryTokensAfter: allHistory,
+        protectedHistoryTokens,
+        remainingBeforeAnchor: remainingHistoryBudget - protectedHistoryTokens,
+        anchorOverflow: true,
+        fixedOverBudget: remainingHistoryBudget < 0,
+      });
+    }
     // Measure history before compaction — the in-place drop below truncates
     // `result`, after which `historyIndices` no longer addresses valid entries.
     const allHistory = approxHistoryTokens(0, historyIndices.length);
@@ -5570,24 +6043,30 @@ export async function clipToContextBudget(
   // Walk history newest→oldest, tokenizing each message only as we reach it.
   // The first message that would overflow the budget stops the walk; every
   // older message is dropped without ever being tokenized.
-  let accHistoryTokens = 0;
-  let oldestKeptHistoryIdx = -1;
-  let tokenized = 0;
-  for (let i = historyIndices.length - 1; i >= 0; i--) {
-    // Yield every 256 tokenized messages. `counter.count()` is sync (~0.5ms/msg
-    // on Termux), so a large budget keeping thousands of messages must yield to
-    // keep /generate/stop responsive — but each setTimeout(0) costs ~1ms of
-    // event-loop overhead, so yielding too often dominates the work it guards.
-    // 256 ≈ 128ms between yields on Termux (well within stop-button latency)
-    // while keeping the macrotask overhead negligible.
-    if (tokenized > 0 && (tokenized & 255) === 0) {
-      await new Promise<void>((r) => setTimeout(r, 0));
-      if (signal?.aborted)
-        throw signal.reason ?? new DOMException("Aborted", "AbortError");
-    }
+  const protectedHistoryTokens = await countProtectedHistory();
+  const remainingBeforeAnchor = remainingHistoryBudget - protectedHistoryTokens;
+  if (anchorActive && remainingBeforeAnchor < 0) {
+    const allHistory =
+      approxHistoryTokens(0, protectedHistoryStart) + protectedHistoryTokens;
+    return makeStats({
+      chatHistoryTokensBefore: allHistory,
+      chatHistoryTokensAfter: allHistory,
+      protectedHistoryTokens,
+      remainingBeforeAnchor,
+      anchorOverflow: true,
+    });
+  }
+
+  let accHistoryTokens = protectedHistoryTokens;
+  let oldestKeptHistoryIdx = anchorActive
+    ? protectedHistoryStart
+    : -1;
+  for (let i = (anchorActive ? protectedHistoryStart : historyIndices.length) - 1; i >= 0; i--) {
     const msg = result[historyIndices[i]];
-    const t = counter.count(`${msg.role}\n${getTextContent(msg)}`);
-    tokenized++;
+    const text = `${msg.role}\n${getTextContent(msg)}`;
+    charsSinceYield += text.length;
+    await yieldWhenDue();
+    const t = counter.count(text);
     if (accHistoryTokens + t > remainingHistoryBudget) break;
     accHistoryTokens += t;
     oldestKeptHistoryIdx = i;
@@ -5597,6 +6076,8 @@ export async function clipToContextBudget(
     return makeStats({
       chatHistoryTokensBefore: accHistoryTokens,
       chatHistoryTokensAfter: accHistoryTokens,
+      protectedHistoryTokens,
+      remainingBeforeAnchor,
     });
   }
 
@@ -5625,6 +6106,8 @@ export async function clipToContextBudget(
     chatHistoryTokensAfter: accHistoryTokens,
     messagesDropped: droppedCount,
     tokensDropped,
+    protectedHistoryTokens,
+    remainingBeforeAnchor,
   });
 }
 
@@ -5634,18 +6117,95 @@ export async function clipToContextBudget(
  * Priority (lowest → highest): sampler overrides → advanced settings → reasoning settings → custom body.
  * Request-level overrides (merged by the caller) take the highest priority.
  */
-function buildParameters(
+export function applyGoogleSearchPresetSetting(
+  params: Record<string, any>,
+  enabled: boolean | undefined,
+  providerName?: string | null,
+): void {
+  if (
+    enabled === true &&
+    (providerName === "google" || providerName === "google_vertex")
+  ) {
+    params.enable_web_search = true;
+  }
+}
+
+type ReasoningParameterSettings = {
+  prefix?: string;
+  suffix?: string;
+  autoParse?: boolean;
+  apiReasoning?: boolean;
+  reasoningEffort?: string;
+  keepInHistory?: number;
+  thinkingDisplay?: string;
+  /** When present, supersedes the legacy preset-level custom body. */
+  customBody?: CustomBody;
+};
+
+function resolveEffectiveReasoningSettings(
+  connection: ConnectionProfile | null | undefined,
+  globalSettings: unknown,
+): ReasoningParameterSettings | null {
+  const boundSettings = connection?.metadata?.reasoningBindings?.settings;
+  if (
+    boundSettings &&
+    typeof boundSettings === "object" &&
+    !Array.isArray(boundSettings)
+  ) {
+    return boundSettings as ReasoningParameterSettings;
+  }
+  if (
+    globalSettings &&
+    typeof globalSettings === "object" &&
+    !Array.isArray(globalSettings)
+  ) {
+    return globalSettings as ReasoningParameterSettings;
+  }
+  return null;
+}
+
+function hasOwnCustomBody(
+  settings: ReasoningParameterSettings | null | undefined,
+): boolean {
+  return !!settings && Object.hasOwn(settings, "customBody");
+}
+
+/**
+ * Spread a valid enabled custom body onto request parameters. Invalid JSON or
+ * non-object JSON is intentionally ignored, matching the legacy behavior.
+ */
+export function applyCustomBodyParameters(
+  params: Record<string, any>,
+  customBody: CustomBody | null | undefined,
+): void {
+  if (!customBody?.enabled || !customBody.rawJson) return;
+  try {
+    const parsed = JSON.parse(customBody.rawJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      Object.assign(params, parsed);
+    }
+  } catch {
+    // Invalid JSON — skip silently. The UI prevents saving invalid values.
+  }
+}
+
+export function buildParameters(
   overrides: SamplerOverrides | null,
   preset: Preset | null,
-  reasoningSettings?: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null,
+  reasoningSettings?: ReasoningParameterSettings | null,
   providerName?: string | null,
   modelName?: string | null,
 ): Record<string, any> {
   const params: Record<string, any> = {};
+
+  // The Loom "Use web search" checkbox is provider-agnostic in storage, but
+  // Google AI Studio and Vertex expose it as the native google_search tool.
+  // Other providers must not receive this internal compatibility key.
+  applyGoogleSearchPresetSetting(
+    params,
+    preset?.prompts?.completionSettings?.enableWebSearch,
+    providerName,
+  );
 
   // Streaming toggle — transport-level concern, orthogonal to sampler tuning.
   // Applied regardless of overrides.enabled so users can disable streaming without
@@ -5692,11 +6252,13 @@ function buildParameters(
 
   // API-level reasoning: inject provider-specific params when enabled.
   // Placed before custom body so custom body can override with more specific config.
-  // For toggle-only providers (Moonshot, Z.AI), always inject when apiReasoning is on.
+  // For providers that require an explicit on-switch (Moonshot, Z.AI), always inject
+  // when apiReasoning is on.
   if (reasoningSettings?.apiReasoning && providerName) {
     const effort = reasoningSettings.reasoningEffort || "auto";
-    const isToggleOnly = providerName === "moonshot" || providerName === "zai";
-    if (effort !== "auto" || isToggleOnly) {
+    const requiresExplicitOnSwitch =
+      providerName === "moonshot" || providerName === "zai";
+    if (effort !== "auto" || requiresExplicitOnSwitch) {
       injectReasoningParams(
         params,
         providerName,
@@ -5707,16 +6269,14 @@ function buildParameters(
     }
   }
 
-  // Custom body from preset.parameters.customBody
-  const customBody = preset?.parameters?.customBody;
-  if (customBody?.enabled && customBody.rawJson) {
-    try {
-      const custom = JSON.parse(customBody.rawJson);
-      Object.assign(params, custom);
-    } catch {
-      // Invalid JSON — skip silently
-    }
-  }
+  // Custom bodies now live with reasoning so connection reasoning bindings can
+  // snapshot and apply them. Older presets continue to work until a user saves
+  // the new setting; an explicitly saved disabled body cleanly turns off the
+  // old preset-level value.
+  const customBody = hasOwnCustomBody(reasoningSettings)
+    ? reasoningSettings?.customBody
+    : preset?.parameters?.customBody;
+  applyCustomBodyParameters(params, customBody);
 
   // Authoritative off-switch: when the user has disabled API reasoning, strip every
   // provider-specific reasoning field — including anything a customBody spread in —
@@ -5753,8 +6313,13 @@ function buildParameters(
  * - Bedrock:     reasoning_effort (top-level OpenAI Chat Completions string).
  *                Bedrock maps it to each model's native mechanism (gpt-oss
  *                reasoning, Claude thinking, etc.). Valid: none/minimal/low/medium/high.
- * - Moonshot:    thinking: { type: "enabled" } — toggle-only, effort ignored
- * - Z.AI:        thinking: { type: "enabled" } — toggle-only, effort ignored
+ * - Moonshot:    model-dependent. Kimi K3 uses top-level reasoning_effort (only
+ *                "max" at present). K2.7-code uses thinking: { type: "enabled",
+ *                keep: "all" } (or omit, since thinking is always on). K2.6/K2.5
+ *                use thinking: { type: "enabled" }.
+ * - Z.AI:        thinking: { type: "enabled" } plus reasoning_effort for GLM-5.x
+ *                models (max/xhigh/high/medium/low/minimal/none). GLM-4.x only
+ *                receives the thinking toggle.
  * - Others:      reasoning: { effort } (generic OpenAI-compatible passthrough)
  */
 export function injectReasoningParams(
@@ -5880,11 +6445,53 @@ export function injectReasoningParams(
     }
     // Avoid sending both forms — the object form we just set is authoritative.
     delete params.reasoning_effort;
-  } else if (providerName === "moonshot" || providerName === "zai") {
-    // Toggle-only providers: thinking is enabled/disabled, no effort granularity.
-    // The "Request Reasoning" toggle controls this — effort is ignored.
+  } else if (providerName === "moonshot") {
+    // Moonshot model families use different reasoning controls:
+    // - Kimi K3: top-level reasoning_effort (currently only "max");
+    //   the K2.x `thinking` parameter must NOT be sent.
+    // - Kimi K2.7 Code: thinking is always on and Preserved Thinking is always on.
+    //   If explicitly set, only {"type":"enabled","keep":"all"} is accepted.
+    // - Kimi K2.6 / K2.5: thinking.type enabled/disabled toggles reasoning.
+    const modelId = model || "";
+    const isK3 = /^kimi-k3/i.test(modelId);
+    const isK27Code = /^kimi-k2\.7-code/i.test(modelId);
+
+    if (isK3) {
+      if (params.reasoning_effort === undefined) {
+        params.reasoning_effort = "max";
+      }
+    } else if (isK27Code) {
+      if (!params.thinking) {
+        params.thinking = { type: "enabled", keep: "all" };
+      }
+    } else {
+      // K2.6, K2.5, or unknown Moonshot model.
+      if (!params.thinking) {
+        params.thinking = { type: "enabled" };
+      }
+    }
+  } else if (providerName === "zai") {
+    // Z.AI (Zhipu GLM): thinking.type controls CoT; GLM-5.x additionally
+    // supports reasoning_effort (GLM-5.2+ officially, GLM-5/5.1 support max/high
+    // per the GLM-5 repo). Send both so GLM-5.x models use the requested effort.
     if (!params.thinking) {
       params.thinking = { type: "enabled" };
+    }
+
+    const isGlm5 = model ? /^glm-5/i.test(model) : false;
+    if (isGlm5 && params.reasoning_effort === undefined) {
+      const validEfforts = new Set([
+        "max",
+        "xhigh",
+        "high",
+        "medium",
+        "low",
+        "minimal",
+        "none",
+      ]);
+      // "auto" maps to the documented default deep-reasoning level.
+      params.reasoning_effort =
+        effort === "auto" ? "max" : validEfforts.has(effort) ? effort : "max";
     }
   } else if (providerName === "bedrock") {
     // Bedrock's OpenAI-compatible Chat Completions endpoint exposes a single
@@ -5957,6 +6564,27 @@ export function applyProviderReasoningOffSwitch(
     return;
   }
 
+  if (providerName === "zai") {
+    params.thinking = { type: "disabled" };
+    return;
+  }
+
+  if (providerName === "moonshot") {
+    const modelId = modelName || "";
+    const isK3 = /^kimi-k3/i.test(modelId);
+    const isK27Code = /^kimi-k2\.7-code/i.test(modelId);
+
+    if (isK3 || isK27Code) {
+      // K3 and K2.7-code always think; sending a disabled config errors or is
+      // ignored. Stripping reasoning params is the best we can do for "off".
+      return;
+    }
+
+    // K2.6 / K2.5 support an explicit disabled toggle.
+    params.thinking = { type: "disabled" };
+    return;
+  }
+
   if (providerName === "nanogpt") {
     params.reasoning = { exclude: true };
   }
@@ -6000,9 +6628,10 @@ async function onelinerImpersonation(
       throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const role: "user" | "assistant" = msg.is_user ? "user" : "assistant";
-    const resolvedContent = healFormattingArtifacts(
+    const visibleResolvedContent = healFormattingArtifacts(
       (await evaluate(msg.content, macroEnv, registry)).text,
     );
+    const resolvedContent = appendAssociativeRegexContext(visibleResolvedContent, msg);
     result.push({ role, content: resolvedContent });
     historyParts.push(resolvedContent);
     messageCount++;
@@ -6085,6 +6714,7 @@ async function legacyAssembly(
   chat?: Chat | null,
   connection?: ConnectionProfile | null,
   userId?: string,
+  userInput?: string,
   signal?: AbortSignal,
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
@@ -6137,6 +6767,7 @@ async function legacyAssembly(
       messages,
       generationType,
       connection: connection ?? null,
+      userInput,
       groupCharacterNames: groupNames,
       groupNotMutedNames: legacyNotMuted,
       targetCharacterName: isGroup
@@ -6150,9 +6781,13 @@ async function legacyAssembly(
         userId,
         "reasoningSettings",
       );
-      if (reasoningSetting?.value) {
-        macroEnv.extra.reasoningPrefix = reasoningSetting.value.prefix ?? "";
-        macroEnv.extra.reasoningSuffix = reasoningSetting.value.suffix ?? "";
+      const effectiveReasoning = resolveEffectiveReasoningSettings(
+        connection,
+        reasoningSetting?.value,
+      );
+      if (effectiveReasoning) {
+        macroEnv.extra.reasoningPrefix = effectiveReasoning.prefix ?? "";
+        macroEnv.extra.reasoningSuffix = effectiveReasoning.suffix ?? "";
       }
       // Populate theme info for {{userColorMode}} macro (legacy path)
       const themeSetting = settingsSvc.getSetting(userId, "theme");
@@ -6281,7 +6916,8 @@ async function legacyAssembly(
     } else if (signal?.aborted) {
       throw signal.reason ?? new DOMException("Aborted", "AbortError");
     }
-    const resolved = healFormattingArtifacts(await resolveMacros(m.content));
+    const visibleResolved = healFormattingArtifacts(await resolveMacros(m.content));
+    const resolved = appendAssociativeRegexContext(visibleResolved, m);
     const attachments = attachmentsForContext(m, legacyGeneratedImageContextPolicy);
     if (m.extra?.image_gen && resolved.trim().length === 0 && attachments.length === 0) {
       continue;
@@ -6330,24 +6966,24 @@ async function legacyAssembly(
   );
 
   // Strip reasoning from older chat history messages based on keepInHistory
-  let reasoningVal: {
-    apiReasoning?: boolean;
-    reasoningEffort?: string;
-    thinkingDisplay?: string;
-  } | null = null;
+  let reasoningVal: ReasoningParameterSettings | null = null;
   if (userId) {
     const reasoningSetting = settingsSvc.getSetting(
       userId,
       "reasoningSettings",
     );
-    if (reasoningSetting?.value) {
+    const effectiveReasoning = resolveEffectiveReasoningSettings(
+      connection,
+      reasoningSetting?.value,
+    );
+    if (effectiveReasoning) {
       stripReasoningFromChatHistory(
         llmMessages,
         legacyFirstChatIdx,
         legacyHistoryCount,
-        reasoningSetting.value,
+        effectiveReasoning,
       );
-      reasoningVal = reasoningSetting.value;
+      reasoningVal = effectiveReasoning;
     }
 
     // Apply context filters (details blocks, loom tags, HTML tags)

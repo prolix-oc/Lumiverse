@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Sparkles, Settings, Puzzle } from 'lucide-react'
 import { useStore } from '@/store'
@@ -101,7 +101,10 @@ export default function ViewportDrawer() {
   const visibleDrawerTabs = orderedDrawerTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id) && !hiddenPlacementIdsSet.has(tab.id))
   const visibleExtensionEntries = orderedExtensionEntries.filter((entry) => !hiddenTabIdsSet.has(entry.id) && !hiddenPlacementIdsSet.has(entry.id))
   const requestedActiveTab = drawerTab || 'profile'
-  const allTabs = [...visibleBuiltInTabs, ...visibleExtensionEntries]
+  const allTabs = useMemo(
+    () => [...visibleBuiltInTabs, ...visibleExtensionEntries],
+    [visibleBuiltInTabs, visibleExtensionEntries],
+  )
   const activeTab = allTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'profile'
   const activeTabConfig = allTabs.find((t) => t.id === activeTab) || DRAWER_TABS[0]
 

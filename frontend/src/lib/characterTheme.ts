@@ -6,21 +6,19 @@
  * the user's mode, glass, radius, and font preferences.
  */
 
-import type { ImagePalette, RGB } from './colorExtraction'
+import type { ImagePalette, RGB, TextZoneBand, TextZoneCluster } from './colorExtraction'
 import {
-  rgbToHsl,
   shiftTowards,
-  ensureContrast,
-  hslToRgb,
-  constrainLuminance,
   contrastRatio,
+  constrainLuminance,
+  rgbToHsl,
+  hslToRgb,
+  heroMaskAlpha,
+  deriveCharacterOverlayFromPalette,
+  deriveCharacterNameVarsFromPalette,
 } from './colorExtraction'
 import type { CharacterThemeOverlay } from '@/types/theme'
 
-/** Reference dark theme background (approximate) for contrast checks. */
-const REF_DARK_BG: RGB = { r: 10, g: 10, b: 15 }
-/** Reference light theme background (approximate) for contrast checks. */
-const REF_LIGHT_BG: RGB = { r: 250, g: 250, b: 252 }
 /** WCAG AA minimum for normal text. */
 const MIN_TEXT_CONTRAST = 4.5
 
@@ -51,33 +49,139 @@ function mixRgb(from: RGB, to: RGB, weight: number): RGB {
   }
 }
 
-function pickHeroTextColor(seed: RGB, background: RGB): RGB {
-  const candidates = [
-    ensureContrast(shiftTowards(seed, HERO_LIGHT_TEXT, 0.9), background, MIN_TEXT_CONTRAST),
-    ensureContrast(shiftTowards(seed, HERO_DARK_TEXT, 0.9), background, MIN_TEXT_CONTRAST),
-    HERO_LIGHT_TEXT,
-    HERO_DARK_TEXT,
-  ]
-
-  return candidates
-    .map((color) => ({ color, ratio: contrastRatio(color, background) }))
-    .sort((a, b) => b.ratio - a.ratio)[0].color
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v))
 }
 
-function deriveSecondaryTone(seed: RGB, surface: RGB, mode: 'dark' | 'light'): RGB {
-  const hsl = rgbToHsl(seed.r, seed.g, seed.b)
-  let secondary = hslToRgb(
-    hsl.h,
-    clamp(hsl.s, mode === 'dark' ? 20 : 16, mode === 'dark' ? 58 : 48),
-    mode === 'dark' ? clamp(hsl.l, 42, 60) : clamp(hsl.l, 30, 46)
-  )
+function luminance(color: RGB): number {
+  return color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722
+}
 
-  secondary = ensureContrast(secondary, surface, MIN_TEXT_CONTRAST)
-  secondary = mode === 'dark'
-    ? constrainLuminance(secondary, undefined, DARK_MODE_MAX_LUM)
-    : constrainLuminance(secondary, LIGHT_MODE_MIN_LUM, undefined)
+// ── Hero text-zone contrast engine ──
 
-  return secondary
+interface WeightedBacking {
+  color: RGB
+  weight: number
+}
+
+/**
+ * Composite raw image clusters with the page surface using each cluster's
+ * hero-mask alpha. The rendered backing under the hero text is
+ * `image·α + surface·(1−α)`, not raw pixels — the mask fades the image to
+ * transparent by 95% of its height, so the lower the text row, the more the
+ * page surface contributes.
+ */
+function compositeBand(band: TextZoneBand, surface: RGB): WeightedBacking[] {
+  return band.clusters.map((c) => ({
+    color: mixRgb(surface, c.color, c.alpha),
+    weight: c.weight,
+  }))
+}
+
+function minContrast(color: RGB, backings: WeightedBacking[]): number {
+  let min = Infinity
+  for (const b of backings) {
+    min = Math.min(min, contrastRatio(color, b.color))
+  }
+  return min
+}
+
+/**
+ * Like ensureContrast, but guarantees the ratio against the *worst* weighted
+ * backing in the set rather than a single average color. Walks lightness in
+ * HSL space (preserving hue/saturation) and returns the closest lightness
+ * that clears `minRatio` against every backing, or the best-effort candidate
+ * when the band is genuinely bimodal.
+ */
+function ensureContrastMulti(foreground: RGB, backings: WeightedBacking[], minRatio: number): RGB {
+  if (backings.length === 0) return foreground
+  let best = foreground
+  let bestMin = minContrast(foreground, backings)
+  if (bestMin >= minRatio) return foreground
+
+  const hsl = rgbToHsl(foreground.r, foreground.g, foreground.b)
+  for (let delta = 1; delta <= 100; delta++) {
+    for (const l of [hsl.l + delta, hsl.l - delta]) {
+      if (l < 0 || l > 100) continue
+      const candidate = hslToRgb(hsl.h, hsl.s, l)
+      const m = minContrast(candidate, backings)
+      if (m >= minRatio) return candidate
+      if (m > bestMin) {
+        bestMin = m
+        best = candidate
+      }
+    }
+  }
+  return best
+}
+
+interface HeroBandColors {
+  text: RGB
+  muted: RGB
+  /** True when a significant cluster (≥15% of the band) still can't reach
+   *  4.5:1 with the chosen text — i.e. the band straddles both very dark and
+   *  very light content and no single color can win everywhere. */
+  bimodal: boolean
+}
+
+function fallbackBand(palette: ImagePalette): TextZoneBand {
+  const { regions } = palette
+  const color = palette.regionExtremes?.bottom.darkest ?? {
+    r: Math.round(regions.bottom.r * 0.6 + regions.center.r * 0.4),
+    g: Math.round(regions.bottom.g * 0.6 + regions.center.g * 0.4),
+    b: Math.round(regions.bottom.b * 0.6 + regions.center.b * 0.4),
+  }
+  const meanY = 0.85
+  const cluster: TextZoneCluster = { color, weight: 1, meanY, alpha: heroMaskAlpha(meanY) }
+  return { clusters: [cluster] }
+}
+
+/**
+ * Pick a text color for one band in one mode. Polarity (light vs dark text)
+ * is chosen by maximin: whichever candidate's worst-case cluster contrast is
+ * stronger wins, so a large light region isn't sacrificed to a small dark one
+ * (and vice versa).
+ */
+function deriveBandColors(band: TextZoneBand, surface: RGB, mode: 'dark' | 'light'): HeroBandColors {
+  const backings = compositeBand(band, surface)
+  if (backings.length === 0) {
+    // Band is fully masked/transparent — the text sits on the bare surface.
+    backings.push({ color: surface, weight: 1 })
+  }
+
+  // Tint the text toward the dominant cluster's hue, scaled by saturation:
+  // colorful artwork tints the text, grayscale artwork stays neutral.
+  const dominantCluster = band.clusters.length > 0
+    ? band.clusters.reduce((a, b) => (b.weight > a.weight ? b : a))
+    : null
+  const tintSource = dominantCluster?.color ?? surface
+  const tintW = 0.25 + 0.2 * (rgbToHsl(tintSource.r, tintSource.g, tintSource.b).s / 100)
+
+  const lightCandidate = ensureContrastMulti(mixRgb(HERO_LIGHT_TEXT, tintSource, tintW), backings, MIN_TEXT_CONTRAST)
+  const darkCandidate = ensureContrastMulti(mixRgb(HERO_DARK_TEXT, tintSource, tintW), backings, MIN_TEXT_CONTRAST)
+
+  let text = minContrast(lightCandidate, backings) >= minContrast(darkCandidate, backings)
+    ? lightCandidate
+    : darkCandidate
+
+  const dominantBacking = backings.reduce((a, b) => (b.weight > a.weight ? b : a)).color
+  let muted = ensureContrastMulti(shiftTowards(text, dominantBacking, 0.28), backings, MIN_TEXT_CONTRAST)
+
+  // Eye-comfort clamps, then re-guarantee (clamping can cost contrast).
+  text = constrainLuminance(text, mode === 'light' ? LIGHT_MODE_MIN_LUM : undefined, mode === 'dark' ? DARK_MODE_MAX_LUM : undefined)
+  muted = constrainLuminance(muted, mode === 'light' ? LIGHT_MODE_MIN_LUM : undefined, mode === 'dark' ? DARK_MODE_MAX_LUM : undefined)
+  text = ensureContrastMulti(text, backings, MIN_TEXT_CONTRAST)
+  muted = ensureContrastMulti(muted, backings, MIN_TEXT_CONTRAST)
+
+  // Bimodal when the text materially fails somewhere: the cumulative weight
+  // of clusters it can't clear crosses 15% of the band.
+  let failingWeight = 0
+  for (const b of backings) {
+    if (contrastRatio(text, b.color) < MIN_TEXT_CONTRAST) failingWeight += b.weight
+  }
+  const bimodal = failingWeight >= 0.15
+
+  return { text, muted, bimodal }
 }
 
 /**
@@ -87,31 +191,24 @@ function deriveSecondaryTone(seed: RGB, surface: RGB, mode: 'dark' | 'light'): R
  * Strategy:
  *   1. Use the dominant color's hue as the accent hue
  *   2. Boost saturation for the accent (so it reads as intentional, not muddy)
- *   3. Derive a subtle secondary from the center region
+ *   3. Derive a subtle secondary from the palette
  *   4. Derive a very subtle background tint from the average color
  */
 export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOverlay {
-  const darkAccent = palette.ui.dark.accent
-  const lightAccent = palette.ui.light.accent
-  const primaryHsl = rgbToHsl(darkAccent.r, darkAccent.g, darkAccent.b)
-
-  const secondarySeed = palette.palette[1] ?? palette.regions.center
-  const secondaryDark = deriveSecondaryTone(secondarySeed, palette.ui.dark.surface, 'dark')
-  const secondaryLight = deriveSecondaryTone(secondarySeed, palette.ui.light.surface, 'light')
-
+  const overlay = deriveCharacterOverlayFromPalette(palette)
   return {
-    accent: { h: primaryHsl.h, s: primaryHsl.s, l: primaryHsl.l },
+    accent: overlay.accent,
     baseColors: {
-      primary: rgbToCss(darkAccent),
-      secondary: rgbToCss(secondaryDark),
-      background: rgbToCss(palette.ui.dark.surface),
-      text: rgbToCss(palette.ui.dark.text),
+      primary: overlay.baseColors.primary,
+      secondary: overlay.baseColors.secondary,
+      background: overlay.baseColors.background,
+      text: overlay.baseColors.text,
     },
     baseColorsLight: {
-      primary: rgbToCss(lightAccent),
-      secondary: rgbToCss(secondaryLight),
-      background: rgbToCss(palette.ui.light.surface),
-      text: rgbToCss(palette.ui.light.text),
+      primary: overlay.baseColorsLight.primary,
+      secondary: overlay.baseColorsLight.secondary,
+      background: overlay.baseColorsLight.background,
+      text: overlay.baseColorsLight.text,
     },
   }
 }
@@ -119,71 +216,85 @@ export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOve
 /**
  * Compute hero-overlay CSS variables (for the character profile hero section).
  *
- * The text sits in the mask FADE ZONE where the image transitions into the page
- * background. We estimate that backing color from the image bottom/center plus
- * the actual page surface, then choose the light/dark text polarity with the
- * stronger WCAG contrast.
+ * The backing under the hero text is not a single color: the hero image fades
+ * through a CSS mask into the page surface, so each row of text sits on
+ * `image·α(y) + surface·(1−α(y))`. We sample the text overlay's actual
+ * footprint into run-length-deduped clusters (`palette.textZone`, split into
+ * a `name` band and a `meta` band), composite each cluster with the mode's
+ * page surface, and choose the light/dark text polarity by maximin WCAG
+ * contrast across the significant clusters — so a large backing region is
+ * never sacrificed to a small one, and genuinely bimodal bands are flagged
+ * instead of silently failing.
  */
 export function deriveHeroTextVars(
   palette: ImagePalette,
-  surfaceColor?: RGB
+  /** A live DOM sample of the rendered title can replace the palette's static
+   * name zone. Meta content keeps its stable lower-hero band. */
+  options: { nameBand?: TextZoneBand } = {},
 ): Record<string, string> {
-  const { dominant, regions } = palette
+  const { dominant } = palette
 
-  // Blend bottom (60%) + center (40%) — the region behind the text overlay
-  const textZone: RGB = {
-    r: Math.round(regions.bottom.r * 0.6 + regions.center.r * 0.4),
-    g: Math.round(regions.bottom.g * 0.6 + regions.center.g * 0.4),
-    b: Math.round(regions.bottom.b * 0.6 + regions.center.b * 0.4),
-  }
+  const nameBand = options.nameBand ?? palette.textZone?.name ?? fallbackBand(palette)
+  const metaBand = palette.textZone?.meta ?? fallbackBand(palette)
 
-  // Seed hero text from the extractor's surface-aware readable UI colors so
-  // the text family already tracks practical surface luminance, then blend in
-  // the actual text-zone tint so it still feels image-aware.
-  let contrastDark = shiftTowards(textZone, palette.ui.dark.text, 0.84)
-  let mutedDark = shiftTowards(contrastDark, palette.ui.dark.mutedText, 0.28)
+  const nameDark = deriveBandColors(nameBand, palette.ui.dark.surface, 'dark')
+  const nameLight = deriveBandColors(nameBand, palette.ui.light.surface, 'light')
+  const metaDark = deriveBandColors(metaBand, palette.ui.dark.surface, 'dark')
+  const metaLight = deriveBandColors(metaBand, palette.ui.light.surface, 'light')
 
-  let contrastLight = shiftTowards(textZone, palette.ui.light.text, 0.84)
-  let mutedLight = shiftTowards(contrastLight, palette.ui.light.mutedText, 0.28)
-
-  // The hero controls overlap the image fade. Estimate the real backing color
-  // by blending the sampled image text-zone with the actual page surface.
-  const contrastBg = surfaceColor ? mixRgb(surfaceColor, textZone, 0.58) : textZone
-
-  // Pick whichever polarity actually wins contrast against that blended hero
-  // background, instead of assuming dark mode always wants light text and light
-  // mode always wants dark text.
-  contrastDark = pickHeroTextColor(contrastDark, contrastBg)
-  contrastLight = pickHeroTextColor(contrastLight, contrastBg)
-  mutedDark = ensureContrast(mixRgb(contrastDark, contrastBg, 0.22), contrastBg, MIN_TEXT_CONTRAST)
-  mutedLight = ensureContrast(mixRgb(contrastLight, contrastBg, 0.22), contrastBg, MIN_TEXT_CONTRAST)
-
-  // Eye-comfort clamping: dark-mode text should never be blindingly bright,
-  // and light-mode text should never be a harsh smudge.
-  contrastDark = constrainLuminance(contrastDark, undefined, DARK_MODE_MAX_LUM)
-  mutedDark = constrainLuminance(mutedDark, undefined, DARK_MODE_MAX_LUM)
-  contrastLight = constrainLuminance(contrastLight, LIGHT_MODE_MIN_LUM, undefined)
-  mutedLight = constrainLuminance(mutedLight, LIGHT_MODE_MIN_LUM, undefined)
-
-  contrastDark = ensureContrast(contrastDark, contrastBg, MIN_TEXT_CONTRAST)
-  mutedDark = ensureContrast(mutedDark, contrastBg, MIN_TEXT_CONTRAST)
-  contrastLight = ensureContrast(contrastLight, contrastBg, MIN_TEXT_CONTRAST)
-  mutedLight = ensureContrast(mutedLight, contrastBg, MIN_TEXT_CONTRAST)
-
-  const darkScrim = contrastRatio(HERO_LIGHT_TEXT, contrastBg) >= contrastRatio(HERO_DARK_TEXT, contrastBg)
+  // Scrims for buttons/tags: opposite polarity of the chosen meta text so
+  // they read clearly against the same hero backing.
+  const darkScrim = luminance(metaDark.text) > 128
     ? 'rgba(0, 0, 0, 0.38)'
     : 'rgba(255, 255, 255, 0.40)'
-  const lightScrim = darkScrim
+  const lightScrim = luminance(metaLight.text) > 128
+    ? 'rgba(0, 0, 0, 0.38)'
+    : 'rgba(255, 255, 255, 0.40)'
+
+  // A title can genuinely straddle bright and dark artwork. In that case no
+  // foreground alone is honest; give only the title a compact, polarity-aware
+  // backing. At 55% this is strong enough to make either extreme safe while
+  // still leaving the art visible around the label.
+  const nameScrim = (text: RGB, bimodal: boolean) => !bimodal
+    ? 'transparent'
+    : luminance(text) > 128
+      ? 'rgba(0, 0, 0, 0.55)'
+      : 'rgba(255, 255, 255, 0.55)'
+
+  // Prefer the engine's Vibrant swatch for the hero accent: it's the most
+  // intentional, saturated color in the image (hair, eyes, costume detail).
+  // Fall back to the raw dominant so cached/older palettes still work.
+  const vibrant = palette.swatches?.vibrant?.color
+  const heroDominant = vibrant ?? dominant
+
+  const ambientDark = palette.ambient?.dark
+  const ambientLight = palette.ambient?.light
 
   return {
-    '--hero-dominant': `rgb(${dominant.r} ${dominant.g} ${dominant.b})`,
-    // Per-theme contrast (CSS selects based on data-theme-mode)
-    '--hero-contrast-dark': `rgb(${contrastDark.r} ${contrastDark.g} ${contrastDark.b})`,
-    '--hero-contrast-light': `rgb(${contrastLight.r} ${contrastLight.g} ${contrastLight.b})`,
-    '--hero-contrast-muted-dark': `rgb(${mutedDark.r} ${mutedDark.g} ${mutedDark.b})`,
-    '--hero-contrast-muted-light': `rgb(${mutedLight.r} ${mutedLight.g} ${mutedLight.b})`,
+    '--hero-dominant': rgbToCss(heroDominant),
+    // Name band (topmost text, over the least-faded image).
+    '--hero-contrast-name-dark': rgbToCss(nameDark.text),
+    '--hero-contrast-name-light': rgbToCss(nameLight.text),
+    '--hero-name-scrim-dark': nameScrim(nameDark.text, nameDark.bimodal),
+    '--hero-name-scrim-light': nameScrim(nameLight.text, nameLight.bimodal),
+    // Meta band (edit button, creator, tags — over the fade zone).
+    '--hero-contrast-dark': rgbToCss(metaDark.text),
+    '--hero-contrast-light': rgbToCss(metaLight.text),
+    '--hero-contrast-muted-dark': rgbToCss(metaDark.muted),
+    '--hero-contrast-muted-light': rgbToCss(metaLight.muted),
+    // '1' when the band is bimodal and no single color clears 4.5 everywhere.
+    // The profile uses the name-specific result above to show a compact scrim.
+    '--hero-text-bimodal-dark': nameDark.bimodal || metaDark.bimodal ? '1' : '0',
+    '--hero-text-bimodal-light': nameLight.bimodal || metaLight.bimodal ? '1' : '0',
     '--hero-text-scrim-dark': darkScrim,
     '--hero-text-scrim-light': lightScrim,
+    // Apple Music-style ambient glow derived from the same vibrant seed.
+    '--hero-ambient-dark': ambientDark
+      ? `radial-gradient(ellipse 120% 80% at 50% 0%, ${rgbToCss(ambientDark)} 0%, transparent 70%)`
+      : 'none',
+    '--hero-ambient-light': ambientLight
+      ? `radial-gradient(ellipse 120% 80% at 50% 0%, ${rgbToCss(ambientLight)} 0%, transparent 70%)`
+      : 'none',
   }
 }
 
@@ -205,83 +316,9 @@ export function deriveHeroTextVars(
 export function deriveCharacterNameVars(
   palette: ImagePalette
 ): Record<string, string> {
-  const hsl = pickMostVibrant(palette)
-
-  // Dark mode: bright pastel — boosted saturation, high lightness
-  const darkS = clamp(hsl.s + 10, 45, 80)
-  let darkL = clamp(hsl.l, 72, 85)
-
-  // Light mode: deep rich — boosted saturation, low lightness
-  const lightS = clamp(hsl.s + 15, 50, 85)
-  let lightL = clamp(hsl.l, 25, 38)
-
-  // Guard against low-contrast edge cases (e.g. near-black palettes where
-  // saturation clamping might still leave the color too dim).
-  let darkRgb = ensureContrast(hslToRgb(hsl.h, darkS, darkL), REF_DARK_BG, MIN_TEXT_CONTRAST)
-  // Dark mode: cap brightness so the name never glares on a dark background.
-  darkRgb = constrainLuminance(darkRgb, undefined, DARK_MODE_MAX_LUM)
-  darkL = rgbToHsl(darkRgb.r, darkRgb.g, darkRgb.b).l
-
-  let lightRgb = ensureContrast(hslToRgb(hsl.h, lightS, lightL), REF_LIGHT_BG, MIN_TEXT_CONTRAST)
-  // Light mode: floor brightness so the name never feels like a harsh smudge.
-  lightRgb = constrainLuminance(lightRgb, LIGHT_MODE_MIN_LUM, undefined)
-  lightL = rgbToHsl(lightRgb.r, lightRgb.g, lightRgb.b).l
-
+  const vars = deriveCharacterNameVarsFromPalette(palette)
   return {
-    '--char-name-dark': `hsl(${hsl.h}, ${darkS}%, ${darkL}%)`,
-    '--char-name-light': `hsl(${hsl.h}, ${lightS}%, ${lightL}%)`,
+    '--char-name-dark': vars.dark,
+    '--char-name-light': vars.light,
   }
-}
-
-/** Minimum saturation to consider a color "vibrant" rather than gray/muddy. */
-const MIN_VIBRANT_SAT = 20
-
-/**
- * Score palette regions by vibrancy and return the best HSL candidate.
- *
- * Vibrancy = saturation × lightness penalty × flatness penalty.
- * Flat regions (solid backgrounds like white, gray, or single-color fills)
- * have high pixel concentration in a single bucket and are heavily penalized
- * to avoid sampling the background instead of the character.
- */
-function pickMostVibrant(palette: ImagePalette): { h: number; s: number; l: number } {
-  const candidates: Array<{ rgb: RGB; flatness: number }> = [
-    { rgb: palette.dominant, flatness: palette.flatness.full },
-    { rgb: palette.regions.top, flatness: palette.flatness.top },
-    { rgb: palette.regions.center, flatness: palette.flatness.center },
-    { rgb: palette.regions.bottom, flatness: palette.flatness.bottom },
-    { rgb: palette.regions.left, flatness: palette.flatness.left },
-    { rgb: palette.regions.right, flatness: palette.flatness.right },
-    { rgb: palette.average, flatness: 0 }, // average has no meaningful flatness
-    ...palette.palette.map((rgb) => ({ rgb, flatness: 0 })),
-  ]
-
-  let best: { h: number; s: number; l: number } | null = null
-  let bestScore = -1
-
-  for (const { rgb, flatness } of candidates) {
-    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b)
-    // Penalize extreme lightness (< 15% or > 85%) — near-black/white
-    const lPenalty = hsl.l < 15 ? 0.3 : hsl.l > 85 ? 0.4 : 1
-    // Penalize flat/monotone regions — >50% concentration is a solid background
-    // Scale: 0.0 flatness → 1.0 (no penalty), 0.5 → 0.5, 0.8 → 0.1
-    const flatPenalty = flatness > 0.5 ? Math.max(0.1, 1 - flatness) : 1
-    const score = hsl.s * lPenalty * flatPenalty
-    if (score > bestScore) {
-      bestScore = score
-      best = hsl
-    }
-  }
-
-  // If the best candidate is still too desaturated, force a usable color
-  if (!best || best.s < MIN_VIBRANT_SAT) {
-    const fallback = rgbToHsl(palette.dominant.r, palette.dominant.g, palette.dominant.b)
-    return { h: fallback.h, s: Math.max(fallback.s, 45), l: 55 }
-  }
-
-  return best
-}
-
-function clamp(v: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, v))
 }

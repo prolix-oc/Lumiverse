@@ -63,6 +63,7 @@ import type {
   CortexResultDTO,
   CortexUsageStatsDTO,
   LinkedCortexResultDTO,
+  AssemblyBreakdownEntryDTO,
   MemoryConsolidationDTO,
   MemoryCortexConfigDTO,
   MemoryEntityDTO,
@@ -87,12 +88,15 @@ import type {
   MediaTransformResultDTO,
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import { deserializeWorkerResponseError } from "./worker-response-error";
+import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
   assertValidSharedRpcEndpoint,
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
+import type { LumiaDlcCatalog } from "../types/pack";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -110,6 +114,21 @@ type TokenCountResult = {
 type PromptBlockCategoryGroup = {
   categoryBlock: PromptBlock | null;
   children: PromptBlock[];
+};
+
+type AssembleRequest = {
+  blocks: PromptBlock[];
+  chatId: string;
+  connectionId?: string;
+  personaId?: string;
+  generationType?: string;
+  promptVariables?: Record<string, Record<string, string | number | string[]>>;
+  signal?: AbortSignal;
+};
+
+type AssembleResult = {
+  messages: LlmMessageDTO[];
+  breakdown: AssemblyBreakdownEntryDTO[];
 };
 
 type FrontendProcessState =
@@ -240,6 +259,14 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
+  | {
+      type: "assemble_prompt";
+      requestId: string;
+      input: Omit<AssembleRequest, "signal">;
+      userId?: string;
+    }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -501,11 +528,30 @@ type RuntimeHostToWorker =
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
 
 // `presets` is replaced wholesale (not intersected) because the local
-// PromptBlock type adds variants (select, switch, multiselect) that the
-// published PromptBlockDTO doesn't carry. Intersection would require the
-// implementation to satisfy both shapes — which is impossible since the
-// local type is strictly broader.
+// PromptBlock type also carries host-only sealed-block provenance. Keeping the
+// runtime CRUD surface on the native type avoids narrowing data returned by
+// newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+  /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
+  dlc: {
+    getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
+  };
+  theme: SpindleAPI["theme"] & {
+    deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any>;
+  };
+  assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  contracts: Readonly<Record<string, number>>;
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number }
+  ): void;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -953,6 +999,34 @@ function requestGeneration(input: any): Promise<unknown> {
   });
 }
 
+/** Assembly uses the generation cancellation channel but never invokes a provider. */
+function requestAssembly(input: AssembleRequest, userId?: string): Promise<AssembleResult> {
+  const signal = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError((signal.reason as any)?.message ?? "Assembly aborted"));
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => post({ type: "cancel_generation", requestId });
+    pendingResponses.set(requestId, {
+      resolve: (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value as AssembleResult);
+      },
+      reject: (reason) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(reason);
+      },
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    post({ type: "assemble_prompt", requestId, input: payload, userId });
+  });
+}
+
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
  * that yields `StreamChunkDTO` values as the host forwards them. The
@@ -1117,6 +1191,10 @@ const spindleApi: RuntimeSpindleAPI = {
     assertMutationAllowed("spindle.registerInterceptor()");
     interceptHandler = handler;
     post({ type: "register_interceptor", priority });
+  },
+
+  assemble(input, userId?: string) {
+    return requestAssembly(input, userId);
   },
 
   registerTool(tool): void {
@@ -1857,6 +1935,17 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "color_extract", requestId, imageId, userId });
       return result;
+    },
+    async deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any> {
+      // Pure computation: derive the character-aware overlay locally without a
+      // host round-trip. This keeps palette → overlay fast for extensions.
+      return deriveCharacterOverlay(palette.palette, palette.ui);
     },
     async generateVariables(config: {
       accent: { h: number; s: number; l: number };
@@ -3040,6 +3129,14 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  dlc: {
+    async getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "dlc_get_catalog", requestId, userId: options?.userId });
+      return result as LumiaDlcCatalog;
+    },
+  },
+
   permissions: {
     async getGranted(): Promise<string[]> {
       const scope = sharedRpcPermissionScope.getStore();
@@ -3260,10 +3357,16 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  registerContextHandler(handler, priority?): void {
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number },
+  ): void {
     assertMutationAllowed("spindle.registerContextHandler()");
     contextHandlerFn = handler;
-    post({ type: "register_context_handler", priority });
+    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs });
   },
 
   registerMessageContentProcessor(handler, priority?): void {
@@ -3835,6 +3938,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             context: msg.context,
           });
         }
+      } else {
+        post({
+          type: "context_handler_result",
+          requestId: msg.requestId,
+          context: msg.context,
+        });
       }
       break;
     }
@@ -3939,10 +4048,11 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         if (msg.error) {
           // Convert host-side abort errors back into a real DOMException so
           // extensions can do `err.name === "AbortError"` the usual way.
-          if (msg.error.startsWith("AbortError:")) {
-            pending.reject(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+          const responseError = msg.error
+          if (typeof responseError === "string" && responseError.startsWith("AbortError:")) {
+            pending.reject(makeAbortError(responseError.slice("AbortError:".length).trim()))
           } else {
-            pending.reject(new Error(msg.error));
+            pending.reject(deserializeWorkerResponseError(responseError))
           }
         } else {
           pending.resolve(msg.result);

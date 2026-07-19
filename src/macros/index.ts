@@ -1,11 +1,12 @@
 export { evaluate } from "./MacroEvaluator";
-export { buildEnv, cloneEnv, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns, type BuildEnvContext } from "./MacroEnv";
+export { buildEnv, cloneEnv, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns, withPromptBlockContext, type BuildEnvContext } from "./MacroEnv";
 export { registry } from "./MacroRegistry";
 export type {
   MacroEnv,
   MacroHandler,
   MacroDefinition,
   MacroExecContext,
+  PromptBlockMacroContext,
   MacroDiagnostic,
   EvaluateResult,
   AstNode,

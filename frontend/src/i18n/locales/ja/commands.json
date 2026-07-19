@@ -262,7 +262,9 @@
     "forkChat": {
       "title": "フォークチャット",
       "message": "最新のメッセージから新しいブランチを作成しますか?",
-      "confirm": "フォーク"
+      "confirm": "フォーク",
+      "nameLabel": "チャット名（任意）",
+      "namePlaceholder": "空欄のままにすると自動で名前が付けられます"
     },
     "deleteChat": {
       "title": "チャットを削除する",

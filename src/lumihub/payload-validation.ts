@@ -25,6 +25,103 @@ export type ValidationResult<T> =
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+/**
+ * Validate and clone a metadata bag without invoking accessors or accepting
+ * values that cannot be represented by the JSON-over-WebSocket contract.
+ */
+export function isSafePlainJsonObject(value: unknown): value is Record<string, unknown> {
+  try {
+    cloneSafeJsonValue(value, new Set<object>());
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+export function cloneSafePlainJsonObject(value: unknown): Record<string, unknown> {
+  const cloned = cloneSafeJsonValue(value, new Set<object>());
+  if (typeof cloned !== "object" || cloned === null || Array.isArray(cloned)) {
+    throw new Error("value must be a plain JSON object");
+  }
+  return cloned as Record<string, unknown>;
+}
+
+function cloneSafeJsonValue(value: unknown, seen: Set<object>): unknown {
+  if (value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "object") throw new Error("value is not JSON-compatible");
+  if (seen.has(value)) throw new Error("value contains a cycle");
+
+  const prototype = Object.getPrototypeOf(value);
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) throw new Error("array has an invalid prototype");
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor
+      || !Object.hasOwn(lengthDescriptor, "value")
+      || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0
+    ) {
+      throw new Error("array has an invalid length");
+    }
+
+    const length = lengthDescriptor.value;
+    const cloned: unknown[] = new Array(length);
+    seen.add(value);
+    try {
+      for (const key of Reflect.ownKeys(value)) {
+        if (key === "length") continue;
+        if (typeof key !== "string") throw new Error("array has a symbol key");
+        const index = Number(key);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
+          throw new Error("array has a non-index property");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) {
+          throw new Error("array has an accessor, hidden property, or hole");
+        }
+        Object.defineProperty(cloned, key, {
+          value: cloneSafeJsonValue(descriptor.value, seen),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      for (let index = 0; index < length; index += 1) {
+        if (!Object.hasOwn(value, String(index))) throw new Error("array has a hole");
+      }
+      return cloned;
+    } finally {
+      seen.delete(value);
+    }
+  }
+
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("object has an invalid prototype");
+  }
+
+  const cloned = Object.create(prototype === null ? null : Object.prototype) as Record<string, unknown>;
+  seen.add(value);
+  try {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") throw new Error("object has a symbol key");
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) {
+        throw new Error("object has an accessor or hidden property");
+      }
+      Object.defineProperty(cloned, key, {
+        value: cloneSafeJsonValue(descriptor.value, seen),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    return cloned;
+  } finally {
+    seen.delete(value);
+  }
+}
 
 function isString(value: unknown, max = MAX_STRING_LEN): value is string {
   return typeof value === "string" && value.length <= max;
@@ -179,7 +276,31 @@ export function validateInstallPresetPayload(
   if (!isPlainObject(raw.presetData)) {
     return { ok: false, error: "presetData must be an object" };
   }
-  if (JSON.stringify(raw.presetData).length > MAX_PRESET_DATA_BYTES) {
+  const presetData = raw.presetData;
+  const presetDescriptor = Object.getOwnPropertyDescriptor(presetData, "preset");
+  const preset = presetDescriptor && Object.hasOwn(presetDescriptor, "value") && isPlainObject(presetDescriptor.value)
+    ? presetDescriptor.value
+    : null;
+  if (preset) {
+    try {
+      for (const key of ["passthroughMetadata", "metadata"] as const) {
+        const descriptor = Object.getOwnPropertyDescriptor(preset, key);
+        if (!descriptor) continue;
+        if (!Object.hasOwn(descriptor, "value") || !isSafePlainJsonObject(descriptor.value)) {
+          return { ok: false, error: `preset.${key} must be a plain JSON object` };
+        }
+      }
+    } catch {
+      return { ok: false, error: "preset metadata must be a plain JSON object" };
+    }
+  }
+  let serializedPresetData: string;
+  try {
+    serializedPresetData = JSON.stringify(presetData);
+  } catch {
+    return { ok: false, error: "presetData must contain valid JSON" };
+  }
+  if (serializedPresetData.length > MAX_PRESET_DATA_BYTES) {
     return { ok: false, error: `presetData exceeds ${MAX_PRESET_DATA_BYTES} bytes` };
   }
   if (raw.presetVersion != null && !isString(raw.presetVersion, 64)) {
@@ -208,7 +329,9 @@ export function validateInstallPresetPayload(
     for (const block of sealed.blocks) {
       if (!isPlainObject(block)) return { ok: false, error: "sealedPreset.blocks entries must be objects" };
       if (!isString(block.key, 256)) return { ok: false, error: "sealedPreset block key must be a string ≤256 chars" };
-      if (!isString(block.sha256, 64)) return { ok: false, error: "sealedPreset block sha256 must be a string ≤64 chars" };
+      if (typeof block.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(block.sha256)) {
+        return { ok: false, error: "sealedPreset block sha256 must be a 64-character hexadecimal digest" };
+      }
     }
   }
 

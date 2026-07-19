@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
 import { createSandboxFrame } from './sandbox-frame'
 import { scheduleSpindleDomTask } from './browser-scheduler'
+import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 
 export interface SpindleMessageWidgetRenderOptions {
   messageId: string
@@ -35,7 +36,7 @@ export function upsertMessageWidget(
   options: SpindleMessageWidgetRenderOptions,
   onMessage?: (payload: unknown) => void,
   corsProxy?: (url: string, options?: any) => Promise<any>,
-): void {
+): () => void {
   const list = widgetsByMessage.get(options.messageId) || []
   const nextRecord: MessageWidgetRecord = { ...options, extensionId, onMessage, corsProxy }
   const idx = list.findIndex((w) => w.extensionId === extensionId && w.widgetId === options.widgetId)
@@ -43,6 +44,20 @@ export function upsertMessageWidget(
   else list[idx] = nextRecord
   widgetsByMessage.set(options.messageId, list)
   notify()
+  const messageId = nextRecord.messageId
+
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    const currentList = widgetsByMessage.get(messageId)
+    if (!currentList) return
+    const currentIndex = currentList.indexOf(nextRecord)
+    if (currentIndex === -1) return
+    currentList.splice(currentIndex, 1)
+    if (currentList.length === 0) widgetsByMessage.delete(messageId)
+    notify()
+  }
 }
 
 export function removeMessageWidget(extensionId: string, messageId: string, widgetId: string): void {
@@ -110,6 +125,10 @@ function MessageWidgetFrame({ widget }: { widget: MessageWidgetRecord }): ReactE
         if (height > 0) widgetHeightCache.set(widgetKey, height)
       })
       resizeObserver.observe(frame.element)
+      // The scheduled insertion can happen well after the message row was
+      // measured. Notify the list before mutating the row so its resize policy
+      // treats this as programmatic content expansion, not backward scrolling.
+      dispatchMessageContentLayout(host, { preserveScrollAnchor: true })
       host.replaceChildren(frame.element)
 
       dispose = () => {

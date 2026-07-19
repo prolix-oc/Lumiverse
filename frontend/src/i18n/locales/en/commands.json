@@ -262,7 +262,9 @@
     "forkChat": {
       "title": "Fork Chat",
       "message": "Create a new branch from the latest message?",
-      "confirm": "Fork"
+      "confirm": "Fork",
+      "nameLabel": "Chat name (optional)",
+      "namePlaceholder": "Leave blank to use an automatic name"
     },
     "deleteChat": {
       "title": "Delete Chat",

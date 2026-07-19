@@ -15,10 +15,12 @@ export const HOST_SLOTS_PROP = '__hostSlots'
  * Built-in "slot" tags. Unlike ALLOWED_JSX_TAGS (which the interpreter builds
  * from scratch), a slot tag is replaced at render time with a trusted React
  * element the host supplied — e.g. the real <MessageContent /> with full
- * markdown, code highlighting, macros and interactivity. Override authors can
- * place a slot but cannot pass any data into it, so this adds no XSS surface.
+ * markdown, code highlighting, macros and interactivity, or <Original /> for
+ * the complete native component. Override authors can place a slot but cannot
+ * pass any data into it, so this adds no XSS surface.
  */
 export const ALLOWED_SLOT_TAGS = new Set([
+  'Original',
   'Content',
   'Reasoning',
   'Attachments',
@@ -79,6 +81,7 @@ export const ALLOWED_ACTION_PATHS = new Set([
   'actions.edit',
   'actions.delete',
   'actions.toggleHidden',
+  'actions.toggleContextAnchor',
   'actions.fork',
   'actions.promptBreakdown',
   'actions.swipeLeft',

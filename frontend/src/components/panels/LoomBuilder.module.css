@@ -48,6 +48,79 @@
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
+  container-type: inline-size;
+}
+
+.presetSelector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.presetSelect {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.extensionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.extensionToolbar > div {
+  min-width: 0;
+}
+
+.extensionTabBar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--lumiverse-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.extensionTab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.extensionTab:hover {
+  color: var(--lumiverse-text);
+}
+
+.extensionTabActive {
+  color: var(--lumiverse-primary);
+  border-bottom-color: var(--lumiverse-primary);
+}
+
+.extensionTabContent {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
 }
 
 .searchToggle {
@@ -58,6 +131,35 @@
   color: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary-020);
   background: var(--lumiverse-primary-010);
+}
+
+/* Keep the preset selector usable in narrow sidebars. The bulk action remains
+   discoverable through its icon and tooltip, while its text returns when the
+   toolbar has enough room for both controls. */
+@container (max-width: 620px) {
+  .categoryToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .categoryToggle .toolbarButtonLabel {
+    display: none;
+  }
+}
+
+@container (max-width: 440px) {
+  .searchToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .searchToggle .toolbarButtonLabel {
+    display: none;
+  }
 }
 
 .searchBarRow {
@@ -1175,32 +1277,6 @@
 }
 
 
-/* ============================================================================
-   CUSTOM BODY
-   ============================================================================ */
-
-.customBodyTextarea {
-  width: 100%;
-  min-height: 64px;
-  padding: 10px 12px;
-  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  font-family: var(--lumiverse-font-mono, monospace);
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
-}
-
-.customBodyTextarea:focus {
-  border-color: var(--lumiverse-primary-muted);
-  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
-}
-
 .jsonError {
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);
@@ -1615,10 +1691,7 @@
 
 .blockNameRow {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
   min-width: 0;
 }
 
@@ -1626,7 +1699,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 160px;
+  flex: 1 1 auto;
   min-width: 0;
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
@@ -1654,9 +1727,10 @@
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   min-width: 0;
+  align-self: center;
 }
 
 .triggerBadgeList {

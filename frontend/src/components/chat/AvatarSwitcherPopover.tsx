@@ -33,7 +33,10 @@ export default function AvatarSwitcherPopover({ chatId, children }: Props) {
   const character = characters.find((c) => c.id === activeCharacterId)
   const setActiveChatAvatarId = useStore((s) => s.setActiveChatAvatarId)
 
-  const alternates = (character?.extensions?.alternate_avatars || []) as AlternateAvatarEntry[]
+  const alternates = useMemo(
+    () => (character?.extensions?.alternate_avatars || []) as AlternateAvatarEntry[],
+    [character?.extensions?.alternate_avatars],
+  )
 
   const allAvatars = useMemo(() => {
     const list: { key: string; imageId: string | null; label: string }[] = []

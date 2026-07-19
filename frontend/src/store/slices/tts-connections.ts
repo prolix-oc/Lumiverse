@@ -1,17 +1,20 @@
 import type { StateCreator } from 'zustand'
-import type { TtsConnectionsSlice } from '@/types/store'
+import type { AppStore, TtsConnectionsSlice } from '@/types/store'
 import type { TtsConnectionProfile } from '@/types/api'
-import { normalizeConnectionsOrder } from './connections-order-merge'
+import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
-export const createTtsConnectionsSlice: StateCreator<TtsConnectionsSlice> = (set) => ({
+export const createTtsConnectionsSlice: StateCreator<AppStore, [], [], TtsConnectionsSlice> = (set) => ({
   ttsProfiles: [],
   ttsProviders: [],
 
-  setTtsProfiles: (profiles) => set({ ttsProfiles: profiles }),
+  setTtsProfiles: (profiles) =>
+    set((state) => ({
+      ttsProfiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).tts),
+    })),
 
   addTtsProfile: (profile) =>
     set((state) => {
-      const connectionsOrder = normalizeConnectionsOrder((state as any).connectionsOrder)
+      const connectionsOrder = normalizeConnectionsOrder(state.connectionsOrder)
       const order = connectionsOrder.tts
       return {
         ttsProfiles: [...state.ttsProfiles, profile],

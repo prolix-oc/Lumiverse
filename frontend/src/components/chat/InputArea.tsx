@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, Search } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
@@ -18,7 +18,8 @@ import { getPersonaAvatarThumbUrl, getCharacterAvatarThumbUrl } from '@/lib/avat
 import { uuidv7 } from '@/lib/uuid'
 import { toast } from '@/lib/toast'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
-import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
+import { unmarshalPreset } from '@/lib/loom/service'
+import { presetSaveCoordinator, StalePresetHydrationError } from '@/lib/loom/preset-save-coordinator'
 import { resolveAutoPersonaBinding } from '@/store/slices/personas'
 import {
   CHAT_PERSONA_METADATA_KEY,
@@ -44,11 +45,29 @@ import { getMobileQueueHintKey, type MobileQueueHoldState } from './mobileQueueH
 import { unlockNotificationAudio } from '@/lib/notificationAudio'
 import { unlockTTSAudio } from '@/lib/ttsAudio'
 import { orderGroupResponseIds, readGroupResponseOrder } from '@/lib/groupResponseOrder'
+import {
+  REGEX_ACTION_EVENT,
+  applyRegexActionDraft,
+  clearRegexSelectionForSource,
+  claimLocalRegexAction,
+  claimLocalRegexActions,
+  consumeRegexSelections,
+  consumeRegexActionDraft,
+  getPendingRegexSelections,
+  hasPendingRegexSelectionsForBlock,
+  queueRegexSelection,
+  queueRegexActionDraft,
+  restoreRegexSelections,
+  toggleRegexSelection,
+  type PendingRegexSelection,
+  type RegexActionActivation,
+} from '@/lib/regex/actionBus'
 import { createSTTEngine, getSupportedSTTAudioFormat, isWebSpeechAvailable, type STTAudioFrame, type STTEngine } from '@/lib/sttEngine'
 
 interface InputAreaProps {
   chatId: string
   onNavigateHome?: () => void
+  onOpenChatFind?: () => void
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
@@ -57,6 +76,22 @@ const STT_VISUALIZER_BARS = 18
 const MOBILE_QUEUE_HOLD_PROMPT_MS = 180
 const MOBILE_QUEUE_HOLD_MS = 900
 const LIVE_GENERATION_HEAD_STATUSES = new Set(['assembling', 'council', 'waiting', 'reasoning', 'streaming'])
+
+function stackVisibleRegexSelections(base: string, selections: PendingRegexSelection[]): string {
+  return [base.trim(), ...selections.filter((item) => item.type === 'send').map((item) => item.content.trim())]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function serializeHiddenRegexSelections(selections: PendingRegexSelection[]) {
+  return selections.filter((item) => item.type === 'append').map((item) => ({
+    content: item.content,
+    action_id: item.id,
+    script_id: item.scriptId,
+    instance_id: item.instanceId,
+    source_message_id: item.messageId,
+  }))
+}
 const STT_IDLE_BARS = Array.from({ length: STT_VISUALIZER_BARS }, (_, index) => {
   const centerBias = 1 - Math.abs(index - ((STT_VISUALIZER_BARS - 1) / 2)) / (STT_VISUALIZER_BARS / 2)
   return 0.12 + centerBias * 0.22
@@ -194,23 +229,31 @@ function slugifyName(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
+export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: InputAreaProps) {
   const { t } = useTranslation('chat')
   const { t: te } = useTranslation('errors')
   const queueModLabel = isMac ? t('input.modCmd') : t('input.modCtrl')
   const navigate = useNavigate()
   const [text, setText] = useState('')
+  const [pendingRegexVisibleCount, setPendingRegexVisibleCount] = useState(0)
   const [lastImpersonateInput, setLastImpersonateInput] = useState<string>('')
   const [dryRunning, setDryRunning] = useState(false)
   const [resolvingMacros, setResolvingMacros] = useState(false)
   const [authorsNoteOpen, setAuthorsNoteOpen] = useState(false)
   const [openPopover, setOpenPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
+  const openPopoverRef = useRef(openPopover)
+  useEffect(() => {
+    openPopoverRef.current = openPopover
+  }, [openPopover])
   const [renderPopover, setRenderPopover] = useState<null | 'guides' | 'quick' | 'persona' | 'tools' | 'extras' | 'altFields' | 'addons' | 'databank' | 'groupMember' | 'connections'>(null)
   const [popoverClosing, setPopoverClosing] = useState(false)
+  const [personaSearch, setPersonaSearch] = useState('')
   const [personaList, setPersonaList] = useState<Array<{
     id: string
     name: string
     title: string
+    description: string
+    folder: string
     avatar_path: string | null
     image_id: string | null
     metadata?: Record<string, any>
@@ -247,6 +290,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const pendingSelectionRef = useRef<{ start: number; end: number; direction?: 'forward' | 'backward' | 'none' } | null>(null)
   const pendingSTTActionRef = useRef<'queue' | 'send' | null>(null)
   const sendingRef = useRef(false)
+  const regexActionHandlingRef = useRef(false)
   const generationNonceRef = useRef(0)
   const touchHoldPromptTimerRef = useRef<number>(0)
   const touchQueueArmTimerRef = useRef<number>(0)
@@ -290,10 +334,12 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   const guidedGenerations = useStore((s) => s.guidedGenerations)
   const quickReplySets = useStore((s) => s.quickReplySets)
   const personas = useStore((s) => s.personas)
+  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
   const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
   const personaTagBindings = useStore((s) => s.personaTagBindings)
   const messages = useStore((s) => s.messages)
   const addMessage = useStore((s) => s.addMessage)
+  const updateMessage = useStore((s) => s.updateMessage)
   const beginStreaming = useStore((s) => s.beginStreaming)
   const startStreaming = useStore((s) => s.startStreaming)
   const stopStreaming = useStore((s) => s.stopStreaming)
@@ -434,7 +480,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setAltFieldsLoaded(true)
       })
       .catch(() => { setAltFieldsData({}); setAltFieldsLoaded(false) })
-  }, [activeCharacterId, isGroupChat, groupCharacterKey, groupAltFieldsKey])
+  }, [activeCharacterId, isGroupChat, groupCharacterIds, groupCharacterKey, groupAltFieldsKey])
 
   const pruneAltSelections = useCallback((
     selections: Record<string, string>,
@@ -603,6 +649,49 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     [activeChatMetadata],
   )
 
+  const personaPickerGroups = useMemo(() => {
+    const query = personaSearch.trim().toLocaleLowerCase()
+    const matching = query
+      ? personaList.filter((persona) => [persona.name, persona.title, persona.description, persona.folder]
+          .some((value) => value.toLocaleLowerCase().includes(query)))
+      : personaList
+    const matchingById = new Map(matching.map((persona) => [persona.id, persona]))
+    const recent = recentPersonaIds
+      .map((id) => matchingById.get(id))
+      .filter((persona): persona is (typeof personaList)[number] => !!persona)
+    const recentIds = new Set(recent.map((persona) => persona.id))
+    const folders = new Map<string, typeof personaList>()
+
+    for (const persona of matching) {
+      if (recentIds.has(persona.id)) continue
+      const folder = persona.folder.trim()
+      const items = folders.get(folder) ?? []
+      items.push(persona)
+      folders.set(folder, items)
+    }
+
+    const groups: Array<{
+      key: string
+      folder: string
+      recent: boolean
+      personas: typeof personaList
+    }> = []
+    if (recent.length > 0) groups.push({ key: '__recent', folder: '', recent: true, personas: recent })
+    for (const [folder, items] of [...folders.entries()].sort(([a], [b]) => {
+      if (!a) return 1
+      if (!b) return -1
+      return a.localeCompare(b)
+    })) {
+      groups.push({
+        key: folder || '__uncategorized',
+        folder,
+        recent: false,
+        personas: items.sort((a, b) => a.name.localeCompare(b.name)),
+      })
+    }
+    return groups
+  }, [personaList, personaSearch, recentPersonaIds])
+
   const persistChatPersonaSelection = useCallback(async (personaId: string | null) => {
     if (!chatId || isTemporaryChat) return false
 
@@ -646,7 +735,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     t,
   ])
 
-  const currentChatAddonOverrides = activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {}
+  const currentChatAddonOverrides = useMemo(
+    () => activePersonaId ? (chatAddonStatesByPersona[activePersonaId] ?? {}) : {},
+    [activePersonaId, chatAddonStatesByPersona],
+  )
   const basePersonaAddonStates = useMemo(() => {
     const states: Record<string, boolean> = {}
     for (const addon of personaAddons) states[addon.id] = addon.enabled
@@ -750,7 +842,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       toast.error(t('toast.failedSaveAddonState'))
       return false
     }
-  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata])
+  }, [activePersonaId, chatId, chatAddonStatesByPersona, syncChatAddonMetadata, t])
 
   const handleToggleAddonState = useCallback((addonId: string) => {
     void persistChatAddonOverride(addonId, !(effectivePersonaAddonStates[addonId] ?? false))
@@ -900,6 +992,17 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // Restore draft on mount or chat switch
   useEffect(() => {
     setLastImpersonateInput('')
+    setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+    const queuedDraft = consumeRegexActionDraft(chatId)
+    if (queuedDraft) {
+      let saved = ''
+      if (saveDraftInput) {
+        try { saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId) || '' } catch {}
+      }
+      setText(applyRegexActionDraft(saved, queuedDraft))
+      requestAnimationFrame(() => resizeTextarea(textareaRef.current))
+      return
+    }
     if (!saveDraftInput) return
     try {
       const saved = localStorage.getItem(DRAFT_KEY_PREFIX + chatId)
@@ -907,7 +1010,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setText(saved)
       }
     } catch {}
-  }, [chatId, saveDraftInput])
+  }, [chatId, saveDraftInput, resizeTextarea])
 
   // Debounced save on text change
   useEffect(() => {
@@ -940,11 +1043,19 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     if (promptVariablesLoading) return
     setOpenPopover(null)
     setPromptVariablesLoading(true)
+    const presetId = activeLoomPresetId
+    const hydration = presetSaveCoordinator.beginHydration(presetId, 'prompt-variables')
     try {
-      const preset = await presetsApi.get(activeLoomPresetId)
-      setPromptVariablesPreset(unmarshalPreset(preset))
+      const preset = await presetsApi.get(presetId)
+      if (useStore.getState().activeLoomPresetId !== presetId) {
+        presetSaveCoordinator.cancelHydration(hydration)
+        return
+      }
+      setPromptVariablesPreset(presetSaveCoordinator.hydrate(unmarshalPreset(preset), hydration))
       setPromptVariablesModalOpen(true)
     } catch (err) {
+      presetSaveCoordinator.cancelHydration(hydration)
+      if (err instanceof StalePresetHydrationError) return
       console.error('[InputArea] Failed to load prompt variables preset:', err)
       toast.error(t('toast.failedLoadPromptVariables'))
     } finally {
@@ -953,15 +1064,20 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [activeLoomPresetId, promptVariablesLoading, t])
 
   const savePromptVariableValues = useCallback(async (values: PromptVariableValues) => {
-    if (!promptVariablesPreset) return
-    const updated: LoomPreset = {
-      ...promptVariablesPreset,
-      promptVariables: values,
-      updatedAt: Date.now(),
+    if (!promptVariablesPreset || useStore.getState().activeLoomPresetId !== promptVariablesPreset.id) {
+      setPromptVariablesModalOpen(false)
+      setPromptVariablesPreset(null)
+      return
     }
+    const updated = presetSaveCoordinator.mutate(
+      promptVariablesPreset.id,
+      promptVariablesPreset,
+      (preset) => ({ ...preset, promptVariables: values }),
+      { immediate: true },
+    )
     try {
-      const saved = await presetsApi.update(updated.id, marshalUpdate(updated))
-      setPromptVariablesPreset(unmarshalPreset(saved))
+      const saved = await presetSaveCoordinator.flush(updated.id)
+      setPromptVariablesPreset(saved ?? updated)
     } catch (err) {
       console.warn('[InputArea] Failed to save prompt variable values:', err)
       toast.error(t('toast.failedSavePromptVariables'))
@@ -1003,8 +1119,8 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   // Databank # autocomplete — search when hash query changes
   useEffect(() => {
     if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current)
-    if (hashQuery === null || hashQuery.length === 0) {
-      if (openPopover === 'databank') setOpenPopover(null)
+      if (hashQuery === null || hashQuery.length === 0) {
+      if (openPopoverRef.current === 'databank') setOpenPopover(null)
       setDatabankResults([])
       return
     }
@@ -1019,7 +1135,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         setDatabankActiveIdx(0)
         if (results.length > 0) {
           setOpenPopover('databank')
-        } else if (openPopover === 'databank') {
+        } else if (openPopoverRef.current === 'databank') {
           setOpenPopover(null)
         }
       } catch {
@@ -1027,14 +1143,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       }
     }, 200)
     return () => { if (databankDebounceRef.current) clearTimeout(databankDebounceRef.current) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hashQuery, chatId, activeCharacterId])
 
   // @ autocomplete — filter locally against group members. Muted members are
   // kept in the list (dimmed in UI); selecting them overrides mute for this turn.
   useEffect(() => {
     if (!isGroupChat || atQuery === null) {
-      if (openPopover === 'groupMember') setOpenPopover(null)
+      if (openPopoverRef.current === 'groupMember') setOpenPopover(null)
       setAtResults([])
       return
     }
@@ -1070,10 +1185,9 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     setAtActiveIdx(0)
     if (ranked.length > 0) {
       setOpenPopover('groupMember')
-    } else if (openPopover === 'groupMember') {
+    } else if (openPopoverRef.current === 'groupMember') {
       setOpenPopover(null)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [atQuery, isGroupChat, groupCharacterIds, mutedCharacterIds, characters])
 
   // While hidden for mobile edit, the RO below cannot observe a display:none
@@ -1197,23 +1311,30 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
   }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
   useEffect(() => {
-    if (openPopover !== 'persona') return
+    if (openPopover !== 'persona') {
+      setPersonaSearch('')
+      return
+    }
     if (personas.length > 0) {
       setPersonaList(personas.map((p) => ({
         id: p.id,
         name: p.name,
         title: p.title || '',
+        description: p.description || '',
+        folder: p.folder || '',
         avatar_path: p.avatar_path,
         image_id: p.image_id,
         metadata: p.metadata,
       })))
       return
     }
-    personasApi.list({ limit: 200 }).then((res) => {
-      setPersonaList(res.data.map((p) => ({
+    personasApi.listAll().then((allPersonas) => {
+      setPersonaList(allPersonas.map((p) => ({
         id: p.id,
         name: p.name,
         title: p.title || '',
+        description: p.description || '',
+        folder: p.folder || '',
         avatar_path: p.avatar_path,
         image_id: p.image_id,
         metadata: p.metadata,
@@ -1226,10 +1347,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     charactersApi.get(activeCharacterId).then((c) => setCharacterName(c.name)).catch(() => {})
   }, [activeCharacterId])
 
-  const DOCUMENT_EXTENSIONS = new Set([
+  const DOCUMENT_EXTENSIONS = useMemo(() => new Set([
     '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.xml',
     '.html', '.htm', '.yaml', '.yml', '.log', '.rst', '.rtf',
-  ])
+  ]), [])
 
   const isDocumentFile = useCallback((file: File) => {
     const ext = file.name.lastIndexOf('.') >= 0 ? file.name.slice(file.name.lastIndexOf('.')).toLowerCase() : ''
@@ -1352,7 +1473,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
     return false
   }, [messages])
-  const hasDraftContent = text.trim().length > 0 || pendingAttachments.length > 0
+  const hasDraftContent = text.trim().length > 0 || pendingAttachments.length > 0 || pendingRegexVisibleCount > 0
   const [mobileQueueHoldState, setMobileQueueHoldState] = useState<MobileQueueHoldState>('idle')
 
   const setMobileQueueHoldVisualState = useCallback((next: MobileQueueHoldState) => {
@@ -1406,12 +1527,58 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
   }, [mobileQueueHoldState, hasDraftContent, isGeneratingInChat, clearTouchQueueTimers, setMobileQueueHoldVisualState])
 
+  const finalizeRegexSelections = useCallback(async (
+    selections: PendingRegexSelection[],
+    triggerAction?: RegexActionActivation,
+  ): Promise<boolean> => {
+    const multiSelections = selections.filter((selection) => selection.multi_select)
+    const actionsToClaim: RegexActionActivation[] = [
+      ...multiSelections,
+      ...(triggerAction ? [triggerAction] : []),
+    ]
+    if (actionsToClaim.length === 0) return true
+
+    if (mpRoomId && !mpIsHost) {
+      if (claimLocalRegexActions(actionsToClaim)) return true
+      for (const selection of multiSelections) clearRegexSelectionForSource(selection)
+      setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      toast.info(t('toast.regexActionAlreadyUsed'))
+      return false
+    }
+
+    try {
+      const result = await messagesApi.claimRegexActions(chatId, actionsToClaim.flatMap((selection) => (
+        selection.messageId ? [{
+          message_id: selection.messageId,
+          script_id: selection.scriptId,
+          action_id: selection.id,
+          instance_id: selection.instanceId,
+        }] : []
+      )))
+      for (const message of result.messages) updateMessage(message.id, { extra: message.extra })
+      return true
+    } catch (error: any) {
+      for (const message of error?.body?.messages || []) {
+        if (message?.id && message?.extra) updateMessage(message.id, { extra: message.extra })
+      }
+      if (error?.status === 404 || error?.status === 409) {
+        for (const selection of multiSelections) clearRegexSelectionForSource(selection)
+        setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      }
+      toast.info(error?.body?.error || t('toast.regexActionClaimFailed'))
+      return false
+    }
+  }, [chatId, mpIsHost, mpRoomId, t, updateMessage])
+
   // Multiplayer room send. Returns 'sent' (routed to the room — caller stops),
   // 'blocked' (off-turn / closed freeform window — caller stops), or 'local'
   // (not in a room, or host in round-robin → caller does its normal local
   // send/queue). Shared by send AND queue so both are turn/window-gated
   // identically — queueing must not be a bypass.
-  const attemptRoomSend = useCallback((): 'sent' | 'blocked' | 'local' => {
+  const attemptRoomSend = useCallback(async (
+    contentOverride?: string,
+    triggerAction?: RegexActionActivation,
+  ): Promise<'sent' | 'blocked' | 'local'> => {
     const mp = useStore.getState()
     if (!mp.mpRoomId) return 'local'
     if (!mp.isMyTurn()) {
@@ -1422,34 +1589,59 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     // peers always, and the host during a freeform window — submits via the room.
     const hostFreeformContribution = mp.mpIsHost && mp.mpTurnStrategy === 'freeform'
     if (mp.mpIsHost && !hostFreeformContribution) return 'local'
-    const roomContent = text.trim()
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const roomContent = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
     if (!roomContent) return 'blocked'
-    sendRoomAction({ type: 'room_message', content: roomContent })
-    setText('')
-    if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+    if (!await finalizeRegexSelections(pendingSelections, triggerAction)) return 'blocked'
+    const consumedSelections = consumeRegexSelections(chatId)
+    setPendingRegexVisibleCount(0)
+    sendRoomAction({
+      type: 'room_message',
+      content: roomContent,
+      associative_regex_append: serializeHiddenRegexSelections(consumedSelections),
+    })
+    if (contentOverride === undefined) {
+      setText('')
+      if (saveDraftInput) { try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {} }
+    }
     requestAnimationFrame(() => {
       if (textareaRef.current) { resizeTextarea(textareaRef.current); textareaRef.current.focus() }
     })
     return 'sent'
-  }, [text, chatId, saveDraftInput, resizeTextarea])
+  }, [text, chatId, saveDraftInput, resizeTextarea, finalizeRegexSelections])
 
   const handleQueueMessage = useCallback(async () => {
     if (sendingRef.current || isGeneratingInChat) return
+    sendingRef.current = true
     // In a room, queueing IS sending — gate by turn/window + route through the
     // host (peers can't write to the chat directly).
-    if (attemptRoomSend() !== 'local') return
-    const content = text.trim()
+    if (await attemptRoomSend() !== 'local') {
+      sendingRef.current = false
+      return
+    }
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const content = stackVisibleRegexSelections(text, pendingSelections)
     const attachments = pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
       : undefined
-    if (!content && !attachments) return
+    if (!content && !attachments) {
+      sendingRef.current = false
+      return
+    }
 
-    sendingRef.current = true
+    if (!await finalizeRegexSelections(pendingSelections)) {
+      sendingRef.current = false
+      return
+    }
+
     setText('')
     setPendingAttachments([])
     if (saveDraftInput) {
       try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
     }
+
+    let consumedRegexSelections: PendingRegexSelection[] = []
+    const regexSelectionsFinalized = pendingSelections.some((selection) => selection.multi_select)
 
     requestAnimationFrame(() => {
       if (textareaRef.current) {
@@ -1464,6 +1656,10 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       const extra: Record<string, any> = {}
       if (effectivePersonaId) extra.persona_id = effectivePersonaId
       if (attachments) extra.attachments = attachments
+      consumedRegexSelections = consumeRegexSelections(chatId)
+      setPendingRegexVisibleCount(0)
+      const hiddenSelections = serializeHiddenRegexSelections(consumedRegexSelections)
+      if (hiddenSelections.length > 0) extra.associative_regex_append = hiddenSelections
 
       const msg = await messagesApi.create(chatId, {
         is_user: true,
@@ -1474,30 +1670,53 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       addMessage(msg)
       toast.info(t('toast.messageQueued'), { duration: 1500 })
     } catch (err: any) {
+      restoreRegexSelections(
+        chatId,
+        regexSelectionsFinalized
+          ? consumedRegexSelections.filter((selection) => !selection.multi_select)
+          : consumedRegexSelections,
+      )
+      setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
       console.error('[InputArea] Failed to queue message:', err)
       toast.error(err?.body?.error || err?.message || t('toast.failedQueueMessage'))
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activePersonaId, personas, pendingAttachments, addMessage, saveDraftInput, resizeTextarea, attemptRoomSend, finalizeRegexSelections, t])
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (
+    contentOverride?: string,
+    triggerAction?: RegexActionActivation,
+  ) => {
     if (sendingRef.current || isGeneratingInChat) return
+    sendingRef.current = true
 
     // Multiplayer: route through the room (turn/window-gated) unless we're the
     // host in round-robin, who sends locally on their own chat.
-    if (attemptRoomSend() !== 'local') return
+    if (await attemptRoomSend(contentOverride, triggerAction) !== 'local') {
+      sendingRef.current = false
+      return
+    }
 
-    const content = text.trim()
-    const attachments = pendingAttachments.length > 0
+    const pendingSelections = getPendingRegexSelections(chatId)
+    const sourceText = stackVisibleRegexSelections(contentOverride ?? text, pendingSelections)
+    const content = sourceText.trim()
+    const attachments = contentOverride === undefined && pendingAttachments.length > 0
       ? pendingAttachments.map(({ previewUrl: _, ...a }) => a)
       : undefined
 
-    sendingRef.current = true
+    const willCreateMessage = !!content || !!attachments
+    if (willCreateMessage && !await finalizeRegexSelections(pendingSelections, triggerAction)) {
+      sendingRef.current = false
+      return
+    }
+
     const nonce = ++generationNonceRef.current
-    setText('')
-    setPendingAttachments([])
-    if (saveDraftInput) {
+    if (contentOverride === undefined) {
+      setText('')
+      setPendingAttachments([])
+    }
+    if (contentOverride === undefined && saveDraftInput) {
       try { localStorage.removeItem(DRAFT_KEY_PREFIX + chatId) } catch {}
     }
     setStreamingError(null)
@@ -1510,6 +1729,11 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       }
     })
 
+    let consumedRegexSelections: PendingRegexSelection[] = []
+    let regexAppendsCommitted = false
+    const regexSelectionsFinalized = willCreateMessage && (
+      !!triggerAction || pendingSelections.some((selection) => selection.multi_select)
+    )
     try {
       const effectivePersonaId = isTemporaryChat ? null : activePersonaId
       const effectivePersonaName = personas.find((p) => p.id === effectivePersonaId)?.name || t('userFallback')
@@ -1522,6 +1746,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         generation_type: 'normal' as const,
+        user_input: sourceText || undefined,
       }
 
       // Parse @mentions in the user's message (group chats only). Each mention
@@ -1576,6 +1801,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
             persona_addon_states: genOpts.persona_addon_states,
             preset_id: genOpts.preset_id,
             force_preset_id: genOpts.force_preset_id,
+            user_input: genOpts.user_input,
           },
         })
       } else {
@@ -1586,12 +1812,17 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         const extra: Record<string, any> = {}
         if (effectivePersonaId) extra.persona_id = effectivePersonaId
         if (attachments) extra.attachments = attachments
+        consumedRegexSelections = consumeRegexSelections(chatId)
+        setPendingRegexVisibleCount(0)
+        const hiddenSelections = serializeHiddenRegexSelections(consumedRegexSelections)
+        if (hiddenSelections.length > 0) extra.associative_regex_append = hiddenSelections
         const msg = await messagesApi.create(chatId, {
           is_user: true,
           name: effectivePersonaName,
           content: finalContent || '(attached)',
           extra: Object.keys(extra).length > 0 ? extra : undefined,
         })
+        regexAppendsCommitted = true
         // Optimistically add to store so it appears immediately
         addMessage(msg)
         // Show streaming state immediately so stop button appears during assembly
@@ -1617,6 +1848,15 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         consumeOneshotGuides()
       }
     } catch (err: any) {
+      if (!regexAppendsCommitted) {
+        restoreRegexSelections(
+          chatId,
+          regexSelectionsFinalized
+            ? consumedRegexSelections.filter((selection) => !selection.multi_select)
+            : consumedRegexSelections,
+        )
+        setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+      }
       if (generationNonceRef.current !== nonce) return
       console.error('[InputArea] Failed to send:', err)
       const msg = err?.body?.error || err?.message || te('failedToStartGeneration')
@@ -1625,7 +1865,129 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend])
+  }, [text, chatId, isGeneratingInChat, isTemporaryChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, personas, pendingAttachments, addMessage, startStreaming, beginStreaming, setStreamingError, consumeOneshotGuides, saveDraftInput, hasQueuedMessages, isGroupChat, groupCharacterIds, mutedCharacterIds, groupResponseOrder, characters, setMentionQueue, resizeTextarea, attemptRoomSend, finalizeRegexSelections, activeCharacterId, t, te])
+
+  useEffect(() => {
+    const handleRegexAction = async (event: Event) => {
+      const action = (event as CustomEvent<RegexActionActivation>).detail
+      if (!action || action.chatId !== chatId) return
+      if (!action.messageId || regexActionHandlingRef.current) return
+      if (action.effects?.length && mpRoomId && !mpIsHost) {
+        toast.info(t('toast.regexActionStateHostOnly'))
+        return
+      }
+      if (action.multi_select && sendingRef.current) {
+        toast.info(t('toast.regexActionSelectionLocked'))
+        return
+      }
+      if (!action.multi_select && action.type === 'send' && (sendingRef.current || isGeneratingInChat)) {
+        toast.info(t('toast.regexActionClaimFailed'))
+        return
+      }
+      regexActionHandlingRef.current = true
+      try {
+        if (action.multi_select) {
+          const result = toggleRegexSelection(action)
+          setPendingRegexVisibleCount(result.items.filter((item) => item.type === 'send').length)
+          if ('reason' in result) {
+            if (result.reason === 'removed') {
+              toast.info(t('toast.regexActionMultiRemoved'), { title: action.title || t('toast.regexActionSelected') })
+            } else if (result.reason === 'used') {
+              toast.info(t('toast.regexActionAlreadyUsed'))
+            } else {
+              toast.info(t(result.reason === 'invalid_limit'
+                ? 'toast.regexActionInvalidLimit'
+                : 'toast.regexActionLimitReached', { limit: action.limit }))
+            }
+            return
+          }
+          toast.info(action.subtitle || t('toast.regexActionMultiQueued', {
+            cost: action.cost,
+            total: result.items
+              .filter((item) => item.messageId === action.messageId && item.instanceId === action.instanceId)
+              .reduce((sum, item) => sum + item.cost, 0),
+            limit: action.limit,
+          }), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
+          textareaRef.current?.focus()
+          return
+        }
+        if (action.type === 'effects') {
+          const claimed = await messagesApi.claimRegexAction(chatId, action.messageId, {
+            script_id: action.scriptId,
+            action_id: action.id,
+            instance_id: action.instanceId,
+          })
+          updateMessage(claimed.message.id, { extra: claimed.message.extra })
+          const draft = claimed.effects?.find((effect) => effect.type === 'draft')
+          if (claimed.forked_chat) {
+            if (draft) queueRegexActionDraft(claimed.forked_chat.id, draft)
+            navigate(`/chat/${claimed.forked_chat.id}`)
+          } else if (draft) {
+            setText((current) => applyRegexActionDraft(current, draft))
+            requestAnimationFrame(() => {
+              resizeTextarea(textareaRef.current)
+              textareaRef.current?.focus()
+            })
+          }
+          toast.info(action.subtitle || t('toast.regexActionEffectsApplied'), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
+          return
+        }
+        if (action.type === 'append' && hasPendingRegexSelectionsForBlock(action)) {
+          toast.info(t('toast.regexActionClearMultiFirst'))
+          return
+        }
+        if (mpRoomId && !mpIsHost) {
+          if (action.type === 'append') {
+            if (!claimLocalRegexAction(action)) {
+              toast.info(t('toast.regexActionAlreadyUsed'))
+              return
+            }
+            queueRegexSelection(action)
+            setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+            toast.info(action.subtitle || t('toast.regexActionQueued'), {
+              title: action.title || t('toast.regexActionSelected'),
+              duration: 2500,
+            })
+            return
+          }
+          await handleSend(action.content, action)
+          return
+        }
+
+        if (action.type === 'append') {
+          const claimed = await messagesApi.claimRegexAction(chatId, action.messageId, {
+            script_id: action.scriptId,
+            action_id: action.id,
+            instance_id: action.instanceId,
+          })
+          updateMessage(claimed.message.id, { extra: claimed.message.extra })
+          queueRegexSelection(action)
+          setPendingRegexVisibleCount(getPendingRegexSelections(chatId).filter((item) => item.type === 'send').length)
+          toast.info(action.subtitle || t('toast.regexActionQueued'), {
+            title: action.title || t('toast.regexActionSelected'),
+            duration: 2500,
+          })
+          textareaRef.current?.focus()
+          return
+        }
+        await handleSend(action.content, action)
+      } catch (error: any) {
+        const current = error?.body?.message
+        if (current?.id && current?.extra) updateMessage(current.id, { extra: current.extra })
+        toast.info(error?.body?.error || t('toast.regexActionClaimFailed'))
+      } finally {
+        regexActionHandlingRef.current = false
+      }
+    }
+    window.addEventListener(REGEX_ACTION_EVENT, handleRegexAction)
+    return () => window.removeEventListener(REGEX_ACTION_EVENT, handleRegexAction)
+  }, [chatId, handleSend, isGeneratingInChat, mpIsHost, mpRoomId, navigate, resizeTextarea, t, updateMessage])
 
   const finalizeSTTTranscript = useCallback(() => {
     const transcript = sttNormalizedFinalSegmentsRef.current.join(' ').trim()
@@ -1741,26 +2103,28 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.regenerationFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, regenFeedback.position, retainCouncilForRegens, addMessage, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleRegenerate = useCallback(() => {
     if (isGeneratingInChat) return
     if (regenFeedback.enabled) {
       openModal('regenFeedback', {
+        chatId,
         onSubmit: (feedback: string) => doRegenerate(feedback),
         onSkip: () => doRegenerate(),
       })
     } else {
       doRegenerate()
     }
-  }, [isGeneratingInChat, regenFeedback.enabled, openModal, doRegenerate])
+  }, [isGeneratingInChat, regenFeedback.enabled, openModal, doRegenerate, chatId])
 
   const handleContinue = useCallback(async () => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
     beginStreaming(undefined, 'continue')
     try {
-      const lastAssistant = [...messages].reverse().find((msg) => !msg.is_user)
+      const lastMessage = messages.at(-1)
+      const lastAssistant = lastMessage && !lastMessage.is_user ? lastMessage : undefined
       const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
         ? lastAssistant.extra.character_id
         : undefined
@@ -1772,6 +2136,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        message_id: lastAssistant?.id,
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
       })
@@ -1785,12 +2150,13 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.continueFailed') })
     }
-  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides])
+  }, [chatId, isGeneratingInChat, messages, isGroupChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, retainCouncilForRegens, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, t, te])
 
   const handleImpersonate = useCallback(async (mode: import('@/api/generate').ImpersonateMode) => {
     if (isGeneratingInChat) return
     const nonce = ++generationNonceRef.current
-    const impersonateInput = text.trim()
+    const inputDraft = text
+    const impersonateInput = inputDraft.trim()
     beginStreaming(undefined, 'impersonate_draft')
     // Stash the input so the user can restore it after the run, and clear the box.
     if (impersonateInput) {
@@ -1812,6 +2178,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         generation_type: 'impersonate',
         impersonate_mode: mode,
         impersonate_input: impersonateInput || undefined,
+        user_input: inputDraft || undefined,
         impersonate_draft: true,
       })
       if (generationNonceRef.current !== nonce) return
@@ -1824,7 +2191,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setStreamingError(msg)
       toast.error(msg, { title: t('toast.impersonationFailed') })
     }
-  }, [chatId, isGeneratingInChat, text, activeProfileId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea])
+  }, [chatId, isGeneratingInChat, text, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, impersonationPresetId, getActivePresetForGeneration, beginStreaming, startStreaming, setStreamingError, consumeOneshotGuides, resizeTextarea, t, te])
 
   const handleStop = useCallback(async () => {
     if (!isGeneratingInChat) return
@@ -1844,10 +2211,20 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     }
   }, [isGeneratingInChat, generationIdForChat, localGenerationInChat, activeGenerationId, chatId, stopStreaming, isRoomPeer])
 
-  const handleNewChat = useCallback(async () => {
+  const queueCurrentChatDeletion = useCallback(() => {
+    void chatsApi.delete(chatId).catch((err) => {
+      console.error('[InputArea] Failed to delete previous chat after creating a new one:', err)
+      toast.error(t('toast.failedDeleteChat'))
+    })
+  }, [chatId, t])
+
+  const createNewChat = useCallback(async (deleteThisChat: boolean) => {
     // For group chats, open group creator pre-populated with current members
     if (isGroupChat && groupCharacterIds.length > 0) {
-      openModal('groupChatCreator', { initialCharacterIds: [...groupCharacterIds] })
+      openModal('groupChatCreator', {
+        initialCharacterIds: [...groupCharacterIds],
+        ...(deleteThisChat ? { deleteChatIdAfterCreate: chatId } : {}),
+      })
       return
     }
     if (!activeCharacterId) return
@@ -1870,6 +2247,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
               })
               toast.dismiss(toastId)
               navigate(`/chat/${chat.id}`)
+              if (deleteThisChat) queueCurrentChatDeletion()
             } catch (err) {
               toast.dismiss(toastId)
               console.error('[InputArea] Failed to create chat:', err)
@@ -1888,12 +2266,25 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       toast.dismiss(creationToastId)
       creationToastId = null
       navigate(`/chat/${chat.id}`)
+      if (deleteThisChat) queueCurrentChatDeletion()
     } catch (err) {
       if (creationToastId) toast.dismiss(creationToastId)
       console.error('[InputArea] Failed to start new chat:', err)
       toast.error(t('toast.failedStartNewChat'))
     }
-  }, [activeCharacterId, isGroupChat, groupCharacterIds, navigate, openModal])
+  }, [activeCharacterId, chatId, isGroupChat, groupCharacterIds, navigate, openModal, queueCurrentChatDeletion, t])
+
+  const handleNewChat = useCallback(() => {
+    openModal('confirm', {
+      title: t('newChatConfirm.title'),
+      message: t('newChatConfirm.message'),
+      confirmText: t('newChatConfirm.confirm'),
+      checkboxLabel: t('newChatConfirm.deleteThisChat'),
+      onConfirm: (_inputValue: string, deleteThisChat: boolean) => {
+        void createNewChat(deleteThisChat)
+      },
+    })
+  }, [createNewChat, openModal, t])
 
   const handleConvertToGroup = useCallback(async () => {
     if (!chatId || !activeCharacterId || isGroupChat) return
@@ -1923,7 +2314,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         title: t('toast.conversionFailed'),
       })
     }
-  }, [chatId, activeCharacterId, isGroupChat, navigate, openModal])
+  }, [chatId, activeCharacterId, isGroupChat, navigate, openModal, t])
 
   const handleDryRun = useCallback(async () => {
     if (dryRunning || isGeneratingInChat) return
@@ -1941,6 +2332,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        user_input: text || undefined,
         target_character_id: isGroupChat ? focusedPreviewCharacterId || undefined : undefined,
       })
       openModal('dryRun', result)
@@ -1951,7 +2343,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setDryRunning(false)
     }
-  }, [chatId, dryRunning, isGeneratingInChat, activeProfileId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat])
+  }, [text, chatId, dryRunning, isGeneratingInChat, activeProfileId, activeCharacterId, activePersonaId, activeGenerationAddonStates, getActivePresetForGeneration, openModal, setStreamingError, focusedPreviewCharacterId, isGroupChat, t])
 
   const handleResolveMacros = useCallback(async () => {
     if (resolvingMacros) return
@@ -1968,6 +2360,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
         character_id: focusedPreviewCharacterId || undefined,
         persona_id: activePersonaId || undefined,
         connection_id: activeProfileId || undefined,
+        user_input: text,
       })
       if (res.text === text) {
         toast.info(t('toast.noMacrosFound'))
@@ -1988,7 +2381,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
     } finally {
       setResolvingMacros(false)
     }
-  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection])
+  }, [text, chatId, resolvingMacros, focusedPreviewCharacterId, activePersonaId, activeProfileId, queueTextareaSelection, t, te])
 
   const handleHashSelect = useCallback((result: { slug: string; name: string }) => {
     const before = text.slice(0, hashStartIndex)
@@ -2302,7 +2695,7 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
       setSttStatus('idle')
       toast.error(err?.message || t('toast.sttFailed'), { title: t('toast.sttFailed') })
     }
-  }, [isListeningToSTT, isSTTSupported, voiceSettings, text, openModal, applySTTTranscript, stopSTTSession, finalizeSTTTranscript])
+  }, [isListeningToSTT, isSTTSupported, voiceSettings, text, openModal, applySTTTranscript, stopSTTSession, finalizeSTTTranscript, t])
 
   useEffect(() => {
     if (isGeneratingInChat && isListeningToSTT) {
@@ -2698,6 +3091,29 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
           {renderPopover === 'persona' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              <label className={styles.personaSearch}>
+                <Search size={13} />
+                <input
+                  type="search"
+                  value={personaSearch}
+                  onChange={(event) => setPersonaSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && personaSearch) {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setPersonaSearch('')
+                    }
+                  }}
+                  placeholder={t('quickMenu.searchPersonas')}
+                  aria-label={t('quickMenu.searchPersonas')}
+                  autoFocus
+                />
+                {personaSearch && (
+                  <button type="button" onClick={() => setPersonaSearch('')} aria-label={t('quickMenu.searchPersonas')}>
+                    <X size={12} />
+                  </button>
+                )}
+              </label>
               {persistedChatPersonaId && (
                 <button
                   type="button"
@@ -2710,36 +3126,46 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
                   {t('quickMenu.clearOneShotPersona')}
                 </button>
               )}
-              {personaList.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noPersonas')}</div>}
-              {personaList.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={clsx(styles.popRowBtn, activePersonaId === p.id && styles.popRowBtnActive)}
-                  onClick={() => {
-                    void persistChatPersonaSelection(p.id)
-                    setOpenPopover(null)
-                  }}
-                >
-                  <span className={styles.personaMain}>
-                    <span className={styles.personaAvatar}>
-                      {p.avatar_path || p.image_id ? (
-                        <img
-                          className={styles.personaAvatarImg}
-                          src={getPersonaAvatarThumbUrl(p) || undefined}
-                          alt={p.name}
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className={styles.personaFallback}>{p.name.slice(0, 1).toUpperCase()}</span>
-                      )}
-                    </span>
-                    <span className={styles.personaNameGroup}>
-                      <span>{p.name}</span>
-                      {p.title && <span className={styles.personaTitle}>{p.title}</span>}
-                    </span>
-                  </span>
-                </button>
+              {personaPickerGroups.length === 0 && <div className={styles.popEmpty}>{t('quickMenu.noPersonas')}</div>}
+              {personaPickerGroups.map((group) => (
+                <div key={group.key} className={styles.personaGroup}>
+                  <div className={styles.personaGroupHeader}>
+                    <span>{group.recent
+                      ? t('quickMenu.recentPersonas')
+                      : group.folder || t('quickMenu.uncategorizedPersonas')}</span>
+                    <span>{group.personas.length}</span>
+                  </div>
+                  {group.personas.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={clsx(styles.popRowBtn, activePersonaId === p.id && styles.popRowBtnActive)}
+                      onClick={() => {
+                        void persistChatPersonaSelection(p.id)
+                        setOpenPopover(null)
+                      }}
+                    >
+                      <span className={styles.personaMain}>
+                        <span className={styles.personaAvatar}>
+                          {p.avatar_path || p.image_id ? (
+                            <img
+                              className={styles.personaAvatarImg}
+                              src={getPersonaAvatarThumbUrl(p) || undefined}
+                              alt={p.name}
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className={styles.personaFallback}>{p.name.slice(0, 1).toUpperCase()}</span>
+                          )}
+                        </span>
+                        <span className={styles.personaNameGroup}>
+                          <span>{p.name}</span>
+                          {p.title && <span className={styles.personaTitle}>{p.title}</span>}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
           )}
@@ -2944,6 +3370,21 @@ export default function InputArea({ chatId, onNavigateHome }: InputAreaProps) {
 
           {renderPopover === 'extras' && (
             <div className={clsx(styles.popover, popoverClosing && styles.popoverClosing)}>
+              {isMobile && onOpenChatFind && (
+                <button
+                  type="button"
+                  className={styles.popRowBtn}
+                  onClick={() => {
+                    setOpenPopover(null)
+                    onOpenChatFind()
+                  }}
+                >
+                  <span className={styles.personaMain}>
+                    <Search size={14} />
+                    <span>{t('findInChat.open')}</span>
+                  </span>
+                </button>
+              )}
               <div className={styles.extrasSection}>
                 <div className={styles.quickSetName}>{t('quickMenu.impersonate')}</div>
                 {lastImpersonateInput && (

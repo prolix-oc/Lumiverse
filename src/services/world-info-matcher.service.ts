@@ -20,6 +20,11 @@ interface PatternMeta {
   patternLen: number;
 }
 
+export interface WorldInfoMatcherOptions {
+  forceCaseSensitive?: boolean;
+  forceMatchWholeWords?: boolean;
+}
+
 function makeNode(): Node {
   return { next: new Map(), fail: 0, out: [] };
 }
@@ -123,7 +128,12 @@ export class WorldInfoMatcher {
   private regexEntries: WorldBookEntry[];
   private entriesByUid: Map<string, WorldBookEntry>;
 
-  constructor(entries: WorldBookEntry[]) {
+  private forceCaseSensitive: boolean;
+  private forceMatchWholeWords: boolean;
+
+  constructor(entries: WorldBookEntry[], options: WorldInfoMatcherOptions = {}) {
+    this.forceCaseSensitive = options.forceCaseSensitive === true;
+    this.forceMatchWholeWords = options.forceMatchWholeWords === true;
     const cased: { text: string; meta: PatternMeta }[] = [];
     const uncased: { text: string; meta: PatternMeta }[] = [];
     const regexEntries: WorldBookEntry[] = [];
@@ -135,17 +145,19 @@ export class WorldInfoMatcher {
         if (e.key.length || e.keysecondary.length) regexEntries.push(e);
         continue;
       }
-      const sink = e.case_sensitive ? cased : uncased;
+      const caseSensitive = this.forceCaseSensitive || e.case_sensitive;
+      const matchWholeWords = this.forceMatchWholeWords || e.match_whole_words;
+      const sink = caseSensitive ? cased : uncased;
       const pushKeys = (keys: string[], role: "primary" | "secondary") => {
         for (let i = 0; i < keys.length; i++) {
           const k = keys[i];
           if (!k) continue;
-          const text = e.case_sensitive ? k : k.toLowerCase();
+          const text = caseSensitive ? k : k.toLowerCase();
           sink.push({
             text,
             meta: {
               entryUid: e.uid, keyIndex: i, role,
-              wholeWord: e.match_whole_words,
+              wholeWord: matchWholeWords,
               patternLen: text.length,
             },
           });
@@ -195,8 +207,8 @@ export class WorldInfoMatcher {
   }
 
   private scanRegexEntry(entry: WorldBookEntry, text: string, state: ScanState) {
-    const flags = entry.case_sensitive ? "g" : "gi";
-    const wholeWord = entry.match_whole_words && !entry.use_regex;
+    const flags = this.forceCaseSensitive || entry.case_sensitive ? "g" : "gi";
+    const wholeWord = (this.forceMatchWholeWords || entry.match_whole_words) && !entry.use_regex;
     const run = (keys: string[], role: "primary" | "secondary") => {
       for (let i = 0; i < keys.length; i++) {
         const k = keys[i];

@@ -92,7 +92,7 @@
 
 .searchInput {
   width: 100%;
-  padding: 8px 12px 8px 32px;
+  padding: 8px 34px 8px 32px;
   border-radius: 8px;
   border: 1px solid var(--lumiverse-border);
   background: var(--lumiverse-bg-dark);
@@ -113,6 +113,29 @@
   transform: translateY(-50%);
   color: var(--lumiverse-text-dim);
   pointer-events: none;
+}
+
+.searchClear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
 }
 
 /* ── Character grid ── */

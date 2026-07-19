@@ -3,8 +3,10 @@ import type { AppStore, SettingsSlice, StartupSettings, ThemeConfig, ReasoningSe
 import { settingsApi } from '@/api/settings'
 import { themeAssetsApi } from '@/api/theme-assets'
 import { BASE_URL } from '@/api/client'
+import { beginActiveLoomPresetSelection, type PresetSelectionRequest } from '@/lib/loom/preset-selection-coordinator'
 import { generateUUID } from '@/lib/uuid'
 import { DEFAULT_THEME, normalizeTheme } from '@/theme/presets'
+import { createSettingsLoadGenerationGuard } from './settings-load-generation'
 import {
   deriveReorderArgs,
   normalizeConnectionsOrder,
@@ -56,6 +58,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'contextFilters',
   'activeProfileId',
   'activePersonaId',
+  'recentPersonaIds',
   'activeLoomPresetId',
   // Character browser preferences
   'favorites',
@@ -104,6 +107,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   'swipeGesturesEnabled',
   'showMessageTokenCount',
   'messageContextMenuEnabled',
+  'suppressContextDropWarnings',
   'guidedGenerations',
   'quickReplySets',
   'toastPosition',
@@ -137,31 +141,59 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
 // inactivity.  Also flushes on page unload so nothing is lost.
 const FLUSH_DELAY = 1_500
 const PENDING_SETTINGS_KEY = '__lumiverse_pending_settings'
+const PENDING_IMAGE_GENERATION_PATCH_KEY = '__lumiverse_pending_image_generation_patch'
 const dirtyKeys = new Map<string, any>()
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushInFlight = false
 let activeFlushPromise: Promise<void> | null = null
+let activeFlushBatch: Record<string, any> | null = null
+let persistenceGeneration = 0
+let localSettingsRevision = 0
+const localSettingRevisions = new Map<string, number>()
+let persistenceScope: string | null = null
+
+function bridgeStorageKey(key: string): string {
+  return persistenceScope ? `${key}:${persistenceScope}` : key
+}
+
+/** Select the authenticated user's local persistence bridge. */
+export function setSettingsPersistenceScope(userId: string | null): void {
+  persistenceScope = userId
+}
+
+let settingsSelectionAbort: AbortController | null = null
+const settingsLoadGeneration = createSettingsLoadGenerationGuard()
 
 function persistBatch(batch: Record<string, any>): Promise<void> {
+  const generation = persistenceGeneration
   flushInFlight = true
-
   const request = settingsApi.putMany(batch).then(() => {
-    // Flush succeeded — clear localStorage bridge since DB is now up to date
-    try { localStorage.removeItem(PENDING_SETTINGS_KEY) } catch {}
+    if (generation === persistenceGeneration) {
+      clearPendingSettings(batch)
+      if (Object.prototype.hasOwnProperty.call(batch, 'imageGeneration')) {
+        clearPendingImageGenerationPatch()
+      }
+    }
   }).catch((err) => {
+    if (generation !== persistenceGeneration) return
     console.error('[settings] Batch persist failed, re-queuing:', err)
-    // Re-queue failed keys so the next flush retries them
+    // Re-queue failed keys so the next flush retries them.
     for (const [k, v] of Object.entries(batch)) {
       if (!dirtyKeys.has(k)) dirtyKeys.set(k, v)
     }
     scheduleFlush()
     throw err
   }).finally(() => {
+    if (generation !== persistenceGeneration) return
     flushInFlight = false
-    if (activeFlushPromise === request) activeFlushPromise = null
+    if (activeFlushPromise === request) {
+      activeFlushPromise = null
+      activeFlushBatch = null
+    }
   })
 
   activeFlushPromise = request
+  activeFlushBatch = batch
   return request
 }
 
@@ -175,8 +207,14 @@ function scheduleFlush() {
   flushTimer = setTimeout(flushDirtyKeys, FLUSH_DELAY)
 }
 
+function hasNewerLocalSetting(key: string, revisionAtLoadStart: number): boolean {
+  return (localSettingRevisions.get(key) ?? 0) > revisionAtLoadStart
+}
+
 export function persistKey(key: string, value: any) {
+  localSettingRevisions.set(key, ++localSettingsRevision)
   dirtyKeys.set(key, value)
+  updatePendingSetting(key, value)
   scheduleFlush()
 }
 
@@ -191,6 +229,104 @@ function isPlainObject(v: any): v is Record<string, any> {
   return v != null && typeof v === 'object' && !Array.isArray(v)
 }
 
+function readPendingSettings(): Record<string, any> | null {
+  try {
+    const raw = localStorage.getItem(bridgeStorageKey(PENDING_SETTINGS_KEY))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return isPlainObject(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function readPendingImageGenerationPatch(): Partial<AppStore['imageGeneration']> | null {
+  try {
+    const raw = localStorage.getItem(bridgeStorageKey(PENDING_IMAGE_GENERATION_PATCH_KEY))
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return isPlainObject(parsed) ? parsed as Partial<AppStore['imageGeneration']> : null
+  } catch {
+    return null
+  }
+}
+
+export function persistPendingImageGenerationPatch(
+  patch: Partial<AppStore['imageGeneration']>,
+): void {
+  const pending = readPendingImageGenerationPatch() ?? {}
+  Object.assign(pending, patch)
+  try {
+    localStorage.setItem(bridgeStorageKey(PENDING_IMAGE_GENERATION_PATCH_KEY), JSON.stringify(pending))
+  } catch {}
+}
+
+function clearPendingImageGenerationPatch(): void {
+  try { localStorage.removeItem(bridgeStorageKey(PENDING_IMAGE_GENERATION_PATCH_KEY)) } catch {}
+}
+
+function mergePendingSettings(batch: Record<string, unknown>): boolean {
+  const pending = readPendingSettings() ?? {}
+  Object.assign(pending, batch)
+  try {
+    localStorage.setItem(bridgeStorageKey(PENDING_SETTINGS_KEY), JSON.stringify(pending))
+  } catch {
+    return false
+  }
+  // A persisted full row is newer than, and incorporates, any partial image bridge.
+  if (Object.prototype.hasOwnProperty.call(batch, 'imageGeneration')) {
+    clearPendingImageGenerationPatch()
+  }
+  return true
+}
+
+function pendingValuesMatch(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
+}
+
+export function hasPendingSetting(key: string): boolean {
+  const pending = readPendingSettings()
+  return Boolean(pending && Object.prototype.hasOwnProperty.call(pending, key))
+}
+
+export function updatePendingSetting(key: string, value: unknown): void {
+  const pending = readPendingSettings()
+  if (!pending || !Object.prototype.hasOwnProperty.call(pending, key)) return
+  pending[key] = value
+  try {
+    localStorage.setItem(bridgeStorageKey(PENDING_SETTINGS_KEY), JSON.stringify(pending))
+  } catch {}
+}
+
+export function clearPendingSettings(persisted: Record<string, unknown>): void {
+  const pending = readPendingSettings()
+  if (!pending) return
+
+  let changed = false
+  for (const [key, value] of Object.entries(persisted)) {
+    if (
+      Object.prototype.hasOwnProperty.call(pending, key)
+      && pendingValuesMatch(pending[key], value)
+    ) {
+      delete pending[key]
+      changed = true
+    }
+  }
+  if (!changed) return
+
+  try {
+    if (Object.keys(pending).length === 0) {
+      localStorage.removeItem(bridgeStorageKey(PENDING_SETTINGS_KEY))
+    } else {
+      localStorage.setItem(bridgeStorageKey(PENDING_SETTINGS_KEY), JSON.stringify(pending))
+    }
+  } catch {}
+}
+
 function mergeStoredSetting(defaultValue: any, storedValue: any): any {
   if (!isPlainObject(defaultValue)) return storedValue
   if (!isPlainObject(storedValue)) return defaultValue
@@ -201,25 +337,36 @@ function mergeStoredSetting(defaultValue: any, storedValue: any): any {
   return merged
 }
 
+export function migrateStoredImageGeneration(storedValue: any): any {
+  if (
+    isPlainObject(storedValue)
+    && typeof storedValue.includeCharacters === 'boolean'
+    && typeof storedValue.includePersona !== 'boolean'
+  ) {
+    return { ...storedValue, includePersona: storedValue.includeCharacters }
+  }
+  return storedValue
+}
+
 /** Immediately flush any pending settings (e.g. on page unload). */
 export function flushSettings() {
   if (flushTimer !== null) {
     clearTimeout(flushTimer)
     flushTimer = null
   }
-  if (dirtyKeys.size === 0) return
-
   const batch = Object.fromEntries(dirtyKeys)
   dirtyKeys.clear()
+  const bridgeBatch = {
+    ...(activeFlushBatch ?? {}),
+    ...batch,
+  }
 
-  // Write to localStorage synchronously as a bridge for the next page load.
-  // The keepalive fetch below races with the new page's loadSettings() — if
-  // GET /settings resolves before the PUT lands, the new page gets stale data.
-  // localStorage survives across page loads and is read synchronously by
-  // loadSettings() to recover any values the keepalive flush hasn't persisted yet.
-  try {
-    localStorage.setItem(PENDING_SETTINGS_KEY, JSON.stringify(batch))
-  } catch {}
+  // Merge with any deferred bridge values so an unrelated unload cannot erase
+  // settings that still need a later hydration pass.
+  if (Object.keys(bridgeBatch).length > 0) {
+    mergePendingSettings(bridgeBatch)
+  }
+  if (Object.keys(batch).length === 0) return
 
   // keepalive fetch survives page unload and supports PUT (unlike sendBeacon)
   fetch(`${BASE_URL}/settings`, {
@@ -237,6 +384,10 @@ export function flushSettingsNow(): Promise<void> {
     clearTimeout(flushTimer)
     flushTimer = null
   }
+  if (flushInFlight && activeFlushPromise) {
+    return activeFlushPromise.catch(() => {}).then(() => flushSettingsNow())
+  }
+
 
   if (dirtyKeys.size === 0) {
     return activeFlushPromise ?? Promise.resolve()
@@ -252,9 +403,43 @@ export function hasUnsavedSettings(): boolean {
   return dirtyKeys.size > 0 || flushInFlight || activeFlushPromise !== null
 }
 
-/** Remove a key from the pending dirty-keys map so the next flush won't overwrite a direct PUT. */
-export function clearDirtyKey(key: string): void {
-  dirtyKeys.delete(key)
+/**
+ * Remove a direct-write's matching dirty value without discarding a newer
+ * debounced edit that was queued while the request was in flight.
+ */
+export function clearDirtyKey(key: string, persistedValue?: unknown): void {
+  if (arguments.length === 1 || pendingValuesMatch(dirtyKeys.get(key), persistedValue)) {
+    dirtyKeys.delete(key)
+  }
+}
+
+/** Preserve one user's unsaved settings before changing authentication scope. */
+export function resetSettingsPersistence(): void {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (persistenceScope) {
+    const preserved = {
+      ...(activeFlushBatch ?? {}),
+      ...Object.fromEntries(dirtyKeys),
+    }
+    if (Object.keys(preserved).length > 0) {
+      mergePendingSettings(preserved)
+    }
+  } else {
+    try {
+      localStorage.removeItem(PENDING_SETTINGS_KEY)
+      localStorage.removeItem(PENDING_IMAGE_GENERATION_PATCH_KEY)
+    } catch {}
+  }
+  persistenceGeneration += 1
+  settingsLoadGeneration.begin()
+  dirtyKeys.clear()
+  flushInFlight = false
+  activeFlushPromise = null
+  activeFlushBatch = null
+  persistenceScope = null
 }
 
 // Flush on page unload so slider drags / rapid changes are never lost
@@ -264,6 +449,7 @@ if (typeof window !== 'undefined') {
 
 export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> = (set, get) => ({
   settingsLoaded: false,
+  fullSettingsLoaded: false,
   landingPageChatsDisplayed: 12,
   landingPageLayoutMode: 'cards',
   charactersPerPage: 50,
@@ -316,13 +502,17 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   regenFeedback: {
     enabled: false,
     position: 'user',
+    includePreviousGeneration: false,
   },
   swipeGesturesEnabled: true,
   showMessageTokenCount: true,
   messageContextMenuEnabled: true,
+  suppressContextDropWarnings: false,
   favoritesBarCollapsed: false,
   globalWorldBooks: [],
   worldInfoSettings: {
+    forceCaseSensitive: false,
+    forceMatchWholeWords: false,
     globalScanDepth: null,
     maxRecursionPasses: 3,
     maxActivatedEntries: 0,
@@ -619,39 +809,62 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   },
 
   loadSettings: async () => {
+    const loadGeneration = settingsLoadGeneration.begin()
+    const isCurrentLoad = () => settingsLoadGeneration.isCurrent(loadGeneration)
+    settingsSelectionAbort?.abort()
+    const selectionAbort = new AbortController()
+    settingsSelectionAbort = selectionAbort
+    let selection: PresetSelectionRequest | null = null
+    const localRevisionAtLoadStart = localSettingsRevision
     try {
+      selection = beginActiveLoomPresetSelection({ signal: selectionAbort.signal })
       const rows = await settingsApi.getAll()
+      if (!isCurrentLoad()) return
       const patch: Record<string, any> = {}
       const defaults = get()
+      const pendingImageGenerationPatch = {
+        ...(readPendingImageGenerationPatch() ?? {}),
+        ...(defaults.pendingImageGenerationPatch ?? {}),
+      }
+      const hasPendingImageGenerationPatch = Object.keys(pendingImageGenerationPatch).length > 0
+      let reconciledImageGeneration = false
       let migratedCharacterFilterTab = false
       // Retroactive purge: `activeLumiPresetId` was a defunct preset pointer
       // that still ghost-drove generation for users with a stale value. It has
       // no UI setter; wipe it from the DB on load so it stops resolving to a
       // preset behind the user's back.
       if (rows.some((r) => r.key === 'activeLumiPresetId')) {
+        if (!isCurrentLoad()) return
         settingsApi.delete('activeLumiPresetId').catch(() => {})
       }
       for (const row of rows) {
-        if (!DATA_KEYS.has(row.key)) continue
-        patch[row.key] = mergeStoredSetting((defaults as any)[row.key], row.value)
+        if (
+          !DATA_KEYS.has(row.key)
+          || hasNewerLocalSetting(row.key, localRevisionAtLoadStart)
+        ) continue
+        const storedValue = row.key === 'imageGeneration'
+          ? migrateStoredImageGeneration(row.value)
+          : row.value
+        patch[row.key] = mergeStoredSetting((defaults as any)[row.key], storedValue)
       }
 
       // Recover any settings the previous page wrote to localStorage but may
       // not have persisted to the DB yet (keepalive flush races with this GET).
-      let pendingKeys: Record<string, any> | null = null
-      try {
-        const raw = localStorage.getItem(PENDING_SETTINGS_KEY)
-        if (raw) {
-          pendingKeys = JSON.parse(raw)
-          if (pendingKeys) {
-            for (const [k, v] of Object.entries(pendingKeys)) {
-              if (!DATA_KEYS.has(k)) continue
-              patch[k] = mergeStoredSetting((defaults as any)[k], v)
-            }
-          }
+      const pendingKeys = readPendingSettings()
+      if (pendingKeys) {
+        for (const [k, v] of Object.entries(pendingKeys)) {
+          if (
+            !DATA_KEYS.has(k)
+            || hasNewerLocalSetting(k, localRevisionAtLoadStart)
+          ) continue
+          const pendingValue = k === 'imageGeneration'
+            ? migrateStoredImageGeneration(v)
+            : v
+          patch[k] = mergeStoredSetting(patch[k] ?? (defaults as any)[k], pendingValue)
         }
-      } catch {}
+      }
 
+      if (!isCurrentLoad()) return
       // Migration: discard old ThemeConfig shape (has baseColors but no accent)
       if (patch.theme && 'baseColors' in patch.theme && !('accent' in patch.theme)) {
         patch.theme = null
@@ -673,21 +886,46 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       if (patch.connectionsOrder) {
         patch.connectionsOrder = normalizeConnectionsOrder(patch.connectionsOrder)
       }
+      if (
+        hasPendingImageGenerationPatch
+        && !hasNewerLocalSetting('imageGeneration', localRevisionAtLoadStart)
+      ) {
+        patch.imageGeneration = {
+          ...(patch.imageGeneration ?? defaults.imageGeneration),
+          ...pendingImageGenerationPatch,
+        }
+        patch.pendingImageGenerationPatch = undefined
+      }
 
       if (patch.imageGeneration) {
-        const profiles = get().imageGenProfiles
         const savedConnectionId = patch.imageGeneration.activeImageGenConnectionId ?? null
-        const activeImageGenConnectionId = savedConnectionId && profiles.some((profile) => profile.id === savedConnectionId)
-          ? savedConnectionId
-          : profiles.find((profile) => profile.is_default)?.id ?? null
-        patch.activeImageGenConnectionId = activeImageGenConnectionId
-        if (activeImageGenConnectionId !== savedConnectionId) {
-          patch.imageGeneration = { ...patch.imageGeneration, activeImageGenConnectionId }
-          settingsApi.put('imageGeneration', patch.imageGeneration).catch(() => {})
+        if (get().imageGenProfilesLoaded) {
+          const profiles = get().imageGenProfiles
+          const activeImageGenConnectionId = savedConnectionId && profiles.some((profile) => profile.id === savedConnectionId)
+            ? savedConnectionId
+            : profiles.find((profile) => profile.is_default)?.id ?? null
+          patch.activeImageGenConnectionId = activeImageGenConnectionId
+          if (activeImageGenConnectionId !== savedConnectionId) {
+            patch.imageGeneration = { ...patch.imageGeneration, activeImageGenConnectionId }
+            reconciledImageGeneration = true
+          }
+        } else {
+          // The profile request has not established whether the saved ID is valid.
+          // Preserve it until setImageGenProfiles can reconcile against real data.
+          patch.activeImageGenConnectionId = savedConnectionId
         }
       }
+      const requestedActiveLoomPresetId = patch.activeLoomPresetId as string | null | undefined
+      if (!isCurrentLoad()) return
+      delete patch.activeLoomPresetId
       if (Object.keys(patch).length > 0) {
         set(patch as any)
+        if (!isCurrentLoad()) return
+      }
+      if (requestedActiveLoomPresetId !== undefined && selection) {
+        if (!isCurrentLoad()) return
+        await selection.transition(requestedActiveLoomPresetId)
+        if (!isCurrentLoad()) return
       }
 
       // Reorder profile slices to match persisted connectionsOrder. Without
@@ -695,6 +933,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
       // ConnectionSelect, etc.) keep the backend order until the user drags
       // something in the panel — which is the visible divergence C3 found.
       if (patch.connectionsOrder) {
+        if (!isCurrentLoad()) return
         const order = patch.connectionsOrder as ConnectionsOrder
         const args = deriveReorderArgs(order, {
           llm: get().profiles,
@@ -702,28 +941,66 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           stt: get().sttProfiles,
           tts: get().ttsProfiles,
         })
-        if (args.llm) get().applyProfileOrder(args.llm)
-        if (args.imageGen) get().applyImageGenProfileOrder(args.imageGen)
-        if (args.stt) get().applySttProfileOrder(args.stt)
-        if (args.tts) get().applyTtsProfileOrder(args.tts)
+        if (args.llm) {
+          if (!isCurrentLoad()) return
+          get().applyProfileOrder(args.llm)
+        }
+        if (args.imageGen) {
+          if (!isCurrentLoad()) return
+          get().applyImageGenProfileOrder(args.imageGen)
+        }
+        if (args.stt) {
+          if (!isCurrentLoad()) return
+          get().applySttProfileOrder(args.stt)
+        }
+        if (args.tts) {
+          if (!isCurrentLoad()) return
+          get().applyTtsProfileOrder(args.tts)
+        }
       }
       if (migratedCharacterFilterTab) {
-        settingsApi.put('filterTab', 'characters').catch(() => {})
+        if (!isCurrentLoad()) return
+        persistKey('filterTab', 'characters')
       }
 
-      // Flush recovered pending keys to the DB so subsequent loads are correct,
-      // then clear localStorage since the DB is now authoritative.
-      if (pendingKeys && Object.keys(pendingKeys).length > 0) {
-        settingsApi.putMany(pendingKeys)
-          .then(() => {
-            try { localStorage.removeItem(PENDING_SETTINGS_KEY) } catch {}
-          })
-          .catch(() => {})
+      // Full settings are now authoritative. Queue recovered bridge values
+      // through the same serialized persistence path as normal edits; a bridged
+      // image-generation row still waits for profile reconciliation when needed.
+      if (!isCurrentLoad()) return
+      set({ fullSettingsLoaded: true })
+      if (pendingKeys) {
+        for (const [key, value] of Object.entries(pendingKeys)) {
+          if (!DATA_KEYS.has(key) || key === 'imageGeneration') continue
+          if (!isCurrentLoad()) return
+          persistKey(key, patch[key] ?? value)
+        }
+      }
+      const hasPendingImageGeneration = Boolean(
+        pendingKeys && Object.prototype.hasOwnProperty.call(pendingKeys, 'imageGeneration'),
+      )
+      if (
+        patch.imageGeneration
+        && (
+          reconciledImageGeneration
+          || hasPendingImageGenerationPatch
+          || (get().imageGenProfilesLoaded && hasPendingImageGeneration)
+        )
+      ) {
+        if (!isCurrentLoad()) return
+        persistKey('imageGeneration', patch.imageGeneration)
       }
     } catch (err) {
-      console.error('[settings] Failed to load settings:', err)
+      if (isCurrentLoad()) {
+        console.error('[settings] Failed to load settings:', err)
+      }
     } finally {
-      set({ settingsLoaded: true })
+      selection?.cancel()
+      if (settingsSelectionAbort === selectionAbort) {
+        settingsSelectionAbort = null
+      }
+      if (isCurrentLoad()) {
+        set({ settingsLoaded: true })
+      }
     }
   },
 })

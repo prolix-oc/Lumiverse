@@ -32,6 +32,9 @@ const result = await spindle.generate.quiet({
 })
 ```
 
+`raw`, `quiet`, and `batch` are direct provider helpers. They do not run prompt
+assembly, context handlers, or the pre-generation `registerInterceptor` chain.
+
 ## `spindle.generate.batch(input)`
 
 Run multiple generation requests.
@@ -219,10 +222,14 @@ That means an extension can opt out of host translation entirely by writing the 
 | DeepSeek | `thinking: { type: "enabled" }` + `reasoning_effort` | `low/medium/high → "high"`, `max/xhigh → "max"` |
 | OpenRouter | `reasoning: { effort }` | `none \| minimal \| low \| medium \| high \| xhigh` |
 | NanoGPT | `reasoning: { effort }` (object form preserves `exclude` / `delta_field`) | `none \| minimal \| low \| medium \| high` |
-| Moonshot, Z.AI | `thinking: { type: "enabled" }` (toggle-only) | Effort ignored — `apiReasoning` alone gates it |
+| Moonshot (Kimi K3) | `reasoning_effort: "max"` | Currently only `"max"` is supported |
+| Moonshot (Kimi K2.7 Code) | `thinking: { type: "enabled", keep: "all" }` | Thinking is always on; preserved-thinking config |
+| Moonshot (Kimi K2.6 / K2.5) | `thinking: { type: "enabled" }` | Toggle-only for these model families |
+| Z.AI (GLM-5.x) | `thinking: { type: "enabled" }` + `reasoning_effort` | `max \| xhigh \| high \| medium \| low \| minimal \| none` (API maps to max/high/none) |
+| Z.AI (GLM-4.x) | `thinking: { type: "enabled" }` | Toggle-only — `reasoning_effort` is not supported |
 | Generic OpenAI-compatible | `reasoning: { effort }` | Passed verbatim |
 
-When `apiReasoning: false` the host writes the provider's documented "no extended thinking" shape — `thinking: { type: "disabled" }` for Anthropic and DeepSeek, `reasoning: { exclude: true }` for NanoGPT, omission for everyone else.
+When `apiReasoning: false` the host writes the provider's documented "no extended thinking" shape — `thinking: { type: "disabled" }` for Anthropic, DeepSeek, and Z.AI; `reasoning: { exclude: true }` for NanoGPT; `thinking: { type: "disabled" }` for Moonshot K2.6/K2.5; omission for Moonshot K3/K2.7-code (these models always think).
 
 ---
 
@@ -348,6 +355,46 @@ A discriminated union with three variants:
     Batch is just a wrapper around N raw calls. If you want parallel streamed responses, run `Promise.all([rawStream(a), rawStream(b)])` and consume each iterator however you like.
 
 ---
+
+## Assembly-only block graphs
+
+`spindle.assemble()` runs native Loom assembly for an extension-supplied block
+graph without calling an LLM and without entering the context-handler or
+pre-generation interceptor pipelines. It is safe to call from inside a
+`registerInterceptor` handler.
+
+```ts
+const assembled = await spindle.assemble({
+  chatId,
+  blocks: thread.blocks,
+  connectionId: thread.connectionId,
+  promptVariables: thread.promptVariables,
+})
+
+const result = await spindle.generate.quiet({
+  messages: assembled.messages,
+  connection_id: thread.connectionId,
+})
+```
+
+Assembly uses the supplied chat for history, character/persona macros, attached
+world info, memories, and marker placement. The supplied blocks replace the
+saved preset's block graph and are not persisted. Preset-profile block overrides
+are not applied. Macro resolution is non-committing.
+
+| Field | Type | Description |
+|---|---|---|
+| `blocks` | `PromptBlockDTO[]` | **Required.** Arbitrary Loom block graph (maximum 256 blocks / 1 MB encoded). |
+| `chatId` | `string` | **Required.** Chat supplying native assembly context. |
+| `connectionId` | `string` | Optional connection-aware macro context. |
+| `personaId` | `string` | Optional persona override. |
+| `generationType` | `string` | Optional injection-trigger context; defaults to `"normal"`. |
+| `promptVariables` | `PromptVariableValuesDTO` | Optional values keyed by block id and variable name. |
+| `signal` | `AbortSignal` | Optional cancellation signal. |
+
+The result contains the assembled `messages` and native `breakdown`. This API
+requires the `generation` permission because the result may contain chat,
+persona, memory, and world-info content.
 
 ## Dry Run (Prompt Assembly)
 

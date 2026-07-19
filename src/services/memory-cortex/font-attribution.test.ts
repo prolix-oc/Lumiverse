@@ -22,6 +22,7 @@ import {
   getColorMap,
   type ExtractedColorBlock,
 } from "./font-attribution";
+import { stripNonProseTags } from "../../utils/content-sanitizer";
 
 // ─── Test Characters ──────────────────────────────────────────
 
@@ -535,6 +536,33 @@ describe("edge cases", () => {
 });
 
 describe("processChunkFontColors", () => {
+  test("classifies a configured thought color after non-prose sanitization", () => {
+    const chatId = "chat-sanitized-thought-color";
+    const db = getDb();
+    const melinaId = "entity-melina";
+    const entityIdByName = new Map([["melina", melinaId]]);
+    db.query("INSERT INTO memory_entities (id, chat_id, name) VALUES (?, ?, ?)").run(melinaId, chatId, "Melina");
+
+    const rawContent = "[CHARACTER | Melina]\n<font color=#C8A2C8><thinking>I cannot let them see me hesitate.</thinking></font>";
+    const proseContent = stripNonProseTags(rawContent, {
+      keepFontTags: true,
+      preserveFontInnerTags: ["thinking"],
+    });
+    const result = processChunkFontColors(
+      chatId,
+      proseContent,
+      ["Melina"],
+      entityIdByName,
+      THOUGHT_DELIMITERS,
+    );
+
+    expect(result.attributions).toEqual([
+      expect.objectContaining({ hexColor: "#c8a2c8", entityName: "Melina", usageType: "thought" }),
+    ]);
+    expect(result.strippedContent).not.toContain("font");
+    expect(result.strippedContent).not.toContain("thinking");
+  });
+
   test("tracks configured thought and speech colors for all 4 characters", () => {
     const chatId = "chat-font-colors";
     const entityIdByName = new Map<string, string>();

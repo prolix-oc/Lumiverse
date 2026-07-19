@@ -486,7 +486,7 @@ function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookE
       console.warn("[embeddings] Failed to remove world book entry vectors:", err);
     } finally {
       if (requeue && isWorldBookEntryVectorEligible(entry)) {
-        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
       }
     }
   })();
@@ -637,23 +637,114 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
   return getWorldBook(userId, id)!;
 }
 
-export function deleteWorldBook(userId: string, id: string): boolean {
-  const deleted = getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
+/**
+ * Rename a folder by moving every one of the user's world books in that
+ * folder. Folders are represented by the `folder` value on each world book,
+ * rather than a separate database entity.
+ */
+export function renameWorldBookFolder(userId: string, oldName: string, newName: string): WorldBook[] {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, source) as any[];
+  if (rows.length === 0) return [];
+
+  if (source === target) {
+    return rows.map(rowToBook);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(target, now, userId, source);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: target, updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
+/**
+ * Delete an organizational folder without deleting its lorebooks. Its books
+ * are moved into the unfiled bucket, represented by an empty folder string.
+ */
+export function deleteWorldBookFolder(userId: string, name: string): WorldBook[] {
+  const folder = name.trim();
+  if (!folder) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as any[];
+  if (rows.length === 0) return [];
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(now, userId, folder);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: "", updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
+function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): string[] {
+  if (worldBookIds.length === 0) return [];
+  const placeholders = worldBookIds.map(() => "?").join(", ");
+  return (getDb().query(
+    `SELECT e.id
+     FROM world_book_entries e
+     JOIN world_books wb ON wb.id = e.world_book_id
+     WHERE wb.user_id = ? AND e.world_book_id IN (${placeholders})`
+  ).all(userId, ...worldBookIds) as Array<{ id: string }>).map((row) => row.id);
+}
+
+export async function deleteWorldBook(userId: string, id: string): Promise<boolean> {
+  if (!getWorldBook(userId, id)) return false;
+  const entryIds = getWorldBookEntryIdsForDelete(userId, [id]);
+  const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
+    userId,
+    [id],
+    entryIds,
+    () => getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0,
+  );
   if (deleted) emitWorldBookDeleted(userId, id);
   return deleted;
 }
 
-export function bulkDeleteWorldBooks(userId: string, ids: string[]): { deleted: string[] } {
+export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promise<{ deleted: string[] }> {
   const uniqueIds = dedupeWorldBookIds(ids);
-  const deleted: string[] = [];
+  if (uniqueIds.length === 0) return { deleted: [] };
   const db = getDb();
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const ownedIds = (db.query(
+    `SELECT id FROM world_books WHERE user_id = ? AND id IN (${placeholders})`
+  ).all(userId, ...uniqueIds) as Array<{ id: string }>).map((row) => row.id);
+  const ownedSet = new Set(ownedIds);
+  const orderedOwnedIds = uniqueIds.filter((id) => ownedSet.has(id));
+  if (orderedOwnedIds.length === 0) return { deleted: [] };
+  const entryIds = getWorldBookEntryIdsForDelete(userId, orderedOwnedIds);
 
-  db.transaction(() => {
-    const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
-    for (const id of uniqueIds) {
-      if (stmt.run(id, userId).changes > 0) deleted.push(id);
-    }
-  })();
+  const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
+    userId,
+    orderedOwnedIds,
+    entryIds,
+    () => {
+      const removed: string[] = [];
+      db.transaction(() => {
+        const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
+        for (const id of orderedOwnedIds) {
+          if (stmt.run(id, userId).changes > 0) removed.push(id);
+        }
+      })();
+      return removed;
+    },
+  );
 
   for (const id of deleted) {
     emitWorldBookDeleted(userId, id);
@@ -734,7 +825,7 @@ function buildWorldBooksExportFilename(date: Date = new Date()): string {
   return `world-books-${year}${month}${day}.zip`;
 }
 
-export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): number {
+export async function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): Promise<number> {
   const rows = getDb().query(
     `SELECT id
        FROM world_books
@@ -743,12 +834,7 @@ export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId
         AND json_extract(metadata, '$.source_character_id') = ?`
   ).all(userId, characterId) as Array<{ id: string }>;
 
-  let deleted = 0;
-  for (const row of rows) {
-    if (deleteWorldBook(userId, row.id)) deleted += 1;
-  }
-
-  return deleted;
+  return (await bulkDeleteWorldBooks(userId, rows.map((row) => row.id))).deleted.length;
 }
 
 export function getWorldBookVectorSummary(userId: string, worldBookId: string): WorldBookVectorSummary | null {
@@ -1012,14 +1098,20 @@ export function listEntries(userId: string, worldBookId: string): WorldBookEntry
 
 /**
  * Batch-load entries for multiple world books in 2 queries (ownership + entries).
- * Returns a Map from bookId → entries[], preserving per-book grouping.
+ * Returns a Map from bookId → entries[], preserving per-book grouping. When
+ * provided, `bookNameMap` is populated from the ownership query at no extra cost.
  */
-export function listEntriesForBooks(userId: string, bookIds: string[]): Map<string, WorldBookEntry[]> {
+export function listEntriesForBooks(
+  userId: string,
+  bookIds: string[],
+  bookNameMap?: Map<string, string>,
+): Map<string, WorldBookEntry[]> {
   if (bookIds.length === 0) return new Map();
   const ph = bookIds.map(() => "?").join(", ");
   const owned = getDb()
-    .query(`SELECT id FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
-    .all(...bookIds, userId) as { id: string }[];
+    .query(`SELECT id, name FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...bookIds, userId) as { id: string; name: string }[];
+  for (const book of owned) bookNameMap?.set(book.id, book.name);
   const ownedSet = new Set(owned.map(b => b.id));
   const validIds = bookIds.filter(id => ownedSet.has(id));
   if (validIds.length === 0) return new Map();
@@ -1204,17 +1296,21 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   return updated;
 }
 
-export function deleteEntry(userId: string, id: string): boolean {
+export async function deleteEntry(userId: string, id: string): Promise<boolean> {
   // Verify the entry belongs to a world book owned by this user
   const entry = getEntry(userId, id);
   if (!entry) return false;
 
-  const deleted = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
+  const deleted = await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(
+    userId,
+    [id],
+    () => {
+      const removed = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
+      if (removed) touchWorldBook(entry.world_book_id);
+      return removed;
+    },
+  );
   if (deleted) {
-    touchWorldBook(entry.world_book_id);
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
     eventBus.emit(EventType.WORLD_BOOK_ENTRY_DELETED, { id, worldBookId: entry.world_book_id }, userId);
   }
   return deleted;
@@ -1301,11 +1397,11 @@ export function reorderEntries(userId: string, worldBookId: string, orderedIds: 
   return true;
 }
 
-export function bulkOperateEntries(
+export async function bulkOperateEntries(
   userId: string,
   worldBookId: string,
   input: WorldBookEntryBulkActionInput,
-): WorldBookEntryBulkActionResult | null {
+): Promise<WorldBookEntryBulkActionResult | null> {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
 
@@ -1324,16 +1420,13 @@ export function bulkOperateEntries(
   const db = getDb();
 
   if (input.action === "delete") {
-    db.transaction(() => {
-      const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
-      uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
-      touchWorldBook(worldBookId, now);
-    })();
-    for (const entry of orderedEntries) {
-      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-      });
-    }
+    await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, uniqueIds, () => {
+      db.transaction(() => {
+        const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
+        uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
+        touchWorldBook(worldBookId, now);
+      })();
+    });
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
   }

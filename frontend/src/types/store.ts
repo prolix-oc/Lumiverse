@@ -171,7 +171,7 @@ export interface CharactersSlice {
 
 // ---- Personas Slice ----
 export type PersonaFilterType = 'all' | 'default' | 'connected'
-export type PersonaSortField = 'name' | 'created'
+export type PersonaSortField = 'name' | 'created' | 'updated_at'
 export type PersonaSortDirection = 'asc' | 'desc'
 export type PersonaViewMode = 'grid' | 'list'
 export type PersonaTagBindingMode = 'any' | 'all'
@@ -193,6 +193,8 @@ export interface ResolvedPersonaBinding {
 export interface PersonasSlice {
   personas: Persona[]
   activePersonaId: string | null
+  /** Persona ids ordered by most recent activation, independent of edit timestamps. */
+  recentPersonaIds: string[]
   /** Map of characterId → personaId or binding object */
   characterPersonaBindings: Record<string, string | import('@/types/api').CharacterPersonaBinding>
   /** Map of personaId → tag-based auto-switch binding */
@@ -261,6 +263,7 @@ export interface UISlice {
   openCommandPalette: () => void
   closeCommandPalette: () => void
   addToast: (toast: Omit<Toast, 'id'>) => string
+  updateToast: (id: string, update: Partial<Omit<Toast, 'id'>>) => void
   removeToast: (id: string) => void
   clearToasts: () => void
 
@@ -269,9 +272,9 @@ export interface UISlice {
   incrementBadgeCount: () => void
   resetBadgeCount: () => void
 
-  // Regen feedback text retention
-  lastRegenFeedback: string
-  setLastRegenFeedback: (text: string) => void
+  // Regen feedback text retention (keyed by chat id so drafts don't leak across chats)
+  lastRegenFeedback: Record<string, string>
+  setLastRegenFeedback: (chatId: string, text: string) => void
 
   // Message editing (globally single-slot)
   editingMessageId: string | null
@@ -315,6 +318,7 @@ export type RegenFeedbackPosition = 'system' | 'user'
 export interface RegenFeedbackSettings {
   enabled: boolean
   position: RegenFeedbackPosition
+  includePreviousGeneration: boolean
 }
 
 // ---- Reasoning Settings ----
@@ -338,6 +342,12 @@ export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | '
  *  ('omitted' on Opus 4.7 / Mythos Preview, 'summarized' elsewhere). */
 export type ThinkingDisplay = 'auto' | 'summarized' | 'omitted'
 
+/** Extra JSON fields spread onto the provider request body. */
+export interface ReasoningCustomBody {
+  enabled: boolean
+  rawJson: string
+}
+
 export interface ReasoningSettings {
   prefix: string
   suffix: string
@@ -351,6 +361,11 @@ export interface ReasoningSettings {
   /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
    *  'auto' leaves the field unset so the API picks a model-appropriate default. */
   thinkingDisplay: ThinkingDisplay
+  /**
+   * Extra request-body fields. Omitted for legacy settings so the backend can
+   * continue honoring an old preset-level custom body until this is saved.
+   */
+  customBody?: ReasoningCustomBody
 }
 
 /** Reasoning settings snapshot bound to a connection profile. */
@@ -441,6 +456,8 @@ export interface WorldBookEntryViewPreference {
 // ---- Settings Slice ----
 export interface SettingsSlice {
   settingsLoaded: boolean
+  /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
+  fullSettingsLoaded: boolean
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
   charactersPerPage: number
@@ -484,6 +501,8 @@ export interface SettingsSlice {
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
   messageContextMenuEnabled: boolean
+  /** Suppress toasts when older chat messages are omitted from generation context. */
+  suppressContextDropWarnings: boolean
   favoritesBarCollapsed: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
@@ -677,9 +696,9 @@ export interface CouncilSlice {
   setCouncilExecuting: (executing: boolean) => void
   setCouncilToolsFailure: (failure: CouncilToolsFailedInfo | null) => void
 
-  loadCouncilSettings: () => Promise<void>
+  loadCouncilSettings: (shouldApply?: () => boolean) => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
-  loadAvailableTools: () => Promise<void>
+  loadAvailableTools: (shouldApply?: () => boolean) => Promise<void>
   /** Set merged council tools from pre-fetched data (bootstrap payload).
    *  Same merge rules as `loadAvailableTools`, zero network round trips. */
   hydrateCouncilTools: (
@@ -698,6 +717,8 @@ export interface CouncilSlice {
 // ---- Generation Slice ----
 export interface GenerationSlice {
   imageGeneration: ImageGenSettings
+  /** User edits made before the full settings row has hydrated. */
+  pendingImageGenerationPatch?: Partial<ImageGenSettings>
   sceneBackground: string | null
   sceneGenerating: boolean
   setImageGenSettings: (settings: Partial<ImageGenSettings>) => void
@@ -709,11 +730,17 @@ export interface ImageGenSettings {
   enabled: boolean
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
+  includePersona: boolean
   promptMode?: 'scene' | 'custom' | 'parsed_custom'
   customPrompt?: string
   customNegativePrompt?: string
   activePromptPresetId?: string | null
   promptPresets?: ImageGenPromptPreset[]
+  loraPresets?: LoraPreset[]
+  activeLoraPresetId?: string | null
+  bypassCharacterLora?: boolean
+  bypassActiveLoraPreset?: boolean
+  loraStrengthScale?: number
   promptParserConnectionId?: string | null
   promptParserModel?: string
   promptParserParameters?: Record<string, any>
@@ -756,6 +783,19 @@ export interface ImageGenPromptPreset {
   parserParameters?: Record<string, any>
   /** Whether the preset is intended as a main scene preset or a per-character snippet. Legacy entries are treated as 'main'. */
   kind?: ImageGenPresetKind
+}
+
+export interface LoraEntry {
+  lora_name: string
+  weight_model: number
+  weight_clip?: number
+}
+
+export interface LoraPreset {
+  id: string
+  name: string
+  loras: LoraEntry[]
+  base_tags?: string
 }
 
 // ---- Spindle Slice ----
@@ -1021,6 +1061,7 @@ export interface MentionQueueOpts {
   persona_addon_states?: Record<string, boolean>
   preset_id?: string
   force_preset_id?: boolean
+  user_input?: string
 }
 
 export interface MentionQueue {
@@ -1107,17 +1148,21 @@ export interface MultiplayerSlice {
 import type {
   DrawerTabState,
   CharacterEditorTabState,
+  PresetEditorTabState,
+  PresetEditorToolbarItemState,
   FloatWidgetState,
   DockPanelState,
   AppMountState,
   InputBarActionState,
   ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
   characterEditorTabs: CharacterEditorTabState[]
+  presetEditorTabs: PresetEditorTabState[]
+  presetEditorToolbarItems: PresetEditorToolbarItemState[]
   floatWidgets: FloatWidgetState[]
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
@@ -1137,6 +1182,14 @@ export interface SpindlePlacementSlice {
   registerCharacterEditorTab: (tab: CharacterEditorTabState) => void
   unregisterCharacterEditorTab: (tabId: string) => void
   updateCharacterEditorTab: (tabId: string, updates: Partial<Pick<CharacterEditorTabState, 'title'>>) => void
+
+  registerPresetEditorTab: (tab: PresetEditorTabState) => void
+  unregisterPresetEditorTab: (tabId: string) => void
+  updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => void
+
+  registerPresetEditorToolbarItem: (item: PresetEditorToolbarItemState) => void
+  unregisterPresetEditorToolbarItem: (itemId: string) => void
+  setPresetEditorToolbarItemVisible: (itemId: string, visible: boolean) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
@@ -1212,7 +1265,7 @@ import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from
 export interface RegexSlice {
   regexScripts: RegexScript[]
   regexEditingId: string | null
-  loadRegexScripts: () => Promise<void>
+  loadRegexScripts: (shouldApply?: () => boolean) => Promise<void>
   /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */
   setRegexScripts: (scripts: RegexScript[]) => void
   addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
@@ -1221,6 +1274,8 @@ export interface RegexSlice {
   bulkRemoveRegexScripts: (ids: string[]) => Promise<number>
   reorderRegexScripts: (orderedIds: string[], folderChange?: { id: string; folder: string }) => Promise<void>
   toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
+  toggleSelectedRegexScripts: (ids: string[], disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
+  toggleRegexFolder: (folder: string, disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
   setRegexEditingId: (id: string | null) => void
 }
 
@@ -1254,10 +1309,14 @@ export interface ExpressionSlice {
 // ---- Image Gen Connections Slice ----
 export interface ImageGenConnectionsSlice {
   imageGenProfiles: ImageGenConnectionProfile[]
+  /** True once the current user's image-gen profile list has been fetched. */
+  imageGenProfilesLoaded: boolean
+  /** Monotonic local revision used to reject stale async profile results. */
+  imageGenProfilesVersion: number
   activeImageGenConnectionId: string | null
   imageGenProviders: ImageGenProviderInfo[]
 
-  setImageGenProfiles: (profiles: ImageGenConnectionProfile[]) => void
+  setImageGenProfiles: (profiles: ImageGenConnectionProfile[], expectedVersion?: number) => void
   setActiveImageGenConnection: (id: string | null) => void
   addImageGenProfile: (profile: ImageGenConnectionProfile) => void
   updateImageGenProfile: (id: string, updates: Partial<ImageGenConnectionProfile>) => void
@@ -1456,7 +1515,7 @@ export interface ConnectionSlice {
   /**
    * True once a new service worker bundle has been detected (post-reconnect bundle check).
    * Keeps the connection-lost overlay mounted with "Updating…" messaging until the page reloads
-   * — the existing controllerchange handler in main.tsx performs the reload itself.
+   * — vite-plugin-pwa's onNeedReload callback in main.tsx performs the reload itself.
    */
   wsUpdatePending: boolean
   setWsConnected: (connected: boolean) => void

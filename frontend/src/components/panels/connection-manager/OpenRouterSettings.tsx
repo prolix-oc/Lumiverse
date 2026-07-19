@@ -54,8 +54,8 @@ export default function OpenRouterSettings({ connectionId, connectionName, hasAp
     [t],
   )
 
-  const routing = settings.provider_routing || {}
-  const plugins = settings.plugins || []
+  const routing = useMemo(() => settings.provider_routing || {}, [settings.provider_routing])
+  const plugins = useMemo(() => settings.plugins || [], [settings.plugins])
 
   const providerOptions = useMemo(() =>
     upstreamProviders.map((p) => ({ value: p.slug, label: p.name })),

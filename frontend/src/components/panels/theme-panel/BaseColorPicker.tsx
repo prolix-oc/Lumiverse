@@ -174,11 +174,11 @@ export default function BaseColorPicker({ baseColors, onChange }: BaseColorPicke
       setResolvedDefaults(next)
     })
     return () => cancelAnimationFrame(id)
-  }, [theme, characterThemeOverlay, extensionThemeOverrides])
+  }, [theme, characterThemeOverlay, extensionThemeOverrides, COLOR_KEYS])
 
   const activeDef = COLOR_KEYS.find(c => c.key === activeKey)!
   const currentHex = baseColors[activeKey] || resolvedDefaults[activeKey] || activeDef.defaultColor
-  const rgb = hexToRgb(currentHex) || [147, 112, 219]
+  const rgb = useMemo(() => hexToRgb(currentHex) || [147, 112, 219], [currentHex])
   const [rawHue, sat, val] = rgbToHsv(rgb[0], rgb[1], rgb[2])
   const [preservedHue, setPreservedHue] = useState(rawHue)
   const hue = sat > 0 && val > 0 ? rawHue : preservedHue

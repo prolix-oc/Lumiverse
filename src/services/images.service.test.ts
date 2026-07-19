@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "fs";
+import * as fs from "fs";
+import * as fsPromises from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
@@ -11,6 +13,7 @@ import {
   WALLPAPER_LIBRARY_OWNER,
   deleteImage,
   deleteImageIfUnreferenced,
+  deleteImagesBulk,
   deleteWallpaperLibraryImage,
   getImage,
   getImageFilePath,
@@ -20,6 +23,14 @@ import {
 
 const originalDataDir = env.dataDir;
 let testDataDir = "";
+
+function unlinkError(code: string, path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: simulated unlink failure, unlink '${path}'`), {
+    code,
+    path,
+    syscall: "unlink",
+  });
+}
 
 function initImagesTestDb(): void {
   closeDatabase();
@@ -145,6 +156,19 @@ afterEach(() => {
 });
 
 describe("images.service ownership filters", () => {
+  test("does not create an image row when a write reports success without creating the file", async () => {
+    const writeSpy = spyOn(Bun, "write").mockImplementation(async () => 1);
+    try {
+      const file = new File([new Uint8Array([0])], "missing.png", { type: "image/png" });
+
+      await expect(uploadImage("u1", file)).rejects.toThrow("Image file was not created");
+      const count = getDb().query("SELECT COUNT(*) AS count FROM images").get() as { count: number };
+      expect(count.count).toBe(0);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
   test("lists only extension-owned images and returns specificity-aware URLs", () => {
     seedImage("img-1", 300, { owner_extension_identifier: "ext.gallery", owner_chat_id: "chat-1" });
     seedImage("img-2", 200, { owner_extension_identifier: "ext.gallery", owner_character_id: "char-1" });
@@ -313,6 +337,89 @@ describe("images.service ownership filters", () => {
     expect(deleteImage("u1", "clip-2")).toBe(true);
     expect(existsSync(primaryPath)).toBe(false);
     expect(existsSync(hevcPath)).toBe(false);
+  });
+
+  test("keeps the image row when deleting its files fails", () => {
+    seedImage("undeletable", 100);
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(join(imagesDir, "undeletable.png"), { recursive: true });
+
+    expect(() => deleteImage("u1", "undeletable")).toThrow("Could not delete 1 image file");
+    expect(getImage("u1", "undeletable")).not.toBeNull();
+  });
+
+  test("keeps bulk-deletion rows when deleting their files fails", async () => {
+    seedImage("bulk-undeletable", 100);
+    const imagesDir = join(env.dataDir, "images");
+    mkdirSync(join(imagesDir, "bulk-undeletable.png"), { recursive: true });
+
+    await expect(deleteImagesBulk("u1", ["bulk-undeletable"])).rejects.toThrow("Could not delete 1 image file");
+    expect(getImage("u1", "bulk-undeletable")).not.toBeNull();
+  });
+
+  test("ignores a reported EPERM when the image path is already gone", async () => {
+    seedImage("gone-after-unlink", 100);
+    const primaryPath = join(env.dataDir, "images", "gone-after-unlink.png");
+    mkdirSync(join(env.dataDir, "images"), { recursive: true });
+    writeFileSync(primaryPath, "image");
+
+    const unlinkSpy = spyOn(fsPromises, "unlink").mockImplementation(async (path) => {
+      rmSync(path);
+      throw unlinkError("EPERM", String(path));
+    });
+    try {
+      await expect(deleteImagesBulk("u1", ["gone-after-unlink"])).resolves.toBe(1);
+      expect(unlinkSpy).toHaveBeenCalledTimes(1);
+      expect(getImage("u1", "gone-after-unlink")).toBeNull();
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  test("retries transient EPERM when deleting an image synchronously", () => {
+    seedImage("retry-sync", 100);
+    const primaryPath = join(env.dataDir, "images", "retry-sync.png");
+    mkdirSync(join(env.dataDir, "images"), { recursive: true });
+    writeFileSync(primaryPath, "image");
+
+    let attempts = 0;
+    const unlinkSpy = spyOn(fs, "unlinkSync").mockImplementation((path) => {
+      attempts++;
+      if (attempts === 1) throw unlinkError("EPERM", String(path));
+      rmSync(path);
+    });
+    const sleepSpy = spyOn(Bun, "sleepSync").mockImplementation(() => {});
+    try {
+      expect(deleteImage("u1", "retry-sync")).toBe(true);
+      expect(attempts).toBe(2);
+      expect(sleepSpy).toHaveBeenCalledTimes(1);
+      expect(getImage("u1", "retry-sync")).toBeNull();
+    } finally {
+      sleepSpy.mockRestore();
+      unlinkSpy.mockRestore();
+    }
+  });
+
+  test("keeps the image row after transient unlink retries are exhausted", async () => {
+    seedImage("retry-exhausted", 100);
+    const primaryPath = join(env.dataDir, "images", "retry-exhausted.png");
+    mkdirSync(join(env.dataDir, "images"), { recursive: true });
+    writeFileSync(primaryPath, "image");
+
+    const unlinkSpy = spyOn(fsPromises, "unlink").mockImplementation(async (path) => {
+      throw unlinkError("EPERM", String(path));
+    });
+    const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
+    try {
+      await expect(deleteImagesBulk("u1", ["retry-exhausted"])).rejects.toThrow("Could not delete 1 image file");
+      expect(unlinkSpy).toHaveBeenCalledTimes(6);
+      expect(sleepSpy).toHaveBeenCalledTimes(5);
+      expect(existsSync(primaryPath)).toBe(true);
+      expect(getImage("u1", "retry-exhausted")).not.toBeNull();
+    } finally {
+      sleepSpy.mockRestore();
+      unlinkSpy.mockRestore();
+    }
   });
 
   test("emits wallpaper video upload progress through transcoding and finalize stages", async () => {

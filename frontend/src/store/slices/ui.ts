@@ -54,6 +54,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
     return id
   },
 
+  updateToast: (id, update) =>
+    set((state) => ({
+      toasts: state.toasts.map((toast) => (toast.id === id ? { ...toast, ...update, id } : toast)),
+    })),
+
   removeToast: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
@@ -62,8 +67,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   incrementBadgeCount: () => set((state) => ({ badgeCount: state.badgeCount + 1 })),
   resetBadgeCount: () => set({ badgeCount: 0 }),
 
-  lastRegenFeedback: '',
-  setLastRegenFeedback: (text) => set({ lastRegenFeedback: text }),
+  lastRegenFeedback: {},
+  setLastRegenFeedback: (chatId, text) =>
+    set((state) => ({
+      lastRegenFeedback: { ...state.lastRegenFeedback, [chatId]: text },
+    })),
 
   editingMessageId: null,
   setEditingMessageId: (id) => set({ editingMessageId: id }),

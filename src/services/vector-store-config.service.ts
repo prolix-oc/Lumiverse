@@ -336,15 +336,30 @@ export async function updateVectorStoreConfig(
     return getVectorStoreConfigForApi();
   }
 
+  const previous = getResolvedVectorStoreConfig();
   const normalized = normalizeVectorStoreConfig(input);
 
   if (input.qdrant_api_key !== undefined) {
     if (!input.qdrant_api_key) secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
     else await secretsSvc.putSecret(ownerId, QDRANT_API_KEY_SECRET, input.qdrant_api_key);
+  } else if (
+    normalized.provider === "qdrant"
+    && !hasSameVectorStoreCredentialTarget(normalized, previous, "qdrant")
+  ) {
+    // Never carry a key across endpoints. The replacement target must either
+    // be reachable without a key or receive a new key explicitly.
+    secretsSvc.deleteSecret(ownerId, QDRANT_API_KEY_SECRET);
   }
   if (input.milvus_password !== undefined) {
     if (!input.milvus_password) secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
     else await secretsSvc.putSecret(ownerId, MILVUS_PASSWORD_SECRET, input.milvus_password);
+  } else if (
+    normalized.provider === "milvus"
+    && !hasSameVectorStoreCredentialTarget(normalized, previous, "milvus")
+  ) {
+    // A Milvus password is scoped to its transport, server, database, and
+    // username. Do not silently attach it to a different authentication scope.
+    secretsSvc.deleteSecret(ownerId, MILVUS_PASSWORD_SECRET);
   }
 
   settingsSvc.putSetting(ownerId, VECTOR_STORE_CONFIG_KEY, normalized);
@@ -356,13 +371,51 @@ export async function updateVectorStoreConfig(
   return getVectorStoreConfigForApi();
 }
 
-/** Resolve the secrets to use when building a candidate store for a test/switch:
- *  prefer secrets supplied in the request body, else the stored/env ones. */
-async function resolveCandidateSecrets(input: UpdateVectorStoreConfigInput): Promise<VectorStoreConnectionSecrets> {
-  const stored = await getVectorStoreConnectionSecrets();
+/** True when a candidate uses the exact authentication target of the active config. */
+export function hasSameVectorStoreCredentialTarget(
+  candidate: VectorStoreConfig,
+  active: VectorStoreConfig,
+  provider: "qdrant" | "milvus",
+): boolean {
+  if (candidate.provider !== provider || active.provider !== provider) return false;
+
+  if (provider === "qdrant") {
+    return !!candidate.qdrant?.url
+      && candidate.qdrant.url === active.qdrant?.url;
+  }
+
+  const candidateMilvus = candidate.milvus;
+  const activeMilvus = active.milvus;
+  return !!candidateMilvus?.address
+    && candidateMilvus.address === activeMilvus?.address
+    && (candidateMilvus.ssl ?? false) === (activeMilvus?.ssl ?? false)
+    && (candidateMilvus.transport ?? "grpc") === (activeMilvus?.transport ?? "grpc")
+    && (candidateMilvus.database ?? "") === (activeMilvus?.database ?? "")
+    && (candidateMilvus.username ?? "") === (activeMilvus?.username ?? "");
+}
+
+/** Resolve secrets for a candidate test/switch. A supplied secret always wins;
+ * stored secrets are reused only for the exact active authentication target. */
+async function resolveCandidateSecrets(
+  input: UpdateVectorStoreConfigInput,
+  candidate: VectorStoreConfig,
+): Promise<VectorStoreConnectionSecrets> {
+  const active = getResolvedVectorStoreConfig();
+  const reuseQdrant = input.qdrant_api_key === undefined
+    && hasSameVectorStoreCredentialTarget(candidate, active, "qdrant");
+  const reuseMilvus = input.milvus_password === undefined
+    && hasSameVectorStoreCredentialTarget(candidate, active, "milvus");
+  const stored = reuseQdrant || reuseMilvus
+    ? await getVectorStoreConnectionSecrets()
+    : { qdrantApiKey: null, milvusPassword: null };
+
   return {
-    qdrantApiKey: input.qdrant_api_key !== undefined ? (input.qdrant_api_key || null) : stored.qdrantApiKey,
-    milvusPassword: input.milvus_password !== undefined ? (input.milvus_password || null) : stored.milvusPassword,
+    qdrantApiKey: input.qdrant_api_key !== undefined
+      ? (input.qdrant_api_key || null)
+      : (reuseQdrant ? stored.qdrantApiKey : null),
+    milvusPassword: input.milvus_password !== undefined
+      ? (input.milvus_password || null)
+      : (reuseMilvus ? stored.milvusPassword : null),
   };
 }
 
@@ -377,10 +430,14 @@ export interface VectorStoreTestResult {
  * its `init()` reachability/version probe. Used by the operator UI before
  * committing a provider switch.
  */
-export async function testVectorStoreConnection(input: UpdateVectorStoreConfigInput): Promise<VectorStoreTestResult> {
+export async function testVectorStoreConnection(
+  userId: string,
+  input: UpdateVectorStoreConfigInput,
+): Promise<VectorStoreTestResult> {
+  assertVectorStoreOwner(userId);
   const config = normalizeVectorStoreConfig(input);
   try {
-    const secrets = await resolveCandidateSecrets(input);
+    const secrets = await resolveCandidateSecrets(input, config);
     const { buildVectorStore } = await import("./vector-store");
     const store = await buildVectorStore(config, secrets);
     await store.init();
@@ -498,7 +555,7 @@ export async function switchVectorStoreProvider(
 
   // 1. Validate-before-commit: build + probe the candidate before touching settings.
   const candidateConfig = normalizeVectorStoreConfig(input);
-  const candidateSecrets = await resolveCandidateSecrets(input);
+  const candidateSecrets = await resolveCandidateSecrets(input, candidateConfig);
   const { buildVectorStore } = await import("./vector-store");
   const candidate = await buildVectorStore(candidateConfig, candidateSecrets);
   await candidate.init();

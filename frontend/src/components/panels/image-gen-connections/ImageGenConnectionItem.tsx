@@ -287,10 +287,13 @@ export default function ImageGenConnectionItem({
           )}
           {workflowEditorOpen && (
             <ComfyWorkflowEditor
+              connectionId={profile.id}
               config={workflowConfig}
               error={workflowError}
               onImportWorkflow={importComfyWorkflow}
               onUpdateMappings={updateComfyMappings}
+              onWorkflowActivated={setWorkflowConfig}
+              onConnectionRefresh={refreshComfyProfile}
               onClose={() => setWorkflowEditorOpen(false)}
             />
           )}

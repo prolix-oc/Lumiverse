@@ -46,6 +46,8 @@ import { useLongPress } from '@/hooks/useLongPress'
 import type { Character, CharacterGalleryItem, WorldBook } from '@/types/api'
 import type { WallpaperRef } from '@/types/store'
 import { toast } from '@/lib/toast'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
 import { Button } from '@/components/shared/FormComponents'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import SearchableSelect from '@/components/shared/SearchableSelect'
@@ -73,6 +75,15 @@ const DEBOUNCE_MS = 2000
 const MAX_PERSPECTIVE_LAYERS = 5
 const GALLERY_MIN_ITEM_WIDTH = 120
 const GALLERY_GAP = 8
+
+interface CharxExportProgress {
+  characterId?: string
+  exportId?: string
+  phase: 'preparing' | 'collecting_assets' | 'compressing' | 'complete' | 'failed'
+  completed?: number
+  total?: number
+  error?: string
+}
 const GALLERY_OVERSCAN = 3
 const MD_IMAGE_RE = /!\[[^\]]*\]\(([^)]+)\)/g
 const HTML_IMG_RE = /<img[^>]+src=["']([^"']+)["']/gi
@@ -378,6 +389,7 @@ export default function CharacterEditorPage() {
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
   const [creatingPersona, setCreatingPersona] = useState(false)
+  const [replacingCard, setReplacingCard] = useState(false)
   const [galleryContextMenu, setGalleryContextMenu] = useState<{ pos: ContextMenuPos; item: CharacterGalleryItem } | null>(null)
   const [avatarUploadProgress, setAvatarUploadProgress] = useState<number | null>(null)
   const [altAvatarUploadProgress, setAltAvatarUploadProgress] = useState<number | null>(null)
@@ -390,6 +402,7 @@ export default function CharacterEditorPage() {
   const layerSaveLockRef = useRef<Promise<void> | null>(null)
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const cardReplaceFileRef = useRef<HTMLInputElement>(null)
   const perspectiveLayerFileRef = useRef<HTMLInputElement>(null)
   const galleryFileRef = useRef<HTMLInputElement>(null)
   const galleryScrollRef = useRef<HTMLDivElement>(null)
@@ -690,7 +703,7 @@ export default function CharacterEditorPage() {
         browser.updateCharacter(editingCharacterId, { [field]: value })
       }, DEBOUNCE_MS)
     },
-    [editingCharacterId, browser.updateCharacter, showSaving]
+    [editingCharacterId, browser, showSaving]
   )
 
   // ── Atomic extensions mutation pipeline ──────────────────────────────
@@ -726,7 +739,7 @@ export default function CharacterEditorPage() {
     pendingExtensionsRef.current = null
     showSaving()
     await browser.updateCharacter(editingCharacterId, { extensions: next })
-  }, [editingCharacterId, browser.updateCharacter, showSaving])
+  }, [editingCharacterId, browser, showSaving])
 
   const mutateExtensions = useCallback(
     (mutator: (ext: Record<string, any>) => Record<string, any>, immediate: boolean) => {
@@ -887,7 +900,7 @@ export default function CharacterEditorPage() {
     setNewTag('')
     showSaving()
     browser.updateCharacter(editingCharacterId, { tags: updated })
-  }, [newTag, tags, editingCharacterId, browser.updateCharacter, showSaving])
+  }, [newTag, tags, editingCharacterId, browser, showSaving])
 
   const handleRemoveTag = useCallback(
     (tag: string) => {
@@ -897,7 +910,7 @@ export default function CharacterEditorPage() {
       showSaving()
       browser.updateCharacter(editingCharacterId, { tags: updated })
     },
-    [tags, editingCharacterId, browser.updateCharacter, showSaving]
+    [tags, editingCharacterId, browser, showSaving]
   )
 
   const handleGreetingChange = useCallback(
@@ -917,7 +930,7 @@ export default function CharacterEditorPage() {
       showSaving()
       browser.updateCharacter(editingCharacterId, { alternate_greetings: updated })
     }
-  }, [alternateGreetings, editingCharacterId, browser.updateCharacter, showSaving])
+  }, [alternateGreetings, editingCharacterId, browser, showSaving])
 
   const handleRemoveGreeting = useCallback(
     (index: number) => {
@@ -928,7 +941,7 @@ export default function CharacterEditorPage() {
         browser.updateCharacter(editingCharacterId, { alternate_greetings: updated })
       }
     },
-    [alternateGreetings, editingCharacterId, browser.updateCharacter, showSaving]
+    [alternateGreetings, editingCharacterId, browser, showSaving]
   )
 
   const handleExtensionsChange = useCallback(
@@ -971,7 +984,7 @@ export default function CharacterEditorPage() {
         toast.error(err.body?.error || err.message || t('characterEditor.unbindRegexFailed'))
       }
     },
-    [updateRegexScript]
+    [updateRegexScript, t]
   )
 
   const clearActivatedWorldInfo = useStore((s) => s.clearActivatedWorldInfo)
@@ -1066,7 +1079,7 @@ export default function CharacterEditorPage() {
         setAltAvatarUploadProgress(null)
       }
     },
-    [mutateExtensions]
+    [editingCharacterId, character, mutateExtensions, t]
   )
 
   const { cropModalProps: altAvatarCropProps, openCropFlow: openAltAvatarCropFlow } =
@@ -1090,6 +1103,33 @@ export default function CharacterEditorPage() {
     [openCropFlow]
   )
 
+  const handleReplaceCard = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || !editingCharacterId || replacingCard) return
+
+      // An older debounce firing after the replacement would otherwise restore
+      // stale editor values over the newly-uploaded card.
+      for (const timer of Object.values(timers.current)) clearTimeout(timer)
+      pendingExtensionsRef.current = null
+      if (layersSaveTimerRef.current) clearTimeout(layersSaveTimerRef.current)
+
+      setReplacingCard(true)
+      try {
+        const updated = await charactersApi.replaceCard(editingCharacterId, file)
+        lastSyncedId.current = null
+        updateCharInStore(editingCharacterId, updated)
+        toast.success(t('characterEditor.replaceCardSuccess'))
+      } catch (err: any) {
+        toast.error(err?.body?.error || err?.message || t('characterEditor.replaceCardFailed'))
+      } finally {
+        setReplacingCard(false)
+      }
+    },
+    [editingCharacterId, replacingCard, t, updateCharInStore]
+  )
+
   const perspectiveLayers = useMemo<CharacterPerspectiveLayerInput[]>(() => {
     return readPerspectiveLayers(character?.extensions?.landing_perspective_layers)
   }, [character?.extensions?.landing_perspective_layers])
@@ -1102,7 +1142,7 @@ export default function CharacterEditorPage() {
     setLocalPerspectiveLayers(nextLayers)
     pendingLayersRef.current = clonePerspectiveLayers(nextLayers)
     syncedPerspectiveLayersRef.current = clonePerspectiveLayers(nextLayers)
-  }, [character?.id])
+  }, [character?.id, character, perspectiveLayers])
 
   const flushPerspectiveLayersSave = useCallback(async () => {
     if (!editingCharacterId) return
@@ -1242,19 +1282,19 @@ export default function CharacterEditorPage() {
       skipPerspectiveLayerFlushRef.current = false
       throw err
     }
-  }, [editingCharacterId, browser.deleteCharacter, close])
+  }, [editingCharacterId, browser, close])
 
   const handleDuplicate = useCallback(async () => {
     if (!editingCharacterId) return
     const dup = await browser.duplicateCharacter(editingCharacterId)
     setEditingCharacterId(dup.id)
-  }, [editingCharacterId, browser.duplicateCharacter, setEditingCharacterId])
+  }, [editingCharacterId, browser, setEditingCharacterId])
 
   const handleOpenChat = useCallback(() => {
     if (!character) return
     close()
     browser.openChat(character)
-  }, [character, browser.openChat, close])
+  }, [character, browser, close])
 
   const handleCreatePersonaFromCharacter = useCallback(async () => {
     if (!character || creatingPersona) return
@@ -1315,13 +1355,77 @@ export default function CharacterEditorPage() {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [exporting, setExporting] = useState(false)
   const exportMenuRef = useRef<HTMLDivElement>(null)
+  const activeCharxExportRef = useRef<{
+    exportId: string
+    characterId: string
+    characterName: string
+    toastId: string
+  } | null>(null)
+
+  useEffect(() => {
+    return wsClient.on(EventType.CHARACTER_EXPORT_PROGRESS, (payload: CharxExportProgress) => {
+      const active = activeCharxExportRef.current
+      if (!active || payload.exportId !== active.exportId || payload.characterId !== active.characterId) return
+
+      if (payload.phase === 'collecting_assets') {
+        toast.update(active.toastId, {
+          message: t('characterEditor.exportAssetsProgress', {
+            completed: payload.completed ?? 0,
+            total: payload.total ?? 0,
+          }),
+        })
+        return
+      }
+      if (payload.phase === 'compressing') {
+        toast.update(active.toastId, { message: t('characterEditor.exportCompressing') })
+        return
+      }
+      if (payload.phase === 'complete') {
+        toast.dismiss(active.toastId)
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.success(t('characterEditor.exportSuccess', { name: active.characterName, format: 'CHARX' }))
+        return
+      }
+      if (payload.phase === 'failed') {
+        toast.dismiss(active.toastId)
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.error(t('characterEditor.exportFailed', { error: payload.error || t('characterEditor.unknownError') }))
+      }
+    })
+  }, [t])
 
   const handleExport = useCallback(async (format: 'json' | 'png' | 'charx') => {
     if (!editingCharacterId || !character) return
     setExporting(true)
     setShowExportMenu(false)
     const formatLabel = format === 'charx' ? 'CHARX' : format === 'png' ? 'PNG' : 'JSON'
-    const toastId = toast.info(t('characterEditor.preparingExport', { format: formatLabel }), { title: t('characterEditor.exporting'), duration: 60_000, dismissible: false })
+    const toastId = toast.info(t('characterEditor.preparingExport', { format: formatLabel }), {
+      title: t('characterEditor.exporting'),
+      duration: format === 'charx' ? 0 : 60_000,
+      dismissible: false,
+    })
+
+    if (format === 'charx') {
+      const exportId = uuidv7()
+      activeCharxExportRef.current = {
+        exportId,
+        characterId: editingCharacterId,
+        characterName: character.name,
+        toastId,
+      }
+      try {
+        charactersApi.downloadCharxExport(editingCharacterId, exportId, character.name)
+      } catch (err) {
+        activeCharxExportRef.current = null
+        setExporting(false)
+        toast.dismiss(toastId)
+        toast.error(t('characterEditor.exportFailed', { error: err instanceof Error ? err.message : t('characterEditor.unknownError') }))
+      }
+      return
+    }
+
     try {
       await charactersApi.exportCharacter(editingCharacterId, format, character.name)
       toast.dismiss(toastId)
@@ -1424,6 +1528,13 @@ export default function CharacterEditorPage() {
                       className={styles.hiddenInput}
                       onChange={handleFileSelected}
                     />
+                    <input
+                      ref={cardReplaceFileRef}
+                      type="file"
+                      accept=".json,application/json,.png,image/png"
+                      className={styles.hiddenInput}
+                      onChange={handleReplaceCard}
+                    />
                   </div>
 
                   <div className={styles.headerInfo}>
@@ -1453,6 +1564,15 @@ export default function CharacterEditorPage() {
                       {creatingPersona
                         ? <Spinner size={14} fast />
                         : <UserPlus size={14} />}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => cardReplaceFileRef.current?.click()}
+                      title={t('characterEditor.replaceCard')}
+                      disabled={replacingCard}
+                    >
+                      {replacingCard ? <Spinner size={14} fast /> : <Upload size={14} />}
                     </Button>
                     <div className={styles.exportWrapper} ref={exportMenuRef}>
                       <Button

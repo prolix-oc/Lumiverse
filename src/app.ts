@@ -432,6 +432,14 @@ app.get("/api/v1/sso-providers/login-options", (c) => {
   return c.json(listSsoLoginOptions());
 });
 
+// Public, non-sensitive startup configuration needed before the authenticated
+// app mounts. Safe-theme mode must be known before persisted CSS/overrides can
+// render, otherwise it cannot reliably recover an inaccessible interface.
+app.get("/api/v1/runtime-config", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.json({ safeThemeMode: env.safeThemeMode });
+});
+
 app.use("/api/v1/*", requireAuth);
 
 app.route("/api/v1/settings", settingsRoutes);

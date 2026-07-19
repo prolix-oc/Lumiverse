@@ -19,13 +19,22 @@ const PONG_TIMEOUT_MS = 10_000
  * overflowing on resume.
  */
 const RESUME_PONG_TIMEOUT_MS = 3_000
+const PING_INTERVAL_MS = 30_000
+
+type HeartbeatWorkerMessage =
+  | { type: 'ping-primary'; generation: number }
+  | { type: 'verified'; generation: number }
+  | { type: 'timeout'; generation: number }
 
 export class WebSocketClient {
   private ws: WebSocket | null = null
   private handlers = new Map<string, Set<EventHandler>>()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private pingTimer: ReturnType<typeof setInterval> | null = null
-  private pongWatchdog: ReturnType<typeof setTimeout> | null = null
+  private heartbeatWorker: Worker | null = null
+  private heartbeatWorkerUnavailable = false
+  private heartbeatGeneration = 0
+  private fallbackPingTimer: ReturnType<typeof setInterval> | null = null
+  private fallbackPongWatchdog: ReturnType<typeof setTimeout> | null = null
   private url: string
   private shouldReconnect = true
   private visibilityCleanup: Array<() => void> = []
@@ -74,7 +83,7 @@ export class WebSocketClient {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'pong') {
-          this.clearPongWatchdog()
+          this.ackHeartbeat()
           this.emit(WS_PONG, {})
           return
         }
@@ -155,45 +164,136 @@ export class WebSocketClient {
 
   private startPing() {
     this.stopPing()
-    this.pingTimer = setInterval(() => {
-      this.sendPingNow()
-    }, 30000)
+    const generation = ++this.heartbeatGeneration
+    if (this.ensureHeartbeatWorker()) {
+      this.heartbeatWorker!.postMessage({
+        type: 'start',
+        generation,
+        url: this.url,
+        intervalMs: PING_INTERVAL_MS,
+        timeoutMs: PONG_TIMEOUT_MS,
+      })
+      return
+    }
+    this.startFallbackHeartbeat(generation)
   }
 
   private stopPing() {
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer)
-      this.pingTimer = null
+    const generation = ++this.heartbeatGeneration
+    this.heartbeatWorker?.postMessage({ type: 'stop', generation })
+    if (this.fallbackPingTimer) {
+      clearInterval(this.fallbackPingTimer)
+      this.fallbackPingTimer = null
     }
-    this.clearPongWatchdog()
+    this.clearFallbackPongWatchdog()
   }
 
   private sendPingNow(timeoutMs: number = PONG_TIMEOUT_MS) {
-    if (this.ws?.readyState !== WebSocket.OPEN) return
-    this.ws.send(JSON.stringify({ type: 'ping' }))
-    this.armPongWatchdog(timeoutMs)
+    if (this.ensureHeartbeatWorker()) {
+      this.heartbeatWorker!.postMessage({
+        type: 'ping-now',
+        generation: this.heartbeatGeneration,
+        timeoutMs,
+      })
+      return
+    }
+    if (!this.sendPingFrame()) return
+    this.armFallbackPongWatchdog(this.heartbeatGeneration, timeoutMs)
   }
 
-  private armPongWatchdog(timeoutMs: number = PONG_TIMEOUT_MS) {
-    this.clearPongWatchdog()
-    this.pongWatchdog = setTimeout(() => {
-      this.pongWatchdog = null
-      console.warn('[WS] Pong timeout — forcing close to trigger reconnect')
-      // Force-close the socket. onclose will fire, which both emits WS_CLOSE
-      // (so the UI shows the overlay) and triggers the standard reconnect path.
-      try {
-        this.ws?.close()
-      } catch {
-        /* noop */
+  private sendPingFrame(): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false
+    try {
+      this.ws.send(JSON.stringify({ type: 'ping' }))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private ensureHeartbeatWorker(): boolean {
+    if (this.heartbeatWorker) return true
+    if (this.heartbeatWorkerUnavailable || typeof Worker === 'undefined') return false
+
+    try {
+      const worker = new Worker(new URL('./heartbeat.worker.ts', import.meta.url), {
+        type: 'module',
+        name: 'lumiverse-heartbeat',
+      })
+      worker.onmessage = (event: MessageEvent<HeartbeatWorkerMessage>) => {
+        const message = event.data
+        if (message.generation !== this.heartbeatGeneration) return
+        if (message.type === 'ping-primary') {
+          this.sendPingFrame()
+        } else if (message.type === 'verified') {
+          this.emit(WS_PONG, {})
+        } else if (message.type === 'timeout') {
+          this.handleHeartbeatTimeout(message.generation)
+        }
       }
+      worker.onerror = (event) => {
+        console.warn('[WS] Heartbeat worker failed; using main-thread fallback:', event.message)
+        worker.terminate()
+        if (this.heartbeatWorker === worker) this.heartbeatWorker = null
+        this.heartbeatWorkerUnavailable = true
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.startFallbackHeartbeat(this.heartbeatGeneration)
+        }
+      }
+      this.heartbeatWorker = worker
+      return true
+    } catch (error) {
+      console.warn('[WS] Heartbeat worker unavailable; using main-thread fallback:', error)
+      this.heartbeatWorkerUnavailable = true
+      return false
+    }
+  }
+
+  private startFallbackHeartbeat(generation: number): void {
+    if (this.fallbackPingTimer) clearInterval(this.fallbackPingTimer)
+    this.fallbackPingTimer = setInterval(() => {
+      if (generation !== this.heartbeatGeneration || !this.sendPingFrame()) return
+      this.armFallbackPongWatchdog(generation, PONG_TIMEOUT_MS)
+    }, PING_INTERVAL_MS)
+  }
+
+  private armFallbackPongWatchdog(generation: number, timeoutMs: number): void {
+    this.clearFallbackPongWatchdog()
+    this.fallbackPongWatchdog = setTimeout(() => {
+      this.fallbackPongWatchdog = null
+      this.handleHeartbeatTimeout(generation)
     }, timeoutMs)
   }
 
-  private clearPongWatchdog() {
-    if (this.pongWatchdog) {
-      clearTimeout(this.pongWatchdog)
-      this.pongWatchdog = null
+  private clearFallbackPongWatchdog(): void {
+    if (this.fallbackPongWatchdog) {
+      clearTimeout(this.fallbackPongWatchdog)
+      this.fallbackPongWatchdog = null
     }
+  }
+
+  private ackHeartbeat(): void {
+    this.clearFallbackPongWatchdog()
+  }
+
+  private handleHeartbeatTimeout(generation: number): void {
+    if (generation !== this.heartbeatGeneration) return
+    console.warn('[WS] Pong timeout — forcing close to trigger reconnect')
+    const socket = this.ws
+    if (!socket) return
+
+    // Do not wait for the browser's close handshake: a half-open connection can
+    // remain CLOSING for an unbounded period. Detach it first so its eventual
+    // onclose is ignored, then drive the normal UI/reconnect state ourselves.
+    this.stopPing()
+    this.ws = null
+    try {
+      socket.close()
+    } catch {
+      /* noop */
+    }
+    this.emit(WS_CLOSE, { code: 1006, reason: 'heartbeat timeout' })
+    if (this.shouldReconnect) this.scheduleReconnect()
   }
 
   /** Send a ping immediately and arm the pong watchdog. Used after CONNECTED to verify round-trip. */

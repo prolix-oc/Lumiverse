@@ -86,6 +86,18 @@
     "modCmd": "CMD",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "チャット内を検索",
+    "placeholder": "チャット内を検索…",
+    "clear": "検索テキストをクリア",
+    "previous": "前の結果",
+    "next": "次の結果",
+    "close": "検索を閉じる",
+    "matchCount": "{{current}} / {{total}}",
+    "noMatches": "結果なし",
+    "loading": "検索中…",
+    "searchFailed": "このチャットを検索できませんでした"
+  },
   "quickMenu": {
     "noGuidedGenerations": "ガイド付き世代が設定されていません。",
     "disableAllGuidedGenerations": "すべてのガイド付き生成を無効化",
@@ -165,6 +177,7 @@
     "creatingChatCortex": "バックグラウンドでチャットを作成し、Memory Cortexを準備しています…",
     "failedCreateChat": "チャットを作成できませんでした",
     "failedStartNewChat": "新しいチャットを開始できませんでした",
+    "failedDeleteChat": "このチャットを削除できませんでした",
     "failedOpenChat": "開けませんでした",
     "characterImported": "「{{name}}」がインポートされました",
     "importFailed": "読み込めませんでした",
@@ -369,7 +382,9 @@
     "fork": {
       "title": "フォークチャット",
       "message": "このメッセージで新しいチャットブランチを作成しますか？この時点までのすべてのメッセージがコピーされます。",
-      "confirm": "フォーク"
+      "confirm": "フォーク",
+      "nameLabel": "チャット名（任意）",
+      "namePlaceholder": "空欄のままにすると自動で名前が付けられます"
     },
     "delete": {
       "title": "削除",
@@ -382,5 +397,11 @@
       "message": "これにより、このメッセージはチャットから完全に削除されます。",
       "confirm": "削除"
     }
+  },
+  "newChatConfirm": {
+    "title": "新しいチャットを開始",
+    "message": "新しいチャットを開始してもよろしいですか？",
+    "confirm": "新しいチャットを開始",
+    "deleteThisChat": "このチャットを削除"
   }
 }

@@ -283,6 +283,65 @@
   min-width: 0;
 }
 
+.personaSearch {
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  margin: -2px -2px 2px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, rgba(35, 30, 48, 0.98));
+  color: var(--lumiverse-text-dim);
+}
+
+.personaSearch input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.personaSearch input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.personaSearch button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.personaGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.personaGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px 2px;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .personaAvatar {
   width: 22px;
   height: 22px;

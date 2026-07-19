@@ -1,5 +1,6 @@
 import { get, post, type RequestOptions } from './client'
 import { flushSettingsNow } from '@/store/slices/settings'
+import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
 
 /** Generation requests go through prompt assembly + council + embedding calls
  *  which can legitimately take longer than the default 30s client timeout. */
@@ -23,6 +24,8 @@ export interface GenerateRequest {
   impersonate_mode?: ImpersonateMode
   /** For impersonate: free-form text from the input box, appended to the impersonation prompt. */
   impersonate_input?: string
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  user_input?: string
   /** For impersonate: stream to input box instead of creating a message. */
   impersonate_draft?: boolean
   target_character_id?: string
@@ -305,6 +308,7 @@ export interface ActiveGenerationEntry {
 export const generateApi = {
   async start(request: GenerateRequest) {
     await flushSettingsNow()
+    await flushPresetForGeneration(request.preset_id)
     return post<GenerateResponse>('/generate', request, LONG)
   },
 
@@ -319,11 +323,13 @@ export const generateApi = {
 
   async regenerate(request: GenerateRequest) {
     await flushSettingsNow()
+    await flushPresetForGeneration(request.preset_id)
     return post<GenerateResponse>('/generate/regenerate', request, LONG)
   },
 
   async continueGeneration(request: GenerateRequest) {
     await flushSettingsNow()
+    await flushPresetForGeneration(request.preset_id)
     return post<GenerateResponse>('/generate/continue', request, LONG)
   },
 
@@ -358,6 +364,7 @@ export const generateApi = {
 
   async dryRun(request: GenerateRequest) {
     await flushSettingsNow()
+    await flushPresetForGeneration(request.preset_id)
     return post<DryRunResponse>('/generate/dry-run', request, LONG)
   },
 

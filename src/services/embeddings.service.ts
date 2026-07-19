@@ -38,6 +38,7 @@ import {
 } from "./world-book-vector-state";
 import { getActiveVectorStore } from "./vector-store";
 import {
+  MAX_SOURCE_FILTER_IDS,
   andFilter,
   cosineSimilarity,
   distanceFromSimilarity,
@@ -45,6 +46,7 @@ import {
   idsIn,
   inSet,
   mmrSelect,
+  notInSet,
   ownerScope,
   ownersScope,
   reciprocalRankFusion,
@@ -232,9 +234,43 @@ export interface WorldBookSearchCandidate {
   entry_id: string;
   distance: number;
   lexical_score: number | null;
+  /** Bounded, provider-scale-independent BM25 evidence used by reranking. */
+  lexical_strength?: number;
   content: string;
   searchTextPreview: string;
   metadata: WorldBookEmbeddingMetadata;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+/**
+ * Convert provider-specific positive BM25 magnitudes into a bounded robust
+ * signal. Log centering makes the result exactly invariant to uniform positive
+ * scaling; median/MAD keeps isolated score outliers from setting the scale.
+ */
+export function normalizeBm25Scores(
+  scores: Array<number | null | undefined>,
+): number[] {
+  const positiveLogs = scores
+    .filter((score): score is number => typeof score === "number" && Number.isFinite(score) && score > 0)
+    .map((score) => Math.log(score));
+  if (positiveLogs.length === 0) return scores.map(() => 0);
+
+  const center = median(positiveLogs);
+  const mad = median(positiveLogs.map((value) => Math.abs(value - center)));
+  const scale = Math.max(1.4826 * mad, 0.25);
+  return scores.map((score) => {
+    if (typeof score !== "number" || !Number.isFinite(score) || score <= 0) return 0;
+    const z = Math.max(-6, Math.min(6, (Math.log(score) - center) / scale));
+    return 1 / (1 + Math.exp(-z));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +310,9 @@ export interface ChatMemorySettings {
 
   // --- Quick Mode ---
   quickMode: "conservative" | "balanced" | "aggressive" | null; // Default "balanced". null = manual
+
+  // --- Injection Strategy ---
+  injectionStrategy: "fallback" | "macro_only" | "disabled"; // Default "macro_only"
 }
 
 export interface PerChatMemoryOverrides {
@@ -316,6 +355,7 @@ export const DEFAULT_CHAT_MEMORY_SETTINGS: ChatMemorySettings = {
   splitOnTimeGapMinutes: 0,
   maxMessagesPerChunk: 0,
   quickMode: "balanced",
+  injectionStrategy: "macro_only",
 };
 
 const CHAT_MEMORY_SETTINGS_KEY = "chatMemorySettings";
@@ -350,6 +390,9 @@ export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
     quickMode: input?.quickMode === null ? null
       : ["conservative", "balanced", "aggressive"].includes(input?.quickMode) ? input.quickMode
       : d.quickMode,
+    injectionStrategy: ["fallback", "macro_only", "disabled"].includes(input?.injectionStrategy)
+      ? input.injectionStrategy
+      : d.injectionStrategy,
   };
 }
 
@@ -2206,10 +2249,47 @@ export async function testEmbeddingConfig(
 }
 
 export async function deleteWorldBookEntryEmbeddings(userId: string, entryId: string): Promise<void> {
-  await deleteWorldBookEntryRows(userId, [entryId]);
+  await deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, [entryId], () => {});
 }
 
-async function deleteWorldBookEntryRows(userId: string, entryIds: string[]): Promise<void> {
+const worldBookEntryVectorCommitTails = new Map<string, Promise<void>>();
+
+async function acquireWorldBookEntryVectorCommitLock(key: string): Promise<() => void> {
+  const previous = worldBookEntryVectorCommitTails.get(key) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const tail = previous.then(() => current, () => current);
+  worldBookEntryVectorCommitTails.set(key, tail);
+  await previous.catch(() => {});
+
+  return () => {
+    releaseCurrent();
+    if (worldBookEntryVectorCommitTails.get(key) === tail) {
+      worldBookEntryVectorCommitTails.delete(key);
+    }
+  };
+}
+
+async function withWorldBookEntryVectorCommitLocks<T>(
+  userId: string,
+  entryIds: string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = Array.from(new Set(entryIds.map((entryId) => JSON.stringify([userId, entryId])))).sort();
+  const releases: Array<() => void> = [];
+  try {
+    for (const key of keys) {
+      releases.push(await acquireWorldBookEntryVectorCommitLock(key));
+    }
+    return await fn();
+  } finally {
+    for (let i = releases.length - 1; i >= 0; i--) releases[i]();
+  }
+}
+
+async function deleteWorldBookEntryRowsUnlocked(userId: string, entryIds: string[]): Promise<void> {
   if (entryIds.length === 0) return;
   await deleteStoreRows("embeddings_world_books", andFilter([
     eq("user_id", userId),
@@ -2218,9 +2298,54 @@ async function deleteWorldBookEntryRows(userId: string, entryIds: string[]): Pro
   ]));
 }
 
-async function deleteWorldBookEntryEmbeddingsBatch(userId: string, entryIds: string[]): Promise<void> {
-  if (entryIds.length === 0) return;
-  await deleteWorldBookEntryRows(userId, entryIds);
+async function deleteWorldBookRowsUnlocked(userId: string, worldBookIds: string[]): Promise<void> {
+  if (worldBookIds.length === 0) return;
+  await deleteStoreRows("embeddings_world_books", andFilter([
+    eq("user_id", userId),
+    eq("source_type", "world_book_entry"),
+    inSet("owner_id", worldBookIds),
+  ]));
+}
+
+async function coordinateWorldBookVectorAndSourceDelete<T>(
+  userId: string,
+  lockEntryIds: string[],
+  deleteVectors: () => Promise<void>,
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  return withWorldBookEntryVectorCommitLocks(userId, lockEntryIds, async () => {
+    await deleteVectors();
+    return await deleteSource();
+  });
+}
+
+export async function deleteWorldBookEntryEmbeddingsBeforeSourceDelete<T>(
+  userId: string,
+  entryIds: string[],
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  const uniqueEntryIds = Array.from(new Set(entryIds));
+  return coordinateWorldBookVectorAndSourceDelete(
+    userId,
+    uniqueEntryIds,
+    () => deleteWorldBookEntryRowsUnlocked(userId, uniqueEntryIds),
+    deleteSource,
+  );
+}
+
+export async function deleteWorldBookEmbeddingsBeforeSourceDelete<T>(
+  userId: string,
+  worldBookIds: string[],
+  lockEntryIds: string[],
+  deleteSource: () => T | Promise<T>,
+): Promise<T> {
+  const uniqueWorldBookIds = Array.from(new Set(worldBookIds));
+  return coordinateWorldBookVectorAndSourceDelete(
+    userId,
+    Array.from(new Set(lockEntryIds)),
+    () => deleteWorldBookRowsUnlocked(userId, uniqueWorldBookIds),
+    deleteSource,
+  );
 }
 
 function getDesiredWorldBookVectorStatus(entry: WorldBookEntry): WorldBookVectorIndexStatus {
@@ -2359,6 +2484,141 @@ async function filterCurrentWorldBookEntriesForWrite(
   });
 }
 
+function updateWorldBookEntriesVectorStateIfCurrent(
+  userId: string,
+  entries: WorldBookEntry[],
+  status: WorldBookVectorIndexStatus,
+  indexedAt: number | null,
+  error: string | null,
+): string[] {
+  if (entries.length === 0) return [];
+  const db = getDb();
+  const updatedIds: string[] = [];
+  const stmt = db.query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ?, vector_indexed_at = ?, vector_index_error = ?
+     WHERE id = ?
+       AND world_book_id = ?
+       AND content = ?
+       AND comment = ?
+       AND key = ?
+       AND keysecondary = ?
+       AND vectorized = ?
+       AND disabled = ?
+       AND updated_at = ?
+       AND world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
+  );
+  const apply = db.transaction(() => {
+    for (const entry of entries) {
+      const result = stmt.run(
+        status,
+        indexedAt,
+        error,
+        entry.id,
+        entry.world_book_id,
+        String(entry.content || ""),
+        String(entry.comment || ""),
+        JSON.stringify(Array.isArray(entry.key) ? entry.key : []),
+        JSON.stringify(Array.isArray(entry.keysecondary) ? entry.keysecondary : []),
+        entry.vectorized ? 1 : 0,
+        entry.disabled ? 1 : 0,
+        Number(entry.updated_at ?? 0),
+        userId,
+      );
+      if (result.changes > 0) updatedIds.push(entry.id);
+    }
+  });
+  apply();
+  return updatedIds;
+}
+
+interface WorldBookVectorCommitWrite {
+  entry: WorldBookEntry;
+  rows: EmbeddingRow[];
+}
+
+interface WorldBookVectorCommitDependencies {
+  filterCurrent: (
+    userId: string,
+    entries: WorldBookEntry[],
+    settingsFingerprint: string,
+    configFingerprint: string,
+  ) => Promise<WorldBookEntry[]>;
+  deleteRows: (userId: string, entryIds: string[]) => Promise<void>;
+  upsertRows: (rows: EmbeddingRow[]) => Promise<void>;
+  markIndexedIfCurrent: (userId: string, entries: WorldBookEntry[], indexedAt: number) => Promise<string[]> | string[];
+}
+
+interface WorldBookVectorCommitResult {
+  indexedIds: string[];
+  staleIds: string[];
+}
+
+const defaultWorldBookVectorCommitDependencies: WorldBookVectorCommitDependencies = {
+  filterCurrent: filterCurrentWorldBookEntriesForWrite,
+  deleteRows: deleteWorldBookEntryRowsUnlocked,
+  upsertRows: (rows) => upsertStoreRows("embeddings_world_books", rows),
+  markIndexedIfCurrent: (userId, entries, indexedAt) =>
+    updateWorldBookEntriesVectorStateIfCurrent(userId, entries, "indexed", indexedAt, null),
+};
+
+async function commitWorldBookVectorWritesIfCurrent(
+  userId: string,
+  writes: WorldBookVectorCommitWrite[],
+  settingsFingerprint: string,
+  configFingerprint: string,
+  indexedAt: number,
+  dependencies: WorldBookVectorCommitDependencies = defaultWorldBookVectorCommitDependencies,
+): Promise<WorldBookVectorCommitResult> {
+  const writesByEntryId = new Map(writes.map((write) => [write.entry.id, write] as const));
+  const requestedIds = Array.from(writesByEntryId.keys());
+  if (requestedIds.length === 0) return { indexedIds: [], staleIds: [] };
+
+  return withWorldBookEntryVectorCommitLocks(userId, requestedIds, async () => {
+    const requestedEntries = Array.from(writesByEntryId.values()).map((write) => write.entry);
+    const stableBeforeWrite = await dependencies.filterCurrent(
+      userId,
+      requestedEntries,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    const stableBeforeIds = new Set(stableBeforeWrite.map((entry) => entry.id));
+    const staleIds = requestedIds.filter((entryId) => !stableBeforeIds.has(entryId));
+    if (stableBeforeWrite.length === 0) return { indexedIds: [], staleIds };
+
+    const rows = stableBeforeWrite.flatMap((entry) => writesByEntryId.get(entry.id)?.rows ?? []);
+    const writtenIds = stableBeforeWrite.map((entry) => entry.id);
+    await dependencies.deleteRows(userId, writtenIds);
+    await dependencies.upsertRows(rows);
+
+    const stableAfterWrite = await dependencies.filterCurrent(
+      userId,
+      stableBeforeWrite,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    const indexedIds = await dependencies.markIndexedIfCurrent(userId, stableAfterWrite, indexedAt);
+    const indexedIdSet = new Set(indexedIds);
+    const staleAfterWrite = writtenIds.filter((entryId) => !indexedIdSet.has(entryId));
+    if (staleAfterWrite.length > 0) {
+      await dependencies.deleteRows(userId, staleAfterWrite);
+      staleIds.push(...staleAfterWrite);
+    }
+
+    return { indexedIds, staleIds: Array.from(new Set(staleIds)) };
+  });
+}
+
+export const __test__ = {
+  collectWorldBookHitsByUniqueSource,
+  collapseWorldBookHitsBySource,
+  worldBookSourceExclusionFilters,
+  commitWorldBookVectorWritesIfCurrent,
+  coordinateWorldBookVectorAndSourceDelete,
+  updateWorldBookEntriesVectorStateIfCurrent,
+  withWorldBookEntryVectorCommitLocks,
+};
+
 export async function markWorldBookEntriesVectorErrorIfCurrent(
   userId: string,
   entries: WorldBookEntry[],
@@ -2366,16 +2626,23 @@ export async function markWorldBookEntriesVectorErrorIfCurrent(
   settingsFingerprint: string,
   configFingerprint: string,
 ): Promise<number> {
-  const stableEntries = await filterCurrentWorldBookEntriesForWrite(userId, entries, settingsFingerprint, configFingerprint);
-  if (stableEntries.length === 0) return 0;
-  const stableIds = stableEntries.map((entry) => entry.id);
-  try {
-    await deleteWorldBookEntryEmbeddingsBatch(userId, stableIds);
-  } catch (err) {
-    console.warn("[embeddings] Failed to delete stale world-book vectors while marking error:", err);
-  }
-  updateWorldBookEntriesVectorState(stableIds, "error", null, error);
-  return stableIds.length;
+  return withWorldBookEntryVectorCommitLocks(userId, entries.map((entry) => entry.id), async () => {
+    const stableEntries = await filterCurrentWorldBookEntriesForWrite(userId, entries, settingsFingerprint, configFingerprint);
+    if (stableEntries.length === 0) return 0;
+    const stableIds = stableEntries.map((entry) => entry.id);
+    try {
+      await deleteWorldBookEntryRowsUnlocked(userId, stableIds);
+    } catch (err) {
+      console.warn("[embeddings] Failed to delete stale world-book vectors while marking error:", err);
+    }
+    const currentAfterDelete = await filterCurrentWorldBookEntriesForWrite(
+      userId,
+      stableEntries,
+      settingsFingerprint,
+      configFingerprint,
+    );
+    return updateWorldBookEntriesVectorStateIfCurrent(userId, currentAfterDelete, "error", null, error).length;
+  });
 }
 
 export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBookEntry): Promise<void> {
@@ -2409,11 +2676,17 @@ export async function syncWorldBookEntryEmbedding(userId: string, entry: WorldBo
       return;
     }
     const rows = buildWorldBookEmbeddingRows(userId, stableEntry, chunks, vectors, now);
-
-    await deleteWorldBookEntryRows(userId, [stableEntry.id]);
-    await upsertStoreRows("embeddings_world_books", rows);
-
-    updateWorldBookEntryVectorState(stableEntry.id, "indexed", now, null);
+    const commit = await commitWorldBookVectorWritesIfCurrent(
+      userId,
+      [{ entry: stableEntry, rows }],
+      settingsFingerprint,
+      configFingerprint,
+      now,
+    );
+    if (commit.indexedIds.length === 0) {
+      console.info("[embeddings] Discarded stale world-book vector commit for entry=%s", entry.id.slice(0, 8));
+      return;
+    }
     await scheduleStoreOptimize("world_book");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Vector indexing failed";
@@ -2570,22 +2843,31 @@ export async function reindexWorldBookEntries(
         );
       }
 
-      const rows: EmbeddingRow[] = [];
-      for (const group of stableGroups) {
-        rows.push(...buildWorldBookEmbeddingRows(
+      const writes = stableGroups.map((group) => ({
+        entry: group.entry,
+        rows: buildWorldBookEmbeddingRows(
           userId,
           group.entry,
           group.chunks,
           vectorSlices.get(group.entry.id) ?? [],
           now,
-        ));
+        ),
+      }));
+      const commit = await commitWorldBookVectorWritesIfCurrent(
+        userId,
+        writes,
+        settingsFingerprint,
+        configFingerprint,
+        now,
+      );
+      if (commit.staleIds.length > 0) {
+        console.info(
+          "[embeddings] Discarded %d stale world-book vector commit%s after write validation",
+          commit.staleIds.length,
+          commit.staleIds.length === 1 ? "" : "s",
+        );
       }
-
-      await deleteWorldBookEntryRows(userId, stableGroups.map((group) => group.entry.id));
-      await upsertStoreRows("embeddings_world_books", rows);
-
-      updateWorldBookEntriesVectorState(stableGroups.map((group) => group.entry.id), "indexed", now, null);
-      progress.indexed += stableGroups.length;
+      progress.indexed += commit.indexedIds.length;
       progress.current += groups.length;
       emitProgress();
     } catch (err) {
@@ -2656,6 +2938,65 @@ export async function searchWorldBookEntries(
   }));
 }
 
+function worldBookSourceExclusionFilters(sourceIds: Set<string>): VectorFilter[] {
+  const ids = Array.from(sourceIds);
+  const filters: VectorFilter[] = [];
+  for (let i = 0; i < ids.length; i += MAX_SOURCE_FILTER_IDS) {
+    filters.push(notInSet("source_id", ids.slice(i, i + MAX_SOURCE_FILTER_IDS)));
+  }
+  return filters;
+}
+
+async function collectWorldBookHitsByUniqueSource(
+  baseFilter: VectorFilter,
+  targetLimit: number,
+  search: (filter: VectorFilter) => Promise<VectorHit[]>,
+  signal?: AbortSignal,
+): Promise<VectorHit[]> {
+  const hits: VectorHit[] = [];
+  const seenSourceIds = new Set<string>();
+
+  while (seenSourceIds.size < targetLimit && !signal?.aborted) {
+    const filter = andFilter([
+      baseFilter,
+      ...worldBookSourceExclusionFilters(seenSourceIds),
+    ]);
+    const batch = await search(filter);
+    if (batch.length === 0 || signal?.aborted) break;
+
+    let addedSource = false;
+    for (const hit of batch) {
+      const sourceId = String(hit.source_id || "");
+      if (!sourceId || seenSourceIds.has(sourceId)) continue;
+      seenSourceIds.add(sourceId);
+      addedSource = true;
+    }
+    hits.push(...batch);
+
+    // A provider that ignores the exclusion filter would otherwise loop
+    // forever on the same entry's chunks.
+    if (!addedSource) break;
+  }
+
+  return hits;
+}
+
+function collapseWorldBookHitsBySource(
+  hits: VectorHit[],
+  score: "similarity" | "lexicalScore",
+): VectorHit[] {
+  const strongest = new Map<string, VectorHit>();
+  for (const hit of hits) {
+    const sourceId = String(hit.source_id || "");
+    if (!sourceId) continue;
+    const existing = strongest.get(sourceId);
+    const value = hit[score] ?? Number.NEGATIVE_INFINITY;
+    const existingValue = existing?.[score] ?? Number.NEGATIVE_INFINITY;
+    if (!existing || value > existingValue) strongest.set(sourceId, hit);
+  }
+  return Array.from(strongest.values());
+}
+
 /**
  * Search world book entries using a pre-computed vector and optional query text,
  * returning enough metadata to rerank candidates deterministically.
@@ -2663,7 +3004,7 @@ export async function searchWorldBookEntries(
 export async function searchWorldBookEntriesHybridWithVector(
   userId: string,
   worldBookId: string,
-  queryText: string,
+  queryText: string | string[],
   vector: number[],
   requestedLimit = 8,
   hybridWeightMode?: EmbeddingConfig["hybrid_weight_mode"],
@@ -2673,7 +3014,10 @@ export async function searchWorldBookEntriesHybridWithVector(
   await ensureWorldBookVectorVersion(userId);
   if (signal?.aborted) return [];
 
-  const trimmedQuery = queryText.trim();
+  const lexicalQueries = (Array.isArray(queryText) ? queryText : [queryText])
+    .map((value) => value.trim())
+    .filter((value, index, values) => value.length > 0 && values.indexOf(value) === index);
+  const fallbackQuery = lexicalQueries[0] ?? "";
   const filter = ownerScope(userId, "world_book_entry", worldBookId);
   const finalLimit = Math.max(
     1,
@@ -2688,79 +3032,20 @@ export async function searchWorldBookEntriesHybridWithVector(
     : Math.min(200, Math.max(finalLimit * 3, finalLimit));
 
   const store = await getActiveVectorStore();
-  const nativeHybridSearch = store.hybridSearch?.bind(store);
-  const canUseNativeHybrid = !!nativeHybridSearch && !!trimmedQuery && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical;
-  let vectorRows = canUseNativeHybrid
-    ? await nativeHybridSearch({
-      collection: "embeddings_world_books",
-      vector,
-      queryText: trimmedQuery,
-      filter,
-      limit: candidateLimit,
-      withVector: false,
-      refine: true,
-      signal,
-    })
-    : await store.vectorSearch({
-      collection: "embeddings_world_books",
-      vector,
-      filter,
-      limit: candidateLimit,
-      withVector: false,
-      refine: true,
-      signal,
-    });
-
-  if (vectorRows.length === 0 && canUseNativeHybrid && !signal?.aborted) {
-    try {
-      const denseFallbackRows = await store.vectorSearch({
+  let vectorRows = await collectWorldBookHitsByUniqueSource(
+    filter,
+    candidateLimit,
+    (searchFilter) => store.vectorSearch({
         collection: "embeddings_world_books",
         vector,
-        filter,
+        filter: searchFilter,
         limit: candidateLimit,
         withVector: false,
         refine: true,
         signal,
-      });
-      if (denseFallbackRows.length > 0) {
-        let recoveredRows = denseFallbackRows;
-        if (trimmedQuery && store.capabilities.nativeLexical) {
-          const lexicalRows = await store.lexicalSearch({
-            collection: "embeddings_world_books",
-            queryText: trimmedQuery,
-            filter,
-            limit: candidateLimit,
-            withVector: false,
-            signal,
-          }).catch((err) => {
-            console.warn(
-              "[embeddings] WI lexical fallback failed after native hybrid miss for book=%s in provider=%s: %s",
-              worldBookId.slice(0, 8),
-              store.id,
-              err instanceof Error ? err.message : String(err),
-            );
-            return [] as VectorHit[];
-          });
-          recoveredRows = reciprocalRankFusion(denseFallbackRows, lexicalRows).slice(0, candidateLimit);
-        }
-        vectorRows = recoveredRows;
-        console.warn(
-          "[embeddings] WI vector search: native hybrid returned 0 rows for book=%s (provider=%s, limit=%d); dense fallback recovered %d row(s)",
-          worldBookId.slice(0, 8),
-          store.id,
-          finalLimit,
-          vectorRows.length,
-        );
-      }
-    } catch (err) {
-      console.warn(
-        "[embeddings] WI dense fallback failed after native hybrid miss for book=%s in provider=%s: %s",
-        worldBookId.slice(0, 8),
-        store.id,
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-  }
+      }),
+    signal,
+  );
 
   if (vectorRows.length === 0 && !signal?.aborted) {
     const fallback = await recoverWorldBookScopedRowsFromStore(
@@ -2768,7 +3053,7 @@ export async function searchWorldBookEntriesHybridWithVector(
       filter,
       vector,
       candidateLimit,
-      trimmedQuery,
+      fallbackQuery,
       signal,
     );
 
@@ -2805,6 +3090,7 @@ export async function searchWorldBookEntriesHybridWithVector(
         entry_id: entryId,
         distance,
         lexical_score: existing?.lexical_score ?? null,
+        lexical_strength: existing?.lexical_strength ?? 0,
         content: String(row.content || ""),
         searchTextPreview: typeof metadata.search_text === "string" ? metadata.search_text : existing?.searchTextPreview || "",
         metadata: { ...(existing?.metadata ?? {}), ...metadata },
@@ -2812,18 +3098,30 @@ export async function searchWorldBookEntriesHybridWithVector(
     }
   }
 
-  if (!canUseNativeHybrid && trimmedQuery && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical && !signal?.aborted) {
-    try {
-      const lexicalRows = await store.lexicalSearch({
-        collection: "embeddings_world_books",
-        queryText: trimmedQuery,
-        filter,
-        limit: candidateLimit,
-        withVector: false,
-        signal,
-      });
+  if (lexicalQueries.length > 0 && hybridWeightMode !== "vector_first" && store.capabilities.nativeLexical && !signal?.aborted) {
+    for (const lexicalQuery of lexicalQueries) {
+      try {
+        const lexicalRows = collapseWorldBookHitsBySource(
+          await collectWorldBookHitsByUniqueSource(
+            filter,
+            candidateLimit,
+            (searchFilter) => store.lexicalSearch({
+              collection: "embeddings_world_books",
+              queryText: lexicalQuery,
+              filter: searchFilter,
+              limit: candidateLimit,
+              withVector: false,
+              signal,
+            }),
+            signal,
+          ),
+          "lexicalScore",
+        );
+        const strengths = normalizeBm25Scores(lexicalRows.map((row) => row.lexicalScore));
 
-      for (const row of lexicalRows) {
+        for (let index = 0; index < lexicalRows.length; index += 1) {
+          const row = lexicalRows[index];
+          const lexicalStrength = strengths[index] ?? 0;
         const entryId = String(row.source_id);
         const metadata = parseWorldBookEmbeddingMetadata(row.metadata_json);
         const lexicalScore = row.lexicalScore;
@@ -2833,6 +3131,7 @@ export async function searchWorldBookEntriesHybridWithVector(
           if (lexicalScore !== null && (existing.lexical_score === null || lexicalScore > existing.lexical_score)) {
             existing.lexical_score = lexicalScore;
           }
+          existing.lexical_strength = Math.max(existing.lexical_strength ?? 0, lexicalStrength);
           if (!existing.searchTextPreview && typeof metadata.search_text === "string") {
             existing.searchTextPreview = metadata.search_text;
           }
@@ -2847,25 +3146,32 @@ export async function searchWorldBookEntriesHybridWithVector(
             entry_id: entryId,
             distance: Number.POSITIVE_INFINITY,
             lexical_score: lexicalScore,
+            lexical_strength: lexicalStrength,
             content: String(row.content || ""),
             searchTextPreview: typeof metadata.search_text === "string" ? metadata.search_text : "",
             metadata,
           });
         }
-      }
-    } catch (err) {
-      if (!signal?.aborted && (err as any)?.name !== "AbortError") {
-        console.warn("[embeddings] World-book FTS candidate fetch failed:", err);
+        }
+      } catch (err) {
+        if (!signal?.aborted && (err as any)?.name !== "AbortError") {
+          console.warn("[embeddings] World-book FTS candidate fetch failed:", err);
+        }
       }
     }
   }
 
-  return Array.from(merged.values())
+  const rankedCandidates = Array.from(merged.values())
     .sort((a, b) => {
       if (a.distance !== b.distance) return a.distance - b.distance;
-      return (b.lexical_score ?? Number.NEGATIVE_INFINITY) - (a.lexical_score ?? Number.NEGATIVE_INFINITY);
-    })
-    .slice(0, finalLimit);
+      if ((b.lexical_strength ?? 0) !== (a.lexical_strength ?? 0)) {
+        return (b.lexical_strength ?? 0) - (a.lexical_strength ?? 0);
+      }
+      return a.entry_id.localeCompare(b.entry_id);
+    });
+  return options?.expandLimit === false
+    ? rankedCandidates
+    : rankedCandidates.slice(0, finalLimit);
 }
 
 async function recoverWorldBookScopedRowsFromStore(
@@ -2891,7 +3197,7 @@ async function recoverWorldBookScopedRowsFromStore(
     scanLimit,
   ).catch(() => [] as VectorRow[]);
 
-  const denseHits = storedRows
+  const denseHits = collapseWorldBookHitsBySource(storedRows
     .filter((row) => row.vector.length === queryVector.length && row.vector.length > 0)
     .map((row) => ({
       id: row.id,
@@ -2901,7 +3207,7 @@ async function recoverWorldBookScopedRowsFromStore(
       similarity: cosineSimilarity(queryVector, row.vector),
       lexicalScore: null,
       vector: null,
-    } satisfies VectorHit))
+    } satisfies VectorHit)), "similarity")
     .sort((a, b) => (b.similarity ?? Number.NEGATIVE_INFINITY) - (a.similarity ?? Number.NEGATIVE_INFINITY))
     .slice(0, limit);
 
@@ -2913,17 +3219,25 @@ async function recoverWorldBookScopedRowsFromStore(
     };
   }
 
-  const lexicalHits = await store.lexicalSearch({
-    collection: "embeddings_world_books",
-    queryText,
+  const lexicalHits = await collectWorldBookHitsByUniqueSource(
     filter,
     limit,
-    withVector: false,
+    (searchFilter) => store.lexicalSearch({
+      collection: "embeddings_world_books",
+      queryText,
+      filter: searchFilter,
+      limit,
+      withVector: false,
+      signal,
+    }),
     signal,
-  }).catch(() => [] as VectorHit[]);
+  ).catch(() => [] as VectorHit[]);
 
   return {
-    hits: reciprocalRankFusion(denseHits, lexicalHits).slice(0, limit),
+    hits: reciprocalRankFusion(
+      denseHits,
+      collapseWorldBookHitsBySource(lexicalHits, "lexicalScore"),
+    ).slice(0, limit),
     scopedRowCount,
     truncated: scopedRowCount > scanLimit,
   };

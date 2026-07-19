@@ -200,6 +200,7 @@ export function getReasoningBindingSummary(settings: ReasoningSettings, promptBi
 
   if (!settings.autoParse) parts.push('manual parse')
   if (settings.thinkingDisplay !== 'auto') parts.push(`display ${settings.thinkingDisplay}`)
+  if (settings.customBody?.enabled) parts.push('custom body on')
 
   if (typeof promptBias === 'string') {
     parts.push(promptBias.trim() ? `prefill ${formatTagValue(promptBias)}` : 'no prefill')
@@ -228,4 +229,9 @@ export function areReasoningSettingsEqual(a: ReasoningSettings, b: ReasoningSett
     && a.reasoningEffort === b.reasoningEffort
     && a.keepInHistory === b.keepInHistory
     && a.thinkingDisplay === b.thinkingDisplay
+    && (a.customBody?.enabled ?? false) === (b.customBody?.enabled ?? false)
+    && (
+      !(a.customBody?.enabled ?? false)
+      || a.customBody?.rawJson === b.customBody?.rawJson
+    )
 }

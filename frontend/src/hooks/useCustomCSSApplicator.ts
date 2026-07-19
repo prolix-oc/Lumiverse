@@ -4,6 +4,7 @@ import { validateCSS, sanitizeCSS } from '@/lib/cssValidator'
 import { rewriteThemeAssetUrls } from '@/lib/themeAssetCss'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
+import { isSafeThemeMode } from '@/lib/safeThemeMode'
 
 const STYLE_ID = 'lumiverse-user-css'
 
@@ -23,6 +24,7 @@ function getOrCreateStyleElement(): HTMLStyleElement {
  * can override the app's unlayered CSS modules without requiring !important.
  */
 export function useCustomCSSApplicator() {
+  const safeThemeMode = isSafeThemeMode()
   const customCSS = useStore((s) => s.customCSS)
   const componentOverrides = useStore((s) => s.componentOverrides)
   const toggleCustomCSS = useStore((s) => s.toggleCustomCSS)
@@ -37,13 +39,13 @@ export function useCustomCSSApplicator() {
       const parts: string[] = []
 
       // Global CSS (independent toggle)
-      if (customCSS.enabled && customCSS.css.trim()) {
+      if (!safeThemeMode && customCSS.enabled && customCSS.css.trim()) {
         parts.push(rewriteThemeAssetUrls(sanitizeCSS(customCSS.css), customCSS.bundleId))
       }
 
       // Per-component CSS — each override has its own toggle, independent of global
       for (const [, override] of Object.entries(componentOverrides)) {
-        if (override.enabled && override.css?.trim()) {
+        if (!safeThemeMode && override.enabled && override.css?.trim()) {
           parts.push(rewriteThemeAssetUrls(sanitizeCSS(override.css), customCSS.bundleId))
         }
       }
@@ -74,7 +76,7 @@ export function useCustomCSSApplicator() {
       // the previously-applied CSS in place instead of crashing.
       toast.error(i18n.t('common.toast.customCssError', { error: (err as Error).message }))
     }
-  }, [customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
+  }, [safeThemeMode, customCSS.bundleId, customCSS.css, customCSS.enabled, customCSS.revision, componentOverrides])
 
   // Cleanup on unmount
   useEffect(() => {

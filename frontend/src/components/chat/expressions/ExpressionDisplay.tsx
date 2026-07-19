@@ -178,6 +178,27 @@ export default function ExpressionDisplay() {
 
   const isGroupExpressionMode = isGroupChat && groupExpressionCharIds.length > 0
 
+  const getGroupCharImageUrl = useCallback((charId: string): string | null => {
+    const expr = groupExpressions[charId]
+    if (expr?.imageId) return expressionsApi.imageUrl(expr.imageId)
+    // Fall back to default expression from config
+    const config = groupConfigs.get(charId)
+    if (!config) return null
+    const defaultLabel = config.defaultExpression
+    if (defaultLabel && config.mappings[defaultLabel]) {
+      return expressionsApi.imageUrl(config.mappings[defaultLabel])
+    }
+    const firstLabel = Object.keys(config.mappings)[0]
+    if (firstLabel) return expressionsApi.imageUrl(config.mappings[firstLabel])
+    return null
+  }, [groupExpressions, groupConfigs])
+
+  const getGroupCharLabel = useCallback((charId: string): string | null => {
+    return groupExpressions[charId]?.label
+      || groupConfigs.get(charId)?.defaultExpression
+      || null
+  }, [groupExpressions, groupConfigs])
+
   // ── Sizing ──
   const [pos, setPos] = useState({ x: display.x, y: display.y })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
@@ -271,7 +292,7 @@ export default function ExpressionDisplay() {
       const url = getGroupCharImageUrl(charId)
       if (url) preloadImage(url)
     }
-  }, [isGroupExpressionMode, groupExpressionCharIds, groupExpressions, groupConfigs, preloadImage])
+  }, [isGroupExpressionMode, groupExpressionCharIds, groupExpressions, groupConfigs, preloadImage, getGroupCharImageUrl])
 
   const clampPos = useCallback(
     (x: number, y: number) => {
@@ -397,28 +418,6 @@ export default function ExpressionDisplay() {
     const n = groupExpressionCharIds.length
     return size.width * (1 - Math.max(0.45, 0.75 - 0.1 * Math.max(0, n - 2)))
   }, [isGroupExpressionMode, groupExpressionCharIds.length, size.width])
-
-  // ── Group helpers ──
-  function getGroupCharImageUrl(charId: string): string | null {
-    const expr = groupExpressions[charId]
-    if (expr?.imageId) return expressionsApi.imageUrl(expr.imageId)
-    // Fall back to default expression from config
-    const config = groupConfigs.get(charId)
-    if (!config) return null
-    const defaultLabel = config.defaultExpression
-    if (defaultLabel && config.mappings[defaultLabel]) {
-      return expressionsApi.imageUrl(config.mappings[defaultLabel])
-    }
-    const firstLabel = Object.keys(config.mappings)[0]
-    if (firstLabel) return expressionsApi.imageUrl(config.mappings[firstLabel])
-    return null
-  }
-
-  function getGroupCharLabel(charId: string): string | null {
-    return groupExpressions[charId]?.label
-      || groupConfigs.get(charId)?.defaultExpression
-      || null
-  }
 
   const directGroupMenuCharId = useMemo(() => {
     if (menuTargetCharId && groupConfigs.has(menuTargetCharId)) return menuTargetCharId
@@ -611,6 +610,7 @@ export default function ExpressionDisplay() {
     groupExpressionCharIds,
     characters,
     groupConfigs,
+    getGroupCharLabel,
     directGroupMenuCharId,
     isGroupExpressionMode,
     hasExpressions,

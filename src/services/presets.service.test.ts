@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
-import { getPreset, getPresetUpdatedAt, getPresetRegistrySignature } from "./presets.service";
+import { getPreset, getPresetCacheRevision, getPresetRegistrySignature, updatePreset } from "./presets.service";
+import { PresetRevisionConflictError } from "../types/preset";
 
 function initPresetsTestDb(): void {
   closeDatabase();
@@ -16,7 +17,8 @@ function initPresetsTestDb(): void {
     updated_at INTEGER NOT NULL DEFAULT 0,
     prompts TEXT NOT NULL DEFAULT '{}',
     user_id TEXT,
-    engine TEXT NOT NULL DEFAULT 'classic'
+    engine TEXT NOT NULL DEFAULT 'classic',
+    cache_revision INTEGER NOT NULL DEFAULT 0
   )`);
 }
 
@@ -74,6 +76,7 @@ describe("presets.service — ETag sources + row trim", () => {
     expect(preset!.prompt_order).toEqual([{ id: "b1" }]);
     expect(preset!.engine).toBe("loom");
     expect(preset!.updated_at).toBe(100);
+    expect(preset!.cache_revision).toBe(0);
   });
 
   test("getPreset is scoped to the owning user", () => {
@@ -81,29 +84,87 @@ describe("presets.service — ETag sources + row trim", () => {
     expect(getPreset("u2", "p1")).toBeNull();
   });
 
-  test("getPresetUpdatedAt returns updated_at, null for missing or other-user", () => {
-    insertPreset({ id: "p1", name: "A", provider: "openai", user_id: "u1", updated_at: 42 });
-    expect(getPresetUpdatedAt("u1", "p1")).toBe(42);
-    expect(getPresetUpdatedAt("u1", "missing")).toBeNull();
-    expect(getPresetUpdatedAt("u2", "p1")).toBeNull();
-  });
 
-  test("registry signature reflects count + max(updated_at), scoped by user and provider", () => {
+  test("registry signatures are scoped by user and filters", () => {
     insertPreset({ id: "p1", name: "A", provider: "openai", user_id: "u1", updated_at: 100 });
     insertPreset({ id: "p2", name: "B", provider: "loom", user_id: "u1", updated_at: 250 });
     insertPreset({ id: "p3", name: "C", provider: "loom", user_id: "u2", updated_at: 999 });
 
-    expect(getPresetRegistrySignature("u1")).toEqual({ count: 2, maxUpdatedAt: 250 });
-    expect(getPresetRegistrySignature("u1", "loom")).toEqual({ count: 1, maxUpdatedAt: 250 });
-    expect(getPresetRegistrySignature("u1", "anthropic")).toEqual({ count: 0, maxUpdatedAt: 0 });
+    const all = getPresetRegistrySignature("u1");
+    const loom = getPresetRegistrySignature("u1", "loom");
+    const empty = getPresetRegistrySignature("u1", "anthropic");
+    expect(all).not.toBe(loom);
+    expect(loom).not.toBe(empty);
+    expect(empty).not.toBe(getPresetRegistrySignature("u2", "anthropic"));
+    expect(empty).toBe(getPresetRegistrySignature("u1", "anthropic"));
   });
 
-  test("registry signature changes when a preset is edited (drives ETag invalidation)", () => {
+  test("registry signature changes for a same-second non-maximum edit", () => {
     insertPreset({ id: "p1", name: "A", provider: "loom", user_id: "u1", updated_at: 100 });
+    insertPreset({ id: "p2", name: "B", provider: "loom", user_id: "u1", updated_at: 250 });
     const before = getPresetRegistrySignature("u1", "loom");
-    getDb().run("UPDATE presets SET updated_at = ? WHERE id = ?", [500, "p1"]);
+    getDb().run("UPDATE presets SET cache_revision = ? WHERE id = ?", [1, "p1"]);
     const after = getPresetRegistrySignature("u1", "loom");
-    expect(after.maxUpdatedAt).toBeGreaterThan(before.maxUpdatedAt);
-    expect(after.count).toBe(before.count);
+    expect(after).not.toBe(before);
+  });
+
+  test("registry signature changes for a same-timestamp delete/create replacement", () => {
+    insertPreset({ id: "p1", name: "A", provider: "loom", user_id: "u1", updated_at: 250 });
+    const before = getPresetRegistrySignature("u1", "loom");
+    getDb().run("DELETE FROM presets WHERE id = ?", ["p1"]);
+    insertPreset({ id: "p2", name: "B", provider: "loom", user_id: "u1", updated_at: 250 });
+    expect(getPresetRegistrySignature("u1", "loom")).not.toBe(before);
+  });
+
+  test("updatePreset increments a dedicated cache revision without distorting timestamps", () => {
+    insertPreset({ id: "p1", name: "A", provider: "loom", user_id: "u1", updated_at: 2_000_000_000 });
+    const first = updatePreset("u1", "p1", { name: "B" });
+    const second = updatePreset("u1", "p1", { name: "C" });
+    expect(first?.updated_at).toBeLessThan(2_000_000_000);
+    expect(getPresetCacheRevision("u1", "p1")).toBe(2);
+    expect(second?.name).toBe("C");
+    expect(getPresetCacheRevision("u1", "missing")).toBeNull();
+  });
+
+  test("rejects a stale conditional writer without changing newer metadata or blocks", () => {
+    insertPreset({
+      id: "p1",
+      name: "A",
+      provider: "loom",
+      user_id: "u1",
+      prompt_order: [{ id: "original" }],
+    });
+
+    const first = updatePreset("u1", "p1", {
+      name: "newer",
+      prompt_order: [{ id: "newer-block" }],
+      expected_cache_revision: 0,
+    });
+    expect(first?.cache_revision).toBe(1);
+
+    expect(() => updatePreset("u1", "p1", {
+      metadata: { source: "stale-writer" },
+      prompt_order: [{ id: "stale-block" }],
+      expected_cache_revision: 0,
+    })).toThrow(PresetRevisionConflictError);
+
+    const current = getPreset("u1", "p1");
+    expect(current?.name).toBe("newer");
+    expect(current?.prompt_order).toEqual([{ id: "newer-block" }]);
+    expect(current?.metadata).toEqual({});
+    expect(current?.cache_revision).toBe(1);
+  });
+
+  test("rejects stale conditional no-op writers", () => {
+    insertPreset({ id: "p1", name: "A", provider: "loom", user_id: "u1" });
+    const current = updatePreset("u1", "p1", { name: "newer" });
+    expect(current?.cache_revision).toBe(1);
+
+    expect(() => updatePreset("u1", "p1", {
+      expected_cache_revision: 0,
+    })).toThrow(PresetRevisionConflictError);
+
+    expect(getPreset("u1", "p1")?.name).toBe("newer");
+    expect(getPreset("u1", "p1")?.cache_revision).toBe(1);
   });
 });

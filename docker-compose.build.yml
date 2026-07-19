@@ -38,6 +38,9 @@ services:
       - TRUST_ANY_ORIGIN=true
       # - TRUSTED_ORIGINS=https://lumiverse.example.com
 
+      # Emergency theme recovery (suppresses saved CSS/overrides without deleting them)
+      # - LUMIVERSE_SAFE_THEME=true
+
       # Encryption: auto-generated and stored in the data volume.
       # Only set these if migrating from an existing install.
       # - ENCRYPTION_KEY=

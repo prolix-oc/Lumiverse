@@ -147,7 +147,7 @@ export default function ImportPackModal({ onImport, onClose }: Props) {
 
     // Call after loop completes so modal stays open during the full batch
     if (lastImportedPack) onImport(lastImportedPack)
-  }, [selectedPacks, importing, onImport])
+  }, [selectedPacks, importing, onImport, t])
 
   // File import — unwrap { pack: {...} } wrapper if present (extension export format)
   const handleFile = useCallback(async (file: File) => {

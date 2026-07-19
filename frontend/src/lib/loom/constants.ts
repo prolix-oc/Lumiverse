@@ -145,7 +145,7 @@ export const SAMPLER_PARAMS: SamplerParam[] = [
   { key: 'maxTokens', label: 'Max Response', apiKey: 'max_tokens', type: 'int', min: 1, max: 128000, step: 1, defaultHint: 16384, unit: 'tokens', apiKeyBySource: { makersuite: 'maxOutputTokens', vertexai: 'maxOutputTokens' } },
   { key: 'contextSize', label: 'Context Size', apiKey: 'max_context_length', type: 'int', min: 1024, max: 2097152, step: 1024, defaultHint: 128000, unit: 'tokens' },
   { key: 'temperature', label: 'Temperature', apiKey: 'temperature', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 1.0 },
-  { key: 'topP', label: 'Top P', apiKey: 'top_p', type: 'float', min: 0, max: 1, step: 0.01, defaultHint: 0.95 },
+  { key: 'topP', label: 'Top P', apiKey: 'top_p', type: 'float', min: 0, max: 1, step: 0.01, defaultHint: 0.95, includeToggle: true },
   { key: 'minP', label: 'Min P', apiKey: 'min_p', type: 'float', min: 0, max: 1, step: 0.01, defaultHint: 0 },
   { key: 'topK', label: 'Top K', apiKey: 'top_k', type: 'int', min: 0, max: 500, step: 1, defaultHint: 0, includeToggle: true },
   { key: 'frequencyPenalty', label: 'Freq Penalty', apiKey: 'frequency_penalty', type: 'float', min: 0, max: 2, step: 0.01, defaultHint: 0, optIn: true },

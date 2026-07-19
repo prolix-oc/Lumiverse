@@ -3,6 +3,7 @@ import { AlertTriangle, Copy, KeyRound, Link2, Pencil, Trash2, Unlink } from 'lu
 import { Button } from '@/components/shared/FormComponents'
 import { useStore } from '@/store'
 import { ssoProvidersApi, type SsoDiscoveryResult, type SsoLinksResponse, type SsoProvider, type SsoProviderInput, type SsoProviderKind } from '@/api/sso-providers'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { startSsoPopup } from '@/lib/ssoPopup'
 import styles from './SsoProviderSettings.module.css'
 
@@ -227,8 +228,12 @@ export default function SsoProviderSettings() {
   }
 
   async function copy(text: string) {
-    await navigator.clipboard.writeText(text)
-    setSuccess('Copied to clipboard')
+    try {
+      await copyTextToClipboard(text)
+      setSuccess('Copied to clipboard')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not copy the redirect URI to the clipboard.')
+    }
   }
 
   if (!isOwner) return <div className={styles.container}>Owner access is required to configure SSO providers.</div>

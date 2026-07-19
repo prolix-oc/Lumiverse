@@ -17,6 +17,9 @@ services:
       - TRUST_ANY_ORIGIN=true
       # - TRUSTED_ORIGINS=https://lumiverse.example.com
 
+      # Emergency theme recovery (suppresses saved CSS/overrides without deleting them)
+      # - LUMIVERSE_SAFE_THEME=true
+
       # Encryption: auto-generated and stored in the data volume.
       # Only set these if migrating from an existing install.
       # - ENCRYPTION_KEY=
@@ -25,6 +28,10 @@ services:
       # Spindle extension storage limits
       # - SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES=524288000
       # - SPINDLE_EPHEMERAL_EXTENSION_DEFAULT_MAX_BYTES=52428800
+
+      # SMART disk health monitoring is enabled automatically when smartctl can
+      # reach a physical drive. Set false to disable background checks.
+      # - LUMIVERSE_SMART_MONITOR=false
 
       # ── SillyTavern Migration (uncomment to enable) ─────────────────
       # One-time automated import at startup. Bind-mount your ST folder
@@ -38,6 +45,12 @@ services:
       - lumiverse-data:/app/data
       # SillyTavern migration: bind your ST folder read-only
       # - /path/to/SillyTavern:/app/data/SillyTavern:ro
+    # SMART needs explicit host-device access. Map only the drives you intend
+    # to monitor; do not use privileged mode just for disk health checks.
+    # devices:
+    #   - /dev/sda:/dev/sda
+    # cap_add:
+    #   - SYS_RAWIO
     restart: unless-stopped
 
 volumes:

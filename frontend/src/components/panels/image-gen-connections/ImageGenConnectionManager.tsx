@@ -81,6 +81,7 @@ export default function ImageGenConnectionManager() {
 
     const storeState = useStore.getState()
     const cacheHit = storeState.imageGenProfiles.length > 0 && storeState.imageGenProviders.length > 0
+    const expectedProfilesVersion = storeState.imageGenProfilesVersion
 
     async function init() {
       if (!cacheHit) setLoading(true)
@@ -93,7 +94,7 @@ export default function ImageGenConnectionManager() {
         if (cancelled) return
 
         if (profilesResult.status === 'fulfilled') {
-          setProfiles(profilesResult.value.data)
+          setProfiles(profilesResult.value.data, expectedProfilesVersion)
         }
 
         if (providersResult.status === 'fulfilled') {

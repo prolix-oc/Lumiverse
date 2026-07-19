@@ -53,6 +53,7 @@ import type {
   RoomTurnChangedPayload,
   RoomTurnSkippedPayload,
   RoomPresencePayload,
+  SystemSmartAlertPayload,
 } from '@/types/ws-events'
 import type { Message } from '@/types/api'
 import type { ChatHeadStatus } from '@/types/store'
@@ -222,11 +223,6 @@ async function deleteEmptyGeneratedSwipe(
 
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
 const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
-
-// Set on first SYSTEM_DISK_LOW receipt to silence the rebroadcasts the
-// backend fires every 5 min while the disk stays over threshold. Module
-// scope (not state) — survives WS reconnects, resets only on full page load.
-let diskWarningShown = false
 
 interface VarChangeSummary {
   bagWideVarChange: boolean
@@ -656,9 +652,26 @@ export function useWebSocket() {
                 over: Math.abs(clip.remainingHistoryBudget).toLocaleString(),
               }),
             )
-          } else if (clip?.enabled && clip.remainingHistoryBudget <= 0 && clip.messagesDropped > 0) {
+          } else if (
+            clip?.enabled &&
+            clip.anchorActive &&
+            !clip.anchorOverflow &&
+            (state.summarization.contextAnchorWarningThresholdTokens ?? 0) > 0 &&
+            (clip.remainingBeforeAnchor ?? Number.POSITIVE_INFINITY) <= state.summarization.contextAnchorWarningThresholdTokens
+          ) {
+            toast.warning(
+              i18n.t('common.toast.contextAnchorNearLimit', {
+                remaining: Math.max(0, clip.remainingBeforeAnchor ?? 0).toLocaleString(),
+              }),
+            )
+          } else if (
+            clip?.enabled &&
+            clip.remainingHistoryBudget <= 0 &&
+            clip.messagesDropped > 0 &&
+            !state.suppressContextDropWarnings
+          ) {
             toast.warning(i18n.t('common.toast.contextNoHistoryRoom'))
-          } else if (clip?.enabled && clip.messagesDropped > 0) {
+          } else if (clip?.enabled && clip.messagesDropped > 0 && !state.suppressContextDropWarnings) {
             toast.warning(
               i18n.t('common.toast.contextClipped', {
                 count: clip.messagesDropped,
@@ -933,6 +946,7 @@ export function useWebSocket() {
                     persona_addon_states: queue.opts.persona_addon_states,
                     preset_id: queue.opts.preset_id,
                     force_preset_id: queue.opts.force_preset_id,
+                    user_input: queue.opts.user_input,
                     target_character_id: nextId,
                     generation_type: 'normal',
                   }).then((res) => {
@@ -996,6 +1010,9 @@ export function useWebSocket() {
                   prompt: ig.customPrompt,
                   negativePrompt: ig.customNegativePrompt,
                   promptPresetId: ig.activePromptPresetId ?? null,
+                  bypassCharacterLora: !!ig.bypassCharacterLora,
+                  bypassActiveLoraPreset: !!ig.bypassActiveLoraPreset,
+                  loraStrengthScale: ig.loraStrengthScale,
                   promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
                   generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
@@ -1414,6 +1431,7 @@ export function useWebSocket() {
             action: 'stop',
             processId: payload.processId,
             reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+            ...(payload.force === true ? { force: true } : {}),
           })
         }
       }),
@@ -1450,11 +1468,6 @@ export function useWebSocket() {
       }),
 
       wsClient.on(EventType.SYSTEM_DISK_LOW, (payload: { path: string; usagePercent: number; freeBytes: number; totalBytes: number; thresholdPercent: number; thresholdFreeBytes: number }) => {
-        // Backend re-emits this on every 5-min interval while the disk is
-        // over threshold so late-connecting admins still get notified. Dedupe
-        // here so existing sessions only see one toast per page-load.
-        if (diskWarningShown) return
-        diskWarningShown = true
         const formatBytes = (bytes: number): string => {
           const GIB = 1024 * 1024 * 1024
           const MIB = 1024 * 1024
@@ -1467,6 +1480,24 @@ export function useWebSocket() {
         toast.warning(
           `The disk hosting Lumiverse is ${pct}% full with ${free} free remaining. Free up space to avoid crashes — writes to memory-mapped files may fault if the disk fills.`,
           { title: 'Storage almost full', duration: 30_000 },
+        )
+      }),
+
+      wsClient.on(EventType.SYSTEM_SMART_ALERT, (payload: SystemSmartAlertPayload) => {
+        if (payload.drives.length === 0) return
+
+        const affected = payload.drives.slice(0, 3).map((drive) => {
+          const label = drive.model ? `${drive.model} (${drive.device})` : drive.device
+          const conditions = drive.conditions.slice(0, 2).map((condition) => condition.message).join('; ')
+          return conditions ? `${label}: ${conditions}` : label
+        })
+        const more = payload.drives.length > affected.length ? ` (+${payload.drives.length - affected.length} more)` : ''
+        const hasFailure = payload.drives.some((drive) => drive.status === 'failing'
+          || drive.conditions.some((condition) => condition.severity === 'failing'))
+        const toastFn = hasFailure ? toast.error : toast.warning
+        toastFn(
+          `${affected.join(' · ')}${more}. Open Settings → Operator → Disk Health for details.`,
+          { title: hasFailure ? 'Disk health failure' : 'Disk health warning', duration: 30_000 },
         )
       }),
 
@@ -1985,7 +2016,7 @@ export function useWebSocket() {
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, store])
 
   useEffect(() => {
     wsClient.setFocusedChat(activeChatId)

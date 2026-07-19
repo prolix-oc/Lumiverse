@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { defaultVectorStoreConfig, normalizeVectorStoreConfig } from "./vector-store-config.service";
+import {
+  defaultVectorStoreConfig,
+  hasSameVectorStoreCredentialTarget,
+  normalizeVectorStoreConfig,
+} from "./vector-store-config.service";
 
 describe("normalizeVectorStoreConfig", () => {
   it("defaults to lancedb for missing/invalid providers", () => {
@@ -93,5 +97,67 @@ describe("normalizeVectorStoreConfig", () => {
     } as any);
     expect(JSON.stringify(cfg)).not.toContain("secret");
     expect((cfg as any).qdrant_api_key).toBeUndefined();
+  });
+
+  it("reuses Qdrant credentials only for the same URL", () => {
+    const active = normalizeVectorStoreConfig({
+      provider: "qdrant",
+      qdrant: { url: "https://qdrant.example:6333", collectionPrefix: "old_" },
+    });
+    const sameTarget = normalizeVectorStoreConfig({
+      provider: "qdrant",
+      qdrant: { url: "https://qdrant.example:6333/", collectionPrefix: "new_" },
+    });
+    const attackerTarget = normalizeVectorStoreConfig({
+      provider: "qdrant",
+      qdrant: { url: "https://attacker.example:6333" },
+    });
+
+    expect(hasSameVectorStoreCredentialTarget(sameTarget, active, "qdrant")).toBe(true);
+    expect(hasSameVectorStoreCredentialTarget(attackerTarget, active, "qdrant")).toBe(false);
+  });
+
+  it("reuses Milvus credentials only for the same authentication scope", () => {
+    const active = normalizeVectorStoreConfig({
+      provider: "milvus",
+      milvus: {
+        address: "milvus.example:19530",
+        ssl: true,
+        database: "lumiverse",
+        username: "owner",
+      },
+    });
+    const sameTarget = normalizeVectorStoreConfig({
+      provider: "milvus",
+      milvus: {
+        address: "milvus.example:19530",
+        ssl: true,
+        database: "lumiverse",
+        username: "owner",
+        requestTimeoutMs: 5_000,
+      },
+    });
+    const changedUsername = normalizeVectorStoreConfig({
+      provider: "milvus",
+      milvus: {
+        address: "milvus.example:19530",
+        ssl: true,
+        database: "lumiverse",
+        username: "attacker",
+      },
+    });
+    const downgradedTransport = normalizeVectorStoreConfig({
+      provider: "milvus",
+      milvus: {
+        address: "milvus.example:19530",
+        ssl: false,
+        database: "lumiverse",
+        username: "owner",
+      },
+    });
+
+    expect(hasSameVectorStoreCredentialTarget(sameTarget, active, "milvus")).toBe(true);
+    expect(hasSameVectorStoreCredentialTarget(changedUsername, active, "milvus")).toBe(false);
+    expect(hasSameVectorStoreCredentialTarget(downgradedTransport, active, "milvus")).toBe(false);
   });
 });

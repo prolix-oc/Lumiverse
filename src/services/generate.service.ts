@@ -10,12 +10,14 @@ import * as settingsSvc from "./settings.service";
 import * as personasSvc from "./personas.service";
 import {
   assemblePrompt,
+  applyCustomBodyParameters,
   applyProviderReasoningOffSwitch,
   injectReasoningParams,
   collectVectorActivatedWorldInfo,
   mergeActivatedWorldInfoEntries,
   getSourceMessageId,
   isChatHistoryMessage,
+  resolveContinuePostfix,
   shouldPreserveDisplayReasoningDelimiters,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
@@ -45,6 +47,7 @@ import {
 } from "./inline-tool-continuation";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
+import type { CustomBody } from "../types/preset";
 import {
   interceptorPipeline,
   type InterceptorBreakdownEntry,
@@ -55,10 +58,14 @@ import {
   appendCouncilDeliberationHistory,
   collectWorldInfoForCouncil,
   formatDeliberation,
+  selectCouncilContextMessages,
   type CouncilEnrichment,
   type CouncilExecutionResultWithHistory,
 } from "./council/council-execution.service";
-import { activateWorldInfo } from "./world-info-activation.service";
+import {
+  activateWorldInfo,
+  type WorldInfoSettings,
+} from "./world-info-activation.service";
 import type {
   CachedCouncilResult,
   CouncilMember,
@@ -156,6 +163,8 @@ interface GenerateInput {
   impersonate_mode?: ImpersonateMode;
   /** For impersonate: free-form text from the user's input box, appended to the impersonation prompt. */
   impersonate_input?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  user_input?: string;
   /** For impersonate: stream tokens to the frontend but do NOT create a message. The user edits and sends manually. */
   impersonate_draft?: boolean;
   target_character_id?: string;
@@ -565,8 +574,18 @@ interface SpindleContext {
   connectionId?: string;
   personaId?: string;
   generationType: string;
+  dryRun?: boolean;
+  userId?: string;
+  cancelGeneration?: boolean;
   activatedWorldInfo?: ActivatedWorldInfoEntry[];
   [key: string]: unknown;
+}
+
+class GenerationCancelledByExtensionError extends Error {
+  constructor() {
+    super("Generation cancelled by extension context handler");
+    this.name = "GenerationCancelledByExtension";
+  }
 }
 
 /** Result of assembling + post-processing the prompt pipeline. */
@@ -1002,6 +1021,7 @@ type ReasoningSettingsSnapshot = {
   apiReasoning?: boolean;
   reasoningEffort?: string;
   thinkingDisplay?: string;
+  customBody?: CustomBody;
 } | null;
 
 type CouncilResultCache = CachedCouncilResult & {
@@ -1028,6 +1048,11 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
+function excludesLatestUserMessage(toolsSettings: unknown): boolean {
+  return (toolsSettings as { excludeLatestUserMessage?: boolean })
+    .excludeLatestUserMessage === true;
+}
+
 // Hash the council's view of the chat — the (id, content) pairs of the last
 // `contextWindow` messages, the same slice council members consume in
 // buildContextMessages. Mixed into the cache fingerprint so that editing or
@@ -1035,8 +1060,13 @@ function stableJson(value: unknown): string {
 function hashCouncilContextMessages(
   messages: Message[],
   contextWindow: number,
+  excludeLatestUserMessage: boolean,
 ): string {
-  const window = messages.slice(-contextWindow);
+  const window = selectCouncilContextMessages(
+    messages,
+    contextWindow,
+    excludeLatestUserMessage,
+  );
   const hasher = new Bun.CryptoHasher("sha256");
   for (const m of window) {
     hasher.update(m.id);
@@ -1066,6 +1096,7 @@ function buildCouncilCacheFingerprint(
       mode: councilSettings.toolsSettings.mode,
       timeoutMs: councilSettings.toolsSettings.timeoutMs,
       sidecarContextWindow: councilSettings.toolsSettings.sidecarContextWindow,
+      excludeLatestUserMessage: excludesLatestUserMessage(councilSettings.toolsSettings),
       includeUserPersona: councilSettings.toolsSettings.includeUserPersona,
       includeCharacterInfo: councilSettings.toolsSettings.includeCharacterInfo,
       includeWorldInfo: councilSettings.toolsSettings.includeWorldInfo,
@@ -1143,6 +1174,7 @@ function applyEffectiveReasoningSettings(
   modelName: string | undefined,
   params: GenerationParameters,
   override?: GenerationReasoningOverrideDTO,
+  includeCustomBody = false,
 ): void {
   const resolvedOverride = resolveReasoningOverride(override);
   const reasoningSettings =
@@ -1150,10 +1182,15 @@ function applyEffectiveReasoningSettings(
       ? resolvedOverride
       : getEffectiveReasoningSettings(userId, connection);
 
+  if (includeCustomBody) {
+    applyCustomBodyParameters(params, reasoningSettings?.customBody);
+  }
+
   if (reasoningSettings?.apiReasoning) {
     const effort = reasoningSettings.reasoningEffort || "auto";
-    const isToggleOnly = providerName === "moonshot" || providerName === "zai";
-    if (effort !== "auto" || isToggleOnly) {
+    const requiresExplicitOnSwitch =
+      providerName === "moonshot" || providerName === "zai";
+    if (effort !== "auto" || requiresExplicitOnSwitch) {
       injectReasoningParams(
         params,
         providerName,
@@ -1218,10 +1255,13 @@ async function runPromptPipeline(opts: {
   generationType: string;
   impersonateMode?: ImpersonateMode;
   impersonateInput?: string;
+  userInput?: string;
   inputMessages?: LlmMessage[];
   inputParameters?: GenerationParameters;
   excludeMessageId?: string;
   rejectedSwipe?: string;
+  continueMessageId?: string;
+  continuePostfix?: string;
   targetCharacterId?: string;
   councilToolResults?: any[];
   councilNamedResults?: Record<string, string>;
@@ -1230,6 +1270,7 @@ async function runPromptPipeline(opts: {
   regenFeedback?: string;
   regenFeedbackPosition?: "system" | "user";
   signal?: AbortSignal;
+  isDryRun?: boolean;
 }): Promise<PromptPipelineResult> {
   // Yield to the event loop before entering the assembly pipeline so a stop
   // clicked in the first few ticks after the generation starts can actually
@@ -1247,13 +1288,19 @@ async function runPromptPipeline(opts: {
     connectionId: opts.connectionId,
     personaId: opts.personaId,
     generationType: opts.generationType,
+    dryRun: opts.isDryRun === true,
+    userId: opts.userId,
   };
   if (contextHandlerChain.count > 0) {
-    spindleContext = (await contextHandlerChain.run(
+    const handled = (await contextHandlerChain.run(
       spindleContext,
       opts.userId,
       opts.signal,
-    )) as SpindleContext;
+    )) as SpindleContext | undefined;
+    if (handled) spindleContext = handled;
+    if (spindleContext.cancelGeneration === true) {
+      throw new GenerationCancelledByExtensionError();
+    }
   }
 
   // Build messages: use explicit messages if provided, otherwise assemble from preset
@@ -1288,8 +1335,11 @@ async function runPromptPipeline(opts: {
       generationType: opts.generationType as GenerationType,
       impersonateMode: opts.impersonateMode,
       impersonateInput: opts.impersonateInput,
+      userInput: opts.userInput,
       excludeMessageId: opts.excludeMessageId,
       rejectedSwipe: opts.rejectedSwipe,
+      continueMessageId: opts.continueMessageId,
+      continuePostfix: opts.continuePostfix,
       targetCharacterId: opts.targetCharacterId,
       councilToolResults: opts.councilToolResults,
       councilNamedResults: opts.councilNamedResults,
@@ -1544,6 +1594,8 @@ async function runPromptPipeline(opts: {
     effectiveConnection.provider,
     effectiveConnection.model || undefined,
     parameters,
+    undefined,
+    !!opts.inputMessages,
   );
 
   return {
@@ -1767,7 +1819,8 @@ export async function startGeneration(
     let characterName = "Assistant";
     const requestedTargetCharId =
       input.target_character_id &&
-      (!isGroupChat || groupCharacterIds.includes(input.target_character_id))
+      isGroupChat &&
+      groupCharacterIds.includes(input.target_character_id)
         ? input.target_character_id
         : undefined;
     const messageTargetCharId =
@@ -1898,8 +1951,10 @@ export async function startGeneration(
         const cpPreset = cpPresetId
           ? presetsSvc.getPreset(input.userId, cpPresetId)
           : null;
-        lifecycle.continuePostfix =
-          cpPreset?.prompts?.completionSettings?.continuePostfix || "";
+        lifecycle.continuePostfix = resolveContinuePostfix(
+          lastMsg.content,
+          cpPreset?.prompts?.completionSettings?.continuePostfix || "",
+        );
       }
     }
 
@@ -2091,6 +2146,7 @@ export async function startGeneration(
             councilContextHash = hashCouncilContextMessages(
               councilMessages,
               councilSettings.toolsSettings.sidecarContextWindow,
+              excludesLatestUserMessage(councilSettings.toolsSettings),
             );
 
             // Check if we can reuse cached council results for regens/swipes/continues
@@ -2189,6 +2245,10 @@ export async function startGeneration(
                   resolvedPersona,
                   input.chat_id,
                 );
+              const councilWorldInfoSettings =
+                (settingsSvc.getSetting(input.userId, "worldInfoSettings")?.value as
+                  | Partial<WorldInfoSettings>
+                  | undefined) ?? {};
               let councilWiActivated =
                 wiEntries.length > 0
                   ? activateWorldInfo({
@@ -2196,6 +2256,7 @@ export async function startGeneration(
                       messages: councilMessages,
                       chatTurn: councilMessages.length,
                       wiState: {},
+                      settings: councilWorldInfoSettings,
                     }).activatedEntries
                   : [];
 
@@ -2208,10 +2269,12 @@ export async function startGeneration(
                 wiEntries,
                 councilMessages,
                 abortController.signal,
+                councilWorldInfoSettings,
               );
               councilWiActivated = mergeActivatedWorldInfoEntries(
                 councilWiActivated,
                 vectorActivated,
+                councilWorldInfoSettings,
               ).activatedEntries;
 
               // Cache for assembly to reuse
@@ -2591,10 +2654,13 @@ export async function startGeneration(
                 : undefined,
             impersonateInput:
               genType === "impersonate" ? input.impersonate_input : undefined,
+            userInput: input.user_input,
             inputMessages: input.messages,
             inputParameters: input.parameters,
             excludeMessageId,
             rejectedSwipe,
+            continueMessageId: lifecycle.continueMessageId,
+            continuePostfix: lifecycle.continuePostfix,
             targetCharacterId: pipelineTargetCharId,
             councilToolResults,
             councilNamedResults,
@@ -2615,6 +2681,23 @@ export async function startGeneration(
           activatedWorldInfo,
           deliberationHandledByMacro,
         } = pipeline;
+
+        // A context anchor is a strict guardrail: older history may be clipped,
+        // but the marked message and every newer turn must fit together. Abort
+        // before the primary provider receives any prompt when that protected
+        // tail exceeds the available history budget.
+        if (pipeline.contextClipStats?.anchorOverflow) {
+          const protectedTokens = pipeline.contextClipStats.protectedHistoryTokens ?? 0;
+          const availableTokens = Math.max(
+            0,
+            pipeline.contextClipStats.remainingHistoryBudget,
+          );
+          throw new Error(
+            `Protected context anchor needs ${protectedTokens.toLocaleString()} tokens, ` +
+              `but only ${availableTokens.toLocaleString()} fit after prompt overhead. ` +
+              `Increase Context Size or lower Max Response.`,
+          );
+        }
 
         // Persist deferred WI state and dirty chat variables after assembly.
         // Both go through mergeChatMetadata so that any user-driven metadata edits
@@ -2766,9 +2849,9 @@ export async function startGeneration(
           pendingCouncilRetries.delete(generationId);
         }
 
-        // If this was a user-initiated abort (stop request), emit proper events so the
-        // frontend can reset its streaming state and clean up.
-        if (abortController.signal.aborted) {
+        // User aborts and extension-requested cancels both emit stop events so
+        // the frontend resets its streaming state.
+        if (abortController.signal.aborted || err instanceof GenerationCancelledByExtensionError) {
           // Clean up staged message if one was created (sidecar council mode)
           if (stagedMessageId) {
             try {
@@ -2845,10 +2928,9 @@ export async function dryRunGeneration(
   input: GenerateInput,
 ): Promise<DryRunResult> {
   const genType = input.generation_type || "normal";
+  const sourceMessages = chatsSvc.getMessages(input.userId, input.chat_id);
   const sourceMessagesById = new Map(
-    chatsSvc
-      .getMessages(input.userId, input.chat_id)
-      .map((message) => [message.id, message] as const),
+    sourceMessages.map((message) => [message.id, message] as const),
   );
   const dryRunReasoningSettings =
     settingsSvc.getSetting(input.userId, "reasoningSettings")?.value ?? null;
@@ -2856,6 +2938,17 @@ export async function dryRunGeneration(
   // No-preset temp chats bypass preset resolution/assertion (same as
   // startGeneration); assembly falls back to raw message mapping.
   const dryRunChat = chatsSvc.getChat(input.userId, input.chat_id);
+  const dryRunIsGroupChat = dryRunChat?.metadata?.group === true;
+  const dryRunGroupCharacterIds =
+    dryRunIsGroupChat && Array.isArray(dryRunChat?.metadata?.character_ids)
+      ? (dryRunChat.metadata.character_ids as string[])
+      : [];
+  const dryRunTargetCharacterId =
+    dryRunIsGroupChat &&
+    typeof input.target_character_id === "string" &&
+    dryRunGroupCharacterIds.includes(input.target_character_id)
+      ? input.target_character_id
+      : undefined;
   const isNoPresetChat = isNoPresetChatMetadata(dryRunChat?.metadata);
   if (isNoPresetChat) {
     input.preset_id = undefined;
@@ -2889,6 +2982,24 @@ export async function dryRunGeneration(
   }
   const { provider } = await resolveProviderAndKey(input.userId, connection.id);
 
+  const dryRunContinueTarget =
+    genType === "continue"
+      ? input.message_id
+        ? sourceMessagesById.get(input.message_id) ?? null
+        : [...sourceMessages].reverse().find((message) => !message.is_user) ?? null
+      : null;
+  const dryRunPresetId = input.preset_id || connection.preset_id;
+  const dryRunContinueConfiguredPostfix = dryRunPresetId
+    ? presetsSvc.getPreset(input.userId, dryRunPresetId)?.prompts
+        ?.completionSettings?.continuePostfix || ""
+    : "";
+  const dryRunContinuePostfix = dryRunContinueTarget
+    ? resolveContinuePostfix(
+        dryRunContinueTarget.content,
+        dryRunContinueConfiguredPostfix,
+      )
+    : undefined;
+
   const pipeline = await runPromptPipeline({
     userId: input.userId,
     chatId: input.chat_id,
@@ -2904,11 +3015,15 @@ export async function dryRunGeneration(
         : undefined,
     impersonateInput:
       genType === "impersonate" ? input.impersonate_input : undefined,
+    userInput: input.user_input,
     inputMessages: input.messages,
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,
-    targetCharacterId: input.target_character_id,
+    continueMessageId: dryRunContinueTarget?.id,
+    continuePostfix: dryRunContinuePostfix,
+    targetCharacterId: dryRunTargetCharacterId,
     signal: input.signal,
+    isDryRun: true,
   });
 
   // Compute token counts for the breakdown
@@ -4344,6 +4459,7 @@ async function prepareRawCall(
     input.model,
     parameters,
     input.reasoning,
+    true,
   );
   if (reasoningConnection) injectConnectionMetadataFlags(reasoningConnection, parameters);
 
@@ -4392,6 +4508,7 @@ async function prepareQuietCall(
     connection.model || undefined,
     mergedParams,
     input.reasoning,
+    true,
   );
 
   // Allow callers (e.g. Memory Cortex sidecar) to override the model without
@@ -4615,6 +4732,8 @@ export async function summarizeGenerate(
       provider.name,
       sidecarModel || connection.model || undefined,
       mergedParams,
+      undefined,
+      true,
     );
 
     const resolvedModel = sidecarModel || connection.model;

@@ -2,10 +2,9 @@ import { registry } from "../MacroRegistry";
 import { evaluate } from "../MacroEvaluator";
 import {
   getRegexScriptByScriptId,
-  substituteRegexCaptures,
 } from "../../services/regex-scripts.service";
 import {
-  regexCollectSandboxed,
+  regexCaptureReplacementsSandboxed,
   regexReplaceSandboxed,
   RegexTimeoutError,
 } from "../../utils/regex-sandbox";
@@ -67,22 +66,21 @@ export function registerRegexRefMacros(): void {
         if (script.substitute_macros === "raw") {
           // "raw" mode: substitute capture groups BEFORE macro resolution
           // so $1, $2, etc. are available inside macro arguments. Match
-          // collection runs in the regex sandbox so a malicious script
-          // pattern can't freeze the assembly thread.
-          const matches = await regexCollectSandboxed(
+          // interpolation runs in the regex sandbox so a malicious script
+          // pattern can't freeze the assembly thread and large capture arrays
+          // never need to cross the worker boundary.
+          const matches = await regexCaptureReplacementsSandboxed(
             findRegex,
             script.flags,
             text,
+            script.replace_string,
             REGEX_REF_TIMEOUT_MS,
           );
 
           if (matches.length > 0) {
             const replacements = await Promise.all(
-              matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
-                const withCaptures = substituteRegexCaptures(
-                  script.replace_string, fullMatch, groups, index, text, namedGroups,
-                );
-                return (await evaluate(withCaptures, ctx.env, registry)).text;
+              matches.map(async ({ replacement }) => {
+                return (await evaluate(replacement, ctx.env, registry)).text;
               }),
             );
             let out = "";
@@ -90,7 +88,7 @@ export function registerRegexRefMacros(): void {
             for (let i = 0; i < matches.length; i++) {
               out += text.slice(lastIdx, matches[i].index);
               out += replacements[i];
-              lastIdx = matches[i].index + matches[i].fullMatch.length;
+              lastIdx = matches[i].index + matches[i].matchLength;
             }
             out += text.slice(lastIdx);
             result = out;

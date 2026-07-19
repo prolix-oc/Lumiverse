@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { Outlet } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useWebSocket } from '@/ws/useWebSocket'
 import { useStore } from '@/store'
@@ -27,9 +28,12 @@ import { useBoundPresetSelection } from '@/hooks/useBoundPresetSelection'
 import { RouterContextExporter } from '@/lib/router-bridge'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
 import { installNotificationAudioPrimer } from '@/lib/notificationAudio'
+import { getSafeThemeState } from '@/lib/safeThemeMode'
 import styles from './App.module.css'
 
 export default function App() {
+  const { t } = useTranslation('common')
+  const safeTheme = getSafeThemeState()
   useWebSocket()
   useThemeApplicator()
   useCharacterTheme()
@@ -170,6 +174,11 @@ export default function App() {
             } as React.CSSProperties}
           >
             <DesktopPwaTitlebar />
+            {safeTheme.active && (
+              <div className={styles.safeThemeBanner} role="status">
+                {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
+              </div>
+            )}
             <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
             <ErrorBoundary label="App">
               {/* Mirrors react-router context out to detached drawer-tab roots */}

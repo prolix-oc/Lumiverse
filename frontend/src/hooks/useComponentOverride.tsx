@@ -1,9 +1,10 @@
-import React, { useMemo, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useStore } from '@/store'
 import { transpileComponent } from '@/lib/componentTranspiler'
 import { HOST_SLOTS_PROP } from '@/lib/componentOverrideCapabilities'
 import { toast } from '@/lib/toast'
 import i18n from '@/i18n'
+import { isSafeThemeMode } from '@/lib/safeThemeMode'
 
 /**
  * ErrorBoundary that falls back to the default component on crash.
@@ -39,18 +40,30 @@ class OverrideErrorBoundary extends React.Component<
   }
 }
 
+interface TranspileEntry {
+  tsx: string
+  component: React.ComponentType<any> | null
+  error: string | null
+}
+
 /**
  * Cache transpiled components so we only re-transpile when source changes.
  * Keyed by component name, stores the source hash and compiled component.
  */
-const transpileCache = new Map<string, { tsx: string; component: React.ComponentType<any> | null; error: string | null }>()
+const transpileCache = new Map<string, TranspileEntry>()
 
-function getOrTranspile(name: string, tsx: string) {
+function getCachedEntry(name: string, tsx: string): TranspileEntry | null {
+  const cached = transpileCache.get(name)
+  if (cached && cached.tsx === tsx) return cached
+  return null
+}
+
+async function getOrTranspile(name: string, tsx: string): Promise<TranspileEntry> {
   const cached = transpileCache.get(name)
   if (cached && cached.tsx === tsx) return cached
 
-  const result = transpileComponent(tsx)
-  const entry = { tsx, component: result.component, error: result.error }
+  const result = await transpileComponent(tsx)
+  const entry: TranspileEntry = { tsx, component: result.component, error: result.error }
   transpileCache.set(name, entry)
 
   if (result.error) {
@@ -62,6 +75,9 @@ function getOrTranspile(name: string, tsx: string) {
 
 /**
  * Hook that returns a wrapped component — either the user's override or the default.
+ * The override also receives a trusted <Original /> slot containing the complete
+ * default renderer, allowing safe additive decoration without rebuilding native
+ * controls and behavior.
  *
  * Usage:
  * ```tsx
@@ -85,31 +101,53 @@ export function useComponentOverride<P extends Record<string, any>>(
   hostSlots?: Record<string, React.ReactNode>,
 ): React.ReactElement {
   const override = useStore((s) => s.componentOverrides?.[componentName])
+  const safeThemeMode = isSafeThemeMode()
   const prevErrorRef = useRef<string | null>(null)
 
-  const compiled = useMemo(() => {
-    if (!override?.enabled || !override.tsx.trim()) return null
-    return getOrTranspile(componentName, override.tsx)
-  }, [componentName, override?.enabled, override?.tsx])
+  const [compiled, setCompiled] = useState<TranspileEntry | null>(() => {
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) return null
+    return getCachedEntry(componentName, override.tsx)
+  })
+
+  useEffect(() => {
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) {
+      setCompiled(null)
+      return
+    }
+
+    let cancelled = false
+    getOrTranspile(componentName, override.tsx).then((entry) => {
+      if (!cancelled) setCompiled(entry)
+    })
+
+    return () => { cancelled = true }
+  }, [safeThemeMode, componentName, override?.enabled, override?.tsx])
 
   // Show transpile errors once (not on every render)
-  if (compiled?.error && compiled.error !== prevErrorRef.current) {
-    prevErrorRef.current = compiled.error
-    toast.error(i18n.t('common.toast.overrideError', { name: componentName, error: compiled.error }))
-  } else if (!compiled?.error) {
-    prevErrorRef.current = null
-  }
+  useEffect(() => {
+    if (compiled?.error && compiled.error !== prevErrorRef.current) {
+      prevErrorRef.current = compiled.error
+      toast.error(i18n.t('common.toast.overrideError', { name: componentName, error: compiled.error }))
+    } else if (!compiled?.error) {
+      prevErrorRef.current = null
+    }
+  }, [compiled?.error, componentName])
 
   if (compiled?.component) {
     const UserComponent = compiled.component
+    const original = <DefaultComponent {...defaultProps} />
     // Freeze top-level props so user code can't reassign action callbacks.
     // Host slots ride along under a reserved key the interpreter reads directly
     // and never exposes to user scope (see FORBIDDEN_PROPERTY_NAMES).
-    const frozenProps = Object.freeze({ ...overrideProps, [HOST_SLOTS_PROP]: hostSlots })
+    // Original is assigned last so callers cannot replace the native component.
+    const frozenProps = Object.freeze({
+      ...overrideProps,
+      [HOST_SLOTS_PROP]: { ...hostSlots, Original: original },
+    })
     return (
       <OverrideErrorBoundary
         componentName={componentName}
-        fallback={<DefaultComponent {...defaultProps} />}
+        fallback={original}
       >
         <UserComponent {...frozenProps} />
       </OverrideErrorBoundary>
@@ -139,19 +177,36 @@ export function useOverrideRender(
   props: Record<string, any>,
 ): React.ReactElement | null {
   const override = useStore((s) => s.componentOverrides?.[componentName])
+  const safeThemeMode = isSafeThemeMode()
   const prevErrorRef = useRef<string | null>(null)
 
-  const compiled = useMemo(() => {
-    if (!override?.enabled || !override.tsx.trim()) return null
-    return getOrTranspile(componentName, override.tsx)
-  }, [componentName, override?.enabled, override?.tsx])
+  const [compiled, setCompiled] = useState<TranspileEntry | null>(() => {
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) return null
+    return getCachedEntry(componentName, override.tsx)
+  })
 
-  if (compiled?.error && compiled.error !== prevErrorRef.current) {
-    prevErrorRef.current = compiled.error
-    toast.error(i18n.t('common.toast.overrideError', { name: componentName, error: compiled.error }))
-  } else if (!compiled?.error) {
-    prevErrorRef.current = null
-  }
+  useEffect(() => {
+    if (safeThemeMode || !override?.enabled || !override.tsx.trim()) {
+      setCompiled(null)
+      return
+    }
+
+    let cancelled = false
+    getOrTranspile(componentName, override.tsx).then((entry) => {
+      if (!cancelled) setCompiled(entry)
+    })
+
+    return () => { cancelled = true }
+  }, [safeThemeMode, componentName, override?.enabled, override?.tsx])
+
+  useEffect(() => {
+    if (compiled?.error && compiled.error !== prevErrorRef.current) {
+      prevErrorRef.current = compiled.error
+      toast.error(i18n.t('common.toast.overrideError', { name: componentName, error: compiled.error }))
+    } else if (!compiled?.error) {
+      prevErrorRef.current = null
+    }
+  }, [compiled?.error, componentName])
 
   if (!compiled?.component) return null
 

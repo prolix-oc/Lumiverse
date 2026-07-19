@@ -107,13 +107,14 @@ export default function useSwipeAction(message: Message, chatId: string): SwipeA
     if (isStreaming) return
     if (regenFeedback.enabled) {
       openModal('regenFeedback', {
+        chatId,
         onSubmit: (feedback: string) => doRegenerate(feedback),
         onSkip: () => doRegenerate(),
       })
     } else {
       doRegenerate()
     }
-  }, [isStreaming, regenFeedback.enabled, openModal, doRegenerate])
+  }, [isStreaming, regenFeedback.enabled, openModal, doRegenerate, chatId])
 
   const handleSwipe = useCallback(
     async (direction: 'left' | 'right') => {
@@ -185,6 +186,7 @@ export async function executeSwipe(message: Message, chatId: string, direction: 
 
     if (regenFeedback.enabled) {
       openModal('regenFeedback', {
+        chatId,
         onSubmit: (feedback: string) => doRegen(feedback),
         onSkip: () => doRegen(),
       })

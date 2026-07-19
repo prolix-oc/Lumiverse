@@ -151,7 +151,7 @@ export default function PromptItemizerModal() {
     } finally {
       setRawLoading(false)
     }
-  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId])
+  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId, t])
 
   const handleToggleRaw = useCallback(async () => {
     if (rawView !== 'off') {

@@ -13,6 +13,7 @@ import * as charactersSvc from "../src/services/characters.service";
 import * as chatsSvc from "../src/services/chats.service";
 import * as personasSvc from "../src/services/personas.service";
 import * as presetsSvc from "../src/services/presets.service";
+import * as settingsSvc from "../src/services/settings.service";
 import * as memoryCortex from "../src/services/memory-cortex";
 import { macrosRoutes } from "../src/routes/macros.routes";
 import { assemblePrompt } from "../src/services/prompt-assembly.service";
@@ -74,6 +75,30 @@ describe("temporary character-less chats", () => {
     expect(grouped.data.some((item) => item.character_id === character.id)).toBe(true);
   });
 
+  test("macro resolution exposes the input-bar draft snapshot", async () => {
+    const chat = createTempChat();
+    const app = new Hono();
+    app.use("*", async (c, next) => {
+      c.set("userId", USER_ID);
+      await next();
+    });
+    app.route("/macros", macrosRoutes);
+
+    const response = await app.request("/macros/resolve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chat.id,
+        template: "{{userInput}}|{{user_input}}",
+        user_input: "  preserved draft\n",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.text).toBe("  preserved draft\n|  preserved draft\n");
+  });
+
   test("deleteTemporaryChats sweeps only temporary chats", () => {
     const character = charactersSvc.createCharacter(USER_ID, { name: "Aerith" });
     const normalChat = chatsSvc.createChat(USER_ID, { character_id: character.id });
@@ -130,7 +155,7 @@ describe("temporary character-less chats", () => {
     }
   });
 
-  test("preset blocks still apply to temporary chats", async () => {
+  test("preset blocks and guided generations resolve the input-bar draft", async () => {
     const chat = createTempChat();
     chatsSvc.createMessage(chat.id, { is_user: true, name: "User", content: "Hello there" }, USER_ID);
 
@@ -157,20 +182,32 @@ describe("temporary character-less chats", () => {
       prompts: {},
       metadata: {},
       prompt_order: [
-        block({ name: "Main", content: "PRESET_SYSTEM_MARKER: be concise." }),
+        block({ name: "Main", content: "PRESET_SYSTEM_MARKER: {{userInput}}" }),
         block({ name: "Chat History", marker: "chat_history" }),
       ],
     } as any);
+    settingsSvc.putSetting(USER_ID, "guidedGenerations", [
+      {
+        id: "guide-1",
+        name: "Use Draft",
+        content: "GUIDED_SYSTEM_MARKER: {{userInput}}",
+        position: "system",
+        mode: "persistent",
+        enabled: true,
+      },
+    ]);
 
     const result = await assemblePrompt({
       userId: USER_ID,
       chatId: chat.id,
       generationType: "normal",
       presetId: preset.id,
+      userInput: "Exact input-bar draft",
     } as any);
 
     const serialized = JSON.stringify(result.messages);
-    expect(serialized).toContain("PRESET_SYSTEM_MARKER");
+    expect(serialized).toContain("PRESET_SYSTEM_MARKER: Exact input-bar draft");
+    expect(serialized).toContain("GUIDED_SYSTEM_MARKER: Exact input-bar draft");
     expect(serialized).toContain("Hello there");
   });
 

@@ -74,7 +74,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         setActiveGroup(Object.keys(grps).filter((n) => n !== '_default')[0] || Object.keys(grps)[0] || null)
       }
     }).finally(() => setLoading(false))
-  }, [characterId])
+  }, [activeGroup, characterId])
 
   useEffect(() => { fetchConfig() }, [fetchConfig])
 
@@ -222,7 +222,7 @@ export default function ExpressionEditorTab({ characterId }: Props) {
         setUploading(false)
       }
     },
-    [characterId, config, saveConfig, defaultExpressionLabel]
+    [config, saveConfig, defaultExpressionLabel]
   )
 
   const openGalleryPicker = useCallback(() => {

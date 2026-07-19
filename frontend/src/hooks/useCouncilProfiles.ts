@@ -252,7 +252,7 @@ export function useCouncilProfiles() {
 
       return next
     })
-  }, [addToast, persistSidecar])
+  }, [addToast, persistSidecar, t])
 
   // Flush any pending sidecar save when the hook unmounts or persistence target changes
   useEffect(() => {
@@ -284,7 +284,7 @@ export function useCouncilProfiles() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeChatId, addToast, councilSettings, refreshResolved, sidecarConfig])
+  }, [activeChatId, addToast, councilSettings, refreshResolved, sidecarConfig, t])
 
   const clearDefaults = useCallback(async () => {
     setIsLoading(true)
@@ -316,7 +316,7 @@ export function useCouncilProfiles() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeChatId, addToast, councilSettings, refreshResolved, sidecarConfig])
+  }, [activeChatId, addToast, councilSettings, refreshResolved, sidecarConfig, t])
 
   const unbindChat = useCallback(async () => {
     if (!activeChatId) return
@@ -331,7 +331,7 @@ export function useCouncilProfiles() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeChatId, addToast, refreshResolved])
+  }, [activeChatId, addToast, refreshResolved, t])
 
   const bindToCharacter = useCallback(async () => {
     if (!activeCharacterId || !characterBindingEnabled) return
@@ -349,7 +349,7 @@ export function useCouncilProfiles() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeCharacterId, addToast, characterBindingEnabled, councilSettings, refreshResolved, sidecarConfig])
+  }, [activeCharacterId, addToast, characterBindingEnabled, councilSettings, refreshResolved, sidecarConfig, t])
 
   const unbindCharacter = useCallback(async () => {
     if (!activeCharacterId || !characterBindingEnabled) return
@@ -364,7 +364,7 @@ export function useCouncilProfiles() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeCharacterId, addToast, characterBindingEnabled, refreshResolved])
+  }, [activeCharacterId, addToast, characterBindingEnabled, refreshResolved, t])
 
   const chatBinding = chatSlot.for === activeChatId ? chatSlot.binding : null
   const characterBinding = charSlot.for === activeCharacterId ? charSlot.binding : null

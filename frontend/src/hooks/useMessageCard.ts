@@ -21,6 +21,8 @@ import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
 import { resolveMultiplayerMessageAuthor } from '@/lib/multiplayerMessageAuthor'
 
+const CONTEXT_HISTORY_ANCHOR_KEY = 'context_history_anchor_message_id'
+
 /**
  * Strip thinking/reasoning tags from content and extract the thoughts.
  * Handles <think>, <thinking>, <reasoning> and their closing variants.
@@ -52,6 +54,7 @@ function parseThinkingTags(content: string): { cleaned: string; thoughts: string
 
 export function useMessageCard(message: Message, chatId: string) {
   const { t } = useTranslation('chat', { keyPrefix: 'toast' })
+  const { t: tChat } = useTranslation('chat')
   const { t: tc } = useTranslation('chat', { keyPrefix: 'messageCard' })
   const navigate = useNavigate()
   const editingMessageId = useStore((s) => s.editingMessageId)
@@ -77,6 +80,8 @@ export function useMessageCard(message: Message, chatId: string) {
   const mpCharacterAvatar = useStore((s) => s.mpCharacterAvatar)
   const autoParse = useStore((s) => s.reasoningSettings.autoParse)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
   const isBubbleMode = useStore((s) => s.chatSheldDisplayMode) === 'bubble'
 
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
@@ -262,10 +267,7 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const avatar = useMemo(
     () => ({ cropped: croppedAvatarTiers, original: originalAvatarTiers }),
-    [
-      croppedAvatarTiers.sm, croppedAvatarTiers.lg, croppedAvatarTiers.full,
-      originalAvatarTiers.sm, originalAvatarTiers.lg, originalAvatarTiers.full,
-    ],
+    [croppedAvatarTiers, originalAvatarTiers],
   )
 
   const macroUserName = useMemo(() => {
@@ -374,6 +376,38 @@ export function useMessageCard(message: Message, chatId: string) {
   }, [chatId, message.id, message.swipe_id])
 
   const isHidden = message.extra?.hidden === true
+  const contextAnchorMessageId = typeof activeChatMetadata?.[CONTEXT_HISTORY_ANCHOR_KEY] === 'string'
+    ? activeChatMetadata[CONTEXT_HISTORY_ANCHOR_KEY] as string
+    : null
+  const isContextAnchor = contextAnchorMessageId === message.id
+
+  const handleToggleContextAnchor = useCallback(async () => {
+    if (isHidden) return
+
+    const previousMetadata = activeChatMetadata
+    const nextAnchorMessageId = isContextAnchor ? null : message.id
+    const optimisticMetadata = {
+      ...(previousMetadata ?? {}),
+      ...(nextAnchorMessageId ? { [CONTEXT_HISTORY_ANCHOR_KEY]: nextAnchorMessageId } : {}),
+    }
+    if (!nextAnchorMessageId) delete optimisticMetadata[CONTEXT_HISTORY_ANCHOR_KEY]
+    setActiveChatMetadata(optimisticMetadata)
+
+    try {
+      const updated = await chatsApi.patchMetadata(chatId, {
+        [CONTEXT_HISTORY_ANCHOR_KEY]: nextAnchorMessageId,
+      })
+      setActiveChatMetadata(updated.metadata ?? null)
+      addToast({
+        type: 'success',
+        message: tChat(isContextAnchor ? 'messageActions.contextAnchorCleared' : 'messageActions.contextAnchorSet'),
+      })
+    } catch (err) {
+      console.error('[MessageCard] Failed to update context anchor:', err)
+      setActiveChatMetadata(previousMetadata)
+      addToast({ type: 'error', message: tChat('messageActions.contextAnchorFailed') })
+    }
+  }, [activeChatMetadata, addToast, chatId, isContextAnchor, isHidden, message.id, setActiveChatMetadata, tChat])
 
   const handleToggleHidden = useCallback(async () => {
     try {
@@ -382,19 +416,27 @@ export function useMessageCard(message: Message, chatId: string) {
       if (!newHidden) delete extra.hidden
       const updated = await messagesApi.update(chatId, message.id, { extra })
       updateMessage(updated.id, updated)
+      if (newHidden && isContextAnchor) {
+        const updatedChat = await chatsApi.patchMetadata(chatId, {
+          [CONTEXT_HISTORY_ANCHOR_KEY]: null,
+        })
+        setActiveChatMetadata(updatedChat.metadata ?? null)
+      }
     } catch (err) {
       console.error('[MessageCard] Failed to toggle hidden:', err)
     }
-  }, [chatId, message.id, message.extra, updateMessage])
+  }, [chatId, isContextAnchor, message.id, message.extra, setActiveChatMetadata, updateMessage])
 
   const handleFork = useCallback(() => {
     openModal('confirm', {
       title: tc('fork.title'),
       message: tc('fork.message'),
       confirmText: tc('fork.confirm'),
-      onConfirm: async () => {
+      inputLabel: tc('fork.nameLabel'),
+      inputPlaceholder: tc('fork.namePlaceholder'),
+      onConfirm: async (name: string) => {
         try {
-          const newChat = await chatsApi.branch(chatId, message.id)
+          const newChat = await chatsApi.branch(chatId, message.id, name)
           navigate(`/chat/${newChat.id}`)
         } catch (err) {
           console.error('[MessageCard] Failed to fork chat:', err)
@@ -437,6 +479,7 @@ export function useMessageCard(message: Message, chatId: string) {
   // back to the live roster because no per-message snapshot exists for them.
   // Non-reactive read on purpose: avoids re-rendering every card on
   // typing/presence churn.
+  // eslint-disable-next-line react-compiler/react-compiler
   const mpStore = useStore.getState()
   const mpAuthor = resolveMultiplayerMessageAuthor({
     message,
@@ -478,11 +521,13 @@ export function useMessageCard(message: Message, chatId: string) {
     displayName: mpDisplayName,
     macroUserName,
     isHidden,
+    isContextAnchor,
     handleEdit,
     handleSaveEdit,
     handleCancelEdit,
     handleDelete,
     handleToggleHidden,
+    handleToggleContextAnchor,
     handleFork,
   }
 }

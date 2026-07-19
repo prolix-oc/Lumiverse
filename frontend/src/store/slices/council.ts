@@ -107,10 +107,12 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
   setCouncilExecuting: (executing) => set({ councilExecuting: executing }),
   setCouncilToolsFailure: (failure) => set({ councilToolsFailure: failure }),
 
-  loadCouncilSettings: async () => {
+  loadCouncilSettings: async (shouldApply = () => true) => {
+    if (!shouldApply()) return
     set({ councilLoading: true })
     try {
       const settings = await councilApi.getSettings()
+      if (!shouldApply()) return
       const storedTools = settings.toolsSettings ?? {}
       set({
         councilSettings: {
@@ -126,7 +128,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
     } catch (err) {
       console.error('[council] Failed to load settings:', err)
     } finally {
-      set({ councilLoading: false })
+      if (shouldApply()) set({ councilLoading: false })
     }
   },
 
@@ -146,7 +148,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
     debouncedSave(merged, get().councilPersistenceTarget)
   },
 
-  loadAvailableTools: async () => {
+  loadAvailableTools: async (shouldApply = () => true) => {
     try {
       // Fetch council tools (built-in + DLC + any extension tools the backend already merged)
       // AND spindle extension tools separately, then merge so extension tools always appear.
@@ -156,6 +158,7 @@ export const createCouncilSlice: StateCreator<CouncilSlice> = (set, get) => ({
         spindleApi.getTools().catch(() => []),
         spindleApi.list().catch(() => ({ extensions: [], isPrivileged: false })),
       ])
+      if (!shouldApply()) return
 
       const merged = mergeCouncilAndSpindleTools(councilTools, spindleTools, extensionList.extensions)
       set({ availableCouncilTools: merged })

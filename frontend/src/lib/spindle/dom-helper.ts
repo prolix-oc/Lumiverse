@@ -8,6 +8,7 @@ import {
   unregisterByElement,
   unregisterByExtension,
 } from './dom-injection-registry'
+import { registerLiveRoot, unregisterLiveRoot } from './live-root-registry'
 
 const DATA_ATTR = 'data-spindle-ext'
 const DATA_INJ_ATTR = 'data-spindle-inj-id'
@@ -17,18 +18,21 @@ const DATA_INJ_ATTR = 'data-spindle-inj-id'
 // methods so we can change the attribute name without breaking them.
 const DATA_MSG_ID_ATTR = 'data-message-id'
 const FORBIDDEN_CREATE_TAGS = new Set(['iframe', 'frame', 'object', 'embed'])
-
 export function createDOMHelper(
   extensionId: string,
   corsProxy?: (url: string, options?: any) => Promise<any>,
-  canEval?: () => boolean
+  canEval?: () => boolean,
+  assertActive: () => void = () => {},
+  generation?: number,
 ): SpindleDOMHelper {
   const trackedElements = new Set<Element>()
-  const trackedStyles: (() => void)[] = []
+  const trackedRootUnregisters = new Map<Element, () => void>()
   const trackedDisposers: (() => void)[] = []
+  const trackedStyles: (() => void)[] = []
 
   return {
     inject(target: string | Element, html: string, position?: InsertPosition): Element {
+      assertActive()
       const el = typeof target === 'string' ? document.querySelector(target) : target
       if (!el) throw new Error(`Target not found: ${target}`)
 
@@ -54,8 +58,18 @@ export function createDOMHelper(
       wrapper.setAttribute(DATA_INJ_ATTR, injectionId)
       wrapper.appendChild(sanitized)
 
-      el.insertAdjacentElement(resolvedPosition, wrapper)
-      trackedElements.add(wrapper)
+      let unregisterRoot: (() => void) | undefined
+      try {
+        el.insertAdjacentElement(resolvedPosition, wrapper)
+        assertActive()
+        unregisterRoot = registerLiveRoot(extensionId, wrapper, null, generation)
+        trackedRootUnregisters.set(wrapper, unregisterRoot)
+        trackedElements.add(wrapper)
+      } catch (error) {
+        unregisterRoot?.()
+        wrapper.remove()
+        throw error
+      }
 
       // Register for virtualizer-remount replay if this injection landed
       // inside a chat message bubble. Injections elsewhere (chat header,
@@ -83,12 +97,16 @@ export function createDOMHelper(
     },
 
     uninject(element: Element): void {
+      const unregisterRoot = trackedRootUnregisters.get(element)
+      unregisterRoot?.()
+      trackedRootUnregisters.delete(element)
       unregisterByElement(element)
       trackedElements.delete(element)
       element.remove()
     },
 
     addStyle(css: string): () => void {
+      assertActive()
       const style = document.createElement('style')
       style.setAttribute(DATA_ATTR, extensionId)
       style.textContent = css
@@ -108,6 +126,7 @@ export function createDOMHelper(
       tag: K,
       attrs?: Record<string, string>
     ): HTMLElementTagNameMap[K] {
+      assertActive()
       if (FORBIDDEN_CREATE_TAGS.has(String(tag).toLowerCase())) {
         throw new Error(`Forbidden element tag: ${tag}. Use ctx.dom.createSandboxFrame() for isolated scriptable widgets.`)
       }
@@ -123,6 +142,7 @@ export function createDOMHelper(
     },
 
     createSandboxFrame(options) {
+      assertActive()
       // Honor allowEval only if the extension holds the unsafe_eval grant
       // (fail-closed).
       const gatedOptions = {
@@ -192,6 +212,11 @@ export function createDOMHelper(
     },
 
     cleanup(): void {
+      for (const [element, unregisterRoot] of trackedRootUnregisters) {
+        unregisterRoot()
+        element.remove()
+      }
+      trackedRootUnregisters.clear()
       for (const el of trackedElements) {
         el.remove()
       }

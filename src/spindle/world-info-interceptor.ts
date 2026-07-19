@@ -72,8 +72,6 @@ export interface WorldInfoInterceptor {
   ) => Promise<WorldInfoInterceptorResultDTO | void>;
 }
 
-const INTERCEPTOR_TIMEOUT_MS = 10_000;
-
 class WorldInfoInterceptorChain {
   private handlers: WorldInfoInterceptor[] = [];
 
@@ -159,20 +157,7 @@ class WorldInfoInterceptorChain {
     for (const handler of this.handlers) {
       if (handler.userId && handler.userId !== userId) continue;
       try {
-        const result = await Promise.race([
-          handler.handler({ ...ctx, entries: buildDto(working) }),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `World-info interceptor from ${handler.extensionId} timed out (${INTERCEPTOR_TIMEOUT_MS / 1000}s)`
-                  )
-                ),
-              INTERCEPTOR_TIMEOUT_MS
-            )
-          ),
-        ]);
+        const result = await handler.handler({ ...ctx, entries: buildDto(working) });
         const disabledList = result?.disabled ?? [];
         const enabledList = result?.enabled ?? [];
         const forcedList = result?.forced ?? [];
@@ -196,9 +181,11 @@ class WorldInfoInterceptorChain {
         working = rebuildWorking();
       } catch (err) {
         console.error(
-          `[Spindle] World-info interceptor error from ${handler.extensionId}:`,
-          err
+          `[Spindle] World-info interceptor error from ${handler.extensionId}: ${err instanceof Error ? err.message : String(err)}`
         );
+        if (err instanceof Error && err.stack) {
+          console.error(err.stack);
+        }
       }
     }
 

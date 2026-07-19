@@ -7,7 +7,6 @@ import {
   TIMEOUT_GIT_FETCH_MS,
   TIMEOUT_GIT_PULL_MS,
   TIMEOUT_GIT_CHECKOUT_MS,
-  TIMEOUT_BUN_CACHE_MS,
   TIMEOUT_BUN_INSTALL_MS,
   TIMEOUT_BUN_BUILD_MS,
 } from "./lib/constants.js";
@@ -43,10 +42,11 @@ function getHeadRef(): string {
   return head.out;
 }
 
-function getChangedFilesBetween(fromRef: string, toRef: string): string[] {
+function getChangedFilesBetween(fromRef: string, toRef: string): string[] | null {
   if (fromRef === toRef) return [];
   const diff = runGit("diff", "--name-only", `${fromRef}..${toRef}`);
-  if (!diff.ok || !diff.out) return [];
+  if (!diff.ok) return null;
+  if (!diff.out) return [];
   return diff.out
     .split("\n")
     .map((line) => line.trim())
@@ -66,8 +66,8 @@ function isFrontendBuildInput(filePath: string): boolean {
   return !FRONTEND_BUILD_IGNORED_PATHS.some((prefix) => filePath.startsWith(prefix));
 }
 
-function shouldRebuildFrontend(changedFiles: string[]): boolean {
-  return changedFiles.some(isFrontendBuildInput);
+function shouldRebuildFrontend(changedFiles: string[] | null): boolean {
+  return changedFiles === null || changedFiles.some(isFrontendBuildInput);
 }
 
 // Termux/proot detection. start.sh exports LUMIVERSE_IS_TERMUX /
@@ -109,6 +109,178 @@ function summarizeFrontendChanges(changedFiles: string[]): string {
   return relevant.length > 5 ? `${preview}, ...` : preview;
 }
 
+interface DependencyManifestRefs {
+  fromRef: string;
+  toRef: string;
+}
+
+type PackageManifest = Record<string, unknown>;
+
+const PACKAGE_INSTALL_INPUT_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "peerDependenciesMeta",
+  "bundledDependencies",
+  "overrides",
+  "resolutions",
+  "trustedDependencies",
+  "patchedDependencies",
+  "workspaces",
+  "catalog",
+  "catalogs",
+  "packageManager",
+] as const;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * A package.json can change its scripts, description, or version without
+ * changing anything Bun must resolve or install. Keep those updates from
+ * triggering a costly node_modules operation, while treating an unreadable
+ * manifest conservatively as changed.
+ */
+export function packageInstallInputsChanged(previous: string, current: string): boolean {
+  try {
+    const previousManifest = JSON.parse(previous) as PackageManifest;
+    const currentManifest = JSON.parse(current) as PackageManifest;
+    const installInputs = (manifest: PackageManifest) => Object.fromEntries(
+      PACKAGE_INSTALL_INPUT_FIELDS.map((field) => [field, manifest[field] ?? null]),
+    );
+    return stableJson(installInputs(previousManifest)) !== stableJson(installInputs(currentManifest));
+  } catch {
+    return true;
+  }
+}
+
+function packageInstallInputsChangedBetween(
+  fromRef: string,
+  toRef: string,
+  packagePath: string,
+): boolean {
+  const previous = runGit("show", `${fromRef}:${packagePath}`);
+  const current = runGit("show", `${toRef}:${packagePath}`);
+  if (!previous.ok || !current.ok) return true;
+  return packageInstallInputsChanged(previous.out, current.out);
+}
+
+function packageDependenciesChanged(
+  changedFiles: string[] | null,
+  packagePath: string,
+  lockfilePath: string,
+  installConfigPaths: string[],
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  if (changedFiles === null) return true;
+  if (changedFiles.some((file) => file === lockfilePath || installConfigPaths.includes(file))) return true;
+  if (!changedFiles.includes(packagePath)) return false;
+  if (!manifestRefs) return true;
+  return packageInstallInputsChangedBetween(manifestRefs.fromRef, manifestRefs.toRef, packagePath);
+}
+
+function backendDependenciesChanged(
+  changedFiles: string[] | null,
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  return packageDependenciesChanged(
+    changedFiles,
+    "package.json",
+    "bun.lock",
+    ["bunfig.toml", ".npmrc"],
+    manifestRefs,
+  );
+}
+
+function frontendDependenciesChanged(
+  changedFiles: string[] | null,
+  manifestRefs?: DependencyManifestRefs,
+): boolean {
+  return packageDependenciesChanged(
+    changedFiles,
+    "frontend/package.json",
+    "frontend/bun.lock",
+    ["frontend/bunfig.toml", "frontend/.npmrc"],
+    manifestRefs,
+  );
+}
+
+export interface ChangedDependencyPlan {
+  installBackend: boolean;
+  installFrontend: boolean;
+  repairTermuxFrontendNativeDeps: boolean;
+}
+
+/**
+ * Keep source-only Termux rebuilds on the same native-binding repair path that
+ * the pre-optimization update flow got from reinstalling frontend dependencies
+ * on every update. A frontend install already performs this repair itself.
+ */
+export function planChangedDependencies(
+  changedFiles: string[] | null,
+  termuxLike: boolean,
+  manifestRefs?: DependencyManifestRefs,
+): ChangedDependencyPlan {
+  const installBackend = backendDependenciesChanged(changedFiles, manifestRefs);
+  const installFrontend = frontendDependenciesChanged(changedFiles, manifestRefs);
+
+  return {
+    installBackend,
+    installFrontend,
+    repairTermuxFrontendNativeDeps:
+      termuxLike && shouldRebuildFrontend(changedFiles) && !installFrontend,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Stop the backend for an operation and guarantee a best-effort restart on
+ * every exit path. startServer is intentionally idempotent, so retrying it
+ * after a partial start failure is safe.
+ */
+export async function runWithServerStopped(
+  label: string,
+  stopServer: () => Promise<void>,
+  startServer: () => Promise<void>,
+  operation: () => Promise<void>,
+): Promise<void> {
+  let restartRequired = false;
+  try {
+    restartRequired = true;
+    await stopServer();
+    await operation();
+    await startServer();
+    restartRequired = false;
+  } catch (operationError) {
+    if (restartRequired) {
+      log(`${label} failed; restarting the server with the last validated frontend bundle...`);
+      try {
+        await startServer();
+        restartRequired = false;
+      } catch (restartError) {
+        throw new Error(
+          `${errorMessage(operationError)}; automatic server recovery also failed: ${errorMessage(restartError)}`,
+          { cause: operationError },
+        );
+      }
+    }
+    throw operationError;
+  }
+}
+
 async function runCommandOrThrow(
   cmd: string[],
   opts: { cwd: string; timeoutMs: number; label: string }
@@ -120,9 +292,10 @@ async function runCommandOrThrow(
 
   if (result.exitCode === 0) return;
 
+  const output = result.stderr.trim() || result.stdout.trim();
   const reason = result.timedOut
-    ? `${opts.label} timed out after ${opts.timeoutMs / 1000}s`
-    : result.stderr.trim() || result.stdout.trim() || `${opts.label} failed`;
+    ? `${opts.label} timed out after ${opts.timeoutMs / 1000}s${output ? `\nLast output:\n${output}` : ""}`
+    : output || `${opts.label} failed`;
   throw new Error(reason);
 }
 
@@ -230,58 +403,45 @@ export async function applyUpdate(
   reportProgress?: ProgressReporter,
 ): Promise<void> {
   log("Preparing update...");
-  const previousHead = getHeadRef();
-  const currentBranch = getCurrentBranch();
-  if (!currentBranch || currentBranch === "HEAD") {
-    throw new Error("Unable to resolve current git branch");
-  }
-  const currentUpstream = getUpstreamRefForSync(currentBranch);
-  assertNoLocalCommitsBeforeHardSync("HEAD", currentBranch, currentUpstream);
-
-  // Stop server before destructive operations
-  await stopServer();
-
-  // Clear Bun install cache
-  log("Clearing install cache...");
-  await runCommandOrThrow(["bun", "pm", "cache", "rm"], {
-    cwd: PROJECT_ROOT,
-    timeoutMs: TIMEOUT_BUN_CACHE_MS,
-    label: "package cache clear",
-  });
-
   const frontendDir = join(PROJECT_ROOT, "frontend");
 
-  reportProgress?.("Syncing repository to upstream branch head...");
-  try {
+  await runWithServerStopped("Update", stopServer, startServer, async () => {
+    const previousHead = getHeadRef();
+    const currentBranch = getCurrentBranch();
+    if (!currentBranch || currentBranch === "HEAD") {
+      throw new Error("Unable to resolve current git branch");
+    }
+    const currentUpstream = getUpstreamRefForSync(currentBranch);
+    assertNoLocalCommitsBeforeHardSync("HEAD", currentBranch, currentUpstream);
+
+    reportProgress?.("Syncing repository to upstream branch head...");
     await stashLocalChanges("lumiverse-runner-auto-stash");
     await resetTrackedFiles("HEAD");
     await syncBranchToUpstream(currentBranch, currentUpstream);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log(`Update failed: ${message}`);
-    await recoverFrontendAndStart(frontendDir, startServer);
-    throw error;
-  }
 
-  const currentHead = getHeadRef();
-  const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+    const currentHead = getHeadRef();
+    const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+    if (changedFiles === null) {
+      log("Could not inspect changed files; conservatively installing dependencies and rebuilding the frontend.");
+    }
 
-  // Install dependencies and rebuild only if pulled files touched frontend inputs.
-  reportProgress?.("Installing backend and frontend dependencies...");
-  await ensureDependencies(frontendDir);
-  if (shouldRebuildFrontend(changedFiles)) {
-    const summary = summarizeFrontendChanges(changedFiles);
-    reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
-    log(`Frontend changes detected in update; waiting for Vite build (${summary}).`);
-    await rebuildFrontend(frontendDir);
-  } else {
-    reportProgress?.("No frontend changes detected; restarting server...");
-    log("No frontend source/config changes detected in pulled files; skipping local Vite rebuild.");
-  }
+    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress, {
+      fromRef: previousHead,
+      toRef: currentHead,
+    });
+    if (shouldRebuildFrontend(changedFiles)) {
+      const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
+      reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
+      log(`Frontend changes detected in update; waiting for Vite build (${summary}).`);
+      await rebuildFrontend(frontendDir);
+    } else {
+      reportProgress?.("No frontend changes detected; restarting server...");
+      log("No frontend source/config changes detected in pulled files; skipping local Vite rebuild.");
+    }
 
-  log("Update complete. Restarting server...");
-  reportProgress?.("Starting server...");
-  await startServer();
+    log("Update complete. Restarting server...");
+    reportProgress?.("Starting server...");
+  });
 }
 
 /**
@@ -299,56 +459,44 @@ export async function switchBranch(
     throw new Error(`Invalid branch: ${target}. Available: ${AVAILABLE_BRANCHES.join(", ")}`);
   }
 
-  const currentBranch = getCurrentBranch();
-  log(`Switching from '${currentBranch}' to '${target}'...`);
-  const previousHead = getHeadRef();
-  const targetUpstream = getUpstreamRefForSync(target);
-
-  // Stop server
-  await stopServer();
-
-  // Clear install cache
-  log("Clearing install cache...");
-  await runCommandOrThrow(["bun", "pm", "cache", "rm"], {
-    cwd: PROJECT_ROOT,
-    timeoutMs: TIMEOUT_BUN_CACHE_MS,
-    label: "package cache clear",
-  });
-
   const frontendDir = join(PROJECT_ROOT, "frontend");
 
-  reportProgress?.(`Syncing '${target}' to upstream branch head...`);
-  try {
+  await runWithServerStopped("Branch switch", stopServer, startServer, async () => {
+    const currentBranch = getCurrentBranch();
+    log(`Switching from '${currentBranch}' to '${target}'...`);
+    const previousHead = getHeadRef();
+    const targetUpstream = getUpstreamRefForSync(target);
+
+    reportProgress?.(`Syncing '${target}' to upstream branch head...`);
     await stashLocalChanges(`lumiverse-branch-switch-${currentBranch || "detached-head"}`);
     await resetTrackedFiles("HEAD");
     await checkoutBranch(target);
     assertNoLocalCommitsBeforeHardSync("HEAD", target, targetUpstream);
     await syncBranchToUpstream(target, targetUpstream);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log(`Failed to switch to '${target}': ${message}`);
-    await recoverFrontendAndStart(frontendDir, startServer);
-    throw error;
-  }
 
-  const currentHead = getHeadRef();
-  const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+    const currentHead = getHeadRef();
+    const changedFiles = getChangedFilesBetween(previousHead, currentHead);
+    if (changedFiles === null) {
+      log("Could not inspect changed files; conservatively installing dependencies and rebuilding the frontend.");
+    }
 
-  reportProgress?.("Installing backend and frontend dependencies...");
-  await ensureDependencies(frontendDir);
-  if (shouldRebuildFrontend(changedFiles)) {
-    const summary = summarizeFrontendChanges(changedFiles);
-    reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
-    log(`Frontend changes detected after branch switch; waiting for Vite build (${summary}).`);
-    await rebuildFrontend(frontendDir);
-  } else {
-    reportProgress?.("No frontend changes detected; restarting server...");
-    log("No frontend source/config changes detected after branch switch; skipping local Vite rebuild.");
-  }
+    await ensureChangedDependencies(frontendDir, changedFiles, reportProgress, {
+      fromRef: previousHead,
+      toRef: currentHead,
+    });
+    if (shouldRebuildFrontend(changedFiles)) {
+      const summary = changedFiles ? summarizeFrontendChanges(changedFiles) : "change list unavailable";
+      reportProgress?.(`Waiting for Vite build to finish${summary ? ` (${summary})` : ""}...`);
+      log(`Frontend changes detected after branch switch; waiting for Vite build (${summary}).`);
+      await rebuildFrontend(frontendDir);
+    } else {
+      reportProgress?.("No frontend changes detected; restarting server...");
+      log("No frontend source/config changes detected after branch switch; skipping local Vite rebuild.");
+    }
 
-  log(`Branch switch complete. Now on '${target}'. Restarting server...`);
-  reportProgress?.("Starting server...");
-  await startServer();
+    log(`Branch switch complete. Now on '${target}'. Restarting server...`);
+    reportProgress?.("Starting server...");
+  });
 }
 
 // Written into node_modules only after `bun install` exits 0. Its absence
@@ -522,13 +670,49 @@ async function installDependenciesForDir(
 }
 
 export async function ensureDependencies(frontendDir: string): Promise<void> {
-  const installCmd = bunInstallCmd();
-  clearBunInstallCacheIfTermux();
+  await ensureBackendDependencies();
+  await ensureFrontendDependencies(frontendDir);
+}
 
-  await installDependenciesForDir(PROJECT_ROOT, "backend", installCmd);
-  await installDependenciesForDir(frontendDir, "frontend", installCmd, async () => {
+export async function ensureBackendDependencies(): Promise<void> {
+  clearBunInstallCacheIfTermux();
+  await installDependenciesForDir(PROJECT_ROOT, "backend", bunInstallCmd());
+}
+
+export async function ensureFrontendDependencies(frontendDir: string): Promise<void> {
+  clearBunInstallCacheIfTermux();
+  await installDependenciesForDir(frontendDir, "frontend", bunInstallCmd(), async () => {
     await repairTermuxFrontendNativeDeps(frontendDir);
   });
+}
+
+async function ensureChangedDependencies(
+  frontendDir: string,
+  changedFiles: string[] | null,
+  reportProgress?: ProgressReporter,
+  manifestRefs?: DependencyManifestRefs,
+): Promise<void> {
+  const plan = planChangedDependencies(
+    changedFiles,
+    isTermuxRuntime() || isProotRuntime(),
+    manifestRefs,
+  );
+
+  if (plan.installBackend) {
+    reportProgress?.("Installing backend dependencies...");
+    await ensureBackendDependencies();
+  }
+  if (plan.installFrontend) {
+    reportProgress?.("Installing frontend dependencies...");
+    await ensureFrontendDependencies(frontendDir);
+  }
+  if (!plan.installBackend && !plan.installFrontend) {
+    log("Dependency manifests are unchanged; skipping package installation.");
+  }
+  if (plan.repairTermuxFrontendNativeDeps) {
+    reportProgress?.("Repairing Termux frontend native bindings...");
+    await repairTermuxFrontendNativeDeps(frontendDir);
+  }
 }
 
 export async function rebuildFrontend(frontendDir: string): Promise<void> {
@@ -539,18 +723,4 @@ export async function rebuildFrontend(frontendDir: string): Promise<void> {
     label: "frontend build",
   });
   log("Frontend rebuilt successfully.");
-}
-
-/** Rebuild frontend (best-effort) and restart the server after a git failure. */
-async function recoverFrontendAndStart(
-  frontendDir: string,
-  startServer: () => Promise<void>
-): Promise<void> {
-  log("Rebuilding frontend to restore dist...");
-  await spawnAsync(["bun", "run", "build"], {
-    cwd: frontendDir,
-    timeoutMs: TIMEOUT_BUN_BUILD_MS,
-    ignoreStdout: true,
-  });
-  await startServer();
 }

@@ -46,7 +46,11 @@
     "searchFolders": "フォルダーを検索...",
     "none": "なし",
     "folderNamePlaceholder": "フォルダー名...",
-    "createNew": "新しいフォルダーを作成..."
+    "createNew": "新しいフォルダーを作成...",
+    "renameFolder": "{{name}} の名前を変更",
+    "deleteFolder": "{{name}} を削除",
+    "confirmRename": "名前の変更を確定",
+    "cancelRename": "名前の変更をキャンセル"
   },
   "imageLightbox": {
     "loadFailed": "画像の読み込みに失敗しました",

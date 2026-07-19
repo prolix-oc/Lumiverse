@@ -4,13 +4,16 @@ import type { ConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 import { areReasoningSettingsEqual, normalizeReasoningSettingsForProvider } from '@/lib/reasoning-binding'
 import { REASONING_DEFAULTS, clearDirtyKey } from './settings'
-import { normalizeConnectionsOrder } from './connections-order-merge'
+import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
 export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsSlice> = (set, get) => ({
   profiles: [],
   activeProfileId: null,
 
-  setProfiles: (profiles) => set({ profiles }),
+  setProfiles: (profiles) =>
+    set((state) => ({
+      profiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).llm),
+    })),
   setActiveProfile: (id) => {
     const state = get()
     const oldProfile = state.activeProfileId

@@ -5,6 +5,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 const originalWindow = (globalThis as any).window
 const originalDocument = (globalThis as any).document
 const originalWebSocket = (globalThis as any).WebSocket
+const originalWorker = (globalThis as any).Worker
 
 type Listener = EventListenerOrEventListenerObject
 
@@ -35,6 +36,7 @@ class MockWebSocket {
 
   readyState = MockWebSocket.OPEN
   sent: string[] = []
+  closeCalls = 0
 
   constructor(_url: string) {}
 
@@ -42,14 +44,38 @@ class MockWebSocket {
     this.sent.push(payload)
   }
 
-  close() {}
+  close() {
+    this.closeCalls += 1
+  }
+}
+
+class MockWorker {
+  static instances: MockWorker[] = []
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: ((event: ErrorEvent) => void) | null = null
+  sent: any[] = []
+
+  constructor(_url: URL, _options?: WorkerOptions) {
+    MockWorker.instances.push(this)
+  }
+
+  postMessage(payload: any) {
+    this.sent.push(payload)
+  }
+
+  emit(payload: any) {
+    this.onmessage?.({ data: payload } as MessageEvent)
+  }
+
+  terminate() {}
 }
 
 ;(globalThis as any).window = windowMock
 ;(globalThis as any).document = documentMock
 ;(globalThis as any).WebSocket = MockWebSocket
+;(globalThis as any).Worker = MockWorker
 
-const { WebSocketClient } = await import('./client')
+const { WebSocketClient, WS_PONG } = await import('./client')
 
 afterAll(() => {
   if (originalWindow === undefined) delete (globalThis as any).window
@@ -60,6 +86,9 @@ afterAll(() => {
 
   if (originalWebSocket === undefined) delete (globalThis as any).WebSocket
   else (globalThis as any).WebSocket = originalWebSocket
+
+  if (originalWorker === undefined) delete (globalThis as any).Worker
+  else (globalThis as any).Worker = originalWorker
 })
 
 function makeClient() {
@@ -99,5 +128,44 @@ describe('WebSocketClient resume watchdog guard', () => {
     client.wasVisible = false
     client.sendVisibility()
     expect(pingTimeouts).toEqual([3_000])
+  })
+
+  test('runs heartbeat scheduling in a worker and closes on its timeout', () => {
+    const client = makeClient()
+    const socket = client.ws as MockWebSocket
+    client.startPing()
+
+    const worker = MockWorker.instances.at(-1)!
+    const start = worker.sent.find((message) => message.type === 'start')
+    expect(start).toMatchObject({ intervalMs: 30_000, timeoutMs: 10_000 })
+
+    expect(start.url).toBe('ws://localhost:3000/api/ws')
+
+    worker.emit({ type: 'ping-primary', generation: start.generation })
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'ping' })])
+
+    worker.emit({ type: 'timeout', generation: start.generation })
+    expect(socket.closeCalls).toBe(1)
+    expect(client.ws).toBeNull()
+    client.disconnect()
+  })
+
+  test('accepts worker verification and ignores stale worker timeouts', () => {
+    const client = makeClient()
+    const socket = client.ws as MockWebSocket
+    let verified = 0
+    client.on(WS_PONG, () => { verified += 1 })
+
+    client.startPing()
+    const worker = MockWorker.instances.at(-1)!
+    const firstStart = worker.sent.find((message) => message.type === 'start')
+    worker.emit({ type: 'verified', generation: firstStart.generation })
+    expect(verified).toBe(1)
+
+    client.startPing()
+    worker.emit({ type: 'timeout', generation: firstStart.generation })
+    expect(socket.closeCalls).toBe(0)
+    expect(client.ws).toBe(socket)
+    client.disconnect()
   })
 })

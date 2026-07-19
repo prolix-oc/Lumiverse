@@ -13,6 +13,7 @@ import Pagination from '@/components/shared/Pagination'
 import type { Character } from '@/types/api'
 import styles from './GroupChatCreatorModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type Step = 'characters' | 'greeting' | 'settings'
 type GroupCardMode = 'swap' | 'merge_ignore_muted' | 'merge'
@@ -33,7 +34,10 @@ export default function GroupChatCreatorModal() {
 
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
-  const modalProps = useStore((s) => s.modalProps) as { initialCharacterIds?: string[] } | null
+  const modalProps = useStore((s) => s.modalProps) as {
+    initialCharacterIds?: string[]
+    deleteChatIdAfterCreate?: string
+  } | null
   const characters = useStore((s) => s.characters)
   const [step, setStep] = useState<Step>('characters')
   const [selectedIds, setSelectedIds] = useState<string[]>(modalProps?.initialCharacterIds ?? [])
@@ -95,7 +99,7 @@ export default function GroupChatCreatorModal() {
     if (Object.keys(overrides).length > 0) {
       setTalkativenessOverrides((prev) => ({ ...prev, ...overrides }))
     }
-  }, [selectedCharacters])
+  }, [selectedCharacters, talkativenessOverrides])
 
   const greetingOptions = useMemo<GreetingOption[]>(() => {
     const options: GreetingOption[] = []
@@ -185,12 +189,17 @@ export default function GroupChatCreatorModal() {
       }
       closeModal()
       navigate(`/chat/${chat.id}`)
+      if (modalProps?.deleteChatIdAfterCreate) {
+        void chatsApi.delete(modalProps.deleteChatIdAfterCreate).catch((err) => {
+          console.error('[GroupChatCreator] Failed to delete previous chat after creating a new one:', err)
+        })
+      }
     } catch (err) {
       console.error('[GroupChatCreator] Failed to create group chat:', err)
     } finally {
       setCreating(false)
     }
-  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, navigate])
+  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, modalProps?.deleteChatIdAfterCreate, navigate])
 
   const canProceed =
     step === 'characters'
@@ -265,8 +274,14 @@ export default function GroupChatCreatorModal() {
                     className={styles.searchInput}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
                     placeholder={t('searchPlaceholder')}
                   />
+                  {search && (
+                    <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 <div className={styles.charGrid}>

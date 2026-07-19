@@ -92,6 +92,10 @@
   border-color: var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
 }
 
+.cardDragging {
+  opacity: 0.5;
+}
+
 /* Left accent bar — type-coded. Subtle saturation: the card is still
    clearly the subject. */
 .card::before {
@@ -234,6 +238,129 @@
   color: var(--lumiverse-text-dim);
 }
 
+/* ---- Placement binding (select variable → block insertion profile) ---- */
+
+.placementBinding {
+  border: 1px solid var(--lumiverse-primary-020, rgba(147, 112, 219, 0.2));
+  border-radius: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, var(--lumiverse-primary-005, rgba(147, 112, 219, 0.05)), transparent 45%),
+    var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.02));
+}
+
+.placementHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.placementTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.placementEnable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+}
+
+.placementHint,
+.placementUnavailable {
+  margin: 3px 0 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+}
+
+.placementBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.placementOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.placementProfilesHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+}
+
+.placementProfilesHeader > :first-child {
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.placementOption {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 9px;
+  background: var(--lumiverse-bg-darker, rgba(0, 0, 0, 0.14));
+}
+
+.placementOptionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.placementOptionKicker {
+  display: block;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(9.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.65px;
+  text-transform: uppercase;
+}
+
+.placementOptionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.placementSummary {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--lumiverse-primary-text, #c4b5fd);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  text-align: right;
+}
+
+.placementFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
 /* ---- Switch default control ---- */
 
 .switchToggleRow {
@@ -337,6 +464,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--lumiverse-text-dim);
   cursor: grab;
   border-radius: 4px;
@@ -350,6 +480,15 @@
 
 .handle:active {
   cursor: grabbing;
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary-050, rgba(147, 112, 219, 0.5));
+  outline-offset: 2px;
+}
+
+.handleDisabled {
+  cursor: default;
 }
 
 .nameField {
@@ -490,5 +629,17 @@
   .colHalf,
   .colThird {
     grid-column: span 12;
+  }
+  .placementHeader,
+  .placementOptionHeader,
+  .placementProfilesHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .placementSummary {
+    text-align: left;
+  }
+  .placementFields {
+    grid-template-columns: 1fr;
   }
 }

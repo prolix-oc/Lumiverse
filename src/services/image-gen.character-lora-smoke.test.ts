@@ -108,7 +108,7 @@ describe("character LoRA pipeline splice (SwarmUI)", () => {
       model: "fake-model",
       api_url: "http://localhost:9999",
       is_default: true,
-      default_parameters: {},
+      default_parameters: { loras: "provider_anchor.safetensors" },
     });
     settingsSvc.putSetting(USER_ID, "imageGeneration", {
       enabled: true,
@@ -161,9 +161,142 @@ describe("character LoRA pipeline splice (SwarmUI)", () => {
     expect(sentRequest.prompt).toContain("a portrait at sunset");
 
     // LoRA params must be set on the request's `parameters` bag.
-    expect(sentRequest.parameters?.loras).toBe("aerith_v3.safetensors");
-    // SwarmUI uses model strength only; we serialize as a string.
-    expect(sentRequest.parameters?.loraWeights).toBe("0.85");
+    expect(sentRequest.parameters?.loras).toBe("provider_anchor.safetensors,aerith_v3.safetensors");
+    // Existing names without explicit weights retain SwarmUI's default weight.
+    expect(sentRequest.parameters?.loraWeights).toBe("1,0.85");
+  });
+
+  test("preserves raw provider layers while scaling and bypassing preset/character layers", async () => {
+    const char = charactersSvc.createCharacter(USER_ID, {
+      name: "Layered",
+      description: "test description",
+    });
+    characterLoraSvc.setCharacterLora(USER_ID, char.id, {
+      lora_name: "character_detail.safetensors",
+      weight_model: 0.85,
+      weight_clip: 0.6,
+      base_tags: "1girl, detailed_eyes",
+      source_url: "https://example.com/layered",
+    });
+
+    const connection = await imageGenConnSvc.createConnection(USER_ID, {
+      name: "Fake SwarmUI",
+      provider: "swarmui",
+      model: "fake-model",
+      api_url: "http://localhost:9999",
+      is_default: true,
+      default_parameters: {
+        loras: ["provider_first.safetensors", "", "provider_second.safetensors"],
+        loraWeights: [0.3, 0.9, 0.4, 0.95],
+      },
+    });
+    settingsSvc.putSetting(USER_ID, "imageGeneration", {
+      enabled: true,
+      activeImageGenConnectionId: connection.id,
+      includeCharacters: false,
+      promptMode: "custom",
+      promptPresets: [],
+      loraPresets: [
+        {
+          id: "style-preset",
+          name: "Style preset",
+          base_tags: "cinematic lighting",
+          loras: [
+            {
+              lora_name: "cinematic_style.safetensors",
+              weight_model: 0.7,
+              weight_clip: 0.5,
+            },
+          ],
+        },
+      ],
+      activeLoraPresetId: "style-preset",
+      loraStrengthScale: 0,
+      outputTarget: "preview",
+      forceGeneration: true,
+      addToGallery: false,
+    });
+
+    const chatId = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    getDb()
+      .query(
+        "INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(chatId, USER_ID, char.id, "smoke", "{}", now, now);
+
+    await generateSceneBackground(USER_ID, chatId, {
+      promptMode: "custom",
+      prompt: "a portrait",
+      skipParse: true,
+      outputTarget: "preview",
+      forceGeneration: true,
+    });
+
+    expect(captured.length).toBe(1);
+    let sentRequest = captured[0].request;
+    expect(sentRequest.prompt.startsWith("cinematic lighting, 1girl, detailed_eyes")).toBe(true);
+    expect(sentRequest.parameters?.loras).toBe(
+      "provider_first.safetensors,provider_second.safetensors,cinematic_style.safetensors,character_detail.safetensors",
+    );
+    expect(sentRequest.parameters?.loraWeights).toBe("0.3,0.4,0,0");
+
+    captured = [];
+    await generateSceneBackground(USER_ID, chatId, {
+      promptMode: "custom",
+      prompt: "a portrait",
+      skipParse: true,
+      outputTarget: "preview",
+      forceGeneration: true,
+      bypassCharacterLora: true,
+    });
+
+    expect(captured.length).toBe(1);
+    sentRequest = captured[0].request;
+    expect(sentRequest.prompt.startsWith("cinematic lighting")).toBe(true);
+    expect(sentRequest.prompt).not.toContain("1girl");
+    expect(sentRequest.parameters?.loras).toBe(
+      "provider_first.safetensors,provider_second.safetensors,cinematic_style.safetensors",
+    );
+    expect(sentRequest.parameters?.loraWeights).toBe("0.3,0.4,0");
+
+    captured = [];
+    await generateSceneBackground(USER_ID, chatId, {
+      promptMode: "custom",
+      prompt: "a portrait",
+      skipParse: true,
+      outputTarget: "preview",
+      forceGeneration: true,
+      bypassActiveLoraPreset: true,
+    });
+
+    expect(captured.length).toBe(1);
+    sentRequest = captured[0].request;
+    expect(sentRequest.prompt.startsWith("1girl, detailed_eyes")).toBe(true);
+    expect(sentRequest.prompt).not.toContain("cinematic lighting");
+    expect(sentRequest.parameters?.loras).toBe(
+      "provider_first.safetensors,provider_second.safetensors,character_detail.safetensors",
+    );
+    expect(sentRequest.parameters?.loraWeights).toBe("0.3,0.4,0");
+
+    captured = [];
+    await generateSceneBackground(USER_ID, chatId, {
+      promptMode: "custom",
+      prompt: "a portrait",
+      skipParse: true,
+      outputTarget: "preview",
+      forceGeneration: true,
+      bypassCharacterLora: true,
+      bypassActiveLoraPreset: true,
+    });
+
+    expect(captured.length).toBe(1);
+    sentRequest = captured[0].request;
+    expect(sentRequest.prompt).toBe("a portrait");
+    expect(sentRequest.parameters?.loras).toBe(
+      "provider_first.safetensors,provider_second.safetensors",
+    );
+    expect(sentRequest.parameters?.loraWeights).toBe("0.3,0.4");
   });
 
   test("no binding → request goes out untouched", async () => {

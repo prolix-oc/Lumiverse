@@ -7,6 +7,7 @@ import { relayClient } from '@/ws/relayClient'
 import { multiplayerApi } from '@/api/multiplayer'
 import { buildActivePersonaSnapshot } from '@/lib/personaSnapshot'
 import { buildCharacterAvatarSnapshot } from '@/lib/characterAvatarSnapshot'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import { toast } from '@/lib/toast'
 import type { RoomParticipant, TurnStrategy } from '@/types/multiplayer'
 
@@ -166,7 +167,7 @@ export default function MultiplayerPanel() {
     } catch {
       /* remote unavailable — local room still works */
     }
-  }, [])
+  }, [setRemoteCode])
 
   const hostCreate = useCallback(async () => {
     if (!activeChatId) return
@@ -292,11 +293,11 @@ export default function MultiplayerPanel() {
     } finally {
       setBusy(false)
     }
-  }, [roomId])
+  }, [roomId, setRemoteCode])
 
   const copyText = useCallback(async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(text)
+      await copyTextToClipboard(text)
       toast.success(`${label} copied`)
     } catch {
       toast.error('Could not copy — select and copy manually')

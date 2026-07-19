@@ -128,7 +128,7 @@ export function useCharacterBrowser() {
         )
       },
     )
-  }, [!!importProgress])
+  }, [importProgress])
 
   // Refresh gallery when LumiHub install completes (external mutation)
   useEffect(() => {
@@ -711,7 +711,7 @@ export function useCharacterBrowser() {
       const wasFavorite = favorites.includes(id)
       const nextFavorites = wasFavorite
         ? favorites.filter((favoriteId) => favoriteId !== id)
-        : [...favorites, id].slice(0, 15)
+        : [...favorites, id]
       const requestSeq = ++favoriteMutationSeqRef.current
 
       toggleFavorite(id)

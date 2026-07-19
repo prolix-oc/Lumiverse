@@ -71,6 +71,87 @@ export interface OperatorDiskWarningStatus {
   defaults: ResolvedDiskWarningSettings
 }
 
+export type SmartctlAvailability = 'available' | 'installable' | 'manual' | 'unsupported'
+export type SmartDriveStatus = 'ok' | 'warning' | 'failing' | 'unavailable' | 'standby'
+export type SmartDriveKind = 'ssd' | 'hdd' | 'unknown'
+export type SmartAlertSeverity = 'warning' | 'failing'
+
+export interface SmartctlBinary {
+  path: string
+  version: string | null
+}
+
+export interface SmartctlInstallPlan {
+  manager: 'apt-get' | 'dnf' | 'yum' | 'apk' | 'pacman' | 'zypper' | 'brew' | 'choco'
+  command: string[]
+  requiresElevation: boolean
+}
+
+export interface SmartDriveSummary {
+  device: string
+  protocol: string | null
+  kind: SmartDriveKind
+  model: string | null
+  serialNumber: string | null
+  status: SmartDriveStatus
+  temperatureC: number | null
+  exitStatus: number
+  percentageUsed: number | null
+  criticalWarning: number | null
+  ataAttributes: {
+    reallocatedSectors: number | null
+    pendingSectors: number | null
+    uncorrectableSectors: number | null
+  }
+  alertConditions: Array<{
+    severity: SmartAlertSeverity
+    message: string
+  }>
+  ssd: {
+    percentageUsed: number | null
+    percentageRemaining: number | null
+    availableSparePercent: number | null
+    availableSpareThresholdPercent: number | null
+    dataWrittenBytes: number | null
+    powerOnHours: number | null
+    powerCycles: number | null
+    unsafeShutdowns: number | null
+    mediaErrors: number | null
+    wearLevelingCount: number | null
+    reservedBlocksUsed: number | null
+    programFailures: number | null
+    eraseFailures: number | null
+  } | null
+  hdd: {
+    powerOnHours: number | null
+    powerCycles: number | null
+    startStopCount: number | null
+    loadCycleCount: number | null
+  } | null
+  message: string | null
+}
+
+export interface SmartctlSnapshot {
+  checkedAt: string
+  drives: SmartDriveSummary[]
+  error: string | null
+}
+
+export interface OperatorSmartctlStatus {
+  availability: SmartctlAvailability
+  binary: SmartctlBinary | null
+  installPlan: SmartctlInstallPlan | null
+  message: string
+  latestSnapshot: SmartctlSnapshot | null
+  snapshot: SmartctlSnapshot
+}
+
+export interface SmartctlInstallResult {
+  installed: boolean
+  status: Omit<OperatorSmartctlStatus, 'snapshot'>
+  error: string | null
+}
+
 export interface ResolvedDnsSettings {
   dohFallbackEnabled: boolean
   dohEndpoint: string
@@ -223,6 +304,8 @@ export const operatorApi = {
   putDns: (settings: DnsSettings) => put<OperatorDnsStatus>('/operator/dns', settings),
   getDiskWarning: () => get<OperatorDiskWarningStatus>('/operator/disk-warning'),
   putDiskWarning: (settings: DiskWarningSettings) => put<OperatorDiskWarningStatus>('/operator/disk-warning', settings),
+  getSmartctl: (refresh = false) => get<OperatorSmartctlStatus>('/operator/smartctl', refresh ? { refresh: 1 } : undefined),
+  installSmartctl: () => post<SmartctlInstallResult>('/operator/smartctl/install'),
   getLogs: (limit = 150) => get<OperatorLogsResponse>('/operator/logs', { limit }),
   subscribeLogs: () => post<{ subscribed: boolean }>('/operator/logs/subscribe'),
   unsubscribeLogs: () => del<{ subscribed: boolean }>('/operator/logs/subscribe'),

@@ -3,6 +3,7 @@
 Lumiverse's first-party React components — model pickers, form atoms, searchable selects, pagination, collapsible sections — are exposed to extensions via `ctx.components.*`. The host renders the real component into a DOM node you control. You never need to depend on React, ship the component CSS, or replicate the look in plain HTML.
 
 Mounted components automatically inherit the active Lumiverse theme (accent color, glass mode, dark/light, density), so they visually match the rest of the host UI without any styling work on your part.
+Shared components are inert by default: they add no DOM or UI until an extension explicitly mounts one through `ctx.components.*` into an extension-owned target under a registered placement root.
 
 ```ts
 import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
@@ -49,11 +50,11 @@ export function setup(ctx: SpindleFrontendContext) {
 
 Every `mountX(target, options)` call:
 
-1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string scoped to your extension's DOM.
+1. **Resolves the target** — pass either an `HTMLElement` or a CSS selector string. Selectors are evaluated across the current extension's live registered placement roots, including roots temporarily detached while their tab or panel is inactive; the selector must resolve exactly one target. An `HTMLElement` in a newly constructed, unowned detached subtree is accepted provisionally so you can mount a component before appending its containing card or panel. That subtree must be appended under one of your live registered roots synchronously, before the current JavaScript task completes, or the host destroys the mount.
 2. **Renders the real component** into that element.
-3. **Returns a handle** with `update()`, `getValue()`, `destroy()`, and component-specific helpers.
+3. **Returns a handle** with `update()`, `destroy()`, and component-specific helpers such as `getValue()` where documented.
 
-The handle is the only thing you need to keep alive. Mounted components are auto-destroyed when your extension is disabled or unloaded — but you should still call `destroy()` yourself when you reuse the target for something else, to avoid leaking memory.
+The handle is the only thing you need to keep alive. A registered root may be temporarily detached without losing mounted component state; any body-ported component UI is hidden and made inert until the root is attached again. Removing or reparenting the target, or unregistering its placement root, destroys the mount. The host also destroys mounts when your extension is disabled or unloaded — but you should still call `destroy()` yourself when you reuse the target for something else, to avoid leaking memory.
 
 ### Shared handle shape
 
@@ -63,7 +64,7 @@ Every handle implements `SpindleMountedComponent<TOptions>`:
 |---|---|---|
 | `componentId` | `string` | Host-assigned ID, unique per extension. Useful in logs. |
 | `element` | `HTMLElement` | The target element the component was mounted into. |
-| `update(patch)` | `void` | Merge a partial of the original options into the live component. Pass only the fields you want to change. |
+| `update(patch)` | `void` | Merge a partial of the original options into the live component. Pass only the fields you want to change; omitted fields remain unchanged. Component-specific option semantics apply; use the documented option shape and do not rely on unknown fields or `undefined` being rejected. |
 | `destroy()` | `void` | Unmount the React tree and release host resources. The target element is left in place. |
 
 Form components add `getValue()` so you can read the current value at any time:
@@ -80,6 +81,11 @@ handle.update({ disabled: true })  // any partial option works
 Components are **auto-controlled** by the host. You supply an initial value and an `onChange` callback — the host owns internal state across user interactions. To force the value from your code, call `handle.update({ value })`. To read the current value, call `handle.getValue()`.
 
 You do **not** need to mirror state into your own variables and call `update()` on every change — that's already happening inside the host.
+
+### `onChange` ordering and detached snapshots
+
+For form components, the host commits the next value before invoking `onChange`, so `handle.getValue()` inside the callback already returns that next value. If the callback calls `handle.update({ value })`, that programmatic update is applied afterward and wins. Callback return values — including `false` or a thenable that resolves to `false` — are notifications only and never roll state back. Synchronous throws and rejected thenables are logged without undoing the committed value. Values passed to callbacks and returned by `getValue()` are detached snapshots; mutating a mutable array (for example, a multiselect value) or a Loom editor snapshot cannot mutate host state.
+
 
 ## Component catalog
 
@@ -101,6 +107,75 @@ You do **not** need to mirror state into your own variables and call `update()` 
 | `mountCollapsibleSection` | Titled, expandable container — see [body slot](#collapsible-sections-with-host-managed-chrome) |
 | `mountPagination` | Page navigation with per-page selector |
 | `mountCloseButton` | Themed X button |
+| `mountLoomBlockEditor` | Native Loom prompt-block editor with validated, extension-owned state |
+
+## Loom block editor
+
+`ctx.components.mountLoomBlockEditor(target, options)` mounts the native Loom block editor into an extension-owned element. It is permission-free, but the target must still follow the same ownership rules as every shared component. A registered placement root may be temporarily detached while its tab or panel is inactive. A new unowned detached subtree may be mounted provisionally only when it is synchronously appended under a live registered root; an arbitrary detached element with only an ownership attribute is not a valid target.
+
+The public value is deliberately closed:
+
+```ts
+interface SpindleLoomBlockEditorValue {
+  blocks: PromptBlockDTO[]
+  promptVariableValues: PromptVariableValuesDTO
+}
+
+interface SpindleLoomBlockEditorOptions {
+  value: SpindleLoomBlockEditorValue
+  onChange?: (value: SpindleLoomBlockEditorValue) => void
+  readOnly?: boolean
+  compact?: boolean
+}
+```
+
+`value` is required. `readOnly` defaults to `false`; `compact` defaults to `true` (matching the native preset editor's space-efficient layout in extension panels). `readOnly` disables user edits while still allowing a programmatic `update()`. Unknown own keys in the value, a block, or the options are rejected. The six host-owned sealed/provenance fields — `sealed`, `sealedKey`, `sealedSource`, `sealedOriginPresetId`, `sealedOriginVersion`, and `sealedSha256` — are intentionally not part of the public `PromptBlockDTO` boundary and must not be supplied by an extension. Main keeps those fields in its trusted projection and merges accepted public edits back without exposing or replacing them.
+
+Mounting validates and deep-clones the complete value before rendering. `onChange` receives a detached clone, and `getValue()` returns a detached clone, so mutating either snapshot cannot mutate host state. `update({ value })` validates and deep-clones the replacement before committing it; an invalid value or option patch is rejected atomically rather than partially applied.
+
+### Loom value limits
+
+The host applies these limits before cloning or rendering:
+
+| Limit | Maximum |
+|---|---:|
+| Object/array nesting depth | 16 |
+| Visited values/nodes | 16,384 |
+| Aggregate object properties and array entries | 65,536 |
+| One string | 65,536 JavaScript string units |
+| All strings combined | 4 MiB after UTF-8 encoding |
+| Blocks | 512 |
+| Prompt variables per block | 512 |
+| Options per select or multiselect variable | 256 |
+| Prompt-variable block buckets | 512 |
+| Prompt-variable values per bucket | 256 |
+
+Preflight also rejects cyclic graphs, accessors, sparse arrays, and custom object prototypes. Limits apply to both the initial `value` and later `update({ value })` calls; exceeding one rejects the whole operation without changing the current editor value.
+
+`maxNodes` counts every value visited during preflight, including primitive values, not only object and array nodes.
+
+```ts
+const editor = ctx.components.mountLoomBlockEditor(slot, {
+  value: { blocks: initialBlocks, promptVariableValues: {} },
+  compact: true,
+  onChange: (next) => {
+    console.log('Loom draft changed', next.blocks.length)
+  },
+})
+
+editor.update({ readOnly: true })
+const snapshot = editor.getValue()
+await editor.refreshMacros()
+editor.destroy()
+```
+
+The editor's macro picker is also intentionally scoped. It displays only `core-public` macros and macros owned by the current extension; definitions owned by other extensions are filtered out. `refreshMacros()` refreshes that filtered catalog and serializes refreshes. The filtered catalog is independently bounded to 128 categories, 256 macros per category, 32 arguments per macro, 8,192 nodes, 32,768 entries, a nesting depth of 16, 65,536 units per string, and 4 MiB of UTF-8 string data. A public mount has no contextual preview adapter: it does not resolve macros against a chat, character, persona, or active connection, does not issue preview/generation requests, and does not render the Main-only contextual preview controls.
+
+### Loom editor lifecycle
+
+- `destroy()` is idempotent. It unmounts the React tree and releases component/portal resources, but leaves the extension-owned target element in the DOM.
+- The host also destroys Loom mounts when the extension is disabled, unloaded, updated, or reloaded; when the relevant permission or placement root is revoked; or when the owned root is removed. A stale handle never remounts or resurrects the component.
+- After teardown, `update()` and `getValue()` throw `COMPONENT_DESTROYED`, and `refreshMacros()` returns a rejected promise with the same lifecycle error. A refresh that was already in flight ignores any late catalog settlement after teardown.
 
 ## Text inputs
 
@@ -307,7 +382,7 @@ const picker = ctx.components.mountSelect(target, {
 | `triggerIcon` | `SpindleSelectOptionLeading` | — | Custom icon shown on the trigger |
 | `triggerClassName` | `string` | — | Additional CSS class on the trigger button |
 | `ariaLabel` | `string` | — | Accessible label for the trigger |
-| `portal` | `boolean` | `true` | Render the dropdown into `document.body` so it escapes `overflow:hidden` ancestors |
+| `portal` | `boolean` | `true` | Render the dropdown into `document.body` so it escapes `overflow:hidden` ancestors. Extension bridges opt into this default; set `false` to keep the dropdown inline. |
 | `align` | `'left' \| 'right'` | `'left'` | Dropdown horizontal alignment relative to the trigger |
 | `maxHeight` | `number` | — | Maximum dropdown height in CSS pixels |
 | `minWidth` | `number` | — | Minimum dropdown width in CSS pixels |
@@ -641,8 +716,9 @@ Pagination is fully controlled — call `pager.update({ currentPage: next })` af
 
 | Event | What the host does |
 |---|---|
-| You call `handle.destroy()` | The React tree is unmounted. The target element remains in place. |
+| You call `handle.destroy()` | The React tree is unmounted. The target element remains in place, and any owned body portals are removed. |
 | You replace the target's contents (e.g. `el.innerHTML = ''`) | **Don't.** Destroy the handle first. Replacing the DOM under React's feet leaks memory. |
+| A registered placement root is temporarily detached | Mounted state is retained. Any owned body portals are hidden with an author-level `display: none` rule and inert while the root is detached; outside-pointer, scroll, resize, and reposition effects are suspended without closing or clearing the select. Reattachment restores the prior `hidden`, `inert`, and inline `style` state, then resumes positioning. |
 | Your extension is disabled / unloaded | All mounted components are destroyed automatically as part of cleanup, alongside drawer tabs, dock panels, and other placements. |
 | The extension reloads (dev/manifest change) | New mounts are created against fresh targets. Stale handles from the previous load are unmounted by the host. |
 

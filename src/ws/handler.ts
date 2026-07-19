@@ -18,6 +18,7 @@ export const wsHandler = upgradeWebSocket((c) => {
   let userId: string | null = null;
   let userRole: string | null = null;
   let sessionId: string | null = null;
+  let heartbeatOnly = false;
   // Multiplayer: set when this socket is a room participant (peer or joined
   // local account). The participantId is connection-scoped and authoritative —
   // inbound room_* messages NEVER trust a participantId from the payload.
@@ -29,6 +30,7 @@ export const wsHandler = upgradeWebSocket((c) => {
 
       try {
         const url = new URL(c.req.url);
+        heartbeatOnly = url.searchParams.get("heartbeat") === "1";
 
         // Auth path 3: room token (remote multiplayer peer, synthetic identity).
         // A peer is NOT a host-local account: it gets NO userId, NO user:/system
@@ -132,6 +134,14 @@ export const wsHandler = upgradeWebSocket((c) => {
           sessionId = session.session.id;
         }
 
+        // Dedicated browser-worker liveness connection. It authenticates like
+        // the application socket but never joins the event bus, so expensive
+        // or long-running application WS handlers cannot delay its pong.
+        if (heartbeatOnly) {
+          ws.send(JSON.stringify({ type: "heartbeat_ready", timestamp: Date.now() }));
+          return;
+        }
+
         // Self-healing: first user (user 0) is always the instance owner.
         if (userId && userRole !== "owner") {
           const cachedFirstId = getFirstUserId();
@@ -199,6 +209,8 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (heartbeatOnly) return;
+
         if (data.type === "visibility") {
           if (userId && sessionId) {
             eventBus.setUserVisibility(userId, sessionId, !!data.visible);
@@ -262,7 +274,12 @@ export const wsHandler = upgradeWebSocket((c) => {
 
         if (data.type === "room_message") {
           if (!roomAuth) return;
-          const result = multiplayerSvc.submitPeerMessage(roomAuth.roomId, roomAuth.participantId, data.content);
+          const result = multiplayerSvc.submitPeerMessage(
+            roomAuth.roomId,
+            roomAuth.participantId,
+            data.content,
+            data.associative_regex_append,
+          );
           if (!result.ok) {
             ws.send(JSON.stringify({ event: "ROOM_MESSAGE_REJECTED", payload: { reason: result.reason }, timestamp: Date.now() }));
           }

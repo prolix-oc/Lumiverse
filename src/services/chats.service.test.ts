@@ -3,6 +3,7 @@ import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
   addSwipe,
   convertSoloChatToGroup,
+  deleteChats,
   getChat,
   cycleSwipe,
   getMessage,
@@ -11,6 +12,7 @@ import {
   listRecentChatsGrouped,
   patchMessageExtra,
   removeGroupMember,
+  searchMessages,
   setGroupMemberAlternateFields,
   updateMessage,
 } from "./chats.service";
@@ -150,6 +152,32 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDatabase();
+});
+
+describe("chat message search", () => {
+  test("searches the active swipe and omits internal injected messages", () => {
+    seedChat("chat-find", "c1", "Find", "{}", 100);
+    seedMessage("before", "chat-find", "No match here", {}, { index: 0 });
+    seedMessage("active-swipe", "chat-find", "Stale content", {}, { index: 1 });
+    getDb().query("UPDATE messages SET swipes = ?, swipe_id = ? WHERE id = ?").run(
+      JSON.stringify(["needle in an inactive swipe", "Needle in the active swipe"]),
+      1,
+      "active-swipe",
+    );
+    seedMessage("injected", "chat-find", "Needle in internal content", { _loom_inject: { block_id: "hidden" } }, { index: 2 });
+    seedMessage("after", "chat-find", "A second needle result", {}, { index: 3 });
+
+    const result = searchMessages("u1", "chat-find", "needle");
+
+    expect(result.total).toBe(2);
+    expect(result.message_total).toBe(4);
+    expect(result.truncated).toBe(false);
+    expect(result.data).toEqual([
+      { id: "active-swipe", index_in_chat: 1, offset: 1 },
+      { id: "after", index_in_chat: 3, offset: 3 },
+    ]);
+    expect(searchMessages("u1", "chat-find", "inactive").total).toBe(0);
+  });
 });
 
 describe("recent chats", () => {
@@ -383,6 +411,26 @@ describe("recent chats", () => {
       },
     ]);
     expect(original.metadata).toEqual({ author_note: "keep me" });
+  });
+});
+
+describe("bulk chat deletion", () => {
+  test("deletes only owned selected chats and ignores duplicate or missing ids", () => {
+    seedChat("delete-one", "c1", "One", "{}", 100);
+    seedChat("delete-two", "c1", "Two", "{}", 200);
+    seedChat("keep", "c1", "Keep", "{}", 300);
+    getDb()
+      .query("INSERT INTO chats (id, user_id, character_id, name, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("foreign", "u2", "c1", "Foreign", "{}", 400, 400);
+
+    const deleted = deleteChats("u1", ["delete-two", "missing", "delete-one", "delete-two", "foreign"]);
+
+    expect(deleted).toEqual(["delete-two", "delete-one"]);
+    expect(getChat("u1", "delete-one")).toBeNull();
+    expect(getChat("u1", "delete-two")).toBeNull();
+    expect(getChat("u1", "keep")?.name).toBe("Keep");
+    const foreign = getDb().query("SELECT id FROM chats WHERE id = ?").get("foreign") as { id: string } | null;
+    expect(foreign?.id).toBe("foreign");
   });
 });
 

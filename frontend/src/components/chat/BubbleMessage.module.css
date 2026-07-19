@@ -25,6 +25,14 @@
     box-shadow 0.15s ease;
 }
 
+/* The normal card is paint-contained and clipped to keep its glass treatment
+   cheap. Authored HTML islands need visual overflow for box/text shadows and
+   transformed corners, so relax both clips only for cards containing one. */
+.card:has([data-lumiverse-html-island]) {
+  overflow: visible;
+  contain: layout style;
+}
+
 /* Hide accent bars */
 .card::before {
   display: none;
@@ -370,6 +378,15 @@
   align-self: flex-end;
 }
 
+/* The right-aligned user badge should remain a single line. The left-aligned
+   option retains the general wrapping behavior for backwards compatibility. */
+.user:not(.userLeft) .metaPill {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  max-width: none;
+  white-space: nowrap;
+}
+
 .userLeft.user .metaPill {
   align-self: flex-start;
 }
@@ -600,6 +617,12 @@
 
   .headerLeft {
     align-items: flex-start;
+    max-width: 100%;
+  }
+
+  /* Actions occupy their own strip above the card at this breakpoint, so the
+     desktop reservation would only squeeze the right-side metadata. */
+  .user:not(.userLeft) .headerLeft {
     max-width: 100%;
   }
 

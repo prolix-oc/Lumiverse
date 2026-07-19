@@ -5,9 +5,9 @@
 // the next write fault on any of those mappings raises SIGBUS — which Bun
 // surfaces as `panic(main thread): Bus error` and dies. There's no clean way
 // to recover at that point; the only mitigation is to keep the disk from
-// filling. This service logs disk usage on startup and warns the connected
-// frontend(s) once per server lifetime when free space drops below the
-// threshold, so the operator has a chance to act before the crash.
+// filling. This service logs disk usage on startup and warns connected
+// frontend(s) when the disk first enters the warning range, so the operator
+// has a chance to act before the crash.
 import { statfsSync } from "node:fs";
 import { env } from "../env";
 import { getDb } from "../db/connection";
@@ -42,11 +42,9 @@ function getCurrentWarningThresholds(): DiskWarningThresholds {
   };
 }
 
-// Tracks whether the last check found the disk over threshold. Used purely
-// for console-log gating — we don't want to spam logs every 5 min while the
-// disk stays full. The WS toast is re-emitted on every over-threshold check
-// so late-connecting admins still get notified; the frontend dedupes per
-// browser session.
+// Tracks whether the last check found the disk over threshold. This gates
+// both console logs and warning events so a sustained condition is announced
+// once, rather than on every five-minute poll.
 let warningActive = false;
 let intervalTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -111,11 +109,9 @@ function runDiskUsageCheck(reason: "startup" | "interval"): void {
   }
   warningActive = over;
 
-  // Re-emit on every check while over threshold so admins who connect after
-  // the first emit still receive the toast. The frontend dedupes per browser
-  // session (see SYSTEM_DISK_LOW handler in useWebSocket.ts), so existing
-  // sessions don't see repeat toasts every 5 min.
-  if (over) {
+  // Warn once at startup when already over threshold, and again only after
+  // the disk recovers then re-enters the warning range.
+  if (over && (reason === "startup" || transitioned)) {
     const payload = {
       path: usage.path,
       usagePercent: usage.usagePercent,

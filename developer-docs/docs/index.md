@@ -35,7 +35,7 @@ Spindle is Lumiverse's extension framework. It lets you add custom functionality
 - [Quick Start](getting-started/quick-start.md) — get your first extension running
 - [Manifest Reference](getting-started/manifest.md) — configure `spindle.json`
 - [Permissions](getting-started/permissions.md) — understand the permission model
-- [Backend Capabilities](getting-started/capabilities.md) — opt out of install-time scanner blocks
+- [Backend Capabilities](getting-started/capabilities.md) — understand scanner declarations and guarded dynamic-code runtime behavior
 - [Runtime Modes](getting-started/runtime.md) — understand `process`, `sandbox`, and `worker`
 - [Backend API](backend-api/index.md) — the `spindle` global reference
 - [Frontend API](frontend-api/index.md) — the `ctx` context reference

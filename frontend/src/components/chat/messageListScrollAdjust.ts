@@ -9,6 +9,7 @@ export interface MessageListScrollAdjustmentInput {
   isStreamingTail: boolean
   isFocusedEditableRow?: boolean
   isUserToggledCollapsibleRow?: boolean
+  isProgrammaticContentReflow?: boolean
 }
 
 export function shouldAdjustMessageListScrollOnResize({
@@ -22,6 +23,7 @@ export function shouldAdjustMessageListScrollOnResize({
   isStreamingTail,
   isFocusedEditableRow,
   isUserToggledCollapsibleRow,
+  isProgrammaticContentReflow,
 }: MessageListScrollAdjustmentInput) {
   const overlapsViewportTop = itemStart < scrollOffset && itemEnd > scrollOffset
 
@@ -47,6 +49,16 @@ export function shouldAdjustMessageListScrollOnResize({
   // appear to lurch even though only a collapsible section changed.
   if (hasMeasuredSize && isUserToggledCollapsibleRow && overlapsViewportTop) {
     return false
+  }
+
+  // A regex result, message-tag interceptor, or extension widget may replace
+  // an already measured row asynchronously. The virtualizer's scrollDirection
+  // can still say "backward" long after the gesture that set it, which would
+  // otherwise suppress compensation and visibly move the viewport. This flag
+  // is scoped to explicit programmatic layout notifications, so ordinary row
+  // mounting while the user scrolls upward keeps the default behavior.
+  if (isProgrammaticContentReflow && itemStart < scrollOffset) {
+    return true
   }
 
   return itemStart < scrollOffset && (!hasMeasuredSize || scrollDirection !== 'backward')

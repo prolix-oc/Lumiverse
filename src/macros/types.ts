@@ -204,6 +204,12 @@ export interface MacroEnv {
   };
   /** Set to true when any chat variable macro mutates state. Used to trigger persistence. */
   _chatVarsDirty?: boolean;
+  /**
+   * The preset prompt block currently being rendered. This is set only for
+   * that block's existing macro evaluation and restored immediately after, so
+   * placement macros remain read-only reflections of the block configuration.
+   */
+  promptBlock?: PromptBlockMacroContext;
   /** Internal: fingerprint accumulator stashed by evaluate(). Surfaced back
    *  via EvaluateResult.touchedVars / cacheable. */
   _fingerprint?: { touched: Set<string>; cacheable: boolean };
@@ -217,6 +223,13 @@ export interface MacroEnv {
    *  than holding the event loop until the 5-pass loop converges. */
   signal?: AbortSignal;
   extra: Record<string, any>;
+}
+
+/** Read-only placement configuration for the preset block currently rendering. */
+export interface PromptBlockMacroContext {
+  role: string;
+  position: string;
+  depth: number;
 }
 
 // ============================================================================

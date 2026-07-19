@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll } from "bun:test";
 import { evaluate } from "./MacroEvaluator";
 import { parse } from "./MacroParser";
 import { registry } from "./MacroRegistry";
-import { initMacros } from "./index";
+import { initMacros, withPromptBlockContext } from "./index";
 import type { MacroEnv } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,8 @@ function makeEnv(opts: {
   lastMessageTime?: number;
   worldInfoOutlets?: Record<string, string>;
   rejectedSwipe?: string;
+  userInput?: string;
+  promptBlock?: MacroEnv["promptBlock"];
   multiplayer?: {
     playerCount: number;
     playerNames: string[];
@@ -89,6 +91,7 @@ function makeEnv(opts: {
       chat: new Map(Object.entries(opts.chatVars ?? {})),
     },
     dynamicMacros: {},
+    promptBlock: opts.promptBlock,
     extra: {
       messages: opts.messages ?? [
         { content: "Hello, how are you?", name: "Alice", is_user: true },
@@ -101,6 +104,7 @@ function makeEnv(opts: {
       lastMessageTime: opts.lastMessageTime,
       characterTags: opts.characterTags ?? ["fantasy", "warrior", "male"],
       worldInfoOutlets: opts.worldInfoOutlets ?? {},
+      userInput: opts.userInput ?? "",
       ...(opts.multiplayer ? { multiplayer: opts.multiplayer } : {}),
     },
   };
@@ -144,11 +148,37 @@ describe("Chat transcript examples", () => {
   });
 });
 
+describe("Prompt block placement macros", () => {
+  test("reflect the current block configuration only while that block renders", async () => {
+    const env = makeEnv();
+
+    expect(
+      await ev("{{promptBlockRole}}/{{promptBlockPosition}}/{{promptBlockDepth}}", env),
+    ).toBe("//");
+
+    const resolved = await withPromptBlockContext(
+      env,
+      { role: "assistant_append", position: "in_history", depth: 3 },
+      () => ev("{{promptBlockRole}}/{{blockPosition}}/{{prompt_block_depth}}", env),
+    );
+
+    expect(resolved).toBe("assistant_append/in_history/3");
+    expect(env.promptBlock).toBeUndefined();
+  });
+});
+
 // ===========================================================================
 // EXISTING MACROS — Regression tests
 // ===========================================================================
 
 describe("Core primitives", () => {
+  test("userInput returns the input-bar draft snapshot", async () => {
+    expect(
+      await ev("{{userInput}}", makeEnv({ userInput: "Draft text\nwith spacing" })),
+    ).toBe("Draft text\nwith spacing");
+    expect(await ev("{{user_input}}", makeEnv())).toBe("");
+  });
+
   test("space", async () => {
     expect(await ev("a{{space}}b")).toBe("a b");
   });
@@ -1476,7 +1506,7 @@ describe("Regex Reference macros", () => {
 });
 
 describe("Lumia and council macros", () => {
-  test("lumiaCouncilInst matches the extension council prompt verbatim", async () => {
+  test("lumiaCouncilInst keeps council profiles as feedback perspectives", async () => {
     const env = makeEnv();
     env.extra.council = {
       councilMode: true,
@@ -1507,13 +1537,13 @@ describe("Lumia and council macros", () => {
     };
 
     const result = await ev("{{lumiaCouncilInst}}", env);
-    expect(result).toContain("COUNCIL MODE ACTIVATED! We Lumias gather in the Loom's planning room to weave the next story beat TOGETHER.");
-    expect(result).toContain("- Address each other BY NAME—no speaking into the void");
-    expect(result).toContain("This is a conversation, not a list of separate opinions. Every voice responds to what came before.");
-    expect(result).toContain("The current sitting members of the council are: **Mira**, **Kael**");
+    expect(result).toContain("## Council Feedback Mode");
+    expect(result).toContain("They are not characters to portray in the response.");
+    expect(result).toContain("Do not simulate a council meeting");
+    expect(result).toContain("Available feedback perspectives: **Mira**, **Kael**");
   });
 
-  test("lumiaStateSynthesis matches the extension council sound-off prompt", async () => {
+  test("lumiaStateSynthesis keeps council output out of the roleplay", async () => {
     const env = makeEnv();
     env.extra.council = {
       councilMode: true,
@@ -1544,9 +1574,9 @@ describe("Lumia and council macros", () => {
     };
 
     const result = await ev("{{lumiaStateSynthesis}}", env);
-    expect(result).toContain("**Council Sound-Off**");
-    expect(result).toContain("- Each member maintains their UNIQUE personality—do not blend or homogenize voices");
-    expect(result).not.toContain("Members kick off in first person as named individuals");
+    expect(result).toContain("## Council Perspective Handling");
+    expect(result).toContain("Do not turn those perspectives into speakers, dialogue, or a group roleplay.");
+    expect(result).not.toContain("Council Sound-Off");
   });
 
   test("lumiaOOC matches the extension council social prompt", async () => {
@@ -1704,8 +1734,8 @@ describe("Lumia and council macros", () => {
     expect(result).toContain("## Council Deliberation");
     expect(result).toContain("Mira");
     expect(result).toContain("Moonlight, rain, and a tense confrontation in the alley.");
-    expect(result).toContain("2. Debate which suggestions have the most merit");
-    expect(result).not.toContain("2. Debate which suggestions have the most merit in first person as named council members responding to each other");
+    expect(result).toContain("## Council Feedback Usage");
+    expect(result).toContain("Do not roleplay, quote, or respond as a council member.");
   });
 
   test("lumiaCouncilToolsActive reflects actual tool output", async () => {

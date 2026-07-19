@@ -15,8 +15,11 @@ set -euo pipefail
 #   ./start.sh -m|--migrate-st  Run SillyTavern migration helper
 #   ./start.sh -k|--kill-pkgs   Nuke lockfiles + node_modules, reinstall backend deps
 #   ./start.sh --no-runner      Start without the visual runner
+#   ./start.sh --safe-theme     Suppress custom CSS/component overrides for recovery
 #   ./start.sh --upgrade-bun    Upgrade Bun to the latest stable release before running
 #   ./start.sh --upgrade-bun-canary  Upgrade Bun to the latest canary build before running
+#
+# Bun versions older than 1.3.13 are automatically upgraded to latest stable.
 #
 # Environment overrides:
 #   FRONTEND_PATH   Path to frontend directory (default: ./frontend)
@@ -99,21 +102,51 @@ _proot_bun() {
   fi
 }
 
-rebuild_bun_termux_wrapper() {
+update_bun_termux_components() {
+  local component="$1"
   local repo="$HOME/.bun-termux"
 
   if [[ -d "$repo" ]]; then
-    info "Rebuilding bun-termux wrapper..."
     if [[ -d "$repo/.git" ]] && ! (cd "$repo" && git pull --ff-only); then
-      warn "Could not update bun-termux checkout — rebuilding the existing copy"
+      warn "Could not update bun-termux checkout — using the existing copy"
     fi
-    (cd "$repo" && make && make install)
-    return
+  else
+    info "Installing bun-termux..."
+    git clone https://github.com/Happ1ness-dev/bun-termux.git "$repo" || return 1
   fi
 
-  info "Installing bun-termux wrapper..."
-  git clone https://github.com/Happ1ness-dev/bun-termux.git "$repo" \
-    && (cd "$repo" && make && make install)
+  local manager="$repo/helper_scripts/bun-termux-manager"
+  if [[ ! -f "$manager" ]]; then
+    err "The bun-termux checkout does not contain its update manager."
+    err "Remove $repo and retry so Lumiverse can install a current checkout."
+    return 1
+  fi
+
+  case "$component" in
+    bun)
+      bash "$manager" update bun
+      ;;
+    wrapper)
+      bash "$manager" update wrapper --source "$repo"
+      ;;
+    all)
+      bash "$manager" update all --source "$repo"
+      ;;
+    *)
+      err "Unknown bun-termux update component: $component"
+      return 1
+      ;;
+  esac
+}
+
+rebuild_bun_termux_wrapper() {
+  info "Rebuilding bun-termux wrapper..."
+  update_bun_termux_components wrapper
+}
+
+upgrade_bun_termux() {
+  info "Updating the Bun runtime and bun-termux wrapper..."
+  update_bun_termux_components all
 }
 
 verify_termux_bun_install_path() {
@@ -148,7 +181,9 @@ MODE="all"  # all | build-only | backend-only | dev | setup | reset-password | e
 USE_RUNNER=true
 FORCE_BUILD=false
 AUTO_OPEN=false
+SAFE_THEME=false
 BUN_UPGRADE_CHANNEL=""  # "" | "stable" | "canary"
+MINIMUM_BUN_VERSION="1.3.13"
 for arg in "$@"; do
   case "$arg" in
     --build|-b)     FORCE_BUILD=true ;;
@@ -162,6 +197,7 @@ for arg in "$@"; do
     --migrate-st|-m) MODE="migrate-st" ;;
     --kill-pkgs|-k) MODE="kill-pkgs" ;;
     --no-runner)    USE_RUNNER=false ;;
+    --safe-theme)   SAFE_THEME=true ;;
     --upgrade-bun)        BUN_UPGRADE_CHANNEL="stable" ;;
     --upgrade-bun-canary) BUN_UPGRADE_CHANNEL="canary" ;;
     --help|-h)
@@ -342,22 +378,17 @@ _install_bun_termux() {
   export PATH="$BUN_INSTALL/bin:$PATH"
   [[ -f "$BUN_INSTALL/env" ]] && source "$BUN_INSTALL/env"
 
-  # Install bun-termux wrapper (userland-exec + LD_PRELOAD shim)
+  # Install bun-termux wrapper (userland-exec + LD_PRELOAD shim). Use the
+  # upstream manager instead of `make install`: the latter copies directly
+  # over the live wrapper and Android rejects that with ETXTBSY.
   # This replaces the raw bun binary with a wrapper that:
   #   - Loads glibc's ld-linux via userland exec (fixes /proc/self/exe)
   #   - Intercepts syscalls for Android filesystem compatibility
   #   - Remaps shebang paths to Termux prefix
-  if [[ ! -d "$HOME/.bun-termux" ]]; then
-    info "Installing bun-termux wrapper..."
-    if git clone https://github.com/Happ1ness-dev/bun-termux.git "$HOME/.bun-termux" 2>/dev/null \
-       && (cd "$HOME/.bun-termux" && make && make install) 2>/dev/null; then
-      ok "bun-termux wrapper installed"
-    else
-      warn "bun-termux wrapper build failed — will use grun (glibc-runner) fallback"
-      rm -rf "$HOME/.bun-termux" 2>/dev/null || true
-    fi
+  if rebuild_bun_termux_wrapper; then
+    ok "bun-termux wrapper installed"
   else
-    info "bun-termux wrapper already present, skipping..."
+    warn "bun-termux wrapper build failed — will use grun (glibc-runner) fallback"
   fi
 
   # Determine which execution method works (same 3-tier detection as _resolve_bun)
@@ -464,16 +495,18 @@ ensure_bun() {
   exit 1
 }
 
-# ─── Bun channel upgrade (optional) ─────────────────────────────────────────
-# Honors --upgrade-bun / --upgrade-bun-canary. Runs after ensure_bun so the
-# binary exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
+# ─── Bun channel upgrades and minimum-version recovery ──────────────────────
+# Honors --upgrade-bun / --upgrade-bun-canary and also upgrades versions below
+# MINIMUM_BUN_VERSION to latest stable. Runs after ensure_bun so the binary
+# exists; `bun upgrade [--canary|--stable]` swaps the binary in-place
 # at $BUN_INSTALL/bin/bun. On native Termux we cannot use `bun upgrade` —
 # Bun's built-in updater probes for `ld` and aborts ("unsupported on systems
-# without ld") because Termux uses bionic, not glibc. Instead we rebuild the
-# bun-termux wrapper, which is the source of truth for Bun on Termux.
-upgrade_bun_if_requested() {
-  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
-
+# without ld") because Termux uses bionic, not glibc. Instead we use the
+# bun-termux manager, which atomically replaces both the underlying `buno`
+# runtime and its wrapper. Atomic replacement is required because Android will
+# not allow `cp` to truncate an executable that is currently mapped.
+upgrade_bun_channel() {
+  local channel="$1"
   local before
   before="$(_bun --version 2>/dev/null || echo unknown)"
 
@@ -481,7 +514,7 @@ upgrade_bun_if_requested() {
   # proot-distro (IS_PROOT) is a real glibc env, so it falls through to the
   # standard `bun upgrade` path below.
   if [[ "$IS_TERMUX" == true ]]; then
-    if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+    if [[ "$channel" == "canary" ]]; then
       warn "Bun canary builds are not supported on native Termux — the bun-termux"
       warn "wrapper only packages stable releases. Skipping upgrade; continuing"
       warn "with the existing $before binary."
@@ -489,16 +522,9 @@ upgrade_bun_if_requested() {
       return 0
     fi
 
-    info "Updating bun-termux wrapper (current Bun: $before)..."
-    if [[ ! -d "$HOME/.bun-termux" ]]; then
-      warn "bun-termux directory not found at \$HOME/.bun-termux."
-      warn "  Reinstall it: rm -rf \$HOME/.bun-termux && ./start.sh"
-      warn "Continuing with the existing $before binary."
-      return 0
-    fi
-
-    if ! (cd "$HOME/.bun-termux" && git pull && make && make install); then
-      err "bun-termux rebuild failed. Continuing with the existing $before binary."
+    info "Updating Bun to latest Termux stable (current: $before)..."
+    if ! upgrade_bun_termux; then
+      err "bun-termux upgrade failed. Continuing with the existing $before binary."
       return 0
     fi
 
@@ -512,7 +538,7 @@ upgrade_bun_if_requested() {
   fi
 
   # ── Standard path (macOS, Linux, proot-distro, WSL, etc.) ─────────────────
-  if [[ "$BUN_UPGRADE_CHANNEL" == "canary" ]]; then
+  if [[ "$channel" == "canary" ]]; then
     info "Upgrading Bun to latest canary (current: $before)..."
     if ! _bun upgrade --canary; then
       err "Bun canary upgrade failed. Continuing with the existing $before binary."
@@ -531,6 +557,59 @@ upgrade_bun_if_requested() {
   local after
   after="$(_bun --version 2>/dev/null || echo unknown)"
   ok "Bun upgraded: $before -> $after"
+}
+
+upgrade_bun_if_requested() {
+  [[ -z "$BUN_UPGRADE_CHANNEL" ]] && return 0
+  upgrade_bun_channel "$BUN_UPGRADE_CHANNEL"
+}
+
+bun_version_at_least() {
+  local current="${1%%-*}"
+  local required="${2%%-*}"
+  local current_major=0 current_minor=0 current_patch=0
+  local required_major=0 required_minor=0 required_patch=0
+
+  IFS=. read -r current_major current_minor current_patch <<< "$current"
+  IFS=. read -r required_major required_minor required_patch <<< "$required"
+  [[ "$current_major" =~ ^[0-9]+$ ]] || return 1
+  [[ "$current_minor" =~ ^[0-9]+$ ]] || return 1
+  [[ "$current_patch" =~ ^[0-9]+$ ]] || return 1
+
+  if (( current_major != required_major )); then
+    (( current_major > required_major ))
+  elif (( current_minor != required_minor )); then
+    (( current_minor > required_minor ))
+  else
+    (( current_patch >= required_patch ))
+  fi
+}
+
+ensure_minimum_bun_version() {
+  local current
+  current="$(_bun --version 2>/dev/null | head -1 || echo unknown)"
+  if bun_version_at_least "$current" "$MINIMUM_BUN_VERSION"; then
+    return 0
+  fi
+
+  warn "Bun $current is below Lumiverse's minimum $MINIMUM_BUN_VERSION."
+  info "Automatically upgrading Bun to the latest stable release..."
+  upgrade_bun_channel "stable"
+
+  _resolve_bun || true
+  current="$(_bun --version 2>/dev/null | head -1 || echo unknown)"
+  if bun_version_at_least "$current" "$MINIMUM_BUN_VERSION"; then
+    ok "Bun $current satisfies the minimum supported version"
+    return 0
+  fi
+
+  err "Bun $current is still below the required $MINIMUM_BUN_VERSION."
+  if [[ "$IS_TERMUX" == true ]]; then
+    err "Update bun-termux to a release containing Bun >= $MINIMUM_BUN_VERSION, then retry."
+  else
+    err "Install the latest stable Bun release from https://bun.sh, then retry."
+  fi
+  exit 1
 }
 
 # ─── First-run setup wizard ─────────────────────────────────────────────────
@@ -711,7 +790,7 @@ start_backend() {
     info "Serving frontend from: $frontend_dist"
   elif [[ "$MODE" != "dev" ]]; then
     warn "No frontend build found. Backend will start without serving frontend."
-    warn "Run './start.sh --build-only' first, or use './start.sh' to build + start."
+    warn "Run './start.sh --build-only' first, or use './start.sh --build' to build + start."
   fi
 
   install_deps "$BACKEND_DIR" "backend"
@@ -727,6 +806,11 @@ start_backend() {
     set -a
     source "$BACKEND_DIR/.env"
     set +a
+  fi
+
+  if [[ "$SAFE_THEME" == true ]]; then
+    export LUMIVERSE_SAFE_THEME=true
+    warn "Safe theme mode enabled: custom CSS and component overrides are suppressed"
   fi
 
   # smol (low-memory GC mode) defaults on; operators disable it persistently
@@ -814,6 +898,7 @@ fi
 setup_proot_aliases
 ensure_bun
 upgrade_bun_if_requested
+ensure_minimum_bun_version
 export_termux_bun_env
 
 case "$MODE" in

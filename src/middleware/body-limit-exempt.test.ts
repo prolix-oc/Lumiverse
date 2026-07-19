@@ -6,11 +6,19 @@ describe("isLargeUploadBodyLimitExemptPath", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/wallpapers")).toBe(true);
   });
 
+  test("allows saved theme packs with embedded assets through the global 10MB guard", () => {
+    expect(isLargeUploadBodyLimitExemptPath("/api/v1/settings/saved-themes")).toBe(true);
+  });
+
   test("still rejects unrelated image routes", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/images/rebuild-thumbnails")).toBe(false);
   });
 
   test("allows Qwen custom voice uploads through the global 10MB guard", () => {
     expect(isLargeUploadBodyLimitExemptPath("/api/v1/tts-connections/abc/qwen/custom-voices")).toBe(true);
+  });
+
+  test("allows character-card replacements through the global 10MB guard", () => {
+    expect(isLargeUploadBodyLimitExemptPath("/api/v1/characters/character-1/replace-card")).toBe(true);
   });
 });

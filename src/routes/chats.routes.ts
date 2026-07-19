@@ -19,6 +19,8 @@ import {
   getActivatedWorldInfoEntriesForChat,
   resolveWorldInfoOutlets,
 } from "../services/prompt-assembly.service";
+import { resolveRegexActionEffects } from "../services/associative-regex-effects.service";
+import type { RegexActionEffect } from "../types/regex-script";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -169,6 +171,15 @@ app.delete("/character-chats/:characterId", (c) => {
   const userId = c.get("userId");
   const deleted = svc.deleteAllChatsForCharacter(userId, c.req.param("characterId"));
   return c.json({ success: true, deleted });
+});
+
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
+  const ids = body.ids.filter((value: unknown): value is string => typeof value === "string" && value.length > 0);
+  const deleted = svc.deleteChats(userId, ids);
+  return c.json({ deleted, count: deleted.length });
 });
 
 app.get("/group-chats", (c) => {
@@ -552,7 +563,8 @@ app.post("/:id/branch", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
   if (!body.message_id) return c.json({ error: "message_id is required" }, 400);
-  const branch = svc.branchChat(userId, c.req.param("id"), body.message_id);
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined;
+  const branch = svc.branchChat(userId, c.req.param("id"), body.message_id, name);
   if (!branch) return c.json({ error: "Not found or invalid message" }, 404);
   return c.json(branch, 201);
 });
@@ -611,6 +623,19 @@ app.get("/:chatId/messages", (c) => {
 
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   return c.json(svc.listMessages(userId, chatId, pagination, { light }));
+});
+
+app.get("/:chatId/messages/search", (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const chat = svc.getChat(userId, chatId);
+  if (!chat) return c.json({ error: "Chat not found" }, 404);
+
+  const query = c.req.query("q")?.trim() ?? "";
+  if (query.length === 0) return c.json({ data: [], total: 0, message_total: 0, truncated: false });
+  if (query.length > 500) return c.json({ error: "Search query is too long" }, 400);
+
+  return c.json(svc.searchMessages(userId, chatId, query));
 });
 
 app.post("/:chatId/messages/bulk-hide", async (c) => {
@@ -683,6 +708,132 @@ app.post("/:chatId/messages", async (c) => {
 
   const msg = svc.createMessage(chatId, body, userId);
   return c.json(msg, 201);
+});
+
+// POST /:chatId/messages/:id/regex-action — atomically consume a rendered
+// associative-regex choice block before the client sends or queues its effect.
+app.post("/:chatId/messages/regex-actions/claim", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const body = await c.req.json().catch(() => null);
+  const rawSelections = Array.isArray(body?.selections) ? body.selections : [];
+  if (rawSelections.length === 0 || rawSelections.length > 64) {
+    return c.json({ error: "selections must contain between 1 and 64 actions" }, 400);
+  }
+
+  const selections: svc.AssociativeRegexActionBatchInput[] = [];
+  for (const raw of rawSelections) {
+    const messageId = typeof raw?.message_id === "string" ? raw.message_id : "";
+    const scriptId = typeof raw?.script_id === "string" ? raw.script_id : "";
+    const actionId = typeof raw?.action_id === "string" ? raw.action_id : "";
+    const instanceId = typeof raw?.instance_id === "string" ? raw.instance_id : "";
+    if (!messageId || !scriptId || !actionId || !instanceId ||
+      !instanceId.startsWith(`${scriptId}:`) ||
+      !/^\d+:\d+$/.test(instanceId.slice(scriptId.length + 1))) {
+      return c.json({ error: "invalid regex action selection" }, 400);
+    }
+    const script = regexScriptsSvc.getRegexScript(userId, scriptId);
+    const action = script?.actions.find((candidate) => candidate.id === actionId);
+    if (!script || script.disabled || !script.target.includes("display") || !action) {
+      return c.json({ error: "regex action is no longer available" }, 404);
+    }
+    if (!action.multi_select && action.type !== "send") {
+      return c.json({ error: "only Send actions can trigger a mixed batch claim" }, 400);
+    }
+    let stateEffects: Array<{ key: string; value: string }> | undefined;
+    if (action.effects?.length) {
+      const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+      if (resolved.status === "user_source") {
+        return c.json({ error: "composable effects require an assistant source message" }, 403);
+      }
+      if (resolved.status !== "resolved") {
+        return c.json({ error: "regex action could not be verified from its source message" }, 404);
+      }
+      stateEffects = resolved.effects
+        .filter((effect) => effect.type === "set_state")
+        .map(({ key, value }) => ({ key, value }));
+    }
+    selections.push({
+      messageId,
+      scriptId,
+      actionId,
+      instanceId,
+      multiSelect: action.multi_select,
+      ...(stateEffects ? { stateEffects } : {}),
+    });
+  }
+
+  const result = svc.claimAssociativeRegexActions(userId, chatId, selections);
+  if (result.status === "not_found") return c.json({ error: "Source message not found", messages: result.messages }, 404);
+  if (result.status === "forbidden") return c.json({ error: "composable effects require an assistant source message", messages: result.messages }, 403);
+  if (result.status === "used") {
+    return c.json({ error: "One or more choices have already been used", messages: result.messages, usage: result.usage }, 409);
+  }
+  return c.json({ messages: result.messages, usages: result.usages });
+});
+
+app.post("/:chatId/messages/:id/regex-action", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const messageId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+  const scriptId = typeof body?.script_id === "string" ? body.script_id : "";
+  const actionId = typeof body?.action_id === "string" ? body.action_id : "";
+  const instanceId = typeof body?.instance_id === "string" ? body.instance_id : "";
+  if (!scriptId || !actionId || !instanceId) {
+    return c.json({ error: "script_id, action_id, and instance_id are required" }, 400);
+  }
+  if (!instanceId.startsWith(`${scriptId}:`) || !/^\d+:\d+$/.test(instanceId.slice(scriptId.length + 1))) {
+    return c.json({ error: "invalid regex action instance" }, 400);
+  }
+
+  const script = regexScriptsSvc.getRegexScript(userId, scriptId);
+  const action = script?.actions.find((candidate) => candidate.id === actionId);
+  if (!script || script.disabled || !script.target.includes("display") || !action) {
+    return c.json({ error: "regex action is no longer available" }, 404);
+  }
+  if (action.multi_select) {
+    return c.json({ error: "multi-select actions must be finalized with the batch claim endpoint" }, 400);
+  }
+
+  let resolvedEffects: RegexActionEffect[] = [];
+  let stateEffects: Array<{ key: string; value: string }> | undefined;
+  if (action.effects?.length) {
+    const resolved = await resolveRegexActionEffects(userId, chatId, messageId, scriptId, actionId, instanceId);
+    if (resolved.status === "user_source") {
+      return c.json({ error: "composable effects require an assistant source message" }, 403);
+    }
+    if (resolved.status !== "resolved") {
+      return c.json({ error: "regex action could not be verified from its source message" }, 404);
+    }
+    resolvedEffects = resolved.effects;
+    stateEffects = resolvedEffects
+      .filter((effect) => effect.type === "set_state")
+      .map(({ key, value }) => ({ key, value }));
+  }
+
+  const result = svc.claimAssociativeRegexAction(userId, chatId, messageId, {
+    instanceId,
+    scriptId,
+    actionId,
+    multiSelect: false,
+    ...(stateEffects ? { stateEffects } : {}),
+    ...(resolvedEffects.length > 0 ? {
+      requiresAssistantSource: true,
+      fork: resolvedEffects.some((effect) => effect.type === "fork"),
+    } : {}),
+  });
+  if (result.status === "not_found") return c.json({ error: "Message not found" }, 404);
+  if (result.status === "forbidden") return c.json({ error: "composable effects require an assistant source message" }, 403);
+  if (result.status === "used") {
+    return c.json({ error: "This choice has already been used", message: result.message, usage: result.usage }, 409);
+  }
+  return c.json({
+    message: result.message,
+    usage: result.usage,
+    ...(resolvedEffects.length > 0 ? { effects: resolvedEffects } : {}),
+    ...(result.forkedChat ? { forked_chat: result.forkedChat } : {}),
+  });
 });
 
 app.put("/:chatId/messages/:id", async (c) => {
@@ -853,10 +1004,11 @@ app.post("/:chatId/display-preprocess", async (c) => {
       return c.json({ error: "each item requires rawContent (string)" }, 400);
     }
 
-    const processed = [];
-    for (const item of items as DisplayPreprocessItem[]) {
-      processed.push(await runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal));
-    }
+    const processed = await Promise.all(
+      (items as DisplayPreprocessItem[]).map((item) =>
+        runDisplayPreprocessItem(userId, chatId, item, c.req.raw.signal)
+      )
+    );
 
     return c.json({ items: processed });
   }

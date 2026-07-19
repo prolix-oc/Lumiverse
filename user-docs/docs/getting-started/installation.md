@@ -10,7 +10,7 @@ Lumiverse runs on your own machine. It needs **Bun** (a fast JavaScript runtime)
 
 ## Requirements
 
-- **Bun** v1.1 or later — [Install Bun](https://bun.sh) (the start scripts auto-install Bun if it's missing)
+- **Bun** v1.3.13 or later — [Install Bun](https://bun.sh) (the start scripts auto-install Bun if missing and auto-upgrade older versions to latest stable)
 - A modern web browser (Chrome, Firefox, Edge, Safari)
 - An API key from at least one AI provider (OpenAI, Anthropic, Google, etc.)
 
@@ -69,7 +69,7 @@ After the shell opens, continue with the normal startup command below.
     ./start.sh
     ```
 
-    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`.
+    The script auto-detects Termux and installs required packages (`glibc-repo`, `glibc-runner`, `proot`). It uses a three-tier execution strategy to find the best way to run Bun on your device, then validates the exact `proot`-wrapped path it will later use for `bun install`. If Bun is older than 1.3.13, startup uses the `bun-termux` manager to atomically update both the Bun runtime and its wrapper before continuing.
 
     If `grun bun --version` works but the native Termux install path is still broken, `start.sh` now attempts a `bun-termux` rebuild before it lets first-run setup continue.
 
@@ -87,12 +87,15 @@ Navigate to `http://localhost:7860`. On first launch, the setup wizard guides yo
 
 ## First-Run Setup Wizard
 
-The setup wizard runs automatically on first launch. It walks through four steps:
+The setup wizard runs automatically on first launch. It walks through five steps:
 
 1. **Admin Account** — Set a username (default: `admin`) and password (minimum 8 characters)
 2. **Server Port** — Choose a port (default: `7860`)
 3. **Extension Storage** — Set the maximum storage for extensions (default: 500 MB)
-4. **Identity Generation** — Creates `data/lumiverse.identity` (your encryption key) and `data/owner.credentials`
+4. **Disk Health Monitoring** — Optionally install smartmontools for SMART disk health checks
+5. **Identity Generation** — Creates `data/lumiverse.identity` (your encryption key) and `data/owner.credentials`
+
+For manual SMART installation, Linux `sudo` requirements, and an explanation of the reported drive metrics, see [Disk Health & SMART](../settings/disk-health.md).
 
 You can also run the wizard manually:
 
@@ -113,7 +116,7 @@ The start scripts accept flags to control behavior:
 
     | Flag | Description |
     |------|-------------|
-    | *(no flags)* | Start normally (frontend + backend) |
+    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.3.13 |
     | `-b`, `--build` | Rebuild frontend before starting |
     | `--build-only` | Rebuild frontend only, don't start |
     | `--backend-only` | Start backend only, skip frontend |
@@ -128,15 +131,15 @@ The start scripts accept flags to control behavior:
     !!! note "Termux behavior"
         Bun's built-in `bun upgrade` command does not work on native Termux — it aborts with `'bun upgrade' is unsupported on systems without ld` because Termux uses Android's bionic libc, not glibc. On Termux:
 
-        * `--upgrade-bun` rebuilds the [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux) wrapper at `$HOME/.bun-termux` (`git pull && make && make install`), which is the actual source of Bun on Termux.
+        * `--upgrade-bun` updates the Bun runtime and rebuilds the [`bun-termux`](https://github.com/Happ1ness-dev/bun-termux) wrapper at `$HOME/.bun-termux`. The upstream manager installs both through atomic renames, so an already-running wrapper does not cause Android's `Text file busy` error.
         * `--upgrade-bun-canary` is **not supported** — bun-termux only packages stable releases. The start script will skip the upgrade and continue with the existing binary. If you specifically need canary, run Lumiverse inside a [proot-distro Linux](https://github.com/termux/proot-distro) environment, where standard `bun upgrade --canary` works normally.
-        * If native Termux reports a broken install path before first run, the fastest repair is usually `./start.sh --upgrade-bun`, which rebuilds the wrapper in place.
+        * If native Termux reports a broken install path before first run, the fastest repair is usually `./start.sh --upgrade-bun`, which updates the runtime and wrapper in place.
 
 === "Windows (`start.ps1`)"
 
     | Flag | Description |
     |------|-------------|
-    | *(no flags)* | Start normally |
+    | *(no flags)* | Start normally; auto-upgrade Bun to latest stable when below 1.3.13 |
     | `-Build` or `-b` | Rebuild frontend before starting |
     | `-Mode build-only` | Rebuild frontend only |
     | `-Mode backend-only` | Start backend only |
@@ -264,6 +267,7 @@ If you'd rather throw away the cache entirely (slower, but belt-and-braces), pas
 | `PORT` | `7860` | Server port |
 | `DATA_DIR` | `./data` | Data directory inside the container |
 | `TRUST_ANY_ORIGIN` | `true` | Accept requests from any origin |
+| `LUMIVERSE_SAFE_THEME` | `false` | Temporarily suppress custom CSS and component overrides for emergency recovery |
 | `TRUSTED_ORIGINS` | — | Comma-separated allowed origins (for production) |
 | `AUTH_SECRET` | auto-derived | Explicit auth signing secret; usually leave unset |
 | `ENCRYPTION_KEY` | auto-generated | Legacy/manual encryption key override; usually leave unset |
@@ -325,6 +329,7 @@ Lumiverse uses a `.env` file for runtime configuration (created by the setup wiz
 | `DATA_DIR` | `./data` | Override the data directory location |
 | `TRUSTED_ORIGINS` | — | CORS origins (comma-separated) |
 | `TRUST_ANY_ORIGIN` | `false` | Accept requests from any origin |
+| `LUMIVERSE_SAFE_THEME` | `false` | Temporarily suppress custom CSS and component overrides for emergency recovery |
 | `FRONTEND_DIR` | — | Custom path to frontend dist folder |
 | `SPINDLE_EPHEMERAL_GLOBAL_MAX_BYTES` | `524288000` | Extension storage limit (500 MB) |
 | `SPINDLE_EPHEMERAL_EXTENSION_DEFAULT_MAX_BYTES` | `52428800` | Default per-extension storage limit |

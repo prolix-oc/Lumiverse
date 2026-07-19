@@ -129,6 +129,32 @@ masterpiece, best quality, 1girl, long red hair, leather jacket, gold earrings, 
 Swap to a different persona or character mid-chat and the splices update automatically on the next generation.
 
 ---
+## LoRA Presets
+
+**Image Generation → LoRA Presets** saves an ordered stack of LoRA filenames, strengths, and optional base tags. Load a preset from **Active LoRA Preset**, then add rows or edit its name before saving. Base tags are prepended to the generated prompt only while that preset is active and not bypassed.
+
+When the active connection supports model discovery (**ComfyUI**, **SwarmUI**, or **SD API**), the filename picker offers its available LoRAs. Selecting an option stores its exact provider filename. You can always type a filename manually instead—useful for a new file that has not appeared in a model list yet. A failed lookup remains visible with **Retry** and never locks the manual filename field.
+
+### Ordering Layers
+
+Rows are applied in their displayed order, so reorder them deliberately:
+
+- Drag the visible grip to move a row with a pointer or touch input.
+- With keyboard focus on the grip, press **Space** to pick up or drop it, use the arrow keys to move it, and press **Escape** to cancel.
+- The saved order is preserved for generation. Raw provider-supplied entries remain first and are not scaled or bypassed, followed by the active, non-bypassed preset's rows and then the active, non-bypassed character layer.
+
+For SwarmUI, the ordered names and model strengths are sent as matching `loras` / `loraweights` lists. SD API receives an ordered LoRA array whose entries use the filename as `path` and model strength as `multiplier`; it does not use the separate CLIP strength. In an imported ComfyUI workflow, rows fill successive mapped `LoraLoader` nodes with separate model and CLIP strengths.
+
+### Layer Controls
+
+Under **LoRA Controls**:
+
+- **Bypass Character LoRA** skips only the active chat character's configured layer and its base tags; raw provider-supplied LoRAs stay prepended and are not scaled or bypassed.
+- **Bypass Active LoRA Preset** skips only the selected preset's rows and base tags. A bypassed preset's base tags are not applied; raw provider-supplied LoRAs stay prepended and are not scaled or bypassed.
+- **LoRA Strength Scale** multiplies model and CLIP strengths only for active, non-bypassed preset and character layers from 0 to 2. Raw provider-supplied LoRAs stay prepended and are not scaled or bypassed. Set it to `0` to keep the configured layers while disabling their strengths for a generation.
+
+---
+
 
 ## Prompt Preview
 

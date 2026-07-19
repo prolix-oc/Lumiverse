@@ -52,8 +52,6 @@ export interface MacroInterceptor {
   handler: (ctx: MacroInterceptorCtx) => Promise<MacroInterceptorResult>;
 }
 
-const INTERCEPTOR_TIMEOUT_MS = 10_000;
-
 class MacroInterceptorChain {
   private handlers: MacroInterceptor[] = [];
 
@@ -80,20 +78,7 @@ class MacroInterceptorChain {
     for (const handler of this.handlers) {
       if (handler.userId && handler.userId !== ctx.userId) continue;
       try {
-        const next = await Promise.race([
-          handler.handler({ ...ctx, template }),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `Macro interceptor from ${handler.extensionId} timed out (${INTERCEPTOR_TIMEOUT_MS / 1000}s)`
-                  )
-                ),
-              INTERCEPTOR_TIMEOUT_MS
-            )
-          ),
-        ]);
+        const next = await handler.handler({ ...ctx, template });
         if (typeof next === "string") {
           if (next !== template) {
             template = next;
@@ -112,9 +97,11 @@ class MacroInterceptorChain {
         }
       } catch (err) {
         console.error(
-          `[Spindle] Macro interceptor error from ${handler.extensionId}:`,
-          err
+          `[Spindle] Macro interceptor error from ${handler.extensionId}: ${err instanceof Error ? err.message : String(err)}`
         );
+        if (err instanceof Error && err.stack) {
+          console.error(err.stack);
+        }
       }
     }
 

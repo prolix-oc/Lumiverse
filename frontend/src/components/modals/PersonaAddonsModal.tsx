@@ -72,7 +72,7 @@ export default function PersonaAddonsModal() {
       })
       .catch(() => toast.error(t('loadFailed')))
       .finally(() => setLoading(false))
-  }, [personaId])
+  }, [personaId, t])
 
   // Debounced save helper for persona-specific addons
   const persistAddons = useCallback((next: PersonaAddon[]) => {
@@ -87,7 +87,7 @@ export default function PersonaAddonsModal() {
         toast.error(t('saveFailed'))
       }
     }, 300)
-  }, [personaId, metadata, updatePersonaInStore])
+  }, [personaId, metadata, updatePersonaInStore, t])
 
   // Save helper for attached global addon refs
   const persistAttachedRefs = useCallback(async (next: AttachedGlobalAddon[]) => {
@@ -100,7 +100,7 @@ export default function PersonaAddonsModal() {
     } catch {
       toast.error(t('saveAttachmentFailed'))
     }
-  }, [personaId, metadata, updatePersonaInStore])
+  }, [personaId, metadata, updatePersonaInStore, t])
 
   // Persona-specific addon handlers
   const handleAdd = useCallback(() => {

@@ -69,6 +69,7 @@ function normalizeDisplayScripts(value: unknown, userId: string): RegexScript[] 
       script_id: typeof raw.script_id === "string" ? raw.script_id : id,
       find_regex: findRegex,
       replace_string: replaceString,
+      actions: svc.normalizeRegexActions(raw.actions),
       flags,
       placement,
       scope: raw.scope === "character" || raw.scope === "chat" ? raw.scope : "global",
@@ -248,6 +249,18 @@ app.post("/bulk-delete", async (c) => {
   return c.json({ deleted, count: deleted.length });
 });
 
+// POST /bulk-toggle — enable/disable an explicit selection in one transaction
+app.post("/bulk-toggle", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  if (!Array.isArray(body?.ids)) return c.json({ error: "ids must be an array" }, 400);
+  const stringIds = body.ids.filter((v: unknown): v is string => typeof v === "string" && v.length > 0);
+  const result = svc.toggleRegexScriptsByIds(userId, stringIds, !!body?.disabled, {
+    activePresetId: body?.active_preset_id ?? null,
+  });
+  return c.json(result);
+});
+
 // GET /:id — get by ID
 app.get("/:id", (c) => {
   const userId = c.get("userId");
@@ -308,6 +321,18 @@ app.put("/:id/toggle", async (c) => {
   const script = svc.toggleRegexScript(userId, c.req.param("id"), !!disabled, { activePresetId: active_preset_id ?? null });
   if (!script) return c.json({ error: "Not found" }, 404);
   return c.json(script);
+});
+
+// POST /folders/toggle — bulk enable/disable every script in a folder
+app.post("/folders/toggle", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => ({}));
+  const folder = typeof body?.folder === "string" ? body.folder : undefined;
+  if (folder === undefined) return c.json({ error: "folder is required" }, 400);
+  const result = svc.toggleRegexScriptsByFolder(userId, folder, !!body?.disabled, {
+    activePresetId: body?.active_preset_id ?? null,
+  });
+  return c.json(result);
 });
 
 export { app as regexScriptsRoutes };

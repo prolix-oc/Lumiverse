@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Copy, Check, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
+import { Copy, Check, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './BubbleActions.module.css'
@@ -10,6 +10,7 @@ interface BubbleActionsProps {
   onEdit: () => void
   onDelete: () => void
   onToggleHidden: () => void
+  onToggleContextAnchor: () => void
   onFork: () => void
   onPromptBreakdown?: () => void
   onPlay?: () => void
@@ -21,6 +22,7 @@ interface BubbleActionsProps {
    *  changes the play tooltip to "Regenerate". */
   hasSavedAudio?: boolean
   isHidden: boolean
+  isContextAnchor: boolean
   content: string
   className?: string
 }
@@ -29,6 +31,7 @@ export default function BubbleActions({
   onEdit,
   onDelete,
   onToggleHidden,
+  onToggleContextAnchor,
   onFork,
   onPromptBreakdown,
   onPlay,
@@ -36,6 +39,7 @@ export default function BubbleActions({
   isGenerating,
   hasSavedAudio,
   isHidden,
+  isContextAnchor,
   content,
   className,
 }: BubbleActionsProps) {
@@ -84,6 +88,25 @@ export default function BubbleActions({
         aria-label={isHidden ? t('messageActions.unhide') : t('messageActions.hide')}
       >
         {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+      </button>
+      <button
+        type="button"
+        onClick={onToggleContextAnchor}
+        title={isHidden
+          ? t('messageActions.contextAnchorHidden')
+          : isContextAnchor
+            ? t('messageActions.clearContextAnchor')
+            : t('messageActions.setContextAnchor')}
+        aria-label={isHidden
+          ? t('messageActions.contextAnchorHidden')
+          : isContextAnchor
+            ? t('messageActions.clearContextAnchor')
+            : t('messageActions.setContextAnchor')}
+        aria-pressed={isContextAnchor}
+        disabled={isHidden}
+        className={isContextAnchor ? styles.contextAnchorActive : undefined}
+      >
+        <Anchor size={13} />
       </button>
       <button type="button" onClick={onFork} title={t('messageActions.fork')} aria-label={t('messageActions.forkAria')}>
         <IconGitFork size={13} />

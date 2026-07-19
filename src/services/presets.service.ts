@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptVariableValue } from "../types/preset";
+import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock, PromptBlockPlacement, PromptVariableValue } from "../types/preset";
+import { PresetRevisionConflictError } from "../types/preset";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
@@ -73,6 +75,7 @@ function rowToPreset(row: any): Preset {
     prompt_order: JSON.parse(row.prompt_order),
     prompts: JSON.parse(row.prompts),
     metadata: JSON.parse(row.metadata),
+    cache_revision: row.cache_revision ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -127,16 +130,15 @@ export function listPresetRegistry(
 }
 
 /**
- * Cheap signature of the registry result set for ETag generation. Any
- * create/delete changes the count; any edit/rename bumps updated_at (and thus
- * the max), so (count, maxUpdatedAt) over the same filter uniquely identifies
- * the current registry without serializing it.
+ * Stable content signature for registry ETags. The ordered `(id, cache_revision)`
+ * stream changes for creates, deletes, and every content update without
+ * serializing large JSON columns or distorting user-visible update times.
  */
 export function getPresetRegistrySignature(
   userId: string,
   provider?: string,
   engine?: string,
-): { count: number; maxUpdatedAt: number } {
+): string {
   const filters: string[] = [];
   const params: any[] = [userId];
   if (provider) {
@@ -148,13 +150,15 @@ export function getPresetRegistrySignature(
     params.push(engine);
   }
   const filterSQL = filters.length > 0 ? " AND " + filters.join(" AND ") : "";
-  const row = getDb()
-    .query(
-      `SELECT COUNT(*) as count, COALESCE(MAX(updated_at), 0) as maxUpdatedAt
-       FROM presets WHERE user_id = ?${filterSQL}`
-    )
-    .get(...params) as { count: number; maxUpdatedAt: number };
-  return { count: row.count, maxUpdatedAt: row.maxUpdatedAt };
+  const rows = getDb()
+    .query(`SELECT id, cache_revision FROM presets WHERE user_id = ?${filterSQL} ORDER BY id`)
+    .all(...params) as Array<{ id: string; cache_revision: number }>;
+  const digest = createHash("sha256");
+  digest.update(userId).update("\0").update(provider ?? "").update("\0").update(engine ?? "").update("\0");
+  for (const row of rows) {
+    digest.update(row.id).update("\0").update(String(row.cache_revision)).update("\0");
+  }
+  return digest.digest("base64url");
 }
 
 // Prepared statement for hot-path preset fetch (avoids re-compiling for large JSON blobs)
@@ -190,6 +194,24 @@ export function findPresetByLumihubId(userId: string, lumihubId: string): Preset
   return row ? rowToPreset(row) : null;
 }
 
+/**
+ * Resolve an installed LumiHub preset by the canonical slug used by the Hub's
+ * install manifest. This is the identity fallback for listings whose Hub row
+ * id changed while their creator/name identity stayed the same.
+ */
+export function findLumihubPresetBySlug(userId: string, slug: string): Preset | null {
+  const row = getDb()
+    .query(
+      `SELECT * FROM presets
+       WHERE user_id = ?
+         AND json_extract(metadata, '$._lumiverse_install_source') = 'lumihub'
+         AND json_extract(metadata, '$._lumiverse_preset_slug') = ?
+       LIMIT 1`
+    )
+    .get(userId, slug) as any;
+  return row ? rowToPreset(row) : null;
+}
+
 export function findPresetBySlug(userId: string, slug: string): Preset | null {
   const row = getDb()
     .query(
@@ -221,17 +243,14 @@ export function listPresetsForManifest(userId: string): PresetManifestRow[] {
   });
 }
 
-/**
- * Fetch just the preset's updated_at for ETag generation, avoiding the full
- * row read + JSON parse of the (potentially large) preset on a cache hit.
- * Returns null when the preset doesn't exist for this user.
- */
-export function getPresetUpdatedAt(userId: string, id: string): number | null {
+/** Fetch a monotonic row revision for cache validation without reading preset JSON. */
+export function getPresetCacheRevision(userId: string, id: string): number | null {
   const row = getDb()
-    .query("SELECT updated_at FROM presets WHERE id = ? AND user_id = ?")
-    .get(id, userId) as { updated_at: number } | null;
-  return row ? row.updated_at : null;
+    .query("SELECT cache_revision FROM presets WHERE id = ? AND user_id = ?")
+    .get(id, userId) as { cache_revision: number } | null;
+  return row ? row.cache_revision : null;
 }
+
 
 /**
  * Validate that a usable preset exists for generation. Throws a config error
@@ -313,15 +332,42 @@ export function updatePreset(userId: string, id: string, input: UpdatePresetInpu
   if (input.prompts !== undefined) { fields.push("prompts = ?"); values.push(JSON.stringify(input.prompts)); }
   if (writeMetadata !== undefined) { fields.push("metadata = ?"); values.push(JSON.stringify(writeMetadata)); }
 
-  if (fields.length === 0) return existing;
+  const expectedCacheRevision = input.expected_cache_revision;
+  if (fields.length === 0) {
+    if (expectedCacheRevision !== undefined && expectedCacheRevision !== (existing.cache_revision ?? 0)) {
+      throw new PresetRevisionConflictError(id, expectedCacheRevision, existing.cache_revision ?? 0);
+    }
+    return existing;
+  }
 
-  fields.push("updated_at = ?");
+  fields.push("updated_at = ?", "cache_revision = cache_revision + 1");
   values.push(Math.floor(Date.now() / 1000));
-  values.push(id);
-  values.push(userId);
 
-  getDb().query(`UPDATE presets SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
-  const updated = getPreset(userId, id)!;
+  const where = ["id = ?", "user_id = ?"];
+  values.push(id, userId);
+  if (expectedCacheRevision !== undefined) {
+    where.push("cache_revision = ?");
+    values.push(expectedCacheRevision);
+  }
+
+  const changes = getDb()
+    .query(`UPDATE presets SET ${fields.join(", ")} WHERE ${where.join(" AND ")}`)
+    .run(...values)
+    .changes;
+  if (changes === 0) {
+    // A conditional miss is either a deleted row (the normal not-found result)
+    // or a stale writer. Read the current revision only after the atomic update
+    // has failed so the distinction cannot race the mutation itself.
+    const current = getPreset(userId, id);
+    if (!current) return null;
+    if (expectedCacheRevision !== undefined) {
+      throw new PresetRevisionConflictError(id, expectedCacheRevision, current.cache_revision ?? 0);
+    }
+    return null;
+  }
+
+  const updated = getPreset(userId, id);
+  if (!updated) return null;
   eventBus.emit(EventType.PRESET_CHANGED, { id, preset: updated }, userId);
   return updated;
 }
@@ -390,6 +436,7 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
     ? input.position
     : "pre_history";
   const characterTagTrigger = sanitizePromptBlockCharacterTagTrigger(input.characterTagTrigger);
+  const placementBinding = normalizePromptBlockPlacementBinding(input.placementBinding);
   return {
     id: typeof input.id === "string" && input.id.trim() ? input.id : crypto.randomUUID(),
     name: typeof input.name === "string" && input.name.trim() ? input.name : "New Chat",
@@ -408,10 +455,40 @@ function normalizePromptBlock(input: CreatePromptBlockInput): PromptBlock {
       ? input.categoryMode
       : null,
     ...(Array.isArray(input.variables) ? { variables: input.variables } : {}),
+    ...(placementBinding ? { placementBinding } : {}),
   };
 }
 
-function normalizePromptBlocks(blocks: PromptBlock[]): PromptBlock[] {
+function normalizePromptBlockPlacementBinding(
+  value: unknown,
+): PromptBlock["placementBinding"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as { variableId?: unknown; options?: unknown };
+  if (typeof raw.variableId !== "string" || !raw.variableId.trim()) return undefined;
+  if (!raw.options || typeof raw.options !== "object" || Array.isArray(raw.options)) return undefined;
+
+  const options: Record<string, PromptBlockPlacement> = {};
+  for (const [optionId, candidate] of Object.entries(raw.options as Record<string, unknown>)) {
+    if (!optionId.trim() || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const placement = candidate as Partial<PromptBlockPlacement>;
+    if (
+      (placement.role !== "system" && placement.role !== "user" && placement.role !== "assistant" && placement.role !== "user_append" && placement.role !== "assistant_append") ||
+      (placement.position !== "pre_history" && placement.position !== "post_history" && placement.position !== "in_history") ||
+      typeof placement.depth !== "number" || !Number.isFinite(placement.depth) || placement.depth < 0
+    ) {
+      continue;
+    }
+    options[optionId] = {
+      role: placement.role,
+      position: placement.position,
+      depth: Math.floor(placement.depth),
+    };
+  }
+  if (Object.keys(options).length === 0) return undefined;
+  return { variableId: raw.variableId.trim(), options };
+}
+
+export function normalizePromptBlocks(blocks: PromptBlock[]): PromptBlock[] {
   return blocks.map((block) => normalizePromptBlock(block));
 }
 
@@ -443,7 +520,7 @@ export function createPromptBlock(
     : blocks.length;
   blocks.splice(insertAt, 0, block);
 
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return block;
 }
 
@@ -462,7 +539,7 @@ export function updatePromptBlock(
 
   const updated = normalizePromptBlock({ ...blocks[index], ...(input || {}), id: blockId });
   blocks[index] = updated;
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return updated;
 }
 
@@ -475,7 +552,7 @@ export function deletePromptBlock(userId: string, presetId: string, blockId: str
   if (index === -1) return false;
 
   blocks.splice(index, 1);
-  updatePreset(userId, presetId, { prompt_order: blocks });
+  updatePreset(userId, presetId, { prompt_order: blocks, expected_cache_revision: preset.cache_revision });
   return true;
 }
 

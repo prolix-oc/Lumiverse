@@ -85,7 +85,7 @@ export default function CharacterBrowser() {
     } catch (err) {
       console.error('[CharacterBrowser] Failed to create character:', err)
     }
-  }, [browser.createCharacter, setEditingCharacterId])
+  }, [browser, setEditingCharacterId])
 
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -127,7 +127,7 @@ export default function CharacterBrowser() {
         browser.importFiles(files)
       }
     },
-    [browser.importFiles]
+    [browser]
   )
 
   const handleBatchDelete = useCallback(() => {
@@ -153,7 +153,7 @@ export default function CharacterBrowser() {
   const handleConfirmDelete = useCallback(() => {
     browser.batchDelete()
     setConfirmDelete(false)
-  }, [browser.batchDelete])
+  }, [browser])
 
   const pagination: ReactNode = useMemo(
     () => (

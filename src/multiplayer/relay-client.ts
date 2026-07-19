@@ -298,7 +298,7 @@ function handleRelayFrame(bridge: Bridge, raw: string): void {
 
   switch (d.type) {
     case "room_message":
-      mp.submitPeerMessage(bridge.roomId, participantId, d.content);
+      mp.submitPeerMessage(bridge.roomId, participantId, d.content, d.associative_regex_append);
       break;
     case "room_typing":
       mp.markTyping(bridge.roomId, participantId, !!d.typing);

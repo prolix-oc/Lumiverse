@@ -100,6 +100,53 @@ describe('moveTabTo / clearPendingActiveTabReset', () => {
   })
 })
 
+describe('preset editor placements', () => {
+  test('registers, updates, and removes extension preset tabs', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorTab({ id: 'tab-1', extensionId: 'ext-1', title: 'Agent Mode', root })
+    expect(slice.state.presetEditorTabs).toHaveLength(1)
+    slice.state.updatePresetEditorTab('tab-1', { title: 'Agents' })
+    expect(slice.state.presetEditorTabs[0].title).toBe('Agents')
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorTabs).toHaveLength(0)
+  })
+
+  test('registers and synchronously removes extension toolbar roots', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorToolbarItem({
+      id: 'toolbar-1',
+      extensionId: 'ext-1',
+      ariaLabel: 'Agent mode controls',
+      root,
+      visible: true,
+    })
+    slice.state.setPresetEditorToolbarItemVisible('toolbar-1', false)
+    expect(slice.state.presetEditorToolbarItems[0].visible).toBe(false)
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorToolbarItems).toHaveLength(0)
+  })
+})
+
+describe('placement capacity', () => {
+  test('allows drawer tabs from thirty distinct extensions', () => {
+    const slice = makeSlice()
+
+    for (let index = 0; index < 30; index += 1) {
+      slice.state.registerDrawerTab({
+        id: `tab-${index}`,
+        extensionId: `extension-${index}`,
+        title: `Extension ${index}`,
+        badge: null,
+        root: {} as HTMLElement,
+      })
+    }
+
+    expect(slice.state.drawerTabs).toHaveLength(30)
+  })
+})
+
 describe('hideAllPlacements / showAllPlacements', () => {
   let slice: ReturnType<typeof makeSlice>
   beforeEach(() => {

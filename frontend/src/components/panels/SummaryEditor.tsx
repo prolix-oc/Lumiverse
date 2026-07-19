@@ -463,6 +463,19 @@ function SummarizationConfig() {
           </>
         )}
       </Section>
+
+      <Section icon={<AlertCircle size={16} />} title={t('summaryEditor.contextAnchorWarning')} status={summarization.contextAnchorWarningThresholdTokens > 0}>
+        <NumberField
+          label={t('summaryEditor.warningThreshold')}
+          hint={t('summaryEditor.warningThresholdHint')}
+          value={summarization.contextAnchorWarningThresholdTokens}
+          onChange={(v) => setSummarization({ contextAnchorWarningThresholdTokens: Math.max(0, v) })}
+          min={0}
+          max={1_000_000}
+          step={256}
+        />
+        <p className={styles.desc}>{t('summaryEditor.contextAnchorWarningDescription')}</p>
+      </Section>
     </div>
   )
 }

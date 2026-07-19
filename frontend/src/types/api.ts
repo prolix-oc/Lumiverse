@@ -197,6 +197,11 @@ export interface MessageExtra {
   _loom_inject?: import('@/lib/loom/types').LoomInjectTag;
   _loom_block_id?: string;
   attachments?: MessageAttachment[];
+  associative_regex_action_usage?: Record<string, {
+    script_id: string;
+    action_id: string;
+    used_at: number;
+  }>;
   [key: string]: any;
 }
 
@@ -221,6 +226,19 @@ export interface Message {
   parent_message_id: string | null;
   branch_id: string | null;
   created_at: number;
+}
+
+export interface ChatMessageSearchMatch {
+  id: string;
+  index_in_chat: number;
+  offset: number;
+}
+
+export interface ChatMessageSearchResult {
+  data: ChatMessageSearchMatch[];
+  total: number;
+  message_total: number;
+  truncated: boolean;
 }
 
 export interface CreateMessageInput {
@@ -659,7 +677,7 @@ export interface CreatePersonaInput {
   folder?: string;
   is_default?: boolean;
   is_narrator?: boolean;
-  attached_world_book_id?: string;
+  attached_world_book_id?: string | null;
   metadata?: Record<string, any>;
 }
 
@@ -686,6 +704,8 @@ export interface Preset {
   metadata: Record<string, any>;
   created_at: number;
   updated_at: number;
+  /** Monotonic persisted revision used for conditional preset updates. */
+  cache_revision?: number;
 }
 
 export interface CreatePresetInput {
@@ -697,7 +717,10 @@ export interface CreatePresetInput {
   metadata?: Record<string, any>;
 }
 
-export type UpdatePresetInput = Partial<CreatePresetInput>;
+export type UpdatePresetInput = Partial<CreatePresetInput> & {
+  /** Transport-only precondition for an atomic cache revision check. */
+  expected_cache_revision?: number;
+};
 
 export interface PresetRegistryItem {
   id: string;
@@ -868,6 +891,17 @@ export interface WorldBookDiagnostics {
   };
   vector_summary: WorldBookVectorSummary;
   query_preview: string;
+  query_scope: {
+    configured_scan_depth: number | null;
+    visible_messages_available: number;
+    vector_messages_selected: number;
+    max_tokens: number;
+    token_truncated: boolean;
+  };
+  lexical_query_previews: Array<{
+    kind: 'anchors' | 'mixed' | 'topical';
+    text: string;
+  }>;
   eligible_entries: number;
   retrieval: {
     top_k: number;
@@ -909,6 +943,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;
@@ -950,6 +985,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;
@@ -983,6 +1019,16 @@ export interface CreateWorldBookInput {
 }
 
 export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
+
+export interface RenameWorldBookFolderResponse {
+  updated: WorldBook[];
+  count: number;
+}
+
+export interface DeleteWorldBookFolderResponse {
+  updated: WorldBook[];
+  count: number;
+}
 
 export interface CreateWorldBookEntryInput {
   outlet_name?: string | null;
@@ -1118,9 +1164,12 @@ export interface ChatMemorySettings {
   splitOnTimeGapMinutes: number
   maxMessagesPerChunk: number
   quickMode: 'conservative' | 'balanced' | 'aggressive' | null
+  injectionStrategy: 'fallback' | 'macro_only' | 'disabled'
 }
 
 export interface WorldInfoSettings {
+  forceCaseSensitive: boolean;
+  forceMatchWholeWords: boolean;
   globalScanDepth: number | null;
   maxRecursionPasses: number;
   maxActivatedEntries: number;
@@ -1150,6 +1199,7 @@ export interface ActivatedWorldInfoEntry {
   score?: number;
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
+  bookName?: string;
 }
 
 export type UpdateWorldBookEntryInput = CreateWorldBookEntryInput;

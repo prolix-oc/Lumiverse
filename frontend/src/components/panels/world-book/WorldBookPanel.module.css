@@ -520,33 +520,6 @@
   transition-delay: 0.3s;
 }
 
-/* ── Book fields toggle ── */
-.bookFieldsToggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
-}
-
-.bookFieldsToggle:hover {
-  border-color: var(--lumiverse-primary);
-}
-
-.bookFieldsLabel {
-  flex: 1;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chevron {
   color: var(--lumiverse-text-dim);
   transition: transform var(--lumiverse-transition-fast);
@@ -615,6 +588,14 @@
 
 .fieldInput:focus {
   border-color: var(--lumiverse-primary);
+}
+
+/* iOS enlarges pages when focusing text controls smaller than 16px. Keep the
+   world-book settings editable without a disruptive viewport zoom on phones. */
+@media (pointer: coarse) {
+  .fieldInput {
+    font-size: max(16px, calc(12.5px * var(--lumiverse-font-scale, 1)));
+  }
 }
 
 .bookActionRow {

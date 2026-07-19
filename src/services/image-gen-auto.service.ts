@@ -1,3 +1,4 @@
+import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { generateSceneBackground, getImageGenSettings } from "./image-gen.service";
@@ -45,7 +46,8 @@ export async function maybeAutoGenerateOnReply(
     );
     return true;
   } catch (err) {
-    console.warn(`[image-gen-auto] Fallback auto-generate failed for chat ${chatId}:`, err);
+    const message = clampErrorMessage(describeProviderError(err, "Image generation failed"));
+    console.warn(`[image-gen-auto] Fallback auto-generate failed for chat ${chatId}: ${message}`);
     return false;
   }
 }

@@ -115,6 +115,7 @@ export enum EventType {
 
   // Avatar
   CHARACTER_AVATAR_CHANGED = "CHARACTER_AVATAR_CHANGED",
+  CHARACTER_EXPORT_PROGRESS = "CHARACTER_EXPORT_PROGRESS",
 
   // Image Gen Connections
   IMAGE_GEN_CONNECTION_CHANGED = "IMAGE_GEN_CONNECTION_CHANGED",
@@ -201,6 +202,7 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = "SYSTEM_DISK_LOW",
+  SYSTEM_SMART_ALERT = "SYSTEM_SMART_ALERT",
 
   // Multiplayer rooms (broadcast to the room:{roomId} topic). Peer chat
   // messages and bot stream tokens reuse MESSAGE_SENT / STREAM_TOKEN_RECEIVED /

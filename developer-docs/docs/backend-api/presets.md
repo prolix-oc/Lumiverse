@@ -38,8 +38,9 @@ const newPreset = await spindle.presets.create({
   metadata: { description: 'Created by my extension' },
 })
 
-// Update the preset metadata
+// Update the preset metadata using the revision returned by create/get.
 const updated = await spindle.presets.update(newPreset.id, {
+  expected_cache_revision: newPreset.cache_revision,
   metadata: {
     ...newPreset.metadata,
     description: 'Updated description',
@@ -57,7 +58,7 @@ const deleted = await spindle.presets.delete(newPreset.id)
 | `list(options?)` | `Promise<{ data: UserPresetDTO[], total: number }>` | List presets. Options: `{ limit?, offset? }`. Defaults: limit 50, max 200. |
 | `get(presetId)` | `Promise<UserPresetDTO \| null>` | Get a preset by ID. Returns `null` if not found. |
 | `create(input)` | `Promise<UserPresetDTO>` | Create a new preset. `name` and `provider` are required. |
-| `update(presetId, input)` | `Promise<UserPresetDTO>` | Update a preset. All fields are optional. |
+| `update(presetId, input)` | `Promise<UserPresetDTO>` | Update a preset. `expected_cache_revision` is required; pass the `cache_revision` from the read/create response. |
 | `delete(presetId)` | `Promise<boolean>` | Delete a preset. Returns `true` if deleted. |
 
 ## UserPresetDTO
@@ -72,6 +73,7 @@ const deleted = await spindle.presets.delete(newPreset.id)
   prompt_order: PromptBlockDTO[]
   prompts: Record<string, unknown>
   metadata: Record<string, unknown>
+  cache_revision: number
   created_at: number   // unix epoch seconds
   updated_at: number
 }
@@ -91,7 +93,10 @@ const deleted = await spindle.presets.delete(newPreset.id)
 
 ## UserPresetUpdateDTO
 
-Same fields as `UserPresetCreateDTO`, but all are optional, including `name` and `provider`.
+`expected_cache_revision` is required and must be the `cache_revision` returned by
+the most recent `get`, `list`, `create`, or successful `update` response. All
+other fields from `UserPresetCreateDTO` are optional, including `name` and
+`provider`.
 
 !!! note "Prompt variable cleanup"
     When `prompt_order` or `metadata` is updated, Lumiverse prunes stale `metadata.promptVariables` entries that no longer correspond to a variable definition on a block. This matches the built-in preset editor behavior.

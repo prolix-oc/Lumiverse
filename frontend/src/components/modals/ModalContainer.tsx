@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, Suspense, lazy } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -24,12 +24,13 @@ import RegenFeedbackModal from './RegenFeedbackModal'
 import PersonaAddonsModal from './PersonaAddonsModal'
 import GlobalAddonsLibraryModal from './GlobalAddonsLibraryModal'
 import ChatSettingsModal from './GroupSettingsModal'
-import CustomCSSModal from './CustomCSSModal'
 import ConfigureDrawerTabsModal from './ConfigureDrawerTabsModal'
 import ImagePromptPreviewModal from './ImagePromptPreviewModal'
 import ImageCaptionModal from './ImageCaptionModal'
 import QwenCustomVoiceModal from './QwenCustomVoiceModal'
 import { WeaverStudio } from '@/components/weaver/WeaverStudio'
+
+const CustomCSSModal = lazy(() => import('./CustomCSSModal'))
 
 export default function ModalContainer() {
   const { t } = useTranslation('modals')
@@ -50,6 +51,8 @@ export default function ModalContainer() {
   const activeModal = useStore((s) => s.activeModal)
   const modalProps = useStore((s) => s.modalProps)
   const closeModal = useStore((s) => s.closeModal)
+  const lastRegenFeedback = useStore((s) => s.lastRegenFeedback)
+  const setLastRegenFeedback = useStore((s) => s.setLastRegenFeedback)
 
   return (
     <>
@@ -62,18 +65,23 @@ export default function ModalContainer() {
           message={modalProps.message || t('confirm.defaultMessage')}
           variant={modalProps.variant || 'safe'}
           confirmText={modalProps.confirmText}
-          onConfirm={() => {
-            modalProps.onConfirm?.()
+          inputLabel={modalProps.inputLabel}
+          inputPlaceholder={modalProps.inputPlaceholder}
+          defaultInputValue={modalProps.defaultInputValue}
+          checkboxLabel={modalProps.checkboxLabel}
+          defaultCheckboxChecked={modalProps.defaultCheckboxChecked}
+          onConfirm={(inputValue, checkboxChecked) => {
             closeModal()
+            modalProps.onConfirm?.(inputValue, checkboxChecked)
           }}
           onCancel={() => {
-            modalProps.onCancel?.()
             closeModal()
+            modalProps.onCancel?.()
           }}
           secondaryText={modalProps.secondaryText}
           onSecondary={modalProps.onSecondary ? () => {
-            modalProps.onSecondary?.()
             closeModal()
+            modalProps.onSecondary?.()
           } : undefined}
           secondaryVariant={modalProps.secondaryVariant}
         />
@@ -125,16 +133,15 @@ export default function ModalContainer() {
         />
       )}
 
-      {activeModal === 'regenFeedback' && (
+      {activeModal === 'regenFeedback' && modalProps.chatId && (
         <RegenFeedbackModal
-          defaultValue={useStore.getState().lastRegenFeedback}
+          defaultValue={lastRegenFeedback[modalProps.chatId as string] ?? ''}
+          onSaveDraft={(feedback) => setLastRegenFeedback(modalProps.chatId as string, feedback)}
           onSubmit={(feedback) => {
-            useStore.getState().setLastRegenFeedback(feedback)
             modalProps.onSubmit?.(feedback)
             closeModal()
           }}
           onSkip={() => {
-            useStore.getState().setLastRegenFeedback('')
             modalProps.onSkip?.()
             closeModal()
           }}
@@ -142,7 +149,11 @@ export default function ModalContainer() {
         />
       )}
 
-      {activeModal === 'customCSS' && <CustomCSSModal />}
+      {activeModal === 'customCSS' && (
+        <Suspense fallback={null}>
+          <CustomCSSModal />
+        </Suspense>
+      )}
       {activeModal === 'imagePromptPreview' && <ImagePromptPreviewModal />}
       {activeModal === 'imageCaptioner' && <ImageCaptionModal />}
       {activeModal === 'qwenCustomVoice' && modalProps.connectionId && <QwenCustomVoiceModal />}

@@ -1,9 +1,15 @@
+import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import * as svc from "../services/presets.service";
+import { PresetRevisionConflictError } from "../types/preset";
 import { parsePagination } from "../services/pagination";
 import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
 
 const app = new Hono();
+
+function userEtagScope(userId: string): string {
+  return createHash("sha256").update(userId).digest("base64url");
+}
 
 app.get("/", (c) => {
   const userId = c.get("userId");
@@ -17,15 +23,16 @@ app.get("/registry", (c) => {
   const provider = c.req.query("provider") || undefined;
   const engine = c.req.query("engine") || undefined;
 
-  // ETag from a cheap signature of the filtered set + the page window, so a
-  // repeat open returns 304 (no body) until a preset is created/edited/deleted.
+  // Hashing the filtered `(id, cache_revision)` sequence catches every update
+  // and delete/create replacement without reading preset JSON blobs.
   const sig = svc.getPresetRegistrySignature(userId, provider, engine);
-  const etag = `"presets-reg-${sig.count}-${sig.maxUpdatedAt}-${provider ?? ""}-${engine ?? ""}-${pagination.limit}-${pagination.offset}"`;
+  const etag = `W/"presets-reg-${sig}-${pagination.limit}-${pagination.offset}"`;
   if (ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
-    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE } });
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE, Vary: "Cookie, Accept-Encoding" } });
   }
   c.header("ETag", etag);
   c.header("Cache-Control", REVALIDATE_PRIVATE);
+  c.header("Vary", "Cookie, Accept-Encoding");
   return c.json(svc.listPresetRegistry(userId, pagination, provider, engine));
 });
 
@@ -40,30 +47,52 @@ app.get("/:id", (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
 
-  // Cheap updated_at lookup drives the ETag, so a cache hit returns 304 without
-  // reading + JSON-parsing the full (potentially large) preset or transferring
-  // its body. updated_at is bumped on every update, so the ETag is never stale.
-  const updatedAt = svc.getPresetUpdatedAt(userId, id);
-  if (updatedAt == null) return c.json({ error: "Not found" }, 404);
+  // A dedicated monotonic revision drives this ETag, so same-second updates
+  // invalidate cache entries without altering the user's visible update time.
+  const cacheRevision = svc.getPresetCacheRevision(userId, id);
+  if (cacheRevision == null) return c.json({ error: "Not found" }, 404);
 
-  const etag = `"preset-${id}-${updatedAt}"`;
+  const etag = `W/"preset-${id}-${cacheRevision}-${userEtagScope(userId)}"`;
   if (ifNoneMatchSatisfies(c.req.header("if-none-match"), etag)) {
-    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE } });
+    return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": REVALIDATE_PRIVATE, Vary: "Cookie, Accept-Encoding" } });
   }
 
   const preset = svc.getPreset(userId, id);
   if (!preset) return c.json({ error: "Not found" }, 404); // deleted between lookups
   c.header("ETag", etag);
   c.header("Cache-Control", REVALIDATE_PRIVATE);
+  c.header("Vary", "Cookie, Accept-Encoding");
   return c.json(preset);
 });
 
 app.put("/:id", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
-  const preset = svc.updatePreset(userId, c.req.param("id"), body);
-  if (!preset) return c.json({ error: "Not found" }, 404);
-  return c.json(preset);
+  if (
+    typeof body.expected_cache_revision !== "number"
+    || !Number.isSafeInteger(body.expected_cache_revision)
+    || body.expected_cache_revision < 0
+  ) {
+    return c.json({
+      error: "expected_cache_revision is required",
+      code: "PRESET_REVISION_REQUIRED",
+    }, 428);
+  }
+  try {
+    const preset = svc.updatePreset(userId, c.req.param("id"), body);
+    if (!preset) return c.json({ error: "Not found" }, 404);
+    return c.json(preset);
+  } catch (err) {
+    if (err instanceof PresetRevisionConflictError) {
+      return c.json({
+        error: err.message,
+        code: err.code,
+        expected_cache_revision: err.expectedCacheRevision,
+        actual_cache_revision: err.actualCacheRevision,
+      }, 409);
+    }
+    throw err;
+  }
 });
 
 app.delete("/:id", (c) => {

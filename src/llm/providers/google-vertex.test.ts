@@ -133,3 +133,64 @@ describe("GoogleVertexProvider tool calling wire shape", () => {
     });
   });
 });
+
+describe("GoogleVertexProvider web search grounding", () => {
+  test.each(["googleSearch", "google_search", "enable_web_search"])(
+    "adds google_search for the %s parameter",
+    (parameter) => {
+      const provider = new GoogleVertexProvider();
+      const body = (provider as any).buildBody({
+        model: "gemini-2.5-flash",
+        messages: [{ role: "user", content: "What's new today?" }],
+        parameters: { [parameter]: true },
+        tools: [],
+      });
+
+      expect(body.tools).toEqual([{ google_search: {} }]);
+      expect(body.googleSearch).toBeUndefined();
+      expect(body.google_search).toBeUndefined();
+      expect(body.enable_web_search).toBeUndefined();
+    },
+  );
+
+  test("does not combine google_search with inline function declarations", () => {
+    const provider = new GoogleVertexProvider();
+    const body = (provider as any).buildBody({
+      model: "gemini-2.5-flash",
+      messages: [{ role: "user", content: "Hi" }],
+      parameters: { enable_web_search: true },
+      tools: [{ name: "lookup", description: "Lookup", parameters: {} }],
+    });
+
+    expect(body.tools).toEqual([{
+      functionDeclarations: [{ name: "lookup", description: "Lookup", parameters: {} }],
+    }]);
+  });
+
+  test("skips unsupported Lite models", () => {
+    const provider = new GoogleVertexProvider();
+    const body = (provider as any).buildBody({
+      model: "gemini-2.0-flash-lite",
+      messages: [{ role: "user", content: "Hi" }],
+      parameters: { enable_web_search: true },
+      tools: [],
+    });
+
+    expect(body.tools).toBeUndefined();
+  });
+
+  test("does not duplicate an existing custom-body google_search tool", () => {
+    const provider = new GoogleVertexProvider();
+    const body = (provider as any).buildBody({
+      model: "gemini-2.5-flash",
+      messages: [{ role: "user", content: "Hi" }],
+      parameters: {
+        enable_web_search: true,
+        tools: [{ google_search: {} }],
+      },
+      tools: [],
+    });
+
+    expect(body.tools).toEqual([{ google_search: {} }]);
+  });
+});

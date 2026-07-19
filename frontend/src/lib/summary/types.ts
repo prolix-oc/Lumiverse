@@ -19,6 +19,8 @@ export interface SummarizationSettings {
   messageLimitEnabled: boolean
   /** Maximum number of recent messages to include when messageLimit is enabled. */
   messageLimitCount: number
+  /** Warn when the protected context tail is within this many tokens of its budget. 0 disables warnings. */
+  contextAnchorWarningThresholdTokens: number
   /** Custom system prompt template. When null/empty, backend default is used. */
   systemPromptOverride: string | null
   /** Custom user prompt template. When null/empty, backend default is used. */
@@ -38,6 +40,7 @@ export const DEFAULT_SUMMARIZATION_SETTINGS: SummarizationSettings = {
   manualMessageContext: 10,
   messageLimitEnabled: false,
   messageLimitCount: 50,
+  contextAnchorWarningThresholdTokens: 0,
   systemPromptOverride: null,
   userPromptOverride: null,
   requestTimeoutMs: DEFAULT_SUMMARY_REQUEST_TIMEOUT_MS,

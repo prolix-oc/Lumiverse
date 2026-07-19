@@ -38,6 +38,9 @@ try {
   process.exit(1);
 }
 console.log(`[startup] Data directory: ${env.dataDir}`);
+if (env.safeThemeMode) {
+  console.warn("[startup] Safe theme mode enabled: custom CSS and component overrides are suppressed");
+}
 
 // Resolve encryption identity (file > env migration > generate)
 await initIdentity();
@@ -120,6 +123,12 @@ startVectorizationQueueMaintenance();
 
 const { startDiskMonitor } = await import("./services/disk-monitor.service");
 startDiskMonitor();
+
+// SMART monitoring is optional: unavailable binaries and inaccessible host
+// devices never prevent startup. When explicitly enabled, root/container
+// deployments can also install smartmontools through a fixed package plan.
+const { initSmartctl } = await import("./services/smartctl.service");
+initSmartctl();
 
 // Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
@@ -254,8 +263,8 @@ async function gracefulShutdown(signal: string) {
 
   // 3. Disconnect LumiHub WebSocket client
   try {
-    const { getLumiHubClient } = await import("./lumihub/client");
-    getLumiHubClient().disconnect();
+    const { disconnectAllLumiHubClients } = await import("./lumihub/client");
+    disconnectAllLumiHubClients();
   } catch {}
 
   // 3.5 Disconnect all MCP servers
@@ -312,6 +321,8 @@ async function gracefulShutdown(signal: string) {
   stopAutomaticDatabaseMaintenance();
   const { stopDiskMonitor } = await import("./services/disk-monitor.service");
   stopDiskMonitor();
+  const { stopSmartctlMonitor } = await import("./services/smartctl.service");
+  stopSmartctlMonitor();
 
   // 8. Close database (triggers WAL checkpoint)
   const { closeDatabase } = await import("./db/connection");

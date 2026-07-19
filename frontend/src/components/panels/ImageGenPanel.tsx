@@ -25,14 +25,78 @@ import { ComfyWorkflowEditor } from './image-gen-connections/ComfyWorkflowEditor
 import { buildMappedFieldControls, type ComfyMappedFieldControl } from '@/lib/comfyui-mapped-fields'
 import type { ComfyUIFieldMapping, ComfyUIWorkflowConfig } from '@/api/image-gen-connections'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
-import type { ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
-import type { ImageGenPromptPreset } from '@/types/store'
+import type { ImageGenConnectionProfile, ImageGenProviderInfo, ImageGenParameterSchema } from '@/types/api'
+import type { ImageGenPromptPreset, LoraEntry, LoraPreset } from '@/types/store'
+import {
+  LoraDiscoveryStatus,
+  LoraRowsEditor,
+  useLoraDiscovery,
+  type DraftLoraEntry,
+  type LoraModelLoader,
+} from './imageGenLoraEditor'
 import styles from './ImageGenPanel.module.css'
 
 type RefImage = { data: string; mimeType?: string }
 const COMFY_CUSTOM_CONTROL_PREFIX = 'custom:'
 const DEFAULT_PROMPT_TIMEOUT_SECONDS = 60
 const DEFAULT_IMAGE_GEN_TIMEOUT_SECONDS = 300
+const LORA_WEIGHT_MIN = 0
+const LORA_WEIGHT_MAX = 1.5
+const LORA_WEIGHT_STEP = 0.05
+const LORA_DEFAULT_WEIGHT = 1
+const LORA_STRENGTH_SCALE_MIN = 0
+const LORA_STRENGTH_SCALE_MAX = 2
+const LORA_STRENGTH_SCALE_STEP = 0.05
+const EMPTY_LORA_PRESETS: LoraPreset[] = []
+
+const loadImageGenModels: LoraModelLoader = (id, subtype) => imageGenConnectionsApi.modelsBySubtype(id, subtype)
+
+type ModelLoadResult = {
+  profile: ImageGenConnectionProfile
+  modelSubtype: string
+  models: Array<{ id: string; label: string }>
+  error: string | null
+  loading: boolean
+}
+
+const modelRefreshKeys = new WeakMap<ImageGenConnectionProfile, number>()
+let nextModelRefreshKey = 1
+
+function modelRefreshKey(profile: ImageGenConnectionProfile | null, modelSubtype: string): string {
+  if (!profile) return `none:${modelSubtype}`
+  let key = modelRefreshKeys.get(profile)
+  if (!key) {
+    key = nextModelRefreshKey++
+    modelRefreshKeys.set(profile, key)
+  }
+  return `${key}:${modelSubtype}`
+}
+
+
+function loraPresetToDraft(preset: LoraPreset | null): DraftLoraEntry[] {
+  return preset?.loras.map((lora) => {
+    const weightModel = Number.isFinite(lora.weight_model) ? String(lora.weight_model) : String(LORA_DEFAULT_WEIGHT)
+    const weightClipFallback = Number.isFinite(lora.weight_model) ? lora.weight_model : LORA_DEFAULT_WEIGHT
+    return {
+      draftId: uuidv7(),
+      lora_name: lora.lora_name,
+      weight_model: weightModel,
+      weight_clip: lora.weight_clip === undefined ? '' : String(Number.isFinite(lora.weight_clip) ? lora.weight_clip : weightClipFallback),
+    }
+  }) ?? []
+}
+
+function parseDraftLoraWeight(value: string): number | null {
+  if (!value.trim()) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return snapRangeValue(parsed, {
+    min: LORA_WEIGHT_MIN,
+    max: LORA_WEIGHT_MAX,
+    step: LORA_WEIGHT_STEP,
+  })
+}
+
 
 function normalizeTimeoutSeconds(value: string, fallback: number): number {
   const parsed = Number(value)
@@ -108,62 +172,105 @@ function parseComfyControlValue(control: ComfyMappedFieldControl, value: string)
  * from the provider via `imageGenConnectionsApi.modelsBySubtype` and surfaces
  * the standard searchable combobox UI used by Connections / TTS / STT panels.
  */
-function ModelComboField({
+export function ModelComboField({
   label,
   hint,
   paramKey,
   modelSubtype,
-  connectionId,
+  activeConnection,
   value,
   onChange,
+  loadModels = loadImageGenModels,
 }: {
   label: string
   hint: string
   paramKey: string
   modelSubtype: string
-  connectionId: string | null
+  activeConnection: ImageGenConnectionProfile | null
   value: any
   onChange: (key: string, value: any) => void
+  loadModels?: LoraModelLoader
 }) {
   const { t } = useTranslation('panels')
-  const [models, setModels] = useState<Array<{ id: string; label: string }>>([])
-  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<ModelLoadResult | null>(null)
+  const latestInputsRef = useRef({ activeConnection, modelSubtype, loadModels })
+  const requestIdRef = useRef(0)
+  latestInputsRef.current = { activeConnection, modelSubtype, loadModels }
+
+  const currentResult = result
+    && result.profile.id === activeConnection?.id
+    && result.modelSubtype === modelSubtype
+  const models = useMemo(() => currentResult ? result.models : [], [currentResult, result?.models])
+  const modelError = currentResult ? result.error : null
+  const loading = currentResult ? result.loading : false
 
   const load = useCallback(async () => {
-    if (!connectionId) return
-    setLoading(true)
-    try {
-      const res = await imageGenConnectionsApi.modelsBySubtype(connectionId, modelSubtype)
-      setModels(res.models ?? [])
-    } catch {
-      setModels([])
-    } finally {
-      setLoading(false)
-    }
-  }, [connectionId, modelSubtype])
+    if (!activeConnection) return
+    const profile = activeConnection
+    const subtype = modelSubtype
+    const requestId = ++requestIdRef.current
+    setResult({ profile, modelSubtype: subtype, models: [], error: null, loading: true })
 
-  const modelIds = useMemo(() => models.map((m) => m.id), [models])
+    try {
+      const response = await loadModels(profile.id, subtype)
+      if (
+        requestId !== requestIdRef.current
+        || latestInputsRef.current.activeConnection !== profile
+        || latestInputsRef.current.modelSubtype !== subtype
+        || latestInputsRef.current.loadModels !== loadModels
+      ) return
+
+      const error = typeof response.error === 'string' && response.error.trim()
+        ? response.error.trim()
+        : null
+      setResult({
+        profile,
+        modelSubtype: subtype,
+        models: error ? [] : response.models ?? [],
+        error,
+        loading: false,
+      })
+    } catch (err: unknown) {
+      if (
+        requestId !== requestIdRef.current
+        || latestInputsRef.current.activeConnection !== profile
+        || latestInputsRef.current.modelSubtype !== subtype
+        || latestInputsRef.current.loadModels !== loadModels
+      ) return
+
+      const message = err instanceof Error && err.message.trim()
+        ? err.message.trim()
+        : t('imageGenPanel.noModelsFound')
+      setResult({ profile, modelSubtype: subtype, models: [], error: message, loading: false })
+    }
+  }, [activeConnection, loadModels, modelSubtype, t])
+
+  const modelIds = useMemo(() => models.map((model) => model.id), [models])
   const modelLabels = useMemo(() => {
     const labels: Record<string, string> = {}
-    for (const m of models) labels[m.id] = m.label
+    for (const model of models) labels[model.id] = model.label
     return labels
   }, [models])
+
+  const emptyMessage = activeConnection
+    ? t('imageGenPanel.noModelsFound')
+    : t('imageGenPanel.pickConnectionFirst')
 
   return (
     <FormField label={label} hint={hint}>
       <ModelCombobox
         value={typeof value === 'string' ? value : ''}
-        onChange={(v) => onChange(paramKey, v || undefined)}
+        onChange={(nextValue) => onChange(paramKey, nextValue || undefined)}
         models={modelIds}
         modelLabels={modelLabels}
         loading={loading}
         onRefresh={load}
         autoRefreshOnFocus
-        refreshKey={connectionId ?? ''}
-        disabled={!connectionId}
+        refreshKey={modelRefreshKey(activeConnection, modelSubtype)}
+        disabled={!activeConnection}
         placeholder={t('imageGenPanel.workflowOrConnectionDefault')}
         appearance="standard"
-        emptyMessage={connectionId ? t('imageGenPanel.noModelsFound') : t('imageGenPanel.pickConnectionFirst')}
+        emptyMessage={modelError || emptyMessage}
       />
     </FormField>
   )
@@ -207,17 +314,18 @@ function ParamField({
   schema,
   value,
   onChange,
-  connectionId,
+  activeConnection,
 }: {
   paramKey: string
   schema: ImageGenParameterSchema
   value: any
   onChange: (key: string, value: any) => void
-  connectionId?: string | null
+  activeConnection?: ImageGenConnectionProfile | null
 }) {
   const displayName = paramKey
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
+    .replace(/^Unet\b/, 'UNet')
     .trim()
   const normalizedSliderValue = useMemo(
     () => normalizeSliderSchemaValue(value, schema),
@@ -232,7 +340,7 @@ function ParamField({
         hint={schema.description}
         paramKey={paramKey}
         modelSubtype={schema.modelSubtype}
-        connectionId={connectionId ?? null}
+        activeConnection={activeConnection ?? null}
         value={value}
         onChange={onChange}
       />
@@ -397,6 +505,11 @@ export default function ImageGenPanel() {
   const [draftNegative, setDraftNegative] = useState('')
   const [loadedPresetId, setLoadedPresetId] = useState<string | null>(null)
   const [confirmDeletePreset, setConfirmDeletePreset] = useState(false)
+  const [loraPresetName, setLoraPresetName] = useState('')
+  const [draftLoras, setDraftLoras] = useState<DraftLoraEntry[]>([])
+  const [draftLoraBaseTags, setDraftLoraBaseTags] = useState('')
+  const [loadedLoraPresetId, setLoadedLoraPresetId] = useState<string | null>(null)
+  const [confirmDeleteLoraPreset, setConfirmDeleteLoraPreset] = useState(false)
   const [characterPresetId, setCharacterPresetId] = useState<string | null>(null)
   const [personaPresetId, setPersonaPresetId] = useState<string | null>(null)
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
@@ -433,6 +546,12 @@ export default function ImageGenPanel() {
   const providerName = activeConnection?.provider || ''
   const isComfyUI = providerName === 'comfyui'
 
+  const loraDiscovery = useLoraDiscovery(
+    activeConnection,
+    loadImageGenModels,
+    t('imageGenPanel.fetchLorasFailed'),
+  )
+  const supportsLoraDiscovery = loraDiscovery.supportsDiscovery
   const comfyCustomControls = useMemo(() => {
     if (!isComfyUI || !workflowConfig) return []
     return buildMappedFieldControls(workflowConfig, workflowCapabilities)
@@ -463,17 +582,30 @@ export default function ImageGenPanel() {
     } finally {
       setWorkflowLoading(false)
     }
-  }, [activeConnection])
+  }, [activeConnection, t])
 
   useEffect(() => {
     void refreshActiveComfyWorkflow()
   }, [refreshActiveComfyWorkflow])
 
+
   const refreshActiveImageGenConnection = useCallback(async () => {
-    if (!activeConnection) return
+    if (
+      !activeConnection
+      || useStore.getState().activeImageGenConnectionId !== activeConnection.id
+    ) return
+    const requestUserId = useStore.getState().user?.id ?? null
+    const expectedProfileVersion = useStore.getState().imageGenProfilesVersion
     try {
       const updated = await imageGenConnectionsApi.get(activeConnection.id)
-      setImageGenProfiles(imageGenProfiles.map((profile) => (profile.id === updated.id ? updated : profile)))
+      if (
+        useStore.getState().user?.id !== requestUserId
+        || useStore.getState().activeImageGenConnectionId !== activeConnection.id
+      ) return
+      setImageGenProfiles(
+        imageGenProfiles.map((profile) => (profile.id === updated.id ? updated : profile)),
+        expectedProfileVersion,
+      )
     } catch {
       // The workflow update already succeeded; stale metadata in the list is non-fatal.
     }
@@ -524,7 +656,7 @@ export default function ImageGenPanel() {
 
   // Provider parameters are saved on the active connection so they do not leak
   // across profiles that happen to use the same parameter names.
-  const genParams: Record<string, any> = activeConnection?.default_parameters || {}
+  const genParams = useMemo(() => activeConnection?.default_parameters || {}, [activeConnection?.default_parameters])
 
   const updateTop = (partial: Record<string, any>) => setImageGenSettings(partial)
 
@@ -568,11 +700,12 @@ export default function ImageGenPanel() {
     return normalizeComfyControlValue(customValues[customKey] ?? control.defaultValue)
   }, [genParams.comfyui_field_values])
 
-  const promptPresets = imageGeneration.promptPresets || []
+  const promptPresets = useMemo(() => imageGeneration.promptPresets || [], [imageGeneration.promptPresets])
   const mainPresets = useMemo(() => promptPresets.filter((p) => (p.kind ?? 'main') === 'main'), [promptPresets])
   const characterPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'character'), [promptPresets])
   const personaPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'persona'), [promptPresets])
   const captioningPresets = useMemo(() => promptPresets.filter((p) => p.kind === 'captioning'), [promptPresets])
+  const loraPresets = imageGeneration.loraPresets ?? EMPTY_LORA_PRESETS
 
   // Load this character's bound preset whenever the active character changes.
   useEffect(() => {
@@ -619,16 +752,27 @@ export default function ImageGenPanel() {
     [loadedPresetId, promptPresets],
   )
 
+  const loadedLoraPreset = useMemo(
+    () => (loadedLoraPresetId ? loraPresets.find((p) => p.id === loadedLoraPresetId) ?? null : null),
+    [loadedLoraPresetId, loraPresets],
+  )
+
   // Re-hydrate the editor textareas whenever the edit target (or its bindings)
   // changes. For main, the editor mirrors the live customPrompt; for
   // character/persona, it mirrors the bound preset (or stays blank).
+  // The live custom prompt/negative are read through refs so the effect does
+  // not re-run on every keystroke while the user is editing.
+  const customPromptRef = useRef(imageGeneration.customPrompt)
+  customPromptRef.current = imageGeneration.customPrompt
+  const customNegativePromptRef = useRef(imageGeneration.customNegativePrompt)
+  customNegativePromptRef.current = imageGeneration.customNegativePrompt
   useEffect(() => {
     if (editTarget === 'main') {
       const activeId = imageGeneration.activePromptPresetId || null
       const activePreset = activeId ? mainPresets.find((p) => p.id === activeId) : null
       setLoadedPresetId(activePreset?.id ?? null)
-      setDraftPrompt(imageGeneration.customPrompt || '')
-      setDraftNegative(imageGeneration.customNegativePrompt || '')
+      setDraftPrompt(customPromptRef.current || '')
+      setDraftNegative(customNegativePromptRef.current || '')
     } else if (editTarget === 'character') {
       const preset = characterPresetId ? characterPresets.find((p) => p.id === characterPresetId) : null
       setLoadedPresetId(preset?.id ?? null)
@@ -645,11 +789,16 @@ export default function ImageGenPanel() {
       setDraftNegative('')
     }
     setPresetName('')
-    // We intentionally exclude `imageGeneration.customPrompt`/`customNegativePrompt`
-    // from deps — the editor itself is the source of truth for those when on
-    // the 'main' target. Re-running on every keystroke would clobber the draft.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editTarget, imageGeneration.activePromptPresetId, characterPresetId, personaPresetId, promptPresets])
+  }, [editTarget, imageGeneration.activePromptPresetId, characterPresetId, personaPresetId, promptPresets, mainPresets, characterPresets, personaPresets])
+
+  useEffect(() => {
+    const activeId = imageGeneration.activeLoraPresetId || null
+    const preset = activeId ? loraPresets.find((p) => p.id === activeId) ?? null : null
+    setLoadedLoraPresetId(preset?.id ?? null)
+    setDraftLoras(loraPresetToDraft(preset))
+    setDraftLoraBaseTags(preset?.base_tags ?? '')
+    setLoraPresetName('')
+  }, [imageGeneration.activeLoraPresetId, loraPresets])
 
   // Mirror the Loom builder pattern: ship the full backend macro catalog into
   // the expandable editor so users can browse/insert macros that work inside
@@ -717,7 +866,7 @@ export default function ImageGenPanel() {
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('imageGenPanel.failedUpdateCharacterBinding'))
     }
-  }, [activeCharacterId])
+  }, [activeCharacterId, t])
 
   const bindPersonaPreset = useCallback(async (presetId: string | null) => {
     if (!activePersonaId) return
@@ -732,7 +881,7 @@ export default function ImageGenPanel() {
     } catch (err: any) {
       setError(err?.body?.error || err?.message || t('imageGenPanel.failedUpdatePersonaBinding'))
     }
-  }, [activePersonaId])
+  }, [activePersonaId, t])
 
   // Unified picker: switches active main preset (and panel content) when
   // editing main, or binds/unbinds the active character/persona when editing
@@ -833,6 +982,7 @@ export default function ImageGenPanel() {
     presetName,
     promptPresets,
     setImageGenSettings,
+    t,
   ])
 
   const deletePromptPreset = useCallback(() => {
@@ -865,19 +1015,138 @@ export default function ImageGenPanel() {
     setImageGenSettings,
   ])
 
+
+  const addDraftLora = useCallback(() => {
+    setDraftLoras((current) => [
+      ...current,
+      {
+        draftId: uuidv7(),
+        lora_name: '',
+        weight_model: String(LORA_DEFAULT_WEIGHT),
+        weight_clip: '',
+      },
+    ])
+  }, [])
+
+
+  const pickLoraPreset = useCallback((presetId: string | null) => {
+    if (!presetId) {
+      setLoadedLoraPresetId(null)
+      setDraftLoras([])
+      setDraftLoraBaseTags('')
+      setLoraPresetName('')
+      setImageGenSettings({ activeLoraPresetId: null })
+      return
+    }
+
+    const preset = loraPresets.find((p) => p.id === presetId)
+    if (!preset) return
+
+    setLoadedLoraPresetId(preset.id)
+    setDraftLoras(loraPresetToDraft(preset))
+    setDraftLoraBaseTags(preset.base_tags ?? '')
+    setLoraPresetName('')
+    setImageGenSettings({ activeLoraPresetId: preset.id })
+  }, [loraPresets, setImageGenSettings])
+
+  const saveLoraPreset = useCallback(() => {
+    const loraNames = draftLoras.map((draft) => draft.lora_name.trim())
+    if (!loraNames.some(Boolean)) {
+      toast.error(t('imageGenPanel.pickLoraBeforeSave'))
+      return
+    }
+
+    if (loraNames.some((loraName) => !loraName)) {
+      toast.error(t('imageGenPanel.pickLoraFilenameBeforeSave'))
+      return
+    }
+
+    const nextLoras: LoraEntry[] = []
+
+    for (const [index, draft] of draftLoras.entries()) {
+      const loraName = loraNames[index] ?? ''
+      const weightModel = parseDraftLoraWeight(draft.weight_model)
+      const weightClip = parseDraftLoraWeight(draft.weight_clip)
+      if (weightModel === null || (draft.weight_clip.trim() && weightClip === null)) {
+        toast.error(t('imageGenPanel.loraWeightsMustBeNumbers'))
+        return
+      }
+
+      const entry: LoraEntry = {
+        lora_name: loraName,
+        weight_model: weightModel,
+      }
+      if (draft.weight_clip.trim()) entry.weight_clip = weightClip ?? weightModel
+      nextLoras.push(entry)
+    }
+
+    if (nextLoras.length === 0) {
+      toast.error(t('imageGenPanel.pickLoraBeforeSave'))
+      return
+    }
+
+    const existingId = loadedLoraPresetId
+    const nextPreset: LoraPreset = {
+      id: existingId || uuidv7(),
+      name: loraPresetName.trim() || loadedLoraPreset?.name || t('imageGenPanel.loraPresetsSection'),
+      loras: nextLoras,
+      base_tags: draftLoraBaseTags.trim() || undefined,
+    }
+    const next = existingId
+      ? loraPresets.map((preset) => (preset.id === existingId ? nextPreset : preset))
+      : [...loraPresets, nextPreset]
+
+    setImageGenSettings({
+      loraPresets: next,
+      activeLoraPresetId: nextPreset.id,
+    })
+    setLoadedLoraPresetId(nextPreset.id)
+    setLoraPresetName('')
+    toast.success(t('imageGenPanel.loraPresetSaved'))
+  }, [
+    draftLoraBaseTags,
+    draftLoras,
+    loadedLoraPreset,
+    loadedLoraPresetId,
+    loraPresetName,
+    loraPresets,
+    setImageGenSettings,
+    t,
+  ])
+
+  const deleteLoraPreset = useCallback(() => {
+    if (!loadedLoraPresetId) return
+    setConfirmDeleteLoraPreset(false)
+    const id = loadedLoraPresetId
+    const next = loraPresets.filter((preset) => preset.id !== id)
+    setImageGenSettings({
+      loraPresets: next,
+      activeLoraPresetId: imageGeneration.activeLoraPresetId === id ? null : imageGeneration.activeLoraPresetId ?? null,
+    })
+    setLoadedLoraPresetId(null)
+    setDraftLoras([])
+    setDraftLoraBaseTags('')
+    setLoraPresetName('')
+  }, [imageGeneration.activeLoraPresetId, loadedLoraPresetId, loraPresets, setImageGenSettings])
+
   const handleImportConfigFile: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    const requestUserId = useStore.getState().user?.id ?? null
+    const expectedProfileVersion = useStore.getState().imageGenProfilesVersion
     setImportConfigBusy(true)
     try {
       const payload = JSON.parse(await file.text())
+      if (useStore.getState().user?.id !== requestUserId) return
       const res = await imageGenApi.importConfig(payload)
+      if (useStore.getState().user?.id !== requestUserId) return
       // The backend already persisted the merged settings; this re-syncs the store.
       setImageGenSettings(res.settings)
       if (res.imported.connections > 0) {
         const list = await imageGenConnectionsApi.list({ limit: 100, offset: 0 })
-        setImageGenProfiles(list.data)
+        if (useStore.getState().user?.id !== requestUserId) return
+        setImageGenProfiles(list.data, expectedProfileVersion)
       }
       toast.success(t('imageGenPanel.importSuccess', {
         presets: res.imported.presets,
@@ -885,7 +1154,9 @@ export default function ImageGenPanel() {
       }))
       for (const issue of res.errors || []) toast.error(issue)
     } catch (err: any) {
-      toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+      if (useStore.getState().user?.id === requestUserId) {
+        toast.error(err.body?.error || err.message || t('imageGenPanel.importFailed'))
+      }
     } finally {
       setImportConfigBusy(false)
     }
@@ -910,6 +1181,9 @@ export default function ImageGenPanel() {
     negativePrompt: string
     promptPresetId: string | null
     outputTarget: 'background' | 'chat_attachment' | 'preview' | 'attach_to_message'
+    bypassCharacterLora?: boolean
+    bypassActiveLoraPreset?: boolean
+    loraStrengthScale?: number
     attachToMessageId?: string
     skipParse?: boolean
   }) => {
@@ -925,6 +1199,9 @@ export default function ImageGenPanel() {
         negativePrompt: input.negativePrompt,
         promptPresetId: input.promptPresetId,
         outputTarget: input.outputTarget,
+        bypassCharacterLora: input.bypassCharacterLora,
+        bypassActiveLoraPreset: input.bypassActiveLoraPreset,
+        loraStrengthScale: input.loraStrengthScale,
         attachToMessageId: input.attachToMessageId,
         skipParse: input.skipParse,
         clientJobId: jobId,
@@ -947,7 +1224,7 @@ export default function ImageGenPanel() {
       setSceneGenerating(false)
       setCurrentJobId(null)
     }
-  }, [imageGeneration.promptGenerationTimeoutSeconds, imageGeneration.generationTimeoutSeconds, setSceneBackground, setSceneGenerating])
+  }, [imageGeneration.promptGenerationTimeoutSeconds, imageGeneration.generationTimeoutSeconds, setSceneBackground, setSceneGenerating, t])
 
   const handleGenerate = async (forceGeneration = false) => {
     if (!activeChatId) {
@@ -996,6 +1273,9 @@ export default function ImageGenPanel() {
       negativePrompt: liveNegative,
       promptPresetId,
       outputTarget,
+      bypassCharacterLora: !!imageGeneration.bypassCharacterLora,
+      bypassActiveLoraPreset: !!imageGeneration.bypassActiveLoraPreset,
+      loraStrengthScale: imageGeneration.loraStrengthScale,
       attachToMessageId,
     }
 
@@ -1083,6 +1363,29 @@ export default function ImageGenPanel() {
     { value: '', label: 'No captioning preset' },
     ...captioningPresets.map((p) => ({ value: p.id, label: p.name })),
   ], [captioningPresets])
+
+  const loraPresetOptions = useMemo(() => [
+    { value: '', label: t('imageGenPanel.noActiveLoraPreset') },
+    ...loraPresets.map((preset) => ({ value: preset.id, label: preset.name })),
+  ], [loraPresets, t])
+
+  const loraFilenameOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const manualOptions: { value: string; label: string; sublabel?: string }[] = []
+    const discoveredOptions: { value: string; label: string; sublabel?: string }[] = []
+    for (const lora of loraDiscovery.loras) {
+      if (seen.has(lora.id)) continue
+      seen.add(lora.id)
+      discoveredOptions.push({ value: lora.id, label: lora.label, sublabel: lora.id })
+    }
+    for (const draft of draftLoras) {
+      const value = draft.lora_name.trim()
+      if (!value || seen.has(value)) continue
+      seen.add(value)
+      manualOptions.push({ value, label: value })
+    }
+    return [...manualOptions, ...discoveredOptions]
+  }, [loraDiscovery.loras, draftLoras])
 
   // Resolve the model ID to a human-readable label
   const modelLabel = useMemo(() => {
@@ -1335,6 +1638,75 @@ export default function ImageGenPanel() {
 
           </EditorSection>
 
+          <EditorSection title={t('imageGenPanel.loraPresetsSection')} Icon={IconBrush} defaultExpanded={false}>
+            <FormField label={t('imageGenPanel.activeLoraPreset')} hint={t('imageGenPanel.loraPresetHint')}>
+              <Select
+                value={imageGeneration.activeLoraPresetId || ''}
+                onChange={(value) => pickLoraPreset(value || null)}
+                options={loraPresetOptions}
+              />
+            </FormField>
+
+            <LoraDiscoveryStatus controller={loraDiscovery} />
+            <LoraRowsEditor
+              rows={draftLoras}
+              onChange={setDraftLoras}
+              filenameOptions={loraFilenameOptions}
+              supportsDiscovery={supportsLoraDiscovery}
+              discoveryState={loraDiscovery.state}
+            />
+
+            <Button variant="secondary" size="sm" icon={<Plus size={14} />} onClick={addDraftLora}>
+              {t('imageGenPanel.addLora')}
+            </Button>
+
+            <FormField label={t('imageGenPanel.baseTags')} hint={t('imageGenPanel.baseTagsHint')}>
+              <ExpandableTextarea
+                className={styles.promptTextarea}
+                value={draftLoraBaseTags}
+                onChange={setDraftLoraBaseTags}
+                title={t('imageGenPanel.baseTags')}
+                placeholder={t('imageGenPanel.baseTags')}
+                rows={3}
+                macros={availableMacros}
+                onRefreshMacros={refreshMacros}
+              />
+            </FormField>
+
+            <div className={styles.inlineRow}>
+              <TextInput
+                value={loraPresetName}
+                onChange={setLoraPresetName}
+                placeholder={loadedLoraPreset ? t('imageGenPanel.renamePreset', { name: loadedLoraPreset.name }) : t('imageGenPanel.newLoraPresetName')}
+              />
+              <Button variant="secondary" size="sm" onClick={saveLoraPreset}>
+                {t('imageGenPanel.saveLoraPreset')}
+              </Button>
+              {loadedLoraPresetId && (
+                <Button variant="danger" size="sm" onClick={() => setConfirmDeleteLoraPreset(true)}>
+                  {t('imageGenPanel.deleteLoraPreset')}
+                </Button>
+              )}
+            </div>
+
+            {confirmDeleteLoraPreset && (
+              <ConfirmationModal
+                isOpen={true}
+                title={t('imageGenPanel.deleteLoraPresetConfirmTitle')}
+                message={t('imageGenPanel.deleteLoraPresetConfirmMessage', { name: loadedLoraPreset?.name })}
+                variant="danger"
+                confirmText={t('imageGenPanel.deleteLoraPreset')}
+                onConfirm={deleteLoraPreset}
+                onCancel={() => setConfirmDeleteLoraPreset(false)}
+              />
+            )}
+            {loadedLoraPreset && (
+              <div className={styles.editorTargetBanner}>
+                {t('imageGenPanel.editing')} <strong>{loadedLoraPreset.name}</strong>
+              </div>
+            )}
+          </EditorSection>
+
           {(imageGeneration.promptMode === 'scene' || imageGeneration.promptMode === 'parsed_custom') && (
             <EditorSection title={t('imageGenPanel.promptParser')} Icon={Settings2} defaultExpanded={imageGeneration.promptMode === 'parsed_custom'}>
               <FormField label={t('imageGenPanel.parserConnection')} hint={t('imageGenPanel.parserConnectionHint')}>
@@ -1480,14 +1852,14 @@ export default function ImageGenPanel() {
 
               {/* Main parameters */}
               {paramGroups.main.map(([key, schema]) => (
-                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
               ))}
 
               {/* Advanced parameters */}
               {paramGroups.advanced.length > 0 && (
                 <EditorSection title={t('imageGenPanel.advanced')} Icon={Settings2} defaultExpanded={false}>
                   {paramGroups.advanced.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               )}
@@ -1496,7 +1868,7 @@ export default function ImageGenPanel() {
               {paramGroups.extra.map(({ name, params }) => (
                 <EditorSection key={name} title={name.charAt(0).toUpperCase() + name.slice(1)} Icon={Settings2} defaultExpanded={false}>
                   {params.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               ))}
@@ -1613,7 +1985,7 @@ export default function ImageGenPanel() {
               {paramGroups.references.length > 0 && !supportsRefs && (
                 <EditorSection title={t('imageGenPanel.references')} Icon={IconBrush} defaultExpanded={false}>
                   {paramGroups.references.map(([key, schema]) => (
-                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} connectionId={activeImageGenConnectionId} />
+                    <ParamField key={key} paramKey={key} schema={schema} value={genParams[key]} onChange={updateParam} activeConnection={activeConnection} />
                   ))}
                 </EditorSection>
               )}
@@ -1622,8 +1994,34 @@ export default function ImageGenPanel() {
 
           <input ref={refInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onRefFiles} />
 
+          <EditorSection title={t('imageGenPanel.loraControls')} Icon={Settings2} defaultExpanded={false}>
+            <ToggleRow
+              checked={!!imageGeneration.bypassCharacterLora}
+              onChange={(checked) => updateTop({ bypassCharacterLora: checked })}
+              label={t('imageGenPanel.bypassCharacterLora')}
+              hint={t('imageGenPanel.bypassCharacterLoraHint')}
+            />
+            <ToggleRow
+              checked={!!imageGeneration.bypassActiveLoraPreset}
+              onChange={(checked) => updateTop({ bypassActiveLoraPreset: checked })}
+              label={t('imageGenPanel.bypassActiveLoraPreset')}
+              hint={t('imageGenPanel.bypassActiveLoraPresetHint')}
+            />
+            <LabeledRangeSlider
+              label={t('imageGenPanel.loraStrengthScale')}
+              hint={t('imageGenPanel.loraStrengthScaleHint')}
+              min={LORA_STRENGTH_SCALE_MIN}
+              max={LORA_STRENGTH_SCALE_MAX}
+              step={LORA_STRENGTH_SCALE_STEP}
+              value={imageGeneration.loraStrengthScale ?? 1}
+              formatValue={(value) => value.toFixed(2).replace(/\.?0+$/, '')}
+              onCommit={(value) => updateTop({ loraStrengthScale: value })}
+            />
+          </EditorSection>
+
           <EditorSection title={t('imageGenPanel.sceneSettings')} Icon={IconBrush}>
-            <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharactersPersona')} hint={t('imageGenPanel.includeCharactersPersonaHint')} />
+            <ToggleRow checked={!!imageGeneration.includeCharacters} onChange={(checked) => updateTop({ includeCharacters: checked })} label={t('imageGenPanel.includeCharacters')} hint={t('imageGenPanel.includeCharactersHint')} />
+            <ToggleRow checked={!!imageGeneration.includePersona} onChange={(checked) => updateTop({ includePersona: checked })} label={t('imageGenPanel.includePersona')} hint={t('imageGenPanel.includePersonaHint')} />
             <ToggleRow checked={imageGeneration.autoGenerate !== false} onChange={(checked) => updateTop({ autoGenerate: checked })} label={t('imageGenPanel.autoGenerateOnReply')} />
             <ToggleRow checked={!!imageGeneration.forceGeneration} onChange={(checked) => updateTop({ forceGeneration: checked })} label={t('imageGenPanel.ignoreSceneChange')} />
             <ToggleRow
@@ -1730,12 +2128,15 @@ export default function ImageGenPanel() {
           onDelete={() => { setSceneBackground(null); setGeneratedPreview(null) }}
         />
       )}
-      {workflowEditorOpen && (
+      {workflowEditorOpen && activeConnection && (
         <ComfyWorkflowEditor
+          connectionId={activeConnection.id}
           config={workflowConfig}
           error={workflowError}
           onImportWorkflow={importComfyWorkflow}
           onUpdateMappings={updateComfyMappings}
+          onWorkflowActivated={setWorkflowConfig}
+          onConnectionRefresh={refreshActiveImageGenConnection}
           onClose={() => setWorkflowEditorOpen(false)}
         />
       )}

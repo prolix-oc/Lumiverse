@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
+import { useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState, useSyncExternalStore, startTransition, memo, type PointerEvent, type ReactNode, type TouchEvent, type WheelEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer, defaultRangeExtractor, type Range, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
 import { useScrollGate } from '@/hooks/useScrollGate'
@@ -8,6 +8,7 @@ import {
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { useStore } from '@/store'
+import { messagesApi } from '@/api/chats'
 import { parseOOC, type OOCBlock } from '@/lib/oocParser'
 import MessageCard from './MessageCard'
 import GroupChatProgressBar from './GroupChatProgressBar'
@@ -15,7 +16,12 @@ import GroupChatMemberBar from './GroupChatMemberBar'
 import { shouldAdjustMessageListScrollOnResize } from './messageListScrollAdjust'
 import { shouldPinMessageListTail } from './messageListPinning'
 import { COLLAPSIBLE_TOGGLE_LAYOUT_EVENT } from './collapsibleLayout'
+import {
+  MESSAGE_CONTENT_LAYOUT_EVENT,
+  shouldPreserveScrollAnchorForLayout,
+} from '@/lib/message-content-layout'
 import type { Message } from '@/types/api'
+import type { ChatFindNavigationTarget } from './ChatFindBar'
 import type { OOCStyleType } from '@/types/store'
 import styles from './MessageList.module.css'
 
@@ -23,16 +29,23 @@ interface MessageListProps {
   messages: Message[]
   chatId: string
   isStreaming: boolean
+  findTarget?: ChatFindNavigationTarget | null
+  findQuery?: string
 }
 
 const TOP_LOAD_THRESHOLD = 96
 const CHAT_SCROLL_TO_BOTTOM_EVENT = 'lumiverse:chat-scroll-bottom'
-const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
 // TanStack recommends a forgiving end threshold for chat so that minor
 // overscroll, mobile momentum settling, and soft-keyboard shrink/growth don't
 // immediately unpin the viewport from new output.
 const SCROLL_END_THRESHOLD = 80
 const INITIAL_SCROLL_TO_END_MAX_MS = 5000
+// Keep the initial tail pinned briefly after it first reaches the end. Message
+// content can still gain height as regex output, HTML islands, fonts, images,
+// and extension widgets finish mounting.
+const INITIAL_SCROLL_TO_END_SETTLE_MS = 1200
+const INITIAL_SCROLL_TO_END_RECHECK_MS = 600
+const INITIAL_LOAD_DOM_WATCH_MS = 6500
 const MIN_MEASURED_ROW_HEIGHT = 32
 const MAX_ESTIMATED_ROW_HEIGHT = 900
 const MOBILE_RANGE_WARM_MS = 1200
@@ -42,6 +55,17 @@ const MOBILE_RANGE_WARM_MS = 1200
 // finds rows mounted.
 const INITIAL_RANGE_WARM_DELAY_MS = 300
 const USER_CONTROLLED_ROW_RESIZE_SETTLE_MS = 450
+const PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS = 1500
+const MIN_FORCED_SCROLL_DURATION_MS = 180
+const MAX_FORCED_SCROLL_DURATION_MS = 700
+
+interface ForcedScrollAnimation {
+  rafId: number
+  startOffset: number
+  targetOffset: number
+  startedAt: number
+  duration: number
+}
 
 type VirtualListItem =
   | { type: 'loadingOlder'; key: string }
@@ -56,8 +80,31 @@ function getTopLoadThreshold(clientHeight: number, isCoarsePointer: boolean) {
   return Math.max(TOP_LOAD_THRESHOLD, Math.round(clientHeight * 1.15), 420)
 }
 
+function isLocalMessagePlaceholder(messageId: string): boolean {
+  return messageId.startsWith('__stream_placeholder_') || messageId.startsWith('__regen_placeholder_')
+}
+
 function clampEstimate(value: number) {
   return Math.max(MIN_MEASURED_ROW_HEIGHT, Math.min(MAX_ESTIMATED_ROW_HEIGHT, value))
+}
+
+function getForcedScrollDuration(distance: number) {
+  // Long jumps should remain quick, but not turn into an abrupt teleport.
+  // Square-root scaling avoids making a result several screens away take
+  // disproportionately longer than a nearby result.
+  return Math.max(
+    MIN_FORCED_SCROLL_DURATION_MS,
+    Math.min(MAX_FORCED_SCROLL_DURATION_MS, 160 + Math.sqrt(Math.abs(distance)) * 5),
+  )
+}
+
+function easeOutQuart(progress: number) {
+  return 1 - (1 - progress) ** 4
+}
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 }
 
 function getUiScale() {
@@ -155,7 +202,7 @@ function estimateOOCContribution(blocks: OOCBlock[], mode: OOCStyleType, bubbleW
   return params.groupChrome + totalEntryHeight
 }
 
-export default function MessageList({ messages, chatId, isStreaming }: MessageListProps) {
+export default function MessageList({ messages, chatId, isStreaming, findTarget = null, findQuery = '' }: MessageListProps) {
   const { t } = useTranslation('chat')
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -163,6 +210,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const isPinnedRef = useRef(true)
   const userUnpinnedRef = useRef(false)
   const isProgrammaticScrollRef = useRef(false)
+  const forcedScrollAnimationRef = useRef<ForcedScrollAnimation | null>(null)
+  const forcedScrollEnabledRef = useRef(false)
   // scrollTop recorded at the moment of a programmatic write. A scroll event
   // is only swallowed as programmatic when the position matches — a bare
   // boolean gets consumed by whichever event arrives first (on iOS that can be
@@ -189,6 +238,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const initialBottomPinnedChatRef = useRef<string | null>(null)
   const initialScrollRafRef = useRef<number | null>(null)
   const initialScrollStartedAtRef = useRef(0)
+  const initialScrollSettleUntilRef = useRef(0)
   const [isCoarsePointer, setIsCoarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   )
@@ -211,6 +261,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const recentCollapsibleToggleMessageIdRef = useRef<string | null>(null)
   const recentCollapsibleToggleUntilRef = useRef(0)
   const recentCollapsibleToggleTimerRef = useRef<number | null>(null)
+  const programmaticReflowUntilByMessageIdRef = useRef<Map<string, number>>(new Map())
+  const findHighlightTimerRef = useRef<number | null>(null)
+  const focusedFindRequestRef = useRef(0)
   const keyboardRepinTimersRef = useRef<number[]>([])
   const keyboardRepinSuppressedUntilRef = useRef(0)
   const interceptorRegistryVersion = useSyncExternalStore(
@@ -218,6 +271,23 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     getTagInterceptorRegistryVersion,
     getTagInterceptorRegistryVersion,
   )
+
+  const cancelForcedScroll = useCallback(() => {
+    const active = forcedScrollAnimationRef.current
+    if (active) {
+      cancelAnimationFrame(active.rafId)
+      forcedScrollAnimationRef.current = null
+    }
+  }, [])
+
+  const beginForcedScroll = useCallback(() => {
+    forcedScrollEnabledRef.current = true
+  }, [])
+
+  const interruptForcedScroll = useCallback(() => {
+    forcedScrollEnabledRef.current = false
+    cancelForcedScroll()
+  }, [cancelForcedScroll])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -272,6 +342,8 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
   // Re-arm top-pagination on chat switch.
   useEffect(() => {
+    forcedScrollEnabledRef.current = false
+    cancelForcedScroll()
     topLoadArmedRef.current = true
     lastScrollTopRef.current = 0
     measuredRowHeightsRef.current = new Map()
@@ -279,10 +351,12 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     averageMeasuredHeightRef.current = null
     initialBottomPinnedChatRef.current = null
     initialScrollStartedAtRef.current = 0
+    initialScrollSettleUntilRef.current = 0
     userUnpinnedRef.current = false
     setEditableFocusInList(false)
     recentCollapsibleToggleMessageIdRef.current = null
     recentCollapsibleToggleUntilRef.current = 0
+    programmaticReflowUntilByMessageIdRef.current.clear()
     if (recentCollapsibleToggleTimerRef.current != null) {
       window.clearTimeout(recentCollapsibleToggleTimerRef.current)
       recentCollapsibleToggleTimerRef.current = null
@@ -291,7 +365,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       cancelAnimationFrame(initialScrollRafRef.current)
       initialScrollRafRef.current = null
     }
-  }, [chatId])
+  }, [cancelForcedScroll, chatId])
 
   // Reset the fade-in state synchronously on chat switch so the next chat
   // starts hidden instead of flashing the new content for one frame.
@@ -308,6 +382,90 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     programmaticScrollTargetRef.current = el.scrollTop
   }, [])
 
+  // Native smooth scrolling restarts whenever TanStack corrects an estimated
+  // message height. A chat can measure several rows while travelling to a
+  // find result, so those restarts look like a scroll that catches and jumps.
+  // Keep one rAF animation alive instead and retarget it from the current
+  // position when the virtualizer refines its destination.
+  const scrollToVirtualOffset = useCallback((
+    offset: number,
+    { adjustments = 0, behavior }: { adjustments?: number; behavior?: ScrollBehavior },
+  ) => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const targetOffset = Math.max(0, offset + adjustments)
+    const active = forcedScrollAnimationRef.current
+    const shouldAnimate = behavior === 'smooth' && !prefersReducedMotion()
+
+    // A user wheel, drag, or touch cancels the current navigation. TanStack
+    // can still reconcile its prior target for a few frames, so ignore a
+    // follow-up smooth request until an explicit find/bottom action arms it.
+    if (behavior === 'smooth' && !forcedScrollEnabledRef.current) return
+
+    // TanStack may switch a measurement correction to `auto` near arrival.
+    // While a forced navigation is active, keep every correction in that one
+    // animation rather than allowing a late write to snap the viewport.
+    const shouldRetargetActiveAnimation = !!active && !prefersReducedMotion()
+
+    if (!shouldAnimate && !shouldRetargetActiveAnimation) {
+      cancelForcedScroll()
+      el.scrollTop = targetOffset
+      return
+    }
+
+    const retarget = (animation: ForcedScrollAnimation) => {
+      const currentOffset = el.scrollTop
+      if (Math.abs(targetOffset - animation.targetOffset) < 0.5) return
+      animation.startOffset = currentOffset
+      animation.targetOffset = targetOffset
+      animation.startedAt = performance.now()
+      animation.duration = getForcedScrollDuration(targetOffset - currentOffset)
+    }
+
+    if (active) {
+      retarget(active)
+      return
+    }
+
+    const startOffset = el.scrollTop
+    if (Math.abs(targetOffset - startOffset) < 1) {
+      el.scrollTop = targetOffset
+      return
+    }
+
+    const animation: ForcedScrollAnimation = {
+      rafId: 0,
+      startOffset,
+      targetOffset,
+      startedAt: performance.now(),
+      duration: getForcedScrollDuration(targetOffset - startOffset),
+    }
+
+    const tick = (now: number) => {
+      if (forcedScrollAnimationRef.current !== animation) return
+
+      const progress = Math.min(1, (now - animation.startedAt) / animation.duration)
+      const nextOffset = animation.startOffset
+        + (animation.targetOffset - animation.startOffset) * easeOutQuart(progress)
+      el.scrollTop = nextOffset
+
+      if (progress >= 1) {
+        // A temporarily stale scrollHeight can clamp this write. TanStack's
+        // reconcile loop will issue the corrected destination again once the
+        // virtual container has its final measured size.
+        el.scrollTop = animation.targetOffset
+        forcedScrollAnimationRef.current = null
+        return
+      }
+
+      animation.rafId = requestAnimationFrame(tick)
+    }
+
+    forcedScrollAnimationRef.current = animation
+    animation.rafId = requestAnimationFrame(tick)
+  }, [cancelForcedScroll])
+
   const warmMobileRange = useCallback((duration = MOBILE_RANGE_WARM_MS) => {
     setMobileRangeWarm(true)
     if (rangeWarmTimerRef.current != null) {
@@ -317,7 +475,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       setMobileRangeWarm(false)
       rangeWarmTimerRef.current = null
     }, duration)
-  }, [isCoarsePointer])
+  }, [])
   const streamingError = useStore((s) => s.streamingError)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
@@ -449,6 +607,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   const cancelInitialScrollToEnd = useCallback(() => {
     initialBottomPinnedChatRef.current = chatId
     initialScrollStartedAtRef.current = 0
+    initialScrollSettleUntilRef.current = 0
     if (initialScrollRafRef.current != null) {
       cancelAnimationFrame(initialScrollRafRef.current)
       initialScrollRafRef.current = null
@@ -691,6 +850,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
           && performance.now() <= recentCollapsibleToggleUntilRef.current
         )
       )
+      const programmaticReflowUntil = row?.type === 'message'
+        ? programmaticReflowUntilByMessageIdRef.current.get(row.message.id) ?? 0
+        : 0
+      const isProgrammaticContentReflow = performance.now() <= programmaticReflowUntil
       return shouldAdjustMessageListScrollOnResize({
         delta,
         itemStart: item.start,
@@ -702,6 +865,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         isStreamingTail,
         isFocusedEditableRow,
         isUserToggledCollapsibleRow,
+        isProgrammaticContentReflow,
       })
     },
     [streamingTargetMessageId, virtualListItems]
@@ -711,8 +875,10 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     if (!hasRows || virtualListItems.length === 0 || initialBottomPinnedChatRef.current === chatId) return
     if (!scrollRef.current) return
     if (initialScrollRafRef.current != null) return
+    const now = performance.now()
     if (initialScrollStartedAtRef.current === 0) {
-      initialScrollStartedAtRef.current = performance.now()
+      initialScrollStartedAtRef.current = now
+      initialScrollSettleUntilRef.current = now + INITIAL_SCROLL_TO_END_SETTLE_MS
     }
 
     initialScrollRafRef.current = requestAnimationFrame(() => {
@@ -720,24 +886,27 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       const el = scrollRef.current
       if (!el || initialBottomPinnedChatRef.current === chatId) return
 
-      if (instance.getTotalSize() <= el.clientHeight) {
-        recordScrollPosition()
-        initialBottomPinnedChatRef.current = chatId
-        return
-      }
-
       const hasLastVirtualItem = instance.getVirtualItems().some((item) => item.index === virtualListItems.length - 1)
-      if (hasLastVirtualItem && instance.isAtEnd(SCROLL_END_THRESHOLD)) {
+      const physicalDistanceFromEnd = Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight)
+      const isAtEnd = hasLastVirtualItem
+        && instance.isAtEnd(SCROLL_END_THRESHOLD)
+        && physicalDistanceFromEnd <= SCROLL_END_THRESHOLD
+
+      if (!isAtEnd && instance.getTotalSize() > el.clientHeight) {
+        markPinned()
+        instance.scrollToEnd({ behavior: 'auto' })
         recordScrollPosition()
-        initialBottomPinnedChatRef.current = chatId
-        return
       }
 
-      markPinned()
-      instance.scrollToEnd({ behavior: 'auto' })
-      recordScrollPosition()
-
-      if (performance.now() - initialScrollStartedAtRef.current <= INITIAL_SCROLL_TO_END_MAX_MS) {
+      const elapsed = performance.now() - initialScrollStartedAtRef.current
+      const settled = isAtEnd && performance.now() >= initialScrollSettleUntilRef.current
+      if (settled || elapsed > INITIAL_SCROLL_TO_END_MAX_MS) {
+        // A late DOM insertion can re-open this session while the viewport is
+        // still genuinely pinned. Do not keep polling once the initial paint
+        // has been quiet long enough.
+        initialBottomPinnedChatRef.current = chatId
+        recordScrollPosition()
+      } else {
         scheduleInitialScrollToEnd(instance)
       }
     })
@@ -772,6 +941,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     paddingEnd: inputSafeZone,
     directDomUpdatesMode: 'position',
     scrollPaddingEnd: inputSafeZone,
+    scrollToFn: scrollToVirtualOffset,
     directDomUpdates: true,
     onChange: (instance, sync) => {
       if (!sync) scheduleInitialScrollToEnd(instance)
@@ -779,7 +949,146 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
   })
   // The core virtualizer exposes this as a mutable instance hook even though
   // the React wrapper's options type does not currently declare it.
-  rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustScrollPositionOnItemSizeChange
+  useLayoutEffect(() => {
+    // eslint-disable-next-line react-compiler/react-compiler
+    rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustScrollPositionOnItemSizeChange
+  }, [rowVirtualizer, shouldAdjustScrollPositionOnItemSizeChange])
+
+  useEffect(() => cancelForcedScroll, [cancelForcedScroll])
+
+  // DOM-driven rendering can complete after the first successful scrollToEnd:
+  // display-regex output is asynchronous, HTML islands populate a shadow root,
+  // and widget/image/font work changes a mounted row without changing message
+  // data. Re-open the short initial settling window only while the user has
+  // stayed pinned, so reading history is never pulled back to the bottom.
+  const extendInitialBottomPin = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !hasRows || virtualListItems.length === 0) return
+    if (!isPinnedRef.current || userUnpinnedRef.current) return
+
+    const now = performance.now()
+    const startedAt = initialScrollStartedAtRef.current
+    const needsNewSession = initialBottomPinnedChatRef.current === chatId
+      || startedAt === 0
+      || now - startedAt > INITIAL_SCROLL_TO_END_MAX_MS
+
+    if (needsNewSession) {
+      initialBottomPinnedChatRef.current = null
+      initialScrollStartedAtRef.current = now
+      initialScrollSettleUntilRef.current = now + INITIAL_SCROLL_TO_END_RECHECK_MS
+    } else {
+      const deadline = startedAt + INITIAL_SCROLL_TO_END_MAX_MS
+      initialScrollSettleUntilRef.current = Math.max(
+        initialScrollSettleUntilRef.current,
+        Math.min(deadline, now + INITIAL_SCROLL_TO_END_RECHECK_MS),
+      )
+    }
+
+    scheduleInitialScrollToEnd(rowVirtualizer)
+  }, [chatId, hasRows, rowVirtualizer, scheduleInitialScrollToEnd, virtualListItems.length])
+
+  // A find result may point into history that has not been paged into the
+  // virtual list yet. Pull complete batches immediately preceding the current
+  // tail window until that persisted result is available. Keeping the loaded
+  // window contiguous preserves the normal top-pagination assumptions.
+  useEffect(() => {
+    if (!findTarget) return
+
+    const controller = new AbortController()
+    let cancelled = false
+
+    const loadTargetHistory = async () => {
+      const attemptedRanges = new Set<string>()
+
+      while (!cancelled && !controller.signal.aborted) {
+        const state = useStore.getState()
+        if (state.activeChatId !== chatId) return
+        if (state.messages.some((message) => message.id === findTarget.id)) return
+
+        const persistedMessages = state.messages.filter((message) => (
+          message.chat_id === chatId && !isLocalMessagePlaceholder(message.id)
+        ))
+        const loadedCount = persistedMessages.length
+        const windowStart = Math.max(0, findTarget.messageTotal - loadedCount)
+
+        // A result inside the nominal tail window should already be present.
+        // If a new message arrived between the chat load and the search, refresh
+        // that tail range once rather than inserting an isolated row.
+        const request = findTarget.offset >= windowStart
+          ? {
+              offset: Math.max(0, findTarget.messageTotal - Math.min(1000, findTarget.messageTotal)),
+              limit: Math.min(1000, findTarget.messageTotal),
+            }
+          : {
+              offset: Math.max(0, windowStart - Math.min(1000, windowStart)),
+              limit: Math.min(1000, windowStart),
+            }
+
+        if (request.limit <= 0) return
+        const requestKey = `${request.offset}:${request.limit}`
+        if (attemptedRanges.has(requestKey)) return
+        attemptedRanges.add(requestKey)
+
+        const page = await messagesApi.list(chatId, request, { signal: controller.signal })
+        if (cancelled || controller.signal.aborted || useStore.getState().activeChatId !== chatId) return
+        if (page.data.length === 0) return
+
+        useStore.getState().prependMessages(page.data)
+      }
+    }
+
+    void loadTargetHistory()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [chatId, findTarget])
+
+  // Once its row exists in the virtualizer, center the selected result and use
+  // the app's established transient card highlight to make the destination
+  // unmistakable without altering rendered Markdown or extension content.
+  useEffect(() => {
+    if (!findTarget || focusedFindRequestRef.current === findTarget.requestId) return
+
+    const targetIndex = virtualListItems.findIndex((item) => (
+      item.type === 'message' && item.message.id === findTarget.id
+    ))
+    if (targetIndex === -1) return
+
+    focusedFindRequestRef.current = findTarget.requestId
+    cancelInitialScrollToEnd()
+    suppressKeyboardRepin(1200)
+    markUserUnpinned()
+    beginForcedScroll()
+    rowVirtualizer.scrollToIndex(targetIndex, { align: 'center', behavior: 'smooth' })
+
+    const store = useStore.getState()
+    store.setHighlightedMessageId(findTarget.id)
+    if (findHighlightTimerRef.current != null) {
+      window.clearTimeout(findHighlightTimerRef.current)
+    }
+    findHighlightTimerRef.current = window.setTimeout(() => {
+      const current = useStore.getState()
+      if (current.highlightedMessageId === findTarget.id) {
+        current.setHighlightedMessageId(null)
+      }
+      findHighlightTimerRef.current = null
+    }, 1700)
+  }, [
+    beginForcedScroll,
+    cancelInitialScrollToEnd,
+    findTarget,
+    markUserUnpinned,
+    rowVirtualizer,
+    suppressKeyboardRepin,
+    virtualListItems,
+  ])
+
+  useEffect(() => () => {
+    if (findHighlightTimerRef.current != null) {
+      window.clearTimeout(findHighlightTimerRef.current)
+    }
+  }, [])
 
   const measureMountedRows = useCallback(() => {
     const el = scrollRef.current
@@ -961,8 +1270,9 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     // position — consume the first one unconditionally (null target).
     isProgrammaticScrollRef.current = true
     programmaticScrollTargetRef.current = null
+    if (behavior === 'smooth') beginForcedScroll()
     rowVirtualizer.scrollToEnd({ behavior })
-  }, [markPinned, rowVirtualizer, virtualListItems.length])
+  }, [beginForcedScroll, markPinned, rowVirtualizer, virtualListItems.length])
 
   // The route changes before the async tail request resolves, so wait until
   // this chat's first loaded rows are present before asking TanStack to land at
@@ -975,6 +1285,70 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
 
     scheduleInitialScrollToEnd(rowVirtualizer)
   }, [chatId, hasRows, rowVirtualizer, scheduleInitialScrollToEnd, virtualListItems.length])
+
+  // Watch only the short chat-load window for content that changes outside the
+  // message data flow. This catches async display-regex replacements, normal
+  // DOM insertions, and open shadow roots used by HTML islands. The row
+  // ResizeObserver is deliberately scoped to currently mounted rows: TanStack
+  // owns long-term measurement, while this observer merely re-arms the initial
+  // bottom pin before the user has expressed a scroll preference.
+  useEffect(() => {
+    if (!hasRows || isStreaming) return
+
+    const list = scrollRef.current
+    if (!list) return
+
+    let stopped = false
+    let pendingRaf = 0
+    let watchTimer = 0
+    const observedRows = new WeakSet<HTMLElement>()
+    const observedShadows = new WeakSet<ShadowRoot>()
+    const rowResizeObserver = new ResizeObserver(scheduleCheck)
+    const domObserver = new MutationObserver(scheduleCheck)
+
+    const observeDynamicRoots = () => {
+      for (const row of list.querySelectorAll<HTMLElement>('[data-virtual-index]')) {
+        if (observedRows.has(row)) continue
+        observedRows.add(row)
+        rowResizeObserver.observe(row)
+      }
+
+      for (const island of list.querySelectorAll<HTMLElement>('[data-lumiverse-html-island]')) {
+        const shadow = island.shadowRoot
+        if (!shadow || observedShadows.has(shadow)) continue
+        observedShadows.add(shadow)
+        // A host's ResizeObserver sees the resulting size change, while this
+        // catches the mutation early enough to extend the quiet settle window.
+        domObserver.observe(shadow, { childList: true, subtree: true, characterData: true })
+      }
+    }
+
+    function scheduleCheck() {
+      if (stopped || pendingRaf) return
+      pendingRaf = requestAnimationFrame(() => {
+        pendingRaf = 0
+        if (stopped) return
+        observeDynamicRoots()
+        extendInitialBottomPin()
+      })
+    }
+
+    domObserver.observe(list, { childList: true, subtree: true, characterData: true })
+    observeDynamicRoots()
+    scheduleCheck()
+
+    const stop = () => {
+      if (stopped) return
+      stopped = true
+      domObserver.disconnect()
+      rowResizeObserver.disconnect()
+      if (pendingRaf) cancelAnimationFrame(pendingRaf)
+      if (watchTimer) window.clearTimeout(watchTimer)
+    }
+
+    watchTimer = window.setTimeout(stop, INITIAL_LOAD_DOM_WATCH_MS)
+    return stop
+  }, [chatId, extendInitialBottomPin, hasRows, isStreaming])
 
   const BOTTOM_REPIN_EPSILON = SCROLL_END_THRESHOLD
   const EXPLICIT_BOTTOM_REPIN_EPSILON = 2
@@ -1021,7 +1395,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     return true
   }, [hasInListEditableFocus, inputSafeZone, markPinned, markProgrammaticScroll, rowVirtualizer, virtualListItems.length])
 
-  const updatePinState = (scrollTop: number, scrollHeight: number, clientHeight: number) => {
+  const updatePinState = useCallback((scrollTop: number, scrollHeight: number, clientHeight: number) => {
     const distance = scrollHeight - scrollTop - clientHeight
     const shouldPin = shouldPinMessageListTail({
       distanceFromEnd: distance,
@@ -1031,7 +1405,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
     })
     if (shouldPin) markPinned()
     else isPinnedRef.current = false
-  }
+  }, [markPinned, BOTTOM_REPIN_EPSILON, EXPLICIT_BOTTOM_REPIN_EPSILON])
 
   // User scroll intent owns pinning: any upward scroll disables auto-follow,
   // and we only re-arm once the user actually returns to the bottom.
@@ -1081,21 +1455,30 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       topLoadArmedRef.current = false
       loadMore()
     }
-  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, markUserUnpinned, recoverTailVoid, suppressKeyboardRepin])
+  }, [cancelInitialScrollToEnd, hasMore, isCoarsePointer, loadingOlder, loadMore, markUserUnpinned, recoverTailVoid, suppressKeyboardRepin, updatePinState])
 
   const handleWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    interruptForcedScroll()
     suppressKeyboardRepin(1000)
     if (event.deltaY < -30) {
       cancelInitialScrollToEnd()
       markUserUnpinned()
       suppressNextPinUpdateRef.current = true
     }
-  }, [cancelInitialScrollToEnd, markUserUnpinned, suppressKeyboardRepin])
+  }, [cancelInitialScrollToEnd, interruptForcedScroll, markUserUnpinned, suppressKeyboardRepin])
 
   const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    interruptForcedScroll()
     suppressKeyboardRepin(1000)
     touchYRef.current = event.touches[0]?.clientY ?? null
-  }, [suppressKeyboardRepin])
+  }, [interruptForcedScroll, suppressKeyboardRepin])
+
+  const handlePointerDown = useCallback((_event: PointerEvent<HTMLDivElement>) => {
+    // Native smooth scroll cancels as soon as a user grabs the list. Mirror
+    // that behaviour for the retargetable animation so a drag or scrollbar
+    // click always wins over a forced navigation.
+    interruptForcedScroll()
+  }, [interruptForcedScroll])
 
   const handleTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const previousY = touchYRef.current
@@ -1202,6 +1585,21 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
         ? target.closest<HTMLElement>('[data-virtual-index]')
         : null
 
+      // Finalized messages can re-render after the first bottom landing when
+      // display regexes, HTML islands, or widgets finish their async work.
+      // Keep the load session alive only if the user is still at the tail.
+      if (!isStreaming) extendInitialBottomPin()
+
+      if (pendingRow && shouldPreserveScrollAnchorForLayout(event)) {
+        const messageId = pendingRow.dataset.messageId
+        if (messageId) {
+          programmaticReflowUntilByMessageIdRef.current.set(
+            messageId,
+            performance.now() + PROGRAMMATIC_CONTENT_REFLOW_SETTLE_MS,
+          )
+        }
+      }
+
       // Debounce the burst of layout events fired during streaming/content
       // changes so we don't re-measure the same row multiple times per frame.
       if (layoutTimer) window.clearTimeout(layoutTimer)
@@ -1233,7 +1631,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       if (layoutTimer) window.clearTimeout(layoutTimer)
       if (settleTimer) window.clearTimeout(settleTimer)
     }
-  }, [measureMountedRows, recoverTailVoid, rowVirtualizer])
+  }, [extendInitialBottomPin, isStreaming, measureMountedRows, recoverTailVoid, rowVirtualizer])
 
   return (
     <div
@@ -1242,6 +1640,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
       ref={scrollRef}
       onScroll={handleScroll}
       onWheel={handleWheel}
+      onPointerDown={handlePointerDown}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -1276,6 +1675,7 @@ export default function MessageList({ messages, chatId, isStreaming }: MessageLi
                   message={item.message}
                   chatId={chatId}
                   depth={visibleMessages.length - 1 - item.messageIndex}
+                  findQuery={findQuery}
                 />
               )
               break

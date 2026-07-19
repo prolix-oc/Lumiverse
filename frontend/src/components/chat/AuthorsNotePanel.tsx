@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CloseButton } from '@/components/shared/CloseButton'
+import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import NumericInput from '@/components/shared/NumericInput'
 import { chatsApi } from '@/api/chats'
 import styles from './AuthorsNotePanel.module.css'
@@ -68,8 +69,7 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
     }
   }, [])
 
-  const handleTextChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value
+  const handleTextChange = useCallback((val: string) => {
     setNoteText(val)
     setEnabled(!!val.trim())
     scheduleSave({ content: val })
@@ -111,13 +111,14 @@ export default function AuthorsNotePanel({ chatId, isOpen, onClose }: AuthorsNot
 
       <div className={styles.body}>
         <div className={styles.field}>
-          <textarea
+          <ExpandableTextarea
             name="authors-note"
             aria-label={t('authorsNote.ariaLabel')}
             className={styles.textarea}
             rows={3}
             value={noteText}
             onChange={handleTextChange}
+            title={t('authorsNote.title')}
             placeholder={t('authorsNote.placeholder')}
           />
         </div>

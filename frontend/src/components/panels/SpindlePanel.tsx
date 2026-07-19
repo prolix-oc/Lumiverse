@@ -17,8 +17,14 @@ import {
   subscribeExtensionMountPoints,
 } from '@/lib/spindle/loader'
 import { toast } from '@/lib/toast'
+import { SortControl } from '@/components/shared/SortControl'
 import styles from './SpindlePanel.module.css'
 import clsx from 'clsx'
+import {
+  EXTENSION_SORT_OPTIONS,
+  sortExtensions,
+  type ExtensionSortMode,
+} from './spindle-extension-sort'
 
 interface EnableAllPermissionsTarget {
   extensionId: string
@@ -62,7 +68,7 @@ export default function SpindlePanel() {
         .filter((ext) => hasExtensionMountPoint(ext.id, 'settings_extensions'))
         .map((ext) => ext.id)
     ),
-    [extensions, extensionMountPointsVersion]
+    [extensions]
   )
 
   const [togglingPerm, setTogglingPerm] = useState<string | null>(null)
@@ -77,6 +83,7 @@ export default function SpindlePanel() {
   const [confirmUpdateAllOpen, setConfirmUpdateAllOpen] = useState(false)
   const [enableAllPermissionsTarget, setEnableAllPermissionsTarget] = useState<EnableAllPermissionsTarget | null>(null)
   const [bulkPermissionExtensionId, setBulkPermissionExtensionId] = useState<string | null>(null)
+  const [extensionSortMode, setExtensionSortMode] = useState<ExtensionSortMode>('installed')
 
   // Branch selection for install
   const [installBranches, setInstallBranches] = useState<string[]>([])
@@ -331,6 +338,16 @@ export default function SpindlePanel() {
     return isPrivileged || (scope === 'user' && !!user?.id && installedBy === user.id)
   })
   const manageableCount = manageableExtensions.length
+  const sortedExtensions = useMemo(
+    () => sortExtensions(extensions, extensionSortMode),
+    [extensions, extensionSortMode],
+  )
+  const extensionSortOptions = EXTENSION_SORT_OPTIONS.map((option) => ({
+    value: option.value,
+    label: t(`spindlePanel.sort.${option.labelKey}`),
+  }))
+  const extensionSortLabel = extensionSortOptions.find((option) => option.value === extensionSortMode)?.label
+    ?? t('spindlePanel.sort.dateInstalled')
 
   const bulkUpdating = !!bulkUpdateStatus && !bulkUpdateStatus.done
   const bulkProcessed = bulkUpdateStatus
@@ -422,31 +439,41 @@ export default function SpindlePanel() {
         <span className={styles.sectionLabel}>
           {t('spindlePanel.installed', { count: extensions.length })}
         </span>
-        {manageableCount > 0 && (
-          <button
-            type="button"
-            className={styles.updateAllBtn}
-            onClick={handleUpdateAll}
-            disabled={bulkUpdating}
-            title={bulkUpdating ? t('spindlePanel.bulkUpdateInProgress') : t('spindlePanel.updateAllHint')}
-          >
-            {bulkUpdating ? (
-              <>
-                <Spinner size={12} fast />
-                {t('spindlePanel.updatingProgress', {
-                  current: bulkDisplayIndex,
-                  total: bulkUpdateStatus?.total ?? manageableCount,
-                  name: bulkUpdateStatus?.currentName ? `: ${bulkUpdateStatus.currentName}` : '',
-                })}
-              </>
-            ) : (
-              <>
-                <RefreshCw size={12} />
-                {t('spindlePanel.updateAll')}
-              </>
-            )}
-          </button>
-        )}
+        <div className={styles.listHeaderActions}>
+          <SortControl<ExtensionSortMode>
+            options={extensionSortOptions}
+            value={extensionSortMode}
+            onChange={setExtensionSortMode}
+            title={t('spindlePanel.sortBy', { field: extensionSortLabel })}
+            dropdownWidth={150}
+            dropdownAlign="end"
+          />
+          {manageableCount > 0 && (
+            <button
+              type="button"
+              className={styles.updateAllBtn}
+              onClick={handleUpdateAll}
+              disabled={bulkUpdating}
+              title={bulkUpdating ? t('spindlePanel.bulkUpdateInProgress') : t('spindlePanel.updateAllHint')}
+            >
+              {bulkUpdating ? (
+                <>
+                  <Spinner size={12} fast />
+                  {t('spindlePanel.updatingProgress', {
+                    current: bulkDisplayIndex,
+                    total: bulkUpdateStatus?.total ?? manageableCount,
+                    name: bulkUpdateStatus?.currentName ? `: ${bulkUpdateStatus.currentName}` : '',
+                  })}
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={12} />
+                  {t('spindlePanel.updateAll')}
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {extensions.length === 0 ? (
@@ -461,7 +488,7 @@ export default function SpindlePanel() {
         </div>
       ) : (
         <div className={styles.extensionList}>
-          {extensions.map((ext) => (
+          {sortedExtensions.map((ext) => (
             <div key={ext.id} className={styles.extensionCard}>
               {(() => {
                 const installScope = ((ext.metadata as any)?.install_scope || 'operator') as 'operator' | 'user'

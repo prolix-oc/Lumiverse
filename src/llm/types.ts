@@ -247,6 +247,12 @@ export interface AssemblyContext {
   chatId: string;
   connectionId?: string;
   presetId?: string;
+  /** Internal transient preset used by assembly-only callers. Never persisted. */
+  presetOverride?: import("../types/preset").Preset;
+  /** Skip per-chat/character/connection preset-profile block overrides. */
+  skipPresetProfileBinding?: boolean;
+  /** Whether macro handlers may commit side effects. Defaults to true. */
+  macroCommit?: boolean;
   /** When true, bypass preset-profile preset selection and use presetId directly. */
   forcePresetId?: boolean;
   generationType: GenerationType;
@@ -257,10 +263,16 @@ export interface AssemblyContext {
   impersonateMode?: ImpersonateMode;
   /** For impersonate: free-form user text from the input box, appended to the impersonation prompt. */
   impersonateInput?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
   /** For regenerate: exclude this message from chat history (it has a blank swipe). */
   excludeMessageId?: string;
   /** For regenerate/swipe: content of the active target swipe before it was replaced. */
   rejectedSwipe?: string;
+  /** For continue: source message id of the assistant turn being extended. */
+  continueMessageId?: string;
+  /** For continue: separator to append to the target in the model prompt and saved reply. */
+  continuePostfix?: string;
   /** For group chats: generate a response as this specific character. */
   targetCharacterId?: string;
   /** Council tool results (passed from generate.service when council executes before assembly). */
@@ -308,6 +320,7 @@ export interface PrefetchedData {
     entries: import("../types/world-book").WorldBookEntry[];
     worldBookIds: string[];
     bookSourceMap: Map<string, import("../services/world-info-sources.service").BookSource>;
+    bookNameMap: Map<string, string>;
   };
   /** Group chat members, batch-loaded. */
   groupCharacters?: Map<string, import("../types/character").Character>;
@@ -334,6 +347,7 @@ export interface ActivatedWorldInfoEntry {
   score?: number;
   bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
+  bookName?: string;
 }
 
 export interface MemoryStats {
@@ -417,6 +431,14 @@ export interface ContextClipStats {
   budgetInvalid?: boolean;
   /** True when fixed prompt overhead alone is larger than the available input budget. */
   fixedOverBudget?: boolean;
+  /** True when a chat context anchor protected one or more history messages. */
+  anchorActive?: boolean;
+  /** Exact tokens required by the protected anchor tail. */
+  protectedHistoryTokens?: number;
+  /** Space left for history before the protected anchor. Negative means the anchor cannot fit. */
+  remainingBeforeAnchor?: number;
+  /** True when the protected anchor tail cannot fit in the remaining history budget. */
+  anchorOverflow?: boolean;
 }
 
 export interface AssemblyResult {

@@ -13,6 +13,42 @@
 
 .contentChar {}
 
+.findMatch {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--lumiverse-warning, #f5b942) 58%, transparent);
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.content :global([data-lumiverse-regex-action]) {
+  cursor: pointer;
+}
+
+.content :global([data-lumiverse-regex-action]:focus-visible) {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.content :global([data-lumiverse-regex-action-used="true"]),
+.content :global([data-lumiverse-regex-action-superseded]),
+.content :global([data-lumiverse-regex-action-state-blocked]) {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: saturate(0.45);
+}
+
+.content :global([data-lumiverse-regex-action-selected]) {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+.content :global([data-lumiverse-regex-action-budget-blocked]:not([data-lumiverse-regex-action-selected])) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* Prevent browser-generated quote marks on <q> wrappers */
 .prose {
   display: flow-root;
@@ -489,7 +525,9 @@
   max-width: 100%;
   margin: 8px 0;
   border-radius: var(--lcs-radius-sm);
-  overflow: hidden;
+  /* Shadows and transforms contribute visual overflow, not layout bounds.
+     Clipping the shadow host therefore cuts them off at the island rectangle. */
+  overflow: visible;
 }
 
 .youtubeEmbedWrap {

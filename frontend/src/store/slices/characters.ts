@@ -62,7 +62,7 @@ export const createCharactersSlice: StateCreator<CharactersSlice> = (set, get) =
       const isFav = state.favorites.includes(id)
       const favorites = isFav
         ? state.favorites.filter((f) => f !== id)
-        : [...state.favorites, id].slice(0, 15)
+        : [...state.favorites, id]
       settingsApi.put('favorites', favorites).catch(() => {})
       return { favorites }
     }),

@@ -189,6 +189,22 @@ describe("buildEnv rejected swipe", () => {
   });
 });
 
+describe("buildEnv user input", () => {
+  test("threads the raw input-bar draft into macro state", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      userInput: "  Preserve this exact draft\n",
+    });
+
+    expect(env.extra.userInput).toBe("  Preserve this exact draft\n");
+  });
+});
+
 describe("buildEnv variables", () => {
   test("does not rehydrate transient local macro variables from chat metadata", () => {
     const env = buildEnv({

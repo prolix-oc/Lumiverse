@@ -5,7 +5,12 @@ import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { GenerationType } from "../llm/types";
-import type { MacroEnv, MacroHandler, MacroDefinition } from "./types";
+import type {
+  MacroEnv,
+  MacroHandler,
+  MacroDefinition,
+  PromptBlockMacroContext,
+} from "./types";
 
 export interface BuildEnvContext {
   character: Character;
@@ -32,6 +37,8 @@ export interface BuildEnvContext {
   signal?: AbortSignal;
   /** Content of the regenerate/swipe target before the new swipe was staged. */
   rejectedSwipe?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
 }
 
 export function resolvePersonaPronouns(persona: Persona | null): {
@@ -147,6 +154,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       lastMessageTime: lastMsg && typeof lastMsg.send_date === "number"
         ? lastMsg.send_date * 1000
         : undefined,
+      userInput: ctx.userInput ?? "",
     },
   };
 }
@@ -186,6 +194,7 @@ export function cloneEnv(env: MacroEnv): MacroEnv {
       chat: new Map(env.variables.chat),
     },
     ...(env._chatVarsDirty ? { _chatVarsDirty: true } : {}),
+    ...(env.promptBlock ? { promptBlock: { ...env.promptBlock } } : {}),
     dynamicMacros: { ...env.dynamicMacros },
     _dynamicMacrosLower: env._dynamicMacrosLower
       ? new Map(env._dynamicMacrosLower)
@@ -193,6 +202,25 @@ export function cloneEnv(env: MacroEnv): MacroEnv {
     signal: env.signal,
     extra: { ...env.extra },
   };
+}
+
+/**
+ * Run work with the supplied preset block as the read-only macro context.
+ * The previous context is always restored so later assembly phases cannot
+ * accidentally inherit placement from an earlier block.
+ */
+export async function withPromptBlockContext<T>(
+  env: MacroEnv,
+  block: PromptBlockMacroContext,
+  work: () => T | Promise<T>,
+): Promise<T> {
+  const previous = env.promptBlock;
+  env.promptBlock = { ...block };
+  try {
+    return await work();
+  } finally {
+    env.promptBlock = previous;
+  }
 }
 
 function resolveChatGreeting(character: Character, chat: Chat, messages: Message[]): string {
