@@ -7,8 +7,6 @@ import type {
   SpindleManifest,
 } from "lumiverse-spindle-types";
 import { interceptorPipeline } from "./interceptor-pipeline";
-import type { ParentGenerationSnapshot } from "./bound-generation-types";
-import { brandHostGenerationId } from "./bound-generation-types";
 import type { RuntimeTransport } from "./runtime-transport";
 import * as managerSvc from "./manager.service";
 import * as dispatchStateSvc from "../services/dispatch-state.service";
