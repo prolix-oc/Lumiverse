@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { join } from "path";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import { createPreset, getPreset, updatePreset } from "../services/presets.service";
 import { validateInstallPresetPayload } from "./payload-validation";
@@ -18,7 +19,7 @@ function installPreset(
   return installPresetForUser(requestId, userId, payload, dependencies);
 }
 
-function initInstallerTestDb(): void {
+async function initInstallerTestDb(): Promise<void> {
   closeDatabase();
   initDatabase(":memory:");
   const db = getDb();
@@ -54,6 +55,23 @@ function initInstallerTestDb(): void {
     user_id TEXT NOT NULL,
     preset_id TEXT
   )`);
+  db.run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    preset_id TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    has_api_key INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.run(
+    await Bun.file(join(import.meta.dir, "..", "db", "migrations", "094_dispatch_state.sql")).text(),
+  );
 }
 
 function installPayload(
