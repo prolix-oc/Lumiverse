@@ -548,11 +548,11 @@ function buildQuirksContent(ctx: MacroExecContext): string {
 
   let header: string;
   if (council.councilMode && (council.members?.length ?? 0) > 0) {
-    header = "## Council Behavioral Quirks";
+    header = "### Council Behavioral Quirks";
   } else if (lumia.chimeraMode) {
-    header = "## Chimera Behavioral Quirks";
+    header = "### Chimera Behavioral Quirks";
   } else {
-    header = "## Behavioral Quirks";
+    header = "### Behavioral Quirks";
   }
 
   return `${header}\n\n${lumia.quirks}`;
