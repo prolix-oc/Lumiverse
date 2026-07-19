@@ -10,6 +10,8 @@ type RuntimeMessage = {
   result?: unknown;
   messages?: Array<{ role: string; content: string }>;
   __spindle_private_bound?: Record<string, unknown>;
+  token?: string;
+  __spindle_private_frontend?: Record<string, unknown>;
 };
 
 type Waiter = {
@@ -29,6 +31,7 @@ const VALID_HOST_DESCRIPTOR = {
     "generation-assembly-v1": 1,
     "interceptor-context-v1": 1,
     "interceptor-final-response-v1": 1,
+    "connection-dispatch-resolution-v1": 1,
     "unknown-capability-v1": 7,
   },
   extensionInstallationId: "00000000-0000-4000-8000-000000000001",
@@ -412,6 +415,87 @@ describe("Worker nested generation authority", () => {
       );
       expect(callbackResult.registrationId).toBe(registration.registrationId);
       expect(callbackResult.messages).toEqual([{ role: "user", content: "hello" }]);
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+});
+
+describe("Worker frontend-message dispatch authority", () => {
+  test("binds dispatch resolution to the authenticated callback scope and completes it", async () => {
+    const runtime = await startRuntime(`
+      void spindle.connections.resolveDispatch("connection-1").catch((error) => {
+        spindle.log.info("unscoped-error:" + error.message);
+      });
+      spindle.onFrontendMessage(async (_payload, userId) => {
+        const descriptor = await spindle.connections.resolveDispatch("connection-1");
+        spindle.log.info("frontend-dispatch:" + JSON.stringify({ userId, descriptor }));
+      });
+    `);
+
+    try {
+      const unscoped = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message?.startsWith("unscoped-error:") === true,
+      );
+      expect(unscoped.message).toContain("CONNECTION_DISPATCH_SCOPE_REQUIRED");
+
+      runtime.worker.postMessage({
+        type: "frontend_message",
+        payload: { type: "inspect" },
+        userId: "user-1",
+        __spindle_private_frontend: { token: "frontend-scope-1" },
+      });
+
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "connections_resolve_dispatch",
+      );
+      expect(request.__spindle_private_bound).toBeUndefined();
+      expect(request.__spindle_private_frontend).toEqual({
+        token: "frontend-scope-1",
+        operationRequestId: request.requestId,
+      });
+      runtime.worker.postMessage({
+        type: "response",
+        requestId: request.requestId,
+        result: {
+          connectionId: "connection-1",
+          connectionName: "Test connection",
+          provider: "openai-compatible",
+          model: "test-model",
+          endpointOrigin: "https://example.test",
+          dispatchKind: "concrete",
+          connectionDispatchRevision: "revision-1",
+        },
+      });
+
+      const resultLog = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message?.startsWith("frontend-dispatch:") === true,
+      );
+      expect(JSON.parse(resultLog.message!.slice("frontend-dispatch:".length))).toEqual({
+        userId: "user-1",
+        descriptor: {
+          connectionId: "connection-1",
+          connectionName: "Test connection",
+          provider: "openai-compatible",
+          model: "test-model",
+          endpointOrigin: "https://example.test",
+          dispatchKind: "concrete",
+          connectionDispatchRevision: "revision-1",
+        },
+      });
+
+      const completed = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "frontend_message_scope_complete",
+      );
+      expect(completed.token).toBe("frontend-scope-1");
     } finally {
       await stopRuntime(runtime);
     }

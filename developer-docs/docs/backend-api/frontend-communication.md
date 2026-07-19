@@ -46,3 +46,38 @@ spindle.onFrontendMessage(async (payload: any, userId) => {
   }
 })
 ```
+
+## Authenticated request-local connection resolution
+
+Hosts advertising `spindle.host.capabilities['connection-dispatch-resolution-v1'] === 1`
+allow backend extensions with the `generation` permission to call
+`spindle.connections.resolveDispatch(connectionId)` from an
+`onFrontendMessage` callback. The host binds the call to the authenticated user
+that sent the frontend message; extensions supply only the connection ID and
+cannot select or forge the user scope.
+
+Return or await asynchronous handler work so the request-local authority remains
+live until the handler settles:
+
+```ts
+spindle.onFrontendMessage(async (payload) => {
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('connectionId' in payload) ||
+    typeof payload.connectionId !== 'string'
+  ) {
+    return
+  }
+
+  const descriptor = await spindle.connections.resolveDispatch(payload.connectionId)
+  spindle.sendToFrontend({ type: 'connection_descriptor', descriptor })
+})
+```
+
+The resolver returns the same credential-free `ConnectionDispatchDescriptorDTO`
+used by bound interceptor generation, including the current
+`connectionDispatchRevision`. Its authority ends when the callback settles or
+the host's bounded request window expires. Fire-and-forget work must not retain
+or reuse that authority. Re-resolve immediately before any revision-bound
+approval or operation instead of treating an earlier descriptor as current.

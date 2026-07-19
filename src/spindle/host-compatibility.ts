@@ -9,6 +9,11 @@ import {
   SPINDLE_HOST_CAPABILITIES,
 } from "lumiverse-spindle-types";
 
+export const LUMIVERSE_SPINDLE_HOST_CAPABILITIES = Object.freeze({
+  ...SPINDLE_HOST_CAPABILITIES,
+  "connection-dispatch-resolution-v1": 1,
+}) as Readonly<Record<string, number>>;
+
 export type ParsedCanonicalSemver = Readonly<{
   source: string;
   major: string;
@@ -143,7 +148,7 @@ export function validateSpindleHostDescriptor(value: unknown): SpindleHostDescri
     capabilities[name] = version;
   }
 
-  for (const [name, version] of Object.entries(SPINDLE_HOST_CAPABILITIES)) {
+  for (const [name, version] of Object.entries(LUMIVERSE_SPINDLE_HOST_CAPABILITIES)) {
     if (capabilities[name] !== version) {
       throw new SpindleCompatibilityError(
         `Missing or incompatible Spindle host capability: ${name}`,
@@ -224,7 +229,7 @@ export async function createSpindleHostDescriptor(
   const descriptor = {
     descriptorVersion: 1,
     lumiverseVersion: await getBackendLumiverseVersion(),
-    capabilities: Object.freeze({ ...SPINDLE_HOST_CAPABILITIES }),
+    capabilities: Object.freeze({ ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES }),
     extensionInstallationId,
   } satisfies SpindleHostDescriptorV1;
 

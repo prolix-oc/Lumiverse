@@ -274,6 +274,10 @@ type BoundRuntimeEnvelope = {
   readonly token: string;
   readonly operationRequestId?: string;
 };
+type FrontendMessageScopeEnvelope = {
+  readonly token: string;
+  readonly operationRequestId?: string;
+};
 type RuntimeWorkerToHost =
   | Exclude<
       WorkerToHost,
@@ -330,6 +334,11 @@ type RuntimeWorkerToHost =
       requestId: string;
       connectionId: string;
       __spindle_private_bound?: BoundRuntimeEnvelope;
+      __spindle_private_frontend?: FrontendMessageScopeEnvelope;
+    }
+  | {
+      type: "frontend_message_scope_complete";
+      token: string;
     }
   | {
       type: "cancel_generation";
@@ -569,7 +578,7 @@ type RuntimeWorkerToHost =
 type RuntimeHostToWorker =
   | Exclude<
       HostToWorker,
-      { type: "init" | "intercept_request" | "intercept_abort" }
+      { type: "init" | "intercept_request" | "intercept_abort" | "frontend_message" }
     >
   | {
       type: "init";
@@ -594,6 +603,12 @@ type RuntimeHostToWorker =
       registrationId: string;
       reason?: string;
       __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "frontend_message";
+      payload: unknown;
+      userId: string;
+      __spindle_private_frontend?: FrontendMessageScopeEnvelope;
     }
   | {
       type: "rpc_pool_request";
@@ -925,6 +940,7 @@ type RuntimeInterceptorRequest = {
 const interceptorRegistrations = new Map<string, RuntimeInterceptorRegistration>();
 const interceptorRequests = new Map<string, RuntimeInterceptorRequest>();
 const interceptorBindingStorage = new AsyncLocalStorage<BoundRuntimeEnvelope | undefined>();
+const frontendMessageScopeStorage = new AsyncLocalStorage<FrontendMessageScopeEnvelope | undefined>();
 let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
 let messageContentProcessorFn:
   | ((ctx: unknown) => Promise<unknown>)
@@ -938,7 +954,8 @@ let worldInfoInterceptorFn:
 let oauthCallbackHandler:
   | ((params: Record<string, string>) => Promise<{ html?: string } | void>)
   | null = null;
-const frontendMessageHandlers = new Set<(payload: unknown, userId: string) => void>();
+type FrontendMessageHandler = (payload: unknown, userId: string) => void | Promise<void>;
+const frontendMessageHandlers = new Set<FrontendMessageHandler>();
 const commandInvokedHandlers = new Set<(commandId: string, context: any) => void | Promise<void>>();
 const permissionDeniedHandlers = new Set<(detail: PermissionDeniedDetail) => void>();
 const permissionChangedHandlers = new Set<(detail: PermissionChangedDetail) => void>();
@@ -1300,26 +1317,38 @@ function isConnectionDispatchDescriptor(value: unknown): value is ConnectionDisp
     (value.connectionDispatchRevision === null || typeof value.connectionDispatchRevision === "string")
   );
 }
-function requestBoundDispatchInspection(
+function requestDispatchInspection(
   connectionId: string,
 ): Promise<ConnectionDispatchDescriptorDTO | null> {
-  const envelope = currentBoundRuntimeEnvelope();
-  if (!envelope) {
-    return Promise.reject(new Error("BOUND_BINDING_REQUIRED: connection dispatch resolution requires an active authenticated interceptor callback"));
-  }
   if (typeof connectionId !== "string" || connectionId.trim().length === 0) {
     return Promise.reject(new TypeError("connectionId must be a non-empty string"));
   }
+  const boundEnvelope = currentBoundRuntimeEnvelope();
+  const frontendEnvelope = frontendMessageScopeStorage.getStore();
+  if (!boundEnvelope && !frontendEnvelope) {
+    return Promise.reject(new Error(
+      "CONNECTION_DISPATCH_SCOPE_REQUIRED: connection dispatch resolution requires an active authenticated interceptor or frontend-message callback",
+    ));
+  }
   const requestId = crypto.randomUUID();
-  const operationEnvelope: BoundRuntimeEnvelope = Object.freeze({
-    ...envelope,
-    operationRequestId: requestId,
-  });
+  const boundOperationEnvelope = boundEnvelope
+    ? Object.freeze({
+        ...boundEnvelope,
+        operationRequestId: requestId,
+      })
+    : undefined;
+  const frontendOperationEnvelope = frontendEnvelope
+    ? Object.freeze({
+        token: frontendEnvelope.token,
+        operationRequestId: requestId,
+      })
+    : undefined;
   return request({
     type: "connections_resolve_dispatch",
     requestId,
     connectionId,
-    __spindle_private_bound: operationEnvelope,
+    __spindle_private_bound: boundOperationEnvelope,
+    __spindle_private_frontend: frontendOperationEnvelope,
   }).then((result) => {
     if (result === null) return null;
     if (!isConnectionDispatchDescriptor(result)) {
@@ -2204,7 +2233,7 @@ const spindleApi: RuntimeSpindleAPI = {
       return result as ConnectionProfileDTO | null;
     },
     async resolveDispatch(connectionId: string): Promise<ConnectionDispatchDescriptorDTO | null> {
-      return requestBoundDispatchInspection(connectionId);
+      return requestDispatchInspection(connectionId);
     },
   },
 
@@ -3774,7 +3803,7 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "frontend_message", payload, userId });
   },
 
-  onFrontendMessage(handler: (payload: unknown, userId: string) => void): () => void {
+  onFrontendMessage(handler: FrontendMessageHandler): () => void {
     frontendMessageHandlers.add(handler);
     return () => {
       frontendMessageHandlers.delete(handler);
@@ -4621,44 +4650,63 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "frontend_message": {
-      // Built-in CORS proxy bridge for sandboxed widgets
-      if (
-        typeof msg.payload === "object" &&
-        msg.payload !== null &&
-        (msg.payload as any).type === "__cors_proxy_request"
-      ) {
-        const p = msg.payload as { requestId: string; url: string; options?: any }
-        spindleApi.cors(p.url, { ...(p.options || {}), responseType: "arraybuffer" }).then(
-          (result) => {
-            spindleApi.sendToFrontend({
-              type: "__cors_proxy_response",
-              requestId: p.requestId,
-              result,
-            }, msg.userId)
-          },
-          (err: any) => {
-            spindleApi.sendToFrontend({
-              type: "__cors_proxy_response",
-              requestId: p.requestId,
-              error: err?.message || "CORS proxy request failed",
-            }, msg.userId)
-          }
-        )
-        break
-      }
-
-      for (const handler of frontendMessageHandlers) {
+      const rawScope = msg.__spindle_private_frontend;
+      const scope = rawScope &&
+        typeof rawScope.token === "string" &&
+        rawScope.token.length > 0
+        ? Object.freeze({ token: rawScope.token })
+        : undefined;
+      const run = async (): Promise<void> => {
         try {
-          handler(msg.payload, msg.userId)
-        } catch (err: any) {
-          post({
-            type: "log",
-            level: "error",
-            message: `Frontend message handler error: ${err.message}`,
-          })
+          await frontendMessageScopeStorage.run(scope, async () => {
+            const payload = msg.payload;
+            if (
+              isRecordValue(payload) &&
+              payload.type === "__cors_proxy_request" &&
+              typeof payload.requestId === "string" &&
+              typeof payload.url === "string"
+            ) {
+              const options = isRecordValue(payload.options) ? payload.options : {};
+              try {
+                const result = await spindleApi.cors(
+                  payload.url,
+                  { ...options, responseType: "arraybuffer" as const },
+                );
+                spindleApi.sendToFrontend({
+                  type: "__cors_proxy_response",
+                  requestId: payload.requestId,
+                  result,
+                }, msg.userId);
+              } catch (error) {
+                spindleApi.sendToFrontend({
+                  type: "__cors_proxy_response",
+                  requestId: payload.requestId,
+                  error: error instanceof Error ? error.message : String(error),
+                }, msg.userId);
+              }
+              return;
+            }
+
+            await Promise.all([...frontendMessageHandlers].map(async (handler) => {
+              try {
+                await handler(msg.payload, msg.userId);
+              } catch (error) {
+                post({
+                  type: "log",
+                  level: "error",
+                  message: `Frontend message handler error: ${error instanceof Error ? error.message : String(error)}`,
+                });
+              }
+            }));
+          });
+        } finally {
+          if (scope) {
+            post({ type: "frontend_message_scope_complete", token: scope.token });
+          }
         }
-      }
-      break
+      };
+      void run();
+      break;
     }
 
     case "frontend_process_lifecycle": {

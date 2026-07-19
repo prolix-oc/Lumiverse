@@ -57,6 +57,7 @@ The descriptor and its nested capability map are immutable frozen snapshots. The
 - `generation-assembly-v1: 1`
 - `interceptor-context-v1: 1`
 - `interceptor-final-response-v1: 1`
+- `connection-dispatch-resolution-v1: 1`
 
 Hosts may add valid capability keys in future versions. Ignore unknown keys and check the known capability name and version your extension requires; do not treat an unknown key as a compatibility failure.
 

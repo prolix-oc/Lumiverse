@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { SpindleManifest } from "lumiverse-spindle-types";
 import {
   SPINDLE_COMPATIBILITY_ERROR_CODE,
-  SPINDLE_HOST_CAPABILITIES,
 } from "lumiverse-spindle-types";
 import {
   SpindleCompatibilityError,
   assertManifestCompatibility,
   compareCanonicalSemver,
+  LUMIVERSE_SPINDLE_HOST_CAPABILITIES,
   createSpindleHostDescriptor,
   digestSpindleHostDescriptor,
   parseCanonicalSemver,
@@ -33,7 +33,7 @@ function descriptor(overrides: Record<string, unknown> = {}): Record<string, unk
   return {
     descriptorVersion: 1,
     lumiverseVersion: HOST_VERSION,
-    capabilities: { ...SPINDLE_HOST_CAPABILITIES },
+    capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES },
     extensionInstallationId: INSTALLATION_ID,
     ...overrides,
   };
@@ -59,7 +59,7 @@ describe("Spindle host compatibility", () => {
   test("validates required capabilities and accepts unknown valid extras", () => {
     const value = validateSpindleHostDescriptor(
       descriptor({
-        capabilities: { ...SPINDLE_HOST_CAPABILITIES, "future-capability-v2": 3 },
+        capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES, "future-capability-v2": 3 },
       }),
     );
     expect(value.capabilities["future-capability-v2"]).toBe(3);
@@ -69,20 +69,20 @@ describe("Spindle host compatibility", () => {
       (value.capabilities as Record<string, number>)["future-capability-v2"] = 4;
     }).toThrow();
 
-    const missing = { ...SPINDLE_HOST_CAPABILITIES } as Record<string, number>;
+    const missing = { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES } as Record<string, number>;
     delete missing["interceptor-final-response-v1"];
     for (const invalid of [
       descriptor({ capabilities: missing }),
-      descriptor({ capabilities: { ...SPINDLE_HOST_CAPABILITIES, "interceptor-final-response-v1": 2 } }),
-      descriptor({ capabilities: { ...SPINDLE_HOST_CAPABILITIES, "Bad Key": 1 } }),
-      descriptor({ capabilities: { ...SPINDLE_HOST_CAPABILITIES, "future-v1": 0 } }),
+      descriptor({ capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES, "interceptor-final-response-v1": 2 } }),
+      descriptor({ capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES, "Bad Key": 1 } }),
+      descriptor({ capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES, "future-v1": 0 } }),
     ]) {
       expect(() => validateSpindleHostDescriptor(invalid)).toThrow(SpindleCompatibilityError);
     }
   });
 
   test("defensively clones descriptor data and requires a canonical lowercase UUID", () => {
-    const raw = descriptor({ capabilities: { ...SPINDLE_HOST_CAPABILITIES } });
+    const raw = descriptor({ capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES } });
     const value = validateSpindleHostDescriptor(raw);
     (raw.capabilities as Record<string, number>)["future-v1"] = 2;
     expect(value.capabilities["future-v1"]).toBeUndefined();
@@ -106,7 +106,7 @@ describe("Spindle host compatibility", () => {
     expect(value.lumiverseVersion).toBe(backendPackage.version);
     expect(value.extensionInstallationId).toBe(INSTALLATION_ID);
     expect(Object.keys(value.capabilities).sort()).toEqual(
-      Object.keys(SPINDLE_HOST_CAPABILITIES).sort(),
+      Object.keys(LUMIVERSE_SPINDLE_HOST_CAPABILITIES).sort(),
     );
     expect(Object.isFrozen(value)).toBe(true);
     expect(Object.isFrozen(value.capabilities)).toBe(true);
@@ -114,7 +114,7 @@ describe("Spindle host compatibility", () => {
 
   test("serializes and digests all validated capabilities in ASCII order", async () => {
     const value = validateSpindleHostDescriptor(
-      descriptor({ capabilities: { ...SPINDLE_HOST_CAPABILITIES, "future-capability-v2": 3 } }),
+      descriptor({ capabilities: { ...LUMIVERSE_SPINDLE_HOST_CAPABILITIES, "future-capability-v2": 3 } }),
     );
     expect(serializeSpindleHostDescriptor(value)).toBe(
       JSON.stringify([
@@ -122,6 +122,7 @@ describe("Spindle host compatibility", () => {
         HOST_VERSION,
         INSTALLATION_ID,
         [
+          ["connection-dispatch-resolution-v1", 1],
           ["future-capability-v2", 3],
           ["generation-assembly-v1", 1],
           ["interceptor-context-v1", 1],

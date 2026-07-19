@@ -97,6 +97,7 @@ import {
 import * as managerSvc from "./manager.service";
 import * as generateSvc from "../services/generate.service";
 import * as connectionsSvc from "../services/connections.service";
+import * as dispatchStateSvc from "../services/dispatch-state.service";
 import * as chatsSvc from "../services/chats.service";
 import type * as presetsSvc from "../services/presets.service";
 import { resolveInterceptorTimeout } from "../services/spindle-settings.service";
@@ -326,6 +327,16 @@ type BoundRuntimeEnvelope = {
   readonly operationRequestId?: string;
 };
 
+type FrontendMessageScopeEnvelope = {
+  readonly token: string;
+  readonly operationRequestId?: string;
+};
+
+type FrontendMessageScopeLease = {
+  readonly userId: string;
+  readonly timeout: Timer;
+};
+
 type RuntimeWorkerToHost =
   | Exclude<
       WorkerToHost,
@@ -383,6 +394,11 @@ type RuntimeWorkerToHost =
       requestId: string;
       connectionId: string;
       __spindle_private_bound?: BoundRuntimeEnvelope;
+      __spindle_private_frontend?: FrontendMessageScopeEnvelope;
+    }
+  | {
+      type: "frontend_message_scope_complete";
+      token: string;
     }
   | {
       type: "cancel_generation";
@@ -645,7 +661,7 @@ type RuntimeWorkerToHost =
 type RuntimeHostToWorker =
   | Exclude<
       HostToWorker,
-      { type: "init" | "intercept_request" | "intercept_abort" }
+      { type: "init" | "intercept_request" | "intercept_abort" | "frontend_message" }
     >
   | {
       type: "init";
@@ -670,6 +686,12 @@ type RuntimeHostToWorker =
       registrationId: string;
       reason?: string;
       __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "frontend_message";
+      payload: unknown;
+      userId: string;
+      __spindle_private_frontend: FrontendMessageScopeEnvelope;
     }
   | {
       type: "rpc_pool_request";
@@ -1067,6 +1089,7 @@ export class WorkerHost {
   private macroValueCache = new Map<string, string>();
   private static readonly MAX_BACKEND_PROCESSES = 16;
   private static readonly SHARED_RPC_REQUEST_TIMEOUT_MS = 10_000;
+  private static readonly FRONTEND_MESSAGE_SCOPE_TIMEOUT_MS = 30_000;
   private onWorkerReady: ((error?: Error) => void) | null = null;
   private onWorkerShutdownAck: (() => void) | null = null;
   private onRuntimeExit: (() => void) | null = null;
@@ -1083,6 +1106,7 @@ export class WorkerHost {
   private readonly interactionApi: WorkerHostInteractionApi;
   private readonly presentationApi: WorkerHostPresentationApi;
   private sharedRpcPermissionScopes = new Map<string, Set<string>>();
+  private readonly frontendMessageScopes = new Map<string, FrontendMessageScopeLease>();
 
   constructor(
     public readonly extensionId: string,
@@ -1527,6 +1551,9 @@ export class WorkerHost {
     }
     this.interceptorInvocations.clear();
     this.interceptorControllersBySignal.clear();
+    for (const token of [...this.frontendMessageScopes.keys()]) {
+      this.releaseFrontendMessageScope(token);
+    }
 
     // Unregister context handler
     this.contextHandlerUnregister?.();
@@ -1607,8 +1634,27 @@ export class WorkerHost {
     }
   }
 
+  private releaseFrontendMessageScope(token: string): void {
+    const scope = this.frontendMessageScopes.get(token);
+    if (!scope) return;
+    clearTimeout(scope.timeout);
+    this.frontendMessageScopes.delete(token);
+  }
+
   sendFrontendMessage(payload: unknown, userId: string): void {
-    this.postToWorker({ type: "frontend_message", payload, userId });
+    const token = crypto.randomUUID();
+    const timeout = setTimeout(
+      () => this.frontendMessageScopes.delete(token),
+      WorkerHost.FRONTEND_MESSAGE_SCOPE_TIMEOUT_MS,
+    );
+    this.frontendMessageScopes.set(token, { userId, timeout });
+    const delivered = this.postToWorker({
+      type: "frontend_message",
+      payload,
+      userId,
+      __spindle_private_frontend: { token },
+    });
+    if (!delivered) this.releaseFrontendMessageScope(token);
   }
 
   private sendFrontendProcessEvent(
@@ -1895,7 +1941,10 @@ export class WorkerHost {
         void this.handleBoundQuietTracked(msg);
         break;
       case "connections_resolve_dispatch":
-        void this.handleBoundDispatch(msg);
+        void this.handleDispatchResolution(msg);
+        break;
+      case "frontend_message_scope_complete":
+        this.releaseFrontendMessageScope(msg.token);
         break;
       case "register_tool":
         this.handleRegisterTool(msg.tool);
@@ -3483,22 +3532,81 @@ export class WorkerHost {
     }
   }
 
-  private async handleBoundDispatch(msg: Extract<RuntimeWorkerToHost, { type: "connections_resolve_dispatch" }>): Promise<void> {
-    const bound = this.boundInvocation(msg.requestId, msg.__spindle_private_bound);
-    if (!bound) {
-      this.postToWorker({ type: "response", requestId: msg.requestId, error: "BOUND_BINDING_REQUIRED" });
+  private async handleDispatchResolution(msg: Extract<RuntimeWorkerToHost, { type: "connections_resolve_dispatch" }>): Promise<void> {
+    if (!this.hasPermission("generation")) {
+      this.postToWorker({
+        type: "response",
+        requestId: msg.requestId,
+        error: `${PERMISSION_DENIED_PREFIX} generation — Connection dispatch resolution requires the generation permission`,
+      });
       return;
     }
+
+    if (msg.__spindle_private_bound) {
+      const bound = this.boundInvocation(msg.requestId, msg.__spindle_private_bound);
+      if (!bound) {
+        this.postToWorker({ type: "response", requestId: msg.requestId, error: "BOUND_BINDING_REQUIRED" });
+        return;
+      }
+      try {
+        const result = await bound.callbacks.inspectDispatch(msg.connectionId);
+        this.postToWorker({ type: "response", requestId: msg.requestId, result });
+      } catch (error) {
+        this.postToWorker({
+          type: "response",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.releaseBoundOperationController(
+          msg.__spindle_private_bound.operationRequestId ?? "",
+          false,
+        );
+      }
+      return;
+    }
+
+    const frontendEnvelope = msg.__spindle_private_frontend;
+    const frontendScope = frontendEnvelope?.operationRequestId === msg.requestId
+      ? this.frontendMessageScopes.get(frontendEnvelope.token)
+      : undefined;
+    if (!frontendScope) {
+      this.postToWorker({
+        type: "response",
+        requestId: msg.requestId,
+        error: "CONNECTION_DISPATCH_SCOPE_REQUIRED",
+      });
+      return;
+    }
+
     try {
-      const result = await bound.callbacks.inspectDispatch(msg.connectionId);
+      this.enforceScopedUser(frontendScope.userId);
+      let result: ConnectionDispatchDescriptorDTO | null;
+      try {
+        result = dispatchStateSvc.resolveDispatchDescriptor(frontendScope.userId, {
+          source: "slot",
+          connectionId: msg.connectionId,
+        }).descriptor;
+      } catch (error) {
+        if (
+          error instanceof dispatchStateSvc.DispatchStateError &&
+          (
+            error.code === "DISPATCH_CONNECTION_NOT_FOUND" ||
+            error.code === "DISPATCH_CONNECTION_ROULETTE_UNSUPPORTED"
+          )
+        ) {
+          result = null;
+        } else {
+          throw error;
+        }
+      }
       this.postToWorker({ type: "response", requestId: msg.requestId, result });
     } catch (error) {
-      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
-    } finally {
-      this.releaseBoundOperationController(
-        msg.__spindle_private_bound?.operationRequestId ?? "",
-        false,
-      );
+      this.postToWorker({
+        type: "response",
+        requestId: msg.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

@@ -1,12 +1,17 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ExtensionInfo, SpindleManifest } from "lumiverse-spindle-types";
+import type {
+  ConnectionDispatchDescriptorDTO,
+  ExtensionInfo,
+  SpindleManifest,
+} from "lumiverse-spindle-types";
 import { interceptorPipeline } from "./interceptor-pipeline";
 import type { ParentGenerationSnapshot } from "./bound-generation-types";
 import { brandHostGenerationId } from "./bound-generation-types";
 import type { RuntimeTransport } from "./runtime-transport";
 import * as managerSvc from "./manager.service";
+import * as dispatchStateSvc from "../services/dispatch-state.service";
 import { WorkerHost } from "./worker-host";
 
 function makeManifest(identifier: string): SpindleManifest {
@@ -59,6 +64,11 @@ type TestBoundEnvelope = {
   operationRequestId?: string;
 };
 
+type TestFrontendScopeEnvelope = {
+  token: string;
+  operationRequestId?: string;
+};
+
 type CapturedRuntimeMessage = {
   type?: string;
   requestId?: string;
@@ -70,6 +80,12 @@ type CapturedRuntimeMessage = {
   context?: Record<string, unknown>;
   finalResponse?: unknown;
   __spindle_private_bound?: TestBoundEnvelope;
+  result?: unknown;
+  error?: unknown;
+  payload?: unknown;
+  userId?: string;
+  token?: string;
+  __spindle_private_frontend?: TestFrontendScopeEnvelope;
 };
 
 type WorkerHostInternals = {
@@ -83,6 +99,15 @@ type WorkerHostInternals = {
     envelope?: TestBoundEnvelope,
   ) => { controller: AbortController } | null;
   handleCancelGeneration: (requestId: string, envelope?: TestBoundEnvelope) => void;
+  sendFrontendMessage: (payload: unknown, userId: string) => void;
+  handleMessage: (message: unknown) => void;
+  handleDispatchResolution: (message: {
+    type: "connections_resolve_dispatch";
+    requestId: string;
+    connectionId: string;
+    __spindle_private_bound?: TestBoundEnvelope;
+    __spindle_private_frontend?: TestFrontendScopeEnvelope;
+  }) => Promise<void>;
   cleanup: () => void;
 };
 
@@ -168,6 +193,96 @@ describe("WorkerHost public startup boundary", () => {
       rmSync(storagePath, { recursive: true, force: true });
     }
   }, { timeout: 30_000 });
+});
+
+describe("WorkerHost frontend-message dispatch authority", () => {
+  test("resolves only through a live authenticated user scope with generation permission", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const descriptor = {
+      connectionId: "connection-1",
+      connectionName: "Test connection",
+      provider: "openai-compatible",
+      model: "test-model",
+      endpointOrigin: "https://example.test",
+      dispatchKind: "concrete",
+      connectionDispatchRevision: "revision-1",
+    } satisfies ConnectionDispatchDescriptorDTO;
+    // Test seam: this handler exposes only the descriptor from the larger service result.
+    const resolved = { descriptor } as unknown as dispatchStateSvc.ResolvedDispatchDescriptor;
+    const resolveSpy = spyOn(dispatchStateSvc, "resolveDispatchDescriptor").mockReturnValue(resolved);
+
+    try {
+      internals.sendFrontendMessage({ type: "inspect" }, "user-1");
+      const delivered = messages.find((message) => message.type === "frontend_message");
+      expect(delivered).toMatchObject({
+        payload: { type: "inspect" },
+        userId: "user-1",
+      });
+      const token = delivered?.__spindle_private_frontend?.token;
+      expect(token).toEqual(expect.any(String));
+
+      await internals.handleDispatchResolution({
+        type: "connections_resolve_dispatch",
+        requestId: "frontend-dispatch-1",
+        connectionId: "connection-1",
+        __spindle_private_frontend: {
+          token: token!,
+          operationRequestId: "frontend-dispatch-1",
+        },
+      });
+      expect(resolveSpy).toHaveBeenCalledWith("user-1", {
+        source: "slot",
+        connectionId: "connection-1",
+      });
+      expect(messages.find((message) => message.requestId === "frontend-dispatch-1")).toMatchObject({
+        type: "response",
+        result: descriptor,
+      });
+
+      internals.handleMessage({
+        type: "frontend_message_scope_complete",
+        token,
+      });
+      await internals.handleDispatchResolution({
+        type: "connections_resolve_dispatch",
+        requestId: "frontend-dispatch-expired",
+        connectionId: "connection-1",
+        __spindle_private_frontend: {
+          token: token!,
+          operationRequestId: "frontend-dispatch-expired",
+        },
+      });
+      expect(messages.find((message) => message.requestId === "frontend-dispatch-expired")).toMatchObject({
+        type: "response",
+        error: "CONNECTION_DISPATCH_SCOPE_REQUIRED",
+      });
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+
+      internals.sendFrontendMessage({ type: "inspect-denied" }, "user-1");
+      const deniedDelivery = messages.find(
+        (message) => message.type === "frontend_message" &&
+          (message.payload as { type?: string } | undefined)?.type === "inspect-denied",
+      );
+      internals.hasPermission = () => false;
+      await internals.handleDispatchResolution({
+        type: "connections_resolve_dispatch",
+        requestId: "frontend-dispatch-denied",
+        connectionId: "connection-1",
+        __spindle_private_frontend: {
+          token: deniedDelivery?.__spindle_private_frontend?.token ?? "",
+          operationRequestId: "frontend-dispatch-denied",
+        },
+      });
+      expect(messages.find((message) => message.requestId === "frontend-dispatch-denied")).toMatchObject({
+        type: "response",
+        error: expect.stringContaining("PERMISSION_DENIED: generation"),
+      });
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveSpy.mockRestore();
+      internals.cleanup();
+    }
+  });
 });
 
 describe("WorkerHost interceptor transport boundary", () => {
