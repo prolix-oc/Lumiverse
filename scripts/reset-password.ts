@@ -33,7 +33,11 @@ import { askSecret, closeInput } from "./input";
 
 async function main() {
   const projectRoot = resolve(import.meta.dir, "..");
-  const dataDir = join(projectRoot, "data");
+  // Honor DATA_DIR the same way the server does (see src/env.ts). Container
+  // deployments (Docker, Railway, etc.) mount the persistent volume somewhere
+  // other than <projectRoot>/data and point DATA_DIR at it, so resolving
+  // relative to the project root would target an empty, wrong directory.
+  const dataDir = resolve(process.env.DATA_DIR || join(projectRoot, "data"));
   const identityPath = join(dataDir, "lumiverse.identity");
   const credentialsPath = join(dataDir, "owner.credentials");
   const dbPath = join(dataDir, "lumiverse.db");

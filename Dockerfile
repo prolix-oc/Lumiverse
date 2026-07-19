@@ -87,6 +87,12 @@ COPY --from=frontend-build /app/frontend/package.json ./frontend/package.json
 COPY package.json ./
 COPY src/ ./src/
 
+# Maintenance scripts (password reset, backfills, etc.). Needed at runtime so
+# operators can run `bun run reset-password` and friends inside a deployed
+# container (Docker, Railway, …). `.dockerignore` still excludes the heavy
+# dev-only scripts (setup wizard, runner, SillyTavern migration).
+COPY scripts/ ./scripts/
+
 # Create data directory with correct ownership
 RUN mkdir -p /app/data && chown -R bun:bun /app/data
 
