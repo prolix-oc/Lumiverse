@@ -17,6 +17,7 @@ import {
   mergeActivatedWorldInfoEntries,
   getSourceMessageId,
   isChatHistoryMessage,
+  resolveContinuePostfix,
   shouldPreserveDisplayReasoningDelimiters,
   type VectorActivatedEntry,
 } from "./prompt-assembly.service";
@@ -1259,6 +1260,8 @@ async function runPromptPipeline(opts: {
   inputParameters?: GenerationParameters;
   excludeMessageId?: string;
   rejectedSwipe?: string;
+  continueMessageId?: string;
+  continuePostfix?: string;
   targetCharacterId?: string;
   councilToolResults?: any[];
   councilNamedResults?: Record<string, string>;
@@ -1335,6 +1338,8 @@ async function runPromptPipeline(opts: {
       userInput: opts.userInput,
       excludeMessageId: opts.excludeMessageId,
       rejectedSwipe: opts.rejectedSwipe,
+      continueMessageId: opts.continueMessageId,
+      continuePostfix: opts.continuePostfix,
       targetCharacterId: opts.targetCharacterId,
       councilToolResults: opts.councilToolResults,
       councilNamedResults: opts.councilNamedResults,
@@ -1946,8 +1951,10 @@ export async function startGeneration(
         const cpPreset = cpPresetId
           ? presetsSvc.getPreset(input.userId, cpPresetId)
           : null;
-        lifecycle.continuePostfix =
-          cpPreset?.prompts?.completionSettings?.continuePostfix || "";
+        lifecycle.continuePostfix = resolveContinuePostfix(
+          lastMsg.content,
+          cpPreset?.prompts?.completionSettings?.continuePostfix || "",
+        );
       }
     }
 
@@ -2652,6 +2659,8 @@ export async function startGeneration(
             inputParameters: input.parameters,
             excludeMessageId,
             rejectedSwipe,
+            continueMessageId: lifecycle.continueMessageId,
+            continuePostfix: lifecycle.continuePostfix,
             targetCharacterId: pipelineTargetCharId,
             councilToolResults,
             councilNamedResults,
@@ -2919,10 +2928,9 @@ export async function dryRunGeneration(
   input: GenerateInput,
 ): Promise<DryRunResult> {
   const genType = input.generation_type || "normal";
+  const sourceMessages = chatsSvc.getMessages(input.userId, input.chat_id);
   const sourceMessagesById = new Map(
-    chatsSvc
-      .getMessages(input.userId, input.chat_id)
-      .map((message) => [message.id, message] as const),
+    sourceMessages.map((message) => [message.id, message] as const),
   );
   const dryRunReasoningSettings =
     settingsSvc.getSetting(input.userId, "reasoningSettings")?.value ?? null;
@@ -2974,6 +2982,24 @@ export async function dryRunGeneration(
   }
   const { provider } = await resolveProviderAndKey(input.userId, connection.id);
 
+  const dryRunContinueTarget =
+    genType === "continue"
+      ? input.message_id
+        ? sourceMessagesById.get(input.message_id) ?? null
+        : [...sourceMessages].reverse().find((message) => !message.is_user) ?? null
+      : null;
+  const dryRunPresetId = input.preset_id || connection.preset_id;
+  const dryRunContinueConfiguredPostfix = dryRunPresetId
+    ? presetsSvc.getPreset(input.userId, dryRunPresetId)?.prompts
+        ?.completionSettings?.continuePostfix || ""
+    : "";
+  const dryRunContinuePostfix = dryRunContinueTarget
+    ? resolveContinuePostfix(
+        dryRunContinueTarget.content,
+        dryRunContinueConfiguredPostfix,
+      )
+    : undefined;
+
   const pipeline = await runPromptPipeline({
     userId: input.userId,
     chatId: input.chat_id,
@@ -2993,6 +3019,8 @@ export async function dryRunGeneration(
     inputMessages: input.messages,
     inputParameters: input.parameters,
     excludeMessageId: input.exclude_message_id,
+    continueMessageId: dryRunContinueTarget?.id,
+    continuePostfix: dryRunContinuePostfix,
     targetCharacterId: dryRunTargetCharacterId,
     signal: input.signal,
     isDryRun: true,

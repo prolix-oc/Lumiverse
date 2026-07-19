@@ -2123,7 +2123,8 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
     const nonce = ++generationNonceRef.current
     beginStreaming(undefined, 'continue')
     try {
-      const lastAssistant = [...messages].reverse().find((msg) => !msg.is_user)
+      const lastMessage = messages.at(-1)
+      const lastAssistant = lastMessage && !lastMessage.is_user ? lastMessage : undefined
       const targetCharacterId = isGroupChat && typeof lastAssistant?.extra?.character_id === 'string'
         ? lastAssistant.extra.character_id
         : undefined
@@ -2135,6 +2136,7 @@ export default function InputArea({ chatId, onNavigateHome, onOpenChatFind }: In
         persona_addon_states: activeGenerationAddonStates,
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+        message_id: lastAssistant?.id,
         target_character_id: targetCharacterId,
         retain_council: retainCouncilForRegens || undefined,
       })

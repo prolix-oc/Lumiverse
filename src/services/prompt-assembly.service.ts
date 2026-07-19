@@ -163,6 +163,7 @@ const SOURCE_INDEX_KEY = "__sourceIndexInChat";
 const CONTEXT_ANCHOR_PROTECTED_KEY = "__contextAnchorProtected";
 const PRESERVE_DISPLAY_REASONING_DELIMS_KEY =
   "__preserveDisplayReasoningDelimiters";
+const CONTINUE_NUDGE_KEY = "__continueNudge";
 
 function markAsChatHistory(
   msg: LlmMessage,
@@ -365,10 +366,29 @@ function stripEmptyTextParts(result: LlmMessage[]): void {
   result.length = write;
 }
 
-function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
+export function resolveContinuePostfix(
+  originalContent: string,
+  configuredPostfix: string,
+): string {
+  if (!configuredPostfix || originalContent.endsWith(configuredPostfix)) {
+    return "";
+  }
+  return configuredPostfix;
+}
+
+export function rtrimLastHistoryAssistant(
+  result: LlmMessage[],
+  preserveSourceMessageId?: string,
+): void {
   for (let i = result.length - 1; i >= 0; i--) {
     const msg = result[i];
     if (msg.role !== "assistant" || !isChatHistoryMessage(msg)) continue;
+    if (
+      preserveSourceMessageId &&
+      getSourceMessageId(msg) === preserveSourceMessageId
+    ) {
+      return;
+    }
 
     if (typeof msg.content === "string") {
       const trimmed = msg.content.replace(/\s+$/, "");
@@ -393,6 +413,68 @@ function rtrimLastHistoryAssistant(result: LlmMessage[]): void {
     }
     return;
   }
+}
+
+function markAsContinueNudge(msg: LlmMessage): LlmMessage {
+  (msg as any)[CONTINUE_NUDGE_KEY] = true;
+  return msg;
+}
+
+function isContinueNudge(msg: LlmMessage): boolean {
+  return (msg as any)[CONTINUE_NUDGE_KEY] === true;
+}
+
+function appendTextToMessage(message: LlmMessage, text: string): LlmMessage {
+  if (!text) return message;
+  if (typeof message.content === "string") {
+    return { ...message, content: message.content + text };
+  }
+
+  const parts = [...message.content];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.type !== "text") continue;
+    parts[i] = { ...part, text: part.text + text };
+    return { ...message, content: parts };
+  }
+  parts.push({ type: "text", text });
+  return { ...message, content: parts };
+}
+
+/**
+ * Put the actual assistant turn being continued at the end of the assembled
+ * request. This preserves its postfix, keeps it adjacent to the continuation
+ * nudge, and lets continuePrefill use it as a real assistant prefill.
+ */
+export function finalizeContinuePrompt(
+  result: LlmMessage[],
+  continueMessageId: string | undefined,
+  continuePostfix: string,
+): boolean {
+  let targetIndex = -1;
+  for (let i = result.length - 1; i >= 0; i--) {
+    const message = result[i];
+    if (message.role !== "assistant" || !isChatHistoryMessage(message)) continue;
+    if (continueMessageId && getSourceMessageId(message) !== continueMessageId) continue;
+    targetIndex = i;
+    break;
+  }
+  if (targetIndex < 0) return false;
+
+  const [target] = result.splice(targetIndex, 1);
+  const continued = appendTextToMessage(target, continuePostfix);
+  // It is now fixed prompt overhead rather than chat history, so it survives
+  // history clipping and is not trimmed after we deliberately add a postfix.
+  delete (continued as any)[CHAT_HISTORY_KEY];
+  delete (continued as any)[CONTEXT_ANCHOR_PROTECTED_KEY];
+  result.push(continued);
+
+  const nudgeIndex = result.findIndex(isContinueNudge);
+  if (nudgeIndex >= 0) {
+    const [nudge] = result.splice(nudgeIndex, 1);
+    result.push(nudge);
+  }
+  return true;
 }
 
 async function applyPromptRegexScriptsBeforeClipping(
@@ -3127,7 +3209,10 @@ export async function assemblePrompt(
     }
   }
 
-  // Continue type: append continueNudge (unless continuePrefill is on)
+  // Continue nudge is tagged now and moved after the continued assistant turn
+  // once prompt regexes/macros have run. Keeping it in the assembly until then
+  // preserves normal prompt-regex behavior without letting later prompt blocks
+  // separate it from the message it refers to.
   if (
     ctx.generationType === "continue" &&
     !completionSettings.continuePrefill
@@ -3136,46 +3221,13 @@ export async function assemblePrompt(
     if (nudge) {
       const resolved = (await evaluate(nudge, macroEnv, registry)).text;
       if (resolved) {
-        result.push({ role: "system", content: resolved });
+        result.push(markAsContinueNudge({ role: "system", content: resolved }));
         breakdown.push({
           type: "utility",
           name: "Continue Nudge",
           role: "system",
           content: resolved,
         });
-      }
-    }
-  }
-
-  // Continue type: apply continuePostfix to last assistant message
-  if (ctx.generationType === "continue" && completionSettings.continuePostfix) {
-    for (let i = result.length - 1; i >= 0; i--) {
-      if (result[i].role === "assistant") {
-        if (typeof result[i].content === "string") {
-          result[i] = {
-            ...result[i],
-            content: result[i].content + completionSettings.continuePostfix,
-          };
-        } else {
-          const parts = [
-            ...(result[i].content as import("../llm/types").LlmMessagePart[]),
-          ];
-          const textIdx = parts.findIndex((p) => p.type === "text");
-          if (textIdx >= 0) {
-            const tp = parts[textIdx] as import("../llm/types").LlmTextPart;
-            parts[textIdx] = {
-              type: "text",
-              text: tp.text + completionSettings.continuePostfix,
-            };
-          } else {
-            parts.push({
-              type: "text",
-              text: completionSettings.continuePostfix,
-            });
-          }
-          result[i] = { ...result[i], content: parts };
-        }
-        break;
       }
     }
   }
@@ -3282,7 +3334,10 @@ export async function assemblePrompt(
     }
   }
 
-  // Collect assistant prefill: promptBias (Start Reply With) + assistantPrefill/assistantImpersonation
+  // A continuation owns its assistant prefill: the assistant turn being
+  // continued is moved to the end of the request below. Adding a second generic
+  // assistant prefill would make the provider continue that text instead, while
+  // the response still gets appended to the original chat message.
   const prefillParts: string[] = [];
 
   // A connection profile can bind its own Start Reply With value alongside its
@@ -3294,6 +3349,7 @@ export async function assemblePrompt(
     ? boundPromptBias
     : settingsMap.get("promptBias");
   if (
+    ctx.generationType !== "continue" &&
     promptBiasVal &&
     typeof promptBiasVal === "string" &&
     promptBiasVal.trim()
@@ -3304,10 +3360,11 @@ export async function assemblePrompt(
   }
 
   const csPrefill =
-    ctx.generationType === "impersonate" &&
-    completionSettings.assistantImpersonation
-      ? completionSettings.assistantImpersonation
-      : completionSettings.assistantPrefill;
+    ctx.generationType === "continue"
+      ? ""
+      : ctx.generationType === "impersonate" && completionSettings.assistantImpersonation
+        ? completionSettings.assistantImpersonation
+        : completionSettings.assistantPrefill;
   if (csPrefill) {
     const resolvedPrefill = (await evaluate(csPrefill, macroEnv, registry))
       .text;
@@ -3322,20 +3379,6 @@ export async function assemblePrompt(
       name: "Assistant Prefill",
       role: "assistant",
       content: assistantPrefill,
-    });
-  } else if (
-    ctx.generationType === "continue" &&
-    result.length > 0 &&
-    result[result.length - 1].role === "assistant"
-  ) {
-    // Continue generation with no explicit prefill — add a minimal nudge so the
-    // conversation ends on a user message (required by most providers).
-    result.push({ role: "user", content: "[Continue]" });
-    breakdown.push({
-      type: "utility",
-      name: "User Nudge",
-      role: "user",
-      content: "[Continue]",
     });
   }
 
@@ -3369,7 +3412,10 @@ export async function assemblePrompt(
   // Strip trailing whitespace from the last chat-history assistant message.
   // Anthropic (and other strict providers) reject turns ending in whitespace;
   // explicit prefills are left alone so users can intentionally seed responses.
-  rtrimLastHistoryAssistant(result);
+  rtrimLastHistoryAssistant(
+    result,
+    ctx.generationType === "continue" ? ctx.continueMessageId : undefined,
+  );
 
   // Drop blank text parts from multipart messages — caption-less attachments,
   // fully-stripped regex output, etc. can otherwise produce empty content blocks
@@ -3412,6 +3458,31 @@ export async function assemblePrompt(
     resolvePromptMacrosAfterRegexPass(result, macroEnv)
   );
   stripEmptyTextParts(result);
+
+  if (ctx.generationType === "continue") {
+    const finalized = finalizeContinuePrompt(
+      result,
+      ctx.continueMessageId,
+      ctx.continuePostfix ?? "",
+    );
+    if (finalized) {
+      const continued = [...result].reverse().find(
+        (message) =>
+          message.role === "assistant" &&
+          !isChatHistoryMessage(message) &&
+          (!ctx.continueMessageId ||
+            getSourceMessageId(message) === ctx.continueMessageId),
+      );
+      if (continued) {
+        breakdown.push({
+          type: "utility",
+          name: "Continue Target",
+          role: "assistant",
+          content: getTextContent(continued),
+        });
+      }
+    }
+  }
 
   // ---- Context budget clipping ----
   // Drop oldest chat history messages until the assembly fits under the
@@ -5640,6 +5711,7 @@ function applyCompletionSettings(
     if (
       squash &&
       isSystem &&
+      !isContinueNudge(msg) &&
       write > 0 &&
       (result[write - 1] as any)._fromSystem
     ) {
