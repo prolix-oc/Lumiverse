@@ -216,7 +216,18 @@ class InterceptorPipeline {
     authority?: InterceptorPipelineAuthority,
   ): Promise<InterceptorResult> {
     let result = messages;
-    const terminalLeases: InterceptorTerminalLease[] = [];
+    let terminalLeases: InterceptorTerminalLease[] = [];
+    const releaseTerminalLeases = (): void => {
+      const leases = terminalLeases;
+      terminalLeases = [];
+      for (const lease of leases) {
+        try {
+          lease.release();
+        } catch {
+          // The lease may already have been revoked during callback cleanup.
+        }
+      }
+    };
     let mergedParameters: Record<string, unknown> | undefined;
     let mergedBreakdown: InterceptorBreakdownEntry[] = [];
     const mergedDeferredGuidance: DeferredGuidanceDTO[] = [];
@@ -224,6 +235,10 @@ class InterceptorPipeline {
     const chatId = getChatId(context);
 
     for (const interceptor of this.interceptors) {
+      if (signal?.aborted) {
+        releaseTerminalLeases();
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
       if (interceptor.userId && interceptor.userId !== userId) {
         continue;
       }
@@ -240,6 +255,7 @@ class InterceptorPipeline {
         if (!matched) continue;
       }
       if (signal?.aborted) {
+        releaseTerminalLeases();
         throw signal.reason ?? new DOMException("Aborted", "AbortError");
       }
       let timeoutMs = DEFAULT_INTERCEPTOR_TIMEOUT_MS;
@@ -263,30 +279,56 @@ class InterceptorPipeline {
         extensionName: interceptor.extensionName,
       });
       let timeout: ReturnType<typeof setTimeout> | undefined;
-      let abortHandler: (() => void) | undefined;
+      let callbackController: AbortController | undefined;
+      let outerAbortHandler: (() => void) | undefined;
+      let pendingAbortReason: unknown;
+      let raceStarted = false;
       const timeoutResult = Promise.withResolvers<never>();
       try {
+        if (interceptor.contextPreparer) {
+          callbackController = new AbortController();
+        }
+        if (signal) {
+          outerAbortHandler = () => {
+            const reason = signal.reason ?? new DOMException("Aborted", "AbortError");
+            pendingAbortReason = reason;
+            if (callbackController && !callbackController.signal.aborted) {
+              callbackController.abort(reason);
+            }
+            if (raceStarted) timeoutResult.reject(reason);
+          };
+          signal.addEventListener("abort", outerAbortHandler, { once: true });
+          if (signal.aborted) outerAbortHandler();
+        }
+        if (signal?.aborted) {
+          releaseTerminalLeases();
+          throw signal.reason ?? new DOMException("Aborted", "AbortError");
+        }
         const callbackContext = interceptor.contextPreparer
-          ? interceptor.contextPreparer(context, signal, authority)
+          ? interceptor.contextPreparer(context, callbackController!.signal, authority)
           : context;
+        if (signal?.aborted) {
+          releaseTerminalLeases();
+          throw signal.reason ?? new DOMException("Aborted", "AbortError");
+        }
         timeout = setTimeout(
-          () =>
-            timeoutResult.reject(
-              new Error(
-                `Interceptor from ${interceptor.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`,
-              ),
-            ),
+          () => {
+            const timeoutError = new Error(
+              `Interceptor from ${interceptor.extensionId} timed out (${Math.round(timeoutMs / 1000)}s)`,
+            );
+            if (callbackController && !callbackController.signal.aborted) {
+              callbackController.abort(timeoutError);
+            }
+            timeoutResult.reject(timeoutError);
+          },
           timeoutMs,
         );
-        if (signal) {
-          abortHandler = () =>
-            timeoutResult.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-          signal.addEventListener("abort", abortHandler, { once: true });
+        const handlerResult = Promise.resolve(interceptor.handler(result, callbackContext));
+        raceStarted = true;
+        if (pendingAbortReason !== undefined) {
+          timeoutResult.reject(pendingAbortReason);
         }
-        const output = await Promise.race([
-          Promise.resolve(interceptor.handler(result, callbackContext)),
-          timeoutResult.promise,
-        ]);
+        const output = await Promise.race([handlerResult, timeoutResult.promise]);
         const normalized: InterceptorResult = Array.isArray(output)
           ? { messages: output }
           : output;
@@ -406,6 +448,7 @@ class InterceptorPipeline {
             extensionId: interceptor.extensionId,
             extensionName: interceptor.extensionName,
           });
+          releaseTerminalLeases();
           throw err;
         }
         emitSpindlePreGenerationActivity({
@@ -424,10 +467,16 @@ class InterceptorPipeline {
         // Continue with previous result on error
       } finally {
         clearTimeout(timeout);
-        if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
+        if (signal && outerAbortHandler) {
+          signal.removeEventListener("abort", outerAbortHandler);
+        }
       }
     }
 
+    if (signal?.aborted) {
+      releaseTerminalLeases();
+      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    }
     return {
       messages: result,
       parameters: mergedParameters,

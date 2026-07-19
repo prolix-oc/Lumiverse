@@ -643,7 +643,16 @@ type RuntimeWorkerToHost =
     };
 
 type RuntimeHostToWorker =
-  | HostToWorker
+  | Exclude<
+      HostToWorker,
+      { type: "init" | "intercept_request" | "intercept_abort" }
+    >
+  | {
+      type: "init";
+      manifest: SpindleManifest;
+      storagePath: string;
+      host: SpindleHostDescriptorV1;
+    }
   | {
       type: "intercept_request";
       requestId: string;
@@ -653,6 +662,13 @@ type RuntimeHostToWorker =
       hostGeneration: string;
       messages: LlmMessageDTO[];
       context: Omit<InterceptorContextDTO, "signal">;
+      __spindle_private_bound?: BoundRuntimeEnvelope;
+    }
+  | {
+      type: "intercept_abort";
+      requestId: string;
+      registrationId: string;
+      reason?: string;
       __spindle_private_bound?: BoundRuntimeEnvelope;
     }
   | {
@@ -982,21 +998,41 @@ type HostInterceptorRegistration = {
   readonly generation: string;
 };
 
+type InterceptorControllerBridge = {
+  readonly registrationId: string;
+  readonly controller: AbortController;
+  readonly outerSignal?: AbortSignal;
+  readonly outerAbortHandler?: () => void;
+};
+
+type BoundOperationController = {
+  readonly invocationRequestId: string;
+  readonly controller: AbortController;
+  readonly onInvocationAbort: () => void;
+};
+
 type HostInterceptorInvocation = {
   readonly requestId: string;
   readonly registrationId: string;
   readonly generation: string;
   readonly workerId: string;
-  readonly hostGeneration: string;
+  readonly runtimeGeneration: string;
   readonly inputMessages: readonly LlmMessageDTO[];
   boundToken?: string;
   readonly controller: AbortController;
+  readonly bridge?: InterceptorControllerBridge;
   readonly context: InterceptorContextDTO;
   readonly privateState: Readonly<InterceptorPrivateState>;
+  outerAbortHandler?: () => void;
   timeout?: ReturnType<typeof setTimeout>;
   resolve?: (value: InterceptorResult) => void;
   reject?: (reason: unknown) => void;
   settled: boolean;
+  workerSettled: boolean;
+  deliveryAttempted: boolean;
+  abortSent: boolean;
+  resourcesReleased: boolean;
+  terminalLease?: InterceptorTerminalLease;
 };
 
 export class WorkerHost {
@@ -1019,10 +1055,10 @@ export class WorkerHost {
   private readonly interceptorInvocations = new Map<string, HostInterceptorInvocation>();
   private workerId = crypto.randomUUID();
   private registrationGeneration = crypto.randomUUID();
-  private hostGeneration = crypto.randomUUID();
-  private readonly boundOperationControllers = new Map<string, AbortController>();
+  private runtimeGeneration = crypto.randomUUID();
+  private readonly boundOperationControllers = new Map<string, BoundOperationController>();
   private hostDescriptor: SpindleHostDescriptorV1 | null = null;
-  private readonly interceptorControllersBySignal = new Map<AbortSignal, AbortController>();
+  private readonly interceptorControllersBySignal = new Map<AbortSignal, InterceptorControllerBridge>();
   private contextHandlerUnregister: (() => void) | null = null;
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
@@ -1250,7 +1286,7 @@ export class WorkerHost {
 
     this.workerId = crypto.randomUUID();
     this.registrationGeneration = crypto.randomUUID();
-    this.hostGeneration = crypto.randomUUID();
+    this.runtimeGeneration = crypto.randomUUID();
     const runtimeToken = Symbol(`spindle-runtime:${this.manifest.identifier}`);
     this.runtimeToken = runtimeToken;
     const runtimePath = join(import.meta.dir, "worker-runtime.ts");
@@ -1479,11 +1515,15 @@ export class WorkerHost {
     }
     this.interceptorRegistrations.clear();
     this.interceptorUnregister = null;
-    for (const invocation of this.interceptorInvocations.values()) {
-      if (invocation.timeout) clearTimeout(invocation.timeout);
-      invocation.settled = true;
-      invocation.controller.abort();
-      invocation.reject?.(new Error("Interceptor host unloaded"));
+    const hostUnloadError = new Error("Interceptor host unloaded");
+    for (const invocation of [...this.interceptorInvocations.values()]) {
+      this.rejectInterceptorInvocation(invocation, hostUnloadError, false);
+    }
+    for (const bridge of [...this.interceptorControllersBySignal.values()]) {
+      this.releaseInterceptorControllerBridge(bridge, hostUnloadError);
+    }
+    for (const operationRequestId of [...this.boundOperationControllers.keys()]) {
+      this.releaseBoundOperationController(operationRequestId, true, hostUnloadError);
     }
     this.interceptorInvocations.clear();
     this.interceptorControllersBySignal.clear();
@@ -1556,12 +1596,14 @@ export class WorkerHost {
     this.cleanup();
   }
 
-  private postToWorker(msg: RuntimeHostToWorker): void {
-    if (!this.runtime) return;
+  private postToWorker(msg: RuntimeHostToWorker): boolean {
+    if (!this.runtime) return false;
     try {
       this.runtime.postMessage(msg);
+      return true;
     } catch (error) {
       this.handleRuntimeTransportFailure(error);
+      return false;
     }
   }
 
@@ -2897,14 +2939,14 @@ export class WorkerHost {
       userId: scopedUserId,
       priority: priority ?? 100,
       registrationId,
-      matcher: matcher ? (rawContext, authority) => matcher.matches(this.scopedInterceptorContext(rawContext, authority)) : undefined,
       resolveTimeoutMs,
+      matcher: matcher ? (rawContext, authority) => matcher.matches(this.scopedInterceptorContext(rawContext, authority)) : undefined,
       contextPreparer: (rawContext, outerSignal, authority) => {
         const callbackController = new AbortController();
-        const onOuterAbort = () => callbackController.abort(outerSignal?.reason);
+        const outerAbortHandler = () => callbackController.abort(outerSignal?.reason);
         if (outerSignal) {
-          if (outerSignal.aborted) onOuterAbort();
-          else outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+          if (outerSignal.aborted) outerAbortHandler();
+          else outerSignal.addEventListener("abort", outerAbortHandler, { once: true });
         }
         const scopedContext = this.scopedInterceptorContext(rawContext, authority);
         const prepared = prepareInterceptorContext({
@@ -2915,7 +2957,11 @@ export class WorkerHost {
           mainDispatchSnapshot: authority?.mainDispatchSnapshot,
           presetMetadata: scopedContext.presetMetadata,
         });
-        this.interceptorControllersBySignal.set(callbackController.signal, callbackController);
+        this.interceptorControllersBySignal.set(callbackController.signal, {
+          registrationId,
+          controller: callbackController,
+          ...(outerSignal ? { outerSignal, outerAbortHandler } : {}),
+        });
         return attachInterceptorPrivateState(prepared, {
           parentGenerationSnapshot: authority?.parentGenerationSnapshot,
           mainDispatchSnapshot: authority?.mainDispatchSnapshot,
@@ -2931,75 +2977,114 @@ export class WorkerHost {
         const typedContext = context;
         const requestId = crypto.randomUUID();
         const privateState = readInterceptorPrivateState(typedContext) ?? { mainApiKey: "" };
-        const controller = privateState.signal
-          ? this.interceptorControllersBySignal.get(privateState.signal) ?? new AbortController()
-          : new AbortController();
-        const messagesWithSourceFlags = messages.map((message) => {
-          const llm = message as unknown as LlmMessage;
-          const isChatHistory = promptAssemblySvc.isChatHistoryMessage(llm);
-          const isWorldInfoEntry = promptAssemblySvc.isWorldInfoEntryMessage(llm);
-          if (!isChatHistory && !isWorldInfoEntry) return message;
-          return {
-            ...message,
-            ...(isChatHistory ? { __isChatHistory: true } : {}),
-            ...(isWorldInfoEntry ? { __isWorldInfoEntry: true } : {}),
-            ...(promptAssemblySvc.getSourceMessageId(llm) !== undefined
-              ? { sourceMessageId: promptAssemblySvc.getSourceMessageId(llm) }
-              : {}),
-            ...(promptAssemblySvc.getSourceIndexInChat(llm) !== undefined
-              ? { sourceIndexInChat: promptAssemblySvc.getSourceIndexInChat(llm) }
-              : {}),
-          };
-        });
-        const workerMessages = stripInterceptorFinalResponseCarrier(messagesWithSourceFlags);
-        const parent = privateState.parentGenerationSnapshot;
-        const invocation: HostInterceptorInvocation = {
-          requestId,
-          registrationId,
-          generation: registrationGeneration,
-          workerId: this.workerId,
-          hostGeneration: parent?.hostGeneration ?? this.hostGeneration,
-          inputMessages: structuredClone(workerMessages),
-          controller,
-          context: typedContext,
-          privateState,
-          settled: false,
-        };
-        const timeoutMs = resolveTimeoutMs();
-        invocation.timeout = setTimeout(() => this.handleInterceptorTimeout(requestId), timeoutMs);
-        this.interceptorInvocations.set(requestId, invocation);
-        const token = crypto.randomUUID();
-        invocation.boundToken = token;
-        const bound: BoundRuntimeEnvelope | undefined = parent
-          ? {
-              workerId: this.workerId,
-              registrationGeneration,
-              callbackUserId: invocation.context.userId,
-              hostGeneration: parent.hostGeneration,
-              requestId,
-              token,
-            }
+        const bridge = privateState.signal
+          ? this.interceptorControllersBySignal.get(privateState.signal)
           : undefined;
-        this.postToWorker({
-          type: "intercept_request",
-          requestId,
-          registrationId,
-          registrationGeneration,
-          workerId: invocation.workerId,
-          messages: workerMessages,
-          context: invocation.context,
-          ...(bound ? { __spindle_private_bound: bound } : {}),
-        });
-        return new Promise<InterceptorResult>((resolve, reject) => {
-          (invocation as HostInterceptorInvocation & {
-            resolve?: (value: InterceptorResult) => void;
-            reject?: (reason: unknown) => void;
-          }).resolve = resolve;
-          (invocation as HostInterceptorInvocation & {
-            resolve?: (value: InterceptorResult) => void;
-            reject?: (reason: unknown) => void;
-          }).reject = reject;
-        });
+        const controller = bridge?.controller ?? new AbortController();
+        let invocation: HostInterceptorInvocation | undefined;
+        try {
+          const messagesWithSourceFlags = messages.map((message) => {
+            const llm = message as unknown as LlmMessage;
+            const isChatHistory = promptAssemblySvc.isChatHistoryMessage(llm);
+            const isWorldInfoEntry = promptAssemblySvc.isWorldInfoEntryMessage(llm);
+            if (!isChatHistory && !isWorldInfoEntry) return message;
+            return {
+              ...message,
+              ...(isChatHistory ? { __isChatHistory: true } : {}),
+              ...(isWorldInfoEntry ? { __isWorldInfoEntry: true } : {}),
+              ...(promptAssemblySvc.getSourceMessageId(llm) !== undefined
+                ? { sourceMessageId: promptAssemblySvc.getSourceMessageId(llm) }
+                : {}),
+              ...(promptAssemblySvc.getSourceIndexInChat(llm) !== undefined
+                ? { sourceIndexInChat: promptAssemblySvc.getSourceIndexInChat(llm) }
+                : {}),
+            };
+          });
+          const workerMessages = stripInterceptorFinalResponseCarrier(messagesWithSourceFlags);
+          const parent = privateState.parentGenerationSnapshot;
+          invocation = {
+            requestId,
+            registrationId,
+            generation: registrationGeneration,
+            workerId: this.workerId,
+            runtimeGeneration: this.runtimeGeneration,
+            inputMessages: structuredClone(workerMessages),
+            controller,
+            ...(bridge ? { bridge } : {}),
+            context: typedContext,
+            privateState,
+            settled: false,
+            workerSettled: false,
+            deliveryAttempted: false,
+            abortSent: false,
+            resourcesReleased: false,
+          };
+          // The WeakMap-backed private state remains attached to the prepared
+          // context; only the temporary signal bridge is consumed here.
+          if (privateState.signal) {
+            this.interceptorControllersBySignal.delete(privateState.signal);
+          }
+          const timeoutMs = resolveTimeoutMs();
+          invocation.timeout = setTimeout(() => this.handleInterceptorTimeout(requestId), timeoutMs);
+          this.interceptorInvocations.set(requestId, invocation);
+          const token = crypto.randomUUID();
+          invocation.boundToken = token;
+          const bound: BoundRuntimeEnvelope | undefined = parent
+            ? {
+                workerId: this.workerId,
+                registrationGeneration,
+                callbackUserId: invocation.context.userId,
+                hostGeneration: parent.hostGeneration,
+                requestId,
+                token,
+              }
+            : undefined;
+          const { signal: _signal, ...serializedContext } = invocation.context;
+          void _signal;
+          const invocationPromise = new Promise<InterceptorResult>((resolve, reject) => {
+            invocation!.resolve = resolve;
+            invocation!.reject = reject;
+          });
+          if (bridge?.outerSignal) {
+            const onOuterAbort = () =>
+              this.handleInterceptorOuterAbort(requestId, bridge.outerSignal?.reason);
+            invocation.outerAbortHandler = onOuterAbort;
+            bridge.outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+            if (bridge.outerSignal.aborted) {
+              this.handleInterceptorOuterAbort(requestId, bridge.outerSignal.reason);
+              return invocationPromise;
+            }
+          }
+          invocation.deliveryAttempted = this.postToWorker({
+            type: "intercept_request",
+            requestId,
+            registrationId,
+            registrationGeneration,
+            workerId: invocation.workerId,
+            hostGeneration: invocation.runtimeGeneration,
+            messages: workerMessages,
+            context: serializedContext,
+            ...(bound ? { __spindle_private_bound: bound } : {}),
+          });
+          if (!invocation.deliveryAttempted) {
+            this.rejectInterceptorInvocation(
+              invocation,
+              new Error("Interceptor worker delivery failed"),
+              false,
+            );
+          }
+          return invocationPromise;
+        } catch (error) {
+          if (privateState.signal) {
+            this.interceptorControllersBySignal.delete(privateState.signal);
+          }
+          if (invocation) {
+            this.rejectInterceptorInvocation(invocation, error, false);
+          } else if (bridge) {
+            this.releaseInterceptorControllerBridge(bridge, error);
+          }
+          throw error;
+        }
       },
     });
     this.interceptorRegistrations.set(registrationId, {
@@ -3011,60 +3096,188 @@ export class WorkerHost {
     });
     this.interceptorUnregister = unregister;
   }
+  private releaseInterceptorControllerBridge(
+    bridge: InterceptorControllerBridge,
+    reason?: unknown,
+  ): void {
+    if (bridge.outerSignal && bridge.outerAbortHandler) {
+      bridge.outerSignal.removeEventListener("abort", bridge.outerAbortHandler);
+    }
+    this.interceptorControllersBySignal.delete(bridge.controller.signal);
+    if (reason !== undefined && !bridge.controller.signal.aborted) {
+      bridge.controller.abort(reason);
+    }
+  }
+
+  private releaseBoundOperationController(
+    operationRequestId: string,
+    abort: boolean,
+    reason?: unknown,
+  ): void {
+    const operation = this.boundOperationControllers.get(operationRequestId);
+    if (!operation) return;
+    const invocation = this.interceptorInvocations.get(operation.invocationRequestId);
+    invocation?.controller.signal.removeEventListener("abort", operation.onInvocationAbort);
+    if (abort && !operation.controller.signal.aborted) {
+      operation.controller.abort(reason);
+    }
+    this.boundOperationControllers.delete(operationRequestId);
+  }
+
+  private releaseBoundOperationsForInvocation(
+    invocation: HostInterceptorInvocation,
+    reason?: unknown,
+  ): void {
+    for (const [operationRequestId, operation] of this.boundOperationControllers) {
+      if (operation.invocationRequestId !== invocation.requestId) continue;
+      this.releaseBoundOperationController(operationRequestId, true, reason);
+    }
+  }
+
+  private releaseInterceptorInvocationResources(
+    invocation: HostInterceptorInvocation,
+    reason?: unknown,
+  ): void {
+    if (invocation.resourcesReleased) return;
+    invocation.resourcesReleased = true;
+    if (invocation.timeout) {
+      clearTimeout(invocation.timeout);
+      invocation.timeout = undefined;
+    }
+    if (invocation.bridge?.outerSignal && invocation.bridge.outerAbortHandler) {
+      invocation.bridge.outerSignal.removeEventListener(
+        "abort",
+        invocation.bridge.outerAbortHandler,
+      );
+    }
+    if (invocation.bridge) {
+      this.interceptorControllersBySignal.delete(invocation.controller.signal);
+    }
+    if (invocation.bridge?.outerSignal && invocation.outerAbortHandler) {
+      invocation.bridge.outerSignal.removeEventListener(
+        "abort",
+        invocation.outerAbortHandler,
+      );
+    }
+    this.releaseBoundOperationsForInvocation(invocation, reason);
+    if (!invocation.controller.signal.aborted) {
+      invocation.controller.abort(reason);
+    }
+    if (this.interceptorInvocations.get(invocation.requestId) === invocation) {
+      this.interceptorInvocations.delete(invocation.requestId);
+    }
+  }
+
+  private sendInterceptorAbort(invocation: HostInterceptorInvocation, reason: unknown): void {
+    if (
+      !invocation.deliveryAttempted
+      || invocation.workerSettled
+      || invocation.abortSent
+    ) {
+      return;
+    }
+    invocation.abortSent = true;
+    if (!this.runtime) return;
+    const abortReason = reason instanceof Error
+      ? reason.message
+      : typeof reason === "string"
+        ? reason
+        : reason === undefined
+          ? "Interceptor aborted"
+          : String(reason);
+    this.postToWorker({
+      type: "intercept_abort",
+      requestId: invocation.requestId,
+      registrationId: invocation.registrationId,
+      reason: abortReason,
+    });
+  }
+
+  private rejectInterceptorInvocation(
+    invocation: HostInterceptorInvocation,
+    reason: unknown,
+    sendAbort: boolean,
+  ): void {
+    if (invocation.settled) {
+      if (!invocation.resourcesReleased) {
+        if (!invocation.controller.signal.aborted) {
+          invocation.controller.abort(reason);
+        }
+        if (invocation.terminalLease) {
+          invocation.terminalLease.release();
+        } else {
+          this.releaseInterceptorInvocationResources(invocation, reason);
+        }
+      }
+      return;
+    }
+    invocation.settled = true;
+    if (sendAbort) this.sendInterceptorAbort(invocation, reason);
+    if (!invocation.controller.signal.aborted) {
+      invocation.controller.abort(reason);
+    }
+    invocation.reject?.(reason);
+    this.releaseInterceptorInvocationResources(invocation, reason);
+  }
+
+  private handleInterceptorOuterAbort(requestId: string, reason?: unknown): void {
+    const invocation = this.interceptorInvocations.get(requestId);
+    if (!invocation) return;
+    const abortReason = reason ?? new DOMException("Aborted", "AbortError");
+    if (invocation.settled) {
+      if (!invocation.resourcesReleased) {
+        if (!invocation.controller.signal.aborted) {
+          invocation.controller.abort(abortReason);
+        }
+        if (invocation.terminalLease) {
+          invocation.terminalLease.release();
+        } else {
+          this.releaseInterceptorInvocationResources(invocation, abortReason);
+        }
+      }
+      return;
+    }
+    this.rejectInterceptorInvocation(invocation, abortReason, true);
+  }
+
 
   private handleUnregisterInterceptor(registrationId: string): void {
     const registration = this.interceptorRegistrations.get(registrationId);
     if (!registration) return;
     registration.unregister();
     this.interceptorRegistrations.delete(registrationId);
-    for (const invocation of this.interceptorInvocations.values()) {
+    const reason = new Error("Interceptor registration revoked");
+    for (const bridge of [...this.interceptorControllersBySignal.values()]) {
+      if (bridge.registrationId !== registrationId) continue;
+      this.releaseInterceptorControllerBridge(bridge, reason);
+    }
+    for (const invocation of [...this.interceptorInvocations.values()]) {
       if (invocation.registrationId !== registrationId) continue;
-      invocation.settled = true;
-      invocation.controller.abort();
-      try {
-        this.postToWorker({
-          type: "intercept_abort",
-          requestId: invocation.requestId,
-          registrationId,
-          reason: "Interceptor registration revoked",
-        });
-      } catch {
-        // Worker teardown is already in progress.
-      }
-      invocation.reject?.(new Error("Interceptor registration revoked"));
-      this.interceptorInvocations.delete(invocation.requestId);
+      this.rejectInterceptorInvocation(invocation, reason, true);
     }
   }
 
   private handleInterceptorTimeout(requestId: string): void {
     const invocation = this.interceptorInvocations.get(requestId);
     if (!invocation || invocation.settled) return;
-    invocation.settled = true;
-    invocation.controller.abort(new Error("Interceptor timeout"));
-    try {
-      this.postToWorker({
-        type: "intercept_abort",
-        requestId,
-        registrationId: invocation.registrationId,
-        reason: "Interceptor timeout",
-      });
-    } catch {
-      // Worker teardown is already in progress.
-    }
-    invocation.reject?.(new Error(`Interceptor timeout from ${this.manifest.identifier}`));
-    this.interceptorInvocations.delete(requestId);
+    this.rejectInterceptorInvocation(
+      invocation,
+      new Error(`Interceptor timeout from ${this.manifest.identifier}`),
+      true,
+    );
   }
 
   private handleInterceptorResult(msg: Extract<RuntimeWorkerToHost, { type: "intercept_result" }>): void {
     const invocation = this.interceptorInvocations.get(msg.requestId);
     if (
       !invocation
+      || invocation.settled
       || invocation.registrationId !== msg.registrationId
       || msg.registrationGeneration !== invocation.generation
       || msg.workerId !== invocation.workerId
-      || msg.hostGeneration !== invocation.hostGeneration
+      || msg.hostGeneration !== invocation.runtimeGeneration
       || this.workerId !== invocation.workerId
-      || this.hostGeneration !== invocation.hostGeneration
+      || this.runtimeGeneration !== invocation.runtimeGeneration
       || this.registrationGeneration !== invocation.generation
       || this.runtimeStopping
     ) {
@@ -3072,9 +3285,6 @@ export class WorkerHost {
     }
     const registration = this.interceptorRegistrations.get(msg.registrationId);
     if (!registration || registration.generation !== invocation.generation) return;
-    // Capture the concrete grant rows at callback receipt. A later
-    // revoke+grant therefore produces a different identity and cannot
-    // reactivate this callback's final-response or interceptor lease.
     const capturedInterceptorGrantId = managerSvc.getPermissionGrantId(
       this.manifest.identifier,
       "interceptor",
@@ -3090,7 +3300,6 @@ export class WorkerHost {
       grantId !== undefined
       && this.hasPermission(permission)
       && managerSvc.getPermissionGrantId(this.manifest.identifier, permission) === grantId;
-
     const isRegistrationLive = () =>
       this.interceptorRegistrations.get(msg.registrationId) === registration
       && registration.generation === invocation.generation;
@@ -3098,7 +3307,7 @@ export class WorkerHost {
       !this.runtimeStopping
       && this.runtime !== null
       && this.workerId === invocation.workerId
-      && this.hostGeneration === invocation.hostGeneration
+      && this.runtimeGeneration === invocation.runtimeGeneration
       && this.registrationGeneration === invocation.generation;
     const finalPermissionGuard = () =>
       hasCapturedGrant("final_response", capturedFinalResponseGrantId)
@@ -3126,12 +3335,9 @@ export class WorkerHost {
       workerId: invocation.workerId,
       registrationId: invocation.registrationId,
       callbackUserId: invocation.context.userId,
-      hostGeneration: invocation.hostGeneration,
+      hostGeneration: invocation.privateState.parentGenerationSnapshot?.hostGeneration
+        ?? invocation.runtimeGeneration,
     });
-
-    invocation.settled = true;
-    if (invocation.timeout) clearTimeout(invocation.timeout);
-    this.interceptorInvocations.delete(msg.requestId);
     let parameters = msg.parameters;
     if (parameters && Object.keys(parameters).length > 0 && !this.hasPermission("generation_parameters")) {
       parameters = undefined;
@@ -3158,7 +3364,7 @@ export class WorkerHost {
           isRegistrationLive,
           isGenerationLive,
           signal: invocation.controller.signal,
-          onDispose: () => undefined,
+          onDispose: () => this.releaseInterceptorInvocationResources(invocation),
         });
       } catch {
         terminalLease = undefined;
@@ -3173,7 +3379,17 @@ export class WorkerHost {
       ...(terminalLease ? { terminalLeases: [terminalLease] } : {}),
       ...(normalized.finalResponse ? { finalResponseState: normalized.finalResponse } : {}),
     };
+    invocation.workerSettled = true;
+    invocation.settled = true;
+    invocation.terminalLease = terminalLease;
+    if (invocation.timeout) {
+      clearTimeout(invocation.timeout);
+      invocation.timeout = undefined;
+    }
     invocation.resolve?.(result);
+    if (!terminalLease) {
+      this.releaseInterceptorInvocationResources(invocation);
+    }
   }
 
   private boundInvocation(
@@ -3192,10 +3408,14 @@ export class WorkerHost {
       envelope.hostGeneration !== parent.hostGeneration) return null;
     if (this.boundOperationControllers.has(envelope.operationRequestId)) return null;
     const controller = new AbortController();
-    const abort = () => controller.abort(invocation.controller.signal.reason);
-    if (invocation.controller.signal.aborted) abort();
-    else invocation.controller.signal.addEventListener("abort", abort, { once: true });
-    this.boundOperationControllers.set(envelope.operationRequestId, controller);
+    const onInvocationAbort = () => controller.abort(invocation.controller.signal.reason);
+    if (invocation.controller.signal.aborted) onInvocationAbort();
+    else invocation.controller.signal.addEventListener("abort", onInvocationAbort, { once: true });
+    this.boundOperationControllers.set(envelope.operationRequestId, {
+      invocationRequestId: invocation.requestId,
+      controller,
+      onInvocationAbort,
+    });
     const context: BoundInvocationContext = {
       workerId: envelope.workerId,
       registrationGeneration: envelope.registrationGeneration,
@@ -3232,7 +3452,10 @@ export class WorkerHost {
     } catch (error) {
       this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     } finally {
-      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+      this.releaseBoundOperationController(
+        msg.__spindle_private_bound?.operationRequestId ?? "",
+        false,
+      );
     }
   }
 
@@ -3253,7 +3476,10 @@ export class WorkerHost {
     } catch (error) {
       this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     } finally {
-      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+      this.releaseBoundOperationController(
+        msg.__spindle_private_bound?.operationRequestId ?? "",
+        false,
+      );
     }
   }
 
@@ -3269,7 +3495,10 @@ export class WorkerHost {
     } catch (error) {
       this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
     } finally {
-      this.boundOperationControllers.delete(msg.__spindle_private_bound?.operationRequestId ?? "");
+      this.releaseBoundOperationController(
+        msg.__spindle_private_bound?.operationRequestId ?? "",
+        false,
+      );
     }
   }
 
@@ -3405,18 +3634,39 @@ export class WorkerHost {
     requestId: string,
     envelope?: BoundRuntimeEnvelope,
   ): void {
-    if (envelope?.operationRequestId) {
+    if (envelope) {
+      const operationRequestId = envelope.operationRequestId;
+      if (!operationRequestId || operationRequestId !== requestId) return;
       const invocation = this.interceptorInvocations.get(envelope.requestId);
-      const operation = this.boundOperationControllers.get(envelope.operationRequestId);
+      const operation = this.boundOperationControllers.get(operationRequestId);
+      const registration = invocation
+        ? this.interceptorRegistrations.get(invocation.registrationId)
+        : undefined;
+      const parent = invocation?.privateState.parentGenerationSnapshot;
       if (
-        invocation &&
-        operation &&
-        invocation.boundToken === envelope.token &&
-        invocation.registrationId.length > 0
+        !invocation
+        || !operation
+        || invocation.settled
+        || operation.invocationRequestId !== invocation.requestId
+        || invocation.boundToken !== envelope.token
+        || invocation.workerId !== envelope.workerId
+        || this.workerId !== envelope.workerId
+        || invocation.generation !== envelope.registrationGeneration
+        || this.registrationGeneration !== envelope.registrationGeneration
+        || invocation.context.userId !== envelope.callbackUserId
+        || !parent
+        || parent.hostGeneration !== envelope.hostGeneration
+        || !registration
+        || registration.generation !== invocation.generation
+        || this.interceptorRegistrations.get(invocation.registrationId) !== registration
       ) {
-        operation.abort();
-        this.boundOperationControllers.delete(envelope.operationRequestId);
+        return;
       }
+      this.releaseBoundOperationController(
+        operationRequestId,
+        true,
+        new DOMException("Aborted", "AbortError"),
+      );
       return;
     }
     const controller = this.generationAbortControllers.get(requestId);

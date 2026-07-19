@@ -11,6 +11,7 @@ import {
   type InterceptorBreakdownEntry,
   type InterceptorResult,
 } from "./interceptor-pipeline";
+import { createInterceptorTerminalLease } from "./lifecycle";
 
 type NormalizeFixture = Omit<
   NormalizeFinalResponseInput,
@@ -139,6 +140,31 @@ async function runWith(interceptors: readonly Interceptor[]): Promise<Intercepto
     for (const dispose of disposers.reverse()) dispose();
   }
 }
+function trackedTerminalLease(extensionId: string, isRunSettled: () => boolean) {
+  let releaseCount = 0;
+  let releaseObservedBeforeSettlement = false;
+  const lease = createInterceptorTerminalLease({
+    registrationId: `${extensionId}-registration`,
+    generationId: "generation-pipeline-test",
+    callbackUserId: "user-pipeline-test",
+    extensionId,
+    extensionName: extensionId,
+    onDispose: () => {
+      releaseCount += 1;
+      releaseObservedBeforeSettlement = !isRunSettled();
+    },
+  });
+  return {
+    lease,
+    get releaseCount() {
+      return releaseCount;
+    },
+    get releaseObservedBeforeSettlement() {
+      return releaseObservedBeforeSettlement;
+    },
+  };
+}
+
 
 function carrierCount(messages: readonly LlmMessageDTO[]): number {
   return messages.filter(
@@ -390,4 +416,410 @@ describe("interceptor pipeline final-response folding", () => {
     ]);
     expect(result.finalResponseState).toBeUndefined();
   });
+});
+
+
+describe("interceptor pipeline callback cancellation", () => {
+  const synchronousLeaseAbortCases: readonly {
+    id: string;
+    description: string;
+    later?: Pick<Interceptor, "userId" | "matcher">;
+  }[] = [
+    { id: "final-return", description: "with no later interceptor" },
+    {
+      id: "user-filter",
+      description: "before a later user-skipped interceptor",
+      later: { userId: "different-user" },
+    },
+    {
+      id: "matcher-filter",
+      description: "before a later matcher-skipped interceptor",
+      later: { matcher: () => false },
+    },
+  ];
+
+  async function expectSynchronousLeaseAbort(
+    scenario: (typeof synchronousLeaseAbortCases)[number],
+  ): Promise<void> {
+    const inputMessages: LlmMessageDTO[] = [{ role: "user", content: "lease input" }];
+    const outer = new AbortController();
+    const abortReason = new Error(`synchronous abort at ${scenario.id}`);
+    let runSettled = false;
+    let laterInvoked = false;
+    const tracked = trackedTerminalLease(
+      `synchronous-lease-${scenario.id}`,
+      () => runSettled,
+    );
+    const disposeA = interceptorPipeline.register({
+      extensionId: `synchronous-lease-${scenario.id}-a`,
+      extensionName: "Interceptor A",
+      priority: 1,
+      handler: async (messages) => {
+        outer.abort(abortReason);
+        return { messages, terminalLeases: [tracked.lease] };
+      },
+    });
+    const disposeLater = scenario.later
+      ? interceptorPipeline.register({
+          extensionId: `synchronous-lease-${scenario.id}-later`,
+          extensionName: "Skipped interceptor",
+          priority: 2,
+          ...scenario.later,
+          handler: async (messages) => {
+            laterInvoked = true;
+            return { messages };
+          },
+        })
+      : undefined;
+    try {
+      const runOutcome = interceptorPipeline.run(
+        inputMessages,
+        { chatId: `synchronous-lease-${scenario.id}` },
+        "user-pipeline-test",
+        outer.signal,
+      ).then(
+        (result) => {
+          runSettled = true;
+          return { kind: "fulfilled" as const, result };
+        },
+        (error) => {
+          runSettled = true;
+          return { kind: "rejected" as const, error };
+        },
+      );
+      const outcome = await runOutcome;
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind !== "rejected") throw new Error("pipeline unexpectedly fulfilled");
+      expect(outcome.error).toBe(abortReason);
+      expect(outer.signal.aborted).toBe(true);
+      expect(outer.signal.reason).toBe(abortReason);
+      expect(laterInvoked).toBe(false);
+      expect(tracked.releaseCount).toBe(1);
+      expect(tracked.releaseObservedBeforeSettlement).toBe(true);
+      expect(tracked.lease.isActive()).toBe(false);
+
+      tracked.lease.release();
+      tracked.lease.release();
+      expect(tracked.releaseCount).toBe(1);
+    } finally {
+      disposeLater?.();
+      disposeA();
+    }
+  }
+
+  for (const scenario of synchronousLeaseAbortCases) {
+    test(`rejects ${scenario.description} after a lease-producing interceptor aborts`, () =>
+      expectSynchronousLeaseAbort(scenario));
+  }
+
+  test("aborts the prepared signal before timeout settles and ignores a late handler result", async () => {
+    const inputMessages: LlmMessageDTO[] = [{ role: "user", content: "timeout input" }];
+    let callbackSignal: AbortSignal | undefined;
+    let resolveStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    let resolveLate: ((result: InterceptorResult) => void) | undefined;
+    const lateResult = new Promise<InterceptorResult>((resolve) => {
+      resolveLate = resolve;
+    });
+    let runSettled = false;
+    let abortObservedBeforeRunSettled = false;
+    let resolveAborted: ((reason: unknown) => void) | undefined;
+    const callbackAborted = new Promise<unknown>((resolve) => {
+      resolveAborted = resolve;
+    });
+    const dispose = interceptorPipeline.register({
+      extensionId: "timeout-callback",
+      extensionName: "Timeout callback",
+      priority: 1,
+      resolveTimeoutMs: () => 5,
+      contextPreparer: (_context, signal) => {
+        if (!signal) throw new Error("test callback signal was not prepared");
+        callbackSignal = signal;
+        signal.addEventListener(
+          "abort",
+          () => {
+            abortObservedBeforeRunSettled = !runSettled;
+            resolveAborted?.(signal.reason);
+          },
+          { once: true },
+        );
+        return {};
+      },
+      handler: async () => {
+        resolveStarted?.();
+        return lateResult;
+      },
+    });
+    try {
+      const run = interceptorPipeline.run(
+        inputMessages,
+        { chatId: "timeout-chat" },
+        "user-pipeline-test",
+      ).then(
+        (result) => {
+          runSettled = true;
+          return result;
+        },
+        (error) => {
+          runSettled = true;
+          throw error;
+        },
+      );
+      await started;
+      const timeoutReason = await callbackAborted;
+      expect(callbackSignal).toBeDefined();
+      expect(callbackSignal?.aborted).toBe(true);
+      expect(callbackSignal?.reason).toBe(timeoutReason);
+      expect(timeoutReason).toBeInstanceOf(Error);
+      expect(abortObservedBeforeRunSettled).toBe(true);
+
+      const result = await run;
+      expect(runSettled).toBe(true);
+      expect(result.messages).toEqual(inputMessages);
+
+      resolveLate?.({
+        messages: [...inputMessages, { role: "system", content: "late output" }],
+      });
+      await lateResult;
+      expect(result.messages).toEqual(inputMessages);
+    } finally {
+      dispose();
+    }
+  });
+
+  test("does not abort a successful callback before its result is reconciled", async () => {
+    let callbackSignal: AbortSignal | undefined;
+    let handlerSawAbort = true;
+    const dispose = interceptorPipeline.register({
+      extensionId: "successful-callback",
+      extensionName: "Successful callback",
+      priority: 1,
+      resolveTimeoutMs: () => 100,
+      contextPreparer: (_context, signal) => {
+        callbackSignal = signal;
+        return {};
+      },
+      handler: async (messages) => {
+        handlerSawAbort = callbackSignal?.aborted ?? true;
+        return { messages: [...messages, { role: "system", content: "successful output" }] };
+      },
+    });
+    try {
+      const result = await interceptorPipeline.run(
+        [{ role: "user", content: "success input" }],
+        { chatId: "success-chat" },
+        "user-pipeline-test",
+      );
+      expect(handlerSawAbort).toBe(false);
+      expect(callbackSignal).toBeDefined();
+      expect(callbackSignal?.aborted).toBe(false);
+      expect(result.messages).toEqual([
+        { role: "user", content: "success input" },
+        { role: "system", content: "successful output" },
+      ]);
+    } finally {
+      dispose();
+    }
+  });
+
+  test("isolates callback signals across concurrent runs", async () => {
+    type RunContext = { chatId: string; runId: "first" | "second" };
+    const inputMessages: LlmMessageDTO[] = [{ role: "user", content: "concurrent input" }];
+    const firstOuter = new AbortController();
+    const secondOuter = new AbortController();
+    const prepared = new Map<RunContext["runId"], AbortSignal>();
+    const releaseHandlers = new Map<
+      RunContext["runId"],
+      (result: InterceptorResult) => void
+    >();
+    const preparedPromises = new Map<
+      RunContext["runId"],
+      Promise<void>
+    >();
+    const resolvePrepared = new Map<
+      RunContext["runId"],
+      () => void
+    >();
+    for (const runId of ["first", "second"] as const) {
+      preparedPromises.set(
+        runId,
+        new Promise<void>((resolve) => resolvePrepared.set(runId, resolve)),
+      );
+    }
+    const dispose = interceptorPipeline.register({
+      extensionId: "concurrent-callbacks",
+      extensionName: "Concurrent callbacks",
+      priority: 1,
+      resolveTimeoutMs: () => 1_000,
+      contextPreparer: (context, signal) => {
+        const runId = (context as RunContext).runId;
+        prepared.set(runId, signal!);
+        resolvePrepared.get(runId)?.();
+        return context;
+      },
+      handler: async (_messages, context) => {
+        const runId = (context as RunContext).runId;
+        return new Promise<InterceptorResult>((resolve) => {
+          releaseHandlers.set(runId, (result) => resolve(result));
+        });
+      },
+    });
+    try {
+      const firstRun = interceptorPipeline.run(
+        inputMessages,
+        { chatId: "first-chat", runId: "first" },
+        "user-pipeline-test",
+        firstOuter.signal,
+      ).then(
+        () => undefined,
+        (error) => error,
+      );
+      const secondRun = interceptorPipeline.run(
+        inputMessages,
+        { chatId: "second-chat", runId: "second" },
+        "user-pipeline-test",
+        secondOuter.signal,
+      );
+      await Promise.all([
+        preparedPromises.get("first"),
+        preparedPromises.get("second"),
+      ]);
+      const firstSignal = prepared.get("first");
+      const secondSignal = prepared.get("second");
+      expect(firstSignal).toBeDefined();
+      expect(secondSignal).toBeDefined();
+      const firstReason = new Error("first run aborted");
+      firstOuter.abort(firstReason);
+      expect(firstSignal?.aborted).toBe(true);
+      expect(firstSignal?.reason).toBe(firstReason);
+      expect(secondSignal?.aborted).toBe(false);
+
+      releaseHandlers.get("second")?.({
+        messages: [...inputMessages, { role: "system", content: "second output" }],
+      });
+      const secondResult = await secondRun;
+      expect(secondResult.messages).toEqual([
+        ...inputMessages,
+        { role: "system", content: "second output" },
+      ]);
+      expect(secondSignal?.aborted).toBe(false);
+
+      expect(await firstRun).toBe(firstReason);
+      releaseHandlers.get("first")?.({ messages: inputMessages });
+    } finally {
+      dispose();
+    }
+  });
+
+  test("releases an earlier terminal lease when the outer run aborts during a pending interceptor", async () => {
+    const inputMessages: LlmMessageDTO[] = [{ role: "user", content: "lease input" }];
+    const outer = new AbortController();
+    let bSignal: AbortSignal | undefined;
+    let resolvePrepared: (() => void) | undefined;
+    const prepared = new Promise<void>((resolve) => {
+      resolvePrepared = resolve;
+    });
+    let resolveLate: ((result: InterceptorResult) => void) | undefined;
+    const lateResult = new Promise<InterceptorResult>((resolve) => {
+      resolveLate = resolve;
+    });
+    let resolveLateHandler: (() => void) | undefined;
+    const lateHandlerCompleted = new Promise<void>((resolve) => {
+      resolveLateHandler = resolve;
+    });
+    let releaseCount = 0;
+    let runSettled = false;
+    let releaseObservedBeforeSettlement = false;
+    let lateOutputAccepted = false;
+    const lease = createInterceptorTerminalLease({
+      registrationId: "interceptor-a-registration",
+      generationId: "generation-pipeline-test",
+      callbackUserId: "user-pipeline-test",
+      extensionId: "interceptor-a",
+      extensionName: "Interceptor A",
+      onDispose: () => {
+        releaseCount += 1;
+        releaseObservedBeforeSettlement = !runSettled;
+      },
+    });
+    const disposeA = interceptorPipeline.register({
+      extensionId: "interceptor-a",
+      extensionName: "Interceptor A",
+      priority: 1,
+      handler: async (messages) => ({
+        messages,
+        terminalLeases: [lease],
+      }),
+    });
+    const disposeB = interceptorPipeline.register({
+      extensionId: "interceptor-b",
+      extensionName: "Interceptor B",
+      priority: 2,
+      contextPreparer: (_context, signal) => {
+        if (!signal) throw new Error("test callback signal was not prepared");
+        bSignal = signal;
+        resolvePrepared?.();
+        return {};
+      },
+      handler: async () => {
+        const result = await lateResult;
+        resolveLateHandler?.();
+        return result;
+      },
+    });
+    try {
+      const runOutcome = interceptorPipeline.run(
+        inputMessages,
+        { chatId: "lease-abort-chat" },
+        "user-pipeline-test",
+        outer.signal,
+      ).then(
+        (result) => {
+          runSettled = true;
+          return { kind: "fulfilled" as const, result };
+        },
+        (error) => {
+          runSettled = true;
+          return { kind: "rejected" as const, error };
+        },
+      );
+      await prepared;
+      expect(bSignal).toBeDefined();
+      expect(bSignal?.aborted).toBe(false);
+
+      const abortReason = new Error("outer abort during interceptor B");
+      outer.abort(abortReason);
+      expect(bSignal?.aborted).toBe(true);
+      expect(bSignal?.reason).toBe(abortReason);
+
+      const outcome = await runOutcome;
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind !== "rejected") throw new Error("pipeline unexpectedly fulfilled");
+      expect(outcome.error).toBe(abortReason);
+      expect(releaseCount).toBe(1);
+      expect(releaseObservedBeforeSettlement).toBe(true);
+      expect(lease.isActive()).toBe(false);
+
+      const lateOutput: InterceptorResult = {
+        get messages() {
+          lateOutputAccepted = true;
+          return [...inputMessages, { role: "system" as const, content: "late output" }];
+        },
+      };
+      resolveLate?.(lateOutput);
+      await lateHandlerCompleted;
+      expect(outcome.kind).toBe("rejected");
+      expect(lateOutputAccepted).toBe(false);
+      expect(releaseCount).toBe(1);
+      lease.release();
+      lease.release();
+      expect(releaseCount).toBe(1);
+    } finally {
+      disposeB();
+      disposeA();
+    }
+  });
+
 });
