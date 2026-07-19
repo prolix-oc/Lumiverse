@@ -12,6 +12,7 @@ import {
 export const LUMIVERSE_SPINDLE_HOST_CAPABILITIES = Object.freeze({
   ...SPINDLE_HOST_CAPABILITIES,
   "connection-dispatch-resolution-v1": 1,
+  "loom-block-management-v1": 1,
 }) as Readonly<Record<string, number>>;
 
 export type ParsedCanonicalSemver = Readonly<{

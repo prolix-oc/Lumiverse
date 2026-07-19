@@ -54,6 +54,7 @@ The descriptor and its nested capability map are immutable frozen snapshots. The
 - `preset-extension-data-v1: 1`
 - `preset-editor-v1: 1`
 - `loom-block-editor-v1: 1`
+- `loom-block-management-v1: 1`
 - `generation-assembly-v1: 1`
 - `interceptor-context-v1: 1`
 - `interceptor-final-response-v1: 1`
