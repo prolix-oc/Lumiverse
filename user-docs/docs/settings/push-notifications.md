@@ -1,4 +1,8 @@
-# Push Notifications
+---
+title: Notifications
+---
+
+# Notifications
 
 Lumiverse can send push notifications to your devices when certain events happen — like when a character finishes responding. This is useful when you're multitasking or using the PWA on mobile.
 

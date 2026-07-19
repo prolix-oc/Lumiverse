@@ -9,6 +9,7 @@ frontend/scripts/.translate-cache-*.json
 # moved DEFAULT_MIGRATION_LOCK_TABLE out of its root export) and crashed
 # startup. Keep the lockfile tracked so every environment installs the same tree.
 node_modules/
+.tmp/
 .claude/
 vendor/lancedb-android/upstream/
 vendor/lancedb-android/build/
@@ -58,6 +59,8 @@ Thumbs.db
 frontend/src/lib/generatedComponentProps.ts
 frontend/src/lib/generatedCssVariables.ts
 frontend/src/lib/generatedComponentCss.ts
+frontend/.dist-build-*/
+frontend/.dist-backup-*/
 *.tsbuildinfo
 
 # =============================================================================
@@ -71,6 +74,10 @@ frontend/src/lib/generatedComponentCss.ts
 !LICENSE.md
 !README.md
 !SECURITY.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!.github/ISSUE_TEMPLATE/**/*.md
+!.github/PULL_REQUEST_TEMPLATE.md
 scripts/release.sh
 scripts/release-main.sh
 scripts/release-rc.sh

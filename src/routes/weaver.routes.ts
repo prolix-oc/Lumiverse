@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import * as svc from "../services/weaver/session.service";
 import * as extractionSvc from "../services/weaver/extraction.service";
 import * as interviewSvc from "../services/weaver/interview.service";
@@ -15,6 +16,7 @@ import { NARRATION_MODES } from "../services/weaver/narration";
 import { PERSONA_REGISTERS } from "../services/weaver/persona-register";
 import { getBuildRegistry } from "../services/weaver/build-registry";
 import * as tuningSvc from "../services/weaver/tuning";
+import { WEAVER_TEXT_TIMEOUT_DEFAULT_SECONDS } from "../services/weaver/tuning";
 import { MAX_DYNAMIC_QUESTIONS } from "../services/weaver/dynamic-question.service";
 import { HARVEST_CAP } from "../services/weaver/people.service";
 import { getWorldbookRole } from "../services/weaver/worldbook-roles";
@@ -67,9 +69,42 @@ function publicWeaverError(err: unknown): string {
     if (err.message.startsWith("Render the field first")) return err.message;
     if (err.message === "A field cannot be empty") return err.message;
     if (err.message === "Add a nudge to steer the re-render") return err.message;
+    if (err.name === "TimeoutError" || err.message.toLowerCase().includes("timed out"))
+      return "The model took too long to respond. Try again, lower the reasoning effort, or switch models.";
     if (err.name === "AbortError" || err.message.toLowerCase().includes("abort")) return "Generation was canceled.";
   }
   return "That step could not finish. Check the connection and try again.";
+}
+
+function weaverTextTimeoutMs(userId: string): number {
+  const seconds =
+    tuningSvc.getWeaverTuning(userId).text_timeout_seconds ?? WEAVER_TEXT_TIMEOUT_DEFAULT_SECONDS;
+  return seconds * 1000;
+}
+
+function weaverTextCall(c: Context, userId: string): { signal: AbortSignal; done: () => void } {
+  const timeoutMs = weaverTextTimeoutMs(userId);
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException(`Weaver generation timed out after ${timeoutMs / 1000}s`, "TimeoutError"),
+      ),
+    timeoutMs,
+  );
+  const client = c.req.raw.signal as AbortSignal | undefined;
+  const onAbort = () => controller.abort(client?.reason ?? new DOMException("Aborted", "AbortError"));
+  if (client) {
+    if (client.aborted) onAbort();
+    else client.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    done: () => {
+      clearTimeout(timer);
+      client?.removeEventListener("abort", onAbort);
+    },
+  };
 }
 
 app.post("/sessions", async (c) => {
@@ -227,6 +262,7 @@ function tuningDefaults(): Record<string, number> {
       : {}),
     dynamic_question_cap: MAX_DYNAMIC_QUESTIONS,
     harvest_cap: HARVEST_CAP,
+    text_timeout_seconds: WEAVER_TEXT_TIMEOUT_DEFAULT_SECONDS,
   };
 }
 
@@ -282,53 +318,65 @@ app.get("/sessions/:id/interview", (c) => {
 app.post("/sessions/:id/interview/question", async (c) => {
   const userId = c.get("userId");
   const body = (await c.req.json().catch(() => ({}))) as GenerateQuestionInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    const question = await interviewSvc.generateQuestion(userId, c.req.param("id"), body);
+    const question = await interviewSvc.generateQuestion(userId, c.req.param("id"), body, signal);
     return c.json({ question });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Question generation failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: publicWeaverError(err) }, 400);
+  } finally {
+    done();
   }
 });
 
 app.post("/sessions/:id/interview/answer", async (c) => {
   const userId = c.get("userId");
   const body = (await c.req.json().catch(() => ({}))) as AnswerInterviewQuestionInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    const state = await interviewSvc.answerQuestion(userId, c.req.param("id"), body);
+    const state = await interviewSvc.answerQuestion(userId, c.req.param("id"), body, signal);
     return c.json(state);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Answer failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: message }, 400);
+  } finally {
+    done();
   }
 });
 
 app.post("/sessions/:id/interview/spark", async (c) => {
   const userId = c.get("userId");
   const body = (await c.req.json().catch(() => ({}))) as SparkQuestionInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    const options = await interviewSvc.sparkQuestion(userId, c.req.param("id"), body);
+    const options = await interviewSvc.sparkQuestion(userId, c.req.param("id"), body, signal);
     return c.json({ options });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Spark failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: publicWeaverError(err) }, 400);
+  } finally {
+    done();
   }
 });
 
 app.post("/sessions/:id/interview/enhance", async (c) => {
   const userId = c.get("userId");
   const body = (await c.req.json().catch(() => ({}))) as EnhanceAnswerInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    const options = await interviewSvc.enhanceAnswer(userId, c.req.param("id"), body);
+    const options = await interviewSvc.enhanceAnswer(userId, c.req.param("id"), body, signal);
     return c.json({ options });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Enhance failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     if (message.startsWith("Write a draft answer first")) return c.json({ error: message }, 400);
     return c.json({ error: publicWeaverError(err) }, 400);
+  } finally {
+    done();
   }
 });
 
@@ -642,8 +690,9 @@ app.post("/sessions/:id/lore/question", async (c) => {
   const { error } = growableSession(c, userId);
   if (error) return error;
   const body = (await c.req.json().catch(() => ({}))) as GenerateQuestionInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    const question = await interviewSvc.generateQuestion(userId, c.req.param("id"), body, undefined, {
+    const question = await interviewSvc.generateQuestion(userId, c.req.param("id"), body, signal, {
       ignoreCap: true,
     });
     return c.json({ question });
@@ -651,6 +700,8 @@ app.post("/sessions/:id/lore/question", async (c) => {
     const message = err instanceof Error ? err.message : "Question generation failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: publicWeaverError(err) }, 400);
+  } finally {
+    done();
   }
 });
 
@@ -659,8 +710,9 @@ app.post("/sessions/:id/lore/answer", async (c) => {
   const { session, error } = growableSession(c, userId);
   if (error) return error;
   const body = (await c.req.json().catch(() => ({}))) as AnswerInterviewQuestionInput;
+  const { signal, done } = weaverTextCall(c, userId);
   try {
-    await interviewSvc.answerQuestion(userId, c.req.param("id"), body);
+    await interviewSvc.answerQuestion(userId, c.req.param("id"), body, signal);
     bibleSvc.syncDynamicRegion(userId, c.req.param("id"));
 
     const character = getCharacter(userId, session!.character_id!);
@@ -689,6 +741,8 @@ app.post("/sessions/:id/lore/answer", async (c) => {
     const message = err instanceof Error ? err.message : "Answer failed";
     if (message === "Session not found") return c.json({ error: message }, 404);
     return c.json({ error: message }, 400);
+  } finally {
+    done();
   }
 });
 

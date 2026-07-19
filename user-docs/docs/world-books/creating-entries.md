@@ -1,3 +1,7 @@
+---
+title: Creating Entries
+---
+
 # Creating Entries
 
 Each entry in a World Book is a piece of information that can be injected into the prompt when its conditions are met.

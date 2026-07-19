@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCharacterBrowser } from '@/hooks/useCharacterBrowser'
 import { charactersApi } from '@/api/characters'
@@ -14,6 +14,7 @@ import CharacterGrid from './character-browser/CharacterGrid'
 import CharacterList from './character-browser/CharacterList'
 import CharacterEditorPage from './character-browser/CharacterEditorPage'
 import ImportUrlModal from './character-browser/ImportUrlModal'
+import BulkTagsModal from './character-browser/BulkTagsModal'
 import DragDropOverlay from './character-browser/DragDropOverlay'
 import GroupChatsPanel from './character-browser/GroupChatsPanel'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -71,6 +72,12 @@ export default function CharacterBrowser() {
   const browser = useCharacterBrowser()
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
   const openModal = useStore((s) => s.openModal)
+  const favoritesBarCollapsed = useStore((s) => s.favoritesBarCollapsed)
+  const setSetting = useStore((s) => s.setSetting)
+
+  const handleToggleFavoritesCollapse = useCallback(() => {
+    setSetting('favoritesBarCollapsed', !favoritesBarCollapsed)
+  }, [favoritesBarCollapsed, setSetting])
   const handleCreateNew = useCallback(async () => {
     try {
       const character = await browser.createCharacter()
@@ -78,10 +85,11 @@ export default function CharacterBrowser() {
     } catch (err) {
       console.error('[CharacterBrowser] Failed to create character:', err)
     }
-  }, [browser.createCharacter, setEditingCharacterId])
+  }, [browser, setEditingCharacterId])
 
   const [importUrlOpen, setImportUrlOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [bulkTagsOpen, setBulkTagsOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [tagLibraryImporting, setTagLibraryImporting] = useState(false)
   const dragCounterRef = useRef(0)
@@ -119,7 +127,7 @@ export default function CharacterBrowser() {
         browser.importFiles(files)
       }
     },
-    [browser.importFiles]
+    [browser]
   )
 
   const handleBatchDelete = useCallback(() => {
@@ -145,7 +153,29 @@ export default function CharacterBrowser() {
   const handleConfirmDelete = useCallback(() => {
     browser.batchDelete()
     setConfirmDelete(false)
-  }, [browser.batchDelete])
+  }, [browser])
+
+  const pagination: ReactNode = useMemo(
+    () => (
+      <Pagination
+        currentPage={browser.currentPage}
+        totalPages={browser.totalPages}
+        onPageChange={browser.setCurrentPage}
+        perPage={browser.charactersPerPage}
+        perPageOptions={[24, 50, 100, 200, 500]}
+        onPerPageChange={browser.setCharactersPerPage}
+        totalItems={browser.totalFiltered}
+      />
+    ),
+    [
+      browser.currentPage,
+      browser.totalPages,
+      browser.setCurrentPage,
+      browser.charactersPerPage,
+      browser.setCharactersPerPage,
+      browser.totalFiltered,
+    ],
+  )
 
   return (
     <div
@@ -192,6 +222,7 @@ export default function CharacterBrowser() {
           onSelectAll={() => browser.selectAllBatch(browser.characters.map((c) => c.id))}
           onClearSelection={browser.clearBatchSelection}
           onDelete={handleBatchDelete}
+          onTags={() => setBulkTagsOpen(true)}
           onCancel={() => browser.setBatchMode(false)}
         />
       )}
@@ -244,8 +275,10 @@ export default function CharacterBrowser() {
             <FavoritesSlider
               characters={browser.favoriteCharacters}
               favorites={browser.favorites}
+              collapsed={favoritesBarCollapsed}
               onOpen={browser.openChat}
               onToggleFavorite={browser.toggleFavorite}
+              onToggleCollapse={handleToggleFavoritesCollapse}
             />
           )}
 
@@ -280,15 +313,7 @@ export default function CharacterBrowser() {
             />
           )}
 
-          <Pagination
-            currentPage={browser.currentPage}
-            totalPages={browser.totalPages}
-            onPageChange={browser.setCurrentPage}
-            perPage={browser.charactersPerPage}
-            perPageOptions={[24, 50, 100, 200, 500]}
-            onPerPageChange={browser.setCharactersPerPage}
-            totalItems={browser.totalFiltered}
-          />
+          <div className={styles.paginationBar}>{pagination}</div>
         </>
       )}
 
@@ -310,6 +335,13 @@ export default function CharacterBrowser() {
         message={t('characterBrowser.deleteCharactersMessage', { count: browser.batchSelected.length })}
         variant="danger"
         confirmText={t('characterBrowser.delete')}
+      />
+      <BulkTagsModal
+        isOpen={bulkTagsOpen}
+        selectedIds={browser.batchSelected}
+        allTags={browser.allTags}
+        onClose={() => setBulkTagsOpen(false)}
+        onApplied={() => { setBulkTagsOpen(false); browser.refreshBrowser() }}
       />
 
       <ConfirmationModal

@@ -80,6 +80,22 @@
   animation: pulse-glow 3s ease-in-out infinite;
 }
 
+:global([data-part='streaming']) .socialCard,
+:global([data-part='streaming']) .socialCard::before,
+:global([data-part='streaming']) .socialCard::after,
+:global([data-part='streaming']) .socialAvatarContainer {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .socialCard,
+  .socialCard::before,
+  .socialCard::after,
+  .socialAvatarContainer {
+    animation: none;
+  }
+}
+
 .socialAvatar {
   width: 42px;
   height: 42px;

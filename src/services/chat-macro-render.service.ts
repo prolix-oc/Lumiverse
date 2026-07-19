@@ -5,31 +5,6 @@ import * as chatsSvc from "./chats.service";
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
 
-/**
- * Preset-defined prompt variable names are seeded into env.variables.local by
- * the assembly pipeline so {{var::}}, {{getvar::}}, and {{.name}} share a
- * backing store mid-prompt. Persisting them into chat.metadata.macro_variables.local
- * would freeze the user's first-generation values into the chat forever, so any
- * later change in the Configure Prompt Variables modal would be shadowed by the
- * stale chat-stored copy. We strip preset-variable names from the persisted
- * snapshot — they re-seed from preset.metadata.promptVariables on the next
- * generation. In-prompt {{setvar::}} writes to non-colliding names still persist.
- */
-function localWithoutPresetVars(
-  local: Record<string, string>,
-  env: MacroEnv | undefined,
-): Record<string, string> {
-  const pv = env?.extra?.promptVariables;
-  if (!pv || typeof pv !== "object") return local;
-  const presetNames = new Set(Object.keys(pv));
-  if (presetNames.size === 0) return local;
-  const out: Record<string, string> = {};
-  for (const key of Object.keys(local)) {
-    if (!presetNames.has(key)) out[key] = local[key];
-  }
-  return out;
-}
-
 interface ReconcileChatMessageMacrosInput {
   userId: string;
   chatId: string;
@@ -48,7 +23,6 @@ export async function resolveRenderedChatMessages(
   input: ResolveRenderedChatMessagesInput,
 ): Promise<{
   resolvedById: Map<string, string>;
-  localVariables?: Record<string, string>;
   globalVariables?: Record<string, string>;
   chatVariables?: Record<string, string>;
 }> {
@@ -82,7 +56,6 @@ export async function resolveRenderedChatMessages(
 
   return {
     resolvedById,
-    localVariables: Object.fromEntries(env.variables.local),
     globalVariables: Object.fromEntries(env.variables.global),
     chatVariables: Object.fromEntries(env.variables.chat),
   };
@@ -97,6 +70,17 @@ export async function resolveRenderedMessageContent(
   return healFormattingArtifacts((await evaluate(content, env, registry)).text);
 }
 
+export function buildPersistedMacroVariables(
+  existingMacroVars: Record<string, unknown>,
+  incomingGlobal: Record<string, string>,
+): Record<string, unknown> {
+  const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
+  return {
+    ...existingMacroVars,
+    global: { ...existingGlobal, ...incomingGlobal },
+  };
+}
+
 export function persistMacroVariableState(
   userId: string,
   chatId: string,
@@ -106,17 +90,9 @@ export function persistMacroVariableState(
   if (!chat) return;
 
   const existingMacroVars = (chat.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
-  const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
-  const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
   const existingChatVars = (chat.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
-  const incomingLocal = localWithoutPresetVars(Object.fromEntries(env.variables.local), env);
-  const macroVariables = {
-    ...existingMacroVars,
-    local: { ...existingLocal, ...incomingLocal },
-    global: { ...existingGlobal, ...Object.fromEntries(env.variables.global) },
-  };
   chatsSvc.mergeChatMetadata(userId, chatId, {
-    macro_variables: macroVariables,
+    macro_variables: buildPersistedMacroVariables(existingMacroVars, Object.fromEntries(env.variables.global)),
     chat_variables: { ...existingChatVars, ...Object.fromEntries(env.variables.chat) },
   });
 }
@@ -129,7 +105,6 @@ export async function reconcileChatMessageMacros(
 
   const {
     resolvedById,
-    localVariables,
     globalVariables,
     chatVariables,
   } = await resolveRenderedChatMessages({
@@ -144,21 +119,13 @@ export async function reconcileChatMessageMacros(
     chatsSvc.updateMessage(input.userId, messageId, { content: resolved });
   }
 
-  if (input.persistVariables !== false && localVariables && globalVariables && chatVariables) {
+  if (input.persistVariables !== false && globalVariables && chatVariables) {
     const chat = chatsSvc.getChat(input.userId, input.chatId);
     // Env values win on collision but concurrent extension writes survive.
     const existingMacroVars = (chat?.metadata?.macro_variables as Record<string, unknown> | undefined) ?? {};
-    const existingLocal = (existingMacroVars.local as Record<string, string> | undefined) ?? {};
-    const existingGlobal = (existingMacroVars.global as Record<string, string> | undefined) ?? {};
     const existingChatVars = (chat?.metadata?.chat_variables as Record<string, string> | undefined) ?? {};
-    const incomingLocal = localWithoutPresetVars(localVariables, input.macroEnvSeed);
-    const macroVariables = {
-      ...existingMacroVars,
-      local: { ...existingLocal, ...incomingLocal },
-      global: { ...existingGlobal, ...globalVariables },
-    };
     chatsSvc.mergeChatMetadata(input.userId, input.chatId, {
-      macro_variables: macroVariables,
+      macro_variables: buildPersistedMacroVariables(existingMacroVars, globalVariables),
       chat_variables: { ...existingChatVars, ...chatVariables },
     });
   }

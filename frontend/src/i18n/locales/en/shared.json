@@ -20,6 +20,8 @@
     "untitledBlock": "Untitled block",
     "variableCount_one": "{{count}} variable",
     "variableCount_other": "{{count}} variables",
+    "placementSummary": "Placement: {{role}} · {{position}}",
+    "placementSummaryWithDepth": "Placement: {{role}} · {{position}} · depth {{depth}}",
     "resetAll": "Reset all",
     "saving": "Saving…",
     "resetToDefault": "Reset to default"
@@ -46,7 +48,11 @@
     "searchFolders": "Search folders...",
     "none": "None",
     "folderNamePlaceholder": "Folder name...",
-    "createNew": "Create new folder..."
+    "createNew": "Create new folder...",
+    "renameFolder": "Rename {{name}}",
+    "deleteFolder": "Delete {{name}}",
+    "confirmRename": "Confirm rename",
+    "cancelRename": "Cancel rename"
   },
   "imageLightbox": {
     "loadFailed": "Failed to load image",
@@ -84,14 +90,27 @@
     "emptyMessage": "No options available",
     "noResultsMessage": "No matches",
     "uncategorized": "Uncategorized",
-    "clear": "None"
+    "clear": "None",
+    "clearSearch": "Clear search"
   },
   "expandedTextEditor": {
     "collapseEditor": "Collapse editor",
     "expandEditor": "Expand editor",
     "hideMacros": "Hide Macros",
     "insertMacro": "Insert Macro",
-    "searchMacros": "Search macros..."
+    "searchMacros": "Search macros...",
+    "clearMacroSearch": "Clear macro search",
+    "find": "Find",
+    "findAndReplace": "Find & Replace",
+    "findPlaceholder": "Find in this field…",
+    "clearFind": "Clear find text",
+    "previousMatch": "Previous match",
+    "nextMatch": "Next match",
+    "closeFind": "Close find controls",
+    "replacePlaceholder": "Replace with…",
+    "replaceWith": "Replace with",
+    "replace": "Replace",
+    "replaceAll": "Replace All"
   },
   "spindle": {
     "floatWidget": "Float Widget",

@@ -1,5 +1,7 @@
-import { useLayoutEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
+import { useEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
 import { createSandboxFrame } from './sandbox-frame'
+import { scheduleSpindleDomTask } from './browser-scheduler'
+import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 
 export interface SpindleMessageWidgetRenderOptions {
   messageId: string
@@ -34,7 +36,7 @@ export function upsertMessageWidget(
   options: SpindleMessageWidgetRenderOptions,
   onMessage?: (payload: unknown) => void,
   corsProxy?: (url: string, options?: any) => Promise<any>,
-): void {
+): () => void {
   const list = widgetsByMessage.get(options.messageId) || []
   const nextRecord: MessageWidgetRecord = { ...options, extensionId, onMessage, corsProxy }
   const idx = list.findIndex((w) => w.extensionId === extensionId && w.widgetId === options.widgetId)
@@ -42,6 +44,20 @@ export function upsertMessageWidget(
   else list[idx] = nextRecord
   widgetsByMessage.set(options.messageId, list)
   notify()
+  const messageId = nextRecord.messageId
+
+  let active = true
+  return () => {
+    if (!active) return
+    active = false
+    const currentList = widgetsByMessage.get(messageId)
+    if (!currentList) return
+    const currentIndex = currentList.indexOf(nextRecord)
+    if (currentIndex === -1) return
+    currentList.splice(currentIndex, 1)
+    if (currentList.length === 0) widgetsByMessage.delete(messageId)
+    notify()
+  }
 }
 
 export function removeMessageWidget(extensionId: string, messageId: string, widgetId: string): void {
@@ -84,32 +100,48 @@ function MessageWidgetFrame({ widget }: { widget: MessageWidgetRecord }): ReactE
   const hostRef = useRef<HTMLDivElement | null>(null)
   const widgetKey = `${widget.extensionId}:${widget.messageId}:${widget.widgetId}:${hashWidgetHtml(widget.html)}`
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const cachedHeight = widgetHeightCache.get(widgetKey)
-    const frame = createSandboxFrame(widget.extensionId, {
-      html: widget.html,
-      autoResize: true,
-      minHeight: widget.minHeight ?? 40,
-      maxHeight: widget.maxHeight ?? 4000,
-      ...(cachedHeight ? { initialHeight: cachedHeight } : {}),
-    }, widget.corsProxy)
-    frame.element.setAttribute('data-spindle-message-widget', widget.widgetId)
-    frame.element.setAttribute('data-spindle-extension-id', widget.extensionId)
-    frame.element.style.margin = '12px 0'
-    const unsubscribe = frame.onMessage((payload) => widget.onMessage?.(payload))
-    const resizeObserver = new ResizeObserver(() => {
-      const height = Math.round(frame.element.getBoundingClientRect().height)
-      if (height > 0) widgetHeightCache.set(widgetKey, height)
+
+    let dispose: (() => void) | null = null
+    const cancel = scheduleSpindleDomTask(() => {
+      if (!host.isConnected) return
+
+      const cachedHeight = widgetHeightCache.get(widgetKey)
+      const frame = createSandboxFrame(widget.extensionId, {
+        html: widget.html,
+        autoResize: true,
+        minHeight: widget.minHeight ?? 40,
+        maxHeight: widget.maxHeight ?? 4000,
+        ...(cachedHeight ? { initialHeight: cachedHeight } : {}),
+      }, widget.corsProxy)
+      frame.element.setAttribute('data-spindle-message-widget', widget.widgetId)
+      frame.element.setAttribute('data-spindle-extension-id', widget.extensionId)
+      frame.element.style.margin = '12px 0'
+      const unsubscribe = frame.onMessage((payload) => widget.onMessage?.(payload))
+      const resizeObserver = new ResizeObserver(() => {
+        const height = Math.round(frame.element.getBoundingClientRect().height)
+        if (height > 0) widgetHeightCache.set(widgetKey, height)
+      })
+      resizeObserver.observe(frame.element)
+      // The scheduled insertion can happen well after the message row was
+      // measured. Notify the list before mutating the row so its resize policy
+      // treats this as programmatic content expansion, not backward scrolling.
+      dispatchMessageContentLayout(host, { preserveScrollAnchor: true })
+      host.replaceChildren(frame.element)
+
+      dispose = () => {
+        unsubscribe()
+        resizeObserver.disconnect()
+        frame.destroy()
+        host.replaceChildren()
+      }
     })
-    resizeObserver.observe(frame.element)
-    host.replaceChildren(frame.element)
+
     return () => {
-      unsubscribe()
-      resizeObserver.disconnect()
-      frame.destroy()
-      host.replaceChildren()
+      cancel()
+      dispose?.()
     }
   }, [widget, widgetKey])
 

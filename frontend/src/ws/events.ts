@@ -13,4 +13,5 @@ export type {
   GroupRoundCompletePayload,
   SpindleToastPayload,
   SpindleThemeOverridesPayload,
+  WallpaperUploadProgressPayload,
 } from '@/types/ws-events'

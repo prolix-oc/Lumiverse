@@ -11,20 +11,28 @@ import type {
   RegexPlacement,
   RegexScope,
   RegexTarget,
+  RegexAction,
+  RegexActionEffect,
 } from "../types/regex-script";
 import type { MacroEnv } from "../macros/types";
 import { evaluate } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
 import {
-  regexCollectSandboxed,
+  regexCaptureReplacementsSandboxed,
   regexReplaceSandboxed,
   regexTestSandboxed,
   RegexTimeoutError,
-  type SandboxMatch,
+  type SandboxCaptureReplacement,
 } from "../utils/regex-sandbox";
+import { substituteRegexCaptures as substituteRegexCapturesCore } from "../utils/regex-sandbox-core";
+import {
+  buildRegexActionCaptureTemplate,
+  decorateRegexActionReplacements,
+} from "../utils/regex-actions";
 
 const REGEX_SCRIPT_TIMEOUT_MS = 500;
 const REGEX_SLOW_WARNING_MS = 5_000;
+const REGEX_PERFORMANCE_ENGINE_VERSION = 2;
 
 type RegexPerformanceSource = "prompt_backend" | "response_backend" | "display_backend" | "display_client";
 
@@ -36,6 +44,7 @@ interface RegexPerformanceMetadata {
   detected_at: number;
   source: RegexPerformanceSource;
   version: number;
+  engine_version: number;
 }
 
 export interface RegexPerformanceIssue {
@@ -61,13 +70,18 @@ interface ApplyRegexScriptOptions {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const VALID_PLACEMENTS = new Set(["user_input", "ai_output", "world_info", "reasoning"]);
+const VALID_PLACEMENTS = new Set(["user_input", "ai_output", "world_info", "reasoning", "memory"]);
 const VALID_SCOPES = new Set(["global", "character", "chat"]);
 const VALID_TARGETS = new Set(["prompt", "response", "display"]);
 const VALID_FLAGS = new Set(["d", "g", "i", "m", "s", "u", "v", "y"]);
 const VALID_MACRO_MODES = new Set(["none", "raw", "escaped", "after"]);
 const MAX_PATTERN_LENGTH = 10_000;
+const MAX_REGEX_ACTIONS = 50;
+const MAX_REGEX_ACTION_FIELD_LENGTH = 10_000;
+const REGEX_ACTION_ID_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,63}$/;
+const REGEX_ACTION_STATE_KEY_RE = /^[A-Za-z][A-Za-z0-9_:.-]{0,127}$/;
 const PRESET_REGEX_ENABLED_SETTING_PREFIX = "presetRegexEnabled:";
+const IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY = "imported_script_id";
 
 interface RegexMutationContext {
   activePresetId?: string | null;
@@ -155,6 +169,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
   const value = raw as Partial<RegexPerformanceMetadata>;
   if (value.slow !== true) return null;
   if (typeof value.version !== "number") return null;
+  if (value.engine_version !== REGEX_PERFORMANCE_ENGINE_VERSION) return null;
   return {
     slow: true,
     timed_out: value.timed_out === true,
@@ -163,6 +178,7 @@ function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetad
     detected_at: typeof value.detected_at === "number" ? value.detected_at : 0,
     source: (value.source as RegexPerformanceSource) || "display_backend",
     version: value.version,
+    engine_version: value.engine_version,
   };
 }
 
@@ -219,6 +235,7 @@ export function reportRegexScriptPerformance(
       detected_at: Math.floor(Date.now() / 1000),
       source: issue.source ?? "display_backend",
       version: script.updated_at,
+      engine_version: REGEX_PERFORMANCE_ENGINE_VERSION,
     } satisfies RegexPerformanceMetadata,
   };
 
@@ -298,6 +315,7 @@ export function rowToRegexScript(row: any): RegexScript {
   return {
     ...row,
     script_id: row.script_id || "",
+    actions: normalizeRegexActions(parseJsonArray(row.actions)),
     placement: JSON.parse(row.placement),
     target,
     trim_strings: JSON.parse(row.trim_strings),
@@ -309,6 +327,73 @@ export function rowToRegexScript(row: any): RegexScript {
     run_on_edit: !!row.run_on_edit,
     disabled: !!row.disabled,
   };
+}
+
+function parseJsonArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeRegexActions(value: unknown): RegexAction[] {
+  if (!Array.isArray(value)) return [];
+  const actions: RegexAction[] = [];
+  for (const raw of value.slice(0, MAX_REGEX_ACTIONS)) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const id = typeof item.id === "string" ? item.id.trim() : "";
+    const type = item.type === "append" || item.type === "send" || item.type === "effects" ? item.type : null;
+    if (!REGEX_ACTION_ID_RE.test(id) || !type) continue;
+    const effects = Array.isArray(item.effects)
+      ? item.effects.slice(0, 16).flatMap((rawEffect): RegexActionEffect[] => {
+          if (!rawEffect || typeof rawEffect !== "object") return [];
+          const effect = rawEffect as Record<string, unknown>;
+          if (effect.type === "set_state") {
+            const key = typeof effect.key === "string" ? effect.key.trim() : "";
+            if (!REGEX_ACTION_STATE_KEY_RE.test(key)) return [];
+            return [{
+              type: "set_state",
+              key,
+              value: typeof effect.value === "string"
+                ? effect.value.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH)
+                : "",
+            }];
+          }
+          if (effect.type === "draft") {
+            return [{
+              type: "draft",
+              content: typeof effect.content === "string"
+                ? effect.content.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH)
+                : "",
+              mode: effect.mode === "append" ? "append" : "replace",
+            }];
+          }
+          if (effect.type === "fork") return [{ type: "fork" }];
+          return [];
+        })
+      : [];
+    const compatibleEffects = type === "effects"
+      ? effects
+      : effects.filter((effect) => effect.type === "set_state");
+    if (type === "effects" && compatibleEffects.length === 0) continue;
+    actions.push({
+      id,
+      type,
+      multi_select: type === "effects" ? false : item.multi_select === true,
+      cost: typeof item.cost === "string" ? item.cost.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "1",
+      limit: typeof item.limit === "string" ? item.limit.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "3",
+      title: typeof item.title === "string" ? item.title.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      subtitle: typeof item.subtitle === "string" ? item.subtitle.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      content: typeof item.content === "string" ? item.content.slice(0, MAX_REGEX_ACTION_FIELD_LENGTH) : "",
+      ...(compatibleEffects.length > 0 ? { effects: compatibleEffects } : {}),
+    });
+  }
+  return actions;
 }
 
 function validateFlags(flags: string): boolean {
@@ -356,6 +441,60 @@ function validateInput(input: CreateRegexScriptInput | UpdateRegexScriptInput, i
 
   if (input.find_regex !== undefined && input.find_regex.length > MAX_PATTERN_LENGTH) {
     return "find_regex exceeds maximum length";
+  }
+  if (input.actions !== undefined) {
+    if (!Array.isArray(input.actions)) return "actions must be an array";
+    if (input.actions.length > MAX_REGEX_ACTIONS) return `actions exceeds maximum length (${MAX_REGEX_ACTIONS})`;
+    const ids = new Set<string>();
+    for (const action of input.actions) {
+      if (!action || typeof action !== "object") return "actions contains an invalid entry";
+      if (!REGEX_ACTION_ID_RE.test(action.id?.trim?.() ?? "")) {
+        return "action id must start with a letter and contain only letters, numbers, _, :, . or -";
+      }
+      if (ids.has(action.id.trim())) return `duplicate action id: ${action.id.trim()}`;
+      ids.add(action.id.trim());
+      if (action.type !== "send" && action.type !== "append" && action.type !== "effects") {
+        return `Invalid action type: ${action.type}`;
+      }
+      if (action.multi_select !== undefined && typeof action.multi_select !== "boolean") {
+        return "action multi_select must be a boolean";
+      }
+      for (const field of [action.title, action.subtitle, action.content, action.cost ?? "1", action.limit ?? "3"]) {
+        if (typeof field !== "string") return "action title, subtitle, content, cost, and limit must be strings";
+        if (field.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "action field exceeds maximum length";
+      }
+      if (action.type !== "effects" && !action.content.trim()) return `action content is required: ${action.id}`;
+      if (action.type === "effects" && action.multi_select) return "effects-only actions cannot be multi-select";
+      if (action.type === "effects" && (!action.effects || action.effects.length === 0)) {
+        return `effects-only action requires at least one effect: ${action.id}`;
+      }
+      if (action.effects !== undefined) {
+        if (!Array.isArray(action.effects)) return "action effects must be an array";
+        if (action.effects.length > 16) return "action effects exceeds maximum length (16)";
+        for (const effect of action.effects) {
+          if (!effect || typeof effect !== "object" || !["set_state", "draft", "fork"].includes(effect.type)) {
+            return "action contains an unsupported effect";
+          }
+          if (effect.type === "set_state") {
+            if (typeof effect.key !== "string" || !REGEX_ACTION_STATE_KEY_RE.test(effect.key.trim())) {
+              return "state effect key must start with a letter and contain only letters, numbers, _, :, . or -";
+            }
+            if (typeof effect.value !== "string") return "state effect value must be a string";
+            if (effect.value.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "state effect value exceeds maximum length";
+          } else if (effect.type === "draft") {
+            if (typeof effect.content !== "string" || !effect.content.trim()) return "draft effect content is required";
+            if (effect.content.length > MAX_REGEX_ACTION_FIELD_LENGTH) return "draft effect content exceeds maximum length";
+            if (effect.mode !== "replace" && effect.mode !== "append") return "draft effect mode must be replace or append";
+          }
+        }
+        if (action.effects.filter((effect) => effect.type === "draft").length > 1) return "an action can contain only one draft effect";
+        if (action.effects.filter((effect) => effect.type === "fork").length > 1) return "an action can contain only one fork effect";
+        if (action.type !== "effects" && action.effects.some((effect) => effect.type === "draft" || effect.type === "fork")) {
+          return "draft and fork effects require an effects-only action";
+        }
+      }
+    }
+    input.actions = normalizeRegexActions(input.actions);
   }
   if (input.flags !== undefined && !validateFlags(input.flags)) {
     return "Invalid flags — allowed: d, g, i, m, s, u, v, y";
@@ -416,6 +555,40 @@ function normalizeScriptId(raw: string): string {
     .toLowerCase()
     .replace(/[\s\-]+/g, "_")
     .replace(/[^a-z0-9_]/g, "");
+}
+
+function isPlainMetadataRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mapRegexScriptPersistenceError(err: unknown): string | null {
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  if (
+    message.includes("idx_regex_scripts_script_id")
+    || message.includes("UNIQUE constraint failed: regex_scripts.user_id, regex_scripts.script_id")
+  ) {
+    return "script_id already exists";
+  }
+  return null;
+}
+
+function prepareCharacterBoundImportedScript<T extends Record<string, any>>(input: T, source: string): T {
+  const importedScriptId = typeof input.script_id === "string"
+    ? normalizeScriptId(input.script_id)
+    : "";
+  const metadata = isPlainMetadataRecord(input.metadata) ? { ...input.metadata } : {};
+  metadata.source = source;
+  if (importedScriptId) {
+    metadata[IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY] = importedScriptId;
+  }
+
+  // Character-bound regexes are rebound per imported character, so their
+  // script_id must not remain globally unique across the whole user.
+  return {
+    ...input,
+    script_id: "",
+    metadata,
+  };
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -489,39 +662,46 @@ export function createRegexScript(
   const activePresetId = normalizeOptionalId(context?.activePresetId);
   const disabled = resolveCreateDisabledState(input, activePresetId);
 
-  getDb()
-    .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      id,
-      userId,
-      input.name.trim(),
-      input.script_id ?? "",
-      input.find_regex,
-      input.replace_string ?? "",
-      input.flags ?? "gi",
-      JSON.stringify(input.placement ?? ["ai_output"]),
-      input.scope ?? "global",
-      input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
-      JSON.stringify(input.target ?? ["response"]),
-      input.min_depth ?? null,
-      input.max_depth ?? null,
-      JSON.stringify(input.trim_strings ?? []),
-      input.run_on_edit ? 1 : 0,
-       input.substitute_macros ?? "none",
-       disabled ? 1 : 0,
-       input.sort_order ?? 0,
-      input.description ?? "",
-      input.folder ?? "",
-      input.pack_id ?? null,
-      input.preset_id ?? null,
-      input.character_id ?? null,
-      JSON.stringify(input.metadata ?? {}),
-      now,
-      now
-    );
+  try {
+    getDb()
+      .query(
+        `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, pack_id, preset_id, character_id, metadata, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        userId,
+        input.name.trim(),
+        input.script_id ?? "",
+        input.find_regex,
+        input.replace_string ?? "",
+        JSON.stringify(input.actions ?? []),
+        input.flags ?? "gi",
+        JSON.stringify(input.placement ?? ["ai_output"]),
+        input.scope ?? "global",
+        input.scope === "global" || !input.scope ? null : (input.scope_id ?? null),
+        JSON.stringify(input.target ?? ["response"]),
+        input.min_depth ?? null,
+        input.max_depth ?? null,
+        JSON.stringify(input.trim_strings ?? []),
+        input.run_on_edit ? 1 : 0,
+        input.substitute_macros ?? "none",
+        disabled ? 1 : 0,
+        input.sort_order ?? 0,
+        input.description ?? "",
+        input.folder ?? "",
+        input.pack_id ?? null,
+        input.preset_id ?? null,
+        input.character_id ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        now,
+        now
+      );
+  } catch (err) {
+    const mapped = mapRegexScriptPersistenceError(err);
+    if (mapped) return mapped;
+    throw err;
+  }
 
   const script = getRegexScript(userId, id)!;
   if (script.preset_id && script.preset_id === activePresetId) {
@@ -583,6 +763,7 @@ export function updateRegexScript(
   if (nextInput.script_id !== undefined) { fields.push("script_id = ?"); values.push(nextInput.script_id); }
   if (nextInput.find_regex !== undefined) { fields.push("find_regex = ?"); values.push(nextInput.find_regex); }
   if (nextInput.replace_string !== undefined) { fields.push("replace_string = ?"); values.push(nextInput.replace_string); }
+  if (nextInput.actions !== undefined) { fields.push("actions = ?"); values.push(JSON.stringify(nextInput.actions)); }
   if (nextInput.flags !== undefined) { fields.push("flags = ?"); values.push(nextInput.flags); }
   if (nextInput.placement !== undefined) { fields.push("placement = ?"); values.push(JSON.stringify(nextInput.placement)); }
   if (nextInput.scope !== undefined) { fields.push("scope = ?"); values.push(nextInput.scope); }
@@ -607,7 +788,13 @@ export function updateRegexScript(
   values.push(id);
   values.push(userId);
 
-  getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  try {
+    getDb().query(`UPDATE regex_scripts SET ${fields.join(", ")} WHERE id = ? AND user_id = ?`).run(...values);
+  } catch (err) {
+    const mapped = mapRegexScriptPersistenceError(err);
+    if (mapped) return mapped;
+    throw err;
+  }
 
   const updated = getRegexScript(userId, id)!;
   if (existing.preset_id && existing.preset_id !== updated.preset_id) {
@@ -681,8 +868,8 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
 
   getDb()
     .query(
-      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO regex_scripts (id, user_id, name, script_id, find_regex, replace_string, actions, flags, placement, scope, scope_id, target, min_depth, max_depth, trim_strings, run_on_edit, substitute_macros, disabled, sort_order, description, folder, metadata, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
@@ -691,6 +878,7 @@ export function duplicateRegexScript(userId: string, id: string): RegexScript | 
       "", // script_id intentionally blank on duplicate — must be unique
       existing.find_regex,
       existing.replace_string,
+      JSON.stringify(existing.actions),
       existing.flags,
       JSON.stringify(existing.placement),
       existing.scope,
@@ -753,6 +941,106 @@ export function toggleRegexScript(
   return updated;
 }
 
+type RegexToggleRow = { id: string; preset_id?: string | null; disabled: number };
+
+function toggleRegexScriptRows(
+  userId: string,
+  rows: RegexToggleRow[],
+  disabled: boolean,
+  activePresetId: string | null,
+): { changedIds: string[]; skippedIds: string[] } {
+  const changedIds: string[] = [];
+  const skippedIds: string[] = [];
+  const targets: Array<{ id: string; preset_id: string | null }> = [];
+
+  for (const row of rows) {
+    if (row.preset_id && row.preset_id !== activePresetId) {
+      skippedIds.push(row.id);
+      continue;
+    }
+    if (row.disabled === (disabled ? 1 : 0)) {
+      continue;
+    }
+    targets.push({ id: row.id, preset_id: row.preset_id ?? null });
+  }
+
+  if (targets.length === 0) {
+    return { changedIds, skippedIds };
+  }
+
+  const db = getDb();
+  const now = Math.floor(Date.now() / 1000);
+  const targetIds = targets.map((t) => t.id);
+  const placeholders = targetIds.map(() => "?").join(", ");
+
+  db.transaction(() => {
+    db.query(`UPDATE regex_scripts SET disabled = ?, updated_at = ? WHERE id IN (${placeholders}) AND user_id = ?`)
+      .run(disabled ? 1 : 0, now, ...targetIds, userId);
+  })();
+
+  for (const target of targets) {
+    changedIds.push(target.id);
+    if (target.preset_id) {
+      setPresetBoundScriptEnabledInRestoreList(userId, target.preset_id, target.id, !disabled);
+    }
+    const updated = getRegexScript(userId, target.id);
+    if (updated) {
+      eventBus.emit(EventType.REGEX_SCRIPT_CHANGED, { id: target.id, script: updated }, userId);
+    }
+  }
+
+  return { changedIds, skippedIds };
+}
+
+/**
+ * Bulk enable/disable an explicit set of regex scripts.
+ *
+ * Missing / cross-user IDs are ignored. Scripts bound to a preset other than
+ * the active one are returned in skippedIds, matching per-script toggle safety.
+ */
+export function toggleRegexScriptsByIds(
+  userId: string,
+  ids: string[],
+  disabled: boolean,
+  context?: RegexMutationContext,
+): { changedIds: string[]; skippedIds: string[] } {
+  const uniqueIds = [...new Set(ids)];
+  if (uniqueIds.length === 0) return { changedIds: [], skippedIds: [] };
+
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const unorderedRows = getDb()
+    .query(`SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND id IN (${placeholders})`)
+    .all(userId, ...uniqueIds) as RegexToggleRow[];
+  const rowsById = new Map(unorderedRows.map((row) => [row.id, row]));
+  const rows = uniqueIds.flatMap((id) => {
+    const row = rowsById.get(id);
+    return row ? [row] : [];
+  });
+
+  return toggleRegexScriptRows(userId, rows, disabled, normalizeOptionalId(context?.activePresetId));
+}
+
+/**
+ * Bulk enable/disable every regex script in a folder.
+ *
+ * Scripts bound to a preset other than the active one are skipped (mirroring
+ * per-script toggle behavior). Scripts bound to the active preset have their
+ * enablement persisted to the preset restore list.
+ */
+export function toggleRegexScriptsByFolder(
+  userId: string,
+  folder: string,
+  disabled: boolean,
+  context?: RegexMutationContext,
+): { changedIds: string[]; skippedIds: string[] } {
+  const activePresetId = normalizeOptionalId(context?.activePresetId);
+  const rows = getDb()
+    .query("SELECT id, preset_id, disabled FROM regex_scripts WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as RegexToggleRow[];
+
+  return toggleRegexScriptRows(userId, rows, disabled, activePresetId);
+}
+
 // ── Character-bound query ────────────────────────────────────────────────────
 
 /** Returns all regex scripts scoped to a specific character (for bundling into .charx exports). */
@@ -766,36 +1054,85 @@ export function getCharacterBoundScripts(userId: string, characterId: string): R
 // ── Lookup by script_id ─────────────────────────────────────────────────────
 
 /** Find a regex script by its user-defined script_id. Returns null if not found or script_id is empty. */
-export function getRegexScriptByScriptId(userId: string, scriptId: string): RegexScript | null {
-  if (!scriptId) return null;
+export function getRegexScriptByScriptId(
+  userId: string,
+  scriptId: string,
+  context?: { characterId?: string | null; chatId?: string | null; presetId?: string | null },
+): RegexScript | null {
+  const normalizedScriptId = normalizeScriptId(scriptId);
+  if (!normalizedScriptId) return null;
+
+  const characterId = normalizeOptionalId(context?.characterId);
+  const chatId = normalizeOptionalId(context?.chatId);
+  const presetId = normalizeOptionalId(context?.presetId);
+  const conditions = [
+    "user_id = ?",
+    `(script_id = ? OR json_extract(metadata, '$.${IMPORTED_CHARACTER_SCRIPT_ID_METADATA_KEY}') = ?)`,
+  ];
+  const params: any[] = [userId, normalizedScriptId, normalizedScriptId];
+
+  const scopeConditions: string[] = ["scope = 'global'"];
+  if (characterId) {
+    scopeConditions.push("(scope = 'character' AND scope_id = ?)");
+    params.push(characterId);
+  }
+  if (chatId) {
+    scopeConditions.push("(scope = 'chat' AND scope_id = ?)");
+    params.push(chatId);
+  }
+  if (characterId || chatId) {
+    conditions.push(`(${scopeConditions.join(" OR ")})`);
+  }
+
   const row = getDb()
-    .query("SELECT * FROM regex_scripts WHERE user_id = ? AND script_id = ?")
-    .get(userId, scriptId) as any;
+    .query(
+      `SELECT * FROM regex_scripts
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY
+         CASE
+           WHEN scope = 'chat' AND scope_id = ? THEN 0
+           WHEN scope = 'character' AND scope_id = ? THEN 1
+           WHEN scope = 'global' THEN 2
+           ELSE 3
+         END ASC,
+         CASE
+           WHEN ? IS NOT NULL AND preset_id = ? THEN 0
+           WHEN preset_id IS NULL THEN 1
+           ELSE 2
+         END ASC,
+         CASE WHEN disabled = 0 THEN 0 ELSE 1 END ASC,
+         CASE WHEN script_id = ? THEN 0 ELSE 1 END ASC,
+         sort_order ASC,
+         created_at ASC
+       LIMIT 1`
+    )
+    .get(
+      ...params,
+      chatId,
+      characterId,
+      presetId,
+      presetId,
+      normalizedScriptId,
+    ) as any;
   return row ? rowToRegexScript(row) : null;
 }
 
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
 /**
- * Get active (enabled) scripts matching the given context, properly ordered by
- * scope resolution: global → character → chat, within each tier by sort_order ASC, created_at ASC.
+ * Active scripts for a chat context, ordered global → character → chat then
+ * sort_order, created_at. matchConditions/matchParams are the caller's column
+ * filter; bind order is userId, matchParams, scope ids.
  */
-export function getActiveScripts(
+function getScopedScripts(
   userId: string,
-  opts: { characterId?: string; chatId?: string; target: RegexTarget }
+  opts: { characterId?: string | null; chatId?: string | null },
+  matchConditions: string[],
+  matchParams: any[],
 ): RegexScript[] {
-  const db = getDb();
+  const conditions = ["user_id = ?", "disabled = 0", ...matchConditions];
+  const params: any[] = [userId, ...matchParams];
 
-  // target is stored as a JSON array (e.g. '["prompt","display"]'). Match scripts
-  // whose array contains the requested target using instr on the serialized form.
-  const conditions = [
-    "user_id = ?",
-    "disabled = 0",
-    `instr(target, '"' || ? || '"') > 0`,
-  ];
-  const params: any[] = [userId, opts.target];
-
-  // Scope filter: include global + character-scoped + chat-scoped matching the current context
   const scopeConditions: string[] = ["scope = 'global'"];
   if (opts.characterId) {
     scopeConditions.push("(scope = 'character' AND scope_id = ?)");
@@ -807,11 +1144,9 @@ export function getActiveScripts(
   }
   conditions.push(`(${scopeConditions.join(" OR ")})`);
 
-  const where = conditions.join(" AND ");
-
-  const rows = db
+  const rows = getDb()
     .query(
-      `SELECT * FROM regex_scripts WHERE ${where}
+      `SELECT * FROM regex_scripts WHERE ${conditions.join(" AND ")}
        ORDER BY
          CASE scope WHEN 'global' THEN 0 WHEN 'character' THEN 1 WHEN 'chat' THEN 2 END ASC,
          sort_order ASC, created_at ASC`
@@ -819,6 +1154,52 @@ export function getActiveScripts(
     .all(...params) as any[];
 
   return rows.map(rowToRegexScript);
+}
+
+/** Active scripts whose `target` array contains opts.target. */
+export function getActiveScripts(
+  userId: string,
+  opts: { characterId?: string; chatId?: string; target: RegexTarget }
+): RegexScript[] {
+  // target stored as a JSON array; instr matches the quoted needle.
+  return getScopedScripts(userId, opts, [`instr(target, '"' || ? || '"') > 0`], [opts.target]);
+}
+
+/**
+ * Active scripts carrying the "memory" placement, for stripping content at
+ * ingestion. Filters by placement, not target — a memory script applies
+ * whenever memory is written, regardless of prompt/response/display target.
+ */
+export function getActiveMemoryScripts(
+  userId: string,
+  opts: { characterId?: string | null; chatId?: string | null }
+): RegexScript[] {
+  // placement stored as a JSON array; instr matches the quoted needle.
+  return getScopedScripts(userId, opts, [`instr(placement, '"' || ? || '"') > 0`], ["memory"]);
+}
+
+/**
+ * Apply "memory"-placement scripts to text before it's persisted/embedded.
+ * No macro env at ingestion, so find/replace macros aren't resolved — memory
+ * scripts must use literal patterns.
+ */
+export async function applyMemoryIngestionRegex(
+  userId: string,
+  content: string,
+  opts: { characterId?: string | null; chatId?: string | null },
+): Promise<string> {
+  if (!content) return content;
+  const scripts = getActiveMemoryScripts(userId, opts);
+  if (scripts.length === 0) return content;
+  return applyRegexScripts(
+    content,
+    scripts,
+    "memory",
+    undefined,
+    undefined,
+    undefined,
+    { source: "prompt_backend" },
+  );
 }
 
 /**
@@ -829,39 +1210,12 @@ export function getRunOnEditScripts(
   userId: string,
   opts: { characterId?: string; chatId?: string }
 ): RegexScript[] {
-  const db = getDb();
-
-  const conditions = [
-    "user_id = ?",
-    "disabled = 0",
-    "run_on_edit = 1",
-    `instr(target, '"response"') > 0`,
-  ];
-  const params: any[] = [userId];
-
-  const scopeConditions: string[] = ["scope = 'global'"];
-  if (opts.characterId) {
-    scopeConditions.push("(scope = 'character' AND scope_id = ?)");
-    params.push(opts.characterId);
-  }
-  if (opts.chatId) {
-    scopeConditions.push("(scope = 'chat' AND scope_id = ?)");
-    params.push(opts.chatId);
-  }
-  conditions.push(`(${scopeConditions.join(" OR ")})`);
-
-  const where = conditions.join(" AND ");
-
-  const rows = db
-    .query(
-      `SELECT * FROM regex_scripts WHERE ${where}
-       ORDER BY
-         CASE scope WHEN 'global' THEN 0 WHEN 'character' THEN 1 WHEN 'chat' THEN 2 END ASC,
-         sort_order ASC, created_at ASC`
-    )
-    .all(...params) as any[];
-
-  return rows.map(rowToRegexScript);
+  return getScopedScripts(
+    userId,
+    opts,
+    ["run_on_edit = 1", `instr(target, '"response"') > 0`],
+    [],
+  );
 }
 
 /**
@@ -877,56 +1231,7 @@ export function substituteRegexCaptures(
   input: string,
   namedGroups?: Record<string, string>,
 ): string {
-  return template.replace(
-    /\$(?:(\$)|(&)|(`)|(')|(\d{1,2})|<([^>]*)>)/g,
-    (token, dollar, amp, backtick, quote, digits, name) => {
-      if (dollar !== undefined) return "$";
-      if (amp !== undefined) return fullMatch;
-      if (backtick !== undefined) return input.slice(0, offset);
-      if (quote !== undefined) return input.slice(offset + fullMatch.length);
-      if (digits !== undefined) {
-        const idx = parseInt(digits, 10);
-        if (idx >= 1 && idx <= groups.length) return groups[idx - 1] ?? "";
-        return token;
-      }
-      if (name !== undefined && namedGroups) return namedGroups[name] ?? token;
-      return token;
-    },
-  );
-}
-
-/**
- * Collect all regex matches from a string, returning match metadata needed
- * for capture-group substitution.
- */
-function collectMatches(content: string, regex: RegExp) {
-  const re = new RegExp(regex.source, regex.flags);
-  const matches: { fullMatch: string; index: number; groups: (string | undefined)[]; namedGroups?: Record<string, string> }[] = [];
-
-  if (re.global || re.sticky) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(content)) !== null) {
-      matches.push({
-        fullMatch: m[0],
-        index: m.index,
-        groups: Array.from(m).slice(1),
-        namedGroups: m.groups,
-      });
-      if (m[0].length === 0) re.lastIndex++;
-    }
-  } else {
-    const m = re.exec(content);
-    if (m) {
-      matches.push({
-        fullMatch: m[0],
-        index: m.index,
-        groups: Array.from(m).slice(1),
-        namedGroups: m.groups,
-      });
-    }
-  }
-
-  return matches;
+  return substituteRegexCapturesCore(template, fullMatch, groups, offset, input, namedGroups);
 }
 
 /**
@@ -934,7 +1239,7 @@ function collectMatches(content: string, regex: RegExp) {
  */
 function rebuildFromMatches(
   content: string,
-  matches: { fullMatch: string; index: number }[],
+  matches: { index: number; matchLength: number }[],
   replacements: string[],
 ): string {
   let out = "";
@@ -942,7 +1247,7 @@ function rebuildFromMatches(
   for (let i = 0; i < matches.length; i++) {
     out += content.slice(lastIdx, matches[i].index);
     out += replacements[i];
-    lastIdx = matches[i].index + matches[i].fullMatch.length;
+    lastIdx = matches[i].index + matches[i].matchLength;
   }
   out += content.slice(lastIdx);
   return out;
@@ -1044,37 +1349,63 @@ export async function applyRegexScripts(
         findRegex = await resolveFindMacros(findRegex, script.substitute_macros, macroEnv, options?.outFingerprint);
       }
 
+      const actionCapture = script.actions.length > 0 && options?.source === "display_backend"
+        ? buildRegexActionCaptureTemplate(script.actions)
+        : null;
+      const actionMatches = actionCapture
+        ? await regexCaptureReplacementsSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            actionCapture.template,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          )
+        : [];
+
       if (macroEnv && script.substitute_macros === "raw") {
         // "raw" mode: substitute capture groups into the replacement template
         // BEFORE macro resolution so $1, $2, etc. are available inside macros.
-        // Match collection runs in the regex sandbox so a pathological
-        // user-authored pattern can't freeze the event loop here.
-        const matches: SandboxMatch[] = await regexCollectSandboxed(
-          findRegex,
-          script.flags,
-          result,
-          REGEX_SCRIPT_TIMEOUT_MS,
-        );
-        if (matches.length > 0) {
-          const replacements = await Promise.all(
-            matches.map(async ({ fullMatch, groups, index, namedGroups }) => {
-              const withCaptures = substituteRegexCaptures(
-                script.replace_string, fullMatch, groups, index, result, namedGroups,
-              );
-              const evalResult = await evaluate(withCaptures, macroEnv, registry);
-              foldFingerprint(options?.outFingerprint, evalResult);
-              return evalResult.text;
-            }),
-          );
-          result = rebuildFromMatches(result, matches, replacements);
-        }
-      } else if (macroEnv && script.substitute_macros === "after") {
-        const substituted = await regexReplaceSandboxed(
+        // Capture interpolation runs in the regex sandbox so a pathological
+        // pattern can't freeze the event loop and large capture arrays never
+        // need to cross the worker boundary.
+        const matches: SandboxCaptureReplacement[] = await regexCaptureReplacementsSandboxed(
           findRegex,
           script.flags,
           result,
           script.replace_string,
           REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        if (matches.length > 0) {
+          const replacements = await Promise.all(
+            matches.map(async ({ replacement }) => {
+              const evalResult = await evaluate(replacement, macroEnv, registry);
+              foldFingerprint(options?.outFingerprint, evalResult);
+              return evalResult.text;
+            }),
+          );
+          result = rebuildFromMatches(
+            result,
+            matches,
+            actionCapture
+              ? decorateRegexActionReplacements(replacements, actionMatches, actionCapture.unpack, script.id)
+              : replacements,
+          );
+        }
+      } else if (macroEnv && script.substitute_macros === "after") {
+        const matches = await regexCaptureReplacementsSandboxed(
+          findRegex,
+          script.flags,
+          result,
+          script.replace_string,
+          REGEX_SCRIPT_TIMEOUT_MS,
+        );
+        const replacements = matches.map((match) => match.replacement);
+        const substituted = rebuildFromMatches(
+          result,
+          matches,
+          actionCapture
+            ? decorateRegexActionReplacements(replacements, actionMatches, actionCapture.unpack, script.id)
+            : replacements,
         );
         const evalResult = await evaluate(substituted, macroEnv, registry);
         foldFingerprint(options?.outFingerprint, evalResult);
@@ -1091,13 +1422,33 @@ export async function applyRegexScripts(
         } else if (macroEnv && script.substitute_macros !== "none") {
           replaceString = await resolveReplacementMacros(replaceString, script.substitute_macros, macroEnv, options?.outFingerprint);
         }
-        result = await regexReplaceSandboxed(
-          findRegex,
-          script.flags,
-          result,
-          replaceString,
-          REGEX_SCRIPT_TIMEOUT_MS,
-        );
+        if (actionCapture) {
+          const matches = await regexCaptureReplacementsSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            replaceString,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          );
+          result = rebuildFromMatches(
+            result,
+            matches,
+            decorateRegexActionReplacements(
+              matches.map((match) => match.replacement),
+              actionMatches,
+              actionCapture.unpack,
+              script.id,
+            ),
+          );
+        } else {
+          result = await regexReplaceSandboxed(
+            findRegex,
+            script.flags,
+            result,
+            replaceString,
+            REGEX_SCRIPT_TIMEOUT_MS,
+          );
+        }
       }
 
       // Apply trim_strings
@@ -1453,6 +1804,14 @@ export function importRegexScripts(
   for (let i = 0; i < scripts.length; i++) {
     let item = scripts[i];
 
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(`Script ${i}: invalid script`);
+      skipped++;
+      continue;
+    }
+    // Never mutate the parsed import payload supplied by the caller.
+    item = { ...item };
+
     // SillyTavern format conversion
     if (item.scriptName || item.findRegex) {
       const { pattern, flags } = parseRegexLiteral(item.findRegex ?? item.find_regex ?? "");
@@ -1477,6 +1836,7 @@ export function importRegexScripts(
         script_id: item.script_id ?? "",
         find_regex: pattern,
         replace_string: item.replaceString ?? item.replace_string ?? "",
+        actions: item.actions ?? [],
         flags,
         placement: placement.length > 0 ? placement : ["ai_output"],
         scope: item.scope ?? "global",
@@ -1505,8 +1865,9 @@ export function importRegexScripts(
       item.folder = folderOverride;
     }
 
-    // Stamp preset ownership if provided
-    if (presetIdOverride && !item.preset_id) {
+    // A top-level preset binding is authoritative. Imported scripts can carry
+    // their source preset_id, which must not survive an overwrite/re-import.
+    if (presetIdOverride) {
       item.preset_id = presetIdOverride;
     }
 
@@ -1517,8 +1878,39 @@ export function importRegexScripts(
 
     const result = createRegexScript(userId, item, context);
     if (typeof result === "string") {
-      errors.push(`Script "${item.name}": ${result}`);
-      skipped++;
+      // A stable script_id identifies the row an import should overwrite. Keep
+      // ownership fields off ordinary JSON updates so replacing a script does
+      // not silently detach it from its preset/pack/character. A preset import's
+      // explicit top-level binding is the one exception: it intentionally moves
+      // the existing regex to the imported preset.
+      const existing = result === "script_id already exists" && item.script_id
+        ? getRegexScriptByScriptId(userId, item.script_id)
+        : null;
+      if (!existing) {
+        errors.push(`Script "${item.name}": ${result}`);
+        skipped++;
+        continue;
+      }
+
+      const {
+        id: _id,
+        user_id: _userId,
+        pack_id: _packId,
+        preset_id: _importedPresetId,
+        character_id: _characterId,
+        created_at: _createdAt,
+        updated_at: _updatedAt,
+        ...updates
+      } = item;
+      if (presetIdOverride) updates.preset_id = presetIdOverride;
+
+      const overwritten = updateRegexScript(userId, existing.id, updates, context);
+      if (!overwritten || typeof overwritten === "string") {
+        errors.push(`Script "${item.name}": ${overwritten || "overwrite failed"}`);
+        skipped++;
+      } else {
+        imported++;
+      }
     } else {
       imported++;
     }
@@ -1545,10 +1937,12 @@ export function importCharacterBoundRegexScripts(
   userId: string,
   characterId: string,
   extensions: unknown,
+  options?: { bundleSource?: string },
 ): number {
   if (!extensions || typeof extensions !== "object") return 0;
   const ext = extensions as Record<string, any>;
   let imported = 0;
+  const bundleSource = options?.bundleSource ?? "card_bundle";
 
   // Lumiverse-native bundle: already internal-shaped, rebind directly (mirrors
   // the CHARX bundle import in charx-import.service).
@@ -1556,13 +1950,12 @@ export function importCharacterBoundRegexScripts(
   if (Array.isArray(bundle)) {
     for (const script of bundle) {
       if (!script || typeof script !== "object") continue;
-      const result = createRegexScript(userId, {
+      const result = createRegexScript(userId, prepareCharacterBoundImportedScript({
         ...(script as CreateRegexScriptInput),
         scope: "character",
         scope_id: characterId,
         character_id: characterId,
-        metadata: { ...(script.metadata ?? {}), source: "card_bundle" },
-      });
+      }, bundleSource));
       if (typeof result !== "string") imported++;
     }
     return imported;
@@ -1574,7 +1967,9 @@ export function importCharacterBoundRegexScripts(
   if (Array.isArray(stScripts) && stScripts.length > 0) {
     const result = importRegexScripts(userId, {
       scripts: stScripts.map((s) =>
-        s && typeof s === "object" ? { ...s, scope: "character", scope_id: characterId } : s,
+        s && typeof s === "object"
+          ? prepareCharacterBoundImportedScript({ ...s, scope: "character", scope_id: characterId }, bundleSource)
+          : s,
       ),
       character_id: characterId,
     });

@@ -7,18 +7,16 @@ import { useStore } from '@/store'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { Button } from '@/components/shared/FormComponents'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
+import { LoraDiscoveryStatus, useLoraDiscovery, type LoraModelLoader } from '../imageGenLoraEditor'
 import styles from './CharacterEditorPage.module.css'
 
 interface CharacterLoraTabProps {
   characterId: string
 }
 
-interface LoraOption {
-  id: string
-  label: string
-}
+const loadCharacterLoraModels: LoraModelLoader = (id, subtype) => imageGenConnectionsApi.modelsBySubtype(id, subtype)
 
-type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+
 
 export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps) {
   const { t } = useTranslation('panels')
@@ -30,12 +28,13 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
     [imageGenProfiles, activeImageGenConnectionId],
   )
 
-  const supportsLoraDiscovery =
-    !!activeConnection && (activeConnection.provider === 'comfyui' || activeConnection.provider === 'swarmui')
+  const loraDiscovery = useLoraDiscovery(
+    activeConnection,
+    loadCharacterLoraModels,
+    t('imageGenPanel.fetchLorasFailed'),
+  )
+  const supportsLoraDiscovery = loraDiscovery.supportsDiscovery
 
-  const [loras, setLoras] = useState<LoraOption[]>([])
-  const [lorasState, setLorasState] = useState<LoadState>('idle')
-  const [lorasError, setLorasError] = useState<string | null>(null)
 
   const [binding, setBinding] = useState<CharacterLoraBinding | null>(null)
   const [loraName, setLoraName] = useState('')
@@ -69,37 +68,32 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
       })
   }, [characterId])
 
-  useEffect(() => {
-    if (!supportsLoraDiscovery || !activeConnection) {
-      setLoras([])
-      setLorasState('idle')
-      return
-    }
 
-    let cancelled = false
-    setLorasState('loading')
-    setLorasError(null)
-    imageGenConnectionsApi
-      .modelsBySubtype(activeConnection.id, 'loras')
-      .then((res) => {
-        if (cancelled) return
-        setLoras(res.models.map((m) => ({ id: m.id, label: m.label })))
-        setLorasState('ready')
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setLorasError(err?.message || t('characterEditor.imageLora.fetchLorasFailed'))
-        setLorasState('error')
-      })
-    return () => {
-      cancelled = true
+  const handleClear = useCallback(async () => {
+    setSaving(true)
+    setStatusMessage(null)
+    try {
+      await charactersApi.deleteImageGenLora(characterId)
+      setBinding(null)
+      setLoraName('')
+      setWeightModel('1')
+      setWeightClip('1')
+      setBaseTags('')
+      setSourceUrl('')
+      setStatusMessage({ kind: 'ok', text: t('characterEditor.imageLora.cleared') })
+    } catch (err: any) {
+      setStatusMessage({ kind: 'error', text: err?.message || t('characterEditor.imageLora.clearFailed') })
+    } finally {
+      setSaving(false)
     }
-  }, [supportsLoraDiscovery, activeConnection, t])
+  }, [characterId, t])
 
   const handleSave = useCallback(async () => {
     const trimmedName = loraName.trim()
     if (!trimmedName) {
-      setStatusMessage({ kind: 'error', text: t('characterEditor.imageLora.pickBeforeSave') })
+      // If the user cleared the LoRA picker/filename, treat Save as a removal
+      // so they don't get stuck with a binding they can't clear.
+      await handleClear()
       return
     }
     const wm = Number(weightModel)
@@ -126,31 +120,12 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
     } finally {
       setSaving(false)
     }
-  }, [characterId, loraName, weightModel, weightClip, baseTags, sourceUrl, t])
-
-  const handleClear = useCallback(async () => {
-    setSaving(true)
-    setStatusMessage(null)
-    try {
-      await charactersApi.deleteImageGenLora(characterId)
-      setBinding(null)
-      setLoraName('')
-      setWeightModel('1')
-      setWeightClip('1')
-      setBaseTags('')
-      setSourceUrl('')
-      setStatusMessage({ kind: 'ok', text: t('characterEditor.imageLora.cleared') })
-    } catch (err: any) {
-      setStatusMessage({ kind: 'error', text: err?.message || t('characterEditor.imageLora.clearFailed') })
-    } finally {
-      setSaving(false)
-    }
-  }, [characterId, t])
+  }, [characterId, loraName, weightModel, weightClip, baseTags, sourceUrl, t, handleClear])
 
   const loraOptions = useMemo(() => {
     const seen = new Set<string>()
     const out: { value: string; label: string; sublabel?: string }[] = []
-    for (const lora of loras) {
+    for (const lora of loraDiscovery.loras) {
       if (seen.has(lora.id)) continue
       seen.add(lora.id)
       out.push({ value: lora.id, label: lora.label, sublabel: lora.id })
@@ -163,7 +138,7 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
       })
     }
     return out
-  }, [loras, loraName, t])
+  }, [loraDiscovery.loras, loraName, t])
 
   return (
     <div className={styles.fieldGroup} style={{ gap: 16 }}>
@@ -186,14 +161,7 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
         {!supportsLoraDiscovery ? (
           <div className={styles.fieldHelper}>{t('characterEditor.imageLora.discoveryHint')}</div>
         ) : null}
-        {lorasState === 'loading' ? (
-          <div className={styles.fieldHelper}>{t('characterEditor.imageLora.loadingLoras')}</div>
-        ) : null}
-        {lorasState === 'error' ? (
-          <div className={styles.fieldHelper}>
-            {t('characterEditor.imageLora.loadLorasFailed', { error: lorasError })}
-          </div>
-        ) : null}
+        <LoraDiscoveryStatus controller={loraDiscovery} />
         <SearchableSelect
           value={loraName}
           onChange={(value) => setLoraName(value)}
@@ -201,13 +169,14 @@ export default function CharacterLoraTab({ characterId }: CharacterLoraTabProps)
           placeholder={t('characterEditor.imageLora.pickLora')}
           searchPlaceholder={t('characterEditor.imageLora.searchLoras')}
           emptyMessage={
-            lorasState === 'ready' && loraOptions.length === 0
-              ? t('characterEditor.imageLora.noLorasOnConnection')
+            loraDiscovery.state === 'ready' && loraOptions.length === 0
+              ? t('imageGenPanel.noLorasFound')
               : t('characterEditor.imageLora.noMatchingLoras')
           }
           portal
           minWidth={320}
           clearable
+          disabled={supportsLoraDiscovery && loraDiscovery.state === 'loading'}
         />
         <input
           type="text"

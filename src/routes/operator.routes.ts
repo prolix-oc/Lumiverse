@@ -16,6 +16,15 @@ import {
   getDnsSettingsStatus,
   putDnsSettings,
 } from "../services/dns-settings.service";
+import {
+  getDiskWarningSettingsStatus,
+  putDiskWarningSettings,
+} from "../services/disk-warning-settings.service";
+import {
+  getSmartctlSnapshot,
+  getSmartctlStatus,
+  installSmartctl,
+} from "../services/smartctl.service";
 import { InvalidSettingError } from "../services/settings.service";
 
 const app = new Hono();
@@ -68,6 +77,49 @@ app.put("/dns", async (c) => {
     }
     return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
   }
+});
+
+app.get("/disk-warning", (c) => {
+  return c.json(getDiskWarningSettingsStatus());
+});
+
+app.put("/disk-warning", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json().catch(() => null);
+  try {
+    return c.json(putDiskWarningSettings(userId, body ?? {}));
+  } catch (err) {
+    if (err instanceof InvalidSettingError) {
+      return c.json({ error: err.message }, 400);
+    }
+    return c.json({ error: err instanceof Error ? err.message : "Unknown error" }, 500);
+  }
+});
+
+// ── SMART disk health ──────────────────────────────────────────────────────
+
+app.get("/smartctl", async (c) => {
+  const force = c.req.query("refresh") === "1";
+  const [status, snapshot] = await Promise.all([
+    getSmartctlStatus(),
+    getSmartctlSnapshot({ force }),
+  ]);
+  return c.json({ ...status, snapshot });
+});
+
+/**
+ * Attempts a fixed package-manager install only if this server already has
+ * the required OS privilege. It never runs sudo or solicits credentials over
+ * HTTP; the response includes the detected installation plan when elevation
+ * must happen in a local terminal instead.
+ */
+app.post("/smartctl/install", async (c) => {
+  const result = await installSmartctl();
+  if (!result.installed && result.error) {
+    const status = result.status.availability === "available" ? 200 : 409;
+    return c.json(result, status);
+  }
+  return c.json(result);
 });
 
 app.post("/database/maintenance", async (c) => {

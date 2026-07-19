@@ -8,15 +8,15 @@ import * as settingsSvc from "../services/settings.service";
 import { parsePagination } from "../services/pagination";
 import { REVALIDATE_PRIVATE, ifNoneMatchSatisfies } from "../utils/http-cache";
 import {
-  collectWorldInfoSources,
   collectVectorActivatedWorldInfoDetailed,
-  getWorldInfoVectorQueryPreview,
+  getWorldInfoVectorQueryDetails,
   mergeActivatedWorldInfoEntries,
-  applyVectorPriorityBoost,
-  type BookSource,
 } from "../services/prompt-assembly.service";
-import { deduplicateWorldInfoEntries } from "../services/world-info-dedup.service";
-import { activateWorldInfo, finalizeActivatedWorldInfoEntries, normalizeWorldInfoSettings, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
+import {
+  collectWorldInfoSources,
+  resolveWorldInfoCharacters,
+} from "../services/world-info-sources.service";
+import { activateWorldInfo, type WiState, type WorldInfoSettings } from "../services/world-info-activation.service";
 import type { WorldBookEntry } from "../types/world-book";
 import { makeAssistantCharacter } from "../types/character";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
@@ -25,6 +25,22 @@ import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/cha
 import { loadWorldBookVectorSettings } from "../services/world-book-vector-settings.service";
 
 const MAX_IMPORT_RESPONSE_BYTES = 100 * 1024 * 1024; // 100 MB
+const WORLD_BOOK_EXPORT_FORMATS: svc.WorldBookExportFormat[] = ["lumiverse", "character_book", "sillytavern"];
+
+function parseBulkWorldBookIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.every((id) => typeof id === "string") ? value : null;
+}
+
+function isWorldBookExportFormat(value: unknown): value is svc.WorldBookExportFormat {
+  return typeof value === "string" && WORLD_BOOK_EXPORT_FORMATS.includes(value as svc.WorldBookExportFormat);
+}
+
+function parseBulkWorldBookExportFormat(value: unknown): svc.WorldBookExportFormat | null {
+  if (value === undefined) return "lumiverse";
+  return isWorldBookExportFormat(value) ? value : null;
+}
+
 
 const app = new Hono();
 
@@ -71,11 +87,6 @@ function buildRerankLead(options: {
     return `It ranked #${options.rerankRank} after reranking${metricText}.`;
   }
   return `This candidate was pulled from vector search${metricText}.`;
-}
-
-function getWorldInfoGroupKey(entry: WorldBookEntry): string | null {
-  const groupName = typeof entry.group_name === "string" ? entry.group_name.trim() : "";
-  return groupName ? groupName.toLowerCase() : null;
 }
 
 function buildDiagnosticVectorOutcome(
@@ -184,142 +195,60 @@ function buildDiagnosticVectorOutcome(
 }
 
 function traceDiagnosticVectorHitOutcomes(
-  keywordEntries: WorldBookEntry[],
   vectorEntries: VectorHitEntry[],
+  dispositions: ReturnType<typeof mergeActivatedWorldInfoEntries>["vectorDispositions"],
   settingsInput?: Partial<WorldInfoSettings>,
-  bookSourceMap?: Map<string, BookSource>,
 ): Map<string, DiagnosticVectorHitOutcome> {
-  const settings = normalizeWorldInfoSettings(settingsInput);
-  const mergedEntries: WorldBookEntry[] = [];
-  const sources = new Map<string, { source: "keyword" | "vector"; score?: number }>();
-  const seen = new Set<string>();
-  const occupiedGroups = new Map<string, { entry: WorldBookEntry; source: "keyword" | "vector" }>();
   const outcomes = new Map<string, DiagnosticVectorHitOutcome>();
-  const maxActivatedTarget = settings.maxActivatedEntries > 0
-    ? settings.maxActivatedEntries
-    : Number.POSITIVE_INFINITY;
-
-  for (const entry of keywordEntries) {
-    if (seen.has(entry.id)) continue;
-    mergedEntries.push(entry);
-    seen.add(entry.id);
-    sources.set(entry.id, { source: "keyword" });
-    const groupKey = getWorldInfoGroupKey(entry);
-    if (groupKey) occupiedGroups.set(groupKey, { entry, source: "keyword" });
-  }
-
-  let finalized = finalizeActivatedWorldInfoEntries(mergedEntries, settings, {
-    skipGroupLogic: true,
-    preserveOrder: true,
-  });
 
   for (const item of vectorEntries) {
-    if (seen.has(item.entry.id)) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("already_keyword", {
-        entry: item.entry,
-        rerankRank: item.rerankRank,
-        finalScore: item.finalScore,
-        distance: item.distance,
-      }));
-      continue;
-    }
-
-    if (settings.minPriority > 0 && item.entry.priority < settings.minPriority && !item.entry.constant) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_min_priority", {
-        entry: item.entry,
-        minPriority: settings.minPriority,
-        rerankRank: item.rerankRank,
-        finalScore: item.finalScore,
-        distance: item.distance,
-      }));
-      continue;
-    }
-
-    const groupKey = getWorldInfoGroupKey(item.entry);
-    if (groupKey) {
-      const occupied = occupiedGroups.get(groupKey);
-      if (occupied) {
-        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_group", {
-          entry: item.entry,
-          conflictingEntry: occupied.entry,
-          conflictingSource: occupied.source,
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        }));
-        continue;
-      }
-    }
-
-    // Mirror prompt-assembly's merge: when the cap is full, apply a bounded
-    // score-derived priority boost to vector entries so they can compete on
-    // retrieval relevance instead of losing the order_value tiebreaker. See
-    // `applyVectorPriorityBoost` in prompt-assembly.service.ts.
-    const budgetFull = finalized.activatedEntries.length >= maxActivatedTarget;
-    const nextMergedEntries = [...mergedEntries, item.entry];
-    const finalizeInput = budgetFull
-      ? applyVectorPriorityBoost(nextMergedEntries, sources, item)
-      : nextMergedEntries;
-    const rawNextFinalized = finalizeActivatedWorldInfoEntries(finalizeInput, settings, {
-      skipGroupLogic: true,
-      preserveOrder: !budgetFull,
-    });
-    const nextFinalized = budgetFull
-      ? {
-          ...rawNextFinalized,
-          activatedEntries: rawNextFinalized.activatedEntries
-            .map((e) => nextMergedEntries.find((orig) => orig.id === e.id))
-            .filter((e): e is WorldBookEntry => !!e),
-        }
-      : rawNextFinalized;
-    const itemSurvived = nextFinalized.activatedEntries.some((entry) => entry.id === item.entry.id);
-    const grewActivationSet = nextFinalized.activatedEntries.length > finalized.activatedEntries.length;
-
-    if (!itemSurvived) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
-        budgetFull
-          ? "blocked_by_max_entries"
-          : settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
-        {
-          maxActivatedEntries: settings.maxActivatedEntries,
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        },
-      ));
-      continue;
-    }
-    if (!budgetFull && !grewActivationSet && !item.entry.constant) {
-      outcomes.set(item.entry.id, buildDiagnosticVectorOutcome(
-        settings.maxTokenBudget > 0 ? "blocked_by_token_budget" : "blocked_during_final_assembly",
-        {
-          rerankRank: item.rerankRank,
-          finalScore: item.finalScore,
-          distance: item.distance,
-        },
-      ));
-      continue;
-    }
-
-    mergedEntries.push(item.entry);
-    seen.add(item.entry.id);
-    sources.set(item.entry.id, { source: "vector", score: item.finalScore });
-    if (groupKey) occupiedGroups.set(groupKey, { entry: item.entry, source: "vector" });
-    finalized = nextFinalized;
-    outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("injected_vector", {
+    const disposition = dispositions.get(item.entry.id);
+    const common = {
+      entry: item.entry,
       rerankRank: item.rerankRank,
       finalScore: item.finalScore,
       distance: item.distance,
-    }));
-  }
-
-  const dedupResult = deduplicateWorldInfoEntries(mergedEntries, sources, bookSourceMap);
-  for (const removed of dedupResult.removed) {
-    if (!outcomes.has(removed.removedEntryId)) continue;
-    outcomes.set(removed.removedEntryId, buildDiagnosticVectorOutcome("deduplicated", {
-      keptEntryComment: removed.keptEntryComment,
-      dedupTier: removed.tier,
-    }));
+    };
+    switch (disposition?.code) {
+      case "activated":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("injected_vector", common));
+        break;
+      case "already_keyword":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("already_keyword", common));
+        break;
+      case "blocked_by_min_priority":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_min_priority", {
+          ...common,
+          minPriority: settingsInput?.minPriority,
+        }));
+        break;
+      case "blocked_by_group":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_group", {
+          ...common,
+          conflictingEntry: disposition.conflictingEntry,
+          conflictingSource: disposition.conflictingSource,
+        }));
+        break;
+      case "blocked_by_max_entries":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_max_entries", {
+          ...common,
+          maxActivatedEntries: settingsInput?.maxActivatedEntries,
+        }));
+        break;
+      case "blocked_by_token_budget":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_by_token_budget", common));
+        break;
+      case "deduplicated":
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("deduplicated", {
+          ...common,
+          keptEntryComment: disposition.dedupRecord?.keptEntryComment,
+          dedupTier: disposition.dedupRecord?.tier,
+        }));
+        break;
+      default:
+        outcomes.set(item.entry.id, buildDiagnosticVectorOutcome("blocked_during_final_assembly", common));
+        break;
+    }
   }
 
   return outcomes;
@@ -414,14 +343,77 @@ app.get("/:id", (c) => {
 
 app.get("/:id/export", (c) => {
   const userId = c.get("userId");
-  const format = (c.req.query("format") || "lumiverse") as svc.WorldBookExportFormat;
-  const validFormats: svc.WorldBookExportFormat[] = ["lumiverse", "character_book", "sillytavern"];
-  if (!validFormats.includes(format)) {
-    return c.json({ error: `Invalid format. Must be one of: ${validFormats.join(", ")}` }, 400);
+  const formatValue = c.req.query("format") || "lumiverse";
+  if (!isWorldBookExportFormat(formatValue)) {
+    return c.json({ error: `Invalid format. Must be one of: ${WORLD_BOOK_EXPORT_FORMATS.join(", ")}` }, 400);
   }
+  const format = formatValue;
   const result = svc.exportWorldBook(userId, c.req.param("id"), format);
   if (!result) return c.json({ error: "Not found" }, 404);
   return c.json(result);
+});
+
+app.post("/bulk-delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+
+  const result = await svc.bulkDeleteWorldBooks(userId, ids);
+  return c.json({ deleted: result.deleted });
+});
+
+app.post("/bulk-export", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; format?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+
+  const format = parseBulkWorldBookExportFormat(body?.format);
+  if (!format) {
+    return c.json({ error: `Invalid format. Must be one of: ${WORLD_BOOK_EXPORT_FORMATS.join(", ")}` }, 400);
+  }
+
+  const result = svc.bulkExportWorldBooks(userId, ids, format);
+  return new Response(new Uint8Array(result.bytes), {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${result.filename}"`,
+    },
+  });
+});
+
+app.post("/bulk-move-folder", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; folder?: unknown }>().catch(() => null);
+  const ids = body ? parseBulkWorldBookIds(body.ids) : null;
+  if (!ids) return c.json({ error: "ids must be a non-empty array of strings" }, 400);
+  if (typeof body?.folder !== "string") return c.json({ error: "folder must be a string" }, 400);
+
+  const result = svc.bulkUpdateWorldBooksFolder(userId, ids, body.folder);
+  return c.json({ updated: result.updated });
+});
+
+app.post("/folders/rename", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ old_name?: unknown; new_name?: unknown }>().catch(() => null);
+  const oldName = typeof body?.old_name === "string" ? body.old_name.trim() : "";
+  const newName = typeof body?.new_name === "string" ? body.new_name.trim() : "";
+  if (!oldName) return c.json({ error: "old_name is required" }, 400);
+  if (!newName) return c.json({ error: "new_name is required" }, 400);
+
+  const updated = svc.renameWorldBookFolder(userId, oldName, newName);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/folders/delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: unknown }>().catch(() => null);
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  const updated = svc.deleteWorldBookFolder(userId, name);
+  return c.json({ updated, count: updated.length });
 });
 
 app.put("/:id", async (c) => {
@@ -432,9 +424,9 @@ app.put("/:id", async (c) => {
   return c.json(book);
 });
 
-app.delete("/:id", (c) => {
+app.delete("/:id", async (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteWorldBook(userId, c.req.param("id"))) return c.json({ error: "Not found" }, 404);
+  if (!(await svc.deleteWorldBook(userId, c.req.param("id")))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 
@@ -492,8 +484,11 @@ app.post("/:id/diagnostics", async (c) => {
   const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
   const messages = chatsSvc.getMessages(userId, chat.id);
   const vectorSummary = svc.getWorldBookVectorSummary(userId, bookId)!;
+  const worldInfoCharacters = resolveWorldInfoCharacters(userId, character, chat);
   const attachmentSources = {
-    character: getCharacterWorldBookIds(character.extensions).includes(bookId),
+    character: worldInfoCharacters.some((sourceCharacter) =>
+      getCharacterWorldBookIds(sourceCharacter.extensions).includes(bookId)
+    ),
     persona: persona?.attached_world_book_id === bookId,
     global: globalWorldBooks.includes(bookId),
     chat: chatWorldBookIds.includes(bookId),
@@ -504,14 +499,20 @@ app.post("/:id/diagnostics", async (c) => {
   const worldBookVectorSettings = loadWorldBookVectorSettings(userId, {
     retrievalTopK: embeddings.retrieval_top_k,
   });
-  const queryPreview = await getWorldInfoVectorQueryPreview(userId, messages, chat.id);
+  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
+  const queryDetails = await getWorldInfoVectorQueryDetails(
+    userId,
+    messages,
+    chat.id,
+    worldInfoSettings,
+  );
+  const queryPreview = queryDetails.queryPreview;
   const blockerMessages: string[] = [];
 
   if (!isAttached) {
-    blockerMessages.push("This world book is not attached to the current character, active persona, global world books, or this chat's world books.");
+    blockerMessages.push("This world book is not attached to the active group lorebook scope, active persona, global world books, or this chat's world books.");
   }
 
-  const worldInfoSettings = (settingsSvc.getSetting(userId, "worldInfoSettings")?.value as Partial<WorldInfoSettings> | undefined) ?? {};
   const wiState: WiState = (chat.metadata?.wi_state as WiState) ?? {};
   const wiSources = collectWorldInfoSources(
     userId,
@@ -519,6 +520,7 @@ app.post("/:id/diagnostics", async (c) => {
     persona,
     globalWorldBooks,
     chatWorldBookIds,
+    { chat },
   );
   const bookEntries = wiSources.entries.filter((entry) => entry.world_book_id === bookId);
   const selectedEligibleEntries = bookEntries.filter((entry) =>
@@ -542,11 +544,21 @@ app.post("/:id/diagnostics", async (c) => {
       });
 
   const vectorDetail = isAttached
-    ? await collectVectorActivatedWorldInfoDetailed(userId, chat.id, wiSources.worldBookIds, wiSources.entries, messages)
+    ? await collectVectorActivatedWorldInfoDetailed(
+        userId,
+        chat.id,
+        wiSources.worldBookIds,
+        wiSources.entries,
+        messages,
+        undefined,
+        worldInfoSettings,
+      )
       : {
         entries: [],
         candidateTrace: [],
         queryPreview,
+        queryScope: queryDetails.queryScope,
+        lexicalQueryPreviews: [],
         eligibleCount: 0,
         hitsBeforeThreshold: 0,
         hitsAfterThreshold: 0,
@@ -572,12 +584,12 @@ app.post("/:id/diagnostics", async (c) => {
     vectorDetail.entries,
     worldInfoSettings,
     wiSources.bookSourceMap,
+    wiSources.bookNameMap,
   );
   const vectorHitOutcomes = traceDiagnosticVectorHitOutcomes(
-    wiResult.activatedEntries,
     vectorDetail.candidateTrace.filter((item) => item.retrievalStage === "shortlisted"),
+    mergedWorldInfo.vectorDispositions,
     worldInfoSettings,
-    wiSources.bookSourceMap,
   );
   const selectedCandidateTrace = vectorDetail.candidateTrace.filter((item) => item.entry.world_book_id === bookId);
   const selectedVectorEntries = vectorDetail.entries.filter((item) => item.entry.world_book_id === bookId);
@@ -709,6 +721,14 @@ app.post("/:id/diagnostics", async (c) => {
     },
     vector_summary: vectorSummary,
     query_preview: vectorDetail.queryPreview || queryPreview,
+    query_scope: {
+      configured_scan_depth: vectorDetail.queryScope.configuredScanDepth,
+      visible_messages_available: vectorDetail.queryScope.visibleMessagesAvailable,
+      vector_messages_selected: vectorDetail.queryScope.messagesSelected,
+      max_tokens: vectorDetail.queryScope.maxTokens,
+      token_truncated: vectorDetail.queryScope.tokenTruncated,
+    },
+    lexical_query_previews: vectorDetail.lexicalQueryPreviews,
     eligible_entries: isAttached ? selectedEligibleEntries.length : 0,
     retrieval: {
       top_k: vectorDetail.topK,
@@ -852,10 +872,22 @@ app.post("/import-character-book", async (c) => {
     return c.json({ error: "No embedded character book found" }, 400);
   }
 
+  const currentIds = getCharacterWorldBookIds(character.extensions);
+  const existing = svc.findImportedCharacterBookWorldBook(userId, characterId, currentIds);
+  if (existing) {
+    if (!currentIds.includes(existing.id)) {
+      const nextExtensions = setCharacterWorldBookIds(
+        { ...(character.extensions || {}) },
+        [...currentIds, existing.id],
+      );
+      await charSvc.updateCharacter(userId, characterId, { extensions: nextExtensions });
+    }
+    return c.json({ world_book: existing, entry_count: svc.listEntries(userId, existing.id).length });
+  }
+
   const result = svc.importCharacterBook(userId, characterId, character.name, characterBook, {
     signal: c.req.raw.signal,
   });
-  const currentIds = getCharacterWorldBookIds(character.extensions);
   const nextExtensions = setCharacterWorldBookIds(
     { ...(character.extensions || {}) },
     [...currentIds, result.worldBook.id],
@@ -930,7 +962,7 @@ app.post("/:id/entries/bulk", async (c) => {
     return c.json({ error: "entry_ids is required" }, 400);
   }
   try {
-    const result = svc.bulkOperateEntries(userId, bookId, body);
+    const result = await svc.bulkOperateEntries(userId, bookId, body);
     if (!result) return c.json({ error: "World book not found" }, 404);
     return c.json(result);
   } catch (err: any) {
@@ -959,9 +991,9 @@ app.post("/:id/entries/:eid/duplicate", async (c) => {
   return c.json(duplicated, 201);
 });
 
-app.delete("/:id/entries/:eid", (c) => {
+app.delete("/:id/entries/:eid", async (c) => {
   const userId = c.get("userId");
-  if (!svc.deleteEntry(userId, c.req.param("eid"))) return c.json({ error: "Not found" }, 404);
+  if (!(await svc.deleteEntry(userId, c.req.param("eid")))) return c.json({ error: "Not found" }, 404);
   return c.json({ success: true });
 });
 

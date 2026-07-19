@@ -161,12 +161,13 @@ select:focus-visible,
    inset:0, which triggers WebKit bug #237961 (bottom gap with
    viewport-fit=cover). iOS PWAs rely on the base styles in reset.css
    (height:100%, overflow:hidden) instead. */
-@media (display-mode: standalone) {
+@media (display-mode: standalone), (display-mode: window-controls-overlay) {
   html:not([data-ios-pwa]) {
     position: fixed;
     inset: 0;
     overflow: hidden;
     overscroll-behavior: none;
+    overscroll-behavior-x: none;
     background: var(--lumiverse-bg-deep, #0a0812);
   }
 
@@ -175,6 +176,7 @@ select:focus-visible,
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+    overscroll-behavior-x: none;
     /* Force GPU compositing layer — fixes backdrop-filter not painting
        in some Chromium PWA renderers (particularly Android WebAPK). */
     -webkit-transform: translateZ(0);

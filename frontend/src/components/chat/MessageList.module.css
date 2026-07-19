@@ -3,18 +3,23 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 20px;
-  padding-bottom: var(--lcs-input-safe-zone, 100px);
+  padding: 16px 20px 0;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--lumiverse-border) 55%, transparent) transparent;
   position: relative;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
 
 .list[data-group-chat] {
   padding-top: 0;
 }
+
+/* Scroll-time CSS suppression is handled in each component's own module CSS
+   via :global([data-scrolling]) selectors, since CSS module class names are
+   hashed and can't be targeted from this file. See BubbleMessage.module.css
+   and MessageContent.module.css for the actual rules. */
 
 .list::-webkit-scrollbar {
   width: 5px;
@@ -55,7 +60,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
+  width: 100%;
   contain: layout style;
 }
 
@@ -84,8 +89,7 @@
 
 @media (max-width: 600px) {
   .list {
-    padding: 8px;
-    padding-bottom: var(--lcs-input-safe-zone, 100px);
+    padding: 8px 8px 0;
   }
 
   .list[data-group-chat] {
@@ -95,8 +99,7 @@
 
 @media (max-width: 480px) {
   .list {
-    padding: 6px;
-    padding-bottom: var(--lcs-input-safe-zone, 100px);
+    padding: 6px 6px 0;
   }
 
   .list[data-group-chat] {

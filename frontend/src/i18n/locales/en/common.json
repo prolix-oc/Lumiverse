@@ -1,6 +1,11 @@
 {
   "appName": "Lumiverse",
   "home": "Home",
+  "safeTheme": {
+    "url": "Safe theme mode is active for this browser session. Custom CSS and component overrides are temporarily suppressed; reload without ?safe-theme=1 to restore them.",
+    "server": "Safe theme mode is active for this server. Custom CSS and component overrides are temporarily suppressed; unset LUMIVERSE_SAFE_THEME and restart to restore them.",
+    "both": "Safe theme mode is active from both the URL and server controls. Custom CSS and component overrides are temporarily suppressed."
+  },
   "actions": {
     "save": "Save",
     "cancel": "Cancel",
@@ -75,6 +80,7 @@
     "contextFixedOverBudget": "Fixed prompt overhead ({{fixed}} tokens) already exceeds the input budget by {{over}} tokens. Chat history is the only clip-eligible section, so reduce system/WI/preset content, raise Context Size, or lower Max Tokens.",
     "contextNoHistoryRoom": "Fixed prompt overhead leaves no room for chat history. System prompt and other fixed blocks are not clipped; raise Context Size, lower Max Tokens, or shorten fixed prompt content.",
     "contextClipped": "Clipped {{messages}} chat history message to fit the remaining history budget ({{tokens}} tokens dropped).",
+    "contextAnchorNearLimit": "Protected context is within {{remaining}} tokens of its anchor limit. Increase Context Size or lower Max Response before it can no longer fit.",
     "contextClipped_plural": "Clipped {{messages}} chat history messages to fit the remaining history budget ({{tokens}} tokens dropped).",
     "componentCrashed": "Custom {{name}} crashed — falling back to default",
     "overrideError": "{{name}} override: {{error}}",

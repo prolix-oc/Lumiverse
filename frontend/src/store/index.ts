@@ -16,6 +16,7 @@ import { createSpindleSlice } from './slices/spindle'
 import { createAuthSlice } from './slices/auth'
 import { createWorldInfoSlice } from './slices/world-info'
 import { createGroupChatSlice } from './slices/group-chat'
+import { createMultiplayerSlice } from './slices/multiplayer'
 import { createSpindlePlacementSlice } from './slices/spindle-placement'
 import { createPromptBreakdownSlice } from './slices/prompt-breakdown'
 import { createRegexSlice } from './slices/regex'
@@ -34,6 +35,9 @@ import { createConnectionSlice } from './slices/connection'
 import { createWeaverSlice } from './slices/weaver'
 import { createContainersSlice } from './slices/containers'
 import { registerUserScopedResetStore } from './user-scoped-reset'
+import { configurePresetSelectionCoordinator } from '@/lib/loom/preset-selection-coordinator'
+import { flushPresetForGeneration } from '@/lib/loom/preset-save-coordinator'
+
 
 export const useStore = create<AppStore>()((...a) => ({
   ...createChatSlice(...a),
@@ -52,6 +56,7 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createAuthSlice(...a),
   ...createWorldInfoSlice(...a),
   ...createGroupChatSlice(...a),
+  ...createMultiplayerSlice(...a),
   ...createSpindlePlacementSlice(...a),
   ...createPromptBreakdownSlice(...a),
   ...createRegexSlice(...a),
@@ -70,5 +75,11 @@ export const useStore = create<AppStore>()((...a) => ({
   ...createWeaverSlice(...a),
   ...createContainersSlice(...a),
 }))
+
+configurePresetSelectionCoordinator({
+  getActivePresetId: () => useStore.getState().activeLoomPresetId,
+  setActivePresetId: (presetId) => useStore.getState().setActiveLoomPreset(presetId),
+  flushPreset: flushPresetForGeneration,
+})
 
 registerUserScopedResetStore(useStore, useStore.getState())

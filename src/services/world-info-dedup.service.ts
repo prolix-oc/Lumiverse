@@ -1,6 +1,6 @@
 import type { WorldBookEntry } from "../types/world-book";
 
-type BookSource = "character" | "persona" | "chat" | "global";
+type BookSource = "character" | "persona" | "chat" | "global" | "peer";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +36,10 @@ const SOURCE_PRECEDENCE: Record<string, number> = {
   persona: 3,
   chat: 2,
   global: 1,
+  // A relayed peer lorebook ranks lowest: if a peer's entry near-duplicates a
+  // host-owned one, the host's authoritative copy wins the dedup. (0 is also the
+  // `?? 0` fallback for unknown sources, but we state it for intent.)
+  peer: 0,
 };
 
 const PUNCTUATION_PATTERN = /[^\w\s]/g;

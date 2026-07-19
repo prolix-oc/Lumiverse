@@ -5,8 +5,37 @@ import * as audioSvc from "../services/audio.service";
 import * as muxSvc from "../services/audio-mux.service";
 import * as chatsSvc from "../services/chats.service";
 import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
+import { contentTypeForFormat } from "../utils/audio-content-type";
+import type { TtsStreamChunk } from "../tts/types";
 
 const app = new Hono();
+const SSE_HEARTBEAT_MS = 5000;
+const SSE_AUDIO_CHUNK_BYTES = 48 * 1024;
+
+type StreamAudioPayload = {
+  kind: "bytes" | "audio_file";
+  mimeType: string;
+  base64: string;
+};
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (
+    err.name === "AbortError" || /aborted|aborterror/i.test(err.message)
+  );
+}
+
+function sseHeaders(origin: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  };
+  if (origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Access-Control-Allow-Credentials"] = "true";
+  }
+  return headers;
+}
 
 /** Synthesize speech — returns audio binary */
 app.post("/synthesize", async (c) => {
@@ -25,6 +54,7 @@ app.post("/synthesize", async (c) => {
       model: body.model,
       parameters: body.parameters,
       outputFormat: body.outputFormat,
+      signal: c.req.raw.signal,
     });
 
     return new Response(result.audioData, {
@@ -40,7 +70,7 @@ app.post("/synthesize", async (c) => {
   }
 });
 
-/** Synthesize speech with streaming — returns chunked audio */
+/** Synthesize speech with streaming — returns SSE-wrapped audio chunks */
 app.post("/synthesize/stream", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
@@ -49,53 +79,158 @@ app.post("/synthesize/stream", async (c) => {
     return c.json({ error: "text is required" }, 400);
   }
 
-  try {
-    const generator = ttsSvc.synthesizeStream(userId, {
-      connectionId: body.connectionId,
-      text: body.text,
-      voice: body.voice,
-      model: body.model,
-      parameters: body.parameters,
-      outputFormat: body.outputFormat,
-    });
+  const origin = c.req.header("origin") || "";
+  const fallbackMimeType = contentTypeForFormat(body.outputFormat);
+  const requestSignal = c.req.raw.signal;
+  const streamInput = {
+    connectionId: body.connectionId,
+    text: body.text,
+    voice: body.voice,
+    model: body.model,
+    parameters: body.parameters,
+    outputFormat: body.outputFormat,
+    signal: requestSignal,
+  };
 
-    const stream = new ReadableStream({
-      async pull(controller) {
+  let generator: AsyncGenerator<TtsStreamChunk, void, unknown> | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let closed = false;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+
+      const cleanup = () => {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+      };
+
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        cleanup();
         try {
-          const { value, done } = await generator.next();
-          if (done || value.done) {
-            controller.close();
-            return;
-          }
-          controller.enqueue(value.data);
+          controller.close();
         } catch {
-          // Client disconnected mid-stream; abandon the generator quietly so
-          // the AbortError doesn't bubble to app.onError as an opaque dump.
-          generator.return(undefined as any).catch(() => {});
-          try {
-            controller.close();
-          } catch {
-            /* already closed */
+          /* already closed */
+        }
+      };
+
+      const sendComment = () => {
+        if (closed) return false;
+        try {
+          controller.enqueue(encoder.encode(`:\n\n`));
+          return true;
+        } catch {
+          closed = true;
+          cleanup();
+          return false;
+        }
+      };
+
+      const sendEvent = (event: string, data: unknown) => {
+        if (closed) return false;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          return true;
+        } catch {
+          closed = true;
+          cleanup();
+          return false;
+        }
+      };
+
+      const emitAudioPayload = (payload: StreamAudioPayload) => sendEvent("audio", payload);
+
+      const emitChunkedBytes = (
+        kind: "bytes" | "audio_file",
+        mimeType: string,
+        data: Uint8Array,
+      ) => {
+        if (kind === "audio_file") {
+          return emitAudioPayload({
+            kind,
+            mimeType,
+            base64: Buffer.from(data).toString("base64"),
+          });
+        }
+
+        for (let offset = 0; offset < data.byteLength; offset += SSE_AUDIO_CHUNK_BYTES) {
+          const slice = data.subarray(offset, offset + SSE_AUDIO_CHUNK_BYTES);
+          if (!emitAudioPayload({
+            kind,
+            mimeType,
+            base64: Buffer.from(slice).toString("base64"),
+          })) {
+            return false;
           }
         }
-      },
-      cancel() {
-        generator.return(undefined as any);
-      },
-    });
+        return true;
+      };
 
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Transfer-Encoding": "chunked",
-        "Content-Disposition": "inline",
-      },
-    });
-  } catch (err: any) {
-    const msg = clampErrorMessage(describeProviderError(err, "TTS streaming failed"));
-    const status = /required|not found|unsupported|No API key|missing|connection|configured/i.test(msg) ? 400 : 502;
-    return c.json({ error: msg }, status);
-  }
+      heartbeat = setInterval(() => {
+        sendComment();
+      }, SSE_HEARTBEAT_MS);
+
+      void (async () => {
+        let emittedAudio = false;
+
+        const emitFallbackAudio = async () => {
+          const result = await ttsSvc.synthesize(userId, streamInput);
+          const data = new Uint8Array(result.audioData);
+          if (data.byteLength === 0) return true;
+          return emitChunkedBytes("bytes", result.contentType || fallbackMimeType, data);
+        };
+
+        try {
+          try {
+            generator = ttsSvc.synthesizeStream(userId, streamInput);
+            for await (const chunk of generator) {
+              if (closed || requestSignal.aborted) return;
+              if (chunk.done || chunk.data.byteLength === 0) continue;
+              const kind = chunk.kind || "bytes";
+              const mimeType = chunk.mimeType || fallbackMimeType;
+              emittedAudio = true;
+              if (!emitChunkedBytes(kind, mimeType, chunk.data)) return;
+            }
+          } catch (streamErr) {
+            if (closed || requestSignal.aborted || isAbortError(streamErr)) return;
+            if (!emittedAudio) {
+              try {
+                if (!(await emitFallbackAudio()) || closed || requestSignal.aborted) return;
+                sendEvent("done", { fallback: true });
+                return;
+              } catch (fallbackErr: any) {
+                const msg = clampErrorMessage(describeProviderError(fallbackErr, "TTS streaming failed"));
+                sendEvent("error", { error: msg });
+                return;
+              }
+            }
+            throw streamErr;
+          }
+
+          if (closed || requestSignal.aborted) return;
+          sendEvent("done", { fallback: false });
+        } catch (err: any) {
+          if (closed || requestSignal.aborted || isAbortError(err)) return;
+          const msg = clampErrorMessage(describeProviderError(err, "TTS streaming failed"));
+          sendEvent("error", { error: msg });
+        } finally {
+          generator?.return(undefined as any).catch(() => {});
+          close();
+        }
+      })();
+    },
+    cancel() {
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      generator?.return(undefined as any).catch(() => {});
+    },
+  });
+
+  return new Response(stream, { headers: sseHeaders(origin) });
 });
 
 /**

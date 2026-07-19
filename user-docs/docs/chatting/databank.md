@@ -1,3 +1,7 @@
+---
+title: Databank
+---
+
 # Databank
 
 The **Databank** is Lumiverse's document knowledge base. Drop reference material into a databank — worldbuilding notes, character backstories, rulebooks, transcripts, scraped articles — and it becomes retrievable context during chat. Documents are chunked, vectorized, and either pulled in automatically based on what's being said, or summoned on demand with a `#slug` mention.

@@ -5,12 +5,12 @@ import { enqueuePresetRegexOperation } from '@/lib/presetRegexQueue'
 
 export function usePresetRegexActivation() {
   const isAuthenticated = useStore((s) => s.isAuthenticated)
-  const settingsLoaded = useStore((s) => s.settingsLoaded)
+  const fullSettingsLoaded = useStore((s) => s.fullSettingsLoaded)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
   const previousPresetIdRef = useRef<string | null | undefined>(undefined)
 
   useEffect(() => {
-    if (!isAuthenticated || !settingsLoaded) {
+    if (!isAuthenticated || !fullSettingsLoaded) {
       previousPresetIdRef.current = undefined
       return
     }
@@ -25,5 +25,5 @@ export function usePresetRegexActivation() {
 
     if (previousPresetId === activeLoomPresetId) return
     void enqueuePresetRegexOperation(() => regexApi.switchPresetBound(previousPresetId, activeLoomPresetId)).catch(() => {})
-  }, [activeLoomPresetId, isAuthenticated, settingsLoaded])
+  }, [activeLoomPresetId, isAuthenticated, fullSettingsLoaded])
 }

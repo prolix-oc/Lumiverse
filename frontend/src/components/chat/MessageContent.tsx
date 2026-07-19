@@ -2,6 +2,7 @@ import { useMemo, useRef, useLayoutEffect, useState, useEffect, useCallback, use
 import { useTranslation } from 'react-i18next'
 import { marked } from 'marked'
 import { highlightCode } from '@/lib/codeHighlight'
+import { processMarkdownInHtmlIsland } from './htmlIslandMarkdown'
 import { parseOOC } from '@/lib/oocParser'
 import { createEmphasisAwareRenderer } from '@/lib/markedEmphasisRenderer'
 import { createStrictTildeTokenizer } from '@/lib/markedTokenizer'
@@ -10,17 +11,35 @@ import { resolveDisplayMacros } from '@/lib/resolveDisplayMacros'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { sanitizeHtmlIsland, sanitizeRichHtml } from '@/lib/richHtmlSanitizer'
 import {
+  dispatchCollapsibleToggleLayoutEvent,
+  findDetailsToggleLayoutTarget,
+} from './collapsibleLayout'
+import {
   dispatchMessageTagIntercepts,
   stripMessageTags,
   subscribeTagInterceptorRegistry,
   getTagInterceptorRegistryVersion,
 } from '@/lib/spindle/message-interceptors'
 import { SpindleMessageWidgets } from '@/lib/spindle/message-widgets'
+import {
+  dispatchMessageContentLayout,
+  MESSAGE_CONTENT_LAYOUT_EVENT,
+} from '@/lib/message-content-layout'
 import { useStore } from '@/store'
 import i18n from '@/i18n'
 import { useDisplayRegex } from '@/hooks/useDisplayRegex'
+import {
+  REGEX_SELECTIONS_CHANGED_EVENT,
+  dispatchRegexAction,
+  getRegexBlockSelectionCost,
+  isRegexSelectionPending,
+  type RegexActionActivation,
+  type ResolvedRegexActionPayload,
+} from '@/lib/regex/actionBus'
+import { toast } from '@/lib/toast'
 import { OOCBlock as OOCBlockComponent, OOCIrcChatRoom } from './ooc'
 import type { IrcEntry } from './ooc'
+import { hasImmediateUserReply } from './regexActionAvailability'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import styles from './MessageContent.module.css'
 import clsx from 'clsx'
@@ -30,10 +49,13 @@ interface MessageContentProps {
   isUser: boolean
   userName: string
   isStreaming?: boolean
-  lockStreamingHeight?: boolean
   messageId?: string
   chatId?: string
   depth?: number
+  characterNameOverride?: string
+  risuAssetMapOverride?: Record<string, string> | null
+  disableInterceptors?: boolean
+  findQuery?: string
 }
 
 // Custom renderer for sheld prose classes
@@ -313,7 +335,7 @@ marked.setOptions({
 
 const HTML_ISLAND_TOKEN = 'LUMIVERSE_HTML_ISLAND'
 const YOUTUBE_EMBED_TOKEN = 'LUMIVERSE_YOUTUBE_EMBED'
-const MESSAGE_CONTENT_LAYOUT_EVENT = 'lumiverse:message-content-layout'
+const DETAILS_TOGGLE_KEYS = new Set(['Enter', ' ', 'Spacebar'])
 const SPECIAL_PIECE_RE = new RegExp(`<!--(${HTML_ISLAND_TOKEN}|${YOUTUBE_EMBED_TOKEN})_(\\d+)-->`, 'g')
 const YOUTUBE_NOCOOKIE_ORIGIN = 'https://www.youtube-nocookie.com'
 const YOUTUBE_EMBED_PATH_RE = /^\/embed\/[A-Za-z0-9_-]{6,}$/
@@ -890,16 +912,6 @@ function renderIslandInlineMarkdownText(markdown: string): string {
   return `${leadingWhitespace}${html}${trailingWhitespace}`
 }
 
-const INLINE_CONTEXT_TAGS = new Set([
-  'button',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'label',
-  'option',
-  'select',
-  'summary',
-  'textarea',
-])
-
 function extractHtmlIslands(
   raw: string,
   isStreaming: boolean,
@@ -962,66 +974,12 @@ function extractHtmlIslands(
   return { content, islands }
 }
 
-/**
- * Convert markdown within HTML island text content to rendered HTML.
- * Preserves <style> blocks and HTML tag structure while running text nodes
- * through the full markdown parser, then unwraps single-paragraph results so
- * inline content inside HTML tags stays inline in Shadow DOM.
- */
 function processMarkdownInIsland(html: string): string {
-  // Protect <style> blocks — CSS selectors can contain '>' which breaks tag splitting
-  const styleBlocks: string[] = []
-  const shielded = html.replace(/<style[\s>][\s\S]*?<\/style\s*>/gi, (m) => {
-    styleBlocks.push(m)
-    return `<!--ISLAND_STYLE_${styleBlocks.length - 1}-->`
+  return processMarkdownInHtmlIsland(html, {
+    renderBlockText: renderIslandMarkdownText,
+    renderInlineText: renderIslandInlineMarkdownText,
+    normalizeHtml: normalizeLegacyFontTags,
   })
-
-  // Split into HTML tags (odd indices) and text content (even indices)
-  const parts = shielded.split(/(<[^>]*>)/)
-  let skipDepth = 0
-  const inlineCtxStack: string[] = []
-
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
-
-    // HTML tags — track elements whose content should not be processed
-    if (i % 2 === 1) {
-      if (/^<(pre|code|script)\b/i.test(part)) skipDepth++
-      else if (/^<\/(pre|code|script)\b/i.test(part)) skipDepth = Math.max(0, skipDepth - 1)
-
-      const openMatch = part.match(/^<([a-z][\w:-]*)\b/i)
-      const closeMatch = part.match(/^<\/([a-z][\w:-]*)\b/i)
-      const isSelfClose = /\/\s*>$/.test(part)
-      if (openMatch && !closeMatch && !isSelfClose) {
-        const tag = openMatch[1].toLowerCase()
-        if (INLINE_CONTEXT_TAGS.has(tag)) inlineCtxStack.push(tag)
-      } else if (closeMatch) {
-        const tag = closeMatch[1].toLowerCase()
-        if (INLINE_CONTEXT_TAGS.has(tag)) {
-          const idx = inlineCtxStack.lastIndexOf(tag)
-          if (idx >= 0) inlineCtxStack.splice(idx, 1)
-        }
-      }
-      continue
-    }
-
-    // Text content — skip if empty, inside skip element, or a style placeholder
-    if (!part.trim() || skipDepth > 0) continue
-    if (/^<!--ISLAND_STYLE_\d+-->$/.test(part.trim())) continue
-
-    parts[i] = inlineCtxStack.length > 0
-      ? renderIslandInlineMarkdownText(part)
-      : renderIslandMarkdownText(part)
-  }
-
-  let result = parts.join('')
-
-  // Restore <style> blocks
-  for (let i = 0; i < styleBlocks.length; i++) {
-    result = result.replace(`<!--ISLAND_STYLE_${i}-->`, styleBlocks[i])
-  }
-
-  return normalizeLegacyFontTags(result)
 }
 
 interface TrustedYouTubeEmbed {
@@ -1097,9 +1055,8 @@ function extractTrustedYouTubeEmbeds(raw: string): { content: string; embeds: Tr
 
 // While streaming, an unclosed <details>/<summary> tag makes the markdown +
 // sanitize pipeline emit a structure where the in-progress block briefly takes
-// up real vertical space. That spike gets locked in by the streamingMinHeight
-// ratchet below, so the bubble stays inflated until the stream ends and then
-// snaps back. Pre-closing any unbalanced tags keeps the rendered tree stable.
+// up real vertical space. Pre-closing any unbalanced tags keeps the rendered
+// tree stable and avoids a visible height spike followed by a snap back.
 const STREAMING_DETAILS_TAG_RE = /<\/?(details|summary)\b[^>]*>/gi
 
 function balanceStreamingDetails(raw: string): string {
@@ -1197,18 +1154,14 @@ function attachCodeCopyHandler(root: HTMLElement | ShadowRoot): () => void {
 }
 
 function notifyMessageContentLayout(el: HTMLElement): void {
-  const dispatch = () => {
-    el.dispatchEvent(new CustomEvent(MESSAGE_CONTENT_LAYOUT_EVENT, { bubbles: true }))
-  }
-
-  dispatch()
-  requestAnimationFrame(() => {
-    dispatch()
-    requestAnimationFrame(dispatch)
-  })
+  // One dispatch is enough. TanStack's ResizeObserver (on the row) plus the
+  // load/error listeners below already catch later size changes. The previous
+  // immediate + 2x rAF triple dispatch fired ~3 events for every shadow-DOM
+  // mutation/row mount and caused a measurement storm during scroll/streaming.
+  dispatchMessageContentLayout(el)
 }
 
-function IsolatedHtml({ html }: { html: string }) {
+function IsolatedHtml({ html, isStreaming }: { html: string; isStreaming: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
@@ -1216,6 +1169,9 @@ function IsolatedHtml({ html }: { html: string }) {
     if (!el) return
     const shadow = el.shadowRoot ?? el.attachShadow({ mode: 'open' })
     shadow.innerHTML = `<style data-lumi-island-base>${ISLAND_BASE_CSS}</style>${html}`
+    for (const actionEl of shadow.querySelectorAll<HTMLElement>('[data-lumiverse-regex-action]')) {
+      actionEl.style.cursor = 'pointer'
+    }
     if (
       el.classList.contains('not-prose')
       || el.classList.contains('not-island-prose')
@@ -1234,11 +1190,15 @@ function IsolatedHtml({ html }: { html: string }) {
       })
     }
 
-    const resizeObserver = new ResizeObserver(scheduleLayoutNotify)
-    resizeObserver.observe(el)
+    let resizeObserver: ResizeObserver | null = null
+    let mutationObserver: MutationObserver | null = null
+    if (isStreaming) {
+      resizeObserver = new ResizeObserver(scheduleLayoutNotify)
+      resizeObserver.observe(el)
 
-    const mutationObserver = new MutationObserver(scheduleLayoutNotify)
-    mutationObserver.observe(shadow, { childList: true, subtree: true, attributes: true, characterData: true })
+      mutationObserver = new MutationObserver(scheduleLayoutNotify)
+      mutationObserver.observe(shadow, { childList: true, subtree: true, attributes: true, characterData: true })
+    }
 
     shadow.addEventListener('load', scheduleLayoutNotify, true)
     shadow.addEventListener('error', scheduleLayoutNotify, true)
@@ -1246,15 +1206,106 @@ function IsolatedHtml({ html }: { html: string }) {
     const cleanupCodeCopy = attachCodeCopyHandler(shadow)
     return () => {
       cleanupCodeCopy()
-      resizeObserver.disconnect()
-      mutationObserver.disconnect()
+      resizeObserver?.disconnect()
+      mutationObserver?.disconnect()
       shadow.removeEventListener('load', scheduleLayoutNotify, true)
       shadow.removeEventListener('error', scheduleLayoutNotify, true)
       if (pendingRaf) cancelAnimationFrame(pendingRaf)
     }
-  }, [html])
+  }, [html, isStreaming])
 
-  return <div ref={ref} className={styles.htmlIsland} />
+  return <div ref={ref} className={styles.htmlIsland} data-lumiverse-html-island />
+}
+
+const CHAT_FIND_HIGHLIGHT_ATTR = 'data-chat-find-highlight'
+const CHAT_FIND_SKIP_SELECTOR = 'script,style,textarea,input,button,select,option,svg,math'
+
+type ChatFindHighlightRoot = HTMLElement | ShadowRoot
+
+function clearChatFindHighlights(root: ChatFindHighlightRoot): boolean {
+  const matches = root.querySelectorAll<HTMLElement>(`mark[${CHAT_FIND_HIGHLIGHT_ATTR}]`)
+  if (matches.length === 0) return false
+
+  for (const match of matches) {
+    const parent = match.parentNode
+    if (!parent) continue
+    parent.replaceChild(document.createTextNode(match.textContent ?? ''), match)
+    if (parent instanceof Element) parent.normalize()
+  }
+
+  return true
+}
+
+function highlightChatFindMatches(root: ChatFindHighlightRoot, query: string): boolean {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) return false
+
+  const escapedQuery = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const matcher = new RegExp(escapedQuery, 'giu')
+  const textNodes: Text[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      if (!node.nodeValue || !parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest(`mark[${CHAT_FIND_HIGHLIGHT_ATTR}]`)) return NodeFilter.FILTER_REJECT
+      if (parent.closest(CHAT_FIND_SKIP_SELECTOR)) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+
+  while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+
+  let changed = false
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue ?? ''
+    matcher.lastIndex = 0
+    if (!matcher.test(text)) continue
+
+    matcher.lastIndex = 0
+    const fragment = document.createDocumentFragment()
+    let cursor = 0
+    let match: RegExpExecArray | null
+
+    while ((match = matcher.exec(text)) !== null) {
+      if (match.index > cursor) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)))
+      }
+
+      const mark = document.createElement('mark')
+      mark.className = styles.findMatch
+      mark.setAttribute(CHAT_FIND_HIGHLIGHT_ATTR, '')
+      // CSS modules do not cross into an HTML island's shadow root. Keep the
+      // same visual treatment there with inherited theme variables.
+      if (root instanceof ShadowRoot) {
+        mark.style.background = 'color-mix(in srgb, var(--lumiverse-warning, #f5b942) 58%, transparent)'
+        mark.style.color = 'inherit'
+        mark.style.borderRadius = '2px'
+        mark.style.padding = '0 1px'
+      }
+      mark.textContent = match[0]
+      fragment.appendChild(mark)
+
+      cursor = match.index + match[0].length
+      if (match[0].length === 0) break
+    }
+
+    if (cursor < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor)))
+    }
+
+    textNode.parentNode?.replaceChild(fragment, textNode)
+    changed = true
+  }
+
+  return changed
+}
+
+function getChatFindHighlightRoots(container: HTMLElement): ChatFindHighlightRoot[] {
+  const roots: ChatFindHighlightRoot[] = [container]
+  for (const island of container.querySelectorAll<HTMLElement>('[data-lumiverse-html-island]')) {
+    if (island.shadowRoot) roots.push(island.shadowRoot)
+  }
+  return roots
 }
 
 /**
@@ -1391,24 +1442,38 @@ export default function MessageContent({
   isUser,
   userName,
   isStreaming = false,
-  lockStreamingHeight = true,
   messageId,
   chatId,
   depth = 0,
+  characterNameOverride,
+  risuAssetMapOverride,
+  disableInterceptors = false,
+  findQuery = '',
 }: MessageContentProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const regexScripts = useStore((s) => s.regexScripts)
+  const actionUsage = useStore((s) => {
+    if (!messageId) return undefined
+    return s.messages.find((message) => message.id === messageId)?.extra?.associative_regex_action_usage
+  })
+  const regexActionsSuperseded = useStore((s) => (
+    !isUser && hasImmediateUserReply(s.messages, messageId)
+  ))
   const characters = useStore((s) => s.characters)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
 
-  const charName = useMemo(
+  const fallbackCharName = useMemo(
     () => characters.find((c) => c.id === activeCharacterId)?.name ?? t('assistantFallback'),
     [characters, activeCharacterId, t],
   )
+  const charName = characterNameOverride?.trim() || fallbackCharName
 
   // Merge Risu asset maps from active character (and all group members in group chats)
   const risuAssetMap = useMemo(() => {
+    if (risuAssetMapOverride !== undefined) return risuAssetMapOverride
+
     const charIds = isGroupChat && groupCharacterIds.length > 0
       ? groupCharacterIds
       : activeCharacterId ? [activeCharacterId] : []
@@ -1421,7 +1486,7 @@ export default function MessageContent({
       }
     }
     return merged
-  }, [characters, activeCharacterId, isGroupChat, groupCharacterIds])
+  }, [risuAssetMapOverride, characters, activeCharacterId, isGroupChat, groupCharacterIds])
 
   const interceptorRegistryVersion = useSyncExternalStore(
     subscribeTagInterceptorRegistry,
@@ -1430,13 +1495,20 @@ export default function MessageContent({
   )
   const deliveredTagInterceptsRef = useRef(new Set<string>())
   const interceptedMessageTags = useMemo(
-    () => stripMessageTags(content, { messageId, chatId, isUser, isStreaming }),
-    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion],
+    () => {
+      // interceptorRegistryVersion is the external-store invalidation trigger.
+      void interceptorRegistryVersion
+      return disableInterceptors
+        ? { content, intercepts: [] }
+        : stripMessageTags(content, { messageId, chatId, isUser, isStreaming })
+    },
+    [content, messageId, chatId, isUser, isStreaming, interceptorRegistryVersion, disableInterceptors],
   )
 
   useLayoutEffect(() => {
+    if (disableInterceptors || interceptedMessageTags.intercepts.length === 0) return
     dispatchMessageTagIntercepts(interceptedMessageTags.intercepts, deliveredTagInterceptsRef.current)
-  }, [interceptedMessageTags.intercepts])
+  }, [interceptedMessageTags.intercepts, disableInterceptors])
 
   const interceptorCleanedContent = interceptedMessageTags.content
 
@@ -1466,14 +1538,39 @@ export default function MessageContent({
   )
   const deferredResolvedContent = useDeferredValue(resolvedContent)
   const renderContent = isStreaming ? balanceStreamingDetails(deferredResolvedContent) : resolvedContent
+  const previousRenderContentRef = useRef<string | null>(null)
   const blocks = useMemo(() => parseOOC(renderContent), [renderContent])
   const oocEnabled = useStore((s) => s.oocEnabled)
   const lumiaOOCStyle = useStore((s) => s.lumiaOOCStyle)
   const containerRef = useRef<HTMLDivElement>(null)
   const prevTextLenRef = useRef(0)
-  const maxStreamingHeightRef = useRef(0)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
-  const [streamingMinHeight, setStreamingMinHeight] = useState<number | null>(null)
+  const [regexSelectionVersion, setRegexSelectionVersion] = useState(0)
+
+  useEffect(() => {
+    const refresh = () => setRegexSelectionVersion((version) => version + 1)
+    window.addEventListener(REGEX_SELECTIONS_CHANGED_EVENT, refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener(REGEX_SELECTIONS_CHANGED_EVENT, refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [])
+
+  // Regex macro resolution and tag-interceptor registration can replace an
+  // already-mounted message after the user has scrolled away from the tail.
+  // Mark that reflow before ResizeObserver delivers the row's new height so
+  // the virtual list can preserve the viewport independently of its stale
+  // scrollDirection value. Initial mounts deliberately remain unmarked.
+  useLayoutEffect(() => {
+    const previous = previousRenderContentRef.current
+    previousRenderContentRef.current = renderContent
+    if (previous === null || previous === renderContent) return
+
+    const container = containerRef.current
+    if (!container) return
+    dispatchMessageContentLayout(container, { preserveScrollAnchor: true })
+  }, [renderContent])
 
   const handleLightboxClose = useCallback(() => setLightboxSrc(null), [])
 
@@ -1482,6 +1579,7 @@ export default function MessageContent({
     const container = containerRef.current
     if (!container) return
     const handleClick = (e: MouseEvent) => {
+      if (e.composedPath().some((node) => node instanceof Element && node.hasAttribute('data-lumiverse-regex-action'))) return
       const img = (e.target as HTMLElement).closest('img[data-lightbox], .prose img') as HTMLImageElement | null
       if (img?.src) setLightboxSrc(img.src)
     }
@@ -1489,11 +1587,216 @@ export default function MessageContent({
     return () => container.removeEventListener('click', handleClick)
   }, [])
 
+  // Display-regex actions can live in ordinary prose or inside an HTML
+  // island's shadow root. composedPath() finds the authored target in both.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || isStreaming || !chatId) return
+
+    const activate = (event: MouseEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return
+      const target = event.composedPath().find((node): node is Element => (
+        node instanceof Element && node.hasAttribute('data-lumiverse-regex-action')
+      ))
+      if (!target) return
+      const encoded = target.getAttribute('data-lumiverse-regex-action')
+      if (!encoded) return
+      try {
+        const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
+        if (
+          (payload.type !== 'send' && payload.type !== 'append' && payload.type !== 'effects') ||
+          typeof payload.id !== 'string' || typeof payload.scriptId !== 'string' ||
+          typeof payload.instanceId !== 'string' ||
+          typeof payload.multi_select !== 'boolean' ||
+          typeof payload.cost !== 'number' || !Number.isFinite(payload.cost) || payload.cost <= 0 ||
+          typeof payload.limit !== 'number' || !Number.isFinite(payload.limit) || payload.limit < 0 ||
+          typeof payload.content !== 'string' || (payload.type !== 'effects' && !payload.content.trim())
+        ) return
+        if (regexActionsSuperseded) {
+          event.preventDefault()
+          event.stopPropagation()
+          toast.info(t('toast.regexActionExpired'))
+          return
+        }
+        const configured = regexScripts
+          .find((script) => script.id === payload.scriptId && !script.disabled && script.target.includes('display'))
+          ?.actions.find((action) => action.id === payload.id)
+        if (
+          !configured ||
+          configured.type !== payload.type ||
+          configured.multi_select !== payload.multi_select
+        ) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (isUser && configured.effects?.length) {
+          toast.info(t('toast.regexActionAssistantOnly'))
+          return
+        }
+        const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
+        const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
+          key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
+        ))
+        const alreadyUsed = configured.multi_select
+          ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
+          : blockHasSelection
+        if (target.getAttribute('aria-disabled') === 'true' || alreadyUsed) {
+          toast.info(t('toast.regexActionAlreadyUsed'))
+          return
+        }
+        dispatchRegexAction({
+          id: payload.id,
+          type: payload.type,
+          multi_select: configured.multi_select,
+          cost: payload.cost,
+          limit: payload.limit,
+          title: typeof payload.title === 'string' ? payload.title : '',
+          subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+          content: payload.content,
+          scriptId: payload.scriptId,
+          instanceId: payload.instanceId,
+          chatId,
+          messageId,
+          ...(configured.effects?.length ? { effects: configured.effects } : {}),
+        })
+      } catch {}
+    }
+
+    container.addEventListener('click', activate)
+    container.addEventListener('keydown', activate)
+    return () => {
+      container.removeEventListener('click', activate)
+      container.removeEventListener('keydown', activate)
+    }
+  }, [chatId, messageId, isUser, isStreaming, regexScripts, actionUsage, regexActionsSuperseded, t, regexSelectionVersion])
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const elements: Element[] = Array.from(container.querySelectorAll('[data-lumiverse-regex-action]'))
+    for (const island of container.querySelectorAll<HTMLElement>(`.${styles.htmlIsland}`)) {
+      if (island.shadowRoot) {
+        elements.push(...Array.from(island.shadowRoot.querySelectorAll('[data-lumiverse-regex-action]')))
+      }
+    }
+    for (const element of elements) {
+      const encoded = element.getAttribute('data-lumiverse-regex-action')
+      if (!encoded) continue
+      try {
+        const payload = JSON.parse(decodeURIComponent(encoded)) as Partial<ResolvedRegexActionPayload>
+        if (
+          !payload.instanceId || !payload.id || !payload.scriptId ||
+          (payload.type !== 'send' && payload.type !== 'append' && payload.type !== 'effects') ||
+          typeof payload.cost !== 'number' || typeof payload.limit !== 'number'
+        ) continue
+        const configured = regexScripts
+          .find((script) => script.id === payload.scriptId)
+          ?.actions.find((action) => action.id === payload.id)
+        if (!configured) continue
+        const usageKey = configured.multi_select ? `${payload.instanceId}:${payload.id}` : payload.instanceId
+        const blockHasSelection = Object.keys(actionUsage || {}).some((key) => (
+          key === payload.instanceId || key.startsWith(`${payload.instanceId}:`)
+        ))
+        const used = configured.multi_select
+          ? !!actionUsage?.[payload.instanceId] || !!actionUsage?.[usageKey]
+          : blockHasSelection
+        const activation: RegexActionActivation = {
+          id: payload.id,
+          type: payload.type,
+          multi_select: configured.multi_select,
+          cost: payload.cost,
+          limit: payload.limit,
+          title: typeof payload.title === 'string' ? payload.title : '',
+          subtitle: typeof payload.subtitle === 'string' ? payload.subtitle : '',
+          content: typeof payload.content === 'string' ? payload.content : '',
+          scriptId: payload.scriptId,
+          instanceId: payload.instanceId,
+          chatId: chatId || '',
+          messageId,
+        }
+        const selected = configured.multi_select && !!chatId && isRegexSelectionPending(activation)
+        const budgetBlocked = configured.multi_select && !selected && payload.limit > 0 && (
+          getRegexBlockSelectionCost(activation) + payload.cost > payload.limit
+        )
+        element.toggleAttribute('data-lumiverse-regex-action-selected', selected)
+        element.toggleAttribute('data-lumiverse-regex-action-budget-blocked', budgetBlocked)
+        if (configured.multi_select) element.setAttribute('aria-pressed', selected ? 'true' : 'false')
+        else element.removeAttribute('aria-pressed')
+        const stateEffectBlocked = isUser && !!configured.effects?.length
+        const disabled = used || regexActionsSuperseded || stateEffectBlocked
+        element.toggleAttribute('data-lumiverse-regex-action-superseded', regexActionsSuperseded)
+        element.toggleAttribute('data-lumiverse-regex-action-state-blocked', stateEffectBlocked)
+        if (disabled) {
+          element.setAttribute('aria-disabled', 'true')
+          element.toggleAttribute('data-lumiverse-regex-action-used', used)
+          element.setAttribute('tabindex', '-1')
+          if (element instanceof HTMLElement || element instanceof SVGElement) {
+            element.style.cursor = 'not-allowed'
+            element.style.opacity = '0.55'
+            element.style.filter = 'saturate(0.45)'
+          }
+        } else {
+          element.removeAttribute('aria-disabled')
+          element.removeAttribute('data-lumiverse-regex-action-used')
+          element.setAttribute('tabindex', '0')
+          if (element instanceof HTMLElement || element instanceof SVGElement) {
+            if (budgetBlocked) {
+              element.style.cursor = 'not-allowed'
+              element.style.opacity = '0.55'
+            } else {
+              element.style.removeProperty('cursor')
+              element.style.removeProperty('opacity')
+            }
+            element.style.removeProperty('filter')
+          }
+        }
+        if (element instanceof HTMLElement || element instanceof SVGElement) {
+          if (selected) {
+            element.style.outline = '2px solid var(--lumiverse-primary)'
+            element.style.outlineOffset = '2px'
+          } else {
+            element.style.removeProperty('outline')
+            element.style.removeProperty('outline-offset')
+          }
+        }
+      } catch {}
+    }
+  }, [actionUsage, regexActionsSuperseded, regexScripts, renderContent, regexSelectionVersion, chatId, isUser, messageId])
+
   // Attach click handler for code copy buttons
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
     return attachCodeCopyHandler(container)
+  }, [])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const signalCollapsibleToggle = (event: Event) => {
+      const details = findDetailsToggleLayoutTarget(event)
+      if (details) dispatchCollapsibleToggleLayoutEvent(details)
+    }
+
+    const handleSummaryClickCapture = (event: MouseEvent) => {
+      signalCollapsibleToggle(event)
+    }
+
+    const handleSummaryKeyDownCapture = (event: KeyboardEvent) => {
+      if (!DETAILS_TOGGLE_KEYS.has(event.key)) return
+      signalCollapsibleToggle(event)
+    }
+
+    // Native <details> elements toggle immediately after activation. Mark the
+    // row before that happens so the virtualizer treats the resulting resize as
+    // a user-controlled collapse/expand, just like the dedicated reasoning box.
+    container.addEventListener('click', handleSummaryClickCapture, true)
+    container.addEventListener('keydown', handleSummaryKeyDownCapture, true)
+
+    return () => {
+      container.removeEventListener('click', handleSummaryClickCapture, true)
+      container.removeEventListener('keydown', handleSummaryKeyDownCapture, true)
+    }
   }, [])
 
   useLayoutEffect(() => {
@@ -1518,11 +1821,20 @@ export default function MessageContent({
       scheduleLayoutNotify()
     }
 
-    const observer = new ResizeObserver(scheduleLayoutNotify)
-    observer.observe(container)
+    // MutationObserver and ResizeObserver are only needed while the message
+    // content is actively changing (streaming). For finalized messages they
+    // fire on incidental DOM mutations (hover states, lazy image decode
+    // attribute flips, etc.) and cascade into measureElement calls that are
+    // pure overhead during scroll.
+    let mutationObserver: MutationObserver | null = null
+    let observer: ResizeObserver | null = null
+    if (isStreaming) {
+      observer = new ResizeObserver(scheduleLayoutNotify)
+      observer.observe(container)
 
-    const mutationObserver = new MutationObserver(scheduleLayoutNotify)
-    mutationObserver.observe(container, { childList: true, subtree: true, attributes: true, characterData: true })
+      mutationObserver = new MutationObserver(scheduleLayoutNotify)
+      mutationObserver.observe(container, { childList: true, subtree: true, attributes: true, characterData: true })
+    }
 
     container.addEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleChildLayoutNotify)
     container.addEventListener('load', scheduleLayoutNotify, true)
@@ -1536,51 +1848,52 @@ export default function MessageContent({
 
     return () => {
       cancelled = true
-      observer.disconnect()
-      mutationObserver.disconnect()
+      observer?.disconnect()
+      mutationObserver?.disconnect()
       container.removeEventListener(MESSAGE_CONTENT_LAYOUT_EVENT, handleChildLayoutNotify)
       container.removeEventListener('load', scheduleLayoutNotify, true)
       container.removeEventListener('error', scheduleLayoutNotify, true)
       if (pendingRaf) window.cancelAnimationFrame(pendingRaf)
       for (const timer of settleTimers) window.clearTimeout(timer)
     }
-  }, [renderContent])
+    // Observers are set up once per mount. DOM mutations, resizes, and child
+    // layout events already notify MessageList via scheduleLayoutNotify(), so
+    // re-creating observers on every renderContent change is unnecessary and
+    // causes observer churn during fast streaming.
+  }, [isStreaming])
 
+  // While streaming, ratchet the content container's min-height upward so that
+  // transient DOM shrinkage (unclosed tags snapping shut, image placeholders
+  // collapsing, etc.) cannot make the virtualized row height oscillate. The
+  // lock is applied directly to the DOM to avoid React re-render thrash.
   useLayoutEffect(() => {
-    if (!isStreaming || !lockStreamingHeight) {
-      maxStreamingHeightRef.current = 0
-      setStreamingMinHeight(null)
-      return
-    }
-
     const container = containerRef.current
     if (!container) return
 
-    const updateMinHeight = () => {
-      // Measure in layout (unscaled) pixels via offsetHeight, NOT
-      // getBoundingClientRect. Under the standardized CSS `zoom` model used by
-      // --lumiverse-ui-scale (`body > * { zoom }` in reset.css), getBoundingClientRect
-      // returns zoom-*scaled* px, but this container lives inside that zoomed
-      // subtree — so a min-height written from a scaled measurement gets multiplied
-      // by zoom a second time and balloons the bubble. offsetHeight is zoom-invariant
-      // (and font-scale aware, since font scale is plain CSS font-size with no
-      // transform), keeping the ratchet in the virtualizer's own coordinate space.
-      const nextHeight = container.offsetHeight
-      if (nextHeight <= maxStreamingHeightRef.current) return
-      maxStreamingHeightRef.current = nextHeight
-      setStreamingMinHeight(nextHeight)
+    if (!isStreaming) {
+      container.style.minHeight = ''
+      return
     }
 
-    updateMinHeight()
+    // offsetHeight is zoom-invariant under Lumiverse's body-level CSS zoom,
+    // whereas getBoundingClientRect() would return scaled pixels and the lock
+    // would be applied twice.
+    let maxHeight = container.offsetHeight
+    container.style.minHeight = `${maxHeight}px`
 
-    const observer = new ResizeObserver(() => {
-      updateMinHeight()
-    })
+    const updateMinHeight = () => {
+      const h = container.offsetHeight
+      if (h > maxHeight) {
+        maxHeight = h
+        container.style.minHeight = `${h}px`
+      }
+    }
 
+    const observer = new ResizeObserver(updateMinHeight)
     observer.observe(container)
-    return () => observer.disconnect()
-  }, [isStreaming, lockStreamingHeight])
 
+    return () => observer.disconnect()
+  }, [isStreaming])
 
   const renderedBlocks = useMemo(() => {
     const elements: React.ReactNode[] = []
@@ -1617,7 +1930,7 @@ export default function MessageContent({
             const piece = pieces[p]
             elements.push(
               piece.type === 'island'
-                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
@@ -1640,7 +1953,7 @@ export default function MessageContent({
             const piece = pieces[p]
             elements.push(
               piece.type === 'island'
-                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} />
+                ? <IsolatedHtml key={`${i}-island-${p}`} html={piece.content} isStreaming={isStreaming} />
                 : piece.type === 'youtubeEmbed'
                   ? <TrustedYouTubeEmbed key={`${i}-youtube-${p}`} embed={piece.embed} />
                 : <ProseHtml key={`${i}-${p}`} className={styles.prose} html={piece.content} />
@@ -1652,6 +1965,28 @@ export default function MessageContent({
 
     return elements
   }, [blocks, oocEnabled, lumiaOOCStyle, isStreaming])
+
+  // Highlight rendered text nodes instead of rewriting the source Markdown or
+  // sanitized HTML. This preserves formatting, display regexes, OOC layouts,
+  // and isolated HTML islands while making query matches visible everywhere.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const roots = getChatFindHighlightRoots(container)
+    for (const root of roots) clearChatFindHighlights(root)
+    if (!findQuery.trim()) return
+
+    let changed = false
+    for (const root of roots) changed = highlightChatFindMatches(root, findQuery) || changed
+    if (changed) notifyMessageContentLayout(container)
+
+    return () => {
+      let didClear = false
+      for (const root of roots) didClear = clearChatFindHighlights(root) || didClear
+      if (didClear) notifyMessageContentLayout(container)
+    }
+  }, [findQuery, renderedBlocks])
 
   // Chunk fade animation for streaming tokens
   useLayoutEffect(() => {
@@ -1708,15 +2043,12 @@ export default function MessageContent({
     prevTextLenRef.current = currentLen
   }, [content, isStreaming])
 
-  const minHeight = streamingMinHeight ?? 0
-
   return (
     <>
       <div
         data-component="MessageContent"
         ref={containerRef}
         className={clsx(styles.content, isUser ? styles.contentUser : styles.contentChar)}
-        style={minHeight > 0 ? { minHeight: `${minHeight}px` } : undefined}
       >
         {renderedBlocks}
         <SpindleMessageWidgets messageId={messageId} />

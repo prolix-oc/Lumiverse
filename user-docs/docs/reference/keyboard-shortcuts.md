@@ -1,3 +1,7 @@
+---
+title: Keyboard Shortcuts
+---
+
 # Keyboard Shortcuts
 
 Quick reference for keyboard shortcuts in Lumiverse. On macOS, **Cmd** is the modifier; everywhere else it's **Ctrl**.

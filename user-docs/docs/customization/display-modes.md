@@ -1,3 +1,7 @@
+---
+title: Display Modes
+---
+
 # Display Modes
 
 Lumiverse offers two visual modes for how messages appear in the chat. Choose the one that fits your aesthetic preference and reading style.

@@ -1,3 +1,7 @@
+---
+title: Advanced Features
+---
+
 # Advanced Features
 
 World Books have several advanced features for complex lore management. You don't need these for basic use, but they're powerful when your world grows.

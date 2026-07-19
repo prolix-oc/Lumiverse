@@ -12,6 +12,7 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import type { TtsVoice } from "../tts/types";
 import { describeProviderError } from "../utils/provider-errors";
+import { QWEN_TTS_PROVIDER, mergeQwenVoiceOptions } from "../tts/providers/qwen3-utils";
 
 /** Secret key for a TTS connection's API key. */
 export function ttsConnectionSecretKey(id: string): string {
@@ -30,6 +31,17 @@ export interface TtsConnectionModelsPreviewInput {
   provider: string;
   api_url?: string;
   api_key?: string;
+}
+
+function mergeStoredVoices(
+  providerId: string,
+  profile: TtsConnectionProfile | null,
+  voices: TtsVoice[],
+): TtsVoice[] {
+  if (providerId === QWEN_TTS_PROVIDER) {
+    return mergeQwenVoiceOptions(voices, profile?.metadata);
+  }
+  return voices;
 }
 
 function rowToProfile(row: any): TtsConnectionProfile {
@@ -345,8 +357,15 @@ export async function listConnectionVoicesPreview(
 
   try {
     const voices = await provider.listVoices(apiKey || "", input.api_url ?? existing?.api_url ?? "");
-    return { voices, provider: providerId };
+    return {
+      voices: mergeStoredVoices(providerId, existing, voices),
+      provider: providerId,
+    };
   } catch (err: any) {
-    return { voices: [], provider: providerId, error: describeProviderError(err, "Failed to fetch voices") };
+    return {
+      voices: mergeStoredVoices(providerId, existing, []),
+      provider: providerId,
+      error: describeProviderError(err, "Failed to fetch voices"),
+    };
   }
 }

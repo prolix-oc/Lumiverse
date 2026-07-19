@@ -1,3 +1,7 @@
+---
+title: Importing an Archive
+---
+
 # Importing an Archive
 
 Restore a `.lvbak` archive into your current Lumiverse account. The importer is **non-destructive** — your existing data is preserved, and only new content from the archive is added.

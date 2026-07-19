@@ -1,3 +1,7 @@
+---
+title: Personas
+---
+
 # Personas
 
 A **persona** represents *you* in the conversation. While you can chat without one (the AI just knows your username), a persona gives the AI a richer picture of who you are — your appearance, backstory, personality, and more.

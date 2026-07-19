@@ -1,4 +1,8 @@
-# Presets
+---
+title: Reasoning
+---
+
+# Reasoning
 
 Presets are the heart of Lumiverse's prompt engineering system. They control **what the AI sees** and **how it generates** — from the system prompt structure to sampling parameters like temperature.
 

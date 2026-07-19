@@ -20,10 +20,14 @@
   background: var(--lumiverse-bg-deep);
   border: 1px solid var(--lumiverse-border);
   border-radius: 16px;
-  box-shadow: var(--lumiverse-shadow-xl);
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+:global([data-glass]) .modal {
+  box-shadow: var(--lumiverse-shadow-xl);
 }
 
 .header {
@@ -235,6 +239,7 @@
 .embeddingChecklistItemBody {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 6px;
   min-width: 0;
 }
@@ -1154,13 +1159,13 @@
 @media (max-width: 600px) {
   .overlay {
     align-items: stretch;
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .modal {
     width: calc(100vw / var(--lumiverse-ui-scale, 1));
-    height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    height: calc(var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1))) - var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) - env(safe-area-inset-bottom, 0px));
     border-radius: 0;
   }
 

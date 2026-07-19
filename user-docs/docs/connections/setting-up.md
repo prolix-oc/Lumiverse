@@ -1,3 +1,7 @@
+---
+title: Setting Up a Connection
+---
+
 # Setting Up a Connection
 
 This guide walks you through creating your first connection to an AI provider.

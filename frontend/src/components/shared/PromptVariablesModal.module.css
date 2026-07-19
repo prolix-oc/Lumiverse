@@ -163,6 +163,12 @@
   line-height: 1.4;
 }
 
+.placementSummary {
+  color: var(--lumiverse-primary-text, #c4b5fd);
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+}
+
 .textInput,
 .textArea {
   width: 100%;

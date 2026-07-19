@@ -1,3 +1,7 @@
+---
+title: Web Search
+---
+
 # Web Search
 
 Lumiverse can plug a self-hosted **SearXNG** meta-search instance into the [Council](../council/index.md) so members can look up current, factual, or source-backed information mid-deliberation. Results are scraped, condensed into a context block, and handed back to the calling tool.

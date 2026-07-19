@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../db/connection";
 import {
+  findImportedCharacterBookWorldBook,
   getWorldBook,
   getWorldBookListSignature,
   getWorldBookEntriesSignature,
@@ -78,5 +79,50 @@ describe("world-books.service — ETag sources + row trim", () => {
 
     getDb().run("UPDATE world_book_entries SET updated_at = 80 WHERE id = 'e1'");
     expect(getWorldBookEntriesSignature("b1")).toEqual({ count: 2, maxUpdatedAt: 80 });
+  });
+
+  test("reuses the attached character-sourced lorebook before creating a duplicate import", () => {
+    insertBook({
+      id: "manual",
+      name: "Manual duplicate",
+      user_id: "u1",
+      updated_at: 500,
+      metadata: { source: "character", source_character_id: "char-1", auto_managed_by_character: false },
+    });
+    insertBook({
+      id: "managed",
+      name: "Managed import",
+      user_id: "u1",
+      updated_at: 100,
+      metadata: { source: "character", source_character_id: "char-1", auto_managed_by_character: true },
+    });
+
+    expect(findImportedCharacterBookWorldBook("u1", "char-1", ["manual"])?.id).toBe("manual");
+  });
+
+  test("prefers the auto-managed import when no attached match is supplied", () => {
+    insertBook({
+      id: "manual",
+      name: "Manual duplicate",
+      user_id: "u1",
+      updated_at: 500,
+      metadata: { source: "character", source_character_id: "char-1", auto_managed_by_character: false },
+    });
+    insertBook({
+      id: "managed",
+      name: "Managed import",
+      user_id: "u1",
+      updated_at: 100,
+      metadata: { source: "character", source_character_id: "char-1", auto_managed_by_character: true },
+    });
+    insertBook({
+      id: "other",
+      name: "Other character",
+      user_id: "u1",
+      updated_at: 999,
+      metadata: { source: "character", source_character_id: "char-2", auto_managed_by_character: true },
+    });
+
+    expect(findImportedCharacterBookWorldBook("u1", "char-1")?.id).toBe("managed");
   });
 });

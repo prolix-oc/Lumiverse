@@ -114,9 +114,13 @@ export interface StartupSettings {
   sortDirection?: CharacterSortDirection
   viewMode?: CharacterViewMode
   charactersPerPage?: number
+  favoritesBarCollapsed?: boolean
   theme?: ThemeConfig | null
   landingPageChatsDisplayed?: number
   landingPageLayoutMode?: 'cards' | 'compact'
+  wallpaper?: WallpaperSettings
+  drawerSettings?: DrawerSettings
+  connectionsOrder?: Partial<Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>>
 }
 
 export interface CharactersSlice {
@@ -167,7 +171,7 @@ export interface CharactersSlice {
 
 // ---- Personas Slice ----
 export type PersonaFilterType = 'all' | 'default' | 'connected'
-export type PersonaSortField = 'name' | 'created'
+export type PersonaSortField = 'name' | 'created' | 'updated_at'
 export type PersonaSortDirection = 'asc' | 'desc'
 export type PersonaViewMode = 'grid' | 'list'
 export type PersonaTagBindingMode = 'any' | 'all'
@@ -189,6 +193,8 @@ export interface ResolvedPersonaBinding {
 export interface PersonasSlice {
   personas: Persona[]
   activePersonaId: string | null
+  /** Persona ids ordered by most recent activation, independent of edit timestamps. */
+  recentPersonaIds: string[]
   /** Map of characterId → personaId or binding object */
   characterPersonaBindings: Record<string, string | import('@/types/api').CharacterPersonaBinding>
   /** Map of personaId → tag-based auto-switch binding */
@@ -240,6 +246,7 @@ export interface UISlice {
   drawerTab: string | null
   settingsModalOpen: boolean
   settingsActiveView: string
+  settingsScrollTarget: { extensionId?: string; nonce: number } | null
   portraitPanelOpen: boolean
   commandPaletteOpen: boolean
   toasts: Toast[]
@@ -250,12 +257,13 @@ export interface UISlice {
   openDrawer: (tab?: string) => void
   closeDrawer: () => void
   setDrawerTab: (tab: string) => void
-  openSettings: (view?: string) => void
+  openSettings: (view?: string, target?: { extensionId?: string }) => void
   closeSettings: () => void
   togglePortraitPanel: () => void
   openCommandPalette: () => void
   closeCommandPalette: () => void
   addToast: (toast: Omit<Toast, 'id'>) => string
+  updateToast: (id: string, update: Partial<Omit<Toast, 'id'>>) => void
   removeToast: (id: string) => void
   clearToasts: () => void
 
@@ -264,9 +272,9 @@ export interface UISlice {
   incrementBadgeCount: () => void
   resetBadgeCount: () => void
 
-  // Regen feedback text retention
-  lastRegenFeedback: string
-  setLastRegenFeedback: (text: string) => void
+  // Regen feedback text retention (keyed by chat id so drafts don't leak across chats)
+  lastRegenFeedback: Record<string, string>
+  setLastRegenFeedback: (chatId: string, text: string) => void
 
   // Message editing (globally single-slot)
   editingMessageId: string | null
@@ -310,6 +318,7 @@ export type RegenFeedbackPosition = 'system' | 'user'
 export interface RegenFeedbackSettings {
   enabled: boolean
   position: RegenFeedbackPosition
+  includePreviousGeneration: boolean
 }
 
 // ---- Reasoning Settings ----
@@ -333,6 +342,12 @@ export type ReasoningEffort = 'auto' | 'none' | 'minimal' | 'low' | 'medium' | '
  *  ('omitted' on Opus 4.7 / Mythos Preview, 'summarized' elsewhere). */
 export type ThinkingDisplay = 'auto' | 'summarized' | 'omitted'
 
+/** Extra JSON fields spread onto the provider request body. */
+export interface ReasoningCustomBody {
+  enabled: boolean
+  rawJson: string
+}
+
 export interface ReasoningSettings {
   prefix: string
   suffix: string
@@ -340,11 +355,17 @@ export interface ReasoningSettings {
   apiReasoning: boolean
   reasoningEffort: ReasoningEffort
   /** How many recent reasoning blocks to keep in assembled prompt history.
+   *  This only affects what gets sent back to the model, not message-bubble display.
    *  0 = strip all, -1 = keep all (unlimited), N = keep last N. */
   keepInHistory: number
   /** Anthropic-only. Maps to `thinking.display` in the Messages API request body.
    *  'auto' leaves the field unset so the API picks a model-appropriate default. */
   thinkingDisplay: ThinkingDisplay
+  /**
+   * Extra request-body fields. Omitted for legacy settings so the backend can
+   * continue honoring an old preset-level custom body until this is saved.
+   */
+  customBody?: ReasoningCustomBody
 }
 
 /** Reasoning settings snapshot bound to a connection profile. */
@@ -421,7 +442,7 @@ export type SavedThemeInput =
   | Omit<SavedThemeConfigEntry, 'id' | 'createdAt'>
   | Omit<SavedThemePackEntry, 'id' | 'createdAt'>
 
-export type WorldBookEntrySortBy = 'custom' | 'priority' | 'created' | 'updated' | 'name'
+export type WorldBookEntrySortBy = 'custom' | 'order' | 'priority' | 'created' | 'updated' | 'name'
 export type WorldBookEntrySortDir = 'asc' | 'desc'
 export type WorldBookEntryPageSize = 50 | 100 | 200 | 'all'
 export type WorldBookListSortDir = 'asc' | 'desc'
@@ -435,12 +456,15 @@ export interface WorldBookEntryViewPreference {
 // ---- Settings Slice ----
 export interface SettingsSlice {
   settingsLoaded: boolean
+  /** Full persisted settings loaded; startup settings intentionally set only `settingsLoaded`. */
+  fullSettingsLoaded: boolean
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
   chatSheldDisplayMode: 'minimal' | 'immersive' | 'bubble'
+  minimalUseFullAvatar: boolean
   bubbleUserAlign: 'left' | 'right'
   bubbleDisableHover: boolean
   bubbleHideAvatarBg: boolean
@@ -477,6 +501,9 @@ export interface SettingsSlice {
   swipeGesturesEnabled: boolean
   showMessageTokenCount: boolean
   messageContextMenuEnabled: boolean
+  /** Suppress toasts when older chat messages are omitted from generation context. */
+  suppressContextDropWarnings: boolean
+  favoritesBarCollapsed: boolean
   guidedGenerations: GuidedGeneration[]
   quickReplySets: QuickReplySet[]
   wallpaper: WallpaperSettings
@@ -499,6 +526,7 @@ export interface SettingsSlice {
   savedThemes: SavedTheme[]
   spindleSettings: SpindleSettings
   voiceSettings: VoiceSettings
+  connectionsOrder: Record<'llm' | 'imageGen' | 'stt' | 'tts', string[]>
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void
@@ -575,6 +603,7 @@ export interface ConnectionsSlice {
   addProfile: (profile: ConnectionProfile) => void
   updateProfile: (id: string, updates: Partial<ConnectionProfile>) => void
   removeProfile: (id: string) => void
+  applyProfileOrder: (orderedIds: string[]) => void
 
   providers: ProviderInfo[]
   setProviders: (providers: ProviderInfo[]) => void
@@ -667,9 +696,9 @@ export interface CouncilSlice {
   setCouncilExecuting: (executing: boolean) => void
   setCouncilToolsFailure: (failure: CouncilToolsFailedInfo | null) => void
 
-  loadCouncilSettings: () => Promise<void>
+  loadCouncilSettings: (shouldApply?: () => boolean) => Promise<void>
   saveCouncilSettings: (partial: Partial<CouncilSettings>) => Promise<void>
-  loadAvailableTools: () => Promise<void>
+  loadAvailableTools: (shouldApply?: () => boolean) => Promise<void>
   /** Set merged council tools from pre-fetched data (bootstrap payload).
    *  Same merge rules as `loadAvailableTools`, zero network round trips. */
   hydrateCouncilTools: (
@@ -688,6 +717,8 @@ export interface CouncilSlice {
 // ---- Generation Slice ----
 export interface GenerationSlice {
   imageGeneration: ImageGenSettings
+  /** User edits made before the full settings row has hydrated. */
+  pendingImageGenerationPatch?: Partial<ImageGenSettings>
   sceneBackground: string | null
   sceneGenerating: boolean
   setImageGenSettings: (settings: Partial<ImageGenSettings>) => void
@@ -699,11 +730,17 @@ export interface ImageGenSettings {
   enabled: boolean
   activeImageGenConnectionId?: string | null
   includeCharacters: boolean
+  includePersona: boolean
   promptMode?: 'scene' | 'custom' | 'parsed_custom'
   customPrompt?: string
   customNegativePrompt?: string
   activePromptPresetId?: string | null
   promptPresets?: ImageGenPromptPreset[]
+  loraPresets?: LoraPreset[]
+  activeLoraPresetId?: string | null
+  bypassCharacterLora?: boolean
+  bypassActiveLoraPreset?: boolean
+  loraStrengthScale?: number
   promptParserConnectionId?: string | null
   promptParserModel?: string
   promptParserParameters?: Record<string, any>
@@ -746,6 +783,19 @@ export interface ImageGenPromptPreset {
   parserParameters?: Record<string, any>
   /** Whether the preset is intended as a main scene preset or a per-character snippet. Legacy entries are treated as 'main'. */
   kind?: ImageGenPresetKind
+}
+
+export interface LoraEntry {
+  lora_name: string
+  weight_model: number
+  weight_clip?: number
+}
+
+export interface LoraPreset {
+  id: string
+  name: string
+  loras: LoraEntry[]
+  base_tags?: string
 }
 
 // ---- Spindle Slice ----
@@ -892,6 +942,7 @@ export interface SpindleSlice {
   disableExtension: (id: string) => Promise<void>
   restartExtension: (id: string) => Promise<void>
   grantPermission: (id: string, permission: string) => Promise<void>
+  grantPermissions: (id: string, permissions: string[]) => Promise<void>
   revokePermission: (id: string, permission: string) => Promise<void>
   showPermissionRequest: (request: PendingPermissionRequest) => void
   resolvePermissionRequest: (id: string, approved: boolean) => Promise<void>
@@ -1010,6 +1061,7 @@ export interface MentionQueueOpts {
   persona_addon_states?: Record<string, boolean>
   preset_id?: string
   force_preset_id?: boolean
+  user_input?: string
 }
 
 export interface MentionQueue {
@@ -1042,19 +1094,75 @@ export interface GroupChatSlice {
   shiftMentionQueue: () => string | null
 }
 
+// ---- Multiplayer Slice ----
+import type {
+  RoomParticipant,
+  RoomStateView,
+  TurnStrategy,
+  RoomConnStatus,
+  PersonaSnapshot,
+} from '@/types/multiplayer'
+
+export interface MultiplayerSlice {
+  /** Backend room UUID (used for REST), null when not in a room. */
+  mpRoomId: string | null
+  /** The host's chat id — equals activeChatId while in the room. */
+  mpChatId: string | null
+  mpIsHost: boolean
+  mpMyParticipantId: string | null
+  mpConnStatus: RoomConnStatus
+  mpParticipants: RoomParticipant[]
+  mpTurnStrategy: TurnStrategy
+  mpCurrentTurnParticipantId: string | null
+  mpTurnOrder: string[]
+  mpRound: number
+  /** Unix seconds; null unless a freeform window is open. */
+  mpFreeformDeadline: number | null
+  mpSettings: { maxPeers: number; freeformWindowSec: number } | null
+  /** Compressed bot-avatar data URL relayed by the host (peers render this). */
+  mpCharacterAvatar: string | null
+  /** Host-only: the current remote invite code, auto-rolled when one is redeemed. */
+  mpRemoteCode: string | null
+
+  /** Full reconcile from a ROOM_STATUS / hydration payload. */
+  setRoomState: (view: RoomStateView, opts?: { isHost?: boolean }) => void
+  clearRoom: () => void
+  setRoomConnStatus: (status: RoomConnStatus) => void
+  setCharacterAvatar: (url: string | null) => void
+  setRemoteCode: (code: string | null) => void
+  upsertParticipant: (participant: RoomParticipant) => void
+  removeParticipant: (participantId: string) => void
+  setParticipantPersona: (participantId: string, persona: PersonaSnapshot | null) => void
+  setParticipantTyping: (participantId: string, typing: boolean) => void
+  setRoomTurn: (turn: {
+    currentTurnParticipantId: string | null
+    turnOrder?: string[]
+    round?: number
+    freeformDeadline?: number | null
+  }) => void
+  /** Derived: may the local user send right now? */
+  isMyTurn: () => boolean
+}
+
 // ---- Spindle Placement Slice ----
 import type {
   DrawerTabState,
+  CharacterEditorTabState,
+  PresetEditorTabState,
+  PresetEditorToolbarItemState,
   FloatWidgetState,
   DockPanelState,
   AppMountState,
   InputBarActionState,
   ExtensionCommandState,
 } from '@/store/slices/spindle-placement'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 export interface SpindlePlacementSlice {
   drawerTabs: DrawerTabState[]
+  characterEditorTabs: CharacterEditorTabState[]
+  presetEditorTabs: PresetEditorTabState[]
+  presetEditorToolbarItems: PresetEditorToolbarItemState[]
   floatWidgets: FloatWidgetState[]
   dockPanels: DockPanelState[]
   appMounts: AppMountState[]
@@ -1070,6 +1178,18 @@ export interface SpindlePlacementSlice {
   registerDrawerTab: (tab: DrawerTabState) => void
   unregisterDrawerTab: (tabId: string) => void
   updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => void
+
+  registerCharacterEditorTab: (tab: CharacterEditorTabState) => void
+  unregisterCharacterEditorTab: (tabId: string) => void
+  updateCharacterEditorTab: (tabId: string, updates: Partial<Pick<CharacterEditorTabState, 'title'>>) => void
+
+  registerPresetEditorTab: (tab: PresetEditorTabState) => void
+  unregisterPresetEditorTab: (tabId: string) => void
+  updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => void
+
+  registerPresetEditorToolbarItem: (item: PresetEditorToolbarItemState) => void
+  unregisterPresetEditorToolbarItem: (itemId: string) => void
+  setPresetEditorToolbarItemVisible: (itemId: string, visible: boolean) => void
 
   registerFloatWidget: (widget: FloatWidgetState) => void
   unregisterFloatWidget: (widgetId: string) => void
@@ -1117,6 +1237,7 @@ export interface BreakdownCacheEntry {
   }[]
   messages?: import('@/api/generate').DryRunMessage[]
   totalTokens: number
+  chatHistoryTokens?: number
   maxContext: number
   model: string
   provider: string
@@ -1144,7 +1265,7 @@ import type { RegexScript, CreateRegexScriptInput, UpdateRegexScriptInput } from
 export interface RegexSlice {
   regexScripts: RegexScript[]
   regexEditingId: string | null
-  loadRegexScripts: () => Promise<void>
+  loadRegexScripts: (shouldApply?: () => boolean) => Promise<void>
   /** Pure setter for hydrating from pre-fetched data (bootstrap payload). */
   setRegexScripts: (scripts: RegexScript[]) => void
   addRegexScript: (input: CreateRegexScriptInput) => Promise<RegexScript>
@@ -1153,6 +1274,8 @@ export interface RegexSlice {
   bulkRemoveRegexScripts: (ids: string[]) => Promise<number>
   reorderRegexScripts: (orderedIds: string[], folderChange?: { id: string; folder: string }) => Promise<void>
   toggleRegexScript: (id: string, disabled: boolean) => Promise<void>
+  toggleSelectedRegexScripts: (ids: string[], disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
+  toggleRegexFolder: (folder: string, disabled: boolean) => Promise<{ changedIds: string[]; skippedIds: string[] }>
   setRegexEditingId: (id: string | null) => void
 }
 
@@ -1186,14 +1309,19 @@ export interface ExpressionSlice {
 // ---- Image Gen Connections Slice ----
 export interface ImageGenConnectionsSlice {
   imageGenProfiles: ImageGenConnectionProfile[]
+  /** True once the current user's image-gen profile list has been fetched. */
+  imageGenProfilesLoaded: boolean
+  /** Monotonic local revision used to reject stale async profile results. */
+  imageGenProfilesVersion: number
   activeImageGenConnectionId: string | null
   imageGenProviders: ImageGenProviderInfo[]
 
-  setImageGenProfiles: (profiles: ImageGenConnectionProfile[]) => void
+  setImageGenProfiles: (profiles: ImageGenConnectionProfile[], expectedVersion?: number) => void
   setActiveImageGenConnection: (id: string | null) => void
   addImageGenProfile: (profile: ImageGenConnectionProfile) => void
   updateImageGenProfile: (id: string, updates: Partial<ImageGenConnectionProfile>) => void
   removeImageGenProfile: (id: string) => void
+  applyImageGenProfileOrder: (orderedIds: string[]) => void
   setImageGenProviders: (providers: ImageGenProviderInfo[]) => void
 }
 
@@ -1218,6 +1346,7 @@ export interface SttConnectionsSlice {
   addSttProfile: (profile: import('@/types/api').SttConnectionProfile) => void
   updateSttProfile: (id: string, updates: Partial<import('@/types/api').SttConnectionProfile>) => void
   removeSttProfile: (id: string) => void
+  applySttProfileOrder: (orderedIds: string[]) => void
   setSttProviders: (providers: import('@/types/api').SttProviderInfo[]) => void
 }
 
@@ -1230,6 +1359,7 @@ export interface TtsConnectionsSlice {
   addTtsProfile: (profile: import('@/types/api').TtsConnectionProfile) => void
   updateTtsProfile: (id: string, updates: Partial<import('@/types/api').TtsConnectionProfile>) => void
   removeTtsProfile: (id: string) => void
+  applyTtsProfileOrder: (orderedIds: string[]) => void
   setTtsProviders: (providers: import('@/types/api').TtsProviderInfo[]) => void
 }
 
@@ -1328,7 +1458,19 @@ export interface FloatingAvatarSlice {
 
 // ---- Chat Heads (floating generation status) ----
 
-export type ChatHeadStatus = 'assembling' | 'council' | 'council_failed' | 'waiting' | 'reasoning' | 'streaming' | 'completed' | 'stopped' | 'error'
+export type ChatHeadStatus =
+  | 'assembling'
+  | 'council'
+  | 'council_failed'
+  | 'waiting'
+  | 'reasoning'
+  | 'streaming'
+  | 'completed'
+  | 'stopped'
+  | 'error'
+  | 'mp_your_turn'
+  | 'mp_waiting_turn'
+  | 'mp_freeform'
 
 export interface ChatHeadEntry {
   generationId: string
@@ -1340,6 +1482,8 @@ export interface ChatHeadEntry {
   model: string
   startedAt: number
   attentionCleared?: boolean
+  subtitle?: string
+  multiplayerRoomId?: string
 }
 
 export interface ChatHeadsSlice {
@@ -1371,7 +1515,7 @@ export interface ConnectionSlice {
   /**
    * True once a new service worker bundle has been detected (post-reconnect bundle check).
    * Keeps the connection-lost overlay mounted with "Updating…" messaging until the page reloads
-   * — the existing controllerchange handler in main.tsx performs the reload itself.
+   * — vite-plugin-pwa's onNeedReload callback in main.tsx performs the reload itself.
    */
   wsUpdatePending: boolean
   setWsConnected: (connected: boolean) => void
@@ -1456,6 +1600,7 @@ export interface WeaverSlice {
   weaverStateSessionId: string | null
   loadWeaverInterview: (sessionId: string) => Promise<void>
   nextWeaverQuestion: (sessionId: string, steer?: string) => Promise<void>
+  cancelWeaverQuestion: (sessionId: string, message: string) => void
   answerWeaverQuestion: (
     sessionId: string,
     input: { question: WeaverInterviewQuestion; kind: WeaverResponseKind; content: string; steer?: string },
@@ -1513,6 +1658,7 @@ export type AppStore = ChatSlice &
   AuthSlice &
   WorldInfoSlice &
   GroupChatSlice &
+  MultiplayerSlice &
   SpindlePlacementSlice &
   PromptBreakdownSlice &
   RegexSlice &

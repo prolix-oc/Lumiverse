@@ -1,3 +1,7 @@
+---
+title: API Keys & Tickets
+---
+
 # API Keys & Decryption Tickets
 
 By default, exports **do not** include API keys or any other content from your `secrets` table — those stay encrypted at rest on the source server. If you want a true 1:1 restore (no need to paste keys back in), enable the **Include API keys** option. This produces two files: the archive and a separate **decryption ticket** that holds the AES key.

@@ -47,13 +47,19 @@ export interface OverrideMessageInfo {
   displayName: string
   /** First character of `displayName`, uppercased ('?' when empty). Handy for avatar fallbacks — the AST sandbox cannot slice strings itself. */
   initial: string
-  /** Convenience: cropped square at the tier the active layout uses. See `avatar` for full control. */
+  /**
+   * Convenience source selected by the active layout. This is normally the
+   * cropped sm/lg tier, but follows that layout's "Use full-size avatars"
+   * preference and becomes the original full-resolution source when enabled.
+   * See `avatar` for an explicit variant and tier.
+   */
   avatarUrl: string | null
-  /** Convenience: original aspect ratio at full resolution. See `avatar` for full control. */
+  /** Convenience: original aspect ratio at full resolution. See `avatar` for an explicit tier. */
   fullAvatarUrl: string | null
   /** Cropped/original avatar URLs across all size tiers. */
   avatar: OverrideAvatar
   isHidden: boolean
+  isContextAnchor: boolean
   isStreaming: boolean
   isLastMessage: boolean
   tokenCount: number | null
@@ -101,6 +107,7 @@ export interface OverrideActions {
   edit: () => void
   delete: () => void
   toggleHidden: () => void
+  toggleContextAnchor: () => void
   fork: () => void
   promptBreakdown: () => void
   swipeLeft: () => void

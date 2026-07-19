@@ -45,12 +45,28 @@ export const regexApi = {
     return post<{ deleted: string[]; count: number }>('/regex-scripts/bulk-delete', { ids })
   },
 
+  toggleSelected(ids: string[], disabled: boolean, activePresetId?: string | null) {
+    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/bulk-toggle', {
+      ids,
+      disabled,
+      active_preset_id: activePresetId ?? null,
+    })
+  },
+
   duplicate(id: string) {
     return post<RegexScript>(`/regex-scripts/${id}/duplicate`)
   },
 
   toggle(id: string, disabled: boolean, activePresetId?: string | null) {
     return put<RegexScript>(`/regex-scripts/${id}/toggle`, { disabled, active_preset_id: activePresetId ?? null })
+  },
+
+  toggleFolder(folder: string, disabled: boolean, activePresetId?: string | null) {
+    return post<{ changedIds: string[]; skippedIds: string[] }>('/regex-scripts/folders/toggle', {
+      folder,
+      disabled,
+      active_preset_id: activePresetId ?? null,
+    })
   },
 
   reorder(ids: string[]) {
@@ -65,8 +81,13 @@ export const regexApi = {
     return post<RegexScriptExport>('/regex-scripts/export', { ids, ...filters })
   },
 
-  importScripts(payload: any & { active_preset_id?: string | null }) {
-    return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', payload)
+  importScripts(payload: any, activePresetId?: string | null) {
+    const body = activePresetId === undefined
+      ? payload
+      : Array.isArray(payload)
+        ? { scripts: payload, active_preset_id: activePresetId }
+        : { ...payload, active_preset_id: activePresetId }
+    return post<{ imported: number; skipped: number; errors: string[] }>('/regex-scripts/import', body)
   },
 
   testRegex(params: { find_regex: string; replace_string: string; flags: string; content: string }) {

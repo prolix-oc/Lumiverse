@@ -3,12 +3,30 @@ import type { Image } from '@/types/api'
 
 export type ImageSize = 'sm' | 'lg'
 
+export interface ImageListResult {
+  data: Image[]
+  total: number
+}
+
 export interface ThumbnailRebuildProgress {
   total: number
   current: number
   generated: number
   skipped: number
   failed: number
+}
+
+interface WallpaperUploadOptions {
+  onProgress?: (percent: number) => void
+  uploadId?: string
+}
+
+interface ImageUrlOptions {
+  codec?: 'h264' | 'hevc'
+}
+
+function joinApiPath(path: string): string {
+  return `${BASE_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
 }
 
 export const imagesApi = {
@@ -25,6 +43,32 @@ export const imagesApi = {
     return upload<Image>('/images', form)
   },
 
+  uploadWallpaper(file: File, kind: 'image' | 'video', options?: WallpaperUploadOptions) {
+    const form = new FormData()
+    form.append('image', file)
+    const params = new URLSearchParams()
+    if (kind === 'video') {
+      params.set('strip_audio', '1')
+      params.set('video_codec', 'h264')
+    }
+    if (options?.uploadId) {
+      params.set('upload_id', options.uploadId)
+    }
+    const path = `/images/wallpapers${params.size > 0 ? `?${params.toString()}` : ''}`
+    if (options?.onProgress) {
+      return uploadWithProgress<Image>(path, form, options.onProgress)
+    }
+    return upload<Image>(path, form, kind === 'video' ? { timeout: 0 } : undefined)
+  },
+
+  listWallpapers(params?: { limit?: number; offset?: number }) {
+    return get<ImageListResult>('/images/wallpapers', params)
+  },
+
+  deleteWallpaper(id: string) {
+    return del<{ success: boolean; deleted: boolean }>(`/images/wallpapers/${id}`)
+  },
+
   delete(id: string) {
     return del<void>(`/images/${id}`)
   },
@@ -34,7 +78,10 @@ export const imagesApi = {
   },
 
   /** Full-size original */
-  url(id: string) {
+  url(id: string, options?: ImageUrlOptions) {
+    if (options?.codec) {
+      return `${BASE_URL}/images/${id}?codec=${encodeURIComponent(options.codec)}`
+    }
     return `${BASE_URL}/images/${id}`
   },
 
@@ -46,6 +93,11 @@ export const imagesApi = {
   /** Large tier (~700px) — portrait panel, editor preview */
   largeUrl(id: string) {
     return `${BASE_URL}/images/${id}?size=lg`
+  },
+
+  /** Same-origin proxy for third-party raster images used in rich HTML. */
+  remoteUrl(url: string) {
+    return `${joinApiPath('/images/remote')}?url=${encodeURIComponent(url)}`
   },
 
   rebuildThumbnails(options?: {

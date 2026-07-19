@@ -3,8 +3,8 @@ import { evaluate } from "../macros/MacroEvaluator";
 import { registry } from "../macros/MacroRegistry";
 import { initMacros } from "../macros";
 import type { MacroEnv } from "../macros/types";
-import type { PromptVariableDef } from "../types/preset";
-import { coercePromptVariable } from "./prompt-assembly.service";
+import type { Preset, PromptBlock, PromptVariableDef } from "../types/preset";
+import { coercePromptVariable, resolvePromptBlockPlacements, resolvePromptVariables } from "./prompt-assembly.service";
 
 // ---------------------------------------------------------------------------
 // Minimal env factory — only the fields {{var}} touches matter here.
@@ -33,7 +33,7 @@ function makeEnv(overrides: {
     chat: {
       id: "x", messageCount: 0, lastMessage: "", lastMessageName: "",
       lastUserMessage: "", lastCharMessage: "", lastMessageId: 0,
-      firstIncludedMessageId: 0, lastSwipeId: 0, currentSwipeId: 0,
+      firstIncludedMessageId: 0, lastSwipeId: 0, currentSwipeId: 0, rejectedSwipe: "",
     },
     system: {
       model: "test", maxPrompt: 0, maxContext: 0, maxResponse: 0,
@@ -184,6 +184,65 @@ describe("coercePromptVariable — multiselect", () => {
   });
 });
 
+describe("resolvePromptBlockPlacements", () => {
+  const selector: PromptVariableDef = {
+    id: "placement-target",
+    name: "adherence_target",
+    label: "Adherence target",
+    type: "select",
+    defaultValue: "baseline",
+    options: [
+      { id: "baseline", label: "Balanced", value: "Balanced" },
+      { id: "frontier", label: "Frontier", value: "Frontier" },
+    ],
+  };
+  const block: PromptBlock = {
+    id: "placement-block",
+    name: "Placement-aware prompt",
+    content: "{{promptBlockRole}}/{{promptBlockPosition}}/{{promptBlockDepth}}",
+    role: "system",
+    enabled: true,
+    position: "pre_history",
+    depth: 0,
+    marker: null,
+    isLocked: false,
+    color: null,
+    injectionTrigger: [],
+    group: null,
+    variables: [selector],
+    placementBinding: {
+      variableId: selector.id,
+      options: {
+        baseline: { role: "system", position: "pre_history", depth: 0 },
+        frontier: { role: "user", position: "in_history", depth: 3 },
+      },
+    },
+  };
+
+  test("projects the saved select option into an effective placement without mutating the stored block", () => {
+    const resolved = resolvePromptBlockPlacements([block], {
+      metadata: { promptVariables: { "placement-block": { adherence_target: "frontier" } } },
+    });
+
+    expect(resolved[0]).toMatchObject({ role: "user", position: "in_history", depth: 3 });
+    expect(block).toMatchObject({ role: "system", position: "pre_history", depth: 0 });
+  });
+
+  test("uses the select default and leaves the block unchanged when its chosen option has no placement mapping", () => {
+    const defaultResolved = resolvePromptBlockPlacements([block], { metadata: { promptVariables: {} } });
+    expect(defaultResolved[0]).toMatchObject({ role: "system", position: "pre_history", depth: 0 });
+
+    const unmapped = {
+      ...block,
+      placementBinding: { variableId: selector.id, options: {} },
+    };
+    const unchanged = resolvePromptBlockPlacements([unmapped], {
+      metadata: { promptVariables: { "placement-block": { adherence_target: "frontier" } } },
+    });
+    expect(unchanged[0]).toBe(unmapped);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // {{var::name::ison::keys}} — multiselect AND-query
 // ---------------------------------------------------------------------------
@@ -226,5 +285,97 @@ describe("{{var::name::ison::keys}} — multiselect AND-query", () => {
       promptVariables: { tone: "Respond with warmth." },
     });
     expect(await ev("{{var::tone}}", env)).toBe("Respond with warmth.");
+  });
+});
+
+describe("resolvePromptVariables", () => {
+  test("seeds {{var::}} values from enabled prompt block definitions and preset metadata", async () => {
+    const env = makeEnv();
+    const blocks: PromptBlock[] = [
+      {
+        id: "block-1",
+        name: "Style",
+        content: "{{var::tone}}",
+        role: "system",
+        enabled: true,
+        position: "pre_history",
+        depth: 0,
+        marker: null,
+        isLocked: false,
+        color: null,
+        injectionTrigger: [],
+        group: null,
+        variables: [
+          {
+            id: "var-1",
+            name: "tone",
+            label: "Tone",
+            type: "text",
+            defaultValue: "default tone",
+          },
+        ],
+      },
+    ];
+    const preset = {
+      id: "preset-1",
+      name: "Preset",
+      provider: "test",
+      engine: "test",
+      parameters: {},
+      prompt_order: blocks,
+      prompts: {},
+      metadata: { promptVariables: { "block-1": { tone: "configured tone" } } },
+      created_at: 0,
+      updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset);
+
+    expect(await ev("{{var::tone}} / {{getvar::tone}}", env)).toBe("configured tone / configured tone");
+  });
+
+  test("does not seed variables from disabled prompt blocks", async () => {
+    const env = makeEnv();
+    const blocks: PromptBlock[] = [
+      {
+        id: "block-1",
+        name: "Disabled",
+        content: "{{var::tone}}",
+        role: "system",
+        enabled: false,
+        position: "pre_history",
+        depth: 0,
+        marker: null,
+        isLocked: false,
+        color: null,
+        injectionTrigger: [],
+        group: null,
+        variables: [
+          {
+            id: "var-1",
+            name: "tone",
+            label: "Tone",
+            type: "text",
+            defaultValue: "default tone",
+          },
+        ],
+      },
+    ];
+    const preset = {
+      id: "preset-1",
+      name: "Preset",
+      provider: "test",
+      engine: "test",
+      parameters: {},
+      prompt_order: blocks,
+      prompts: {},
+      metadata: { promptVariables: { "block-1": { tone: "configured tone" } } },
+      created_at: 0,
+      updated_at: 0,
+    } satisfies Preset;
+
+    resolvePromptVariables(env, blocks, preset);
+
+    expect(await ev("{{var::tone}}", env)).toBe("");
   });
 });

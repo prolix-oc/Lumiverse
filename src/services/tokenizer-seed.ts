@@ -128,6 +128,79 @@ const BUILT_IN_CONFIGS = [
     }),
   },
   {
+    id: "glm-5-2",
+    name: "Z.ai GLM-5.2",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/zai-org/GLM-5.2/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/zai-org/GLM-5.2/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "minimax-m3",
+    name: "MiniMax M3",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/MiniMaxAI/MiniMax-M3/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "mimo-v2-5",
+    name: "Xiaomi MiMo-V2.5",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/XiaomiMiMo/MiMo-V2.5/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/XiaomiMiMo/MiMo-V2.5/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "mimo-v2-5-pro",
+    name: "Xiaomi MiMo-V2.5-Pro",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/XiaomiMiMo/MiMo-V2.5-Pro/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/XiaomiMiMo/MiMo-V2.5-Pro/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "gemma-4",
+    name: "Google Gemma 4",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/google/gemma-4-31B-it/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/google/gemma-4-31B-it/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "kimi-k2-7-code",
+    name: "Moonshot Kimi K2.7 Code",
+    type: "tiktoken",
+    config: JSON.stringify({
+      url: "https://huggingface.co/moonshotai/Kimi-K2.7-Code/resolve/main/tiktoken.model",
+      configUrl: "https://huggingface.co/moonshotai/Kimi-K2.7-Code/resolve/main/tokenizer_config.json",
+      pat_str: KIMI_PAT_STR,
+    }),
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    type: "huggingface",
+    config: JSON.stringify({
+      url: "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/resolve/main/tokenizer.json",
+      configUrl: "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro/resolve/main/tokenizer_config.json",
+    }),
+  },
+  {
     id: "approximate-4",
     name: "Rough Estimate (chars/4)",
     type: "approximate",
@@ -164,6 +237,21 @@ const BUILT_IN_PATTERNS = [
   // `qwen-?3[-.]5` catches `qwen3.5-*`, `qwen-3.5-*`, `qwen3-5-*`, `qwen-3-5-*`.
   { id: "pat-qwen-3-5", tokenizer_id: "qwen-3-5", pattern: "(?:^|[/:.])qwen-?3[-.]5", priority: 85 },
   { id: "pat-qwen-3", tokenizer_id: "qwen-3", pattern: "(?:^|[/:.])qwen", priority: 80 },
+  // GLM 5.2 before the looser glm-5 / glm-4 patterns.
+  { id: "pat-glm-5-2", tokenizer_id: "glm-5-2", pattern: "(?:^|[/:.])glm-5[-.]?2", priority: 90 },
+  // MiniMax M3 (text / vision / agent variants).
+  { id: "pat-minimax-m3", tokenizer_id: "minimax-m3", pattern: "(?:^|[/:.])minimax-?m3", priority: 80 },
+  // Xiaomi MiMo-V2.5 family — Pro first so the larger 1T model doesn't fall
+  // through to the base V2.5 pattern.
+  { id: "pat-mimo-v2-5-pro", tokenizer_id: "mimo-v2-5-pro", pattern: "(?:^|[/:.])mimo-?v2[-.]5[-.]?pro", priority: 85 },
+  { id: "pat-mimo-v2-5", tokenizer_id: "mimo-v2-5", pattern: "(?:^|[/:.])mimo-?v2[-.]5", priority: 80 },
+  // Google Gemma 4 before the looser gemma-3 / gemini pattern.
+  { id: "pat-gemma-4", tokenizer_id: "gemma-4", pattern: "(?:^|[/:.])gemma-4", priority: 85 },
+  // Moonshot Kimi K2.7 Code before the general kimi- pattern.
+  { id: "pat-kimi-k2-7-code", tokenizer_id: "kimi-k2-7-code", pattern: "(?:^|[/:.])kimi-?k2[-.]7[-.]?code", priority: 85 },
+  // DeepSeek V4 family — Pro first so it doesn't fall through to Flash.
+  { id: "pat-deepseek-v4-pro", tokenizer_id: "deepseek-v4-pro", pattern: "(?:^|[/:.])deepseek-?v4[-.]?pro", priority: 85 },
+  { id: "pat-deepseek-v4-flash", tokenizer_id: "deepseek-v4-flash", pattern: "(?:^|[/:.])deepseek-?v4[-.]?flash", priority: 80 },
   { id: "pat-fallback", tokenizer_id: "approximate-4", pattern: ".*", priority: -1 },
 ];
 

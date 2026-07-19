@@ -1,3 +1,7 @@
+---
+title: Interface Overview
+---
+
 # Interface Overview
 
 Lumiverse's interface is built around a central chat view with a tabbed drawer that pulls in from the edge of the screen. Here's a tour of what's where.

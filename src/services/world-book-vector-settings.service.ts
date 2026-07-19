@@ -1,4 +1,5 @@
 import * as settingsSvc from "./settings.service";
+import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
 
 export type WorldBookVectorPresetMode = "lean" | "balanced" | "deep" | "custom";
 
@@ -10,8 +11,6 @@ export interface WorldBookVectorSettings {
   retrievalTopK: number;
   maxChunksPerEntry: number;
 }
-
-export const WORLD_BOOK_VECTOR_SETTINGS_KEY = "worldBookVectorSettings";
 
 export const WORLD_BOOK_VECTOR_PRESETS: Record<Exclude<WorldBookVectorPresetMode, "custom">, Omit<WorldBookVectorSettings, "presetMode">> = {
   lean: {

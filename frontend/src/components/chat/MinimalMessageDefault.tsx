@@ -2,10 +2,10 @@
  * Default MinimalMessage renderer — the original implementation extracted
  * so it can be used as a fallback when a user override crashes or is disabled.
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
+import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { useLongPress } from '@/hooks/useLongPress'
@@ -13,7 +13,7 @@ import { useMessagePlayback } from '@/hooks/useMessagePlayback'
 import useSwipeAction from '@/hooks/useSwipeAction'
 import useSwipeGesture from '@/hooks/useSwipeGesture'
 import { copyTextToClipboard, getSelectionTextWithin } from '@/lib/clipboard'
-import { replay as replaySpindleInjections } from '@/lib/spindle/dom-injection-registry'
+import { scheduleReplay as scheduleSpindleInjectionReplay } from '@/lib/spindle/dom-injection-registry'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
 import MessageAttachments from './MessageAttachments'
@@ -38,6 +38,7 @@ export interface MinimalMessageDefaultProps {
   isSelectMode: boolean
   isSelected: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery: string
   // Pre-computed from useMessageCard
   isEditing: boolean
   editContent: string
@@ -59,11 +60,13 @@ export interface MinimalMessageDefaultProps {
   displayName: string
   macroUserName: string
   isHidden: boolean
+  isContextAnchor: boolean
   handleEdit: () => void
   handleSaveEdit: () => void
   handleCancelEdit: () => void
   handleDelete: () => void
   handleToggleHidden: () => void
+  handleToggleContextAnchor: () => void
   handleFork: () => void
   handlePromptBreakdown: () => void
 }
@@ -172,10 +175,11 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
 
 export default function MinimalMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+  findQuery,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden,
-  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
+  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
   handleFork, handlePromptBreakdown,
 }: MinimalMessageDefaultProps) {
   const { t } = useTranslation('chat')
@@ -200,13 +204,12 @@ export default function MinimalMessageDefault({
 
   const cardRef = useRef<HTMLDivElement>(null)
 
-  // Replay any Spindle extension DOM that was registered against this
-  // message id but lost when the chat virtualizer unmounted the row. See
-  // dom-injection-registry.ts for the full mechanism. useLayoutEffect so
-  // the injection lands in the same paint as the bubble's mount.
-  useLayoutEffect(() => {
+  // Replay extension-owned DOM after paint through the cooperative
+  // Spindle queue so chat switches do not pay for injection re-attachment
+  // during the bubble's synchronous mount path.
+  useEffect(() => {
     if (!cardRef.current) return
-    replaySpindleInjections(message.id, cardRef.current)
+    return scheduleSpindleInjectionReplay(message.id, cardRef.current)
   }, [message.id])
 
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
@@ -284,6 +287,13 @@ export default function MinimalMessageDefault({
       active: isHidden,
       onClick: () => contextAction(handleToggleHidden),
     },
+    ...(!isHidden ? [{
+      key: 'toggle-context-anchor',
+      label: isContextAnchor ? t('messageActions.clearContextAnchor') : t('messageActions.setContextAnchor'),
+      icon: <Anchor size={14} />,
+      active: isContextAnchor,
+      onClick: () => contextAction(handleToggleContextAnchor),
+    }] satisfies ContextMenuEntry[] : []),
     {
       key: 'fork',
       label: t('messageActions.fork'),
@@ -306,7 +316,7 @@ export default function MinimalMessageDefault({
     },
   ], [
     canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
-    handlePromptBreakdown, handleToggleHidden, hasSavedAudio, isGenerating, isHidden, isPlaying, isUser,
+    handlePromptBreakdown, handleToggleHidden, handleToggleContextAnchor, hasSavedAudio, isGenerating, isHidden, isContextAnchor, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
 
@@ -320,7 +330,7 @@ export default function MinimalMessageDefault({
     <div
       ref={cardRef}
       data-component="MinimalMessage"
-      data-part={isUser ? 'user' : 'character'}
+      data-part={isUser ? 'user' : isActivelyStreaming ? 'streaming' : 'character'}
       className={clsx(
         styles.card,
         isUser ? styles.user : styles.character,
@@ -405,6 +415,7 @@ export default function MinimalMessageDefault({
             messageId={message.id}
             chatId={chatId}
             depth={depth}
+            findQuery={findQuery}
           />
         ) : isActivelyStreaming ? (
           <StreamingIndicator />
@@ -447,6 +458,7 @@ export default function MinimalMessageDefault({
             onEdit={handleEdit}
             onDelete={handleDelete}
             onToggleHidden={handleToggleHidden}
+            onToggleContextAnchor={handleToggleContextAnchor}
             onFork={handleFork}
             onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
             onPlay={canPlay ? togglePlayback : undefined}
@@ -455,6 +467,7 @@ export default function MinimalMessageDefault({
             hasSavedAudio={hasSavedAudio}
             isUser={isUser}
             isHidden={isHidden}
+            isContextAnchor={isContextAnchor}
             content={message.content}
           />
         </div>

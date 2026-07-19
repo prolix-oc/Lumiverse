@@ -28,11 +28,47 @@ interface PhraseSpecificityState {
   tokenDocFrequency: Map<string, number>;
 }
 
+interface QueryTokenSignal {
+  count: number;
+  hasNameLikeForm: boolean;
+  hasUppercaseForm: boolean;
+  hasTitleCaseForm: boolean;
+}
+
 interface VectorQueryLexicalState {
   normalizedText: string;
   tokenSet: Set<string>;
+  queryTokenSignals: Map<string, QueryTokenSignal>;
   focusTokenSet: Set<string>;
   specificityState: PhraseSpecificityState;
+  mentionOwnership: MentionOwnershipState | null;
+}
+
+export type WorldInfoLexicalQueryBatchKind = "anchors" | "mixed" | "topical";
+
+export interface WorldInfoLexicalQueryBatch {
+  kind: WorldInfoLexicalQueryBatchKind;
+  text: string;
+}
+
+interface DetectedMention {
+  start: number;
+  end: number;
+  normalizedText: string;
+  kind: "exact" | "partial";
+  candidateEntryIds: string[];
+  ownerEntryId: string | null;
+}
+
+interface MentionOwnershipState {
+  mentions: DetectedMention[];
+  exactValuesByEntryId: Map<string, Set<string>>;
+  partialTokensByEntryId: Map<string, Set<string>>;
+  focusTokensByEntryId: Map<string, Set<string>>;
+  supportingAnchors: Array<{
+    entryId: string;
+    value: string;
+  }>;
 }
 
 export interface VectorScoreBreakdown {
@@ -45,6 +81,7 @@ export interface VectorScoreBreakdown {
   commentExact: number;
   commentPartial: number;
   focusBoost: number;
+  supportingContextBoost: number;
   priority: number;
   broadPenalty: number;
   focusMissPenalty: number;
@@ -107,10 +144,20 @@ export interface VectorWorldInfoTimingBreakdown {
   totalMs: number;
 }
 
+export interface WorldInfoVectorQueryScope {
+  configuredScanDepth: number | null;
+  visibleMessagesAvailable: number;
+  messagesSelected: number;
+  maxTokens: number;
+  tokenTruncated: boolean;
+}
+
 export interface VectorWorldInfoRetrievalResult {
   entries: VectorActivatedEntry[];
   candidateTrace: VectorRetrievalTraceEntry[];
   queryPreview: string;
+  queryScope: WorldInfoVectorQueryScope;
+  lexicalQueryPreviews: WorldInfoLexicalQueryBatch[];
   eligibleCount: number;
   hitsBeforeThreshold: number;
   hitsAfterThreshold: number;
@@ -211,6 +258,15 @@ const WORLD_INFO_FOCUS_GENERIC_TOKENS = new Set([
   "rules",
   "rule",
 ]);
+
+const WORLD_INFO_FTS_RESERVED_TOKENS = new Set([
+  "and",
+  "or",
+  "not",
+  "near",
+]);
+
+export const WORLD_INFO_FTS_QUERY_MAX_CHARS = 4096;
 
 const WORLD_INFO_REFERENCE_TITLE_KEYWORDS = new Set([
   "relationship",
@@ -354,8 +410,9 @@ function buildPhraseSpecificityState(
 
 function normalizeLexicalText(text: string): string {
   return text
+    .normalize("NFKC")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -366,6 +423,103 @@ function tokenizeLexicalText(text: string): string[] {
     .filter(
       (token) => token.length > 1 && !WORLD_INFO_VECTOR_STOPWORDS.has(token),
     );
+}
+
+function tokenizeSafeFtsText(text: string): string[] {
+  return (text.normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter(
+      (token) =>
+        token.length > 1 &&
+        !WORLD_INFO_VECTOR_STOPWORDS.has(token) &&
+        !WORLD_INFO_FTS_RESERVED_TOKENS.has(token),
+    );
+}
+
+function getEntryAnchors(entry: WorldBookEntryModel): string[] {
+  return dedupeStringsCaseInsensitive([
+    ...(entry.key || []),
+    ...(entry.keysecondary || []),
+    entry.comment || "",
+  ]);
+}
+
+function appendLexicalBatchTerm(
+  batches: WorldInfoLexicalQueryBatch[],
+  term: string,
+  kind: "anchors" | "topical",
+  maxChars: number,
+): void {
+  if (!term || term.length > maxChars) return;
+  const current = batches[batches.length - 1];
+  const nextText = current?.text ? `${current.text} ${term}` : term;
+  if (!current || nextText.length > maxChars) {
+    batches.push({ kind, text: term });
+    return;
+  }
+  current.text = nextText;
+  if (current.kind !== kind) current.kind = "mixed";
+}
+
+/**
+ * Build parser-safe lexical query batches without allowing topical text to
+ * crowd explicit title/key anchors out of the provider's query limit.
+ */
+export function buildWorldInfoLexicalQueryBatches(
+  queryText: string,
+  entries: WorldBookEntryModel[],
+  maxChars = WORLD_INFO_FTS_QUERY_MAX_CHARS,
+): WorldInfoLexicalQueryBatch[] {
+  const normalizedQuery = normalizeLexicalText(queryText);
+  if (!normalizedQuery || maxChars < 1) return [];
+
+  const querySignals = buildQueryTokenSignals(queryText);
+  const anchorTerms: string[] = [];
+  const anchorTermSet = new Set<string>();
+  const appendAnchorTokens = (tokens: string[]) => {
+    for (const token of tokens) {
+      if (anchorTermSet.has(token)) continue;
+      anchorTermSet.add(token);
+      anchorTerms.push(token);
+    }
+  };
+
+  for (const entry of entries) {
+    for (const anchor of getEntryAnchors(entry)) {
+      const tokens = tokenizeSafeFtsText(anchor);
+      if (tokens.length === 0) continue;
+      const exact = hasExactPhraseMatch(normalizedQuery, anchor);
+      const mentionedTokens = tokens.filter((token) => {
+        if (WORLD_INFO_FOCUS_GENERIC_TOKENS.has(token)) return false;
+        const signal = querySignals.get(token);
+        return !!signal && (signal.hasNameLikeForm || signal.hasUppercaseForm);
+      });
+      if (exact) appendAnchorTokens(tokens);
+      else appendAnchorTokens(mentionedTokens);
+    }
+  }
+
+  const topicalTerms: string[] = [];
+  const topicalTermSet = new Set(anchorTermSet);
+  // Prefer the newest topical evidence while retaining anchors from the full
+  // context. Reverse/dedupe/reverse keeps the last occurrence of each term.
+  const recentTokens = tokenizeSafeFtsText(queryText.slice(-maxChars));
+  for (let index = recentTokens.length - 1; index >= 0; index -= 1) {
+    const token = recentTokens[index];
+    if (topicalTermSet.has(token)) continue;
+    topicalTermSet.add(token);
+    topicalTerms.push(token);
+  }
+  topicalTerms.reverse();
+
+  const batches: WorldInfoLexicalQueryBatch[] = [];
+  for (const term of anchorTerms) {
+    appendLexicalBatchTerm(batches, term, "anchors", maxChars);
+  }
+  for (const term of topicalTerms) {
+    appendLexicalBatchTerm(batches, term, "topical", maxChars);
+  }
+  return batches;
 }
 
 function dedupeStringsCaseInsensitive(values: string[]): string[] {
@@ -508,6 +662,34 @@ function getPartialMatchThreshold(
   return tokenCount === 2 ? 0.75 : 0.6;
 }
 
+function hasStrongSingleTokenPartialSignal(
+  token: string,
+  queryState: VectorQueryLexicalState,
+  specificity: number,
+  kind: "key" | "comment",
+): boolean {
+  const signal = queryState.queryTokenSignals.get(token);
+  if (!signal) return false;
+  if (signal.hasUppercaseForm && token.length >= 3) return true;
+
+  const nameSpecificityFloor = kind === "comment" ? 0.34 : 0.3;
+  if (signal.hasNameLikeForm && specificity >= nameSpecificityFloor) {
+    return true;
+  }
+
+  const repeatedSpecificityFloor = kind === "comment" ? 0.48 : 0.42;
+  if (
+    signal.count >= 2 &&
+    token.length >= 4 &&
+    specificity >= repeatedSpecificityFloor
+  ) {
+    return true;
+  }
+
+  const longTokenSpecificityFloor = kind === "comment" ? 0.78 : 0.7;
+  return token.length >= 8 && specificity >= longTokenSpecificityFloor;
+}
+
 function getRareTokenPartialScore(
   value: string,
   queryState: VectorQueryLexicalState,
@@ -517,11 +699,31 @@ function getRareTokenPartialScore(
   const tokens = Array.from(new Set(tokenizeLexicalText(value)));
   if (tokens.length < 2) return 0;
 
-  const matchedTokenSpecificities = tokens
+  const matchedTokens = tokens
     .filter((token) => queryState.tokenSet.has(token))
-    .map((token) => getTokenSpecificity(queryState.specificityState, token));
-  if (matchedTokenSpecificities.length === 0) return 0;
+    .map((token) => ({
+      token,
+      specificity: getTokenSpecificity(queryState.specificityState, token),
+    }));
+  if (matchedTokens.length === 0) return 0;
 
+  if (matchedTokens.length === 1) {
+    const matchedToken = matchedTokens[0];
+    if (
+      !hasStrongSingleTokenPartialSignal(
+        matchedToken.token,
+        queryState,
+        matchedToken.specificity,
+        kind,
+      )
+    ) {
+      return 0;
+    }
+  }
+
+  const matchedTokenSpecificities = matchedTokens.map(
+    (token) => token.specificity,
+  );
   const bestTokenSpecificity = Math.max(...matchedTokenSpecificities);
   const minimumSpecificity = kind === "comment" ? 0.42 : 0.34;
   if (bestTokenSpecificity < minimumSpecificity) return 0;
@@ -654,15 +856,11 @@ function estimateReferenceEntryPenalty(
   );
 }
 
-function buildFocusTokenSet(
+function buildQueryTokenSignals(
   queryText: string,
-  specificityState: PhraseSpecificityState,
-): Set<string> {
-  const queryTokenSignals = new Map<
-    string,
-    { count: number; hasNameLikeForm: boolean; hasUppercaseForm: boolean }
-  >();
-  for (const match of queryText.matchAll(/\b[A-Za-z0-9]+\b/g)) {
+): Map<string, QueryTokenSignal> {
+  const queryTokenSignals = new Map<string, QueryTokenSignal>();
+  for (const match of queryText.normalize("NFKC").matchAll(/[\p{L}\p{N}]+/gu)) {
     const rawToken = match[0];
     const normalizedToken = normalizeLexicalText(rawToken);
     if (
@@ -677,18 +875,36 @@ function buildFocusTokenSet(
       count: 0,
       hasNameLikeForm: false,
       hasUppercaseForm: false,
+      hasTitleCaseForm: false,
     };
+    const hasCasedLetter = rawToken.toLowerCase() !== rawToken.toUpperCase();
     const isUppercaseForm =
-      /[A-Z]/.test(rawToken) && rawToken === rawToken.toUpperCase();
-    const isNameLikeForm = isUppercaseForm || /^[A-Z][a-z0-9]+$/.test(rawToken);
+      hasCasedLetter && rawToken === rawToken.toUpperCase();
+    const first = Array.from(rawToken)[0] ?? "";
+    const isTitleCaseForm =
+      first.toUpperCase() === first &&
+      first.toLowerCase() !== first &&
+      rawToken !== rawToken.toUpperCase();
+    const isNameLikeForm =
+      isTitleCaseForm ||
+      (isUppercaseForm && normalizedToken.length >= 3);
 
     queryTokenSignals.set(normalizedToken, {
       count: previous.count + 1,
       hasNameLikeForm: previous.hasNameLikeForm || isNameLikeForm,
       hasUppercaseForm: previous.hasUppercaseForm || isUppercaseForm,
+      hasTitleCaseForm: previous.hasTitleCaseForm || isTitleCaseForm,
     });
   }
 
+  return queryTokenSignals;
+}
+
+function buildFocusTokenSet(
+  queryText: string,
+  specificityState: PhraseSpecificityState,
+  queryTokenSignals: Map<string, QueryTokenSignal>,
+): Set<string> {
   const tokens = tokenizeLexicalText(queryText);
   return new Set(
     tokens.filter((token) => {
@@ -700,7 +916,7 @@ function buildFocusTokenSet(
       const specificity = getTokenSpecificity(specificityState, token);
       const repeated = signal.count >= 2 && token.length >= 4;
       const named = signal.hasNameLikeForm && token.length >= 3;
-      const uppercase = signal.hasUppercaseForm && token.length >= 2;
+      const uppercase = signal.hasUppercaseForm && token.length >= 3;
       const verySpecificLongToken = token.length >= 8 && specificity >= 0.48;
 
       if (uppercase) return true;
@@ -754,8 +970,12 @@ function getEntryFocusOverlap(
   }
 
   const matchedSpecificities: number[] = [];
+  const ownedFocusTokens = queryState.mentionOwnership?.focusTokensByEntryId.get(
+    entry.id,
+  );
   for (const token of entryTokens) {
     if (!queryState.focusTokenSet.has(token)) continue;
+    if (queryState.mentionOwnership && !ownedFocusTokens?.has(token)) continue;
     matchedSpecificities.push(
       getTokenSpecificity(queryState.specificityState, token),
     );
@@ -855,6 +1075,7 @@ function getEntrySubjectMismatchPenalty(
 }
 
 function scorePhraseMatches(
+  entryId: string,
   values: string[],
   queryState: VectorQueryLexicalState,
   exactWeight: number,
@@ -885,20 +1106,34 @@ function scorePhraseMatches(
     bestSpecificity = Math.max(bestSpecificity, specificity);
 
     if (hasExactPhraseMatch(queryState.normalizedText, value)) {
-      exactSpecificities.push(specificity);
       matchedValues.push(value);
-      matchedSpecificity = Math.max(matchedSpecificity, specificity);
+      const ownsExact =
+        !queryState.mentionOwnership ||
+        queryState.mentionOwnership.exactValuesByEntryId
+          .get(entryId)
+          ?.has(normalizeLexicalText(value));
+      if (ownsExact) {
+        exactSpecificities.push(specificity);
+        matchedSpecificity = Math.max(matchedSpecificity, specificity);
+      }
       continue;
     }
+
+    const ownedPartialTokens = queryState.mentionOwnership?.partialTokensByEntryId.get(entryId);
+    const ownsPartial =
+      !queryState.mentionOwnership ||
+      tokenizeLexicalText(value).some((token) => ownedPartialTokens?.has(token));
 
     const overlap = getPhraseTokenOverlap(queryState.tokenSet, value);
     if (overlap >= getPartialMatchThreshold(value, kind)) {
       matchedValues.push(value);
-      matchedSpecificity = Math.max(matchedSpecificity, specificity);
-      partialScore = Math.max(
-        partialScore,
-        overlap * specificity * partialWeight,
-      );
+      if (ownsPartial) {
+        matchedSpecificity = Math.max(matchedSpecificity, specificity);
+        partialScore = Math.max(
+          partialScore,
+          overlap * specificity * partialWeight,
+        );
+      }
       continue;
     }
 
@@ -911,8 +1146,10 @@ function scorePhraseMatches(
     if (rareTokenPartialScore <= 0) continue;
 
     matchedValues.push(value);
-    matchedSpecificity = Math.max(matchedSpecificity, specificity);
-    partialScore = Math.max(partialScore, rareTokenPartialScore);
+    if (ownsPartial) {
+      matchedSpecificity = Math.max(matchedSpecificity, specificity);
+      partialScore = Math.max(partialScore, rareTokenPartialScore);
+    }
   }
 
   exactSpecificities.sort((a, b) => b - a);
@@ -937,11 +1174,18 @@ function buildVectorQueryLexicalState(
   queryText: string,
   specificityState: PhraseSpecificityState,
 ): VectorQueryLexicalState {
+  const queryTokenSignals = buildQueryTokenSignals(queryText);
   return {
     normalizedText: normalizeLexicalText(queryText),
     tokenSet: new Set(tokenizeLexicalText(queryText)),
-    focusTokenSet: buildFocusTokenSet(queryText, specificityState),
+    queryTokenSignals,
+    focusTokenSet: buildFocusTokenSet(
+      queryText,
+      specificityState,
+      queryTokenSignals,
+    ),
     specificityState,
+    mentionOwnership: null,
   };
 }
 
@@ -957,6 +1201,437 @@ export function getWorldInfoVectorCandidateMultiplier(
   return getWorldInfoVectorPreset(mode).candidateMultiplier;
 }
 
+export function getWorldInfoVectorCandidateRecallLimit(
+  mode: HybridWeightMode,
+  topK: number,
+  eligibleCount: number,
+): number {
+  const normalizedTopK = Math.max(
+    1,
+    Number.isFinite(topK) ? Math.floor(topK) : 1,
+  );
+  const expandedLimit = Math.max(
+    normalizedTopK * getWorldInfoVectorCandidateMultiplier(mode),
+    normalizedTopK,
+  );
+  const normalizedEligibleCount = Math.max(
+    0,
+    Number.isFinite(eligibleCount) ? Math.floor(eligibleCount) : 0,
+  );
+
+  if (normalizedEligibleCount === 0) return expandedLimit;
+  return Math.max(1, Math.min(normalizedEligibleCount, expandedLimit));
+}
+
+const EXACT_ANCHOR_LEXICAL_SCORE = 30;
+
+function buildSearchTextPreview(entry: WorldBookEntryModel): string {
+  const sections: string[] = [];
+  const comment = (entry.comment || "").trim();
+  const primaryKeys = dedupeStringsCaseInsensitive(entry.key || []);
+  const secondaryKeys = dedupeStringsCaseInsensitive(entry.keysecondary || []);
+  const content = (entry.content || "").trim();
+
+  if (comment) sections.push(`Entry title: ${comment}`);
+  if (primaryKeys.length > 0)
+    sections.push(`Primary keys: ${primaryKeys.join(", ")}`);
+  if (secondaryKeys.length > 0)
+    sections.push(`Secondary keys: ${secondaryKeys.join(", ")}`);
+  if (content) sections.push(`Content:\n${content}`);
+
+  return sections.join("\n\n");
+}
+
+function buildExactAnchorCandidate(
+  entry: WorldBookEntryModel,
+  queryState: VectorQueryLexicalState,
+): WorldBookSearchCandidate | null {
+  const anchors = [
+    ...(entry.key || []),
+    ...(entry.keysecondary || []),
+    entry.comment || "",
+  ];
+  if (
+    !anchors.some((anchor) =>
+      hasExactPhraseMatch(queryState.normalizedText, anchor),
+    )
+  ) {
+    return null;
+  }
+  const searchTextPreview = buildSearchTextPreview(entry);
+
+  return {
+    entry_id: entry.id,
+    distance: Number.POSITIVE_INFINITY,
+    lexical_score: EXACT_ANCHOR_LEXICAL_SCORE,
+    lexical_strength: 0.5,
+    content: entry.content || "",
+    searchTextPreview,
+    metadata: {
+      comment: entry.comment,
+      key: entry.key,
+      keysecondary: entry.keysecondary,
+      world_book_id: entry.world_book_id,
+      search_text: searchTextPreview,
+    },
+  };
+}
+
+function augmentPooledCandidatesWithExactAnchors(
+  eligibleEntries: WorldBookEntryModel[],
+  pooledCandidates: VectorCandidatePoolEntry[],
+  queryState: VectorQueryLexicalState,
+): VectorCandidatePoolEntry[] {
+  const byEntryId = new Map<string, VectorCandidatePoolEntry>();
+  for (const item of pooledCandidates) {
+    byEntryId.set(item.entry.id, item);
+  }
+
+  for (const entry of eligibleEntries) {
+    const exactCandidate = buildExactAnchorCandidate(entry, queryState);
+    if (!exactCandidate) continue;
+
+    const existing = byEntryId.get(entry.id);
+    if (!existing) {
+      byEntryId.set(entry.id, { entry, candidate: exactCandidate });
+      continue;
+    }
+
+    const lexical_score =
+      existing.candidate.lexical_score == null
+        ? exactCandidate.lexical_score
+        : exactCandidate.lexical_score == null
+          ? existing.candidate.lexical_score
+        : Math.max(
+            existing.candidate.lexical_score,
+            exactCandidate.lexical_score,
+          );
+    byEntryId.set(entry.id, {
+      entry,
+      candidate: {
+        ...existing.candidate,
+        lexical_score,
+        lexical_strength: Math.max(
+          existing.candidate.lexical_strength ?? 0,
+          exactCandidate.lexical_strength ?? 0,
+        ),
+        content: existing.candidate.content || exactCandidate.content,
+        searchTextPreview:
+          existing.candidate.searchTextPreview || exactCandidate.searchTextPreview,
+        metadata: {
+          ...exactCandidate.metadata,
+          ...existing.candidate.metadata,
+          search_text:
+            existing.candidate.metadata.search_text ||
+            exactCandidate.metadata.search_text,
+        },
+      },
+    });
+  }
+
+  return Array.from(byEntryId.values());
+}
+
+type EntryAnchorKind = "primary" | "secondary" | "comment";
+
+interface EntryAnchorRecord {
+  entry: WorldBookEntryModel;
+  kind: EntryAnchorKind;
+  value: string;
+  normalizedValue: string;
+  tokens: string[];
+  rawTokens: string[];
+}
+
+function buildEntryAnchorRecords(entries: WorldBookEntryModel[]): EntryAnchorRecord[] {
+  const records: EntryAnchorRecord[] = [];
+  for (const entry of entries) {
+    const append = (kind: EntryAnchorKind, values: string[]) => {
+      for (const value of dedupeStringsCaseInsensitive(values)) {
+        const normalizedValue = normalizeLexicalText(value);
+        const tokens = tokenizeLexicalText(value);
+        const rawTokens = value.normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? [];
+        if (!normalizedValue || tokens.length === 0) continue;
+        records.push({ entry, kind, value, normalizedValue, tokens, rawTokens });
+      }
+    };
+    append("primary", entry.key || []);
+    append("secondary", entry.keysecondary || []);
+    append("comment", [entry.comment || ""]);
+  }
+  return records;
+}
+
+function anchorMatchQuality(kind: EntryAnchorKind, exact: boolean): number {
+  const kindScore = kind === "primary" ? 3 : kind === "secondary" ? 2 : 1;
+  return (exact ? 10 : 0) + kindScore;
+}
+
+function addOwnedValue(
+  map: Map<string, Set<string>>,
+  entryId: string,
+  value: string,
+): void {
+  const values = map.get(entryId) ?? new Set<string>();
+  values.add(value);
+  map.set(entryId, values);
+}
+
+function buildMentionOwnershipState(
+  queryText: string,
+  eligibleEntries: WorldBookEntryModel[],
+  candidates: VectorCandidatePoolEntry[],
+  specificityState: PhraseSpecificityState,
+): MentionOwnershipState {
+  const candidateByEntryId = new Map(
+    candidates.map((item) => [item.entry.id, item.candidate]),
+  );
+  const candidateIds = new Set(candidateByEntryId.keys());
+  const records = buildEntryAnchorRecords(eligibleEntries).filter((record) =>
+    candidateIds.has(record.entry.id),
+  );
+  const normalizedQuery = normalizeLexicalText(queryText);
+  const querySignals = buildQueryTokenSignals(queryText);
+  const mentions: DetectedMention[] = [];
+  const exactValuesByEntryId = new Map<string, Set<string>>();
+  const partialTokensByEntryId = new Map<string, Set<string>>();
+  const focusTokensByEntryId = new Map<string, Set<string>>();
+  const supportingAnchors = records
+    .filter((record) => hasExactPhraseMatch(normalizedQuery, record.value))
+    .map((record) => ({
+      entryId: record.entry.id,
+      value: record.normalizedValue,
+    }))
+    .filter(
+      (anchor, index, anchors) =>
+        anchors.findIndex(
+          (candidate) =>
+            candidate.entryId === anchor.entryId &&
+            candidate.value === anchor.value,
+        ) === index,
+    );
+
+  const resolve = (
+    start: number,
+    end: number,
+    normalizedText: string,
+    kind: "exact" | "partial",
+    matchingRecords: EntryAnchorRecord[],
+  ) => {
+    const bestRecordByEntryId = new Map<string, EntryAnchorRecord>();
+    for (const record of matchingRecords) {
+      const existing = bestRecordByEntryId.get(record.entry.id);
+      if (
+        !existing ||
+        anchorMatchQuality(record.kind, kind === "exact") >
+          anchorMatchQuality(existing.kind, kind === "exact")
+      ) {
+        bestRecordByEntryId.set(record.entry.id, record);
+      }
+    }
+    const ranked = Array.from(bestRecordByEntryId.values()).sort((a, b) => {
+      const qualityDelta =
+        anchorMatchQuality(b.kind, kind === "exact") -
+        anchorMatchQuality(a.kind, kind === "exact");
+      if (qualityDelta !== 0) return qualityDelta;
+      const aCandidate = candidateByEntryId.get(a.entry.id)!;
+      const bCandidate = candidateByEntryId.get(b.entry.id)!;
+      const aFinite = Number.isFinite(aCandidate.distance);
+      const bFinite = Number.isFinite(bCandidate.distance);
+      if (aFinite !== bFinite) return aFinite ? -1 : 1;
+      if (aFinite && aCandidate.distance !== bCandidate.distance) {
+        return aCandidate.distance - bCandidate.distance;
+      }
+      const lexicalDelta =
+        (bCandidate.lexical_strength ?? 0) -
+        (aCandidate.lexical_strength ?? 0);
+      if (lexicalDelta !== 0) return lexicalDelta;
+      const specificityDelta =
+        getPhraseSpecificity(specificityState, b.value) -
+        getPhraseSpecificity(specificityState, a.value);
+      if (specificityDelta !== 0) return specificityDelta;
+      if (a.entry.priority !== b.entry.priority) {
+        return b.entry.priority - a.entry.priority;
+      }
+      if (a.entry.order_value !== b.entry.order_value) {
+        return a.entry.order_value - b.entry.order_value;
+      }
+      return a.entry.id.localeCompare(b.entry.id);
+    });
+    const owner = ranked[0] ?? null;
+    mentions.push({
+      start,
+      end,
+      normalizedText,
+      kind,
+      candidateEntryIds: ranked.map((record) => record.entry.id),
+      ownerEntryId: owner?.entry.id ?? null,
+    });
+    if (!owner) return;
+    if (kind === "exact") {
+      addOwnedValue(exactValuesByEntryId, owner.entry.id, owner.normalizedValue);
+      for (const token of owner.tokens) {
+        addOwnedValue(focusTokensByEntryId, owner.entry.id, token);
+      }
+    } else {
+      addOwnedValue(partialTokensByEntryId, owner.entry.id, normalizedText);
+      addOwnedValue(focusTokensByEntryId, owner.entry.id, normalizedText);
+    }
+  };
+
+  const exactGroups = new Map<string, EntryAnchorRecord[]>();
+  for (const record of records) {
+    if (!hasExactPhraseMatch(normalizedQuery, record.value)) continue;
+    const group = exactGroups.get(record.normalizedValue) ?? [];
+    group.push(record);
+    exactGroups.set(record.normalizedValue, group);
+  }
+  for (const [phrase, matchingRecords] of exactGroups) {
+    let fromIndex = 0;
+    while (fromIndex < normalizedQuery.length) {
+      const padded = ` ${normalizedQuery} `;
+      const found = padded.indexOf(` ${phrase} `, fromIndex);
+      if (found < 0) break;
+      const start = Math.max(0, found - 1);
+      resolve(start, start + phrase.length, phrase, "exact", matchingRecords);
+      fromIndex = found + phrase.length + 1;
+    }
+  }
+
+  for (const match of normalizedQuery.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const token = match[0];
+    if (WORLD_INFO_FOCUS_GENERIC_TOKENS.has(token)) continue;
+    const signal = querySignals.get(token);
+    if (!signal || (!signal.hasNameLikeForm && !signal.hasUppercaseForm)) continue;
+    const acronymOnlyMention =
+      token.length <= 3 &&
+      signal.hasUppercaseForm &&
+      !signal.hasTitleCaseForm;
+    const matchingRecords = records.filter((record) => {
+      if (!record.tokens.includes(token)) return false;
+      if (!acronymOnlyMention) return true;
+      return record.rawTokens.some(
+        (rawToken) =>
+          normalizeLexicalText(rawToken) === token &&
+          rawToken === rawToken.toUpperCase(),
+      );
+    });
+    if (matchingRecords.length === 0) continue;
+    const start = match.index ?? 0;
+    const end = start + token.length;
+    if (
+      mentions.some(
+        (mention) =>
+          mention.kind === "exact" &&
+          start >= mention.start &&
+          end <= mention.end,
+      )
+    ) {
+      continue;
+    }
+    resolve(start, end, token, "partial", matchingRecords);
+  }
+
+  return {
+    mentions,
+    exactValuesByEntryId,
+    partialTokensByEntryId,
+    focusTokensByEntryId,
+    supportingAnchors,
+  };
+}
+
+function getSupportingContextBoost(
+  entry: WorldBookEntryModel,
+  queryState: VectorQueryLexicalState,
+  hasMentionBonus: boolean,
+): number {
+  if (hasMentionBonus || !queryState.mentionOwnership) return 0;
+  const normalizedContent = normalizeLexicalText(entry.content || "");
+  if (!normalizedContent) return 0;
+
+  const supportedSubjects = new Set<string>();
+  for (const anchor of queryState.mentionOwnership.supportingAnchors) {
+    if (anchor.entryId === entry.id) continue;
+    if (` ${normalizedContent} `.includes(` ${anchor.value} `)) {
+      supportedSubjects.add(anchor.entryId);
+    }
+  }
+  if (supportedSubjects.size < 3) return 0;
+  const contentTokenCount = tokenizeLexicalText(entry.content || "").length;
+  const compactness = clamp01(240 / Math.max(240, contentTokenCount));
+  return Math.min(0.1, (supportedSubjects.size - 2) * 0.025) * compactness;
+}
+
+function getExactTitleAnchorBoost(
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  if (rawCommentMatches.exactScore <= 0) return 0;
+  return 0.08 + clamp01(rawCommentMatches.matchedSpecificity) * 0.08;
+}
+
+function getLexicalContentBoostScale(
+  primaryMatches: ReturnType<typeof scorePhraseMatches>,
+  secondaryMatches: ReturnType<typeof scorePhraseMatches>,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+): number {
+  const hasExactAnchor =
+    primaryMatches.exactScore > 0 ||
+    secondaryMatches.exactScore > 0 ||
+    rawCommentMatches.exactScore > 0;
+  if (hasExactAnchor) return 0.3;
+
+  const hasPartialAnchor =
+    primaryMatches.partialScore > 0 ||
+    secondaryMatches.partialScore > 0 ||
+    rawCommentMatches.partialScore > 0;
+  if (hasPartialAnchor) return 0.15;
+
+  return 0.08;
+}
+
+function getActiveTitleTokenBoost(
+  comment: string,
+  queryState: VectorQueryLexicalState,
+  rawCommentMatches: ReturnType<typeof scorePhraseMatches>,
+  isFtsOnly: boolean,
+  commentMultiplier: number,
+): number {
+  if (
+    !comment ||
+    commentMultiplier < 0.8 ||
+    rawCommentMatches.exactScore > 0 ||
+    rawCommentMatches.partialScore <= 0
+  ) {
+    return 0;
+  }
+
+  const titleTokens = Array.from(new Set(tokenizeLexicalText(comment)));
+  if (titleTokens.length < 2) return 0;
+
+  let bestBoost = 0;
+  for (const token of titleTokens) {
+    if (!queryState.tokenSet.has(token)) continue;
+
+    const signal = queryState.queryTokenSignals.get(token);
+    if (!signal) continue;
+
+    const specificity = getTokenSpecificity(queryState.specificityState, token);
+    const acronymMention = signal.hasUppercaseForm && token.length >= 3;
+    const nameMention = signal.hasNameLikeForm;
+    const repeatedDistinctMention =
+      signal.count >= 2 && token.length >= 4 && specificity >= 0.45;
+    if (!acronymMention && !nameMention && !repeatedDistinctMention) continue;
+
+    const repetitionBoost = clamp01((signal.count - 1) / 4) * 0.035;
+    const rawBoost = 0.035 + specificity * 0.045 + repetitionBoost;
+    bestBoost = Math.max(bestBoost, rawBoost);
+  }
+
+  if (bestBoost <= 0) return 0;
+  return Math.min(isFtsOnly ? 0.13 : 0.075, bestBoost + (isFtsOnly ? 0.065 : 0));
+}
+
 function scoreVectorWorldInfoCandidate(
   entry: WorldBookEntryModel,
   candidate: WorldBookSearchCandidate,
@@ -964,6 +1639,7 @@ function scoreVectorWorldInfoCandidate(
   preset: WorldInfoVectorRankingPreset,
 ): VectorActivatedEntry {
   const primaryMatches = scorePhraseMatches(
+    entry.id,
     entry.key || [],
     queryState,
     preset.weights.primaryExact,
@@ -971,6 +1647,7 @@ function scoreVectorWorldInfoCandidate(
     "key",
   );
   const secondaryMatches = scorePhraseMatches(
+    entry.id,
     entry.keysecondary || [],
     queryState,
     preset.weights.secondaryExact,
@@ -981,6 +1658,7 @@ function scoreVectorWorldInfoCandidate(
   const comment = (entry.comment || "").trim();
   const rawCommentMatches = comment
     ? scorePhraseMatches(
+        entry.id,
         [comment],
         queryState,
         preset.weights.commentExact,
@@ -1007,6 +1685,13 @@ function scoreVectorWorldInfoCandidate(
   const matchedComment = rawCommentMatches.matchedValues[0] ?? null;
 
   const isFtsOnly = !Number.isFinite(candidate.distance);
+  const activeTitleTokenBoost = getActiveTitleTokenBoost(
+    comment,
+    queryState,
+    rawCommentMatches,
+    isFtsOnly,
+    commentMultiplier,
+  );
   const vectorSimilarity = distanceToSimilarity(
     isFtsOnly ? 2 : candidate.distance,
   );
@@ -1015,29 +1700,32 @@ function scoreVectorWorldInfoCandidate(
   const secondaryExactScore = secondaryMatches.exactScore;
   const secondaryPartialScore = secondaryMatches.partialScore;
   const commentExactScore = commentMatches.exactScore;
-  const commentPartialScore = commentMatches.partialScore;
+  const commentPartialScore =
+    commentMatches.partialScore + activeTitleTokenBoost;
   const focusOverlap = getEntryFocusOverlap(entry, queryState);
   const focusBoost = focusOverlap.score * 0.05;
   const priorityScore =
     clamp01((entry.priority || 0) / 100) * preset.weights.priority;
   const vectorScore = vectorSimilarity * preset.weights.vector;
+  const lexicalContentBoostScale = getLexicalContentBoostScale(
+    primaryMatches,
+    secondaryMatches,
+    rawCommentMatches,
+  );
   const lexicalContentBoost =
-    candidate.lexical_score != null && candidate.lexical_score > 0
-      ? clamp01(Math.log1p(candidate.lexical_score) / Math.log1p(30)) *
+    (candidate.lexical_strength ?? 0) > 0
+      ? clamp01(candidate.lexical_strength ?? 0) *
         preset.weights.vector *
-        0.35
+        lexicalContentBoostScale
       : 0;
+  const exactTitleAnchorBoost = getExactTitleAnchorBoost(rawCommentMatches);
   const lexicalSpecificityAnchor = Math.max(
     primaryMatches.matchedSpecificity,
     secondaryMatches.matchedSpecificity,
     commentMatches.matchedSpecificity,
   );
-  const entrySpecificityAnchor = Math.max(
-    lexicalSpecificityAnchor,
-    commentMatches.bestSpecificity * 0.7,
-    primaryMatches.bestSpecificity * 0.45,
-    secondaryMatches.bestSpecificity * 0.35,
-  );
+  // Unmatched anchor specificity must not make a broad entry look focused.
+  const entrySpecificityAnchor = lexicalSpecificityAnchor;
   const lexicalSignalStrength =
     primaryExactScore +
     primaryPartialScore +
@@ -1045,6 +1733,11 @@ function scoreVectorWorldInfoCandidate(
     secondaryPartialScore +
     commentExactScore +
     commentPartialScore;
+  const supportingContextBoost = getSupportingContextBoost(
+    entry,
+    queryState,
+    lexicalSignalStrength > 0 || focusBoost > 0,
+  );
   const effectiveDistance = isFtsOnly ? 2 : candidate.distance;
   const ftsWeaknessReduction =
     isFtsOnly && lexicalContentBoost > 0
@@ -1094,8 +1787,10 @@ function scoreVectorWorldInfoCandidate(
       secondaryExactScore +
       secondaryPartialScore +
       commentExactScore +
+      exactTitleAnchorBoost +
       commentPartialScore +
       focusBoost +
+      supportingContextBoost +
       priorityScore -
       broadPenalty,
   );
@@ -1116,9 +1811,10 @@ function scoreVectorWorldInfoCandidate(
       primaryPartial: primaryPartialScore,
       secondaryExact: secondaryExactScore,
       secondaryPartial: secondaryPartialScore,
-      commentExact: commentExactScore,
+      commentExact: commentExactScore + exactTitleAnchorBoost,
       commentPartial: commentPartialScore,
       focusBoost,
+      supportingContextBoost,
       priority: priorityScore,
       broadPenalty,
       focusMissPenalty,
@@ -1140,10 +1836,21 @@ export function rankVectorWorldInfoCandidates(
     topK,
   } = input;
   const preset = getWorldInfoVectorPreset(hybridWeightMode);
-  const hitsBeforeThreshold = pooledCandidates.length;
   const specificityState = buildPhraseSpecificityState(eligibleEntries);
   const queryState = buildVectorQueryLexicalState(queryText, specificityState);
-  const scoredCandidates = pooledCandidates.map(({ entry, candidate }) =>
+  const augmentedCandidates = augmentPooledCandidatesWithExactAnchors(
+    eligibleEntries,
+    pooledCandidates,
+    queryState,
+  );
+  queryState.mentionOwnership = buildMentionOwnershipState(
+    queryText,
+    eligibleEntries,
+    augmentedCandidates,
+    specificityState,
+  );
+  const hitsBeforeThreshold = augmentedCandidates.length;
+  const scoredCandidates = augmentedCandidates.map(({ entry, candidate }) =>
     scoreVectorWorldInfoCandidate(entry, candidate, queryState, preset),
   );
   const thresholdPassed =

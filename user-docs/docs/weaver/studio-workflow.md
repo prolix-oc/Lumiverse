@@ -1,3 +1,7 @@
+---
+title: Studio Workflow
+---
+
 # Studio Workflow
 
 Every Weaver build walks through six stages, in order: **Dream → Read-back → Interview → Bible → Render → Finalize**. The rail at the top shows where you are; you can always step back to an earlier stage, and your work autosaves as you go.

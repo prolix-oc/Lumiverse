@@ -1,3 +1,7 @@
+---
+title: LumiHub
+---
+
 # LumiHub
 
 LumiHub is a hub service that lets you browse and install characters and world books directly into your Lumiverse instance from the web.

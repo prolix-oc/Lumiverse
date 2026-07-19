@@ -1,5 +1,6 @@
 import { get, post } from './client'
 import { flushSettingsNow } from '@/store/slices/settings'
+import type { PromptBlock, PromptVariableValues } from '@/lib/loom/types'
 
 export interface MacroResolveRequest {
   template: string
@@ -7,7 +8,13 @@ export interface MacroResolveRequest {
   character_id?: string
   persona_id?: string
   connection_id?: string
+  /** Exact input-bar draft text available to {{userInput}} during preview. */
+  user_input?: string
   dynamic_macros?: Record<string, string>
+  prompt_blocks?: PromptBlock[]
+  /** Prompt block whose content is being rendered for preview. */
+  prompt_block_id?: string
+  prompt_variables?: PromptVariableValues
   /**
    * Strip leading/trailing whitespace from the resolved text, mirroring the
    * per-block trim the prompt assembly applies. Used by the block-editor
@@ -41,6 +48,12 @@ export interface MacroBatchResolveRequest {
   character_id?: string
   persona_id?: string
   connection_id?: string
+  /** Exact input-bar draft text available to {{userInput}} during preview. */
+  user_input?: string
+  prompt_blocks?: PromptBlock[]
+  /** Prompt block id keyed by template name when previewing blocks in a batch. */
+  prompt_block_ids?: Record<string, string>
+  prompt_variables?: PromptVariableValues
 }
 
 export interface MacroBatchResolveResponse {

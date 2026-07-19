@@ -55,34 +55,10 @@
   align-items: center;
   justify-content: space-between;
 }
-
-.tokenCountBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: none;
-  background: var(--lumiverse-fill-subtle);
-  color: var(--lumiverse-text-dim);
-  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
-}
-
-.tokenCountBtn:hover:not(:disabled) {
-  background: var(--lumiverse-fill);
+.fieldHint {
   color: var(--lumiverse-text-muted);
-}
-
-.tokenCountBtn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.tokenCountValue {
-  color: var(--lumiverse-primary-text, var(--lumiverse-primary));
-  font-variant-numeric: tabular-nums;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  margin: 4px 0 0;
 }
 
 .entryInput {

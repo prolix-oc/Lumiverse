@@ -15,6 +15,8 @@ export interface WorldBookEntry {
   world_book_id: string;
   uid: string;
   outlet_name: string | null;
+  wi_marker: string | null;
+  wi_marker_side: "before" | "after" | null;
   key: string[];
   keysecondary: string[];
   content: string;
@@ -97,6 +99,17 @@ export interface WorldBookDiagnostics {
   };
   vector_summary: WorldBookVectorSummary;
   query_preview: string;
+  query_scope: {
+    configured_scan_depth: number | null;
+    visible_messages_available: number;
+    vector_messages_selected: number;
+    max_tokens: number;
+    token_truncated: boolean;
+  };
+  lexical_query_previews: Array<{
+    kind: "anchors" | "mixed" | "topical";
+    text: string;
+  }>;
   eligible_entries: number;
   retrieval: {
     top_k: number;
@@ -138,6 +151,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;
@@ -179,6 +193,7 @@ export interface WorldBookDiagnostics {
       commentExact: number;
       commentPartial: number;
       focusBoost: number;
+      supportingContextBoost: number;
       priority: number;
       broadPenalty: number;
       focusMissPenalty: number;
@@ -239,6 +254,8 @@ export type UpdateWorldBookInput = Partial<CreateWorldBookInput>;
 
 export interface CreateWorldBookEntryInput {
   outlet_name?: string | null;
+  wi_marker?: string | null;
+  wi_marker_side?: "before" | "after" | null;
   key?: string[];
   keysecondary?: string[];
   content?: string;
@@ -339,4 +356,5 @@ export interface WorldInfoCache {
   emBefore: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 5
   emAfter: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;        // position 6
   atMarker: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string }>;       // position 7
+  pinnedMarkers: Array<{ content: string; role: "system" | "user" | "assistant"; entryLabel: string; marker: string; side: "before" | "after" }>;
 }

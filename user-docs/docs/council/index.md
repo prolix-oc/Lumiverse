@@ -1,4 +1,8 @@
-# Council & Lumia
+---
+title: Council
+---
+
+# Council
 
 The **Council** is Lumiverse's multi-persona deliberation system. Before the AI generates a response, a panel of AI personas can analyze the scene, suggest directions, and provide guidance — all feeding into the final output.
 

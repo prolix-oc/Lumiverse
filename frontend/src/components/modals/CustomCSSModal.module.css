@@ -167,9 +167,14 @@
   overflow: hidden;
 }
 
+.sidebarSearch {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .searchInput {
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px 34px 8px 12px;
   margin: 0;
   border: none;
   border-bottom: 1px solid var(--lumiverse-border);
@@ -179,6 +184,29 @@
   font-family: inherit;
   outline: none;
   transition: border-color var(--lumiverse-transition-fast);
+}
+
+.searchClear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
 }
 
 .searchInput:focus {

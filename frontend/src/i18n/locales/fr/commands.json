@@ -262,7 +262,9 @@
     "forkChat": {
       "title": "Bavarder",
       "message": "Créer une nouvelle branche du dernier message ?",
-      "confirm": "Fourchette"
+      "confirm": "Fourchette",
+      "nameLabel": "Nom du chat (facultatif)",
+      "namePlaceholder": "Laissez vide pour utiliser un nom automatique"
     },
     "deleteChat": {
       "title": "Supprimer le chat",

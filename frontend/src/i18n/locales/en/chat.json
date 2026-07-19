@@ -13,7 +13,13 @@
     "hideFromAi": "Hide from AI context",
     "unhideFromAi": "Unhide from AI context",
     "hide": "Hide",
-    "unhide": "Unhide"
+    "unhide": "Unhide",
+    "setContextAnchor": "Protect context from this message",
+    "clearContextAnchor": "Clear protected context anchor",
+    "contextAnchorHidden": "Unhide this message before using it as a context anchor",
+    "contextAnchorSet": "Context anchor set",
+    "contextAnchorCleared": "Context anchor cleared",
+    "contextAnchorFailed": "Failed to update context anchor"
   },
   "scrollToBottom": "Scroll to bottom",
   "inputPlaceholder": "Type a message…",
@@ -45,7 +51,7 @@
     "backHome": "Back to home",
     "regenerate": "Regenerate",
     "continue": "Continue",
-    "sendAsPersona": "Send next message as persona",
+    "sendAsPersona": "Switch persona for this chat",
     "personaAddons": "Persona add-ons",
     "personaAddonsCustomized": "Persona add-ons — customized for this chat",
     "guidedGenerations": "Guided generations",
@@ -66,6 +72,11 @@
     "stopGeneration": "Stop generation",
     "sendMessage": "Send message",
     "sendMessageQueueHint": "Send message ({{mod}}+click to queue)",
+    "sendMessageTouchQueueHint": "Send message (hold to queue)",
+    "holdToQueue": "Hold to queue",
+    "keepHoldingToQueue": "Keep holding to queue",
+    "releaseToQueue": "Release to queue",
+    "queueingMessage": "Queueing…",
     "sendQueuedMessages": "Send queued messages",
     "nudgeFreshReply": "Nudge for a fresh reply",
     "processingSpeech": "Processing speech",
@@ -84,18 +95,39 @@
     "modCmd": "Cmd",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "Find in chat",
+    "placeholder": "Find in chat…",
+    "clear": "Clear find text",
+    "previous": "Previous result",
+    "next": "Next result",
+    "close": "Close find",
+    "matchCount": "{{current}} of {{total}}",
+    "noMatches": "No results",
+    "loading": "Searching…",
+    "searchFailed": "Couldn't search this chat"
+  },
   "quickMenu": {
     "noGuidedGenerations": "No guided generations configured.",
+    "disableAllGuidedGenerations": "Disable all guided generations",
     "manageInSettings": "Manage in settings",
     "noQuickReplySets": "No enabled quick reply sets.",
     "untitledReply": "Untitled reply",
-    "clearOneShotPersona": "Clear one-shot persona",
+    "clearOneShotPersona": "Clear chat persona",
     "noPersonas": "No personas available.",
+    "searchPersonas": "Search personas…",
+    "recentPersonas": "Recently used",
+    "uncategorizedPersonas": "Uncategorized",
     "manageChats": "Manage Chats",
     "manageConnections": "Manage Connections",
     "noConnections": "No connections available.",
     "groupSettings": "Group Settings",
     "chatSettings": "Chat Settings",
+    "promptVariables": "Prompt Variables",
+    "promptVariablesFor": "Change values for {{name}}",
+    "promptVariablesActivePreset": "Change values for selected preset",
+    "promptVariablesSelectPreset": "Select a preset to change prompt variables",
+    "loadingPromptVariables": "Loading prompt variables...",
     "convertToGroupChat": "Convert to Group Chat",
     "newGroupChat": "New Group Chat",
     "authorsNote": "Author's Note",
@@ -154,6 +186,20 @@
     "failedUploadAttachment": "Failed to upload attachment",
     "messageQueued": "Message queued",
     "failedQueueMessage": "Failed to queue message",
+    "regexActionSelected": "Choice selected",
+    "regexActionQueued": "This choice will be appended invisibly to your next message.",
+    "regexActionAlreadyUsed": "That choice block has already been used.",
+    "regexActionExpired": "That choice is no longer available because you already replied.",
+    "regexActionAssistantOnly": "State-changing choices are only available on assistant messages.",
+    "regexActionStateHostOnly": "Only the room host can commit composable-effect choices.",
+    "regexActionEffectsApplied": "Interactive effects applied.",
+    "regexActionClaimFailed": "This choice could not be selected.",
+    "regexActionMultiQueued": "Option added ({{cost}} cost; {{total}}/{{limit}} selected). Click again to remove it before Send.",
+    "regexActionMultiRemoved": "Option removed from the next Send.",
+    "regexActionLimitReached": "That option exceeds this block's {{limit}} cost limit.",
+    "regexActionInvalidLimit": "This action block does not have a valid positive cost limit.",
+    "regexActionSelectionLocked": "Selections are locked because Send has started.",
+    "regexActionClearMultiFirst": "Remove this block's staged multi-select options before choosing a non-triggering append action.",
     "generationFailed": "Generation Failed",
     "regenerationFailed": "Regeneration Failed",
     "continueFailed": "Continue Failed",
@@ -162,6 +208,7 @@
     "creatingChatCortex": "Creating chat and preparing Memory Cortex in the background…",
     "failedCreateChat": "Failed to create chat",
     "failedStartNewChat": "Failed to start new chat",
+    "failedDeleteChat": "Failed to delete this chat",
     "failedOpenChat": "Failed to open chat",
     "characterImported": "\"{{name}}\" was imported",
     "importFailed": "Import failed",
@@ -197,7 +244,11 @@
     "noMemoryRebuildNeeded": "No memory rebuild was needed for this chat.",
     "failedRecompileMemories": "Failed to recompile memories",
     "chatDocuments": "Chat Documents",
-    "chatDocumentsNamed": "{{name}} Chat"
+    "chatDocumentsNamed": "{{name}} Chat",
+    "failedSaveChatPersona": "Failed to save persona for this chat",
+    "noPresetForPromptVariables": "Select a preset before changing prompt variables",
+    "failedLoadPromptVariables": "Failed to load prompt variables",
+    "failedSavePromptVariables": "Failed to save prompt variables"
   },
   "addGroupMember": {
     "title": "Add Group Member",
@@ -267,6 +318,12 @@
     }
   },
   "expressionDisplay": {
+    "switchExpression": "Switch Expression…",
+    "switchExpressionFor": "Switch {{name}}'s Expression…",
+    "chooseCharacter": "Choose Character…",
+    "backToDisplayMenu": "Back to Display Menu",
+    "backToCharacterMenu": "Back to Character Menu",
+    "failedSaveSelection": "Couldn't save the selected expression.",
     "sizeSmall": "Size: Small",
     "sizeMedium": "Size: Medium",
     "sizeLarge": "Size: Large",
@@ -367,7 +424,9 @@
     "fork": {
       "title": "Fork Chat",
       "message": "Create a new chat branch at this message? All messages up to this point will be copied.",
-      "confirm": "Fork"
+      "confirm": "Fork",
+      "nameLabel": "Chat name (optional)",
+      "namePlaceholder": "Leave blank to use an automatic name"
     },
     "delete": {
       "title": "Delete",
@@ -380,5 +439,11 @@
       "message": "This will permanently remove this message from the chat.",
       "confirm": "Delete"
     }
+  },
+  "newChatConfirm": {
+    "title": "Start New Chat",
+    "message": "Are you sure you want to start a new chat?",
+    "confirm": "Start New Chat",
+    "deleteThisChat": "Delete This Chat"
   }
 }

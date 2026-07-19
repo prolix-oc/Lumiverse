@@ -10,6 +10,7 @@ export interface SynthesizeInput {
   model?: string;
   parameters?: Record<string, any>;
   outputFormat?: string;
+  signal?: AbortSignal;
 }
 
 function resolveConnection(userId: string, connectionId?: string) {
@@ -40,6 +41,7 @@ export async function synthesize(userId: string, input: SynthesizeInput): Promis
     voice: input.voice || profile.voice,
     parameters: { ...profile.default_parameters, ...input.parameters },
     outputFormat: input.outputFormat || profile.default_parameters.output_format,
+    signal: input.signal,
   };
 
   return provider.synthesize(apiKey || "", profile.api_url || "", request);
@@ -69,6 +71,7 @@ export async function* synthesizeStream(
     voice: input.voice || profile.voice,
     parameters: { ...profile.default_parameters, ...input.parameters },
     outputFormat: input.outputFormat || profile.default_parameters.output_format,
+    signal: input.signal,
   };
 
   yield* provider.synthesizeStream(apiKey || "", profile.api_url || "", request);

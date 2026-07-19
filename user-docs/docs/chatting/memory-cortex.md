@@ -1,3 +1,7 @@
+---
+title: Memory Cortex
+---
+
 # Memory Cortex
 
 Memory Cortex is an advanced memory layer that sits on top of [Long-Term Memory](memory.md). While basic long-term memory retrieves relevant text chunks by similarity, the cortex understands *what happened* — tracking characters, relationships, emotional beats, and narrative arcs across your entire conversation.

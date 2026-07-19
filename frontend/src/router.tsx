@@ -5,11 +5,16 @@ import ChatView from './components/chat/ChatView'
 import CharacterBrowser from './components/panels/CharacterBrowser'
 import CharacterProfile from './components/panels/CharacterProfile'
 import LoginPage from './components/auth/LoginPage'
+import SsoCompletePage from './components/auth/SsoCompletePage'
 
-export const router = createBrowserRouter([
+const routes = [
   {
     path: '/login',
     element: <LoginPage />,
+  },
+  {
+    path: '/sso-complete',
+    element: <SsoCompletePage />,
   },
   {
     path: '/',
@@ -21,4 +26,6 @@ export const router = createBrowserRouter([
       { path: 'characters/:id', element: <CharacterProfile /> },
     ],
   },
-])
+]
+
+export const router = createBrowserRouter(routes)

@@ -4,6 +4,12 @@ import { cancelStreamAndCloseConnection, createCooperativeYielder, fetchWithPref
 import { getTextContent, type GenerationRequest, type GenerationResponse, type StreamChunk, type ToolCallResult, type LlmMessage, type LlmMessagePart } from "../types";
 import { fetchProviderJson, throwProviderResponseError } from "../../utils/provider-errors";
 import { sanitizeGeminiSchema } from "./google";
+import {
+  appendGoogleSearchTool,
+  buildGoogleSearchTool,
+  GOOGLE_SEARCH_HANDLED_PARAMS,
+  GOOGLE_SEARCH_PARAMETERS,
+} from "./google-search";
 
 // ── Service account JWT → OAuth2 access token ──────────────────────────────
 
@@ -216,6 +222,7 @@ export class GoogleVertexProvider implements LlmProvider {
       top_p: COMMON_PARAMS.top_p,
       top_k: COMMON_PARAMS.top_k,
       stop: COMMON_PARAMS.stop,
+      ...GOOGLE_SEARCH_PARAMETERS,
     },
     requiresMaxTokens: false,
     supportsSystemRole: true,
@@ -295,6 +302,7 @@ export class GoogleVertexProvider implements LlmProvider {
     }
 
     const toolCalls = fnCalls.length > 0 ? fnCalls : undefined;
+    const groundingMetadata = candidate?.groundingMetadata ?? data.groundingMetadata;
 
     return {
       content,
@@ -306,6 +314,7 @@ export class GoogleVertexProvider implements LlmProvider {
             prompt_tokens: data.usageMetadata.promptTokenCount || 0,
             completion_tokens: data.usageMetadata.candidatesTokenCount || 0,
             total_tokens: data.usageMetadata.totalTokenCount || 0,
+            ...(groundingMetadata ? { provider_raw: { groundingMetadata } } : {}),
           }
         : undefined,
     };
@@ -378,6 +387,9 @@ export class GoogleVertexProvider implements LlmProvider {
                   prompt_tokens: data.usageMetadata.promptTokenCount || 0,
                   completion_tokens: data.usageMetadata.candidatesTokenCount || 0,
                   total_tokens: data.usageMetadata.totalTokenCount || 0,
+                  ...((candidate?.groundingMetadata ?? data.groundingMetadata)
+                    ? { provider_raw: { groundingMetadata: candidate?.groundingMetadata ?? data.groundingMetadata } }
+                    : {}),
                 }
               : undefined;
 
@@ -497,6 +509,7 @@ export class GoogleVertexProvider implements LlmProvider {
   private static readonly HANDLED_PARAMS = new Set([
     "temperature", "max_tokens", "top_p", "top_k", "stop", "thinkingConfig",
     "responseMimeType", "responseSchema", "responseJsonSchema",
+    ...GOOGLE_SEARCH_HANDLED_PARAMS,
   ]);
 
   private buildBody(request: GenerationRequest): any {
@@ -505,6 +518,14 @@ export class GoogleVertexProvider implements LlmProvider {
     const systemMessages = request.messages.filter((m) => m.role === "system");
     const otherMessages = request.messages.filter((m) => m.role !== "system");
     const toolNameById = this.buildToolNameMap(request.messages);
+    const functionTools = request.tools ?? [];
+    const hasFunctionDeclarations = functionTools.length > 0;
+    const googleSearchTool = buildGoogleSearchTool(
+      this.name,
+      request.model,
+      params,
+      hasFunctionDeclarations,
+    );
 
     const body: any = {
       contents: otherMessages.map((m) => ({
@@ -562,15 +583,17 @@ export class GoogleVertexProvider implements LlmProvider {
       ];
     }
 
-    if (request.tools && request.tools.length > 0) {
+    if (hasFunctionDeclarations) {
       body.tools = [{
-        functionDeclarations: request.tools.map((t) => ({
+        functionDeclarations: functionTools.map((t) => ({
           name: t.name,
           description: t.description,
           parameters: sanitizeGeminiSchema(t.parameters),
         })),
       }];
     }
+
+    appendGoogleSearchTool(this.name, body, googleSearchTool);
 
     return body;
   }

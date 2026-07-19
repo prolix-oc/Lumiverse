@@ -1,3 +1,7 @@
+---
+title: Regeneration Feedback
+---
+
 # Regeneration Feedback
 
 When you regenerate a response, Lumiverse can prompt you for feedback — a brief note telling the AI *why* you're regenerating. This guides the next attempt in a specific direction instead of just rolling the dice again.

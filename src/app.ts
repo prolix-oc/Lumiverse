@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Handler } from "hono";
 import { cors } from "hono/cors";
 import { compress } from "./middleware/compress";
 import { bodyLimit } from "hono/body-limit";
@@ -17,12 +17,15 @@ import { secretsRoutes } from "./routes/secrets.routes";
 import { presetsRoutes } from "./routes/presets.routes";
 import { connectionsRoutes } from "./routes/connections.routes";
 import { generateRoutes } from "./routes/generate.routes";
+import { multiplayerRoutes } from "./routes/multiplayer.routes";
 import { imagesRoutes } from "./routes/images.routes";
 import { audioRoutes } from "./routes/audio.routes";
 import { providersRoutes } from "./routes/providers.routes";
 import { macrosRoutes } from "./routes/macros.routes";
 import { spindleRoutes } from "./routes/spindle.routes";
+import { uploadsRoutes } from "./routes/uploads.routes";
 import { usersRoutes } from "./routes/users.routes";
+import { ssoProvidersRoutes } from "./routes/sso-providers.routes";
 import { packsRoutes } from "./routes/packs.routes";
 import { councilRoutes } from "./routes/council.routes";
 import { weaverRoutes } from "./routes/weaver.routes";
@@ -46,6 +49,7 @@ import { pushRoutes } from "./routes/push.routes";
 import { memoryCortexRoutes } from "./routes/memory-cortex.routes";
 import { operatorRoutes } from "./routes/operator.routes";
 import { openrouterRoutes } from "./routes/openrouter.routes";
+import { nanogptRoutes } from "./routes/nanogpt.routes";
 import { ttsConnectionsRoutes } from "./routes/tts-connections.routes";
 import { sttConnectionsRoutes } from "./routes/stt-connections.routes";
 import { ttsRoutes } from "./routes/tts.routes";
@@ -61,12 +65,14 @@ import { userDataRoutes } from "./routes/user-data.routes";
 import { wsHandler } from "./ws/handler";
 import { issueTicket } from "./ws/tickets";
 import { rateLimit } from "./middleware/rate-limit";
+import { isLargeUploadBodyLimitExemptPath } from "./middleware/body-limit-exempt";
 import {
   isHostAllowed,
   isOriginAllowed,
 } from "./services/trusted-hosts.service";
 import { authLockoutService } from "./services/auth-lockout.service";
 import { getClientIp } from "./utils/client-ip";
+import { listSsoLoginOptions } from "./services/sso-providers.service";
 
 const app = new Hono();
 const SIGN_IN_AUTH_PATTERN = /^\/api\/auth\/sign-in(?:\/|$)/;
@@ -94,6 +100,7 @@ const PUBLIC_POST_PREFIXES = [
   "/api/spindle-oauth/",
   "/api/v1/lumihub",
   "/api/v1/openrouter/oauth-landing",
+  "/api/v1/nanogpt/oauth-landing",
 ];
 app.use("/api/*", async (c, next) => {
   const clientId = getClientIp(c);
@@ -136,27 +143,9 @@ app.use("/api/*", async (c, next) => {
 // character-gallery.routes.ts: 50 MB/image × up to 100 files). Letting them
 // through here is what keeps the gallery /bulk endpoint from 413-ing on the
 // sum of all images even though every individual file is well under the cap.
-const GALLERY_PATH_RE = /^\/api\/v1\/characters\/[^/]+\/gallery(?:\/.*)?$/;
-const EXPRESSIONS_ZIP_PATH_RE =
-  /^\/api\/v1\/characters\/[^/]+\/expressions\/(?:groups\/[^/]+\/)?upload-zip$/;
 app.use("/api/*", async (c, next) => {
   const path = c.req.path;
-  if (
-    path.startsWith("/api/v1/migrate/") ||
-    path === "/api/v1/characters/import-bulk" ||
-    path === "/api/v1/characters/import" ||
-    path.startsWith("/api/v1/world-books/import") ||
-    path === "/api/v1/images" ||
-    path === "/api/v1/theme-assets" ||
-    path === "/api/v1/notification-sounds/completion" ||
-    GALLERY_PATH_RE.test(path) ||
-    EXPRESSIONS_ZIP_PATH_RE.test(path) ||
-    path === "/api/v1/stt/transcribe" ||
-    path === "/api/v1/tts/save-message-audio" ||
-    path === "/api/v1/chats/import" ||
-    path === "/api/v1/chats/import-st" ||
-    path === "/api/v1/user-data/import"
-  ) {
+  if (isLargeUploadBodyLimitExemptPath(path)) {
     return next();
   }
   return bodyLimit({
@@ -296,7 +285,7 @@ app.use("*", async (c, next) => {
 // a LAN IP instead of localhost. Respect X-Forwarded-Proto/Host from reverse
 // proxies (Cloudflare, nginx, HuggingFace Spaces) so BetterAuth generates
 // https:// callback URLs when served behind TLS termination.
-app.on(["POST", "GET"], "/api/auth/*", (c) => {
+const betterAuthHandler: Handler = (c) => {
   if (c.req.path === "/api/auth/sign-up/email") {
     return c.json({ error: "Not found" }, 404);
   }
@@ -308,7 +297,9 @@ app.on(["POST", "GET"], "/api/auth/*", (c) => {
     return auth.handler(new Request(rewritten.toString(), c.req.raw));
   }
   return auth.handler(c.req.raw);
-});
+};
+app.get("/api/auth/*", betterAuthHandler);
+app.post("/api/auth/*", betterAuthHandler);
 
 // OAuth callback route — unauthenticated, before auth middleware
 app.route("/api/spindle-oauth", spindleOAuthRoutes);
@@ -372,6 +363,57 @@ if (code && window.opener) {
 </body></html>`);
 });
 
+// NanoGPT OAuth landing — unauthenticated (popup redirect from NanoGPT)
+app.get("/api/v1/nanogpt/oauth-landing", async (c) => {
+  const rawCode = c.req.query("code") || "";
+  const rawState = c.req.query("state") || "";
+  const rawError = c.req.query("error") || "";
+  const rawOpenerOrigin = c.req.query("opener_origin") || "";
+  const code = /^[A-Za-z0-9._~+/=-]{1,512}$/.test(rawCode) ? rawCode : "";
+  const state = /^[A-Za-z0-9._~+/=-]{1,512}$/.test(rawState) ? rawState : "";
+  const error = /^[A-Za-z0-9._~+/=-]{1,128}$/.test(rawError) ? rawError : "";
+  let openerOrigin = "";
+  try {
+    const parsed = new URL(rawOpenerOrigin);
+    if (parsed.origin === rawOpenerOrigin && isOriginAllowed(parsed.origin)) {
+      openerOrigin = parsed.origin;
+    }
+  } catch {
+    openerOrigin = "";
+  }
+  const htmlAttr = (value: string) => value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return c.html(`<!DOCTYPE html>
+<html><head><title>NanoGPT Authorization</title>
+<style>body{background:#10151e;color:rgba(255,255,255,.82);font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:14px}</style></head>
+<body>
+<div id="s" data-code="${htmlAttr(code)}" data-state="${htmlAttr(state)}" data-error="${htmlAttr(error)}" data-opener-origin="${htmlAttr(openerOrigin)}">Completing authorization...</div>
+<script>
+var el = document.getElementById('s');
+var code = el.dataset.code || '';
+var state = el.dataset.state || '';
+var error = el.dataset.error || '';
+var targetOrigin = el.dataset.openerOrigin || window.location.origin;
+if (error) {
+  el.textContent = 'Authorization failed: ' + error;
+} else if (code && state && window.opener) {
+  window.opener.postMessage({ type: 'nanogpt_oauth_code', code: code, state: state }, targetOrigin);
+  el.textContent = 'Authorized! Closing...';
+  setTimeout(function(){ window.close(); }, 500);
+} else if (!code) {
+  el.textContent = 'No authorization code received.';
+} else if (!state) {
+  el.textContent = 'No authorization state received.';
+} else {
+  el.textContent = 'Could not reach parent window. Copy this code: ' + code;
+}
+</script>
+</body></html>`);
+});
+
 // Image gen results — unauthenticated, public access for push notifications and embeds
 app.get("/api/v1/image-gen/results/:id", async (c) => {
   const { getImageFilePathPublic } = await import("./services/images.service");
@@ -386,6 +428,18 @@ app.get("/api/v1/image-gen/results/:id", async (c) => {
 });
 
 // Auth middleware — AFTER auth handler, BEFORE routes
+app.get("/api/v1/sso-providers/login-options", (c) => {
+  return c.json(listSsoLoginOptions());
+});
+
+// Public, non-sensitive startup configuration needed before the authenticated
+// app mounts. Safe-theme mode must be known before persisted CSS/overrides can
+// render, otherwise it cannot reliably recover an inaccessible interface.
+app.get("/api/v1/runtime-config", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.json({ safeThemeMode: env.safeThemeMode });
+});
+
 app.use("/api/v1/*", requireAuth);
 
 app.route("/api/v1/settings", settingsRoutes);
@@ -397,16 +451,20 @@ app.route("/api/v1/secrets", secretsRoutes);
 app.route("/api/v1/presets", presetsRoutes);
 app.route("/api/v1/connections", connectionsRoutes);
 app.route("/api/v1/openrouter", openrouterRoutes);
+app.route("/api/v1/nanogpt", nanogptRoutes);
 app.route("/api/v1/files", filesRoutes);
 app.route("/api/v1/images", imagesRoutes);
 app.route("/api/v1/audio", audioRoutes);
 app.route("/api/v1/theme-assets", themeAssetsRoutes);
 app.route("/api/v1/notification-sounds", notificationSoundsRoutes);
 app.route("/api/v1/generate", generateRoutes);
+app.route("/api/v1/multiplayer", multiplayerRoutes);
 app.route("/api/v1/providers", providersRoutes);
 app.route("/api/v1/macros", macrosRoutes);
 app.route("/api/v1/spindle", spindleRoutes);
+app.route("/api/v1/spindle-uploads", uploadsRoutes);
 app.route("/api/v1/users", usersRoutes);
+app.route("/api/v1/sso-providers", ssoProvidersRoutes);
 app.route("/api/v1/packs", packsRoutes);
 app.route("/api/v1/council", councilRoutes);
 app.route("/api/v1/weaver", weaverRoutes);

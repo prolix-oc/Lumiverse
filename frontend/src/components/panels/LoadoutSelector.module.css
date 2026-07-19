@@ -63,13 +63,14 @@
   background: var(--lumiverse-bg-elevated);
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lumiverse-radius, 8px);
-  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
+  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.2));
   padding: 4px;
 }
 
 :global([data-glass]) .dropdown {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 
 .dropdownItem {
@@ -199,13 +200,14 @@
   background: var(--lumiverse-bg-elevated);
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lumiverse-radius-md, 10px);
-  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
+  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.2));
   padding: 4px;
 }
 
 :global([data-glass]) .menu {
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 80%, transparent);
   backdrop-filter: blur(var(--lcs-glass-blur, 8px));
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
 }
 
 .menuItem {

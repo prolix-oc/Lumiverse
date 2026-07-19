@@ -9,15 +9,7 @@ import { startAllExtensions } from "./spindle/lifecycle";
 import { initIdentity } from "./crypto/init";
 import { initVapidKeys } from "./crypto/vapid";
 import { eventBus } from "./ws/bus";
-
-export function isTermuxLikeEnvironment(): boolean {
-  return Boolean(process.env.TERMUX_VERSION)
-    || process.env.LUMIVERSE_IS_TERMUX === "true"
-    || process.env.LUMIVERSE_IS_PROOT === "true"
-    || process.env.PREFIX?.startsWith("/data/data/com.termux/") === true
-    || process.env.HOME?.startsWith("/data/data/com.termux/files/home") === true
-    || env.dataDir.startsWith("/data/data/com.termux/");
-}
+import { isTermuxLikeEnvironment } from "./utils/termux";
 
 // Validate data directory is accessible and writable before any file operations.
 // This catches permission issues early (common on Termux/Android) instead of
@@ -46,6 +38,9 @@ try {
   process.exit(1);
 }
 console.log(`[startup] Data directory: ${env.dataDir}`);
+if (env.safeThemeMode) {
+  console.warn("[startup] Safe theme mode enabled: custom CSS and component overrides are suppressed");
+}
 
 // Resolve encryption identity (file > env migration > generate)
 await initIdentity();
@@ -64,10 +59,16 @@ const { clearAllPoolEntries } = await import("./services/generation-pool.service
 clearAllPoolEntries();
 
 // Dynamic import: auth modules call getDb() at module level, so must load after initDatabase()
-const { seedOwner, backfillUserIds, getFirstUserId } = await import("./auth/seed");
+const { seedOwner, backfillUserIds, backfillDefaultPresets, getFirstUserId } = await import("./auth/seed");
 const { operatorService } = await import("./services/operator.service");
 await seedOwner();
 backfillUserIds();
+const presetBackfill = backfillDefaultPresets();
+if (presetBackfill.seeded > 0 || presetBackfill.upgradedLegacy > 0 || presetBackfill.activated > 0) {
+  console.log(
+    `[Auth] Default preset backfill: seeded ${presetBackfill.seeded}, upgraded ${presetBackfill.upgradedLegacy}, activated ${presetBackfill.activated}`,
+  );
+}
 
 console.log(
   `[startup] Runner IPC: ${operatorService.ipcAvailable ? "connected" : `unavailable (${operatorService.ipcReason})`}`
@@ -111,6 +112,11 @@ initSharpSettings();
 const { initDnsSettings } = await import("./services/dns-settings.service");
 initDnsSettings();
 
+// Load owner-scoped disk warning thresholds before the monitor starts so
+// operator changes apply live without a server restart.
+const { initDiskWarningSettings } = await import("./services/disk-warning-settings.service");
+initDiskWarningSettings();
+
 // Start background vectorization maintenance only after the database is ready.
 const { startVectorizationQueueMaintenance } = await import("./services/vectorization-queue.service");
 startVectorizationQueueMaintenance();
@@ -118,7 +124,13 @@ startVectorizationQueueMaintenance();
 const { startDiskMonitor } = await import("./services/disk-monitor.service");
 startDiskMonitor();
 
-// Pre-warm tokenizers for configured connection models (fire-and-forget)
+// SMART monitoring is optional: unavailable binaries and inaccessible host
+// devices never prevent startup. When explicitly enabled, root/container
+// deployments can also install smartmontools through a fixed package plan.
+const { initSmartctl } = await import("./services/smartctl.service");
+initSmartctl();
+
+// Pre-warm tokenizers for active/default connection models (fire-and-forget)
 import("./services/tokenizer.service").then(({ prewarm }) => prewarm()).catch(() => {});
 
 // LanceDB startup maintenance: compact fragments, migrate old HNSW_PQ → IVF_PQ (fire-and-forget)
@@ -132,6 +144,10 @@ const { default: app, websocket } = await import("./app");
 // Register push notification EventBus listeners
 const { initPushListeners } = await import("./services/push.service");
 initPushListeners();
+
+// Register background image-generation fallback listeners
+const { initImageGenAutoListeners } = await import("./services/image-gen-auto.service");
+initImageGenAutoListeners();
 
 // Start extensions after app is imported but before serving —
 // ensures extension macros are registered in the global registry
@@ -164,6 +180,17 @@ const server = Bun.serve({
 // Give the EventBus access to the server for native topic-based publish().
 eventBus.setServer(server);
 
+// Initialize multiplayer rooms: registers the chat/generation fan-out listener
+// (re-broadcasts to room topics), the prompt-assembly persona provider, and
+// re-arms any freeform deadline timers dropped by the restart.
+const { initMultiplayer } = await import("./services/multiplayer.service");
+initMultiplayer();
+
+// Register the Identity Server attestation validator so remote peers can join
+// directly with a server-minted token (no-op until MPIDENTITY_URL is set).
+const { registerIdentityServerAttestation } = await import("./multiplayer/attestation");
+registerIdentityServerAttestation();
+
 console.log(`Lumiverse Backend listening on ${server.hostname}:${server.port}`);
 
 // Notify runner (if present) that the server is ready
@@ -190,6 +217,14 @@ setTimeout(() => {
     );
   });
 }, 0);
+
+setTimeout(() => {
+  import("./services/characters.service").then(({ resumePendingCharacterDeletions }) => {
+    resumePendingCharacterDeletions().catch((err) =>
+      console.warn("[characters] deletion resume failed:", err instanceof Error ? err.message : err)
+    );
+  });
+}, 5_000);
 
 // Pre-warm trusted-host suggestions after the server starts listening so the
 // Operator tab usually hits a warm cache without slowing down boot.
@@ -228,8 +263,8 @@ async function gracefulShutdown(signal: string) {
 
   // 3. Disconnect LumiHub WebSocket client
   try {
-    const { getLumiHubClient } = await import("./lumihub/client");
-    getLumiHubClient().disconnect();
+    const { disconnectAllLumiHubClients } = await import("./lumihub/client");
+    disconnectAllLumiHubClients();
   } catch {}
 
   // 3.5 Disconnect all MCP servers
@@ -248,11 +283,12 @@ async function gracefulShutdown(signal: string) {
   const { stopTicketSweep } = await import("./ws/tickets");
   const { stopOAuthStateSweep } = await import("./spindle/oauth-state");
   const { stopPkceSweep } = await import("./routes/lumihub.routes");
-  const { stopQueryCacheCleanup, stopWorldBookVectorizationSweep } = await import("./services/vectorization-queue.service");
+  const { stopChatChunkVectorizationWorker, stopQueryCacheCleanup, stopWorldBookVectorizationSweep } = await import("./services/vectorization-queue.service");
   const { stopVersionCheckCleanup } = await import("./services/embeddings.service");
   stopTicketSweep();
   stopOAuthStateSweep();
   stopPkceSweep();
+  stopChatChunkVectorizationWorker();
   stopQueryCacheCleanup();
   stopWorldBookVectorizationSweep();
   stopVersionCheckCleanup();
@@ -285,6 +321,8 @@ async function gracefulShutdown(signal: string) {
   stopAutomaticDatabaseMaintenance();
   const { stopDiskMonitor } = await import("./services/disk-monitor.service");
   stopDiskMonitor();
+  const { stopSmartctlMonitor } = await import("./services/smartctl.service");
+  stopSmartctlMonitor();
 
   // 8. Close database (triggers WAL checkpoint)
   const { closeDatabase } = await import("./db/connection");

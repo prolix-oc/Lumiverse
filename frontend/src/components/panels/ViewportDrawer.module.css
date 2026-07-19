@@ -1,8 +1,9 @@
 /* ── Wrapper — always rendered, translates to open/close ── */
 
 .wrapper {
+  --drawer-tab-w: 48px;
   position: fixed;
-  top: env(safe-area-inset-top, 0px);
+  top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   /* The `bottom: calc(0 - var(--ios-viewport-offset))` pattern used on pure
      backdrops (ModalShell, PackBrowser overlay, etc.) is defensive viewport
      overhang — harmless when the element is just a dimmed layer, but the
@@ -17,16 +18,22 @@
   transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.wrapperCompact {
+  --drawer-tab-w: 32px;
+}
+
 .wrapperRight {
   right: 0;
   flex-direction: row;
-  transform: translateX(var(--drawer-panel-w));
+  /* Shift by the actual wrapper width minus the exposed handle width so the
+     tab stays flush even if viewport units and zoom compensation diverge. */
+  transform: translateX(calc(100% - var(--drawer-tab-w)));
 }
 
 .wrapperLeft {
   left: 0;
   flex-direction: row-reverse;
-  transform: translateX(calc(-1 * var(--drawer-panel-w)));
+  transform: translateX(calc(-100% + var(--drawer-tab-w)));
 }
 
 .wrapperOpen {
@@ -38,7 +45,7 @@
 .drawerTab {
   flex-shrink: 0;
   align-self: flex-start;
-  width: 48px;
+  width: var(--drawer-tab-w);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -80,7 +87,6 @@
 }
 
 .drawerTabCompact {
-  width: 32px;
   padding: 8px 6px;
   gap: 0;
 }
@@ -360,20 +366,19 @@
   overflow-x: hidden;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
-  /* Bottom buffer keeps the last list item reachable even when something
-     overlays the bottom of the panel (mobile browser chrome, the Spindle
-     dock, iOS home indicator). Mirrors LoomBuilder.scrollArea's pattern. */
-  padding: 12px 12px calc(40px + env(safe-area-inset-bottom, 0px));
+  /* Keep the last list item clear of the home indicator / gesture bar. Any
+     panel-specific bottom chrome (pagination bars, etc.) should add its own
+     spacing rather than relying on this buffer. */
+  padding: 12px 12px env(safe-area-inset-bottom, 0px);
   position: relative;
 }
 
 /* iOS PWA: the drawer doesn't resize when the keyboard opens (layout viewport
-   stays full-screen). Keyboard-height padding at the bottom creates scroll room
-   so the focusin handler can scroll inputs above the keyboard even when the
-   panel's actual content is shorter than the container. Keep the safe-area
-   buffer so the last item is still reachable when no keyboard is open. */
+   stays full-screen). Add keyboard-height padding so the focusin handler can
+   scroll inputs above the keyboard even when the panel's actual content is
+   shorter than the container. */
 :global(html[data-ios-pwa]) .panelContent {
-  padding-bottom: calc(40px + env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--app-keyboard-inset-bottom, 0px));
 }
 
 .panelContentFull {
@@ -406,22 +411,25 @@
 
 @media (max-width: 600px) {
   .wrapper {
-    --drawer-panel-w: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
+    --drawer-panel-w: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1))) !important;
+    --drawer-tab-w: 40px;
+  }
+
+  .wrapperCompact {
+    --drawer-tab-w: 28px;
   }
 
   .drawerTab {
-    width: 40px;
     padding: 12px 6px 16px;
     gap: 6px;
   }
 
   .drawerTabCompact {
-    width: 28px;
     padding: 6px 4px;
   }
 
   .drawer {
-    width: calc(100vw / var(--lumiverse-ui-scale, 1)) !important;
+    width: var(--drawer-panel-w) !important;
     flex-direction: column !important;
   }
 

@@ -74,6 +74,12 @@ const PARAMETERS: ImageParameterSchemaMap = {
     group: "models",
     modelSubtype: "vae",
   },
+  unet: {
+    type: "string",
+    description: "Optional standalone diffusion model override. Leave empty to use the connection's model.",
+    group: "models",
+    modelSubtype: "unets",
+  },
   clipLModel: {
     type: "string",
     description: "CLIP-L text encoder model, for SD3/Flux-style diffusion models",
@@ -154,14 +160,15 @@ function unwrapPresetExport(rawJson: unknown): string | undefined {
   return rawJson
 }
 
-/** Cached SwarmUI session entry. */
+/** Cached resolved SwarmUI session. */
 interface SessionEntry {
-  sessionId: string
+  promise: Promise<string>
   expiresAt: number
 }
 
 /** 25 minutes — SwarmUI sessions typically last 30. */
 const SESSION_TTL_MS = 25 * 60 * 1000
+const SESSION_CACHE_MAX = 128
 
 /**
  * Short-lived cache for ListModels responses. Opening the image-gen panel
@@ -170,7 +177,140 @@ const SESSION_TTL_MS = 25 * 60 * 1000
  * mirroring the ComfyUI provider's cached model listing.
  */
 const MODEL_LIST_TTL_MS = 5 * 60 * 1000
-const modelListCache = new Map<string, { at: number; models: Array<{ id: string; label: string }> }>()
+const MODEL_LIST_CACHE_MAX = 128
+
+interface ModelListCacheEntry {
+  expiresAt: number
+  models: Array<{ id: string; label: string }>
+}
+
+const modelListCache = new Map<string, ModelListCacheEntry>()
+
+function fingerprintCredential(token: string): string {
+  const hasher = new Bun.CryptoHasher("sha256")
+  hasher.update(token)
+  return hasher.digest("hex")
+}
+
+function modelListCacheKey(
+  base: string,
+  token: string | undefined,
+  query: { path: string; depth: number; subtype: string },
+): string {
+  return `${base}\0${token ? fingerprintCredential(token) : "anonymous"}\0${query.path}\0${query.subtype}\0${query.depth}`
+}
+
+function sweepExpiredModelLists(now: number): void {
+  for (const [key, entry] of modelListCache) {
+    if (entry.expiresAt <= now) modelListCache.delete(key)
+  }
+}
+
+function cacheModelList(
+  key: string,
+  models: Array<{ id: string; label: string }>,
+  now: number,
+): void {
+  modelListCache.delete(key)
+  while (modelListCache.size >= MODEL_LIST_CACHE_MAX) {
+    const oldestKey = modelListCache.keys().next().value
+    if (oldestKey === undefined) break
+    modelListCache.delete(oldestKey)
+  }
+  modelListCache.set(key, { expiresAt: now + MODEL_LIST_TTL_MS, models })
+}
+
+
+/**
+ * Let each caller abandon its wait without cancelling the shared handshake.
+ * The cached promise continues under its own timeout so a second caller can
+ * still receive the session created by the first caller's request.
+ */
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"))
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup()
+      reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"))
+    }
+    const cleanup = () => signal.removeEventListener("abort", onAbort)
+
+    signal.addEventListener("abort", onAbort, { once: true })
+    void promise.then(
+      (value) => {
+        cleanup()
+        resolve(value)
+      },
+      (error) => {
+        cleanup()
+        reject(error)
+      },
+    )
+  })
+}
+
+function parseSwarmResponseError(
+  data: unknown,
+  operation: "session request" | "model listing" | "image generate",
+): ProviderRequestError | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null
+
+  const response = data as Record<string, unknown>
+  if (!response.error && !response.error_id) return null
+
+  const parsed = parseProviderErrorBody(JSON.stringify(data) ?? "")
+  return new ProviderRequestError({
+    provider: "SwarmUI",
+    operation,
+    code: parsed.code,
+    detail: parsed.detail || "SwarmUI returned an error",
+  })
+}
+
+function isStaleSessionError(err: unknown): err is ProviderRequestError {
+  return err instanceof ProviderRequestError && (
+    err.code === "invalid_session_id"
+    || /invalid session/i.test(err.code ?? "")
+    || /invalid session/i.test(err.detail ?? "")
+  )
+}
+
+function invalidModelListingResponse(): ProviderRequestError {
+  return new ProviderRequestError({
+    provider: "SwarmUI",
+    operation: "model listing",
+    detail: "SwarmUI returned an invalid model listing response",
+  })
+}
+
+function parseModelListResponse(data: unknown): Array<{ id: string; label: string }> {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw invalidModelListingResponse()
+  }
+
+  const files = (data as Record<string, unknown>).files
+  if (!Array.isArray(files)) throw invalidModelListingResponse()
+
+  const models: Array<{ id: string; label: string }> = []
+  for (const file of files) {
+    let id: string | undefined
+    if (typeof file === "string") {
+      id = file
+    } else if (file && typeof file === "object" && !Array.isArray(file)) {
+      const name = (file as Record<string, unknown>).name
+      if (typeof name === "string") id = name
+    }
+
+    if (!id || !id.trim()) throw invalidModelListingResponse()
+    models.push({ id, label: modelLabel(id) })
+  }
+
+  return models
+}
 
 export class SwarmUIImageProvider implements ImageProvider {
   readonly name = "swarmui"
@@ -186,50 +326,132 @@ export class SwarmUIImageProvider implements ImageProvider {
   // ── Session management ────────────────────────────────────────────────
 
   /**
-   * In-memory session cache keyed by `baseUrl\0token`.
-   * Sessions are re-fetched automatically on expiry or `invalid_session_id`.
+   * In-memory session cache keyed by the base URL and a SHA-256 credential
+   * fingerprint. Sessions are re-fetched automatically on expiry or
+   * `invalid_session_id`.
    */
   private sessions = new Map<string, SessionEntry>()
 
+  /** In-flight handshakes, bounded separately so active promises are never evicted. */
+  private pendingSessions = new Map<string, Promise<string>>()
+
   private sessionKey(baseUrl: string, token?: string): string {
-    return `${baseUrl}\0${token ?? ""}`
+    return `${baseUrl}\0${token ? fingerprintCredential(token) : "anonymous"}`
   }
 
-  private async getSession(
+  private sweepExpiredSessions(now: number): void {
+    for (const [key, entry] of this.sessions) {
+      if (entry.expiresAt <= now) this.sessions.delete(key)
+    }
+  }
+
+  private cacheSession(key: string, entry: SessionEntry): void {
+    this.sessions.delete(key)
+    while (this.sessions.size >= SESSION_CACHE_MAX) {
+      const oldestKey = this.sessions.keys().next().value
+      if (oldestKey === undefined) break
+      this.sessions.delete(oldestKey)
+    }
+    this.sessions.set(key, entry)
+  }
+
+  private getSession(
     baseUrl: string,
     token?: string,
     signal?: AbortSignal,
   ): Promise<string> {
+    const now = Date.now()
+    this.sweepExpiredSessions(now)
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"))
+    }
+
     const key = this.sessionKey(baseUrl, token)
     const cached = this.sessions.get(key)
-    if (cached && cached.expiresAt > Date.now()) return cached.sessionId
-
-    const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (token) headers.Cookie = `swarm_token=${token}`
-
-    const res = await fetch(`${baseUrl}/API/GetNewSession`, {
-      method: "POST",
-      headers,
-      body: "{}",
-      signal: signal ?? AbortSignal.timeout(10_000),
-    })
-
-    if (!res.ok) {
-      await throwProviderResponseError("SwarmUI", "session request", res)
+    if (cached) {
+      this.sessions.delete(key)
+      this.sessions.set(key, cached)
+      return waitForAbort(cached.promise, signal)
     }
 
-    const data = (await res.json()) as Record<string, any>
-    const sessionId = data.session_id
-    if (!sessionId || typeof sessionId !== "string") {
-      throw new Error("SwarmUI returned no session_id")
+    const pending = this.pendingSessions.get(key)
+    if (pending) return waitForAbort(pending, signal)
+
+    if (this.pendingSessions.size >= SESSION_CACHE_MAX) {
+      return Promise.reject(new ProviderRequestError({
+        provider: "SwarmUI",
+        operation: "session request",
+        code: "session_capacity_reached",
+        detail: "SwarmUI has too many pending session requests; retry shortly",
+        retryable: true,
+      }))
     }
 
-    this.sessions.set(key, { sessionId, expiresAt: Date.now() + SESSION_TTL_MS })
-    return sessionId
+    const sessionPromise = (async () => {
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      if (token) headers.Cookie = `swarm_token=${token}`
+
+      const res = await fetch(`${baseUrl}/API/GetNewSession`, {
+        method: "POST",
+        headers,
+        body: "{}",
+        signal: AbortSignal.timeout(10_000),
+      })
+
+      if (!res.ok) {
+        await throwProviderResponseError("SwarmUI", "session request", res)
+      }
+
+      const data = await res.json() as unknown
+      const responseError = parseSwarmResponseError(data, "session request")
+      if (responseError) throw responseError
+
+      const sessionId = data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>).session_id
+        : undefined
+      if (!sessionId || typeof sessionId !== "string") {
+        throw new Error("SwarmUI returned no session_id")
+      }
+
+      return sessionId
+    })()
+
+    this.pendingSessions.set(key, sessionPromise)
+    void sessionPromise.then(
+      () => {
+        if (this.pendingSessions.get(key) !== sessionPromise) return
+        this.pendingSessions.delete(key)
+        this.cacheSession(key, {
+          promise: sessionPromise,
+          expiresAt: Date.now() + SESSION_TTL_MS,
+        })
+      },
+      () => {
+        if (this.pendingSessions.get(key) === sessionPromise) this.pendingSessions.delete(key)
+      },
+    )
+    return waitForAbort(sessionPromise, signal)
   }
 
-  private invalidateSession(baseUrl: string, token?: string): void {
-    this.sessions.delete(this.sessionKey(baseUrl, token))
+  private async invalidateSession(
+    baseUrl: string,
+    token: string | undefined,
+    failedSessionId: string,
+  ): Promise<void> {
+    const key = this.sessionKey(baseUrl, token)
+    const cachedPromise = this.sessions.get(key)?.promise
+    if (!cachedPromise) return
+
+    let sessionId: string
+    try {
+      sessionId = await cachedPromise
+    } catch {
+      return
+    }
+
+    if (sessionId === failedSessionId && this.sessions.get(key)?.promise === cachedPromise) {
+      this.sessions.delete(key)
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────
@@ -244,6 +466,39 @@ export class SwarmUIImageProvider implements ImageProvider {
     return h
   }
 
+  private resolvedModel(request: ImageGenRequest): string {
+    const unet = request.parameters?.unet
+    return typeof unet === "string" && unet.trim() ? unet : request.model
+  }
+
+  private async requestModelList(
+    base: string,
+    token: string | undefined,
+    sessionId: string,
+    query: { path: string; depth: number; subtype: string },
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
+      session_id: sessionId,
+      path: query.path,
+      depth: query.depth,
+    }
+    if (query.subtype) body.subtype = query.subtype
+
+    const res = await fetch(`${base}/API/ListModels`, {
+      method: "POST",
+      headers: this.buildHeaders(token),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
+    })
+
+    if (!res.ok) await throwProviderResponseError("SwarmUI", "model listing", res)
+
+    const data = await res.json() as unknown
+    const responseError = parseSwarmResponseError(data, "model listing")
+    if (responseError) throw responseError
+    return data
+  }
+
   /** Build the generation request body in SwarmUI's flat parameter format. */
   private buildBody(sessionId: string, request: ImageGenRequest): Record<string, any> {
     const p = request.parameters ?? {}
@@ -252,7 +507,10 @@ export class SwarmUIImageProvider implements ImageProvider {
       session_id: sessionId,
       images: 1,
       prompt: request.prompt,
-      model: request.model,
+      // SwarmUI represents checkpoints and standalone diffusion models with
+      // the same `model` request parameter. An image-tab UNet selection is a
+      // per-generation override of the connection's default model.
+      model: this.resolvedModel(request),
       // SwarmUI only honors explicit width/height when aspectratio is "Custom".
       // Otherwise the server derives dimensions from `sidelength` + the selected
       // aspect ratio preset (default "1:1") and our width/height are ignored.
@@ -352,7 +610,7 @@ export class SwarmUIImageProvider implements ImageProvider {
       )
       return {
         imageDataUrl,
-        model: request.model || "comfyui-workflow",
+        model: this.resolvedModel(request) || "comfyui-workflow",
         provider: this.name,
       }
     }
@@ -384,7 +642,7 @@ export class SwarmUIImageProvider implements ImageProvider {
       if (!res.ok) {
         const text = await readBoundedText(res)
         if (text.includes("invalid_session_id") || text.includes("Invalid session")) {
-          this.invalidateSession(base, token)
+          await this.invalidateSession(base, token, sessionId)
           sessionId = await this.getSession(base, token, request.signal)
           body = this.buildBody(sessionId, request)
           res = await fetch(`${base}/API/GenerateText2Image`, {
@@ -410,13 +668,14 @@ export class SwarmUIImageProvider implements ImageProvider {
         }
       }
 
-      const data = (await res.json()) as Record<string, any>
+      const data = await res.json() as unknown
+      const responseError = parseSwarmResponseError(data, "image generate")
+      if (responseError) throw responseError
 
-      if (data.error || data.error_id) {
-        throw new Error(`SwarmUI error: ${data.error || data.error_id}`)
-      }
-
-      const images: string[] = Array.isArray(data.images) ? data.images : []
+      const response = data && typeof data === "object" && !Array.isArray(data)
+        ? data as Record<string, unknown>
+        : {}
+      const images: string[] = Array.isArray(response.images) ? response.images as string[] : []
       if (images.length === 0) {
         throw new Error("SwarmUI returned no images")
       }
@@ -425,7 +684,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
       return {
         imageDataUrl,
-        model: request.model || "unknown",
+        model: this.resolvedModel(request) || "unknown",
         provider: this.name,
       }
     } finally {
@@ -459,7 +718,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         if (next.done) {
           return {
             imageDataUrl: next.value.imageDataUrl,
-            model: request.model || "comfyui-workflow",
+            model: this.resolvedModel(request) || "comfyui-workflow",
             provider: this.name,
           }
         }
@@ -506,7 +765,7 @@ export class SwarmUIImageProvider implements ImageProvider {
         } else if (event.type === "image") {
           imagePath = event.path
         } else if (event.type === "error") {
-          throw new Error(`SwarmUI generation error: ${event.message}`)
+          throw event.error
         } else if (event.type === "complete") {
           break
         }
@@ -524,7 +783,7 @@ export class SwarmUIImageProvider implements ImageProvider {
 
     return {
       imageDataUrl,
-      model: request.model || "unknown",
+      model: this.resolvedModel(request) || "unknown",
       provider: this.name,
     }
   }
@@ -561,6 +820,12 @@ export class SwarmUIImageProvider implements ImageProvider {
     subtype: string,
   ): Promise<Array<{ id: string; label: string }>> {
     switch (subtype) {
+      case "unets":
+      case "unet":
+        // SwarmUI intentionally keeps checkpoints and diffusion_models in one
+        // Stable-Diffusion inventory, then chooses CheckpointLoaderSimple or
+        // UNETLoader from the selected model's metadata/path at generation.
+        return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "Stable-Diffusion" })
       case "vae":
         return this.fetchModelList(apiKey, apiUrl, { path: "", depth: 10, subtype: "VAE" })
       case "text_encoders":
@@ -580,43 +845,39 @@ export class SwarmUIImageProvider implements ImageProvider {
     query: { path: string; depth: number; subtype: string },
   ): Promise<Array<{ id: string; label: string }>> {
     const base = this.baseUrl(apiUrl)
-    const cacheKey = `${base} ${query.path} ${query.subtype} ${query.depth}`
+    const token = apiKey || undefined
+    const cacheKey = modelListCacheKey(base, token, query)
+    const now = Date.now()
+    sweepExpiredModelLists(now)
+
     const cached = modelListCache.get(cacheKey)
-    if (cached && Date.now() - cached.at < MODEL_LIST_TTL_MS) {
+    if (cached) {
+      modelListCache.delete(cacheKey)
+      modelListCache.set(cacheKey, cached)
       return cached.models
     }
 
-    const token = apiKey || undefined
-    const sessionId = await this.getSession(base, token)
+    let sessionId = await this.getSession(base, token)
+    let data: unknown
+    try {
+      data = await this.requestModelList(base, token, sessionId, query)
+    } catch (err) {
+      if (!isStaleSessionError(err)) throw err
 
-    const body: Record<string, any> = {
-      session_id: sessionId,
-      path: query.path,
-      depth: query.depth,
-    }
-    if (query.subtype) body.subtype = query.subtype
-
-    const res = await fetch(`${base}/API/ListModels`, {
-      method: "POST",
-      headers: this.buildHeaders(token),
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
-    })
-
-    if (!res.ok) await throwProviderResponseError(this.displayName, "model listing", res)
-
-    const data = (await res.json()) as Record<string, any>
-
-    // Response: { folders: [...], files: [{ name, title, ... }] }
-    const models: Array<{ id: string; label: string }> = []
-    const files: any[] = Array.isArray(data.files) ? data.files : []
-
-    for (const f of files) {
-      const id = typeof f === "string" ? f : String(f?.name ?? "")
-      if (id) models.push({ id, label: modelLabel(id) })
+      await this.invalidateSession(base, token, sessionId)
+      sessionId = await this.getSession(base, token)
+      try {
+        data = await this.requestModelList(base, token, sessionId, query)
+      } catch (retryError) {
+        if (isStaleSessionError(retryError)) {
+          await this.invalidateSession(base, token, sessionId)
+        }
+        throw retryError
+      }
     }
 
-    modelListCache.set(cacheKey, { at: Date.now(), models })
+    const models = parseModelListResponse(data)
+    cacheModelList(cacheKey, models, Date.now())
     return models
   }
 
@@ -629,7 +890,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     | { type: "progress"; step: number; totalSteps: number; preview?: string }
     | { type: "image"; path: string }
     | { type: "complete" }
-    | { type: "error"; message: string }
+    | { type: "error"; error: ProviderRequestError }
   > {
     const queue: Array<any> = []
     let resolve: (() => void) | null = null
@@ -648,9 +909,9 @@ export class SwarmUIImageProvider implements ImageProvider {
       try {
         const msg = JSON.parse(evt.data) as Record<string, any>
 
-        // Error message
-        if (msg.error || msg.error_id) {
-          enqueue({ type: "error", message: String(msg.error || msg.error_id) })
+        const responseError = parseSwarmResponseError(msg, "image generate")
+        if (responseError) {
+          enqueue({ type: "error", error: responseError })
           return
         }
 

@@ -1,4 +1,8 @@
-# Packs
+---
+title: Pack Browser
+---
+
+# Pack Browser
 
 Packs are curated content bundles that extend Lumiverse's capabilities. They contain **Lumia items** (AI personas for the council), **Loom items** (narrative content and utilities), and **Loom tools** (council tool definitions).
 

@@ -3,6 +3,7 @@
 !!! warning "Permission required: `cors_proxy`"
 
 Make HTTP requests through the Lumiverse server, bypassing browser CORS restrictions.
+The proxy permits HTTP(S) targets on loopback, APIPA, and RFC-private address ranges for extension-owned integrations.
 
 ## Usage
 
@@ -49,7 +50,7 @@ The `corsProxy` method is only available when:
 1. The extension has the `cors_proxy` permission granted.
 2. The widget is rendered inside a host-managed sandbox frame.
 
-Requests from sandboxed widgets flow through the same host-side CORS proxy pipeline (`spindle.cors()`), so the same URL validation, SSRF protection, timeout, and body-size limits apply.
+Requests from sandboxed widgets flow through the same host-side CORS proxy pipeline (`spindle.cors()`), so the same URL validation, timeout, and body-size limits apply.
 
 ### Binary media responses
 

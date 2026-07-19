@@ -17,6 +17,8 @@ export interface TtsResponse {
 export interface TtsStreamChunk {
   data: Uint8Array;
   done: boolean;
+  kind?: "bytes" | "audio_file";
+  mimeType?: string;
 }
 
 export interface TtsVoice {

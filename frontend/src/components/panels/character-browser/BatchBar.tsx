@@ -1,4 +1,4 @@
-import { Trash2, X, CheckSquare } from 'lucide-react'
+import { Trash2, X, CheckSquare, Tags } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import styles from './BatchBar.module.css'
 
@@ -7,6 +7,7 @@ interface BatchBarProps {
   totalCount: number
   onSelectAll: () => void
   onClearSelection: () => void
+  onTags: () => void
   onDelete: () => void
   onCancel: () => void
 }
@@ -16,6 +17,7 @@ export default function BatchBar({
   totalCount,
   onSelectAll,
   onClearSelection,
+  onTags,
   onDelete,
   onCancel,
 }: BatchBarProps) {
@@ -33,6 +35,15 @@ export default function BatchBar({
           onClick={selectedCount === totalCount ? onClearSelection : onSelectAll}
         >
           {selectedCount === totalCount ? t('characterBrowser.deselectAll') : t('characterBrowser.selectAll')}
+        </button>
+        <button
+          type="button"
+          className={styles.tagsBtn}
+          onClick={onTags}
+          disabled={selectedCount === 0}
+        >
+          <Tags size={14} />
+          {t('characterBrowser.bulkTags')}
         </button>
         <button
           type="button"

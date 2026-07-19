@@ -1,11 +1,15 @@
 import { useEffect, useRef } from 'react'
 import { wsClient, WS_OPEN, WS_CLOSE, WS_PONG, WS_AUTH_ERROR } from './client'
+import { sendRoomAction, relayClient } from './relayClient'
+import { buildActivePersonaSnapshot, activePersonaAddonSignature } from '@/lib/personaSnapshot'
+import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { hasUnsavedSettings } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
 import { spindleApi } from '@/api/spindle'
 import { messagesApi } from '@/api/chats'
+import { multiplayerApi } from '@/api/multiplayer'
 import { imageGenApi } from '@/api/image-gen'
 import { generateApi } from '@/api/generate'
 import { operatorApi } from '@/api/operator'
@@ -39,7 +43,21 @@ import type {
   LumiPipelineCompletedPayload,
   GroupTurnStartedPayload,
   GroupRoundCompletePayload,
+  RoomStatusPayload,
+  RoomInviteCodePayload,
+  RoomJoinRejectedPayload,
+  RoomParticipantJoinedPayload,
+  RoomParticipantLeftPayload,
+  RoomParticipantKickedPayload,
+  RoomPersonaChangedPayload,
+  RoomTurnChangedPayload,
+  RoomTurnSkippedPayload,
+  RoomPresencePayload,
+  SystemSmartAlertPayload,
 } from '@/types/ws-events'
+import type { Message } from '@/types/api'
+import type { ChatHeadStatus } from '@/types/store'
+import type { RoomStateView } from '@/types/multiplayer'
 import type { CouncilToolResult } from 'lumiverse-spindle-types'
 import type { ActivatedWorldInfoEntry, WorldInfoStats } from '@/types/api'
 import { playNotificationPing } from '@/lib/notificationAudio'
@@ -55,6 +73,103 @@ function isLocalStreamPlaceholderId(id: string | null | undefined) {
 }
 
 const MAX_TOAST_ERROR_LENGTH = 800
+const MULTIPLAYER_CHAT_HEAD_PREFIX = 'mp-room:'
+
+const LIVE_GENERATION_HEAD_STATUSES = new Set<ChatHeadStatus>([
+  'assembling',
+  'council',
+  'waiting',
+  'reasoning',
+  'streaming',
+])
+
+function isLiveGenerationHead(status: ChatHeadStatus, generationId: string): boolean {
+  return !generationId.startsWith(MULTIPLAYER_CHAT_HEAD_PREFIX) && LIVE_GENERATION_HEAD_STATUSES.has(status)
+}
+
+function participantName(room: RoomStateView, participantId: string | null): string | null {
+  if (!participantId) return null
+  const participant = room.participants.find((p) => p.id === participantId)
+  return participant?.persona?.name || participant?.displayName || null
+}
+
+function normalizeGenerationHeadStatus(raw: string | undefined): ChatHeadStatus {
+  switch (raw) {
+    case 'assembling':
+    case 'council':
+    case 'waiting':
+    case 'reasoning':
+    case 'streaming':
+    case 'completed':
+    case 'stopped':
+    case 'error':
+      return raw
+    default:
+      return 'waiting'
+  }
+}
+
+function syncMultiplayerChatHead(
+  room: RoomStateView,
+  opts: { characterName?: string; characterAvatar?: string | null } = {},
+): void {
+  const state = useStore.getState()
+  const existing = state.chatHeads.find((h) => h.chatId === room.chatId)
+  if (existing && isLiveGenerationHead(existing.status, existing.generationId)) return
+
+  const myParticipantId = room.selfParticipantId ?? state.mpMyParticipantId
+  const freeformOpen =
+    room.turnStrategy === 'freeform' &&
+    room.freeformDeadline != null &&
+    Date.now() / 1000 < room.freeformDeadline
+  const myTurn = room.turnStrategy === 'round_robin' && room.currentTurnParticipantId === myParticipantId
+  const currentName = participantName(room, room.currentTurnParticipantId)
+
+  const status: ChatHeadStatus = freeformOpen
+    ? 'mp_freeform'
+    : myTurn
+      ? 'mp_your_turn'
+      : 'mp_waiting_turn'
+  const subtitle = freeformOpen
+    ? 'Freeform window open'
+    : myTurn
+      ? 'Your turn'
+      : currentName
+        ? `Waiting for ${currentName}`
+        : 'Waiting for the room'
+
+  state.addChatHead({
+    generationId: `${MULTIPLAYER_CHAT_HEAD_PREFIX}${room.roomId}`,
+    chatId: room.chatId,
+    characterName: opts.characterName || existing?.characterName || state.activeChatName || 'Multiplayer chat',
+    characterId: existing?.characterId || (state.mpIsHost && state.activeChatId === room.chatId ? state.activeCharacterId ?? undefined : undefined),
+    avatarUrl: opts.characterAvatar ?? state.mpCharacterAvatar ?? existing?.avatarUrl ?? null,
+    status,
+    model: '',
+    startedAt: existing?.startedAt ?? Date.now(),
+    subtitle,
+    multiplayerRoomId: room.roomId,
+  })
+}
+
+function syncMultiplayerChatHeadFromStore(): void {
+  const state = useStore.getState()
+  if (!state.mpRoomId || !state.mpChatId) return
+  syncMultiplayerChatHead({
+    roomId: state.mpRoomId,
+    chatId: state.mpChatId,
+    status: 'open',
+    turnStrategy: state.mpTurnStrategy,
+    freeformDeadline: state.mpFreeformDeadline,
+    currentTurnParticipantId: state.mpCurrentTurnParticipantId,
+    turnOrder: state.mpTurnOrder,
+    round: state.mpRound,
+    participants: state.mpParticipants,
+    settings: state.mpSettings ?? undefined,
+    selfParticipantId: state.mpMyParticipantId ?? undefined,
+  })
+}
+
 // Last-line-of-defense sanitizer for error strings rendered in toasts. The
 // backend already strips HTML/oversize bodies from provider errors, but this
 // keeps a misbehaving provider (or a stale backend) from wedging the toast
@@ -73,13 +188,41 @@ function sanitizeToastMessage(raw: string | undefined | null): string {
     : stripped
 }
 
+interface EmptyGeneratedSwipeTarget {
+  chatId: string
+  messageId: string
+  swipeId: number
+}
+
+function getEmptyGeneratedSwipeTarget(state: ReturnType<typeof useStore.getState>, chatId?: string): EmptyGeneratedSwipeTarget | null {
+  if ((state.streamingGenerationType ?? '') !== 'swipe') return null
+  if (!chatId || !state.regeneratingMessageId || state.streamingSwipeId == null) return null
+  const buffered = state.getStreamBuffers().content || state.streamingContent
+  if (buffered.trim().length > 0) return null
+  return { chatId, messageId: state.regeneratingMessageId, swipeId: state.streamingSwipeId }
+}
+
+async function deleteEmptyGeneratedSwipe(
+  target: EmptyGeneratedSwipeTarget | null,
+  messages: Message[],
+): Promise<Message[]> {
+  if (!target) return messages
+  const message = messages.find((m) => m.id === target.messageId)
+  if (!message || message.swipes.length <= 1) return messages
+  const swipeContent = message.swipes[target.swipeId]
+  if (typeof swipeContent !== 'string' || swipeContent.trim().length > 0) return messages
+
+  try {
+    const updated = await messagesApi.deleteSwipe(target.chatId, target.messageId, target.swipeId)
+    return messages.map((m) => (m.id === updated.id ? updated : m))
+  } catch (err) {
+    console.error('[useWebSocket] Failed to delete empty generated swipe:', err)
+    return messages
+  }
+}
+
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
 const CHAT_VARS_PREFIX = 'metadata.chat_variables.'
-
-// Set on first SYSTEM_DISK_LOW receipt to silence the rebroadcasts the
-// backend fires every 5 min while the disk stays over threshold. Module
-// scope (not state) — survives WS reconnects, resets only on full page load.
-let diskWarningShown = false
 
 interface VarChangeSummary {
   bagWideVarChange: boolean
@@ -143,6 +286,41 @@ function applyGenerationMetrics(payload: GenerationMetricsReadyPayload): void {
       ...(payload.generationMetrics ? { generationMetrics: payload.generationMetrics } : {}),
     },
   })
+}
+
+function withReasoningSnapshot(
+  message: Message,
+  reasoning: string,
+  reasoningDuration: number | null | undefined,
+  swipeId: number | null | undefined,
+): Message {
+  // Top-level extra.reasoning is the active-swipe projection. If the generation
+  // finished on a background swipe, don't project it onto the visible swipe.
+  if (swipeId != null && message.swipe_id !== swipeId) return message
+  if (typeof message.extra?.reasoning === 'string' && message.extra.reasoning.length > 0) return message
+  return {
+    ...message,
+    extra: {
+      ...(message.extra || {}),
+      reasoning,
+      ...(reasoningDuration != null ? { reasoningDuration } : {}),
+    },
+  }
+}
+
+function patchMessageReasoningSnapshot(
+  messageId: string | undefined,
+  reasoning: string,
+  reasoningDuration: number | null | undefined,
+  swipeId: number | null | undefined,
+): void {
+  if (!messageId || !reasoning) return
+  const state = useStore.getState()
+  const message = state.messages.find((m) => m.id === messageId)
+  if (!message) return
+  const patched = withReasoningSnapshot(message, reasoning, reasoningDuration, swipeId)
+  if (patched === message) return
+  state.updateMessage(messageId, { extra: patched.extra })
 }
 
 /**
@@ -389,6 +567,15 @@ export function useWebSocket() {
         const changedChatId = payload.chat?.id ?? payload.chatId
         if (changedChatId !== state.activeChatId) return
 
+        if (payload.chat) {
+          state.setActiveChatName(payload.chat.name ?? null)
+          state.setActiveChatMetadata(payload.chat.metadata ?? null)
+          const wallpaper = payload.chat.metadata?.wallpaper as import('@/types/store').WallpaperRef | undefined
+          state.setActiveChatWallpaper(wallpaper?.image_id ? wallpaper : null)
+          const avatarOverride = payload.chat.metadata?.active_avatar_id as string | undefined
+          state.setActiveChatAvatarId(avatarOverride || null)
+        }
+
         const changedFields = payload.changedFields
         if (changedFields === undefined) {
           invalidateDisplayRegexCache()
@@ -412,7 +599,7 @@ export function useWebSocket() {
             state.setRespondingCharacterId(payload.characterId)
           }
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             // Generation already wired via HTTP response — just set the target message.
             // This happens when council sidecar stages a message after startStreaming was
@@ -431,11 +618,12 @@ export function useWebSocket() {
           generationId: payload.generationId,
           chatId: payload.chatId,
           characterName: payload.characterName || 'Assistant',
-          characterId: payload.characterId,
-          avatarUrl: null, // resolved by the component via characterId
+          characterId: state.mpChatId === payload.chatId && !state.mpIsHost ? undefined : payload.characterId,
+          avatarUrl: state.mpChatId === payload.chatId ? state.mpCharacterAvatar : null,
           status: 'assembling',
           model: '',
           startedAt: Date.now(),
+          subtitle: state.mpChatId === payload.chatId ? 'Generating reply' : undefined,
         })
       }),
 
@@ -443,7 +631,7 @@ export function useWebSocket() {
         const state = store.getState()
         if (payload.chatId === state.activeChatId) {
           if (state.activeGenerationId !== payload.generationId) {
-            state.startStreaming(payload.generationId, payload.targetMessageId)
+            state.startStreaming(payload.generationId, payload.targetMessageId, payload.generationType)
           } else if (payload.targetMessageId && state.regeneratingMessageId !== payload.targetMessageId) {
             state.setRegeneratingMessageId(payload.targetMessageId)
           }
@@ -464,9 +652,26 @@ export function useWebSocket() {
                 over: Math.abs(clip.remainingHistoryBudget).toLocaleString(),
               }),
             )
-          } else if (clip?.enabled && clip.remainingHistoryBudget <= 0 && clip.messagesDropped > 0) {
+          } else if (
+            clip?.enabled &&
+            clip.anchorActive &&
+            !clip.anchorOverflow &&
+            (state.summarization.contextAnchorWarningThresholdTokens ?? 0) > 0 &&
+            (clip.remainingBeforeAnchor ?? Number.POSITIVE_INFINITY) <= state.summarization.contextAnchorWarningThresholdTokens
+          ) {
+            toast.warning(
+              i18n.t('common.toast.contextAnchorNearLimit', {
+                remaining: Math.max(0, clip.remainingBeforeAnchor ?? 0).toLocaleString(),
+              }),
+            )
+          } else if (
+            clip?.enabled &&
+            clip.remainingHistoryBudget <= 0 &&
+            clip.messagesDropped > 0 &&
+            !state.suppressContextDropWarnings
+          ) {
             toast.warning(i18n.t('common.toast.contextNoHistoryRoom'))
-          } else if (clip?.enabled && clip.messagesDropped > 0) {
+          } else if (clip?.enabled && clip.messagesDropped > 0 && !state.suppressContextDropWarnings) {
             toast.warning(
               i18n.t('common.toast.contextClipped', {
                 count: clip.messagesDropped,
@@ -527,6 +732,7 @@ export function useWebSocket() {
           }
 
           if (payload.error) {
+            const emptySwipeTarget = getEmptyGeneratedSwipeTarget(state, payload.chatId)
             // Remove client-side placeholder if regeneration failed before backend saved a real message
             const regenId = state.regeneratingMessageId
             if (isLocalStreamPlaceholderId(regenId)) {
@@ -553,12 +759,18 @@ export function useWebSocket() {
               { title: i18n.t('common.toast.generationFailedTitle') },
             )
             // Reconcile message list on error so any backend-staged empty messages
-            // are reflected (or removed if the backend cleaned them up).
-            if (payload.chatId) {
-              fetchLatestMessages(payload.chatId).then((res) => {
+            // are reflected (or removed if the backend cleaned them up). Peers skip
+            // this — their backend has no authoritative copy of the host's chat, so
+            // a re-fetch would wipe the live view (the host reconciles + the error
+            // toast already surfaced the failure).
+            const sErr = store.getState()
+            const mpPeerErr = !!sErr.mpRoomId && !sErr.mpIsHost && sErr.mpChatId === payload.chatId
+            if (payload.chatId && !mpPeerErr) {
+              fetchLatestMessages(payload.chatId).then(async (res) => {
+                const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
                 const s = store.getState()
                 if (s.activeChatId === payload.chatId) {
-                  s.setMessages(res.data, res.total)
+                  s.setMessages(messages, res.total)
                 }
               }).catch(() => { /* ignore */ })
             }
@@ -616,6 +828,47 @@ export function useWebSocket() {
             // fresh one as unseen so a "new swipe ready" badge points them to it.
             const completedSwipeId = state.streamingSwipeId
             const completedMessageId = payload.messageId
+            const completedReasoning = state.streamingReasoning
+            const completedReasoningDuration = state.streamingReasoningDuration
+
+            // ── Multiplayer peers: finalize from the event, never re-fetch ──
+            // A peer holds no authoritative local copy of the host's chat (local
+            // peer: the chat is owned by the host, so a re-fetch returns nothing;
+            // remote peer: the shadow chat is frozen at join). Re-fetching here
+            // would wipe the live, WS-delivered conversation — so finalize the
+            // streamed assistant message from the event payload, keep everything
+            // else, and skip the host-only image-gen / @mention follow-ups.
+            {
+              const sPeer = store.getState()
+              if (sPeer.mpRoomId && !sPeer.mpIsHost && sPeer.mpChatId === payload.chatId) {
+                if (completedMessageId && typeof payload.content === 'string') {
+                  const current = sPeer.messages.find((m) => m.id === completedMessageId)
+                  const extraSnapshot = current && completedReasoning
+                    ? withReasoningSnapshot(
+                        current,
+                        completedReasoning,
+                        completedReasoningDuration,
+                        completedSwipeId,
+                      ).extra
+                    : undefined
+                  sPeer.updateMessage(completedMessageId, {
+                    content: payload.content,
+                    ...(extraSnapshot
+                      ? { extra: extraSnapshot }
+                      : {}),
+                  })
+                }
+                if (completedMessageId) {
+                  const buffered = pendingGenerationMetrics.get(completedMessageId)
+                  if (buffered) {
+                    applyGenerationMetrics(buffered)
+                    pendingGenerationMetrics.delete(completedMessageId)
+                  }
+                }
+                sPeer.endStreaming()
+                return
+              }
+            }
 
             // Reconcile before clearing streaming. Clearing first collapses long
             // streamed rows back to their blank/original content for a frame; on
@@ -628,7 +881,17 @@ export function useWebSocket() {
             fetchLatestMessages(payload.chatId).then((res) => {
               const s = store.getState()
               if (s.activeChatId === payload.chatId) {
-                s.setMessages(res.data, res.total)
+                const messages = completedMessageId && completedReasoning
+                  ? res.data.map((message) => message.id === completedMessageId
+                      ? withReasoningSnapshot(
+                          message,
+                          completedReasoning,
+                          completedReasoningDuration,
+                          completedSwipeId,
+                        )
+                      : message)
+                  : res.data
+                s.setMessages(messages, res.total)
                 // Deferred metrics may have arrived (and been wiped by the
                 // setMessages above) before this re-fetch could read them —
                 // re-apply from the buffer so the pill/hover survive the race.
@@ -650,6 +913,12 @@ export function useWebSocket() {
                 s.endStreaming()
               }
             }).catch(() => {
+              patchMessageReasoningSnapshot(
+                completedMessageId,
+                completedReasoning,
+                completedReasoningDuration,
+                completedSwipeId,
+              )
               store.getState().endStreaming()
               if (isLocalStreamPlaceholderId(optimisticMessageId)) {
                 store.getState().removeMessage(optimisticMessageId)
@@ -677,6 +946,7 @@ export function useWebSocket() {
                     persona_addon_states: queue.opts.persona_addon_states,
                     preset_id: queue.opts.preset_id,
                     force_preset_id: queue.opts.force_preset_id,
+                    user_input: queue.opts.user_input,
                     target_character_id: nextId,
                     generation_type: 'normal',
                   }).then((res) => {
@@ -697,12 +967,14 @@ export function useWebSocket() {
                 }
               }
 
-              // Don't trigger image gen if a new generation already started,
-              // we're in a group nudge loop, or the user has navigated away
-              // from the chat that just finished generating (the backend would
-              // still create the attachment message, but the local store would
-              // silently drop it because the active chat no longer matches).
+              const pageVisible = document.visibilityState === 'visible' && document.hasFocus()
+
+              // Foreground pages keep the existing client-side auto-generate
+              // flow. Hidden/backgrounded sessions hand off to the backend
+              // fallback listener so mobile suspends and closed tabs can still
+              // reach ComfyUI without double-firing the request.
               if (
+                pageVisible &&
                 !latest.isStreaming &&
                 !latest.isNudgeLoopActive &&
                 latest.activeChatId === payload.chatId &&
@@ -738,6 +1010,9 @@ export function useWebSocket() {
                   prompt: ig.customPrompt,
                   negativePrompt: ig.customNegativePrompt,
                   promptPresetId: ig.activePromptPresetId ?? null,
+                  bypassCharacterLora: !!ig.bypassCharacterLora,
+                  bypassActiveLoraPreset: !!ig.bypassActiveLoraPreset,
+                  loraStrengthScale: ig.loraStrengthScale,
                   promptGenerationTimeoutSeconds: ig.promptGenerationTimeoutSeconds,
                   generationTimeoutSeconds: ig.generationTimeoutSeconds,
                 }).then((res) => {
@@ -769,6 +1044,7 @@ export function useWebSocket() {
               playNotificationPing(state.chatHeadsCustomCompletionSound?.uploadedAt ?? null)
             }
           }
+          if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
         }
       }),
 
@@ -820,12 +1096,23 @@ export function useWebSocket() {
         // then both updates (stop streaming + set messages) happen in a single
         // React render — no flash of empty content.
         const chatId = payload?.chatId || state.activeChatId
-        if (chatId) {
-          fetchLatestMessages(chatId).then((res) => {
+        const emptySwipeTarget = getEmptyGeneratedSwipeTarget(state, chatId)
+        const mpPeerStop = !!state.mpRoomId && !state.mpIsHost && !!chatId && state.mpChatId === chatId
+        if (mpPeerStop) {
+          // Peers can't re-fetch the host's chat — finalize the streamed partial
+          // from the live buffer and stop (the backend's MESSAGE_EDITED re-broadcast
+          // reconciles the authoritative saved partial). Avoids wiping the view.
+          if (state.regeneratingMessageId && state.streamingContent) {
+            state.updateMessage(state.regeneratingMessageId, { content: state.streamingContent })
+          }
+          state.stopStreaming()
+        } else if (chatId) {
+          fetchLatestMessages(chatId).then(async (res) => {
+            const messages = await deleteEmptyGeneratedSwipe(emptySwipeTarget, res.data)
             const s = store.getState()
             if (s.activeChatId === chatId) {
               s.stopStreaming()
-              s.setMessages(res.data, res.total)
+              s.setMessages(messages, res.total)
             } else {
               s.stopStreaming()
             }
@@ -845,6 +1132,7 @@ export function useWebSocket() {
           } else {
             state.updateChatHead(payload.generationId, { status: 'stopped' })
           }
+          if (state.mpChatId === payload.chatId) syncMultiplayerChatHeadFromStore()
         }
       }),
 
@@ -1143,6 +1431,7 @@ export function useWebSocket() {
             action: 'stop',
             processId: payload.processId,
             reason: typeof payload.reason === 'string' ? payload.reason : undefined,
+            ...(payload.force === true ? { force: true } : {}),
           })
         }
       }),
@@ -1178,12 +1467,7 @@ export function useWebSocket() {
         toastFn(payload.message, { title: attributedTitle, duration: payload.duration })
       }),
 
-      wsClient.on(EventType.SYSTEM_DISK_LOW, (payload: { path: string; usagePercent: number; freeBytes: number; totalBytes: number; thresholdPercent: number }) => {
-        // Backend re-emits this on every 5-min interval while the disk is
-        // over threshold so late-connecting admins still get notified. Dedupe
-        // here so existing sessions only see one toast per page-load.
-        if (diskWarningShown) return
-        diskWarningShown = true
+      wsClient.on(EventType.SYSTEM_DISK_LOW, (payload: { path: string; usagePercent: number; freeBytes: number; totalBytes: number; thresholdPercent: number; thresholdFreeBytes: number }) => {
         const formatBytes = (bytes: number): string => {
           const GIB = 1024 * 1024 * 1024
           const MIB = 1024 * 1024
@@ -1194,8 +1478,26 @@ export function useWebSocket() {
         const pct = (payload.usagePercent * 100).toFixed(0)
         const free = formatBytes(payload.freeBytes)
         toast.warning(
-          `The disk hosting Lumiverse is ${pct}% full (${free} free). Free up space to avoid crashes — writes to memory-mapped files may fault if the disk fills.`,
+          `The disk hosting Lumiverse is ${pct}% full with ${free} free remaining. Free up space to avoid crashes — writes to memory-mapped files may fault if the disk fills.`,
           { title: 'Storage almost full', duration: 30_000 },
+        )
+      }),
+
+      wsClient.on(EventType.SYSTEM_SMART_ALERT, (payload: SystemSmartAlertPayload) => {
+        if (payload.drives.length === 0) return
+
+        const affected = payload.drives.slice(0, 3).map((drive) => {
+          const label = drive.model ? `${drive.model} (${drive.device})` : drive.device
+          const conditions = drive.conditions.slice(0, 2).map((condition) => condition.message).join('; ')
+          return conditions ? `${label}: ${conditions}` : label
+        })
+        const more = payload.drives.length > affected.length ? ` (+${payload.drives.length - affected.length} more)` : ''
+        const hasFailure = payload.drives.some((drive) => drive.status === 'failing'
+          || drive.conditions.some((condition) => condition.severity === 'failing'))
+        const toastFn = hasFailure ? toast.error : toast.warning
+        toastFn(
+          `${affected.join(' · ')}${more}. Open Settings → Operator → Disk Health for details.`,
+          { title: hasFailure ? 'Disk health failure' : 'Disk health warning', duration: 30_000 },
         )
       }),
 
@@ -1422,22 +1724,221 @@ export function useWebSocket() {
         }
         console.warn(`[Summary] Generation failed for chat ${payload.chatId}:`, payload.error)
       }),
+
+      // ── Multiplayer rooms ──
+      // Peer chat messages and bot stream tokens arrive via the existing
+      // MESSAGE_SENT / STREAM_TOKEN_RECEIVED handlers (re-broadcast to the room
+      // topic, still carrying the real chatId). These only cover room lifecycle.
+      wsClient.on(EventType.ROOM_STATUS, (payload: RoomStatusPayload) => {
+        const state = store.getState()
+        if (payload.room) {
+          state.setRoomState(payload.room)
+          // The host relays the bot avatar (peers can't fetch the owner-scoped
+          // character-avatar endpoint) — stash it for useMessageCard.
+          if (payload.characterAvatar !== undefined) {
+            state.setCharacterAvatar(payload.characterAvatar)
+          }
+          syncMultiplayerChatHead(payload.room, {
+            characterName: payload.chatName || payload.characterName,
+            characterAvatar: payload.characterAvatar,
+          })
+          // A hydration snapshot for a PEER (we're not the host) means we just
+          // joined — or rejoined — someone else's room: adopt it as the active
+          // chat view and refresh the messages. The host owns the real chat, so
+          // we never clobber the host's own messages with the tail snapshot.
+          if (Array.isArray(payload.messages) && !state.mpIsHost) {
+            state.setActiveChat(payload.chatId)
+            store.getState().setMessages(payload.messages as Message[])
+            // Mid-join: if the host had a reply streaming when we joined, resume
+            // it from the embedded snapshot so it appears live (not just at
+            // completion). Peers can't reach the host's pool endpoint
+            // cross-instance, so the host hands us the in-flight snapshot here.
+            // Mirrors recoverPooledGeneration's resume branch.
+            const gen = payload.generation
+            if (gen?.active && gen.generationId) {
+              const st = store.getState()
+              st.startStreaming(gen.generationId, gen.targetMessageId, gen.generationType)
+              st.setStreamingSwipeId(gen.targetSwipeId ?? null)
+              if (gen.content) st.reconcileStreamContent(gen.content, gen.contentOffset ?? 0)
+              if (gen.reasoning) st.reconcileStreamReasoning(gen.reasoning, gen.reasoningOffset ?? 0)
+              if (gen.reasoningDurationMs) store.setState({ streamingReasoningDuration: gen.reasoningDurationMs })
+              else if (gen.reasoningStartedAt) st.setStreamingReasoningStartedAt(gen.reasoningStartedAt)
+              st.addChatHead({
+                generationId: gen.generationId,
+                chatId: payload.chatId,
+                characterName: gen.characterName || payload.characterName || payload.chatName || 'Assistant',
+                characterId: gen.characterId,
+                avatarUrl: payload.characterAvatar ?? st.mpCharacterAvatar,
+                status: normalizeGenerationHeadStatus(gen.status),
+                model: '',
+                startedAt: Date.now(),
+                subtitle: 'Generating reply',
+              })
+            }
+            // Record this joined room in the user's own chat history (best-effort,
+            // so it shows up in recent/manage chats with the multiplayer badge),
+            // stashing the durable reconnect token so it can be rejoined later.
+            multiplayerApi
+              .saveShadow({
+                chatId: payload.chatId,
+                roomId: payload.roomId,
+                name: payload.chatName,
+                characterName: payload.characterName,
+                messages: payload.messages,
+                reconnectToken: relayClient.reconnectToken() ?? undefined,
+              })
+              .catch(() => {})
+          }
+        } else if (payload.status === 'closed' && payload.roomId === state.mpRoomId) {
+          // Stop any relay auto-reconnect before clearing — the room is gone, so
+          // we must not try to rejoin it.
+          relayClient.disconnect()
+          state.deleteChatHead(payload.chatId)
+          state.clearRoom()
+          toast.info(i18n.t('multiplayer.roomClosed', { defaultValue: 'The room was closed by the host' }))
+        }
+      }),
+
+      wsClient.on(EventType.ROOM_JOIN_REJECTED, (payload: RoomJoinRejectedPayload) => {
+        // The host refused our join (full / closed / banned / kicked). Tear down
+        // the relay + clear so we don't sit "connected but never in the room".
+        relayClient.disconnect()
+        store.getState().clearRoom()
+        const reason = payload.reason
+        toast.error(
+          reason === 'full'
+            ? i18n.t('multiplayer.joinFull', { defaultValue: 'That room is full' })
+            : reason === 'banned'
+              ? i18n.t('multiplayer.joinBanned', { defaultValue: 'You are banned from that room' })
+              : reason === 'kicked'
+                ? i18n.t('multiplayer.joinKicked', { defaultValue: 'You were removed from that room' })
+                : reason === 'closed'
+                  ? i18n.t('multiplayer.joinClosed', { defaultValue: 'That room has closed' })
+                  : i18n.t('multiplayer.joinRejected', { defaultValue: 'Could not join the room' }),
+        )
+      }),
+
+      wsClient.on(EventType.ROOM_INVITE_CODE, (payload: RoomInviteCodePayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        // A guest redeemed the shared code → the host auto-rolled a fresh one.
+        state.setRemoteCode(payload.code)
+        toast.info(i18n.t('multiplayer.inviteRolled', { defaultValue: 'Invite used — a new code is ready to share' }))
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_JOINED, (payload: RoomParticipantJoinedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.upsertParticipant(payload.participant)
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_LEFT, (payload: RoomParticipantLeftPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.removeParticipant(payload.participantId)
+      }),
+
+      wsClient.on(EventType.ROOM_PARTICIPANT_KICKED, (payload: RoomParticipantKickedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        if (payload.participantId === state.mpMyParticipantId) {
+          // Tear down the relay (and suppress auto-reconnect) before clearing —
+          // we've been removed, so we must not try to rejoin.
+          relayClient.disconnect()
+          state.deleteChatHead(payload.chatId)
+          state.clearRoom()
+          toast.warning(
+            payload.banned
+              ? i18n.t('multiplayer.youWereBanned', { defaultValue: 'You were banned from the room' })
+              : i18n.t('multiplayer.youWereRemoved', { defaultValue: 'You were removed from the room' }),
+          )
+        } else {
+          state.removeParticipant(payload.participantId)
+        }
+      }),
+
+      wsClient.on(EventType.ROOM_PERSONA_CHANGED, (payload: RoomPersonaChangedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setParticipantPersona(payload.participantId, payload.persona)
+      }),
+
+      wsClient.on(EventType.ROOM_TURN_CHANGED, (payload: RoomTurnChangedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setRoomTurn({
+          currentTurnParticipantId: payload.currentTurnParticipantId,
+          turnOrder: payload.turnOrder,
+          round: payload.round,
+          freeformDeadline: payload.freeformDeadline,
+        })
+        syncMultiplayerChatHeadFromStore()
+        // The host opened a freeform window — let everyone know they can add to it.
+        if (payload.windowOpen) {
+          toast.info(
+            i18n.t('multiplayer.freeformWindowOpen', {
+              defaultValue: 'Freeform window open — add your message',
+            }),
+          )
+        }
+      }),
+
+      wsClient.on(EventType.ROOM_TURN_SKIPPED, (payload: RoomTurnSkippedPayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setRoomTurn({ currentTurnParticipantId: payload.currentTurnParticipantId })
+        syncMultiplayerChatHeadFromStore()
+      }),
+
+      wsClient.on(EventType.ROOM_PRESENCE, (payload: RoomPresencePayload) => {
+        const state = store.getState()
+        if (payload.roomId !== state.mpRoomId) return
+        state.setParticipantTyping(payload.participantId, payload.typing)
+      }),
     ]
 
-    // Re-sync pooled tokens whenever the tab becomes visible. Mobile PWAs and
-    // background tabs may miss live STREAM_TOKEN_RECEIVED events while hidden
-    // even when the WS stays open; the server pool is authoritative, so a
-    // status poll on every visible transition restores all accumulated content
-    // (segment offsets slice off anything the client already rendered).
-    const onVisibilityChange = () => {
+    // Re-sync the active chat whenever the app resumes. STREAM_TOKEN_RECEIVED
+    // is only routed to the focused chat session, so desktop window blur can
+    // drop live segments without ever flipping document.visibilityState to
+    // hidden. After the pool recovery, re-fetch the idle chat tail so a missed
+    // deferred METRICS_READY event (TTFT/TPS/model/provider) or a stale final
+    // message snapshot is refreshed from the authoritative saved row.
+    let resumeReconcileInFlight = false
+    const reconcileActiveChatOnResume = async () => {
       if (document.visibilityState !== 'visible') return
-      const activeChatId = store.getState().activeChatId
-      if (activeChatId) {
-        recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+      if (resumeReconcileInFlight) return
+      resumeReconcileInFlight = true
+      try {
+        const activeChatId = store.getState().activeChatId
+        if (!activeChatId) {
+          store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+          return
+        }
+
+        await recoverPooledGeneration(activeChatId).catch(() => { /* best-effort */ })
+        await store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
+
+        const latest = store.getState()
+        if (latest.activeChatId !== activeChatId) return
+        if (latest.isStreaming) return
+        if (latest.mpRoomId && !latest.mpIsHost && latest.mpChatId === activeChatId) return
+
+        try {
+          const fresh = await fetchLatestMessages(activeChatId)
+          const after = store.getState()
+          if (after.activeChatId === activeChatId && !after.isStreaming) {
+            after.setMessages(fresh.data, fresh.total)
+          }
+        } catch {
+          /* best-effort */
+        }
+      } finally {
+        resumeReconcileInFlight = false
       }
-      store.getState().reconcileChatHeads().catch(() => { /* best-effort */ })
     }
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    const onResume = () => { void reconcileActiveChatOnResume() }
+    document.addEventListener('visibilitychange', onResume)
+    window.addEventListener('focus', onResume)
 
     // Mobile browsers occasionally deliver the full token stream but miss or
     // delay the terminal WS event. While a chat is streaming, poll the pooled
@@ -1470,15 +1971,52 @@ export function useWebSocket() {
       sendDrawerTabRegistrySnapshot(state.drawerTabs)
     })
 
+    // Multiplayer: relay the local persona to the room whenever it changes (or
+    // on join). Phase 1 broadcasts the persona's existing same-origin avatar
+    // URL; re-hosting for off-instance peers is a later phase.
+    let lastRelayKey = ''
+    let lastLorebookKey = ''
+    const relayPersona = (state: ReturnType<typeof store.getState>) => {
+      if (!state.mpRoomId || !state.activePersonaId) { lastRelayKey = ''; lastLorebookKey = ''; return }
+      // Persona snapshot: re-send on a persona switch OR a real-time add-on
+      // toggle (the add-on signature changes even when the persona id doesn't),
+      // so the host's generation reflects the peer's currently-enabled add-ons.
+      const personaKey = `${state.mpRoomId}:${state.activePersonaId}:${activePersonaAddonSignature()}`
+      if (personaKey !== lastRelayKey) {
+        lastRelayKey = personaKey
+        // Compress + relay the active persona (name + effective description +
+        // portable WebP data-URL avatar) so every client's member list + message
+        // attribution show it and the host's prompt reflects enabled add-ons.
+        void buildActivePersonaSnapshot().then((snap) => {
+          if (snap) sendRoomAction({ type: 'room_persona_change', persona: snap })
+        })
+      }
+      // Attached persona lorebook: tied to the persona itself (add-on toggles
+      // don't change it), relayed host-only for generation. Re-send only when the
+      // active persona changes; send null on a persona with no book so the host
+      // clears the previous one.
+      const lorebookKey = `${state.mpRoomId}:${state.activePersonaId}`
+      if (lorebookKey !== lastLorebookKey) {
+        lastLorebookKey = lorebookKey
+        void buildActivePersonaLorebook().then((lorebook) => {
+          sendRoomAction({ type: 'room_persona_lorebook', lorebook })
+        })
+      }
+    }
+    const unsubPersonaRelay = store.subscribe(relayPersona)
+    relayPersona(store.getState())
+
     return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('visibilitychange', onResume)
+      window.removeEventListener('focus', onResume)
       clearInterval(recoveryWatchdog)
       clearInterval(chatHeadReconcile)
       unsubDrawerTabs()
+      unsubPersonaRelay()
       unsubs.forEach(unsub => unsub())
       wsClient.disconnect()
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, store])
 
   useEffect(() => {
     wsClient.setFocusedChat(activeChatId)

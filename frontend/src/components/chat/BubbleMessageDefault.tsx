@@ -2,10 +2,10 @@
  * Default BubbleMessage renderer — the original implementation extracted
  * so it can be used as a fallback when a user override crashes or is disabled.
  */
-import { useRef, useCallback, useState, useMemo, useLayoutEffect } from 'react'
+import { useRef, useCallback, useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square } from 'lucide-react'
+import { Copy, Pencil, Trash2, EyeOff, Eye, BarChart3, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import MessageContent from './MessageContent'
 import MessageEditArea from './MessageEditArea'
@@ -24,7 +24,7 @@ import useSwipeGesture from '@/hooks/useSwipeGesture'
 import { useLongPress } from '@/hooks/useLongPress'
 import { useMessagePlayback } from '@/hooks/useMessagePlayback'
 import { copyTextToClipboard, getSelectionTextWithin } from '@/lib/clipboard'
-import { replay as replaySpindleInjections } from '@/lib/spindle/dom-injection-registry'
+import { scheduleReplay as scheduleSpindleInjectionReplay } from '@/lib/spindle/dom-injection-registry'
 import { useStore } from '@/store'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
@@ -38,6 +38,7 @@ export interface BubbleMessageDefaultProps {
   isSelectMode: boolean
   isSelected: boolean
   onToggleSelect?: (e: React.MouseEvent) => void
+  findQuery: string
   // Pre-computed from useMessageCard
   isEditing: boolean
   editContent: string
@@ -59,12 +60,14 @@ export interface BubbleMessageDefaultProps {
   displayName: string
   macroUserName: string
   isHidden: boolean
+  isContextAnchor: boolean
   userLeft: boolean
   handleEdit: () => void
   handleSaveEdit: () => void
   handleCancelEdit: () => void
   handleDelete: () => void
   handleToggleHidden: () => void
+  handleToggleContextAnchor: () => void
   handleFork: () => void
   handlePromptBreakdown: () => void
 }
@@ -173,10 +176,11 @@ function MetaPill({ index, timestamp, tokenCount, isHidden, isUser, generationMe
 
 export default function BubbleMessageDefault({
   message, chatId, depth, isSelectMode, isSelected, onToggleSelect,
+  findQuery,
   isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
   isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
-  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, userLeft,
-  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden,
+  tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor, userLeft,
+  handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
   handleFork, handlePromptBreakdown,
 }: BubbleMessageDefaultProps) {
   const { t } = useTranslation('chat')
@@ -208,18 +212,13 @@ export default function BubbleMessageDefault({
   const isHighlighted = useStore((s) => s.highlightedMessageId === message.id)
   const cardRef = useRef<HTMLDivElement>(null)
 
-  // Re-inject any Spindle extension DOM that was registered for this
-  // message id but lost when the virtualizer unmounted the row (or this
-  // is the first mount and an extension injected before the row existed).
-  // useLayoutEffect — not useEffect — so the injection lands in the same
-  // paint as the bubble's mount, avoiding a flash of "no extension DOM".
-  // The dep is just message.id, so it only fires when this row genuinely
-  // hosts a different message; it won't re-replay on every re-render
-  // (which is what we want — replay is idempotent but still pointless
-  // work to do on every prop change).
-  useLayoutEffect(() => {
+  // Replay extension-owned DOM after paint through the cooperative
+  // Spindle queue. That avoids doing wrapper re-attachment inside the
+  // bubble's synchronous commit path, which is where chat-switch hitching
+  // becomes noticeable for large injected subtrees.
+  useEffect(() => {
     if (!cardRef.current) return
-    replaySpindleInjections(message.id, cardRef.current)
+    return scheduleSpindleInjectionReplay(message.id, cardRef.current)
   }, [message.id])
 
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
@@ -297,6 +296,13 @@ export default function BubbleMessageDefault({
       active: isHidden,
       onClick: () => contextAction(handleToggleHidden),
     },
+    ...(!isHidden ? [{
+      key: 'toggle-context-anchor',
+      label: isContextAnchor ? t('messageActions.clearContextAnchor') : t('messageActions.setContextAnchor'),
+      icon: <Anchor size={14} />,
+      active: isContextAnchor,
+      onClick: () => contextAction(handleToggleContextAnchor),
+    }] satisfies ContextMenuEntry[] : []),
     {
       key: 'fork',
       label: t('messageActions.fork'),
@@ -319,7 +325,7 @@ export default function BubbleMessageDefault({
     },
   ], [
     canPlay, contextAction, handleCopy, handleDelete, handleEdit, handleFork,
-    handlePromptBreakdown, handleToggleHidden, hasSavedAudio, isGenerating, isHidden, isPlaying, isUser,
+    handlePromptBreakdown, handleToggleHidden, handleToggleContextAnchor, hasSavedAudio, isGenerating, isHidden, isContextAnchor, isPlaying, isUser,
     togglePlayback, t, tc,
   ])
 
@@ -435,6 +441,7 @@ export default function BubbleMessageDefault({
               messageId={message.id}
               chatId={chatId}
               depth={depth}
+              findQuery={findQuery}
             />
           ) : isActivelyStreaming ? (
             <StreamingIndicator />
@@ -470,6 +477,7 @@ export default function BubbleMessageDefault({
           onEdit={handleEdit}
           onDelete={handleDelete}
           onToggleHidden={handleToggleHidden}
+          onToggleContextAnchor={handleToggleContextAnchor}
           onFork={handleFork}
           onPromptBreakdown={!isUser ? handlePromptBreakdown : undefined}
           onPlay={canPlay ? togglePlayback : undefined}
@@ -477,6 +485,7 @@ export default function BubbleMessageDefault({
           isGenerating={isGenerating}
           hasSavedAudio={hasSavedAudio}
           isHidden={isHidden}
+          isContextAnchor={isContextAnchor}
           content={message.content}
           className={styles.actionsPill}
         />

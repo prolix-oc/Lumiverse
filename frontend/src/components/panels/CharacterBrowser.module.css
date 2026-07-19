@@ -220,3 +220,11 @@
   transform-origin: left;
   transition: transform 0.15s ease-out;
 }
+
+.paginationBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  flex-shrink: 0;
+  padding: 8px 12px 12px;
+}

@@ -29,8 +29,12 @@
   max-width: clamp(340px, calc(94vw / var(--lumiverse-ui-scale, 1)), min(900px, var(--lumiverse-content-max-width, 900px)));
   height: calc(80vh / var(--lumiverse-ui-scale, 1));
   max-height: calc(80vh / var(--lumiverse-ui-scale, 1));
-  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 1px var(--lumiverse-primary-020);
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4)), 0 0 1px var(--lumiverse-primary-020);
   overflow: hidden;
+}
+
+:global([data-glass]) .dialog {
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 1px var(--lumiverse-primary-020);
 }
 
 /* ── Inline variant (renders in-flow below the field) ── */
@@ -77,7 +81,14 @@
   white-space: nowrap;
 }
 
-.macroToggle {
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toolbarBtn {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -92,9 +103,14 @@
   align-self: flex-start;
 }
 
-.macroToggle:hover {
+.toolbarBtn:hover,
+.toolbarBtnActive {
   border-color: var(--lumiverse-primary);
   color: var(--lumiverse-primary);
+}
+
+.toolbarBtnActive {
+  background: var(--lumiverse-primary-010);
 }
 
 .closeBtn {
@@ -117,6 +133,93 @@
   color: var(--lumiverse-text);
 }
 
+/* ── Find and replace ── */
+
+.findPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg-elevated);
+  flex-shrink: 0;
+}
+
+.findRow,
+.replaceRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.findIcon {
+  flex-shrink: 0;
+  color: var(--lumiverse-text-dim);
+}
+
+.findInput {
+  flex: 1;
+  min-width: 80px;
+  height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  outline: none;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.findInput:focus {
+  border-color: var(--lumiverse-primary);
+}
+
+.matchCount {
+  min-width: 46px;
+  color: var(--lumiverse-text-dim);
+  font-family: var(--lumiverse-font-mono, monospace);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  text-align: center;
+}
+
+.findIconBtn,
+.replaceBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-height: 28px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.findIconBtn {
+  width: 28px;
+  padding: 0;
+}
+
+.replaceBtn {
+  padding: 4px 10px;
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.findIconBtn:hover:not(:disabled),
+.replaceBtn:hover:not(:disabled) {
+  border-color: var(--lumiverse-primary);
+  color: var(--lumiverse-primary);
+}
+
+.findIconBtn:disabled,
+.replaceBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ── Body ── */
 
 .body {
@@ -127,6 +230,7 @@
 }
 
 .editorArea {
+  --expanded-editor-tab-size: 4;
   flex: 1;
   min-width: 0;
   /* min-height:0 lets this flex child shrink below its (very tall) content so
@@ -155,6 +259,8 @@
   font-family: inherit;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
@@ -215,7 +321,8 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  tab-size: 2;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   color: var(--lumiverse-text);
   pointer-events: none;
   box-sizing: border-box;
@@ -242,7 +349,8 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  tab-size: 2;
+  tab-size: var(--expanded-editor-tab-size);
+  -moz-tab-size: var(--expanded-editor-tab-size);
   -webkit-text-fill-color: transparent;
   box-sizing: border-box;
 }
@@ -252,25 +360,26 @@
   -webkit-text-fill-color: var(--lumiverse-text-dim);
 }
 
-/* Lock per-character glyph advance across BOTH layers so the caret (which lives
-   in the <textarea>) and the visible glyphs (in the <pre>) never drift apart.
-   A <textarea> shapes text with kerning/ligatures effectively OFF (it treats
-   glyphs as fixed cells for caret math), while a <pre> applies the font's
-   kerning + contextual ligatures by default. That asymmetry shifts the
-   highlighted text away from the caret — worsening along each line and around
-   ligature-prone tokens this editor is full of ({{ }} :: -> ==), especially on
-   ligature mono fonts (Fira Code, JetBrains Mono). Forcing the same minimal
-   shaping on both keeps them in step. text-size-adjust pins mobile text
-   inflation, which hits the <pre> (content) but not the form control.
-   These two selectors MUST stay grouped — divergence here = caret drift. */
+/* Lock every text metric across BOTH layers so the caret (which lives in the
+   <textarea>) and the visible glyphs (in the <pre>) never drift apart. Under
+   UI zoom, even small UA-default differences between form controls and block
+   text compound into visible x/y offset by the time a line wraps. Keep these
+   selectors grouped and layout-neutral: color/background-only highlighting,
+   no font-weight/style changes, and identical shaping/wrapping rules. */
 .highlightPre,
 .textareaHighlighted {
+  font-weight: 400;
+  font-style: normal;
   letter-spacing: 0;
   word-spacing: 0;
+  text-indent: 0;
+  text-transform: none;
   font-kerning: none;
   font-variant-ligatures: none;
+  font-variant-numeric: normal;
   font-feature-settings: "liga" 0, "calt" 0;
-  text-rendering: optimizeSpeed;
+  font-synthesis: none;
+  text-rendering: auto;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -279,12 +388,10 @@
 
 .hlBracket {
   color: #c792ea;
-  font-weight: 700;
 }
 
 .hlMacroName {
   color: var(--lumiverse-primary, #9370db);
-  font-weight: 700;
 }
 
 .hlSep {
@@ -307,7 +414,22 @@
 
 .hlMdHeader {
   color: #f78c6c;
-  font-weight: 700;
+}
+
+.findMatch,
+.findMatchCurrent {
+  padding: 0;
+  border-radius: 2px;
+  color: inherit;
+}
+
+.findMatch {
+  background: color-mix(in srgb, var(--lumiverse-warning, #f5b942) 42%, transparent);
+}
+
+.findMatchCurrent {
+  background: color-mix(in srgb, var(--lumiverse-primary, #9370db) 72%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, white 52%, transparent);
 }
 
 /* ── Macro sidebar ── */
@@ -357,6 +479,26 @@
   width: 100%;
   color: var(--lumiverse-text);
   outline: none;
+}
+
+.macroSearchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.macroSearchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
 }
 
 .macroGroup {
@@ -462,11 +604,32 @@
     max-height: 100%;
     height: 100%;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top, 0);
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
   }
 
   .body {
     flex-direction: column;
+  }
+
+  .header {
+    padding: 10px 12px;
+  }
+
+  .findPanel {
+    padding: 8px;
+  }
+
+  .findRow,
+  .replaceRow {
+    flex-wrap: wrap;
+  }
+
+  .findInput {
+    font-size: 16px;
+  }
+
+  .replaceRow .findInput {
+    flex-basis: calc(100% - 24px);
   }
 
   .textarea {

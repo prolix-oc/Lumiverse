@@ -51,6 +51,7 @@ function makeMinimalEnv(): MacroEnv {
       firstIncludedMessageId: 0,
       lastSwipeId: 0,
       currentSwipeId: 0,
+      rejectedSwipe: "",
     },
     system: {
       model: "test",
@@ -79,6 +80,8 @@ function makeEntry(partial: Partial<WorldBookEntry>): WorldBookEntry {
     world_book_id: "wb-1",
     uid: "uid-1",
     outlet_name: null,
+    wi_marker: null,
+    wi_marker_side: null,
     key: [],
     keysecondary: [],
     content: "",

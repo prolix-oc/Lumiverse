@@ -23,8 +23,6 @@ export default function ThemePanel() {
   )
 
   const openModal = useStore((s) => s.openModal)
-  const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
-  const setSetting = useStore((s) => s.setSetting)
   // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
   // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
   const current = normalizeTheme(theme) ?? DEFAULT_THEME
@@ -189,12 +187,10 @@ export default function ThemePanel() {
         <DepthControls
           radiusScale={current.radiusScale}
           enableGlass={current.enableGlass}
-          useFullAvatar={bubbleUseFullAvatar}
           fontScale={current.fontScale}
           uiScale={current.uiScale ?? 1}
           onRadiusChange={handleRadiusChange}
           onGlassToggle={handleGlassToggle}
-          onFullAvatarToggle={(v) => setSetting('bubbleUseFullAvatar', v)}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
         />

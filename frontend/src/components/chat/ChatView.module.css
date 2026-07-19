@@ -6,31 +6,23 @@
   height: 100%;
   position: relative;
   overflow: clip;
-  background: var(--lumiverse-bg-deep);
+  background: transparent;
 }
 
 .hasSceneBackground {}
 
-.wallpaperLayer {
+.wallpaperTransitionLayer {
   position: absolute;
   inset: 0;
-  z-index: 0;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+  z-index: 2;
   pointer-events: none;
-  transition: opacity 400ms ease;
+  background: #000;
+  opacity: 0;
+  transition: opacity 260ms ease-in-out;
 }
 
-.wallpaperVideoLayer {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  pointer-events: none;
-  transition: opacity 400ms ease;
+.wallpaperTransitionLayerActive {
+  opacity: 1;
 }
 
 .sceneBackgroundLayer {
@@ -74,7 +66,7 @@
   min-height: 0;
   height: 100%;
   position: relative;
-  z-index: 2;
+  z-index: 3;
 }
 
 .chatColumn {
@@ -96,6 +88,53 @@
   min-height: 0;
   height: 100%;
   position: relative;
+}
+
+.chatColumnInner[data-chat-chrome-entering] .chatToolbar,
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='ChatFindBar']),
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']),
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='InputArea']),
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageSelectBar']) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chatColumnInner[data-chat-chrome-entering] .chatToolbar {
+  transform: translateY(-8px);
+}
+
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='ChatFindBar']) {
+  transform: translateY(-8px);
+}
+
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='InputArea']),
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageSelectBar']) {
+  transform: translateY(10px);
+}
+
+.chatColumnInner[data-chat-chrome-entering] :global([data-component='MessageList']) {
+  transform: translateY(6px);
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageList']),
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='ChatFindBar']),
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='InputArea']),
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageSelectBar']) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='InputArea']),
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageSelectBar']) {
+  transform: translateY(10px);
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='MessageList']) {
+  transform: translateY(6px);
+}
+
+.chatColumnInner[data-chat-chrome-leaving] :global([data-component='ChatFindBar']) {
+  transform: translateY(-8px);
 }
 
 .noticeDock,
@@ -253,8 +292,7 @@
   flex-shrink: 0;
   background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
   border-bottom: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 180ms ease, transform 180ms ease;
 }
 
 .toolbarBtn {
@@ -286,9 +324,10 @@
   border-color: var(--lumiverse-primary);
 }
 
-/* GPU optimization: disable backdrop-filter on all cards during streaming */
-.streaming [data-message-id] {
+/* GPU optimization: disable backdrop-filter on the card receiving tokens. */
+.streaming :global([data-part='streaming']) {
   backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 /* ── Portrait side wrapper — slides tab + panel as a unit ──

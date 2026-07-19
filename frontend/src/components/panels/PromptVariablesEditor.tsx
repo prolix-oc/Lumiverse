@@ -1,5 +1,22 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import {
   AlertTriangle,
   ChevronDown,
@@ -11,8 +28,11 @@ import {
 import clsx from 'clsx'
 import NumberStepper from '@/components/shared/NumberStepper'
 import { Toggle } from '@/components/shared/Toggle'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { generateUUID } from '@/lib/uuid'
 import type {
+  PromptBlockPlacement,
+  PromptBlockPlacementBinding,
   PromptVariableDef,
   PromptVariableOption,
   PromptVariableType,
@@ -26,6 +46,9 @@ import css from './PromptVariablesEditor.module.css'
 export interface VariablesEditorProps {
   variables: PromptVariableDef[]
   onChange: (vars: PromptVariableDef[]) => void
+  placementBinding?: PromptBlockPlacementBinding
+  fallbackPlacement: PromptBlockPlacement
+  onPlacementBindingChange: (binding: PromptBlockPlacementBinding | undefined) => void
 }
 
 const TYPE_ACCENT_CLASS: Record<PromptVariableType, string> = {
@@ -50,6 +73,20 @@ function makeNewVariable(): PromptVariableDef {
 
 function makeNewOption(index: number): PromptVariableOption {
   return { id: generateUUID(), label: `Option ${index + 1}`, value: '' }
+}
+
+export function reorderPromptVariables(
+  variables: PromptVariableDef[],
+  activeId: string,
+  overId: string | null,
+): PromptVariableDef[] {
+  if (!overId || activeId === overId) return variables
+
+  const activeIndex = variables.findIndex((variable) => variable.id === activeId)
+  const overIndex = variables.findIndex((variable) => variable.id === overId)
+  if (activeIndex < 0 || overIndex < 0) return variables
+
+  return arrayMove(variables, activeIndex, overIndex)
 }
 
 // Type-preserving migration. Swapping types shouldn't nuke the user's work —
@@ -174,9 +211,20 @@ function coerceVariableType(
 // VariablesEditor — accordion + list
 // ============================================================================
 
-export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
+export function VariablesEditor({
+  variables,
+  onChange,
+  placementBinding,
+  fallbackPlacement,
+  onPlacementBindingChange,
+}: VariablesEditorProps) {
   const { t } = useTranslation('panels')
   const [expanded, setExpanded] = useState(variables.length > 0)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   const duplicateNames = useMemo(() => {
     const counts = new Map<string, number>()
@@ -211,6 +259,15 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
     setExpanded(true)
   }
 
+  const handleDragEnd = useCallback(({ active, over }: DragEndEvent) => {
+    const reordered = reorderPromptVariables(
+      variables,
+      String(active.id),
+      over === null ? null : String(over.id),
+    )
+    if (reordered !== variables) onChange(reordered)
+  }, [onChange, variables])
+
   return (
     <div className={css.root}>
       <div className={css.header}>
@@ -239,21 +296,197 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
         variables.length === 0 ? (
           <div className={css.empty}>{t('promptVariablesEditor.empty')}</div>
         ) : (
-          <div className={css.list}>
-            {variables.map((v) => (
-              <VariableRow
-                key={v.id}
-                variable={v}
-                isDuplicate={Boolean(v.name?.trim()) && duplicateNames.has(v.name.trim())}
-                onUpdate={(patch) => updateVar(v.id, patch)}
-                onChangeType={(type) => changeType(v.id, type)}
-                onRemove={() => removeVar(v.id)}
-              />
-            ))}
-          </div>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext items={variables.map((variable) => variable.id)} strategy={verticalListSortingStrategy}>
+              <div className={css.list}>
+                {variables.map((v, index) => (
+                  <VariableRow
+                    key={v.id}
+                    variable={v}
+                    index={index}
+                    total={variables.length}
+                    isDuplicate={Boolean(v.name?.trim()) && duplicateNames.has(v.name.trim())}
+                    onUpdate={(patch) => updateVar(v.id, patch)}
+                    onChangeType={(type) => changeType(v.id, type)}
+                    onRemove={() => removeVar(v.id)}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
         )
       )}
+
+      <PlacementBindingEditor
+        variables={variables}
+        binding={placementBinding}
+        fallbackPlacement={fallbackPlacement}
+        onChange={onPlacementBindingChange}
+      />
     </div>
+  )
+}
+
+interface PlacementBindingEditorProps {
+  variables: PromptVariableDef[]
+  binding?: PromptBlockPlacementBinding
+  fallbackPlacement: PromptBlockPlacement
+  onChange: (binding: PromptBlockPlacementBinding | undefined) => void
+}
+
+function clonePlacement(placement: PromptBlockPlacement): PromptBlockPlacement {
+  return { role: placement.role, position: placement.position, depth: placement.depth }
+}
+
+function buildPlacementBinding(
+  variable: Extract<PromptVariableDef, { type: 'select' }>,
+  fallbackPlacement: PromptBlockPlacement,
+  existing?: PromptBlockPlacementBinding,
+): PromptBlockPlacementBinding {
+  return {
+    variableId: variable.id,
+    options: Object.fromEntries(
+      variable.options.map((option) => [
+        option.id,
+        clonePlacement(existing?.options[option.id] ?? fallbackPlacement),
+      ]),
+    ),
+  }
+}
+
+/** Creator-side configuration for a select variable that changes this block's placement. */
+function PlacementBindingEditor({
+  variables,
+  binding,
+  fallbackPlacement,
+  onChange,
+}: PlacementBindingEditorProps) {
+  const { t } = useTranslation('panels')
+  const blockEditor = (key: string) => t(`loomBuilder.blockEditor.${key}`)
+  const selectors = variables.filter(
+    (variable): variable is Extract<PromptVariableDef, { type: 'select' }> => (
+      variable.type === 'select' && variable.name.trim().length > 0
+    ),
+  )
+  const selected = selectors.find((variable) => variable.id === binding?.variableId) ?? null
+  const selectorLabel = (variable: PromptVariableDef) => (
+    variable.label.trim() || variable.name.trim()
+  )
+
+  const enable = () => {
+    const selector = selectors[0]
+    if (!selector) return
+    onChange(buildPlacementBinding(selector, fallbackPlacement))
+  }
+
+  const changeSelector = (variableId: string) => {
+    const selector = selectors.find((variable) => variable.id === variableId)
+    if (!selector) return
+    onChange(buildPlacementBinding(selector, fallbackPlacement, binding))
+  }
+
+  const updateOption = (optionId: string, patch: Partial<PromptBlockPlacement>) => {
+    if (!selected || !binding) return
+    const current = binding.options[optionId] ?? fallbackPlacement
+    const next = { ...current, ...patch }
+    const isAppend = next.role === 'user_append' || next.role === 'assistant_append'
+    if (!isAppend && next.position !== 'in_history') next.depth = 0
+    onChange({
+      ...binding,
+      options: { ...binding.options, [optionId]: next },
+    })
+  }
+
+  return (
+    <section className={css.placementBinding}>
+      <div className={css.placementHeader}>
+        <div>
+          <div className={css.placementTitle}>{t('promptVariablesEditor.placementTitle')}</div>
+          <p className={css.placementHint}>{t('promptVariablesEditor.placementHint')}</p>
+        </div>
+        <div className={css.placementEnable}>
+          <span>{t('promptVariablesEditor.placementEnabled')}</span>
+          <Toggle.Switch checked={!!selected} onChange={(enabled) => (enabled ? enable() : onChange(undefined))} disabled={selectors.length === 0} />
+        </div>
+      </div>
+
+      {selectors.length === 0 ? (
+        <p className={css.placementUnavailable}>{t('promptVariablesEditor.placementUnavailable')}</p>
+      ) : selected && binding ? (
+        <div className={css.placementBody}>
+          <label className={css.field}>
+            <span className={css.fieldLabel}>{t('promptVariablesEditor.placementVariable')}</span>
+            <select className={css.select} value={selected.id} onChange={(event) => changeSelector(event.target.value)}>
+              {selectors.map((variable) => (
+                <option key={variable.id} value={variable.id}>
+                  {selectorLabel(variable)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selected.options.length === 0 ? (
+            <p className={css.placementUnavailable}>{t('promptVariablesEditor.placementNoOptions')}</p>
+          ) : (
+            <div className={css.placementOptions}>
+              <div className={css.placementProfilesHeader}>
+                <span>{t('promptVariablesEditor.placementProfiles')}</span>
+                <span>{t('promptVariablesEditor.placementProfilesHint')}</span>
+              </div>
+              {selected.options.map((option, index) => {
+                const placement = binding.options[option.id] ?? fallbackPlacement
+                const showDepth = placement.position === 'in_history' || placement.role === 'user_append' || placement.role === 'assistant_append'
+                const roleLabel = blockEditor(`roles.${placement.role}`)
+                const positionLabel = blockEditor(`positions.${placement.position}`)
+                return (
+                  <article key={option.id} className={css.placementOption}>
+                    <div className={css.placementOptionHeader}>
+                      <div>
+                        <span className={css.placementOptionKicker}>{t('promptVariablesEditor.placementOption')}</span>
+                        <div className={css.placementOptionName}>{option.label.trim() || option.id || t('promptVariablesEditor.placementOptionFallback', { index: index + 1 })}</div>
+                      </div>
+                      <span className={css.placementSummary}>
+                        {roleLabel} · {positionLabel}{showDepth ? ` · ${blockEditor('depth')} ${placement.depth}` : ''}
+                      </span>
+                    </div>
+                    <div className={css.placementFields}>
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{blockEditor('role')}</span>
+                        <select className={css.select} value={placement.role} onChange={(event) => updateOption(option.id, { role: event.target.value as PromptBlockPlacement['role'] })}>
+                          <option value="system">{blockEditor('roles.system')}</option>
+                          <option value="user">{blockEditor('roles.user')}</option>
+                          <option value="assistant">{blockEditor('roles.assistant')}</option>
+                          <option value="user_append">{blockEditor('roles.user_append')}</option>
+                          <option value="assistant_append">{blockEditor('roles.assistant_append')}</option>
+                        </select>
+                      </label>
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{blockEditor('position')}</span>
+                        <select className={css.select} value={placement.position} onChange={(event) => updateOption(option.id, { position: event.target.value as PromptBlockPlacement['position'] })}>
+                          <option value="pre_history">{blockEditor('positions.pre_history')}</option>
+                          <option value="post_history">{blockEditor('positions.post_history')}</option>
+                          <option value="in_history">{blockEditor('positions.in_history')}</option>
+                        </select>
+                      </label>
+                      {showDepth && (
+                      <label className={css.field}>
+                        <span className={css.fieldLabel}>{blockEditor('depth')}</span>
+                        <NumberStepper value={placement.depth} min={0} onChange={(value) => updateOption(option.id, { depth: value ?? 0 })} />
+                      </label>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </section>
   )
 }
 
@@ -263,6 +496,8 @@ export function VariablesEditor({ variables, onChange }: VariablesEditorProps) {
 
 interface VariableRowProps {
   variable: PromptVariableDef
+  index: number
+  total: number
   isDuplicate: boolean
   onUpdate: (patch: Partial<PromptVariableDef>) => void
   onChangeType: (type: PromptVariableType) => void
@@ -271,12 +506,42 @@ interface VariableRowProps {
 
 function VariableRow({
   variable,
+  index,
+  total,
   isDuplicate,
   onUpdate,
   onChangeType,
   onRemove,
 }: VariableRowProps) {
   const { t } = useTranslation('panels')
+  const sortingDisabled = total < 2
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setSortableRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: variable.id, disabled: sortingDisabled })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+  const handleRef = useRef<HTMLButtonElement>(null)
+  const wasDraggingRef = useRef(false)
+  useEffect(() => {
+    if (wasDraggingRef.current && !isDragging) {
+      handleRef.current?.blur()
+    }
+    wasDraggingRef.current = isDragging
+  }, [isDragging])
+  const setHandleRef = useCallback((node: HTMLButtonElement | null) => {
+    handleRef.current = node
+    setActivatorNodeRef(node)
+  }, [setActivatorNodeRef])
   const typeOptions = useMemo(
     () =>
       (['text', 'textarea', 'number', 'slider', 'select', 'switch', 'multiselect'] as const).map((value) => ({
@@ -294,14 +559,29 @@ function VariableRow({
   const sliderMin = isSlider ? (variable as { min: number }).min : 0
   const sliderMax = isSlider ? (variable as { max: number }).max : 100
   const sliderStep = isSlider ? (variable as { step?: number }).step ?? 1 : 1
+  const position = index + 1
+  const displayName = variable.name.trim() || variable.label.trim() || t('promptVariablesEditor.variableFallback', { position })
 
   return (
-    <div className={clsx(css.card, TYPE_ACCENT_CLASS[variable.type])}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(css.card, TYPE_ACCENT_CLASS[variable.type], isDragging && css.cardDragging)}
+    >
       {/* Row 1: handle · type · name · delete */}
       <div className={css.headerRow}>
-        <span className={css.handle} aria-hidden="true" title={t('promptVariablesEditor.dragComingSoon')}>
+        <button
+          ref={setHandleRef}
+          type="button"
+          className={clsx(css.handle, sortingDisabled && css.handleDisabled)}
+          aria-label={t('promptVariablesEditor.dragToReorder', { position, name: displayName })}
+          title={t('promptVariablesEditor.dragToReorder', { position, name: displayName })}
+          {...attributes}
+          {...(sortingDisabled ? {} : listeners)}
+          aria-disabled={sortingDisabled}
+        >
           <GripVertical size={14} />
-        </span>
+        </button>
 
         <div className={clsx(css.field, css.typeField)}>
           <label className={css.fieldLabel}>{t('promptVariablesEditor.type')}</label>

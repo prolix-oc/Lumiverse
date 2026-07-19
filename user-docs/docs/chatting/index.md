@@ -1,3 +1,7 @@
+---
+title: Chatting
+---
+
 # Chatting
 
 Chatting is the heart of Lumiverse. Once you have a character and a connection set up, everything revolves around the conversation.

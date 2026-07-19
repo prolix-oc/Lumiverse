@@ -21,6 +21,7 @@ export function InterviewStage({ session, onBack, onContinue }: { session: Weave
   const sparkQuestion = useStore((s) => s.sparkWeaverQuestion)
   const enhanceAnswer = useStore((s) => s.enhanceWeaverAnswer)
   const beginInterview = useStore((s) => s.beginWeaverInterview)
+  const cancelQuestion = useStore((s) => s.cancelWeaverQuestion)
   const decideOptIn = useStore((s) => s.decideWeaverOptIn)
   const completeInterview = useStore((s) => s.completeWeaverInterview)
   const resetInterview = useStore((s) => s.resetWeaverInterview)
@@ -184,7 +185,14 @@ export function InterviewStage({ session, onBack, onContinue }: { session: Weave
   }
 
   if (loading) {
-    return <StageRunning label={t('interview.thinking')} onBack={onBack} backLabel={t('interview.backToReadback')} />
+    return (
+      <StageRunning
+        label={t('interview.thinking')}
+        onBack={onBack}
+        backLabel={t('interview.backToReadback')}
+        action={{ label: t('interview.cancel'), icon: 'x', onClick: () => cancelQuestion(session.id, t('interview.canceled')) }}
+      />
+    )
   }
 
   if (!owns || !interview) {

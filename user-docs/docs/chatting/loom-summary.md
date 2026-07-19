@@ -1,4 +1,8 @@
-# Loom Summary
+---
+title: Summary
+---
+
+# Summary
 
 As conversations grow long, older messages fall out of the AI's context window. The Loom Summary system solves this by generating structured summaries of your chat history, preserving key story beats, character developments, and unresolved threads in a compact form the AI can reference.
 

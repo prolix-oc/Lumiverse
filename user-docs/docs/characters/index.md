@@ -1,3 +1,7 @@
+---
+title: Characters
+---
+
 # Characters
 
 Characters are the AI personas you interact with in Lumiverse. Each character has a name, avatar, personality description, and other fields that tell the AI how to behave.

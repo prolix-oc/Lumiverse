@@ -1,4 +1,8 @@
-# World Books
+---
+title: Lorebook
+---
+
+# Lorebook
 
 World Books (also called lorebooks) are collections of contextual information that activate during conversations based on keywords. They're how you give the AI detailed knowledge about your world, characters, locations, and lore — without cramming everything into the character description.
 

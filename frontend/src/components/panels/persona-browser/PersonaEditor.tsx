@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { User, Crown, Copy, Trash2, Play, Upload, Pencil, MessagesSquare, Link, Globe, RefreshCw, X, BookOpen } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import TokenCountButton from '@/components/shared/TokenCountButton'
 import { getPersonaAvatarLargeUrl } from '@/lib/avatarUrls'
 import { worldBooksApi } from '@/api/world-books'
 import { chatsApi } from '@/api/chats'
@@ -60,6 +61,7 @@ const ROLE_OPTIONS = [
 interface PersonaEditorProps {
   persona: Persona
   isActive: boolean
+  isSwitchActive: boolean
   onUpdate: (id: string, input: Record<string, any>) => Promise<any>
   onDelete: (id: string) => Promise<void>
   onDuplicate: (id: string) => Promise<any>
@@ -72,6 +74,7 @@ interface PersonaEditorProps {
 export default function PersonaEditor({
   persona,
   isActive,
+  isSwitchActive,
   onUpdate,
   onDelete,
   onDuplicate,
@@ -328,7 +331,7 @@ export default function PersonaEditor({
   const addonCount = personaAddonCount + globalAddonCount
   const tagOptions = useMemo(
     () => availableTags.map(({ tag, count }) => ({ value: tag, label: tag, sublabel: t('personaEditor.characterCount', { count }) })),
-    [availableTags],
+    [availableTags, t],
   )
   const matchingCharacterCount = useMemo(
     () => tagBinding ? characters.filter((character) => characterMatchesPersonaTagBinding(character.tags || [], tagBinding)).length : 0,
@@ -484,6 +487,10 @@ export default function PersonaEditor({
 
       {/* Description */}
       <div className={styles.section}>
+        <div className={styles.descriptionHeader}>
+          <span className={styles.descriptionLabel}>{t('personaEditor.description')}</span>
+          <TokenCountButton text={description} />
+        </div>
         <ExpandableTextarea
           className={styles.descTextarea}
           value={description}
@@ -602,6 +609,7 @@ export default function PersonaEditor({
             clearable
             clearLabel={t('personaEditor.noLorebook')}
             className={styles.lorebookSelectWrapper}
+            portal
           />
           <Button
             size="icon-sm" variant="ghost"
@@ -785,7 +793,7 @@ export default function PersonaEditor({
           icon={<Play size={13} />}
           onClick={() => onSwitchTo(persona.id)}
         >
-          {isActive ? t('personaEditor.deactivate') : t('personaEditor.switchTo')}
+          {isSwitchActive ? t('personaEditor.deactivate') : t('personaEditor.switchTo')}
         </Button>
         <Button
           variant="secondary" size="sm"

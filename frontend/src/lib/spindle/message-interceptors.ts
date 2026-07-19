@@ -10,6 +10,15 @@ type RegisteredTagInterceptor = {
   extensionName: string
   options: SpindleMessageTagInterceptorOptions
   handler: InterceptorHandler
+  attrEntries?: ReadonlyArray<readonly [string, string]>
+  pendingHtml: string
+}
+
+type TagMatchPlan = {
+  completeRe: RegExp
+  openRe: RegExp
+  lowercaseNeedle: string | null
+  hiddenInterceptors: RegisteredTagInterceptor[]
 }
 
 type PendingTagIntercept = {
@@ -17,11 +26,23 @@ type PendingTagIntercept = {
   interceptor: RegisteredTagInterceptor
 }
 
+type DeferredTagInterceptBatch = {
+  intercepts: PendingTagIntercept[]
+  delivered: Set<string>
+}
+
 const tagInterceptors = new Map<string, RegisteredTagInterceptor[]>()
+const tagMatchPlans = new Map<string, TagMatchPlan>()
+let registeredTagPresenceRe: RegExp | null = null
 let interceptorVersion = 0
 const listeners = new Set<() => void>()
+const deferredTagInterceptBatches: DeferredTagInterceptBatch[] = []
+let deferredTagInterceptTimer: ReturnType<typeof setInterval> | null = null
 
 function notifyInterceptorRegistryChanged(): void {
+  registeredTagPresenceRe = tagInterceptors.size > 0
+    ? new RegExp(`<(?:${Array.from(tagInterceptors.keys(), escapeRegex).join('|')})\\b`, 'i')
+    : null
   interceptorVersion += 1
   for (const listener of listeners) {
     try {
@@ -59,9 +80,9 @@ function parseAttrs(raw: string): Record<string, string> {
   return out
 }
 
-function attrsMatch(needle: Record<string, string> | undefined, haystack: Record<string, string>): boolean {
+function attrsMatch(needle: ReadonlyArray<readonly [string, string]> | undefined, haystack: Record<string, string>): boolean {
   if (!needle) return true
-  for (const [key, value] of Object.entries(needle)) {
+  for (const [key, value] of needle) {
     if ((haystack[key] ?? '') !== value) return false
   }
   return true
@@ -84,6 +105,16 @@ function pendingIndicator(interceptor: RegisteredTagInterceptor): string {
   const name = escapeHtml(interceptor.extensionName || 'Extension')
   const id = escapeHtml(interceptor.extensionId)
   return `<div class="spindle-message-tag-pending" data-spindle-extension-id="${id}"><span class="spindle-message-tag-pending-dot"></span><span>${name} is processing this part of the message...</span></div>`
+}
+
+function rebuildTagMatchPlan(tagName: string, interceptors: RegisteredTagInterceptor[]): void {
+  const escapedTagName = escapeRegex(tagName)
+  tagMatchPlans.set(tagName, {
+    completeRe: new RegExp(`<${escapedTagName}\\b([^>]*)>([\\s\\S]*?)</${escapedTagName}>`, 'gi'),
+    openRe: new RegExp(`<${escapedTagName}\\b([^>]*)>[\\s\\S]*$`, 'i'),
+    lowercaseNeedle: /^[a-z0-9:_-]+$/.test(tagName) ? `<${tagName}` : null,
+    hiddenInterceptors: interceptors.filter((interceptor) => interceptor.options.removeFromMessage !== false),
+  })
 }
 
 function deliveryKey(payload: SpindleMessageTagIntercept, interceptor: RegisteredTagInterceptor): string {
@@ -111,6 +142,7 @@ export function registerTagInterceptor(
   const normalizedOptions: SpindleMessageTagInterceptorOptions = {
     ...options,
     tagName,
+    ...(options.attrs ? { attrs: { ...options.attrs } } : {}),
     removeFromMessage: options.removeFromMessage !== false,
   }
 
@@ -119,10 +151,16 @@ export function registerTagInterceptor(
     extensionName,
     options: normalizedOptions,
     handler,
+    attrEntries: normalizedOptions.attrs
+      ? Object.entries(normalizedOptions.attrs)
+      : undefined,
+    pendingHtml: '',
   }
+  item.pendingHtml = pendingIndicator(item)
   const list = tagInterceptors.get(tagName) || []
   list.push(item)
   tagInterceptors.set(tagName, list)
+  rebuildTagMatchPlan(tagName, list)
   notifyInterceptorRegistryChanged()
 
   return () => {
@@ -131,6 +169,8 @@ export function registerTagInterceptor(
     const next = current.filter((entry) => entry !== item)
     if (next.length === 0) tagInterceptors.delete(tagName)
     else tagInterceptors.set(tagName, next)
+    if (next.length === 0) tagMatchPlans.delete(tagName)
+    else rebuildTagMatchPlan(tagName, next)
     notifyInterceptorRegistryChanged()
   }
 }
@@ -143,6 +183,8 @@ export function unregisterTagInterceptorsByExtension(extensionId: string): void 
     changed = true
     if (next.length === 0) tagInterceptors.delete(tagName)
     else tagInterceptors.set(tagName, next)
+    if (next.length === 0) tagMatchPlans.delete(tagName)
+    else rebuildTagMatchPlan(tagName, next)
   }
   if (changed) {
     notifyInterceptorRegistryChanged()
@@ -154,15 +196,27 @@ export function stripMessageTags(
   context: { messageId?: string; chatId?: string; isUser?: boolean; isStreaming?: boolean },
 ): { content: string; intercepts: PendingTagIntercept[] } {
   if (!content || tagInterceptors.size === 0) return { content, intercepts: [] }
+  if (!content.includes('<')) return { content, intercepts: [] }
+  // Below this point, cached per-tag regexes are cheaper than allocating a
+  // lowercase copy and running the combined absence check. Large registries
+  // are where repeated full-message scans dominate.
+  const usePresencePrefilter = tagInterceptors.size >= 32
+  if (usePresencePrefilter && registeredTagPresenceRe && !registeredTagPresenceRe.test(content)) {
+    return { content, intercepts: [] }
+  }
 
   let output = content
   const intercepts: PendingTagIntercept[] = []
+  const lowercaseContent = usePresencePrefilter ? content.toLowerCase() : ''
 
   for (const [tagName, interceptors] of tagInterceptors) {
     if (interceptors.length === 0) continue
-    const re = new RegExp(`<${escapeRegex(tagName)}\\b([^>]*)>([\\s\\S]*?)</${escapeRegex(tagName)}>`, 'gi')
+    const plan = tagMatchPlans.get(tagName)
+    if (!plan) continue
+    if (lowercaseContent && plan.lowercaseNeedle && !lowercaseContent.includes(plan.lowercaseNeedle)) continue
+    plan.completeRe.lastIndex = 0
 
-    output = output.replace(re, (fullMatch, attrsRaw, inner) => {
+    output = output.replace(plan.completeRe, (fullMatch, attrsRaw, inner) => {
       const attrs = parseAttrs(String(attrsRaw || ''))
       const payload: SpindleMessageTagIntercept = {
         extensionId: '',
@@ -178,7 +232,7 @@ export function stripMessageTags(
 
       let shouldRemove = false
       for (const interceptor of interceptors) {
-        if (!attrsMatch(interceptor.options.attrs, attrs)) continue
+        if (!attrsMatch(interceptor.attrEntries, attrs)) continue
         intercepts.push({ payload, interceptor })
         if (interceptor.options.removeFromMessage !== false) {
           shouldRemove = true
@@ -189,14 +243,13 @@ export function stripMessageTags(
     })
 
     if (context.isStreaming) {
-      const hiddenInterceptors = interceptors.filter((interceptor) => interceptor.options.removeFromMessage !== false)
-      if (hiddenInterceptors.length === 0) continue
+      if (plan.hiddenInterceptors.length === 0) continue
 
-      const openRe = new RegExp(`<${escapeRegex(tagName)}\\b([^>]*)>[\\s\\S]*$`, 'i')
-      output = output.replace(openRe, (partialMatch, attrsRaw) => {
+      plan.openRe.lastIndex = 0
+      output = output.replace(plan.openRe, (partialMatch, attrsRaw) => {
         const attrs = parseAttrs(String(attrsRaw || ''))
-        const interceptor = hiddenInterceptors.find((entry) => attrsMatch(entry.options.attrs, attrs))
-        return interceptor ? pendingIndicator(interceptor) : partialMatch
+        const interceptor = plan.hiddenInterceptors.find((entry) => attrsMatch(entry.attrEntries, attrs))
+        return interceptor ? interceptor.pendingHtml : partialMatch
       })
     }
   }
@@ -204,7 +257,7 @@ export function stripMessageTags(
   return { content: output, intercepts }
 }
 
-export function dispatchMessageTagIntercepts(intercepts: PendingTagIntercept[], delivered: Set<string>): void {
+function processMessageTagIntercepts(intercepts: PendingTagIntercept[], delivered: Set<string>): void {
   for (const { payload, interceptor } of intercepts) {
     const key = deliveryKey(payload, interceptor)
     if (delivered.has(key)) continue
@@ -215,4 +268,32 @@ export function dispatchMessageTagIntercepts(intercepts: PendingTagIntercept[], 
       console.error(`[Spindle] Tag interceptor failed (${interceptor.extensionId}):`, err)
     }
   }
+}
+
+function ensureDeferredTagInterceptPoller(): void {
+  if (deferredTagInterceptTimer !== null) return
+  deferredTagInterceptTimer = setInterval(() => {
+    if (document.body.hasAttribute('data-chat-chrome-entering')) return
+    clearInterval(deferredTagInterceptTimer!)
+    deferredTagInterceptTimer = null
+    const batches = deferredTagInterceptBatches.splice(0)
+    for (const batch of batches) {
+      processMessageTagIntercepts(batch.intercepts, batch.delivered)
+    }
+  }, 50)
+}
+
+export function dispatchMessageTagIntercepts(intercepts: PendingTagIntercept[], delivered: Set<string>): void {
+  if (
+    document.body.hasAttribute('data-chat-chrome-entering') ||
+    deferredTagInterceptBatches.length > 0
+  ) {
+    // Preserve delivery order while using one poller for the entire chat,
+    // rather than one timer per mounted message.
+    deferredTagInterceptBatches.push({ intercepts, delivered })
+    ensureDeferredTagInterceptPoller()
+    return
+  }
+
+  processMessageTagIntercepts(intercepts, delivered)
 }

@@ -1,15 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Hash } from 'lucide-react'
-import { Spinner } from '@/components/shared/Spinner'
+import { ChevronRight } from 'lucide-react'
 import { Toggle } from '@/components/shared/Toggle'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import TokenCountButton from '@/components/shared/TokenCountButton'
 import clsx from 'clsx'
 import type { WorldBookEntry } from '@/types/api'
 import { getVectorIndexStatusDescription, getVectorIndexStatusLabel } from '@/lib/worldBookVectorization'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
-import { tokenizersApi } from '@/api/tokenizers'
-import { useStore } from '@/store'
+import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import NumberStepper from './NumberStepper'
 import styles from './WorldBookEntryEditor.module.css'
 
@@ -22,6 +21,7 @@ export interface EntryEditorProps {
 export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdate }: EntryEditorProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor' })
   const { positionOptions, roleOptions, selectiveLogicOptions } = useWorldBookEntryLabels()
+  const { addableMarkers, markerLabel, markerSectionLabel } = useLoomOptionLabels()
 
   const [groupOpen, setGroupOpen] = useState(false)
   const [timingOpen, setTimingOpen] = useState(false)
@@ -37,17 +37,12 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
           ? styles.vectorStatusPending
           : styles.vectorStatusNotEnabled
 
-  // Token count state
-  const [tokenCounting, setTokenCounting] = useState(false)
-  const [tokenCount, setTokenCount] = useState<number | null>(null)
-  const [tokenCountApprox, setTokenCountApprox] = useState(false)
-  const activeProfileId = useStore((s) => s.activeProfileId)
-  const profiles = useStore((s) => s.profiles)
-
   // Local state for text fields to prevent prop-sync from overwriting in-progress edits
   const [content, setContent] = useState(entry.content)
   const [comment, setComment] = useState(entry.comment)
   const [outletName, setOutletName] = useState(entry.outlet_name || '')
+  const [wiMarker, setWiMarker] = useState(entry.wi_marker || '')
+  const [wiMarkerSide, setWiMarkerSide] = useState(entry.wi_marker_side || 'after')
   const [primaryKeys, setPrimaryKeys] = useState(entry.key.join(', '))
   const [secondaryKeys, setSecondaryKeys] = useState(entry.keysecondary.join(', '))
   const lastSyncedId = useRef<string | null>(null)
@@ -59,41 +54,15 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     setContent(entry.content)
     setComment(entry.comment)
     setOutletName(entry.outlet_name || '')
+    setWiMarker(entry.wi_marker || '')
+    setWiMarkerSide(entry.wi_marker_side || 'after')
     setPrimaryKeys(entry.key.join(', '))
     setSecondaryKeys(entry.keysecondary.join(', '))
-    setTokenCount(null)
-    setTokenCountApprox(false)
   }, [entry])
-
-  const handleCountTokens = useCallback(async () => {
-    const profile = profiles.find(p => p.id === activeProfileId) || profiles.find(p => p.is_default)
-    setTokenCounting(true)
-    try {
-      if (profile?.model) {
-        const result = await tokenizersApi.countForModel(profile.model, content)
-        if (result.token_count != null) {
-          setTokenCount(result.token_count)
-          setTokenCountApprox(false)
-        } else {
-          setTokenCount(Math.ceil(content.length / 4))
-          setTokenCountApprox(true)
-        }
-      } else {
-        setTokenCount(Math.ceil(content.length / 4))
-        setTokenCountApprox(true)
-      }
-    } catch {
-      setTokenCount(Math.ceil(content.length / 4))
-      setTokenCountApprox(true)
-    }
-    setTokenCounting(false)
-  }, [activeProfileId, profiles, content])
 
   const handleContentChange = useCallback(
     (v: string) => {
       setContent(v)
-      setTokenCount(null)
-      setTokenCountApprox(false)
       onUpdate(entry.id, { content: v })
     },
     [entry.id, onUpdate]
@@ -115,6 +84,23 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     },
     [entry.id, onUpdate]
   )
+  const handleWiMarkerChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value
+      setWiMarker(value)
+      onImmediateUpdate(entry.id, { wi_marker: value || null })
+    },
+    [entry.id, onImmediateUpdate]
+  )
+
+  const handleWiMarkerSideChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value as 'before' | 'after'
+      setWiMarkerSide(value)
+      onImmediateUpdate(entry.id, { wi_marker_side: value })
+    },
+    [entry.id, onImmediateUpdate]
+  )
 
   const handlePrimaryKeysChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -135,9 +121,22 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
     },
     [entry.id, onUpdate]
   )
+  const markerGroups = (() => {
+    const groups: Array<{ section: string; items: string[] }> = []
+    let current: { section: string; items: string[] } | null = null
+    for (const item of addableMarkers) {
+      if (typeof item === 'object' && 'section' in item) {
+        current = { section: item.section, items: [] }
+        groups.push(current)
+      } else if (current) {
+        current.items.push(item)
+      }
+    }
+    return groups
+  })()
 
   return (
-    <div className={styles.entryEditor}>
+    <div className={styles.entryEditor} data-world-book-entry-editor="true">
       {/* Identity & Content */}
       <span className={styles.sectionHeading}>{t('sections.identity')}</span>
       <div className={styles.entryFieldGroup}>
@@ -181,18 +180,7 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
         <div className={styles.entryField}>
           <div className={styles.fieldLabelRow}>
             <label className={styles.fieldLabel}>{t('fields.content')}</label>
-            <button
-              type="button"
-              className={styles.tokenCountBtn}
-              onClick={handleCountTokens}
-              disabled={tokenCounting || !content.trim()}
-              title={t('countTokensTitle')}
-            >
-              {tokenCounting ? <Spinner size={11} fast /> : <Hash size={11} />}
-              {tokenCount != null
-                ? <span className={styles.tokenCountValue}>{tokenCountApprox ? '~' : ''}{t('tokenCount', { count: tokenCount.toLocaleString() })}</span>
-                : t('countTokens')}
-            </button>
+            <TokenCountButton text={content} />
           </div>
           <ExpandableTextarea
             className={styles.entryTextarea}
@@ -254,6 +242,45 @@ export default function WorldBookEntryEditor({ entry, onUpdate, onImmediateUpdat
             />
           </div>
         </div>
+        {entry.position === 8 && !(entry.outlet_name || '').trim() && (
+          <p className={styles.fieldHint}>{t('outletOnlyHint')}</p>
+        )}
+        {entry.position === 7 && (
+          <div className={styles.entryFieldRow}>
+            <div className={styles.entryField}>
+              <label className={styles.fieldLabel}>{t('markerTarget')}</label>
+              <select
+                className={styles.entrySelect}
+                value={wiMarker}
+                onChange={handleWiMarkerChange}
+              >
+                <option value="">{t('markerTargetNone')}</option>
+                {markerGroups.map((group) => (
+                  <optgroup key={group.section} label={markerSectionLabel(group.section)}>
+                    {group.items.map((marker) => (
+                      <option key={marker} value={marker}>
+                        {markerLabel(marker)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            {wiMarker && (
+              <div className={styles.entryField}>
+                <label className={styles.fieldLabel}>{t('markerSideLabel')}</label>
+                <select
+                  className={styles.entrySelect}
+                  value={wiMarkerSide}
+                  onChange={handleWiMarkerSideChange}
+                >
+                  <option value="before">{t('markerSideBefore')}</option>
+                  <option value="after">{t('markerSideAfter')}</option>
+                </select>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Activation */}

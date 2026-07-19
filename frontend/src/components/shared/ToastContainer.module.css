@@ -9,7 +9,7 @@
   max-width: 420px;
   width: 100%;
   padding: 16px;
-  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  padding-top: calc(16px + var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)));
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
 }
@@ -68,6 +68,7 @@
   border-radius: var(--lumiverse-radius, 8px);
   border: 1px solid;
   min-width: 280px;
+  box-shadow: var(--lumiverse-shadow-sm, 0 2px 8px rgba(0, 0, 0, 0.2));
 }
 
 :global([data-glass]) .toast {
@@ -80,25 +81,21 @@
 .success {
   background: rgba(22, 101, 52, 0.85);
   border-color: var(--lumiverse-success-020);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(34, 197, 94, 0.1);
 }
 
 .warning {
   background: rgba(113, 63, 18, 0.85);
   border-color: var(--lumiverse-warning-020);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(245, 158, 11, 0.1);
 }
 
 .error {
   background: rgba(127, 29, 29, 0.85);
   border-color: var(--lumiverse-danger-020);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(239, 68, 68, 0.1);
 }
 
 .info {
   background: rgba(49, 36, 80, 0.85);
   border-color: var(--lumiverse-primary-020);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px var(--lumiverse-primary-015);
 }
 
 /* Opaque toasts when glass is off */
@@ -106,6 +103,22 @@
 :global(:not([data-glass])) .warning { background: rgb(113, 63, 18); }
 :global(:not([data-glass])) .error   { background: rgb(127, 29, 29); }
 :global(:not([data-glass])) .info    { background: rgb(49, 36, 80); }
+
+:global([data-glass]) .success {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(34, 197, 94, 0.1);
+}
+
+:global([data-glass]) .warning {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(245, 158, 11, 0.1);
+}
+
+:global([data-glass]) .error {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px rgba(239, 68, 68, 0.1);
+}
+
+:global([data-glass]) .info {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 20px var(--lumiverse-primary-015);
+}
 
 /* ── Icon ──────────────────────────────────────────── */
 .iconWrap {

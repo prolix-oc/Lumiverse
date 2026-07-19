@@ -262,7 +262,9 @@
     "forkChat": {
       "title": "Dividi chat",
       "message": "Creare un nuovo ramo dall'ultimo messaggio?",
-      "confirm": "Dividi"
+      "confirm": "Dividi",
+      "nameLabel": "Nome della chat (facoltativo)",
+      "namePlaceholder": "Lascia vuoto per usare un nome automatico"
     },
     "deleteChat": {
       "title": "Elimina chat",

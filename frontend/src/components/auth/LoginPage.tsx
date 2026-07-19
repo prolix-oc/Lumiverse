@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router'
 import { motion, LazyMotion, MotionConfig, domAnimation } from 'motion/react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
+import { ssoProvidersApi, type SsoLoginOption } from '@/api/sso-providers'
+import { startSsoPopup } from '@/lib/ssoPopup'
 import styles from './LoginPage.module.css'
 import clsx from 'clsx'
 
@@ -13,6 +15,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [ssoLoading, setSsoLoading] = useState<string | null>(null)
+  const [ssoOptions, setSsoOptions] = useState<SsoLoginOption[]>([])
   const [focused, setFocused] = useState<string | null>(null)
   const [subtitleKey] = useState<'subtitleGoon' | 'subtitleLoom'>(() =>
     Math.random() < 0.076 ? 'subtitleGoon' : 'subtitleLoom',
@@ -26,6 +30,14 @@ export default function LoginPage() {
   const formRef = useRef<HTMLFormElement>(null)
   const visibleError = error ?? authError
 
+  useEffect(() => {
+    let cancelled = false
+    ssoProvidersApi.loginOptions()
+      .then((options) => { if (!cancelled) setSsoOptions(options) })
+      .catch(() => { if (!cancelled) setSsoOptions([]) })
+    return () => { cancelled = true }
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
@@ -38,6 +50,20 @@ export default function LoginPage() {
       setError(err.message || t('loginFailed'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSsoSignIn = async (provider: SsoLoginOption) => {
+    setError(null)
+    setSsoLoading(provider.provider_id)
+    try {
+      const result = await startSsoPopup({ providerId: provider.provider_id, flow: 'login', returnTo: '/' })
+      if (!result.ok) throw new Error(result.error || 'SSO authorization failed')
+      await checkSession()
+      navigate('/')
+    } catch (err: any) {
+      setError(err.message || `Failed to start ${provider.name} sign-in`)
+      setSsoLoading(null)
     }
   }
 
@@ -214,6 +240,34 @@ export default function LoginPage() {
                 t('signIn')
               )}
             </motion.button>
+
+            {ssoOptions.length > 0 && (
+              <motion.div
+                className={styles.ssoBlock}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.58 }}
+              >
+                <div className={styles.ssoDivider}><span>or</span></div>
+                <div className={styles.ssoList}>
+                  {ssoOptions.map((provider) => (
+                    <button
+                      key={provider.provider_id}
+                      type="button"
+                      className={styles.ssoBtn}
+                      disabled={!!ssoLoading}
+                      onClick={() => handleSsoSignIn(provider)}
+                    >
+                      {ssoLoading === provider.provider_id ? (
+                        <span className={styles.loadingState}><span className={styles.spinner} />Redirecting</span>
+                      ) : (
+                        `Continue with ${provider.name}`
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
           </form>
         </motion.div>
 

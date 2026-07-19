@@ -1,7 +1,234 @@
 .panel {
+  --worldbook-footer-height: 0px;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panelScroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 12px 0;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-padding-block: 12px calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
+}
+
+.panelScroll > * {
+  flex-shrink: 0;
+}
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  padding-bottom: calc(12px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
+}
+
+.panelMobile .panelScroll {
+  gap: 10px;
+  padding: 10px 10px 0;
+}
+
+.panelFooter {
+  flex-shrink: 0;
+  background: var(--lumiverse-bg-deep);
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 55%, transparent);
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.panelFooter::-webkit-scrollbar {
+  display: none;
+}
+
+.panelFooter:empty {
+  display: none;
+}
+
+/* Keep the docked pagination physically pinned to the screen bottom.
+   Chromium/Android shrinks the viewport above the keyboard, while iOS PWA can
+   pan the visual viewport upward when an editor is focused. In both cases we
+   pull the footer's margin box down by the live keyboard inset so it stays
+   behind the keyboard instead of riding up with the focused field. */
+:global(html[data-resizes-content]) .panelFooter,
+:global(html[data-ios-pwa]) .panelFooter {
+  margin-bottom: calc(-1 * var(--app-keyboard-inset-bottom, 0px));
+}
+
+.panelMobile .globalSection,
+.panelMobile .chatSection {
+  gap: 5px;
+  padding: 8px;
+}
+
+.panelMobile .globalPills,
+.panelMobile .chatPills {
+  gap: 4px;
+}
+
+.attachmentAccordion {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+  overflow: hidden;
+}
+
+.attachmentAccordionExpanded {
+  border-color: color-mix(in srgb, var(--lumiverse-border) 70%, var(--lumiverse-text) 30%);
+}
+
+.attachmentAccordionHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px 7px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast);
+}
+
+.attachmentAccordionHeader:hover {
+  background: var(--lumiverse-fill-hover);
+}
+
+.attachmentAccordionStart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.attachmentAccordionIconBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.attachmentAccordionGlobal .attachmentAccordionIconBadge {
+  background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
+  color: var(--lumiverse-primary);
+}
+
+.attachmentAccordionChat .attachmentAccordionIconBadge {
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 14%, transparent);
+  color: var(--lumiverse-info, #42a5f5);
+}
+
+.attachmentAccordionLabel {
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text);
+}
+
+.attachmentAccordionCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--lumiverse-border);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.attachmentAccordionPreview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.attachmentAccordionPreviewChip,
+.attachmentAccordionPreviewMore {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(120px, 32vw);
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+}
+
+.attachmentAccordionPreviewChip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachmentAccordionPreviewChipGlobal,
+.attachmentAccordionGlobal .attachmentAccordionPreviewMore {
+  background: color-mix(in srgb, var(--lumiverse-primary) 12%, transparent);
+  color: var(--lumiverse-primary);
+}
+
+.attachmentAccordionPreviewChipChat,
+.attachmentAccordionChat .attachmentAccordionPreviewMore {
+  background: color-mix(in srgb, var(--lumiverse-info, #42a5f5) 12%, transparent);
+  color: var(--lumiverse-info, #42a5f5);
+}
+
+.attachmentAccordionEmpty {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-style: italic;
+  color: var(--lumiverse-text-dim);
+}
+
+.attachmentAccordionChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  color: var(--lumiverse-text-dim);
+}
+
+.attachmentAccordionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.attachmentAccordionActions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* ── Global world books ── */
@@ -233,11 +460,24 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 0;
+}
+
+.topBarMobile {
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .bookSelectWrapper {
   flex: 1;
   min-width: 0;
+}
+
+.mobileTopActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .sourceBadge {
@@ -280,33 +520,6 @@
   transition-delay: 0.3s;
 }
 
-/* ── Book fields toggle ── */
-.bookFieldsToggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--lumiverse-fill-subtle);
-  border: 1px solid var(--lumiverse-border);
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  cursor: pointer;
-  transition: all var(--lumiverse-transition-fast);
-}
-
-.bookFieldsToggle:hover {
-  border-color: var(--lumiverse-primary);
-}
-
-.bookFieldsLabel {
-  flex: 1;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chevron {
   color: var(--lumiverse-text-dim);
   transition: transform var(--lumiverse-transition-fast);
@@ -325,6 +538,29 @@
   background: var(--lumiverse-fill-subtle);
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;
+}
+
+.bookFieldsMobile {
+  padding: 12px;
+}
+
+.bookSourceNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+  color: var(--lumiverse-primary);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+}
+
+.bookSourceIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .fieldGroup {
@@ -352,6 +588,14 @@
 
 .fieldInput:focus {
   border-color: var(--lumiverse-primary);
+}
+
+/* iOS enlarges pages when focusing text controls smaller than 16px. Keep the
+   world-book settings editable without a disruptive viewport zoom on phones. */
+@media (pointer: coarse) {
+  .fieldInput {
+    font-size: max(16px, calc(12.5px * var(--lumiverse-font-scale, 1)));
+  }
 }
 
 .bookActionRow {
@@ -394,6 +638,72 @@
   border-radius: 999px;
   background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border);
+}
+
+@media (max-height: 860px) and (min-width: 720px) {
+  .panelScroll {
+    gap: 8px;
+    padding: 8px 10px 0;
+    scroll-padding-block-start: 8px;
+  }
+
+  .panelBody {
+    gap: 8px;
+    padding-bottom: calc(8px + max(var(--worldbook-footer-height, 0px), var(--app-keyboard-inset-bottom, 0px)));
+  }
+
+  .panelFooter {
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bookFields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+    gap: 6px 10px;
+    padding: 8px;
+  }
+
+  .bookFields > .bookSourceNote,
+  .bookFields > .vectorSummary,
+  .bookFields > .bookActionRow,
+  .bookFields > .vectorStatusText {
+    grid-column: 1 / -1;
+  }
+
+  .bookFields > button {
+    justify-self: start;
+  }
+
+  .fieldGroup {
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .fieldInput {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 8px;
+  }
+
+  .vectorSummary {
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+  }
+
+  .vectorSummaryGrid {
+    gap: 6px 8px;
+  }
+
+  .vectorSummaryGrid span {
+    padding: 2px 7px;
+  }
+
+  .bookActionRow {
+    gap: 6px;
+    padding-top: 0;
+  }
 }
 
 .bulkSemanticToggle {

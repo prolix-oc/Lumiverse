@@ -5,7 +5,7 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import NumberStepper from '@/components/shared/NumberStepper'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
 import { Toggle } from '@/components/shared/Toggle'
-import type { PromptBlock, PromptVariableDef, PromptVariableValue, PromptVariableValues } from '@/lib/loom/types'
+import type { PromptBlock, PromptBlockPlacement, PromptVariableDef, PromptVariableValue, PromptVariableValues } from '@/lib/loom/types'
 import css from './PromptVariablesModal.module.css'
 
 interface PromptVariablesModalProps {
@@ -70,6 +70,18 @@ function clampNumeric(def: PromptVariableDef, value: number): number {
   if (typeof def.min === 'number' && v < def.min) v = def.min
   if (typeof def.max === 'number' && v > def.max) v = def.max
   return v
+}
+
+function placementForSelection(
+  block: PromptBlock,
+  def: PromptVariableDef,
+  value: PromptVariableValue,
+): PromptBlockPlacement | undefined {
+  if (def.type !== 'select' || block.placementBinding?.variableId !== def.id) return undefined
+  const optionId = typeof value === 'string' ? value : ''
+  const placement = block.placementBinding.options[optionId]
+  if (!placement) return undefined
+  return placement
 }
 
 export function PromptVariablesModal({
@@ -214,6 +226,7 @@ export function PromptVariablesModal({
                         key={def.id}
                         def={def}
                         value={draft[block.id]?.[def.name] ?? def.defaultValue}
+                        placement={placementForSelection(block, def, draft[block.id]?.[def.name] ?? def.defaultValue)}
                         onChange={(v) => setVar(block.id, def.name, v)}
                         onReset={() => resetVar(block.id, def)}
                       />
@@ -259,12 +272,17 @@ export function PromptVariablesModal({
 interface VariableControlProps {
   def: PromptVariableDef
   value: PromptVariableValue
+  placement?: PromptBlockPlacement
   onChange: (v: PromptVariableValue) => void
   onReset: () => void
 }
 
-function VariableControl({ def, value, onChange, onReset }: VariableControlProps) {
+function VariableControl({ def, value, placement, onChange, onReset }: VariableControlProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'promptVariables' })
+  const { t: tp } = useTranslation('panels')
+  const position = placement ? tp(`loomBuilder.blockEditor.positions.${placement.position}`) : ''
+  const role = placement ? tp(`loomBuilder.blockEditor.roles.${placement.role}`) : ''
+  const showDepth = placement && (placement.position === 'in_history' || placement.role === 'user_append' || placement.role === 'assistant_append')
   return (
     <div className={css.variableRow}>
       <div className={css.variableLabel}>
@@ -281,6 +299,11 @@ function VariableControl({ def, value, onChange, onReset }: VariableControlProps
         </button>
       </div>
       {def.description && <div className={css.variableDescription}>{def.description}</div>}
+      {placement && (
+        <div className={css.placementSummary}>
+          {t(showDepth ? 'placementSummaryWithDepth' : 'placementSummary', { role, position, depth: placement.depth })}
+        </div>
+      )}
       {renderControl(def, value, onChange)}
     </div>
   )

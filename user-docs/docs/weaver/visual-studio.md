@@ -1,3 +1,7 @@
+---
+title: Visual Studio
+---
+
 # Visual Studio
 
 Once a card is finalized, its dashboard grows an image side: generate a **portrait**, then derive a full **expression set** from it. It runs through your existing **image-gen connections** — the same ones the [Image Generation](../image-generation/index.md) feature uses — so any provider you've already set up is available here, with no extra configuration.

@@ -141,7 +141,7 @@ type UpdateMessagePatch = {
   swipe_dates?: number[]
   reasoning?: {
     text?: string | null       // null clears extra.reasoning
-    duration?: number | null   // null clears extra.reasoning_duration
+    duration?: number | null   // null clears extra.reasoningDuration
   }
   skipChunkRebuild?: boolean
 }
@@ -176,7 +176,7 @@ These throw rather than silently clamp — partial writes would drift `swipes` /
 
 ### Reasoning patch
 
-`reasoning` targets the host-owned `extra.reasoning` (text) and `extra.reasoning_duration` (ms) fields that the LLM pipeline populates during generation. Supplying `reasoning: { text: "..." }` overwrites the text without touching the duration; supplying `reasoning: { duration: null }` clears the duration without touching the text.
+`reasoning` targets the host-owned `extra.reasoning` (text) and `extra.reasoningDuration` (ms) fields projected for the active swipe. Supplying `reasoning: { text: "..." }` overwrites the active swipe's text without touching the duration; supplying `reasoning: { duration: null }` clears the active swipe's duration without touching the text.
 
 A reasoning patch with no `metadata` patch still persists — the host writes the mutated `extra` bag whenever either `metadata` or `reasoning` touched it.
 

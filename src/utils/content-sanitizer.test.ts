@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizeForVectorization, stripNonProseTags } from "./content-sanitizer";
+import {
+  sanitizeForVectorization,
+  stripHtmlFormattingTags,
+  stripNonProseTags,
+} from "./content-sanitizer";
 
 describe("sanitizeForVectorization", () => {
   test("preserves text inside common HTML formatting wrappers", () => {
@@ -70,6 +74,26 @@ describe("stripNonProseTags", () => {
     expect(
       stripNonProseTags('Before <font color="#ff0000">red text</font> after', { keepFontTags: true }),
     ).toBe('Before <font color="#ff0000">red text</font> after');
+  });
+
+  test("preserves configured thought delimiters inside font blocks until attribution", () => {
+    const options = { keepFontTags: true, preserveFontInnerTags: ["thinking"] };
+    expect(
+      stripNonProseTags(
+        '<font color="#c8a2c8"><thinking>Juniper must not hesitate.</thinking></font>',
+        options,
+      ),
+    ).toBe('<font color="#c8a2c8"><thinking>Juniper must not hesitate.</thinking></font>');
+
+    // The same tag remains non-prose outside a color block, and colors inside
+    // structural wrappers remain excluded from attribution.
+    expect(stripNonProseTags('Before <thinking>private reasoning</thinking> after', options)).toBe("Before after");
+    expect(
+      stripNonProseTags(
+        '<details><font color="#c8a2c8"><thinking>private reasoning</thinking></font></details>',
+        options,
+      ),
+    ).toBe("");
   });
 
   test("preserves color span tags when keepFontTags is set", () => {
@@ -150,5 +174,28 @@ describe("stripNonProseTags", () => {
   test("strips self-closing and attribute-bearing extension tags", () => {
     const input = 'A. <ext_ping status="ready" /> B. <ext_data type="json">{"key":"val"}</ext_data> C.';
     expect(stripNonProseTags(input, { keepFontTags: true })).toBe("A. B. C.");
+  });
+});
+
+describe("stripHtmlFormattingTags", () => {
+  test("removes block-level HTML islands and preserves inline formatted prose", () => {
+    const input = [
+      'I say <font color="#8B7355">"Y-yeah, that\'s me."</font>',
+      '<div class="html-island">',
+      '  <div class="title">linked_list.cpp</div>',
+      '  <pre><code>head = newNode&nbsp;</code></pre>',
+      '  <div class="problems">expected \';\' after expression</div>',
+      '</div>',
+      '<span>*Still nervous.*</span>',
+    ].join("\n");
+
+    const stripped = stripHtmlFormattingTags(input);
+
+    expect(stripped).toContain('<font color="#8B7355">"Y-yeah, that\'s me."</font>');
+    expect(stripped).toContain("*Still nervous.*");
+    expect(stripped).not.toMatch(/\n{3,}/);
+    expect(stripped).not.toContain("linked_list.cpp");
+    expect(stripped).not.toContain("head = newNode");
+    expect(stripped).not.toContain("expected ';' after expression");
   });
 });

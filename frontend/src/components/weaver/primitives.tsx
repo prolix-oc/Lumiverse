@@ -266,7 +266,7 @@ export function Placeholder({ icon, spin, children }: { icon: string; spin?: boo
   )
 }
 
-export function StageRunning({ label, icon = 'refresh', onBack, backLabel }: { label: string; icon?: string; onBack: () => void; backLabel: string }) {
+export function StageRunning({ label, icon = 'refresh', onBack, backLabel, action }: { label: string; icon?: string; onBack: () => void; backLabel: string; action?: { label: string; onClick: () => void; icon?: string } }) {
   return (
     <>
       <div className={styles.panel}>
@@ -275,6 +275,7 @@ export function StageRunning({ label, icon = 'refresh', onBack, backLabel }: { l
       <div className={styles.footer}>
         <Btn icon="arrowLeft" onClick={onBack}>{backLabel}</Btn>
         <div className={styles.spacer} />
+        {action && <Btn icon={action.icon ?? 'x'} onClick={action.onClick}>{action.label}</Btn>}
       </div>
     </>
   )
@@ -344,6 +345,11 @@ export function FlagBand({ subject, criteria, detail, fix, fixSteps, note, inFie
         <Icon name="shield" size={14} />
         <span>{note}</span>
       </div>
+      {action && (
+        <div className={styles.flagbandFoot}>
+          <Btn className={styles.btnTiny} iconRight="arrowRight" onClick={action.onClick}>{action.label}</Btn>
+        </div>
+      )}
     </div>
   )
 }

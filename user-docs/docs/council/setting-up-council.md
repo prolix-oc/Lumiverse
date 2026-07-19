@@ -1,6 +1,10 @@
+---
+title: Setting Up Council
+---
+
 # Setting Up Council
 
-This guide walks you through configuring the council for AI-assisted deliberation.
+This guide walks you through configuring the council for AI-assisted tool feedback.
 
 ---
 
@@ -49,11 +53,15 @@ Configure the sidecar in:
 !!! tip "Use a fast, cheap model"
     The sidecar handles quick analysis tasks, not full creative writing. A smaller model (like Haiku, Flash, or GPT-4o-mini) works well and keeps costs low.
 
+### Exclude Latest User Message from Sidecar
+
+Enable **Exclude Latest User Message from Sidecar** in the Council panel when a lightweight sidecar tends to treat the current user turn as a command to answer. The tool receives the preceding context but not that newest user-authored message, and still returns only its assigned feedback.
+
 ---
 
 ## Council Without Tools
 
-Council mode works even without assigning any tools. In this case, members engage in **pure self-debate** — they deliberate and discuss among themselves, providing general narrative guidance without structured tool outputs.
+Council members produce feedback only through their assigned tools. With no tools assigned, Council adds no tool feedback for that generation.
 
 ---
 
@@ -72,7 +80,7 @@ Each member brings their own perspective based on their Lumia's personality and 
 
 ## Enabling Historical Deliberations
 
-Historical deliberations give a council member continuity across turns. Use them when a member/tool should remember plans it has already proposed, warnings it has raised, or story threads it is intentionally developing in the background.
+Historical deliberations preserve useful continuity across turns, such as earlier plans, warnings, or story threads.
 
 To enable historical deliberations for a member:
 
@@ -83,10 +91,7 @@ To enable historical deliberations for a member:
 
 The setting is per member/tool assignment. For example, you can retain `3` prior **Suggest Direction** outputs for a Story Architect while leaving that same member's **Voice Concern** history disabled.
 
-Historical entries are included in two places:
-
-- The sidecar council tool sees prior outputs from the same member/tool before writing its next deliberation.
-- The main model receives a separate historical-baseline block alongside the current `{{lumiaCouncilDeliberation}}` output.
+The main model receives a separate historical-baseline block alongside the current `{{lumiaCouncilDeliberation}}` output. The sidecar does not receive its own prior output, which prevents it from simply repeating it.
 
 Lumiverse labels historical deliberations as continuity context only. They are not treated as a required template and should not override current chat history, active world info, or the latest user message.
 

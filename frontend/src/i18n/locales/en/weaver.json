@@ -296,6 +296,8 @@
     "progressOpen": "{{count}} still open",
     "progressDeepening": "Essentials covered · deepening",
     "thinking": "Writing the next question…",
+    "cancel": "Cancel",
+    "canceled": "Canceled. Nothing was lost — try again, or step back to switch models.",
     "retry": "Try again",
     "typePlaceholder": "Answer in your own words…",
     "submitAnswer": "Use my answer",
@@ -419,6 +421,9 @@
     "replaceEditBody": "This field is hand-edited. Re-rendering overwrites your text with a fresh pass from the Bible.",
     "keepEdit": "Keep my edit",
     "replaceEdit": "Replace it",
+    "keptEditsTitle": "Your hand-edits were kept",
+    "keptEditsBody": "Render all again left these fields untouched so it wouldn't overwrite your edits: {{fields}}. Open a field and choose Replace it to regenerate it from the Bible.",
+    "keptEditsDismiss": "Dismiss",
     "fieldsRail": "Card fields · {{count}}",
     "fieldFlaggedSubject": "The {{field}} field",
     "fieldFlaggedFix": "Re-render it on its own, or strengthen the Bible entries it draws from, then render again.",
@@ -728,7 +733,8 @@
     "intro": "How much the studio does in one go. Leave a field blank to keep the default shown inside it.",
     "bands": {
       "flow": "In one go",
-      "model": "Temperatures"
+      "model": "Temperatures",
+      "reliability": "Reliability"
     },
     "fields": {
       "propose_count": "People per proposal",
@@ -736,7 +742,8 @@
       "dynamic_question_cap": "Extra questions an interview may ask",
       "harvest_cap": "Most people picked up from one build",
       "generation_temperature": "Writing temperature",
-      "review_temperature": "Judging temperature"
+      "review_temperature": "Judging temperature",
+      "text_timeout_seconds": "Generation timeout (seconds)"
     },
     "hints": {
       "propose_count": "How many people one Propose pass adds to a world's roster.",
@@ -744,9 +751,11 @@
       "dynamic_question_cap": "Deepening questions after the essentials are covered.",
       "harvest_cap": "People the roster picks up from your own words at finalize.",
       "generation_temperature": "Everything the studio composes for you. Higher is looser.",
-      "review_temperature": "The quality checks and read-backs. Lower is steadier."
+      "review_temperature": "The quality checks and read-backs. Lower is steadier.",
+      "text_timeout_seconds": "How long a single step waits before giving up. Raise it for slow reasoning models that keep timing out; lower it to fail faster on a wedged connection."
     },
     "tempsIntro": "How the model runs. Writing covers everything it composes for you; judging covers the quality checks.",
+    "reliabilityIntro": "When a step takes longer than this, the studio stops waiting and shows an error instead of spinning forever.",
     "defaultPlaceholder": "{{value}} (default)",
     "modelDefault": "default",
     "save": "Save",

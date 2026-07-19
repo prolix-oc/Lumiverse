@@ -102,6 +102,71 @@
   margin-top: 6px;
 }
 
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.inputLabel {
+  color: var(--lumiverse-text);
+  font-size: calc(13px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-align: center;
+}
+
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-md, 10px);
+  background: var(--lumiverse-bg-dark, rgba(0, 0, 0, 0.16));
+  color: var(--lumiverse-text);
+  /* iOS zooms focused inputs below 16px. Keep this physical minimum while
+     still respecting larger app font scales. */
+  font-size: max(16px, calc(14px * var(--lumiverse-font-scale, 1)));
+  font-family: inherit;
+  line-height: 1.35;
+}
+
+.input::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--confirmation-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--confirmation-accent) 18%, transparent);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 2px;
+  color: var(--lumiverse-text);
+  font-size: calc(14px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.checkbox input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--confirmation-accent);
+}
+
+.checkbox:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .actions {
   display: flex;
   gap: 12px;
@@ -175,7 +240,9 @@
 
 .cancelBtn:focus-visible,
 .confirmBtn:focus-visible,
-.closeBtn:focus-visible {
+.closeBtn:focus-visible,
+.input:focus-visible,
+.checkbox input:focus-visible {
   outline: none;
 }
 

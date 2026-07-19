@@ -22,6 +22,7 @@ export function useWorldBookEntryLabels() {
       { value: 3, label: t('entryPosition.afterAN') },
       { value: 4, label: t('entryPosition.atDepth') },
       { value: 7, label: t('entryPosition.atMarker') },
+      { value: 8, label: t('entryPosition.outletOnly') },
     ] as const
 
     const typeOptions = [
@@ -32,6 +33,7 @@ export function useWorldBookEntryLabels() {
 
     const sortOptions: { value: WorldBookEntrySortBy; label: string }[] = [
       { value: 'custom', label: t('entrySort.custom') },
+      { value: 'order', label: t('entrySort.order') },
       { value: 'priority', label: t('entrySort.priority') },
       { value: 'name', label: t('entrySort.name') },
       { value: 'created', label: t('entrySort.created') },
@@ -61,7 +63,9 @@ export function useWorldBookEntryLabels() {
     const positionLabel = (position: number) =>
       position === 7
         ? t('entryPosition.markerShort')
-        : positionShort[position] ?? t('entryPosition.fallback', { position })
+        : position === 8
+          ? t('entryPosition.outletOnlyShort')
+          : positionShort[position] ?? t('entryPosition.fallback', { position })
 
     const entryTypeLabel = (entry: WorldBookEntry) =>
       entry.constant ? t('entryType.constant') : entry.vectorized ? t('entryType.vector') : t('entryType.trigger')

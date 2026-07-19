@@ -1,11 +1,12 @@
 export { evaluate } from "./MacroEvaluator";
-export { buildEnv, cloneEnv, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns, type BuildEnvContext } from "./MacroEnv";
+export { buildEnv, cloneEnv, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns, withPromptBlockContext, type BuildEnvContext } from "./MacroEnv";
 export { registry } from "./MacroRegistry";
 export type {
   MacroEnv,
   MacroHandler,
   MacroDefinition,
   MacroExecContext,
+  PromptBlockMacroContext,
   MacroDiagnostic,
   EvaluateResult,
   AstNode,
@@ -15,6 +16,7 @@ export type {
 import { registerCoreMacros } from "./definitions/primitives";
 import { registerNamesMacros } from "./definitions/identity";
 import { registerCharacterMacros } from "./definitions/persona-card";
+import { registerTagMacros } from "./definitions/tags";
 import { registerChatMacros } from "./definitions/conversation";
 import { registerTimeMacros } from "./definitions/temporal";
 import { registerRandomMacros } from "./definitions/entropy";
@@ -33,6 +35,9 @@ import { registerChatUtilsMacros } from "./definitions/chat-utils";
 import { registerRegexRefMacros } from "./definitions/regex-ref";
 import { registerDatabankMacros } from "./definitions/databank";
 import { registerPromptVarMacros } from "./definitions/prompt-vars";
+import { registerMultiplayerMacros } from "./definitions/multiplayer";
+import { registerIterationMacros } from "./definitions/iteration";
+import { registerListMacros } from "./definitions/lists";
 
 let initialized = false;
 
@@ -46,6 +51,7 @@ export function initMacros(): void {
   registerCoreMacros();
   registerNamesMacros();
   registerCharacterMacros();
+  registerTagMacros();
   registerChatMacros();
   registerTimeMacros();
   registerRandomMacros();
@@ -64,4 +70,7 @@ export function initMacros(): void {
   registerRegexRefMacros();
   registerDatabankMacros();
   registerPromptVarMacros();
+  registerMultiplayerMacros();
+  registerIterationMacros();
+  registerListMacros();
 }

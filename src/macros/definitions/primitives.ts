@@ -1,5 +1,6 @@
 import type { AstNode, MacroNode } from "../types";
 import { registry } from "../MacroRegistry";
+import { evaluateMacroCondition } from "../conditions";
 
 const ELSE_MARKER = "\x00ELSE_MARKER\x00";
 
@@ -143,48 +144,24 @@ export function registerCoreMacros(): void {
     builtIn: true,
     name: "if",
     category: "Core",
-    description: "Conditional block. Usage: {{if::condition}}...{{else}}...{{/if}}",
+    description: "Conditional block. Usage: {{if::condition}}...{{elseif::other}}...{{else}}...{{/if}}",
     returnType: "string",
     delayArgResolution: true,
     handler: async (ctx) => {
-      // Join multiple space-delimited args into one condition expression
-      // e.g. {{if .myvar == 5}} → rawArgs = [[getvar], ["=="], ["5"]] → join with spaces
-      let conditionNodes: any[] = ctx.rawArgs[0] || [];
-      if (ctx.rawArgs.length > 1) {
-        conditionNodes = [];
-        for (let i = 0; i < ctx.rawArgs.length; i++) {
-          if (i > 0) conditionNodes.push({ type: "text" as const, value: " " });
-          conditionNodes.push(...ctx.rawArgs[i]);
-        }
-      }
-      let conditionStr = (await ctx.resolveNodes(conditionNodes)).trim();
-
-      // With recursive inline expansion, resolveNodes already fully expands
-      // nested macros. One safety re-resolve covers the rare edge case where
-      // a macro result depends on state mutated by a later macro in the same
-      // template that hasn't been evaluated yet.
-      if (conditionStr.includes("{{")) {
-        const next = (await ctx.resolve(conditionStr)).trim();
-        if (next !== conditionStr) conditionStr = next;
-      }
-
-      // Handle ! prefix negation (ST compat: {{if !condition}})
-      let negate = false;
-      if (conditionStr.startsWith("!")) {
-        negate = true;
-        conditionStr = conditionStr.slice(1).trim();
-      }
-
-      // Resolve remaining .var/$var shorthands that weren't caught by the lexer
-      // (e.g. {{if !.myvar}} where ! prevented lexer shorthand detection)
-      conditionStr = resolveInlineShorthands(conditionStr, ctx.env.variables);
-
-      const isTruthy = evaluateCondition(conditionStr);
-      const result = negate ? !isTruthy : isTruthy;
+      const result = await conditionIsTruthy(ctx, conditionArgNodes(ctx.rawArgs));
 
       if (ctx.isScoped) {
-        const parts = splitOnElseNodes(ctx.bodyRaw);
-        return await ctx.resolveNodes(result ? parts.truthy : parts.falsy);
+        const branches = splitConditionalBranches(ctx.bodyRaw);
+        if (result) {
+          return await ctx.resolveNodes(branches[0]?.body ?? ctx.bodyRaw);
+        }
+        for (const branch of branches.slice(1)) {
+          if (!branch.condition) return await ctx.resolveNodes(branch.body);
+          if (await conditionIsTruthy(ctx, branch.condition)) {
+            return await ctx.resolveNodes(branch.body);
+          }
+        }
+        return "";
       }
 
       return result ? "true" : "";
@@ -199,90 +176,92 @@ export function registerCoreMacros(): void {
     returnType: "string",
     handler: () => ELSE_MARKER,
   });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "elseif",
+    category: "Core",
+    description: "Else-if marker for {{if}} blocks",
+    returnType: "string",
+    aliases: ["elif"],
+    handler: () => "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "unless",
+    category: "Core",
+    description: "Inverse conditional block. Usage: {{unless::condition}}...{{else}}...{{/unless}}",
+    returnType: "string",
+    delayArgResolution: true,
+    handler: async (ctx) => {
+      const result = await conditionIsTruthy(ctx, conditionArgNodes(ctx.rawArgs));
+      if (!ctx.isScoped) return result ? "" : "true";
+
+      const parts = splitOnElseNodes(ctx.bodyRaw);
+      return await ctx.resolveNodes(result ? parts.falsy : parts.truthy);
+    },
+  });
 }
 
-/**
- * Resolve .varName and $varName shorthands within a condition string.
- * Used as a fallback when the lexer couldn't detect the shorthand
- * (e.g. preceded by ! or other non-space characters).
- */
-function resolveInlineShorthands(
-  condition: string,
-  variables: { local: Map<string, string>; global: Map<string, string> },
-): string {
-  return condition
-    .replace(/(^|\s)\.([a-zA-Z][\w-]*)/g, (_, pre, name) => pre + (variables.local.get(name) ?? ""))
-    .replace(/(^|\s)\$([a-zA-Z][\w-]*)/g, (_, pre, name) => pre + (variables.global.get(name) ?? ""));
+function conditionArgNodes(rawArgs: AstNode[][]): AstNode[] {
+  // Join multiple space-delimited args into one condition expression:
+  // {{if .myvar == 5}} -> [[getvar], ["=="], ["5"]] -> ".myvar == 5"
+  if (rawArgs.length <= 1) return rawArgs[0] ?? [];
+  const nodes: AstNode[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (i > 0) nodes.push({ type: "text", value: " " });
+    nodes.push(...rawArgs[i]);
+  }
+  return nodes;
 }
 
-// Order matters here — we scan for the *leftmost* operator and prefer the
-// longest match at that position so e.g. ">=" beats ">" when both could
-// apply at index N.
-const COMPARISON_OPERATORS = ["==", "!=", ">=", "<=", ">", "<"] as const;
+async function conditionIsTruthy(
+  ctx: {
+    resolve: (text: string) => string | Promise<string>;
+    resolveNodes: (nodes: AstNode[]) => string | Promise<string>;
+    env: { variables: Parameters<typeof evaluateMacroCondition>[1] };
+  },
+  nodes: AstNode[],
+): Promise<boolean> {
+  let conditionStr = (await ctx.resolveNodes(nodes)).trim();
 
-function findComparisonOperator(value: string): { op: typeof COMPARISON_OPERATORS[number]; index: number } | null {
-  let bestIndex = -1;
-  let bestOp: typeof COMPARISON_OPERATORS[number] | null = null;
-  for (const op of COMPARISON_OPERATORS) {
-    const index = value.indexOf(op);
-    if (index === -1) continue;
-    if (bestIndex === -1 || index < bestIndex || (index === bestIndex && op.length > (bestOp?.length ?? 0))) {
-      bestIndex = index;
-      bestOp = op;
+  // With recursive inline expansion, resolveNodes already fully expands nested
+  // macros. One safety re-resolve covers the rare edge case where a macro
+  // result depends on state mutated later in the same template.
+  if (conditionStr.includes("{{")) {
+    const next = (await ctx.resolve(conditionStr)).trim();
+    if (next !== conditionStr) conditionStr = next;
+  }
+
+  return evaluateMacroCondition(conditionStr, ctx.env.variables);
+}
+
+type ConditionalBranch = {
+  condition: AstNode[] | null;
+  body: AstNode[];
+};
+
+function splitConditionalBranches(body: AstNode[]): ConditionalBranch[] {
+  const branches: ConditionalBranch[] = [{ condition: null, body: [] }];
+
+  for (const node of body) {
+    if (node.type === "macro" && !node.flags.close) {
+      const name = node.name.toLowerCase();
+      if (name === "elseif" || name === "elif") {
+        branches.push({ condition: conditionArgNodes(node.args), body: [] });
+        continue;
+      }
+      if (name === "else") {
+        branches.push({ condition: null, body: [] });
+        continue;
+      }
     }
-  }
-  return bestOp ? { op: bestOp, index: bestIndex } : null;
-}
-
-function evaluateCondition(value: string): boolean {
-  // Unresolved macros (reconstructed as {{name}} by the evaluator) mean the
-  // value couldn't be determined — treat the entire condition as falsy.
-  if (value.includes("{{") && value.includes("}}")) {
-    return false;
+    branches[branches.length - 1]!.body.push(node);
   }
 
-  // Linear scan for the first comparison operator; avoids the previous
-  // `^(.*?)\s*(...)\s*(.+)$` regex whose greedy/non-greedy combination
-  // could backtrack pathologically on user-supplied values.
-  const found = findComparisonOperator(value);
-  if (found) {
-    const lv = value.slice(0, found.index).trim();
-    const rv = value.slice(found.index + found.op.length).trim();
-
-    // Try numeric comparison
-    const ln = parseFloat(lv);
-    const rn = parseFloat(rv);
-    const bothNumeric = !isNaN(ln) && !isNaN(rn);
-
-    switch (found.op) {
-      case "==": return bothNumeric ? ln === rn : lv === rv;
-      case "!=": return bothNumeric ? ln !== rn : lv !== rv;
-      case ">": return bothNumeric ? ln > rn : lv > rv;
-      case ">=": return bothNumeric ? ln >= rn : lv >= rv;
-      case "<": return bothNumeric ? ln < rn : lv < rv;
-      case "<=": return bothNumeric ? ln <= rn : lv <= rv;
-    }
-  }
-
-  // Falsy values. "no" and "off" are included case-insensitively so the
-  // dozen-plus yes/no boolean macros across the codebase
-  // (lumiaCouncilToolsActive, lumiaCouncilModeActive, databank/memory/cortex
-  // enabled flags, loom Sovereign Hand, isGroupChat, etc.) work as
-  // documented — those macros all advertise "Conditional compatible" and
-  // emit the literal string "no" when off.
-  if (!value) return false;
-  const lower = value.toLowerCase();
-  if (
-    lower === "0" ||
-    lower === "false" ||
-    lower === "null" ||
-    lower === "undefined" ||
-    lower === "no" ||
-    lower === "off"
-  ) {
-    return false;
-  }
-  return true;
+  return branches;
 }
 
 function splitOnElseNodes(body: AstNode[]): { truthy: AstNode[]; falsy: AstNode[] } {

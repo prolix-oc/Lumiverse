@@ -15,6 +15,7 @@ const PARAMETERS: ImageParameterSchemaMap = {
   width: { type: "integer", default: 1024, min: 256, max: 2048, step: 64, description: "Width injected into mapped ComfyUI workflow fields.", group: "advanced" },
   height: { type: "integer", default: 1024, min: 256, max: 2048, step: 64, description: "Height injected into mapped ComfyUI workflow fields.", group: "advanced" },
   checkpoint: { type: "string", description: "Checkpoint injected into mapped ComfyUI checkpoint fields.", group: "models", modelSubtype: "checkpoints" },
+  unet: { type: "string", description: "Optional standalone diffusion model injected into mapped ComfyUI UNETLoader fields. Leave empty to keep the workflow default.", group: "models", modelSubtype: "unets" },
   denoise: { type: "number", default: 0.6, min: 0, max: 1, step: 0.05, description: "Denoise strength injected into a mapped KSampler denoise field for img2img (lower = closer to the source image). Requires an init_image-mapped workflow.", group: "img2img" },
 }
 

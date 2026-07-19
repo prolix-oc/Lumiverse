@@ -8,13 +8,16 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import type { GroupResponseOrder } from '@/lib/groupResponseOrder'
 import Pagination from '@/components/shared/Pagination'
 import type { Character } from '@/types/api'
 import styles from './GroupChatCreatorModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type Step = 'characters' | 'greeting' | 'settings'
 type GroupCardMode = 'swap' | 'merge_ignore_muted' | 'merge'
+type GroupLorebookMode = 'follow_card_mode' | 'active_character' | 'all_unmuted' | 'all'
 
 interface GreetingOption {
   characterId: string
@@ -31,7 +34,10 @@ export default function GroupChatCreatorModal() {
 
   const navigate = useNavigate()
   const closeModal = useStore((s) => s.closeModal)
-  const modalProps = useStore((s) => s.modalProps) as { initialCharacterIds?: string[] } | null
+  const modalProps = useStore((s) => s.modalProps) as {
+    initialCharacterIds?: string[]
+    deleteChatIdAfterCreate?: string
+  } | null
   const characters = useStore((s) => s.characters)
   const [step, setStep] = useState<Step>('characters')
   const [selectedIds, setSelectedIds] = useState<string[]>(modalProps?.initialCharacterIds ?? [])
@@ -40,6 +46,8 @@ export default function GroupChatCreatorModal() {
   const [groupName, setGroupName] = useState('')
   const [talkativenessOverrides, setTalkativenessOverrides] = useState<Record<string, number>>({})
   const [groupCardMode, setGroupCardMode] = useState<GroupCardMode>('swap')
+  const [groupLorebookMode, setGroupLorebookMode] = useState<GroupLorebookMode>('follow_card_mode')
+  const [groupResponseOrder, setGroupResponseOrder] = useState<GroupResponseOrder>('sequential')
   const [scenarioMode, setScenarioMode] = useState<'individual' | 'member' | 'custom'>('individual')
   const [scenarioMemberId, setScenarioMemberId] = useState<string>('')
   const [scenarioCustom, setScenarioCustom] = useState('')
@@ -91,7 +99,7 @@ export default function GroupChatCreatorModal() {
     if (Object.keys(overrides).length > 0) {
       setTalkativenessOverrides((prev) => ({ ...prev, ...overrides }))
     }
-  }, [selectedCharacters])
+  }, [selectedCharacters, talkativenessOverrides])
 
   const greetingOptions = useMemo<GreetingOption[]>(() => {
     const options: GreetingOption[] = []
@@ -156,6 +164,12 @@ export default function GroupChatCreatorModal() {
       if (groupCardMode !== 'swap') {
         extraMeta.group_card_mode = groupCardMode
       }
+      if (groupLorebookMode !== 'follow_card_mode') {
+        extraMeta.group_lorebook_mode = groupLorebookMode
+      }
+      if (groupResponseOrder !== 'sequential') {
+        extraMeta.group_response_order = groupResponseOrder
+      }
       if (scenarioMode !== 'individual') {
         extraMeta.group_scenario_override = {
           mode: scenarioMode,
@@ -175,12 +189,17 @@ export default function GroupChatCreatorModal() {
       }
       closeModal()
       navigate(`/chat/${chat.id}`)
+      if (modalProps?.deleteChatIdAfterCreate) {
+        void chatsApi.delete(modalProps.deleteChatIdAfterCreate).catch((err) => {
+          console.error('[GroupChatCreator] Failed to delete previous chat after creating a new one:', err)
+        })
+      }
     } catch (err) {
       console.error('[GroupChatCreator] Failed to create group chat:', err)
     } finally {
       setCreating(false)
     }
-  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, navigate])
+  }, [creating, selectedIds, groupName, selectedGreeting, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, closeModal, modalProps?.deleteChatIdAfterCreate, navigate])
 
   const canProceed =
     step === 'characters'
@@ -255,8 +274,14 @@ export default function GroupChatCreatorModal() {
                     className={styles.searchInput}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
                     placeholder={t('searchPlaceholder')}
                   />
+                  {search && (
+                    <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
 
                 <div className={styles.charGrid}>
@@ -362,6 +387,38 @@ export default function GroupChatCreatorModal() {
                   </select>
                   <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
                     {t('cardMacrosHint')}
+                  </div>
+                </div>
+
+                <div className={styles.fieldGroup}>
+                  <label className={styles.fieldLabel}>{t('groupLorebooks')}</label>
+                  <select
+                    className={styles.fieldInput}
+                    value={groupLorebookMode}
+                    onChange={(e) => setGroupLorebookMode(e.target.value as GroupLorebookMode)}
+                  >
+                    <option value="follow_card_mode">{t('lorebookModeFollow')}</option>
+                    <option value="active_character">{t('lorebookModeActive')}</option>
+                    <option value="all_unmuted">{t('lorebookModeAllUnmuted')}</option>
+                    <option value="all">{t('lorebookModeAll')}</option>
+                  </select>
+                  <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
+                    {t('groupLorebooksHint')}
+                  </div>
+                </div>
+
+                <div className={styles.fieldGroup}>
+                  <label className={styles.fieldLabel}>{t('groupResponseOrder')}</label>
+                  <select
+                    className={styles.fieldInput}
+                    value={groupResponseOrder}
+                    onChange={(e) => setGroupResponseOrder(e.target.value as GroupResponseOrder)}
+                  >
+                    <option value="sequential">{t('responseOrderSequential')}</option>
+                    <option value="random">{t('responseOrderRandom')}</option>
+                  </select>
+                  <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
+                    {t('groupResponseOrderHint')}
                   </div>
                 </div>
 

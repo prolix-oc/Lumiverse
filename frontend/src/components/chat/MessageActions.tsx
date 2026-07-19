@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Copy, Check, BarChart3, EyeOff, Eye, Volume2, Square } from 'lucide-react'
+import { Pencil, Trash2, Copy, Check, BarChart3, EyeOff, Eye, Volume2, Square, Anchor } from 'lucide-react'
 import { IconGitFork } from '@tabler/icons-react'
 import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -10,6 +10,7 @@ interface MessageActionsProps {
   onEdit: () => void
   onDelete: () => void
   onToggleHidden: () => void
+  onToggleContextAnchor: () => void
   onFork: () => void
   onPromptBreakdown?: () => void
   onPlay?: () => void
@@ -25,6 +26,7 @@ interface MessageActionsProps {
   hasSavedAudio?: boolean
   isUser: boolean
   isHidden: boolean
+  isContextAnchor: boolean
   content: string
 }
 
@@ -32,6 +34,7 @@ export default function MessageActions({
   onEdit,
   onDelete,
   onToggleHidden,
+  onToggleContextAnchor,
   onFork,
   onPromptBreakdown,
   onPlay,
@@ -40,6 +43,7 @@ export default function MessageActions({
   hasSavedAudio,
   isUser,
   isHidden,
+  isContextAnchor,
   content,
 }: MessageActionsProps) {
   const { t } = useTranslation('chat')
@@ -61,6 +65,11 @@ export default function MessageActions({
   const showStopIcon = !!(isGenerating || isPlaying)
   const hideLabel = isHidden ? t('messageActions.unhideFromAi') : t('messageActions.hideFromAi')
   const hideAria = isHidden ? t('messageActions.unhide') : t('messageActions.hide')
+  const contextAnchorLabel = isHidden
+    ? t('messageActions.contextAnchorHidden')
+    : isContextAnchor
+      ? t('messageActions.clearContextAnchor')
+      : t('messageActions.setContextAnchor')
 
   return (
     <div className={styles.actions}>
@@ -90,6 +99,18 @@ export default function MessageActions({
         aria-label={hideAria}
       >
         {isHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+      </Button>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        onClick={onToggleContextAnchor}
+        title={contextAnchorLabel}
+        aria-label={contextAnchorLabel}
+        aria-pressed={isContextAnchor}
+        disabled={isHidden}
+        className={isContextAnchor ? styles.contextAnchorActive : undefined}
+      >
+        <Anchor size={13} />
       </Button>
       <Button size="icon-sm" variant="ghost" onClick={onFork} title={t('messageActions.fork')} aria-label={t('messageActions.forkAria')}>
         <IconGitFork size={13} />

@@ -42,12 +42,23 @@ export function getPersona(userId: string, id: string): Persona | null {
 export function getPersonaAvatarInfo(
   userId: string,
   id: string
-): { image_id: string | null; avatar_path: string | null } | null {
+): { image_id: string | null; avatar_path: string | null; avatar_crop_image_id: string | null } | null {
   const row = getDb()
-    .query("SELECT image_id, avatar_path FROM personas WHERE id = ? AND user_id = ?")
+    .query("SELECT image_id, avatar_path, metadata FROM personas WHERE id = ? AND user_id = ?")
     .get(id, userId) as any;
   if (!row) return null;
-  return { image_id: row.image_id || null, avatar_path: row.avatar_path || null };
+  let avatarCropImageId: string | null = null;
+  try {
+    const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata;
+    avatarCropImageId = typeof metadata?.avatar_crop_image_id === "string" ? metadata.avatar_crop_image_id : null;
+  } catch {
+    avatarCropImageId = null;
+  }
+  return {
+    image_id: row.image_id || null,
+    avatar_path: row.avatar_path || null,
+    avatar_crop_image_id: avatarCropImageId,
+  };
 }
 
 export function createPersona(userId: string, input: CreatePersonaInput): Persona {
@@ -174,6 +185,44 @@ export function deletePersonaFolder(userId: string, name: string): Persona[] {
   for (const persona of updated) {
     eventBus.emit(EventType.PERSONA_CHANGED, { id: persona.id, persona }, userId);
   }
+  return updated;
+}
+
+export function isPersonaAvatarPathReferenced(userId: string, avatarPath: string): boolean {
+  return !!getDb()
+    .query("SELECT 1 FROM personas WHERE user_id = ? AND avatar_path = ? LIMIT 1")
+    .get(userId, avatarPath);
+}
+
+export interface BulkPersonaUpdateInput {
+  folder?: string;
+  attached_world_book_id?: string | null;
+  toggle_narrator?: boolean;
+}
+
+export function bulkUpdatePersonas(
+  userId: string,
+  ids: string[],
+  input: BulkPersonaUpdateInput
+): Persona[] {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const updated: Persona[] = [];
+
+  for (const id of uniqueIds) {
+    const existing = getPersona(userId, id);
+    if (!existing) continue;
+
+    const patch: UpdatePersonaInput = {};
+    if (input.folder !== undefined) patch.folder = input.folder.trim();
+    if (input.attached_world_book_id !== undefined) {
+      patch.attached_world_book_id = input.attached_world_book_id;
+    }
+    if (input.toggle_narrator) patch.is_narrator = !existing.is_narrator;
+
+    const persona = updatePersona(userId, id, patch);
+    if (persona) updated.push(persona);
+  }
+
   return updated;
 }
 

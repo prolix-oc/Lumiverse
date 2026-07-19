@@ -1,3 +1,7 @@
+---
+title: Speech-to-Text
+---
+
 # Speech-to-Text
 
 Speech-to-Text (STT) lets you dictate a chat message from the input bar instead of typing it. Lumiverse supports the browser's built-in Web Speech API and OpenAI-compatible transcription connections such as Whisper.

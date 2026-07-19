@@ -1,3 +1,7 @@
+---
+title: Messages & Swipes
+---
+
 # Messages & Swipes
 
 Understanding how messages work — and how to get the most out of swipes — is key to having great conversations.

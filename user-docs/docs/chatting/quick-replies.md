@@ -1,3 +1,7 @@
+---
+title: Quick Replies
+---
+
 # Quick Replies
 
 Quick replies are pre-written message templates you can insert into the chat with a single click. Useful for common responses, recurring actions, or frequently used OOC instructions.

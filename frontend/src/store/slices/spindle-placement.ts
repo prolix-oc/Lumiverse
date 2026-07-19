@@ -1,16 +1,18 @@
 import type { StateCreator } from 'zustand'
 import type { SpindlePlacementSlice } from '@/types/store'
-import type { SpindleDockEdge } from 'lumiverse-spindle-types'
-import type { TabLocation } from '@/lib/spindle/tab-mobility-types'
+import type { SpindleDockEdge, SpindleTabLocation as TabLocation } from 'lumiverse-spindle-types'
 
 // ── Capacity limits ──
 
 const PLACEMENT_LIMITS = {
-  drawerTabs: { perExtension: 4, global: 8 },
-  floatWidgets: { perExtension: 2, global: 8 },
-  dockPanels: { perExtensionPerEdge: 1, globalPerEdge: 2 },
-  appMounts: { perExtension: 1, global: 4 },
-  inputBarActions: { perExtension: 4, global: 12 },
+  drawerTabs: { perExtension: 8, global: 64 },
+  characterEditorTabs: { perExtension: 8, global: 64 },
+  presetEditorTabs: { perExtension: 8, global: 64 },
+  presetEditorToolbarItems: { perExtension: 4, global: 32 },
+  floatWidgets: { perExtension: 4, global: 32 },
+  dockPanels: { perExtensionPerEdge: 2, globalPerEdge: 8 },
+  appMounts: { perExtension: 2, global: 32 },
+  inputBarActions: { perExtension: 8, global: 64 },
 } as const
 
 // ── State types ──
@@ -31,6 +33,28 @@ export interface DrawerTabState {
   iconSvg?: string
   badge: string | null
   root: HTMLElement
+}
+
+export interface CharacterEditorTabState {
+  id: string
+  extensionId: string
+  title: string
+  root: HTMLElement
+}
+
+export interface PresetEditorTabState {
+  id: string
+  extensionId: string
+  title: string
+  root: HTMLElement
+}
+
+export interface PresetEditorToolbarItemState {
+  id: string
+  extensionId: string
+  ariaLabel: string
+  root: HTMLElement
+  visible: boolean
 }
 
 export interface FloatWidgetState {
@@ -122,6 +146,9 @@ function saveHiddenPlacements(ids: string[]) {
 
 export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = (set, get) => ({
   drawerTabs: [],
+  characterEditorTabs: [],
+  presetEditorTabs: [],
+  presetEditorToolbarItems: [],
   floatWidgets: [],
   dockPanels: [],
   appMounts: [],
@@ -148,15 +175,105 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   },
 
   unregisterDrawerTab: (tabId: string) => {
-    set((state) => ({
-      drawerTabs: state.drawerTabs.filter((t) => t.id !== tabId),
-    }))
+    set((state) => {
+      const hasLocation = Object.prototype.hasOwnProperty.call(state.tabLocations, tabId)
+      const nextTabLocations = hasLocation ? { ...state.tabLocations } : state.tabLocations
+      if (hasLocation) delete nextTabLocations[tabId]
+
+      return {
+        drawerTabs: state.drawerTabs.filter((t) => t.id !== tabId),
+        tabLocations: nextTabLocations,
+        pendingActiveTabReset: state.pendingActiveTabReset === tabId
+          ? null
+          : state.pendingActiveTabReset,
+      }
+    })
   },
 
   updateDrawerTab: (tabId: string, updates: Partial<Pick<DrawerTabState, 'title' | 'shortName' | 'badge'>>) => {
     set((state) => ({
       drawerTabs: state.drawerTabs.map((t) =>
         t.id === tabId ? { ...t, ...updates } : t
+      ),
+    }))
+  },
+
+  // ── Character Editor Tabs ──
+
+  registerCharacterEditorTab: (tab: CharacterEditorTabState) => {
+    const state = get()
+    const extCount = state.characterEditorTabs.filter((t) => t.extensionId === tab.extensionId).length
+    if (extCount >= PLACEMENT_LIMITS.characterEditorTabs.perExtension) {
+      throw new Error(`Character editor tab limit reached (max ${PLACEMENT_LIMITS.characterEditorTabs.perExtension} per extension)`)
+    }
+    if (state.characterEditorTabs.length >= PLACEMENT_LIMITS.characterEditorTabs.global) {
+      throw new Error(`Global character editor tab limit reached (max ${PLACEMENT_LIMITS.characterEditorTabs.global})`)
+    }
+    set({ characterEditorTabs: [...state.characterEditorTabs, tab] })
+  },
+
+  unregisterCharacterEditorTab: (tabId: string) => {
+    set((state) => ({
+      characterEditorTabs: state.characterEditorTabs.filter((t) => t.id !== tabId),
+    }))
+  },
+
+  updateCharacterEditorTab: (tabId: string, updates: Partial<Pick<CharacterEditorTabState, 'title'>>) => {
+    set((state) => ({
+      characterEditorTabs: state.characterEditorTabs.map((t) =>
+        t.id === tabId ? { ...t, ...updates } : t
+      ),
+    }))
+  },
+
+  // ── Preset Editor Tabs ──
+
+  registerPresetEditorTab: (tab: PresetEditorTabState) => {
+    const state = get()
+    const extCount = state.presetEditorTabs.filter((t) => t.extensionId === tab.extensionId).length
+    if (extCount >= PLACEMENT_LIMITS.presetEditorTabs.perExtension) {
+      throw new Error(`Preset editor tab limit reached (max ${PLACEMENT_LIMITS.presetEditorTabs.perExtension} per extension)`)
+    }
+    if (state.presetEditorTabs.length >= PLACEMENT_LIMITS.presetEditorTabs.global) {
+      throw new Error(`Global preset editor tab limit reached (max ${PLACEMENT_LIMITS.presetEditorTabs.global})`)
+    }
+    set({ presetEditorTabs: [...state.presetEditorTabs, tab] })
+  },
+
+  unregisterPresetEditorTab: (tabId: string) => {
+    set((state) => ({ presetEditorTabs: state.presetEditorTabs.filter((t) => t.id !== tabId) }))
+  },
+
+  updatePresetEditorTab: (tabId: string, updates: Partial<Pick<PresetEditorTabState, 'title'>>) => {
+    set((state) => ({
+      presetEditorTabs: state.presetEditorTabs.map((t) => t.id === tabId ? { ...t, ...updates } : t),
+    }))
+  },
+
+  // ── Preset Editor Toolbar ──
+
+  registerPresetEditorToolbarItem: (item: PresetEditorToolbarItemState) => {
+    const state = get()
+    const extCount = state.presetEditorToolbarItems.filter((entry) => entry.extensionId === item.extensionId).length
+    if (extCount >= PLACEMENT_LIMITS.presetEditorToolbarItems.perExtension) {
+      throw new Error(`Preset editor toolbar item limit reached (max ${PLACEMENT_LIMITS.presetEditorToolbarItems.perExtension} per extension)`)
+    }
+    if (state.presetEditorToolbarItems.length >= PLACEMENT_LIMITS.presetEditorToolbarItems.global) {
+      throw new Error(`Global preset editor toolbar item limit reached (max ${PLACEMENT_LIMITS.presetEditorToolbarItems.global})`)
+    }
+    set({ presetEditorToolbarItems: [...state.presetEditorToolbarItems, item] })
+  },
+
+  unregisterPresetEditorToolbarItem: (itemId: string) => {
+    set((state) => ({
+      presetEditorToolbarItems: state.presetEditorToolbarItems.filter((item) => item.id !== itemId),
+    }))
+  },
+
+  setPresetEditorToolbarItemVisible: (itemId: string, visible: boolean) => {
+    set((state) => ({
+      presetEditorToolbarItems: state.presetEditorToolbarItems.map((item) =>
+        item.id === itemId ? { ...item, visible } : item
       ),
     }))
   },
@@ -297,14 +414,35 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   // ── Shared ──
 
   removeAllByExtension: (extensionId: string) => {
-    set((state) => ({
-      drawerTabs: state.drawerTabs.filter((t) => t.extensionId !== extensionId),
-      floatWidgets: state.floatWidgets.filter((w) => w.extensionId !== extensionId),
-      dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
-      appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),
-      inputBarActions: state.inputBarActions.filter((a) => a.extensionId !== extensionId),
-      extensionCommands: state.extensionCommands.filter((e) => e.extensionId !== extensionId),
-    }))
+    set((state) => {
+      const removedDrawerTabIds = new Set(
+        state.drawerTabs
+          .filter((tab) => tab.extensionId === extensionId)
+          .map((tab) => tab.id),
+      )
+      const nextTabLocations = removedDrawerTabIds.size > 0
+        ? { ...state.tabLocations }
+        : state.tabLocations
+      for (const tabId of removedDrawerTabIds) {
+        delete nextTabLocations[tabId]
+      }
+
+      return {
+        drawerTabs: state.drawerTabs.filter((t) => t.extensionId !== extensionId),
+        characterEditorTabs: state.characterEditorTabs.filter((t) => t.extensionId !== extensionId),
+        presetEditorTabs: state.presetEditorTabs.filter((t) => t.extensionId !== extensionId),
+        presetEditorToolbarItems: state.presetEditorToolbarItems.filter((item) => item.extensionId !== extensionId),
+        floatWidgets: state.floatWidgets.filter((w) => w.extensionId !== extensionId),
+        dockPanels: state.dockPanels.filter((p) => p.extensionId !== extensionId),
+        appMounts: state.appMounts.filter((m) => m.extensionId !== extensionId),
+        inputBarActions: state.inputBarActions.filter((a) => a.extensionId !== extensionId),
+        extensionCommands: state.extensionCommands.filter((e) => e.extensionId !== extensionId),
+        tabLocations: nextTabLocations,
+        pendingActiveTabReset: removedDrawerTabIds.has(state.pendingActiveTabReset ?? '')
+          ? null
+          : state.pendingActiveTabReset,
+      }
+    })
   },
 
   togglePlacementVisibility: (placementId: string) => {
@@ -337,6 +475,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
   hideAllPlacements: () => {
     const state = get()
     const allIds = [
+      ...state.drawerTabs.map((t) => t.id),
       ...state.floatWidgets.map((w) => w.id),
       ...state.dockPanels.map((p) => p.id),
       ...state.appMounts.map((m) => m.id),

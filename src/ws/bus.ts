@@ -14,6 +14,18 @@ function getStreamTopic(userId: string, chatId: string): string {
   return `stream:${userId}:${chatId}`;
 }
 
+function getRoomTopic(roomId: string): string {
+  return `room:${roomId}`;
+}
+
+// The "feed" topic carries the re-broadcast chat/generation events
+// (MESSAGE_SENT / STREAM_TOKEN_RECEIVED / GENERATION_*). ONLY peers subscribe
+// to it — the host already receives those on its own user topic (it owns the
+// chat), so subscribing the host here too would double-deliver every token.
+function getRoomFeedTopic(roomId: string): string {
+  return `room:${roomId}:feed`;
+}
+
 class EventBus {
   private server: import("bun").Server<unknown> | null = null;
   private clientToUser = new Map<ServerWebSocket<unknown>, string>();
@@ -21,7 +33,20 @@ class EventBus {
   private clientToSession = new Map<ServerWebSocket<unknown>, string>();
   private clientToFocusedChat = new Map<ServerWebSocket<unknown>, string>();
   private clientLastActivity = new Map<ServerWebSocket<unknown>, number>();
+  // ── Multiplayer rooms ──
+  // A socket may subscribe to one or more room topics. Peer (room-token)
+  // sockets are tracked HERE but NOT in clientToUser — they never receive
+  // user:/system events, only their room:{roomId} topic.
+  private clientToRooms = new Map<ServerWebSocket<unknown>, Set<string>>();
+  private participantToClient = new Map<string, ServerWebSocket<unknown>>();
+  private clientToParticipants = new Map<ServerWebSocket<unknown>, Set<string>>();
+  // In-process sinks for ALL room broadcasts (lifecycle + feed). The relay
+  // bridge subscribes here to mirror a room's full event stream to off-instance
+  // peers, since publishToRoom/Feed deliver only to local WS topic subscribers.
+  private roomBroadcastListeners = new Set<(roomId: string, event: EventType, payload: any) => void>();
   private listeners = new Map<EventType, Set<Listener>>();
+  private pendingListenerDispatches: Array<() => void> = [];
+  private listenerDispatchTimer: ReturnType<typeof setTimeout> | null = null;
   /** Per-user visibility: true if at least one session reports visible. */
   private userVisibility = new Map<string, Map<string, boolean>>();
   private userAllHiddenSince = new Map<string, number>();
@@ -95,11 +120,37 @@ class EventBus {
       }
       this.clientToSession.delete(ws);
     }
+
+    // Multiplayer room cleanup (runs for peer sockets that have no userId too).
+    const rooms = this.clientToRooms.get(ws);
+    if (rooms) {
+      for (const roomId of rooms) {
+        try {
+          ws.unsubscribe(getRoomTopic(roomId));
+          ws.unsubscribe(getRoomFeedTopic(roomId));
+        } catch {
+          // Socket may already be closed
+        }
+      }
+      this.clientToRooms.delete(ws);
+    }
+    const participants = this.clientToParticipants.get(ws);
+    if (participants) {
+      for (const pid of participants) {
+        if (this.participantToClient.get(pid) === ws) {
+          this.participantToClient.delete(pid);
+        }
+      }
+      this.clientToParticipants.delete(ws);
+    }
+    // Peer-only sockets are tracked for the sweep but never had a userId, so
+    // the userId block above won't have cleared their activity entry.
+    if (!userId) this.clientLastActivity.delete(ws);
   }
 
   /** Refresh activity timestamp for a known socket. Called on any message. */
   touchClient(ws: ServerWebSocket<unknown>): void {
-    if (this.clientToUser.has(ws)) {
+    if (this.clientToUser.has(ws) || this.clientToRooms.has(ws)) {
       this.clientLastActivity.set(ws, Date.now());
     }
   }
@@ -127,6 +178,122 @@ class EventBus {
     } catch {
       // Socket may already be closed
     }
+  }
+
+  // ─── Multiplayer rooms ─────────────────────────────────────────────────
+
+  /**
+   * Attach a socket to a room. For peer (room-token) sockets this is the ONLY
+   * subscription they get — they never see user:/system topics. The socket is
+   * registered in the activity sweep so idle peer connections are reclaimed.
+   */
+  subscribeClientToRoom(
+    ws: ServerWebSocket<unknown>,
+    roomId: string,
+    participantId: string,
+    opts?: { feed?: boolean },
+  ): void {
+    try {
+      ws.subscribe(getRoomTopic(roomId));
+      // Peers also subscribe to the feed topic (re-broadcast chat/gen events).
+      // The host does NOT — it gets those on its user topic already.
+      if (opts?.feed) ws.subscribe(getRoomFeedTopic(roomId));
+    } catch {
+      // Socket may already be closed
+    }
+
+    let rooms = this.clientToRooms.get(ws);
+    if (!rooms) {
+      rooms = new Set();
+      this.clientToRooms.set(ws, rooms);
+    }
+    rooms.add(roomId);
+
+    let participants = this.clientToParticipants.get(ws);
+    if (!participants) {
+      participants = new Set();
+      this.clientToParticipants.set(ws, participants);
+    }
+    participants.add(participantId);
+    this.participantToClient.set(participantId, ws);
+
+    this.clientLastActivity.set(ws, Date.now());
+    this.startSweep();
+  }
+
+  unsubscribeClientFromRoom(
+    ws: ServerWebSocket<unknown>,
+    roomId: string,
+    participantId: string,
+  ): void {
+    try {
+      ws.unsubscribe(getRoomTopic(roomId));
+      ws.unsubscribe(getRoomFeedTopic(roomId));
+    } catch {
+      // Socket may already be closed
+    }
+    this.clientToRooms.get(ws)?.delete(roomId);
+    this.clientToParticipants.get(ws)?.delete(participantId);
+    if (this.participantToClient.get(participantId) === ws) {
+      this.participantToClient.delete(participantId);
+    }
+  }
+
+  /**
+   * Publish an event ONLY to a room topic. Unlike `emit`, this does NOT fire
+   * in-process listeners — so the multiplayer fan-out (which re-broadcasts
+   * MESSAGE_SENT / STREAM_TOKEN_RECEIVED / GENERATION_* into a room) cannot
+   * recurse back into its own listener.
+   */
+  /** Subscribe to every room broadcast (lifecycle + feed). For the relay bridge. */
+  onRoomBroadcast(fn: (roomId: string, event: EventType, payload: any) => void): () => void {
+    this.roomBroadcastListeners.add(fn);
+    return () => this.roomBroadcastListeners.delete(fn);
+  }
+
+  private fireRoomBroadcast(roomId: string, event: EventType, payload: any): void {
+    for (const fn of this.roomBroadcastListeners) {
+      try {
+        fn(roomId, event, payload);
+      } catch (err) {
+        console.error("[bus] roomBroadcast listener error:", err);
+      }
+    }
+  }
+
+  publishToRoom(roomId: string, event: EventType, payload: any = {}): void {
+    if (this.server) {
+      const message: EventMessage = { event, payload, timestamp: Date.now() };
+      this.server.publish(getRoomTopic(roomId), JSON.stringify(message));
+    }
+    this.fireRoomBroadcast(roomId, event, payload);
+  }
+
+  /**
+   * Publish to the room FEED topic (peers only) — used by the fan-out to
+   * re-broadcast chat/generation events without double-delivering to the host.
+   */
+  publishToRoomFeed(roomId: string, event: EventType, payload: any = {}): void {
+    if (this.server) {
+      const message: EventMessage = { event, payload, timestamp: Date.now() };
+      this.server.publish(getRoomFeedTopic(roomId), JSON.stringify(message));
+    }
+    this.fireRoomBroadcast(roomId, event, payload);
+  }
+
+  /** Force-close a specific participant's socket (kick / ban / room close). */
+  disconnectParticipant(participantId: string, code = 1000, reason = ""): void {
+    const ws = this.participantToClient.get(participantId);
+    if (!ws) return;
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Already closed
+    }
+  }
+
+  isParticipantConnected(participantId: string): boolean {
+    return this.participantToClient.has(participantId);
   }
 
   // ─── Sweep ───────────────────────────────────────────────────────────
@@ -173,6 +340,21 @@ class EventBus {
     return () => this.listeners.get(event)?.delete(listener);
   }
 
+  private flushListenerDispatches(): void {
+    this.listenerDispatchTimer = null;
+    const pending = this.pendingListenerDispatches.splice(0, this.pendingListenerDispatches.length);
+    for (const run of pending) run();
+    if (this.pendingListenerDispatches.length > 0) {
+      this.listenerDispatchTimer = setTimeout(() => this.flushListenerDispatches(), 0);
+    }
+  }
+
+  private scheduleListenerDispatch(task: () => void): void {
+    this.pendingListenerDispatches.push(task);
+    if (this.listenerDispatchTimer) return;
+    this.listenerDispatchTimer = setTimeout(() => this.flushListenerDispatches(), 0);
+  }
+
   emit(
     event: EventType,
     payload: any = {},
@@ -200,7 +382,7 @@ class EventBus {
     const eventListeners = this.listeners.get(event);
     if (eventListeners) {
       for (const listener of eventListeners) {
-        queueMicrotask(() => {
+        this.scheduleListenerDispatch(() => {
           try {
             listener(message);
           } catch (err) {

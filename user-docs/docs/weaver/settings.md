@@ -1,3 +1,7 @@
+---
+title: Settings
+---
+
 # Settings
 
 The gear in the studio home's header opens the Weaver settings. Every field here **overrides an engine default** — a blank field means "use the default," and the default is always visible as the field's placeholder, so you can see exactly what you're changing. Clear a field and save to go back to stock.

@@ -10,7 +10,7 @@ Standalone `<style>` blocks not inside a wrapper element are extracted together 
 
 ## Markdown inside widget elements
 
-Plain text inside `<button>`, `<h1>`–`<h6>`, `<select>`, `<option>`, `<textarea>`, `<label>`, and `<summary>` is not reparsed as block-level markdown — lines starting with `+`, `-`, `*`, or `#` render as the literal characters rather than being converted into lists or nested headings, while inline emphasis, inline code, and links still work as expected.
+Block markdown is only re-applied when text sits directly inside block containers such as `<div>`, `<section>`, `<article>`, `<blockquote>`, `<li>`, or table cells. Text inside phrasing-only or inline containers like `<span>`, `<a>`, `<strong>`, `<em>`, `<label>`, `<button>`, headings, paragraphs, and form controls is rendered with inline markdown only, so leading `+`, `-`, `*`, or `#` stay literal instead of turning into nested lists or headings that would break the surrounding HTML.
 
 ## Opting out with `data-no-island`
 

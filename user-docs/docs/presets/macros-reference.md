@@ -1,3 +1,7 @@
+---
+title: Macros Reference
+---
+
 # Macros Reference
 
 Macros are template variables written as `{{macro_name}}` that get replaced with dynamic content when your preset is assembled into a prompt. This is the complete reference of the built-in macros available in Lumiverse.
@@ -120,7 +124,7 @@ Utility macros for text manipulation and flow control.
 {{/if}}
 ```
 
-The condition can be any value — it's truthy unless it's empty, `"0"`, `"false"`, `"null"`, or `"undefined"`.
+The condition can be any value — it's truthy unless it's empty, `"0"`, `"false"`, `"null"`, `"undefined"`, `"no"`, or `"off"` (case-insensitive for the named falsy values).
 
 Only the selected branch is resolved. Side-effect macros in the unselected branch do not run.
 
@@ -138,6 +142,30 @@ Only the selected branch is resolved. Side-effect macros in the unselected branc
 {{if::{{.score}} == 100}}perfect!{{/if}}
 ```
 
+**Else-if chains** — use `{{elseif}}` or `{{elif}}` to avoid deeply nested `if` blocks:
+
+```
+{{if::{{groupCardMode}} == solo}}
+Solo chat rules.
+{{elseif::{{groupCardMode}} == swap}}
+Focused group-member rules.
+{{elseif::{{groupCardMode}} == merge_ignore_muted}}
+Merged non-muted group rules.
+{{else}}
+Merged group rules.
+{{/if}}
+```
+
+**Unless** — invert a condition at the block level:
+
+```
+{{unless::{{isGroupChat}}}}
+Only include this in solo chats.
+{{else}}
+Only include this in group chats.
+{{/unless}}
+```
+
 **Variable shorthand** — `.var`, `$var`, and `@var` resolve automatically in conditions:
 
 ```
@@ -145,6 +173,230 @@ Only the selected branch is resolved. Side-effect macros in the unselected branc
 {{if .x > .y}}x is bigger{{/if}}
 {{if !.gameOver}}still playing{{/if}}
 {{if @hp > 0}}still alive{{/if}}
+```
+
+!!! note "Resolution limits"
+    Macro resolution is guarded by a work budget rather than a shallow nesting-depth cap. Deep finite macro chains can resolve beyond 1000 levels, but runaway recursion or explosive expansion is stopped with diagnostics. Individual generators such as `{{repeat}}`, `{{range}}`, and iteration macros still cap item counts at 1000 to keep prompt assembly bounded.
+
+---
+
+## Iteration
+
+### `{{foreach}}`
+
+Repeat a block of content once for each item in a list — the macro equivalent of a JavaScript `forEach`. The list is a single string that is split on a delimiter (`,` by default); each item is trimmed and blank items are dropped.
+
+```
+{{foreach::apple, banana, cherry}}
+- {{.item}}
+{{/foreach}}
+```
+
+produces:
+
+```
+- apple
+- banana
+- cherry
+```
+
+**Custom loop variable** — the second argument renames the loop variable (default `item`):
+
+```
+{{foreach::Alice,Bob::name}}{{.name}} is here. {{/foreach}}
+```
+
+**Custom delimiter** — the third argument changes the split character. Pass an empty delimiter (`::`) to treat the whole string as a single item:
+
+```
+{{foreach::a|b|c::item::|}}{{.item}} {{/foreach}}    — splits on "|"
+```
+
+Inside the body, these loop variables are available (replace `item` with your variable name):
+
+| Variable | Value |
+|----------|-------|
+| `{{.item}}` | The current item |
+| `{{.item_index}}` | 0-based position (`0`, `1`, `2`, …) |
+| `{{.item_number}}` | 1-based position (`1`, `2`, `3`, …) |
+| `{{.item_count}}` | Total number of items |
+| `{{.item_first}}` | `"true"` on the first item, otherwise empty |
+| `{{.item_last}}` | `"true"` on the last item, otherwise empty |
+
+**Numbered list:**
+
+```
+{{foreach::Sword,Shield,Potion::loot}}{{.loot_number}}. {{.loot}}{{newline}}{{/foreach}}
+```
+
+**Comma-joined list** — use `{{.x_last}}` to skip the trailing separator:
+
+```
+{{foreach::a,b,c::x}}{{.x}}{{if::!{{.x_last}}}}, {{/if}}{{/foreach}}    — "a, b, c"
+```
+
+`{{foreach}}` pairs naturally with any macro that returns a delimited list, such as `{{players}}` or `{{group}}`:
+
+```
+{{foreach::{{players}}}}- {{.item}}{{newline}}{{/foreach}}
+```
+
+!!! note "Good to know"
+    - The loop variable is scoped to the loop: its previous value (if any) is restored when the loop ends, so it never clobbers a variable of the same name used elsewhere.
+    - Loops can be nested — give the inner loop a different variable name.
+    - Iteration is capped at 1000 items.
+
+### `{{range}}`
+
+Generate a numeric sequence as a comma-separated list — ideal for counted loops.
+
+```
+{{range::5}}              — "1, 2, 3, 4, 5"   (1..n inclusive)
+{{range::3::6}}           — "3, 4, 5, 6"      (start..end inclusive)
+{{range::1::10::2}}       — "1, 3, 5, 7, 9"   (with a step)
+{{range::5::1}}           — "5, 4, 3, 2, 1"   (counts down)
+```
+
+Feed it into `{{foreach}}` for indexed repetition:
+
+```
+{{foreach::{{range::1::{{playerCount}}}}::n}}Round {{.n}}…{{newline}}{{/foreach}}
+```
+
+### `{{filter}}`
+
+Keep only the list items whose body — an `{{if}}`-style condition — is truthy, returning a comma-separated list. The body sees the same loop variables as `{{foreach}}` (`{{.item}}`, `{{.item_index}}`, …).
+
+```
+{{filter::1,2,3,4::n}}{{gt::{{.n}}::2}}{{/filter}}                  — "3, 4"
+{{filter::{{players}}::p}}{{ne::{{.p}}::{{hostName}}}}{{/filter}}    — everyone but the host
+```
+
+### `{{map}}` / `{{collect}}`
+
+Transform each item in a list and return the transformed values as a delimited list. It uses the same loop bindings and hygiene as `{{foreach}}`.
+
+```
+{{map::a,b,c::x}}{{upper::{{.x}}}}{{/map}}          — "A, B, C"
+```
+
+Arguments:
+
+| Position | Meaning | Default |
+|----------|---------|---------|
+| 1 | Input list | Required |
+| 2 | Loop variable name | `item` |
+| 3 | Input delimiter | `,` |
+| 4 | Output delimiter | `, ` |
+
+```
+{{map::Alice|Bob|Cara::name::|:: / }}{{.name_number}}={{.name}}{{/map}}
+```
+
+produces:
+
+```
+1=Alice / 2=Bob / 3=Cara
+```
+
+### `{{some}}` / `{{every}}`
+
+Test whether **any** (`{{some}}`) or **all** (`{{every}}`) items satisfy a predicate. Both return `"true"` / `""`, are usable as conditions, and short-circuit. `{{every}}` is vacuously `"true"` for an empty list.
+
+```
+{{if::{{some::{{players}}::p}}{{eq::{{.p}}::Bob}}{{/some}}}}Bob is here.{{/if}}
+{{if::{{every::{{range::1::5}}::n}}{{gt::{{.n}}::0}}{{/every}}}}all positive{{/if}}
+```
+
+### `{{foreachMessage}}`
+
+Loop over the chat history, resolving the body once per message — for custom transcripts, pulling out a speaker's lines, or scanning recent turns.
+
+```
+{{foreachMessage}}{{.msg_name}}: {{.msg}}{{newline}}{{/foreachMessage}}
+{{foreachMessage::5}}…{{/foreachMessage}}            — only the last 5 messages
+{{foreachMessage::5::m}}…{{.m}}…{{/foreachMessage}}  — last 5, body variable "m"
+```
+
+A **numeric** first argument iterates the last N messages (oldest-first); a **non-numeric** first argument is the loop variable name (default `msg`). Body bindings (replace `msg`):
+
+| Variable | Value |
+|----------|-------|
+| `{{.msg}}` | Message content |
+| `{{.msg_name}}` | Author name |
+| `{{.msg_is_user}}` | `"true"` for a user message, otherwise empty |
+| `{{.msg_index}}` / `{{.msg_number}}` / `{{.msg_count}}` | Position and total |
+| `{{.msg_first}}` / `{{.msg_last}}` | Edge flags (`"true"` / `""`) |
+
+```
+{{foreachMessage::10::m}}{{if::{{.m_is_user}}}}> {{.m}}{{newline}}{{/if}}{{/foreachMessage}}    — the user's recent lines
+```
+
+### `{{foreachVar}}` / `{{foreachChatVar}}` / `{{foreachGlobalVar}}`
+
+Loop over the variables in a scope whose name starts with a prefix — the way to render a **dynamic state table** when you don't know the keys ahead of time. `{{foreachVar}}` reads local (`.`) variables, `{{foreachChatVar}}` reads chat-persisted (`@`) variables, and `{{foreachGlobalVar}}` reads global (`$`) variables. Items are visited in alphabetical key order.
+
+```
+{{@hp_Alice = 100}}{{@hp_Bob = 80}}
+{{foreachChatVar::hp_::p}}{{.p}}: {{.p_value}} HP{{newline}}{{/foreachChatVar}}
+```
+
+produces:
+
+```
+Alice: 100 HP
+Bob: 80 HP
+```
+
+Body bindings (replace `item`): `{{.item}}` is the name **after** the prefix, `{{.item_key}}` is the full variable name, `{{.item_value}}` is its value, plus the usual `{{.item_index}}` / `{{.item_number}}` / `{{.item_count}}` / `{{.item_first}}` / `{{.item_last}}`.
+
+---
+
+## Lists
+
+Query and transform comma-separated lists. These compose with the iteration macros and with anything that returns a list (`{{players}}`, `{{group}}`, `{{range}}`). Input is split on commas (items trimmed, blanks dropped); list-returning macros emit a clean `, `-separated list, so the family round-trips.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{count::list}}` | `{{listLength}}` | Number of items |
+| `{{includes::list::item}}` | `{{contains}}`, `{{inList}}` | `"true"` / `""` — whole-item membership (condition-compatible) |
+| `{{nth::list::i}}` | `{{at}}` | Item at index `i` (0-based; negative counts from the end) |
+| `{{first::list}}` | — | First item |
+| `{{last::list}}` | — | Last item |
+| `{{slice::list::start::end}}` | — | Sublist (`end` exclusive and optional; negatives allowed). `{{slice::list::-3}}` → last 3 |
+| `{{take::list::n}}` | — | First `n` items (negative `n` → last `|n|`) |
+| `{{sort::list::dir}}` | — | Sorted; numeric when every item is a number, else alphabetical. `dir` = `asc` (default) or `desc` |
+| `{{unique::list}}` | `{{dedupe}}`, `{{distinct}}` | Duplicates removed (first occurrence kept) |
+| `{{reverseList::list}}` | — | Items in reverse order |
+| `{{shuffle::list}}` | — | Items in random order |
+
+**Examples:**
+
+```
+{{count::{{players}}}}                        — how many players
+{{if::{{includes::{{group}}::Bob}}}}…{{/if}}   — gate on membership
+{{first::{{sort::10,2,30}}}}                   — "2" (numeric sort → smallest)
+{{slice::{{players}}::-2}}                      — the last two players
+{{unique::{{sort::b,a,b,c}}}}                   — "a, b, c"
+```
+
+!!! note "Delimiters"
+    The Lists macros operate on **comma-separated** lists — the form every list-producing macro emits. To bring in data with another delimiter, parse it through `{{foreach}}`'s delimiter argument or normalise it first with `{{replace}}`.
+
+### Numeric reductions
+
+Reduce a list of numbers to a single value (non-numeric items are ignored).
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{sum::list}}` | — | Total (`0` for an empty list) |
+| `{{avg::list}}` | `{{mean}}`, `{{average}}` | Mean (empty when there are no numbers) |
+| `{{listMax::list}}` | `{{list_max}}` | Largest number |
+| `{{listMin::list}}` | `{{list_min}}` | Smallest number |
+
+```
+{{sum::{{range::1::10}}}}                                            — "55"
+{{avg::{{foreachChatVar::hp_::p}}{{.p_value}},{{/foreachChatVar}}}}   — average party HP
 ```
 
 ---
@@ -161,12 +413,46 @@ Macros for character and user identity.
 | `{{groupNotMuted}}` | `{{group_not_muted}}` | Names of non-muted group members |
 | `{{notChar}}` | `{{not_char}}` | The non-character party (usually the user) |
 | `{{charGroupFocused}}` | `{{charFocused}}`, `{{char_group_focused}}` | The targeted character in a group chat |
+| `{{charGroupFocusedDescription}}` | `{{charFocusedDescription}}`, `{{char_group_focused_description}}` | The focused group character's description |
+| `{{charGroupFocusedPersonality}}` | `{{charFocusedPersonality}}`, `{{char_group_focused_personality}}` | The focused group character's personality |
 | `{{isGroupChat}}` | `{{is_group_chat}}` | `"yes"` or `"no"` — usable as a condition |
 | `{{isNarrator}}` | `{{is_narrator}}` | `"yes"` or `"no"` — whether the active persona is a narrator (not a self-insert) |
 | `{{groupOthers}}` | `{{group_others}}` | Group members excluding the focused character |
 | `{{groupMemberCount}}` | `{{group_member_count}}` | Number of characters in the group |
 | `{{groupLastSpeaker}}` | `{{group_last_speaker}}` | Last character who spoke |
 | `{{groupCardMode}}` | `{{group_card_mode}}` | Card composition mode: `"solo"`, `"swap"`, `"merge"`, or `"merge_ignore_muted"` |
+
+---
+
+## Multiplayer
+
+State about the current multiplayer room. Outside a room every macro returns a safe "not multiplayer" value (`{{isMultiplayer}}` → `"no"`, counts → `0`, names → empty), so presets can reference them unconditionally. Names match what you see on messages: a player's persona name if they set one, otherwise their display name.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{isMultiplayer}}` | `{{is_multiplayer}}`, `{{is_multiplayer_room}}` | `"yes"` or `"no"` — usable as a condition |
+| `{{playerCount}}` | `{{player_count}}`, `{{players_count}}` | Number of active players (host + peers) |
+| `{{players}}` | `{{player_names}}` | Comma-separated names of all active players (host first) |
+| `{{hostName}}` | `{{host_name}}` | Display name of the room's host |
+| `{{currentPlayer}}` | `{{current_player}}`, `{{current_turn}}` | Name of the player whose turn it is (round-robin rooms; empty in freeform) |
+
+**Gate room-only content** so it costs nothing in solo chats:
+
+```
+{{if::{{isMultiplayer}}}}
+This is a group session with {{playerCount}} players: {{players}}.
+It is currently {{currentPlayer}}'s turn.
+{{/if}}
+```
+
+**Enumerate the roster** with `{{foreach}}`:
+
+```
+{{if::{{isMultiplayer}}}}
+Players in the room:
+{{foreach::{{players}}::player}}{{.player_number}}. {{.player}}{{newline}}{{/foreach}}
+{{/if}}
+```
 
 ---
 
@@ -194,6 +480,35 @@ Macros that pull from the character card fields. These respect [alternate field]
 | `{{firstMessage}}` | `{{firstMes}}`, `{{first_message}}` | Character's first/greeting message |
 | `{{original}}` | — | Character description (original card text) |
 
+### Character Tags
+
+Macros that read the current character card's tags — categorical labels such as `Fantasy`, `Warrior`, `OC`, or `Female`.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{charTags}}` | `{{characterTags}}`, `{{char_tags}}`, `{{tags}}` | Comma-separated list of all the character's tags |
+| `{{tag::index}}` | `{{tagAt}}`, `{{tag_at}}`, `{{charTagAt}}`, `{{nthTag}}` | Single tag at a 0-based index (negative counts from the end); empty if out of range |
+| `{{tagCount}}` | `{{tag_count}}`, `{{tags_count}}`, `{{numTags}}`, `{{charTagCount}}` | Number of tags |
+| `{{randomTag}}` | `{{random_tag}}`, `{{randomCharTag}}` | One randomly chosen tag (empty if the character has none) |
+| `{{hasTag::name}}` | `{{charTag}}`, `{{char_tag}}`, `{{has_tag}}`, `{{tagged}}` | `"true"` if the character has the tag (case-insensitive), else empty — usable as a condition |
+
+```
+{{charTags}}                         — "Fantasy, Warrior, Male"
+{{tagCount}}                         — "3"
+{{tag::0}}                           — "Fantasy" (first tag)
+{{tag::-1}}                          — "Male" (last tag)
+{{hasTag::warrior}}                  — "true" (case-insensitive)
+{{randomTag}}                        — one of the tags at random
+
+{{if::{{hasTag::villain}}}}The character is a villain.{{/if}}
+{{foreach::{{charTags}}::t}}- {{.t}}{{newline}}{{/foreach}}
+{{count::{{charTags}}}}              — same as {{tagCount}}
+{{includes::{{charTags}}::Warrior}}  — "true"
+```
+
+!!! tip "Composing with Lists"
+    `{{charTags}}` returns the same clean comma-separated list form used by the [Lists](#lists) macros, so it feeds directly into `{{count}}`, `{{first}}`, `{{includes}}`, `{{foreach}}`, `{{slice}}`, and the rest of the Lists/Iteration family. Use `{{hasTag}}` when you need a condition-friendly gate for tag-specific content. Like the rest of the list family, these macros split on commas, so a tag label that itself contains a comma is treated as two entries.
+
 ---
 
 ## Chat & Conversation
@@ -205,6 +520,7 @@ Macros for the current chat state.
 | `{{lastMessage}}` | `{{last_message}}` | Content of the most recent message |
 | `{{lastMessageId}}` | `{{last_message_id}}` | Index of the last message |
 | `{{lastUserMessage}}` | `{{last_user_message}}` | Content of the last message from you |
+| `{{userInput}}` | `{{user_input}}` | Exact input-bar draft captured when the generation began; empty for generations not started from the input bar |
 | `{{lastCharMessage}}` | `{{last_char_message}}`, `{{lastBotMessage}}` | Content of the last character message |
 | `{{lastMessageName}}` | — | Name of whoever sent the last message |
 | `{{messageCount}}` | `{{message_count}}`, `{{messagecount}}` | Total message count in the chat |
@@ -213,6 +529,7 @@ Macros for the current chat state.
 | `{{firstDisplayedMessageId}}` | — | Index of the first displayed message |
 | `{{lastSwipeId}}` | — | Index of the last swipe on the final message |
 | `{{currentSwipeId}}` | — | Index of the active swipe |
+| `{{rejectedSwipe}}` | `{{rejectedGeneration}}`, `{{regeneratedMessage}}` | Content of the regenerate/swipe target before the new swipe was staged; empty otherwise |
 
 ---
 
@@ -337,6 +654,27 @@ Composable boolean logic and multi-branch conditionals.
 | `{{switch::value::c1::r1::c2::r2::default}}` | — | Matching result, or default | Value, then case/result pairs, optional default |
 | `{{default::value::fallback}}` | `{{fallback}}`, `{{coalesce}}` | First truthy value | Primary value, fallback |
 
+`{{switch}}` also has a scoped block form for larger branches:
+
+```
+{{switch::{{groupCardMode}}}}
+{{case::solo}}
+Solo chat instructions.
+{{/case}}
+{{case::swap}}
+Focused group-member instructions.
+{{/case}}
+{{case::merge::merge_ignore_muted}}
+Merged group instructions.
+{{/case}}
+{{default}}
+Fallback instructions.
+{{/default}}
+{{/switch}}
+```
+
+Only the matching `{{case}}` body, or the `{{default}}` body, is resolved.
+
 ### Boolean Operators
 
 | Macro | Returns | Args |
@@ -356,6 +694,18 @@ Composable boolean logic and multi-branch conditionals.
 | `{{gte::a::b}}` | `"true"` if a >= b |
 | `{{lte::a::b}}` | `"true"` if a <= b |
 
+### Predicate Helpers
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{empty::value}}` | `{{isEmpty}}` | `"true"` when the value is exactly empty |
+| `{{blank::value}}` | `{{isBlank}}` | `"true"` when the value is empty or whitespace-only |
+| `{{number::value}}` | `{{isNumber}}`, `{{numeric}}` | `"true"` for finite numbers |
+| `{{integer::value}}` | `{{isInteger}}`, `{{int}}` | `"true"` for integer strings |
+| `{{matches::text::pattern::flags}}` | — | `"true"` when `text` matches a regex pattern |
+| `{{startsWith::text::prefix}}` | `{{starts_with}}` | `"true"` when `text` starts with `prefix` |
+| `{{endsWith::text::suffix}}` | `{{ends_with}}` | `"true"` when `text` ends with `suffix` |
+
 **Examples:**
 
 ```
@@ -369,6 +719,14 @@ Composable boolean logic and multi-branch conditionals.
 
 {{if::{{gt::{{messageCount}}::50}}}}
   This is a long conversation.
+{{/if}}
+
+{{if::{{blank::{{.optional_note}}}}}}
+  No note was provided.
+{{/if}}
+
+{{if::{{matches::{{lastUserMessage}}::\\bhelp\\b::i}}}}
+  The user asked for help.
 {{/if}}
 ```
 
@@ -401,7 +759,7 @@ Include internal thoughts
 
 ## Chat Utilities
 
-Access individual messages, track state, and query character metadata.
+Access individual messages, track state, and query chat metadata.
 
 | Macro | Aliases | Returns | Args |
 |-------|---------|---------|------|
@@ -410,8 +768,6 @@ Access individual messages, track state, and query character metadata.
 | `{{chatAge}}` | `{{chat_age}}` | Human-readable time since chat creation | — |
 | `{{counter::name}}` | — | Incremented value (1, 2, 3...) | Counter name (stored as local variable) |
 | `{{toggle::name}}` | — | Flipped boolean (`"true"` ↔ `"false"`) | Toggle name (stored as local variable) |
-| `{{charTags}}` | `{{char_tags}}`, `{{characterTags}}` | Comma-separated list of the character's tags | — |
-| `{{charTag::tag}}` | `{{char_tag}}`, `{{hasTag}}`, `{{has_tag}}` | `"true"` / `"false"` — whether character has this tag | Tag name (case-insensitive) |
 | `{{rcounter::name}}` | — | Render-scoped counter (resets each prompt build, never persisted) | Counter name; optional second arg `reset` to zero it |
 
 **Examples:**
@@ -423,10 +779,6 @@ Access individual messages, track state, and query character metadata.
 
 {{counter::scene_count}}          — auto-incrementing scene counter
 {{toggle::narrator_mode}}         — flip between narrator on/off
-
-{{if::{{charTag::fantasy}}}}
-Include world-building details.
-{{/if}}
 
 This chat started {{chatAge}} ago.
 ```
@@ -483,10 +835,21 @@ Local variables live for the duration of a single evaluation pass. They are usef
 | `{{decvar::key}}` | Decrement by 1 (returns new value) | Variable name |
 | `{{hasvar::key}}` | Check if variable exists (`"true"` / `"false"`) | Variable name |
 | `{{deletevar::key}}` | Delete a variable | Variable name |
+| `{{let::key::value}}...{{/let}}` | Temporarily bind local variables for the scoped body, then restore previous values | Pairs of name/value arguments |
 
-Aliases: `{{varexists}}` for `{{hasvar}}`, `{{flushvar}}` for `{{deletevar}}`
+Aliases: `{{varexists}}` for `{{hasvar}}`, `{{flushvar}}` for `{{deletevar}}`, `{{withVar}}` / `{{scope}}` for `{{let}}`
 
 **Shorthand:** `.` prefix — `{{.myVar}}`, `{{.score = 100}}`, `{{.counter++}}`
+
+**Scoped temporary variables:**
+
+```
+{{let::speaker::{{char}}::tone::quiet}}
+Write {{.speaker}} with a {{.tone}} voice.
+{{/let}}
+```
+
+`{{let}}` is hygienic: if a local variable already existed, its previous value is restored after the block; if it did not exist, it is removed after the block.
 
 ### Chat-Persisted Variables
 
@@ -636,6 +999,32 @@ Information about the current system state.
 | `{{hasExtension::name}}` | `{{has_extension}}` | `"true"` / `"false"` — whether a named extension is active |
 | `{{userColorMode}}` | `{{user_color_mode}}`, `{{colorMode}}`, `{{color_mode}}` | User's color scheme (`dark`, `light`, or `system`) |
 
+### Prompt Block Placement
+
+These read-only macros report the **effective placement** of the preset block currently being rendered. If that block uses a [Placement Selector](prompt-variables.md#placement-selector), they reflect the user's saved Dropdown choice; otherwise they reflect the block's ordinary configuration.
+
+| Macro | Aliases | Returns |
+|-------|---------|---------|
+| `{{promptBlockRole}}` | `{{blockRole}}`, `{{prompt_block_role}}` | Current block role: `system`, `user`, `assistant`, `user_append`, or `assistant_append` |
+| `{{promptBlockPosition}}` | `{{blockPosition}}`, `{{prompt_block_position}}` | Current block position: `pre_history`, `post_history`, or `in_history` |
+| `{{promptBlockDepth}}` | `{{blockDepth}}`, `{{prompt_block_depth}}` | Current block depth as a number (including `0`) |
+
+They resolve to an empty string outside preset-block rendering, such as in a free-form macro preview. They only report placement; they cannot move or modify a block.
+
+**Example — adapt wording to placement:**
+
+```
+{{if::{{promptBlockPosition}} == in_history}}
+This is an in-history reminder. Treat it as context attached near the conversation.
+{{else}}
+This is a top-level instruction block.
+{{/if}}
+
+{{if::{{promptBlockRole}} == system}}
+Follow these instructions at the system level.
+{{/if}}
+```
+
 ---
 
 ## Reasoning / Chain-of-Thought
@@ -774,12 +1163,13 @@ Macros for the Loom narrative system.
 
 ## Condition-Compatible Macros
 
-These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed for use with `{{if}}`:
+These macros return condition-friendly truthy/falsy values (such as `"yes"` / `"no"` or `"true"` / empty) and are designed for use with `{{if}}`:
 
 | Macro | True When |
 |-------|-----------|
 | `{{isGroupChat}}` | Chat has multiple characters |
 | `{{isNarrator}}` | Active persona is marked as a narrator |
+| `{{isMultiplayer}}` | Chat is a multiplayer room |
 | `{{lumiaCouncilModeActive}}` | Council mode is enabled |
 | `{{lumiaCouncilToolsActive}}` | Council tools ran this generation |
 | `{{loomSovHandActive}}` | Sovereign Hand mode is on |
@@ -790,13 +1180,16 @@ These macros return `"yes"` / `"no"` or `"true"` / `"false"` and are designed fo
 | `{{haschatvar::key}}` | Chat-persisted variable exists |
 | `{{hasgvar::key}}` | Global variable exists |
 | `{{hasPromptVar::name}}` | A prompt variable is available |
+| `{{hasTag::name}}` | Character has the given tag (case-insensitive) |
 | `{{var::name::ison::keyA,keyB}}` | All listed option keys are selected on a multi-select prompt variable |
-| `{{charTag::tag}}` | Character has the specified tag |
 | `{{regexInstalled::id}}` | Regex script with that ID is installed and enabled |
 | `{{and::a::b}}` | All arguments are truthy |
 | `{{or::a::b}}` | Any argument is truthy |
 | `{{not::value}}` | Value is falsy |
 | `{{eq::a::b}}` / `{{gt}}` / `{{lt}}` / etc. | Comparison is true |
+| `{{includes::list::item}}` | List contains the item |
+| `{{some::list::var}}…{{/some}}` | Any list item satisfies the predicate |
+| `{{every::list::var}}…{{/every}}` | All list items satisfy the predicate |
 
 **Usage:**
 
@@ -806,7 +1199,7 @@ Council deliberation results:
 {{lumiaCouncilDeliberation}}
 {{/if}}
 
-{{if::{{and::{{charTag::fantasy}}::{{gt::{{messageCount}}::5}}}}}}
+{{if::{{and::{{hasTag::fantasy}}::{{gt::{{messageCount}}::5}}}}}}
 The adventure is well underway.
 {{/if}}
 ```
@@ -832,6 +1225,15 @@ The adventure is well underway.
 
 !!! tip "`{{switch}}` for multi-branch logic"
     Instead of nested if/else chains, use `{{switch::{{.mood}}::happy::cheerful tone::sad::somber tone::neutral tone}}`.
+
+!!! tip "`{{foreach}}` over lists"
+    Any macro that returns a comma-separated list — `{{players}}`, `{{group}}`, a `{{.var}}` you built up — can be fed straight into `{{foreach}}`: `{{foreach::{{players}}::p}}{{.p_number}}. {{.p}}{{newline}}{{/foreach}}`. Wrap multiplayer-only content in `{{if::{{isMultiplayer}}}}` so it stays out of solo chats.
+
+!!! tip "Shape lists before you loop"
+    The `{{sort}}`, `{{unique}}`, `{{filter}}`, `{{slice}}`, and `{{take}}` macros all return lists, so they chain: `{{foreach::{{unique::{{sort::{{group}}}}}}::name}}…{{/foreach}}` loops a sorted, de-duplicated roster. Use `{{count}}` / `{{includes}}` / `{{some}}` / `{{every}}` to gate on a list without looping at all.
+
+!!! tip "Dynamic state tables"
+    Track per-entity state with prefixed chat variables — `{{@hp_Alice = 100}}`, `{{@hp_Bob = 80}}` — then render or aggregate the whole table without hard-coding names: `{{foreachChatVar::hp_::p}}{{.p}}: {{.p_value}}{{newline}}{{/foreachChatVar}}` to list it, or `{{sum::{{foreachChatVar::hp_::p}}{{.p_value}},{{/foreachChatVar}}}}` to total it. Combine with `{{foreachMessage}}` to drive state from the conversation.
 
 !!! tip "`{{wrap}}` for conditional formatting"
     `{{wrap}}` only outputs if the content is non-empty — `{{wrap::(**::**)::{{.note}}}}` produces nothing when the note is unset, avoiding stray delimiters.

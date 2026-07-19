@@ -28,7 +28,7 @@ export default function GlobalAddonsLibraryModal() {
       .then((res) => setAddons(res.data))
       .catch(() => toast.error(t('loadFailed')))
       .finally(() => setLoading(false))
-  }, [])
+  }, [t])
 
   const debouncedUpdate = useCallback((id: string, input: Partial<{ label: string; content: string }>) => {
     const existing = saveTimers.current.get(id)
@@ -42,7 +42,7 @@ export default function GlobalAddonsLibraryModal() {
       }
       saveTimers.current.delete(id)
     }, 300))
-  }, [])
+  }, [t])
 
   const handleAdd = useCallback(async () => {
     try {
@@ -51,7 +51,7 @@ export default function GlobalAddonsLibraryModal() {
     } catch {
       toast.error(t('createFailed'))
     }
-  }, [addons.length])
+  }, [addons.length, t])
 
   const handleDelete = useCallback(async (id: string) => {
     setDeleteTarget(null)
@@ -61,7 +61,7 @@ export default function GlobalAddonsLibraryModal() {
     } catch {
       toast.error(t('deleteFailed'))
     }
-  }, [])
+  }, [t])
 
   const handleDuplicate = useCallback(async (id: string) => {
     try {
@@ -70,7 +70,7 @@ export default function GlobalAddonsLibraryModal() {
     } catch {
       toast.error(t('duplicateFailed'))
     }
-  }, [])
+  }, [t])
 
   const handleLabelChange = useCallback((id: string, label: string) => {
     setAddons((prev) => prev.map((a) => a.id === id ? { ...a, label } : a))

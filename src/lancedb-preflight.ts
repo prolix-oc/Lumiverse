@@ -1,17 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { env } from "./env";
+import { isTermuxLikeEnvironment } from "./utils/termux";
 
 const NATIVE_BINARY_VERSION = "0.29.0";
-
-function isTermuxLikeEnvironment(): boolean {
-  return Boolean(process.env.TERMUX_VERSION)
-    || process.env.LUMIVERSE_IS_TERMUX === "true"
-    || process.env.LUMIVERSE_IS_PROOT === "true"
-    || process.env.PREFIX?.startsWith("/data/data/com.termux/") === true
-    || process.env.HOME?.startsWith("/data/data/com.termux/files/home") === true
-    || env.dataDir.startsWith("/data/data/com.termux/");
-}
 
 function needsDownload(binaryPath: string, stampPath: string): boolean {
   if (!existsSync(binaryPath)) return true;

@@ -1,3 +1,7 @@
+---
+title: Imports
+---
+
 # Imports
 
 The Import door brings existing material into the studio: a character card you downloaded, or a worldbook you've built up elsewhere. An import isn't a separate pipeline — it pre-fills the Bible from your file and then runs the **same** stages as any build, so everything in [Studio Workflow](studio-workflow.md) applies. The difference is where the material comes from: instead of a dream, the Weaver reads your file.

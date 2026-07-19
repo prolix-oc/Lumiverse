@@ -1,10 +1,12 @@
-import { useRef, useCallback, useState } from 'react'import { useTranslation } from 'react-i18next'
-
+import { useRef, useCallback, useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { DockPanelState } from '@/store/slices/spindle-placement'
 import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import { resolveDockPanelEdge } from '@/lib/spindle/dock-placement'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
+import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 import styles from './SpindleDockPanel.module.css'
 import clsx from 'clsx'
 
@@ -12,9 +14,7 @@ interface Props {
   panel: DockPanelState
 }
 
-export default function SpindleDockPanel({
- panel }: Props) {
-  const { t } = useTranslation('spindle')
+export default function SpindleDockPanel({ panel }: Props) {
   const { t: tc } = useTranslation('common')
   const updateDockPanel = useStore((s) => s.updateDockPanel)
   const unregisterDockPanel = useStore((s) => s.unregisterDockPanel)
@@ -25,6 +25,7 @@ export default function SpindleDockPanel({
   const resizing = useRef(false)
   const startPos = useRef(0)
   const startSize = useRef(panel.size)
+  const contentHostRef = useRef<HTMLDivElement | null>(null)
 
   const effectiveEdge = resolveDockPanelEdge(panel.edge, dockPanelDesktopSide, isMobile)
   const effectiveHorizontal = effectiveEdge === 'left' || effectiveEdge === 'right'
@@ -66,6 +67,19 @@ export default function SpindleDockPanel({
     resizing.current = false
     updateDockPanel(panel.id, { size: currentSize })
   }, [updateDockPanel, panel.id, currentSize])
+
+  useEffect(() => {
+    const host = contentHostRef.current
+    if (!host || panel.collapsed) return
+
+    return scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(panel.extensionId, panel.root)) return
+      if (!host.isConnected) return
+      if (!host.contains(panel.root)) {
+        host.replaceChildren(panel.root)
+      }
+    }, { phase: 'paint' })
+  }, [panel.collapsed, panel.extensionId, panel.root])
 
   const CollapseIcon = (() => {
     if (panel.collapsed) {
@@ -119,11 +133,7 @@ export default function SpindleDockPanel({
 
       {!panel.collapsed && (
         <>
-          <div className={styles.content} ref={(el) => {
-            if (el && !el.contains(panel.root)) {
-              el.replaceChildren(panel.root)
-            }
-          }} />
+          <div className={styles.content} ref={contentHostRef} />
 
           {panel.resizable && (
             <div

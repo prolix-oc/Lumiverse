@@ -1,3 +1,7 @@
+---
+title: Expressions
+---
+
 # Expressions
 
 Expressions are visual emotion sprites that change dynamically as the conversation progresses. When enabled, the character's portrait updates to reflect their current mood — smiling when happy, frowning when upset, blushing when embarrassed.

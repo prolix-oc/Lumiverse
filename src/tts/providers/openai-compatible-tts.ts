@@ -103,15 +103,16 @@ export abstract class OpenAICompatibleTtsProvider implements TtsProvider {
       throw new Error(`${this.name}: no response body for streaming`);
     }
 
+    const mimeType = res.headers.get("content-type") || "audio/mpeg";
     const reader = res.body.getReader();
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          yield { data: new Uint8Array(0), done: true };
+          yield { data: new Uint8Array(0), done: true, kind: "bytes", mimeType };
           break;
         }
-        yield { data: value, done: false };
+        yield { data: value, done: false, kind: "bytes", mimeType };
       }
     } finally {
       reader.cancel().catch(() => {});

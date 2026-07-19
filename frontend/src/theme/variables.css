@@ -95,6 +95,12 @@
 
   /* Card backgrounds */
   --lumiverse-card-bg: linear-gradient(165deg, rgba(28, 24, 38, 1) 0%, rgba(24, 20, 34, 1) 50%, rgba(20, 17, 30, 1) 100%);
+  /* Solid color extracted from --lumiverse-card-bg for use inside other
+     gradients (CSS can't interpolate a gradient-valued variable as a color
+     stop). Uses the mid-stop color. */
+  --lumiverse-card-bg-solid: rgb(24, 20, 34);
+  --lumiverse-card-bg-top: rgb(28, 24, 38);
+  --lumiverse-card-bg-bottom: rgb(20, 17, 30);
   --lumiverse-card-image-bg: linear-gradient(135deg, rgba(20, 17, 28, 1) 0%, rgba(28, 22, 40, 1) 100%);
 
   /* Neutral borders */

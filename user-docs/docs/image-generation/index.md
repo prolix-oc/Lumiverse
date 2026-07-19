@@ -1,3 +1,7 @@
+---
+title: Image Generation
+---
+
 # Image Generation
 
 Lumiverse generates scene illustrations, character shots, and chat attachments from your conversations. It can run a hands-off **Scene tool** that watches your chat and refreshes the background as the setting shifts, or accept a **custom prompt** you write yourself — with full preset and macro support.

@@ -1,4 +1,6 @@
 import { registry } from "../MacroRegistry";
+import type { AstNode, ScopedMacroNode } from "../types";
+import { isConditionTruthy } from "../conditions";
 
 export function registerLogicMacros(): void {
   registry.registerMacro({
@@ -13,6 +15,10 @@ export function registerLogicMacros(): void {
     delayArgResolution: true,
     handler: async (ctx) => {
       const value = (await resolveArg(ctx, 0)).trim();
+      if (ctx.isScoped && ctx.bodyRaw.length > 0) {
+        return await resolveScopedSwitch(ctx, value);
+      }
+
       // Args after the first come in case/result pairs; odd remainder is the default
       for (let i = 1; i + 1 < ctx.rawArgs.length; i += 2) {
         if ((await resolveArg(ctx, i)).trim() === value) {
@@ -31,6 +37,17 @@ export function registerLogicMacros(): void {
   registry.registerMacro({
     builtIn: true,
     terminal: true,
+    name: "case",
+    category: "Logic",
+    description: "Case block marker for scoped {{switch}} blocks",
+    returnType: "string",
+    delayArgResolution: true,
+    handler: () => "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
     name: "default",
     category: "Logic",
     description: "Return the first truthy value, or the fallback",
@@ -42,6 +59,9 @@ export function registerLogicMacros(): void {
     ],
     aliases: ["fallback", "coalesce"],
     handler: async (ctx) => {
+      if (ctx.isScoped && ctx.rawArgs.length === 0) {
+        return await ctx.resolveNodes(ctx.bodyRaw);
+      }
       const value = await resolveArg(ctx, 0);
       if (isTruthy(value)) return value;
       return await resolveArg(ctx, 1);
@@ -95,6 +115,111 @@ export function registerLogicMacros(): void {
     handler: (ctx) => {
       return isTruthy(ctx.args[0] ?? "") ? "" : "true";
     },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "empty",
+    category: "Logic",
+    description: "Returns 'true' when the value is exactly empty",
+    returnType: "boolean",
+    aliases: ["isEmpty"],
+    args: [{ name: "value", description: "Value to test" }],
+    handler: (ctx) => (ctx.args[0] ?? "") === "" ? "true" : "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "blank",
+    category: "Logic",
+    description: "Returns 'true' when the value is empty or whitespace-only",
+    returnType: "boolean",
+    aliases: ["isBlank"],
+    args: [{ name: "value", description: "Value to test" }],
+    handler: (ctx) => (ctx.args[0] ?? "").trim() === "" ? "true" : "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "number",
+    category: "Logic",
+    description: "Returns 'true' when the value is a finite number",
+    returnType: "boolean",
+    aliases: ["isNumber", "numeric"],
+    args: [{ name: "value", description: "Value to test" }],
+    handler: (ctx) => {
+      const value = (ctx.args[0] ?? "").trim();
+      return value !== "" && Number.isFinite(Number(value)) ? "true" : "";
+    },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "integer",
+    category: "Logic",
+    description: "Returns 'true' when the value is an integer",
+    returnType: "boolean",
+    aliases: ["isInteger", "int"],
+    args: [{ name: "value", description: "Value to test" }],
+    handler: (ctx) => {
+      const value = (ctx.args[0] ?? "").trim();
+      return /^[-+]?\d+$/.test(value) ? "true" : "";
+    },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "matches",
+    category: "Logic",
+    description: "Returns 'true' when text matches a regular expression",
+    returnType: "boolean",
+    args: [
+      { name: "text", description: "Text to test" },
+      { name: "pattern", description: "Regular expression pattern" },
+      { name: "flags", optional: true, description: "Regex flags" },
+    ],
+    handler: (ctx) => {
+      try {
+        return new RegExp(ctx.args[1] ?? "", ctx.args[2] ?? "").test(ctx.args[0] ?? "") ? "true" : "";
+      } catch {
+        return "";
+      }
+    },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "startsWith",
+    category: "Logic",
+    description: "Returns 'true' when text starts with prefix",
+    returnType: "boolean",
+    aliases: ["starts_with"],
+    args: [
+      { name: "text", description: "Text to test" },
+      { name: "prefix", description: "Prefix" },
+    ],
+    handler: (ctx) => (ctx.args[0] ?? "").startsWith(ctx.args[1] ?? "") ? "true" : "",
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    terminal: true,
+    name: "endsWith",
+    category: "Logic",
+    description: "Returns 'true' when text ends with suffix",
+    returnType: "boolean",
+    aliases: ["ends_with"],
+    args: [
+      { name: "text", description: "Text to test" },
+      { name: "suffix", description: "Suffix" },
+    ],
+    handler: (ctx) => (ctx.args[0] ?? "").endsWith(ctx.args[1] ?? "") ? "true" : "",
   });
 
   registry.registerMacro({
@@ -213,9 +338,7 @@ export function registerLogicMacros(): void {
 }
 
 function isTruthy(value: string): boolean {
-  if (!value) return false;
-  const v = value.trim();
-  return v !== "" && v !== "0" && v !== "false" && v !== "null" && v !== "undefined";
+  return isConditionTruthy(value.trim());
 }
 
 async function resolveArg(
@@ -224,4 +347,35 @@ async function resolveArg(
 ): Promise<string> {
   const nodes = ctx.rawArgs[index] ?? [];
   return String(await Promise.resolve(ctx.resolveNodes(nodes)));
+}
+
+async function resolveScopedSwitch(
+  ctx: {
+    bodyRaw: AstNode[];
+    resolveNodes: (nodes: AstNode[]) => string | Promise<string>;
+  },
+  value: string,
+): Promise<string> {
+  let defaultBody: AstNode[] | null = null;
+
+  for (const node of ctx.bodyRaw) {
+    if (node.type !== "scoped_macro") continue;
+    const scoped = node as ScopedMacroNode;
+    const name = scoped.name.toLowerCase();
+
+    if (name === "case") {
+      for (const arg of scoped.args) {
+        if ((await ctx.resolveNodes(arg)).trim() === value) {
+          return String(await Promise.resolve(ctx.resolveNodes(scoped.body)));
+        }
+      }
+      continue;
+    }
+
+    if (name === "default") {
+      defaultBody = scoped.body;
+    }
+  }
+
+  return defaultBody ? String(await Promise.resolve(ctx.resolveNodes(defaultBody))) : "";
 }

@@ -9,6 +9,7 @@ import { chatsApi } from '@/api/chats'
 import { presetsApi } from '@/api/presets'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
+import type { GroupResponseOrder } from '@/lib/groupResponseOrder'
 import type { Character, Chat, PresetRegistryItem, VoiceRef } from '@/types/api'
 import styles from './GroupChatCreatorModal.module.css'
 
@@ -29,6 +30,7 @@ function readVoiceRef(value: unknown): VoiceRef | null {
 }
 
 type GroupCardMode = 'swap' | 'merge_ignore_muted' | 'merge'
+type GroupLorebookMode = 'follow_card_mode' | 'active_character' | 'all_unmuted' | 'all'
 
 export default function GroupSettingsModal() {
   const { t } = useTranslation('modals', { keyPrefix: 'groupSettings' })
@@ -51,7 +53,7 @@ export default function GroupSettingsModal() {
   const chatId = modalProps?.chatId ?? ''
   const metadata = modalProps?.metadata ?? {}
   const isGroup = metadata.group === true
-  const characterIds: string[] = metadata.character_ids ?? []
+  const characterIds = useMemo(() => (metadata.character_ids ?? []) as string[], [metadata.character_ids])
   // Single-character chats hang voice overrides off the chat's owning
   // character. The modal opens for the active chat, so activeCharacterId is
   // a reliable proxy when this isn't a group.
@@ -81,6 +83,16 @@ export default function GroupSettingsModal() {
       ? metadata.group_card_mode
       : 'swap'
   )
+  const [groupLorebookMode, setGroupLorebookMode] = useState<GroupLorebookMode>(
+    metadata.group_lorebook_mode === 'active_character'
+      || metadata.group_lorebook_mode === 'all_unmuted'
+      || metadata.group_lorebook_mode === 'all'
+      ? metadata.group_lorebook_mode
+      : 'follow_card_mode'
+  )
+  const [groupResponseOrder, setGroupResponseOrder] = useState<GroupResponseOrder>(
+    metadata.group_response_order === 'random' ? 'random' : 'sequential'
+  )
 
   const existingOverride = metadata.group_scenario_override ?? {}
   const [scenarioMode, setScenarioMode] = useState<'individual' | 'member' | 'custom'>(
@@ -95,9 +107,12 @@ export default function GroupSettingsModal() {
   // ── Voice overrides ──────────────────────────────────────────────────
   // Only exposed in single-character chats. Group chats use the member-bar
   // context menu to set per-member overrides individually.
-  const initialVoiceOverrides = metadata.voiceOverrides && typeof metadata.voiceOverrides === 'object'
-    ? metadata.voiceOverrides as Record<string, any>
-    : {}
+  const initialVoiceOverrides = useMemo(
+    () => metadata.voiceOverrides && typeof metadata.voiceOverrides === 'object'
+      ? metadata.voiceOverrides as Record<string, any>
+      : {},
+    [metadata.voiceOverrides],
+  )
   const [narratorOverride, setNarratorOverride] = useState<VoiceRef | null>(
     readVoiceRef(initialVoiceOverrides.narrator),
   )
@@ -154,6 +169,8 @@ export default function GroupSettingsModal() {
       if (isGroup) {
         metadataPatch.talkativeness_overrides = talkativenessOverrides
         metadataPatch.group_card_mode = groupCardMode === 'swap' ? null : groupCardMode
+        metadataPatch.group_lorebook_mode = groupLorebookMode === 'follow_card_mode' ? null : groupLorebookMode
+        metadataPatch.group_response_order = groupResponseOrder === 'sequential' ? null : groupResponseOrder
         metadataPatch.group_scenario_override = scenarioMode !== 'individual'
           ? {
               mode: scenarioMode,
@@ -194,7 +211,7 @@ export default function GroupSettingsModal() {
     } finally {
       setSaving(false)
     }
-  }, [saving, chatId, groupName, impersonationPresetId, isGroup, talkativenessOverrides, groupCardMode, scenarioMode, scenarioMemberId, scenarioCustom, chatCharacter, characterOverride, narratorOverride, initialVoiceOverrides, setActiveChatMetadata, modalProps, closeModal])
+  }, [saving, chatId, groupName, impersonationPresetId, isGroup, talkativenessOverrides, groupCardMode, groupLorebookMode, groupResponseOrder, scenarioMode, scenarioMemberId, scenarioCustom, chatCharacter, characterOverride, narratorOverride, initialVoiceOverrides, setActiveChatMetadata, modalProps, closeModal])
 
   return (
     <ModalShell isOpen={true} onClose={closeModal} maxWidth={520}>
@@ -291,6 +308,38 @@ export default function GroupSettingsModal() {
                 </select>
                 <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
                   {t('cardMacrosHint')}
+                </div>
+              </div>
+
+              <div className={styles.fieldGroup}>
+                <label className={styles.fieldLabel}>{t('groupLorebooks')}</label>
+                <select
+                  className={styles.fieldInput}
+                  value={groupLorebookMode}
+                  onChange={(e) => setGroupLorebookMode(e.target.value as GroupLorebookMode)}
+                >
+                  <option value="follow_card_mode">{t('lorebookModeFollow')}</option>
+                  <option value="active_character">{t('lorebookModeActive')}</option>
+                  <option value="all_unmuted">{t('lorebookModeAllUnmuted')}</option>
+                  <option value="all">{t('lorebookModeAll')}</option>
+                </select>
+                <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
+                  {t('groupLorebooksHint')}
+                </div>
+              </div>
+
+              <div className={styles.fieldGroup}>
+                <label className={styles.fieldLabel}>{t('groupResponseOrder')}</label>
+                <select
+                  className={styles.fieldInput}
+                  value={groupResponseOrder}
+                  onChange={(e) => setGroupResponseOrder(e.target.value as GroupResponseOrder)}
+                >
+                  <option value="sequential">{t('responseOrderSequential')}</option>
+                  <option value="random">{t('responseOrderRandom')}</option>
+                </select>
+                <div style={{ fontSize: 'calc(11px * var(--lumiverse-font-scale, 1))', color: 'var(--lumiverse-text-dim)', lineHeight: 1.45 }}>
+                  {t('groupResponseOrderHint')}
                 </div>
               </div>
 

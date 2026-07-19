@@ -46,7 +46,11 @@
     "searchFolders": "搜索文件夾…",
     "none": "無",
     "folderNamePlaceholder": "文件夾名稱…",
-    "createNew": "新建文件夾…"
+    "createNew": "新建文件夾…",
+    "renameFolder": "重新命名 {{name}}",
+    "deleteFolder": "刪除 {{name}}",
+    "confirmRename": "確認重新命名",
+    "cancelRename": "取消重新命名"
   },
   "imageLightbox": {
     "loadFailed": "圖片加載失敗",

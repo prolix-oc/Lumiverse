@@ -63,6 +63,7 @@ RUN echo "ca-refresh: ${CA_REFRESH}" \
     && apt-get install --no-install-recommends --no-install-suggests -y \
          git \
          ca-certificates \
+         smartmontools \
     && update-ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -78,8 +79,9 @@ WORKDIR /app
 # Backend dependencies
 COPY --from=backend-deps /app/node_modules ./node_modules
 
-# Built frontend
+# Built frontend assets + manifest used by spindle.version.getFrontend()
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+COPY --from=frontend-build /app/frontend/package.json ./frontend/package.json
 
 # Backend source
 COPY package.json ./

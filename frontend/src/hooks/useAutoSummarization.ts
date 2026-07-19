@@ -6,6 +6,7 @@ import {
   shouldAutoSummarize,
 } from '@/lib/summary/service'
 import { generateApi } from '@/api/generate'
+import { scheduleLowPriorityTask } from '@/lib/low-priority-task'
 
 /**
  * Always-mounted auto-summarization trigger. Lives at the App root so it runs
@@ -153,6 +154,6 @@ export function useAutoSummarization() {
       }
     }
 
-    queueMicrotask(kickoff)
+    scheduleLowPriorityTask(kickoff, { label: 'auto summarization kickoff' })
   }, [activeChatId, messageCount, mode, autoInterval, isStreaming, lastGenerationType])
 }

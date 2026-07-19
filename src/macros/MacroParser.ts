@@ -309,7 +309,7 @@ function pairScopedMacros(nodes: AstNode[]): AstNode[] {
         const scoped: ScopedMacroNode = {
           type: "scoped_macro",
           name: node.name,
-          args: node.args,
+          args: pairArgs(node.args), // pair scoped macros nested in arguments
           flags: node.flags,
           body: pairScopedMacros(bodyNodes), // recurse into body
           raw: node.raw,
@@ -319,6 +319,12 @@ function pairScopedMacros(nodes: AstNode[]): AstNode[] {
         i = closingIdx + 1;
         continue;
       }
+      // Open macro with no matching close tag — keep it as a plain macro, but
+      // still pair any scoped macros nested inside its arguments (e.g.
+      // {{count::{{filter::...}}...{{/filter}}}}).
+      result.push(node.args.length > 0 ? { ...node, args: pairArgs(node.args) } : node);
+      i++;
+      continue;
     }
 
     // Skip standalone close tags (orphaned)
@@ -332,6 +338,12 @@ function pairScopedMacros(nodes: AstNode[]): AstNode[] {
   }
 
   return result;
+}
+
+/** Pair scoped macros within each argument's node list. */
+function pairArgs(args: AstNode[][]): AstNode[][] {
+  if (args.length === 0) return args;
+  return args.map((arg) => pairScopedMacros(arg));
 }
 
 function findClosingMacro(nodes: AstNode[], startIdx: number, name: string): number {

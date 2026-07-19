@@ -1,3 +1,7 @@
+---
+title: Long-Term Memory
+---
+
 # Long-Term Memory
 
 Long-term memory gives the AI the ability to recall relevant moments from earlier in the conversation — even if those moments have long since scrolled out of the context window. It works by chunking your chat history into vectors and retrieving the most relevant pieces on each generation.

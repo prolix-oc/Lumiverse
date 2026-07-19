@@ -1,10 +1,11 @@
 import { betterAuth } from "better-auth";
-import { username, admin, bearer } from "better-auth/plugins";
+import { username, admin, bearer, genericOAuth } from "better-auth/plugins";
 import { getDb } from "../db/connection";
 import { env } from "../env";
 import { provisionUserDirectories } from "./provision";
 import { seedDefaultPreset } from "./default-preset";
 import { getAllowedOrigins } from "../services/trusted-hosts.service";
+import { listEnabledSsoAuthConfigs } from "../services/sso-providers.service";
 
 // ─── Signup gate ────────────────────────────────────────────────────────
 // All signups are blocked unless a valid nonce is presented.
@@ -33,6 +34,22 @@ function consumeNonce(expectedNonce: string | null): boolean {
 }
 
 // ─── BetterAuth instance ────────────────────────────────────────────────
+
+let ssoConfigs: ReturnType<typeof listEnabledSsoAuthConfigs> = [];
+try {
+  ssoConfigs = listEnabledSsoAuthConfigs();
+  if (ssoConfigs.length > 0) {
+    console.log(`[Auth] Registered ${ssoConfigs.length} owner-configured SSO provider${ssoConfigs.length === 1 ? "" : "s"}.`);
+    for (const provider of ssoConfigs) {
+      console.log(`[Auth] SSO ${provider.providerId} redirect URI: ${provider.redirectURI}`);
+    }
+  }
+} catch (err) {
+  // This can happen in tests that import auth before migrations have run.
+  // In production the table exists, so surface it as a warning rather than crash.
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`[Auth] Could not load SSO providers at startup: ${message}`);
+}
 
 export const auth = betterAuth({
   database: getDb(),
@@ -70,8 +87,31 @@ export const auth = betterAuth({
         owner: {} as any,
       },
     }),
+    ...(ssoConfigs.length > 0
+      ? [genericOAuth({
+          config: ssoConfigs.map((provider) => ({
+            providerId: provider.providerId,
+            clientId: provider.clientId,
+            clientSecret: provider.clientSecret,
+            discoveryUrl: provider.discoveryUrl,
+            redirectURI: provider.redirectURI,
+            scopes: provider.scopes,
+            pkce: provider.pkce,
+            disableImplicitSignUp: true,
+            disableSignUp: true,
+          })),
+        })]
+      : []),
     bearer(),
   ],
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ssoConfigs.map((provider) => provider.providerId),
+      allowDifferentEmails: true,
+      disableImplicitLinking: true,
+    },
+  },
   databaseHooks: {
     user: {
       create: {
@@ -82,16 +122,22 @@ export const auth = betterAuth({
           }
         },
         after: async (user) => {
-          // BetterAuth swallows hook exceptions, so a failed directory
-          // provision used to leave the operator without any signal that
-          // the user couldn't write to disk. Surface the failure to the
-          // log instead of silently dropping it.
+          // BetterAuth swallows hook exceptions, so surface directory or
+          // preset-seed failures independently instead of dropping the user
+          // into a half-provisioned state with no signal in the logs.
           try {
             provisionUserDirectories(user.id);
-            seedDefaultPreset(user.id);
           } catch (err) {
             console.error(
-              `[Auth] Failed to provision user ${user.id}:`,
+              `[Auth] Failed to provision directories for user ${user.id}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+          try {
+            seedDefaultPreset(user.id, { setActive: true });
+          } catch (err) {
+            console.error(
+              `[Auth] Failed to seed default preset for user ${user.id}:`,
               err instanceof Error ? err.message : err,
             );
           }

@@ -1,3 +1,7 @@
+---
+title: Exporting Your Data
+---
+
 # Exporting Your Data
 
 Bundle your entire account into a single `.lvbak` archive you can download, archive, or move to another Lumiverse instance.

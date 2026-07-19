@@ -1,3 +1,7 @@
+---
+title: Extensions
+---
+
 # Extensions
 
 Lumiverse supports extensions through **Spindle**, an isolated extension runtime. Extensions can add new features, modify behavior, and integrate with external services — all sandboxed inside a Bun Worker with a permission-gated RPC bridge to the rest of the app.

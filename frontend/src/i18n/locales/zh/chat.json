@@ -43,7 +43,7 @@
     "backHome": "返回主页",
     "regenerate": "重新生成",
     "continue": "继续",
-    "sendAsPersona": "以人设身份发送下一条消息",
+    "sendAsPersona": "为此聊天切换人设",
     "personaAddons": "人设附加项",
     "personaAddonsCustomized": "人设附加项 — 已为本聊天定制",
     "guidedGenerations": "引导生成",
@@ -63,6 +63,11 @@
     "stopGeneration": "停止生成",
     "sendMessage": "发送消息",
     "sendMessageQueueHint": "发送消息（{{mod}}+点击 加入队列）",
+    "sendMessageTouchQueueHint": "发送消息（长按可加入队列）",
+    "holdToQueue": "长按加入队列",
+    "keepHoldingToQueue": "继续长按以加入队列",
+    "releaseToQueue": "松开即可加入队列",
+    "queueingMessage": "正在加入队列…",
     "sendQueuedMessages": "发送队列中的消息",
     "nudgeFreshReply": "轻推以获取新回复",
     "processingSpeech": "正在处理语音",
@@ -81,18 +86,36 @@
     "modCmd": "Cmd",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "在聊天中查找",
+    "placeholder": "在聊天中查找…",
+    "clear": "清除查找文本",
+    "previous": "上一个结果",
+    "next": "下一个结果",
+    "close": "关闭查找",
+    "matchCount": "第 {{current}} 个，共 {{total}} 个",
+    "noMatches": "没有结果",
+    "loading": "正在查找…",
+    "searchFailed": "无法搜索此聊天"
+  },
   "quickMenu": {
     "noGuidedGenerations": "未配置引导生成。",
+    "disableAllGuidedGenerations": "禁用全部引导生成",
     "manageInSettings": "在设置中管理",
     "noQuickReplySets": "没有已启用的快捷回复集。",
     "untitledReply": "未命名回复",
-    "clearOneShotPersona": "清除一次性人设",
+    "clearOneShotPersona": "清除此聊天的人设",
     "noPersonas": "暂无可用人设。",
     "manageChats": "管理聊天",
     "manageConnections": "管理连接",
     "noConnections": "暂无可用连接。",
     "groupSettings": "群组设置",
     "chatSettings": "聊天设置",
+    "promptVariables": "提示词变量",
+    "promptVariablesFor": "更改 {{name}} 的取值",
+    "promptVariablesActivePreset": "更改当前所选预设的取值",
+    "promptVariablesSelectPreset": "选择预设后即可更改提示词变量",
+    "loadingPromptVariables": "正在加载提示词变量...",
     "convertToGroupChat": "转为群聊",
     "newGroupChat": "新建群聊",
     "authorsNote": "作者附注",
@@ -159,6 +182,7 @@
     "creatingChatCortex": "正在创建聊天并在后台准备记忆皮层…",
     "failedCreateChat": "创建聊天失败",
     "failedStartNewChat": "开始新聊天失败",
+    "failedDeleteChat": "删除此聊天失败",
     "failedOpenChat": "打开聊天失败",
     "characterImported": "已导入「{{name}}」",
     "importFailed": "导入失败",
@@ -194,7 +218,11 @@
     "noMemoryRebuildNeeded": "此聊天无需重建记忆。",
     "failedRecompileMemories": "重新编译记忆失败",
     "chatDocuments": "聊天文档",
-    "chatDocumentsNamed": "{{name}} 聊天"
+    "chatDocumentsNamed": "{{name}} 聊天",
+    "failedSaveChatPersona": "无法保存此聊天的人设",
+    "noPresetForPromptVariables": "请先选择预设，再更改提示词变量",
+    "failedLoadPromptVariables": "加载提示词变量失败",
+    "failedSavePromptVariables": "保存提示词变量失败"
   },
   "addGroupMember": {
     "title": "添加群组成员",
@@ -362,7 +390,9 @@
     "fork": {
       "title": "分叉聊天",
       "message": "从此消息创建新的聊天分支？将复制此点之前的所有消息。",
-      "confirm": "分叉"
+      "confirm": "分叉",
+      "nameLabel": "聊天名称（可选）",
+      "namePlaceholder": "留空可使用自动生成的名称"
     },
     "delete": {
       "title": "删除",
@@ -375,5 +405,11 @@
       "message": "这将永久从聊天中移除此消息。",
       "confirm": "删除"
     }
+  },
+  "newChatConfirm": {
+    "title": "开始新聊天",
+    "message": "确定要开始新聊天吗？",
+    "confirm": "开始新聊天",
+    "deleteThisChat": "删除此聊天"
   }
 }

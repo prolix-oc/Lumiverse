@@ -9,6 +9,7 @@ import { useStore } from '@/store'
 import { packsApi } from '@/api/packs'
 import styles from './LoomSelector.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface LoomSelectorProps {
   category: LoomItemCategory
@@ -157,9 +158,10 @@ export default function LoomSelector({ category, onClose }: LoomSelectorProps) {
             placeholder={t('searchPlaceholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => clearSearchOnEscape(e, searchTerm, () => setSearchTerm(''))}
           />
           {searchTerm && (
-            <button className={styles.searchClear} onClick={() => setSearchTerm('')}>
+            <button type="button" className={styles.searchClear} onClick={() => setSearchTerm('')} aria-label={tc('actions.clear')}>
               <XCircle size={14} />
             </button>
           )}

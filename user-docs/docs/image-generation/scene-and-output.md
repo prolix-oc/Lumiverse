@@ -1,3 +1,7 @@
+---
+title: Scene, Output & Timeouts
+---
+
 # Scene, Output & Timeouts
 
 How Lumiverse decides _when_ to generate, _where_ the result goes, and how long it's allowed to take.

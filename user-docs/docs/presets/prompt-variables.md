@@ -1,3 +1,7 @@
+---
+title: Prompt Variables
+---
+
 # Prompt Variables
 
 Prompt Variables allow preset creators to expose customizable inputs to end users without requiring them to edit raw prompt block text or touch any macros. 
@@ -56,6 +60,26 @@ In your block, just write:
 ```
 
 The user picks `Warm` from the dropdown; the prompt receives the full warm-tone instruction.
+
+### Placement Selector
+
+A **Dropdown** on a block can also choose where that *same block* is inserted. This is useful when a preset needs a small set of model- or adherence-oriented modes without asking users to edit the block itself.
+
+1. Add a Dropdown variable to the block and define its options.
+2. In the block's **Prompt Variables** section, enable **Placement selector**.
+3. Choose that Dropdown as the controlling variable, then configure a **Role**, **Position**, and, when needed, **Depth** for each option.
+
+For example, a Dropdown named `adherence_target` might offer these profiles:
+
+| Option | Role | Position | Depth |
+|--------|------|----------|-------|
+| `Balanced` | `system` | Before Chat History | — |
+| `Frontier` | `user` | Within Chat History | `0` |
+| `Deep reminder` | `system` | Within Chat History | `3` |
+
+Only Dropdowns can control placement, and the variable must belong to the block it controls. The option's normal **value** still works with `{{var::...}}`; its placement profile is configured separately.
+
+When a user selects and saves an option in **Configure Prompt Variables**, the block uses that option's placement on the next prompt build. The Loom block-list role badge also reflects the saved selection. If a selection or profile is unavailable, Lumiverse uses the block's ordinary Role, Position, and Depth as the safe fallback.
 
 ### On / Off
 
@@ -172,6 +196,8 @@ Clicking this opens the **Prompt Variables Modal**.
 The modal aggregates all variables from the preset, but **it only shows variables for blocks that are currently enabled**.
 
 If you disable a prompt block (for instance, turning off a specific "Action Sequences" module), any Prompt Variables attached to that block will disappear from the modal. This ensures users are never confused by settings that are inactive.
+
+For a Dropdown configured as a **Placement selector**, the modal also shows the Role, Position, and applicable Depth that the currently selected option will use. Save your choice to apply it to the preset.
 
 ### Resetting Values
 

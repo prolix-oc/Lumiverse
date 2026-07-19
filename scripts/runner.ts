@@ -36,10 +36,12 @@ function pickRandomGoodbyeLine(lines: string[]): string {
 // ─── Bun version gate ───────────────────────────────────────────────────────
 // Checked before anything else so the operator sees a clear message.
 {
-  const [M = 0, m = 0, p = 0] = Bun.version.split(".").map(Number);
-  if (M < 1 || (M === 1 && (m < 3 || (m === 3 && p < 3)))) {
-    console.error(`\n  Bun ${Bun.version} is too old — Lumiverse requires Bun >= 1.3.3.`);
-    console.error("  Update: curl -fsSL https://bun.sh/install | bash\n");
+  const [M = 0, m = 0, p = 0] = Bun.version
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+  if (M < 1 || (M === 1 && (m < 3 || (m === 3 && p < 13)))) {
+    console.error(`\n  Bun ${Bun.version} is too old — Lumiverse requires Bun >= 1.3.13.`);
+    console.error(`  Update with ${process.platform === "win32" ? ".\\start.ps1" : "./start.sh"}.\n`);
     process.exit(1);
   }
 }

@@ -38,6 +38,8 @@ import type {
   DatabankDocumentCreateDTO,
   DatabankDocumentUpdateDTO,
   PersonaDTO,
+  GlobalAddonDTO,
+  GlobalAddonUpdateDTO,
   PersonaCreateDTO,
   PersonaUpdateDTO,
   CouncilSettings,
@@ -61,6 +63,7 @@ import type {
   CortexResultDTO,
   CortexUsageStatsDTO,
   LinkedCortexResultDTO,
+  AssemblyBreakdownEntryDTO,
   MemoryConsolidationDTO,
   MemoryCortexConfigDTO,
   MemoryEntityDTO,
@@ -75,13 +78,25 @@ import type {
   VaultReindexResultDTO,
   VaultWithContentsDTO,
 } from "lumiverse-spindle-types";
+import type {
+  MediaConvertAudioRequestDTO,
+  MediaConvertVideoRequestDTO,
+  MediaTranscodeVideoRequestDTO,
+  MediaRemoveAudioFromVideoRequestDTO,
+  MediaAddAudioToVideoRequestDTO,
+  MediaCreateVideoFromImageAndAudioRequestDTO,
+  MediaTransformResultDTO,
+} from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
+import { deserializeWorkerResponseError } from "./worker-response-error";
+import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
   assertValidSharedRpcEndpoint,
   normalizeOwnedSharedRpcEndpoint,
 } from "./shared-rpc";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Preset, CreatePresetInput, UpdatePresetInput, PromptBlock } from "../types/preset";
+import type { LumiaDlcCatalog } from "../types/pack";
 
 const nativeProcessExit = process.exit.bind(process);
 
@@ -99,6 +114,21 @@ type TokenCountResult = {
 type PromptBlockCategoryGroup = {
   categoryBlock: PromptBlock | null;
   children: PromptBlock[];
+};
+
+type AssembleRequest = {
+  blocks: PromptBlock[];
+  chatId: string;
+  connectionId?: string;
+  personaId?: string;
+  generationType?: string;
+  promptVariables?: Record<string, Record<string, string | number | string[]>>;
+  signal?: AbortSignal;
+};
+
+type AssembleResult = {
+  messages: LlmMessageDTO[];
+  breakdown: AssemblyBreakdownEntryDTO[];
 };
 
 type FrontendProcessState =
@@ -229,6 +259,14 @@ type SpindleUserRole = "operator" | "admin" | "user";
 
 type RuntimeWorkerToHost =
   | WorkerToHost
+  | { type: "dlc_get_catalog"; requestId: string; userId?: string }
+  | {
+      type: "assemble_prompt";
+      requestId: string;
+      input: Omit<AssembleRequest, "signal">;
+      userId?: string;
+    }
+  | { type: "register_context_handler"; priority?: number; timeoutMs?: number }
   | {
       type: "chat_append_message";
       requestId: string;
@@ -275,6 +313,8 @@ type RuntimeWorkerToHost =
   | { type: "preset_blocks_update"; requestId: string; presetId: string; blockId: string; input: Partial<Omit<PromptBlock, "id">>; userId?: string }
   | { type: "preset_blocks_delete"; requestId: string; presetId: string; blockId: string; userId?: string }
   | { type: "preset_categories_list"; requestId: string; presetId: string; userId?: string }
+  | { type: "uploads_get"; requestId: string; uploadId: string; userId?: string }
+  | { type: "uploads_delete"; requestId: string; uploadId: string; userId?: string }
   | {
       type: "tokens_count_text";
       requestId: string;
@@ -343,6 +383,13 @@ type RuntimeWorkerToHost =
   | { type: "images_upload"; requestId: string; input: ImageUploadDTO; userId?: string }
   | { type: "images_upload_from_data_url"; requestId: string; dataUrl: string; originalFilename?: string; userId?: string }
   | { type: "images_delete"; requestId: string; imageId: string; userId?: string }
+  | { type: "images_delete_many"; requestId: string; imageIds: string[]; userId?: string }
+  | { type: "media_audio_convert"; requestId: string; input: MediaConvertAudioRequestDTO }
+  | { type: "media_video_convert"; requestId: string; input: MediaConvertVideoRequestDTO }
+  | { type: "media_video_transcode"; requestId: string; input: MediaTranscodeVideoRequestDTO }
+  | { type: "media_video_remove_audio"; requestId: string; input: MediaRemoveAudioFromVideoRequestDTO }
+  | { type: "media_video_add_audio"; requestId: string; input: MediaAddAudioToVideoRequestDTO }
+  | { type: "media_video_from_image_audio"; requestId: string; input: MediaCreateVideoFromImageAndAudioRequestDTO }
   | { type: "register_message_content_processor"; priority?: number }
   | {
       type: "message_content_processor_result";
@@ -468,17 +515,43 @@ type RuntimeHostToWorker =
       requestId: string;
       ctx: unknown;
     }
+  | {
+      type: "permission_changed";
+      extensionId?: string;
+      permission: string;
+      granted: boolean;
+      allGranted: string[];
+    }
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
 
 // `presets` is replaced wholesale (not intersected) because the local
-// PromptBlock type adds variants (select, switch, multiselect) that the
-// published PromptBlockDTO doesn't carry. Intersection would require the
-// implementation to satisfy both shapes — which is impossible since the
-// local type is strictly broader.
+// PromptBlock type also carries host-only sealed-block provenance. Keeping the
+// runtime CRUD surface on the native type avoids narrowing data returned by
+// newer hosts when the installed public type package lags a release.
 type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+  /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
+  dlc: {
+    getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
+  };
+  theme: SpindleAPI["theme"] & {
+    deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any>;
+  };
+  assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  contracts: Readonly<Record<string, number>>;
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number }
+  ): void;
   registerMessageContentProcessor(
     handler: (ctx: {
       chatId: string;
@@ -581,6 +654,18 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
     categories: {
       list(presetId: string, userId?: string): Promise<PromptBlockCategoryGroup[]>;
     };
+  };
+  uploads: {
+    get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null>;
+    delete(uploadId: string, userId?: string): Promise<boolean>;
+  };
+  media: {
+    convertAudio(input: MediaConvertAudioRequestDTO): Promise<MediaTransformResultDTO>;
+    convertVideo(input: MediaConvertVideoRequestDTO): Promise<MediaTransformResultDTO>;
+    transcodeVideo(input: MediaTranscodeVideoRequestDTO): Promise<MediaTransformResultDTO>;
+    removeAudioFromVideo(input: MediaRemoveAudioFromVideoRequestDTO): Promise<MediaTransformResultDTO>;
+    addAudioToVideo(input: MediaAddAudioToVideoRequestDTO): Promise<MediaTransformResultDTO>;
+    createVideoFromImageAndAudio(input: MediaCreateVideoFromImageAndAudioRequestDTO): Promise<MediaTransformResultDTO>;
   };
   tokens: {
     countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult>;
@@ -746,6 +831,10 @@ const extensionMacroHandlers = new Map<string, (ctx: unknown) => unknown | Promi
 const macroInvocationStack: MacroInvocationState[] = [];
 const sharedRpcPermissionScope = new AsyncLocalStorage<SharedRpcPermissionScope | undefined>();
 
+function isLocalRuntimeEvent(event: string): boolean {
+  return event === "PERMISSION_CHANGED";
+}
+
 // ─── Messaging ───────────────────────────────────────────────────────────
 
 function post(msg: RuntimeWorkerToHost): void {
@@ -910,6 +999,34 @@ function requestGeneration(input: any): Promise<unknown> {
   });
 }
 
+/** Assembly uses the generation cancellation channel but never invokes a provider. */
+function requestAssembly(input: AssembleRequest, userId?: string): Promise<AssembleResult> {
+  const signal = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError((signal.reason as any)?.message ?? "Assembly aborted"));
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => post({ type: "cancel_generation", requestId });
+    pendingResponses.set(requestId, {
+      resolve: (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value as AssembleResult);
+      },
+      reject: (reason) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(reason);
+      },
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    post({ type: "assemble_prompt", requestId, input: payload, userId });
+  });
+}
+
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
  * that yields `StreamChunkDTO` values as the host forwards them. The
@@ -1007,7 +1124,9 @@ const spindleApi: RuntimeSpindleAPI = {
   on(event: string, handler: (payload: any) => void): () => void {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, new Set());
-      post({ type: "subscribe_event", event });
+      if (!isLocalRuntimeEvent(event)) {
+        post({ type: "subscribe_event", event });
+      }
     }
     eventHandlers.get(event)!.add(handler);
 
@@ -1015,7 +1134,9 @@ const spindleApi: RuntimeSpindleAPI = {
       eventHandlers.get(event)?.delete(handler);
       if (eventHandlers.get(event)?.size === 0) {
         eventHandlers.delete(event);
-        post({ type: "unsubscribe_event", event });
+        if (!isLocalRuntimeEvent(event)) {
+          post({ type: "unsubscribe_event", event });
+        }
       }
     };
   },
@@ -1070,6 +1191,10 @@ const spindleApi: RuntimeSpindleAPI = {
     assertMutationAllowed("spindle.registerInterceptor()");
     interceptHandler = handler;
     post({ type: "register_interceptor", priority });
+  },
+
+  assemble(input, userId?: string) {
+    return requestAssembly(input, userId);
   },
 
   registerTool(tool): void {
@@ -1700,6 +1825,19 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  uploads: {
+    async get(uploadId: string, userId?: string): Promise<{ fileName: string; size: number; data: Uint8Array } | null> {
+      const requestId = crypto.randomUUID();
+      return (await request({ type: "uploads_get", requestId, uploadId, userId })) as
+        | { fileName: string; size: number; data: Uint8Array }
+        | null;
+    },
+    async delete(uploadId: string, userId?: string): Promise<boolean> {
+      const requestId = crypto.randomUUID();
+      return (await request({ type: "uploads_delete", requestId, uploadId, userId })) as boolean;
+    },
+  },
+
   tokens: {
     async countText(text: string, options?: { model?: string; modelSource?: TokenModelSource; userId?: string }): Promise<TokenCountResult> {
       const requestId = crypto.randomUUID();
@@ -1797,6 +1935,17 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "color_extract", requestId, imageId, userId });
       return result;
+    },
+    async deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any> {
+      // Pure computation: derive the character-aware overlay locally without a
+      // host round-trip. This keeps palette → overlay fast for extensions.
+      return deriveCharacterOverlay(palette.palette, palette.ui);
     },
     async generateVariables(config: {
       accent: { h: number; s: number; l: number };
@@ -1911,6 +2060,56 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "images_delete", requestId, imageId, userId });
       return result as boolean;
+    },
+    async deleteMany(imageIds: string[], options?: { userId?: string }): Promise<number> {
+      assertMutationAllowed("spindle.images.deleteMany()");
+      const requestId = crypto.randomUUID();
+      const result = await request({
+        type: "images_delete_many",
+        requestId,
+        imageIds,
+        userId: options?.userId,
+      });
+      return result as number;
+    },
+  },
+
+  media: {
+    async convertAudio(input: MediaConvertAudioRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.convertAudio()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_audio_convert", requestId, input });
+      return result as MediaTransformResultDTO;
+    },
+    async convertVideo(input: MediaConvertVideoRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.convertVideo()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_video_convert", requestId, input });
+      return result as MediaTransformResultDTO;
+    },
+    async transcodeVideo(input: MediaTranscodeVideoRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.transcodeVideo()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_video_transcode", requestId, input });
+      return result as MediaTransformResultDTO;
+    },
+    async removeAudioFromVideo(input: MediaRemoveAudioFromVideoRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.removeAudioFromVideo()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_video_remove_audio", requestId, input });
+      return result as MediaTransformResultDTO;
+    },
+    async addAudioToVideo(input: MediaAddAudioToVideoRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.addAudioToVideo()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_video_add_audio", requestId, input });
+      return result as MediaTransformResultDTO;
+    },
+    async createVideoFromImageAndAudio(input: MediaCreateVideoFromImageAndAudioRequestDTO): Promise<MediaTransformResultDTO> {
+      assertMutationAllowed("spindle.media.createVideoFromImageAndAudio()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "media_video_from_image_audio", requestId, input });
+      return result as MediaTransformResultDTO;
     },
   },
 
@@ -2893,6 +3092,25 @@ const spindleApi: RuntimeSpindleAPI = {
     },
   },
 
+  global_addons: {
+    async list(options?: { limit?: number; offset?: number; userId?: string }): Promise<{ data: GlobalAddonDTO[]; total: number }> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_list", requestId, limit: options?.limit, offset: options?.offset, userId: options?.userId });
+      return result as { data: GlobalAddonDTO[]; total: number };
+    },
+    async get(addonId: string, userId?: string): Promise<GlobalAddonDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_get", requestId, addonId, userId });
+      return result as GlobalAddonDTO | null;
+    },
+    async update(addonId: string, input: GlobalAddonUpdateDTO, userId?: string): Promise<GlobalAddonDTO> {
+      assertMutationAllowed("spindle.global_addons.update()");
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "global_addons_update", requestId, addonId, input, userId });
+      return result as GlobalAddonDTO;
+    },
+  },
+
   council: {
     async getSettings(options?: { userId?: string }): Promise<CouncilSettings> {
       const requestId = crypto.randomUUID();
@@ -2908,6 +3126,14 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "council_get_available_lumia_items", requestId, userId: options?.userId });
       return result as LumiaItemDTO[];
+    },
+  },
+
+  dlc: {
+    async getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "dlc_get_catalog", requestId, userId: options?.userId });
+      return result as LumiaDlcCatalog;
     },
   },
 
@@ -3131,10 +3357,16 @@ const spindleApi: RuntimeSpindleAPI = {
     });
   },
 
-  registerContextHandler(handler, priority?): void {
+  contracts: Object.freeze({ preAssemblyGenerationContext: 1 }),
+
+  registerContextHandler(
+    handler: (context: unknown) => Promise<unknown>,
+    priority?: number,
+    opts?: { timeoutMs?: number },
+  ): void {
     assertMutationAllowed("spindle.registerContextHandler()");
     contextHandlerFn = handler;
-    post({ type: "register_context_handler", priority });
+    post({ type: "register_context_handler", priority, timeoutMs: opts?.timeoutMs });
   },
 
   registerMessageContentProcessor(handler, priority?): void {
@@ -3706,6 +3938,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             context: msg.context,
           });
         }
+      } else {
+        post({
+          type: "context_handler_result",
+          requestId: msg.requestId,
+          context: msg.context,
+        });
       }
       break;
     }
@@ -3810,10 +4048,11 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         if (msg.error) {
           // Convert host-side abort errors back into a real DOMException so
           // extensions can do `err.name === "AbortError"` the usual way.
-          if (msg.error.startsWith("AbortError:")) {
-            pending.reject(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+          const responseError = msg.error
+          if (typeof responseError === "string" && responseError.startsWith("AbortError:")) {
+            pending.reject(makeAbortError(responseError.slice("AbortError:".length).trim()))
           } else {
-            pending.reject(new Error(msg.error));
+            pending.reject(deserializeWorkerResponseError(responseError))
           }
         } else {
           pending.resolve(msg.result);
@@ -3849,7 +4088,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
       for (const p of msg.allGranted) grantedPermissions.add(p);
 
       const detail: PermissionChangedDetail = {
-        extensionId: manifest.identifier,
+        extensionId: ("extensionId" in msg ? msg.extensionId : undefined) ?? manifest.identifier,
         permission: msg.permission,
         granted: msg.granted,
         allGranted: msg.allGranted,

@@ -1,3 +1,7 @@
+---
+title: Understanding Presets
+---
+
 # Understanding Presets
 
 This guide explains how presets work conceptually, so you can create and customize them with confidence.

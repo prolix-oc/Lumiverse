@@ -29,17 +29,17 @@ export interface NanoGptUsageWindow {
   remaining: number;
   percentUsed: number;
   resetAt: number | null;
+  limit: number | null;
 }
 
 export interface NanoGptSubscriptionUsage {
   active: boolean;
-  enforceDailyLimit: boolean;
-  limits: {
-    daily: number | null;
-    monthly: number | null;
-  };
-  daily: NanoGptUsageWindow | null;
-  monthly: NanoGptUsageWindow | null;
+  allowOverage: boolean;
+  // Typed usage windows mirroring NanoGPT's subscription payload. Each may be
+  // null when the plan doesn't meter that dimension.
+  dailyInputTokens: NanoGptUsageWindow | null;
+  weeklyInputTokens: NanoGptUsageWindow | null;
+  dailyImages: NanoGptUsageWindow | null;
   period: {
     currentPeriodEnd: string | null;
   };
@@ -47,14 +47,19 @@ export interface NanoGptSubscriptionUsage {
   graceUntil: string | null;
 }
 
-/** Parse a single Nano-GPT usage window (daily/monthly) from the raw API payload. */
-function parseNanoGptUsageWindow(w: any): NanoGptUsageWindow | null {
+/**
+ * Parse a single Nano-GPT usage window from the raw API payload, folding in its
+ * matching `limits.<key>` value. The window object and its limit live under
+ * separate keys in NanoGPT's response, so callers pass both.
+ */
+function parseNanoGptUsageWindow(w: any, limit: any): NanoGptUsageWindow | null {
   if (!w || typeof w !== "object") return null;
   return {
     used: typeof w.used === "number" ? w.used : 0,
     remaining: typeof w.remaining === "number" ? w.remaining : 0,
     percentUsed: typeof w.percentUsed === "number" ? w.percentUsed : 0,
     resetAt: typeof w.resetAt === "number" ? w.resetAt : null,
+    limit: typeof limit === "number" ? limit : null,
   };
 }
 
@@ -390,13 +395,10 @@ export async function fetchNanoGptSubscriptionUsage(userId: string, id: string):
     const raw = await res.json() as any;
     return {
       active: !!raw?.active,
-      enforceDailyLimit: !!raw?.enforceDailyLimit,
-      limits: {
-        daily: typeof raw?.limits?.daily === "number" ? raw.limits.daily : null,
-        monthly: typeof raw?.limits?.monthly === "number" ? raw.limits.monthly : null,
-      },
-      daily: parseNanoGptUsageWindow(raw?.daily),
-      monthly: parseNanoGptUsageWindow(raw?.monthly),
+      allowOverage: !!raw?.allowOverage,
+      dailyInputTokens: parseNanoGptUsageWindow(raw?.dailyInputTokens, raw?.limits?.dailyInputTokens),
+      weeklyInputTokens: parseNanoGptUsageWindow(raw?.weeklyInputTokens, raw?.limits?.weeklyInputTokens),
+      dailyImages: parseNanoGptUsageWindow(raw?.dailyImages, raw?.limits?.dailyImages),
       period: {
         currentPeriodEnd: typeof raw?.period?.currentPeriodEnd === "string" ? raw.period.currentPeriodEnd : null,
       },

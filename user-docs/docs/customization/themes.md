@@ -1,4 +1,8 @@
-# Themes
+---
+title: Theme
+---
+
+# Theme
 
 Lumiverse's theme system lets you customize the entire visual appearance — colors, fonts, glass effects, and more.
 
@@ -89,7 +93,59 @@ For richer sharing — including custom CSS, component overrides, and bundled as
 For full styling control beyond what the Theme Panel exposes, open **Settings → Appearance → Custom CSS** (or invoke the Custom CSS modal from the Theme Panel). It supports:
 
 - **Custom CSS** — raw CSS that's injected after the built-in stylesheet, so you can override any variable or selector
-- **Component Overrides** — drop-in TSX replacements for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
+- **Component Overrides** — safe TSX decorators for built-in components (advanced; imported overrides are quarantined until you explicitly approve them, for safety)
+
+Component starter templates render `<Original />`, a trusted slot containing the
+complete built-in component. Keep that slot in the template and add markup around
+it so native behavior—actions, swipes, editing, greetings, accessibility, and new
+features added in later releases—continues to work. Removing `<Original />` opts
+into a full replacement, which means the replacement must recreate every feature
+it needs.
+
+```jsx
+export default function BubbleMessage(props) {
+  return (
+    <>
+      <Original />
+      <div className="message-decoration">✦</div>
+    </>
+  )
+}
+```
+
+Use per-component CSS when the change is purely visual; it layers onto the native
+component without changing its React structure.
+
+### Choosing message avatar resolution
+
+The example below intentionally replaces the built-in message markup because it
+changes the avatar source, not just its presentation. A full replacement must
+also render any actions or controls it wants to retain. For sizing, cropping,
+borders, and other visual avatar changes, keep `<Original />` and use CSS instead.
+
+`BubbleMessage` and `MinimalMessage` component overrides receive the same avatar sources. Use `message.avatar` when the theme needs a specific shape or resolution:
+
+```jsx
+export default function BubbleMessage({ message, styles }) {
+  const avatarSrc = message.avatar.cropped.lg || message.avatar.cropped.sm || message.avatarUrl
+
+  return (
+    <div className={styles.card || ''}>
+      <img src={avatarSrc || ''} alt={message.displayName} />
+      <Content />
+    </div>
+  )
+}
+```
+
+The available sources are:
+
+- `message.avatar.cropped.sm`, `.lg`, and `.full` — the square crop at about 300 px, about 700 px, or original resolution
+- `message.avatar.original.sm`, `.lg`, and `.full` — the uploaded aspect ratio at those same tiers
+- `message.avatarUrl` — the source selected by the current message style; it also follows that style's **Use full-size avatars** preference
+- `message.fullAvatarUrl` — the original aspect ratio at full resolution
+
+Use the same expressions in a `MinimalMessage` override; only the exported function/component being overridden changes. Changing an image's `src` requires a component override—Custom CSS can resize or crop the rendered image, but cannot select another source URL.
 
 ---
 
@@ -113,6 +169,20 @@ A **Theme Pack** bundles everything together — theme variables, custom CSS, co
 - **Import Pack** — Load a pack into Lumiverse. Imported component overrides arrive disabled by default and must be explicitly enabled, which prevents an untrusted pack from running arbitrary code on import.
 
 Theme Packs travel with their assets, so a recipient sees exactly what you see without needing to re-upload images.
+
+### Safe theme recovery
+
+If custom CSS or a component override makes the interface inaccessible, open Lumiverse with `?safe-theme=1` appended to its URL, for example `https://lumiverse.example.com/?safe-theme=1`. This suppresses custom CSS and component CSS/TSX overrides for that browser session without deleting them. Remove the query parameter and reload when the theme has been repaired.
+
+Server operators and theme developers can also start Lumiverse with safe theme mode enabled:
+
+```bash
+./start.sh --safe-theme
+# Windows PowerShell: .\start.ps1 -SafeTheme
+# Direct/server/container launches can set LUMIVERSE_SAFE_THEME=true instead.
+```
+
+The startup flag applies to every browser using that server. Unset it and restart Lumiverse to restore saved styling. The existing `Ctrl+Shift+U` shortcut remains available when the app has mounted; unlike safe theme mode, the shortcut persists the disabled state of the current CSS and component overrides.
 
 ---
 

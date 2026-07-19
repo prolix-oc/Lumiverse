@@ -43,7 +43,15 @@
 }
 
 :global(html[data-ios-pwa]) .top {
-  top: env(safe-area-inset-top, 0px);
+  top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
+}
+
+@media (display-mode: window-controls-overlay) {
+  .left,
+  .right,
+  .top {
+    top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px));
+  }
 }
 
 .bottom {
@@ -197,7 +205,7 @@
   :global(html[data-ios-pwa]) .left,
   :global(html[data-ios-pwa]) .right,
   :global(html[data-ios-pwa]) .top {
-    top: env(safe-area-inset-top, 0px) !important;
+    top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) !important;
   }
 
   .collapsed.left,
@@ -216,5 +224,13 @@
   .right > .header > .title {
     writing-mode: horizontal-tb;
     text-orientation: initial;
+  }
+}
+
+@media (max-width: 600px) and (display-mode: window-controls-overlay) {
+  .left,
+  .right,
+  .top {
+    top: var(--app-interactive-safe-top, env(safe-area-inset-top, 0px)) !important;
   }
 }

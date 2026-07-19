@@ -1,3 +1,7 @@
+---
+title: Author's Note
+---
+
 # Author's Note
 
 The Author's Note is a hidden instruction you can inject into the conversation at a specific depth. It's like a director's whisper to the AI — the characters don't "see" it, but it shapes how the AI writes.

@@ -99,3 +99,85 @@ describe('moveTabTo / clearPendingActiveTabReset', () => {
     expect(slice.state.pendingActiveTabReset).toBe('profile')
   })
 })
+
+describe('preset editor placements', () => {
+  test('registers, updates, and removes extension preset tabs', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorTab({ id: 'tab-1', extensionId: 'ext-1', title: 'Agent Mode', root })
+    expect(slice.state.presetEditorTabs).toHaveLength(1)
+    slice.state.updatePresetEditorTab('tab-1', { title: 'Agents' })
+    expect(slice.state.presetEditorTabs[0].title).toBe('Agents')
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorTabs).toHaveLength(0)
+  })
+
+  test('registers and synchronously removes extension toolbar roots', () => {
+    const slice = makeSlice()
+    const root = {} as HTMLElement
+    slice.state.registerPresetEditorToolbarItem({
+      id: 'toolbar-1',
+      extensionId: 'ext-1',
+      ariaLabel: 'Agent mode controls',
+      root,
+      visible: true,
+    })
+    slice.state.setPresetEditorToolbarItemVisible('toolbar-1', false)
+    expect(slice.state.presetEditorToolbarItems[0].visible).toBe(false)
+    slice.state.removeAllByExtension('ext-1')
+    expect(slice.state.presetEditorToolbarItems).toHaveLength(0)
+  })
+})
+
+describe('placement capacity', () => {
+  test('allows drawer tabs from thirty distinct extensions', () => {
+    const slice = makeSlice()
+
+    for (let index = 0; index < 30; index += 1) {
+      slice.state.registerDrawerTab({
+        id: `tab-${index}`,
+        extensionId: `extension-${index}`,
+        title: `Extension ${index}`,
+        badge: null,
+        root: {} as HTMLElement,
+      })
+    }
+
+    expect(slice.state.drawerTabs).toHaveLength(30)
+  })
+})
+
+describe('hideAllPlacements / showAllPlacements', () => {
+  let slice: ReturnType<typeof makeSlice>
+  beforeEach(() => {
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.clear() } catch { /* no-op */ }
+    }
+    slice = makeSlice()
+  })
+
+  test('hideAllPlacements includes extension drawer tabs', () => {
+    slice.set({
+      drawerTabs: [{ id: 'drawer-1' } as any, { id: 'drawer-2' } as any],
+      floatWidgets: [{ id: 'float-1' } as any],
+      dockPanels: [{ id: 'dock-1' } as any],
+      appMounts: [{ id: 'mount-1' } as any],
+    } as any)
+
+    slice.state.hideAllPlacements()
+
+    expect(slice.state.hiddenPlacements).toEqual(['drawer-1', 'drawer-2', 'float-1', 'dock-1', 'mount-1'])
+  })
+
+  test('showAllPlacements clears drawer tab visibility hidden by hideAllPlacements', () => {
+    slice.set({
+      drawerTabs: [{ id: 'drawer-1' } as any],
+      floatWidgets: [{ id: 'float-1' } as any],
+    } as any)
+
+    slice.state.hideAllPlacements()
+    slice.state.showAllPlacements()
+
+    expect(slice.state.hiddenPlacements).toEqual([])
+  })
+})

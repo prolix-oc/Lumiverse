@@ -1,9 +1,15 @@
-import { get, post, put, patch, del, upload } from './client'
+import { get, post, put, patch, del, upload, type RequestOptions } from './client'
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, ChatSummary, ChatTreeNode
+  GroupedRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
+import type { RegexActionEffect } from '@/types/regex'
+
+/** Use the user's local date and time so automatically named chats are easy to distinguish. */
+export function createTimestampedChatName(now = new Date()): string {
+  return now.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
+}
 
 export const chatsApi = {
   list(params?: { characterId?: string; limit?: number; offset?: number }) {
@@ -39,7 +45,10 @@ export const chatsApi = {
   },
 
   create(input: CreateChatInput) {
-    return post<Chat>('/chats', input)
+    return post<Chat>('/chats', {
+      ...input,
+      name: input.name?.trim() || createTimestampedChatName(),
+    })
   },
 
   /**
@@ -74,12 +83,23 @@ export const chatsApi = {
     return del<void>(`/chats/${id}`)
   },
 
+  bulkDeleteChats(ids: string[]) {
+    return post<{ deleted: string[]; count: number }>('/chats/bulk-delete', { ids })
+  },
+
+  exportChat(id: string) {
+    return get<{ chat: Chat; messages: Message[] }>(`/chats/${id}/export`)
+  },
+
   deleteCharacterChats(characterId: string) {
     return del<{ success: boolean; deleted: number }>(`/chats/character-chats/${characterId}`)
   },
 
   createGroup(input: CreateGroupChatInput) {
-    return post<Chat>('/chats/group', input)
+    return post<Chat>('/chats/group', {
+      ...input,
+      name: input.name?.trim() || createTimestampedChatName(),
+    })
   },
 
   convertToGroup(id: string) {
@@ -119,8 +139,11 @@ export const chatsApi = {
     )
   },
 
-  branch(chatId: string, messageId: string) {
-    return post<Chat>(`/chats/${chatId}/branch`, { message_id: messageId })
+  branch(chatId: string, messageId: string, name?: string) {
+    return post<Chat>(`/chats/${chatId}/branch`, {
+      message_id: messageId,
+      ...(name?.trim() ? { name: name.trim() } : {}),
+    })
   },
 
   getTree(chatId: string) {
@@ -152,8 +175,12 @@ export const chatsApi = {
 }
 
 export const messagesApi = {
-  list(chatId: string, params?: { limit?: number; offset?: number; tail?: boolean }) {
-    return get<PaginatedResult<Message>>(`/chats/${chatId}/messages`, params)
+  list(chatId: string, params?: { limit?: number; offset?: number; tail?: boolean }, options?: RequestOptions) {
+    return get<PaginatedResult<Message>>(`/chats/${chatId}/messages`, params, options)
+  },
+
+  search(chatId: string, query: string, options?: RequestOptions) {
+    return get<ChatMessageSearchResult>(`/chats/${chatId}/messages/search`, { q: query }, options)
   },
 
   get(chatId: string, messageId: string) {
@@ -162,6 +189,31 @@ export const messagesApi = {
 
   create(chatId: string, input: CreateMessageInput) {
     return post<Message>(`/chats/${chatId}/messages`, input)
+  },
+
+  claimRegexAction(chatId: string, messageId: string, input: {
+    script_id: string
+    action_id: string
+    instance_id: string
+  }) {
+    return post<{
+      message: Message
+      usage: { script_id: string; action_id: string; used_at: number }
+      effects?: RegexActionEffect[]
+      forked_chat?: Chat
+    }>(`/chats/${chatId}/messages/${messageId}/regex-action`, input)
+  },
+
+  claimRegexActions(chatId: string, selections: Array<{
+    message_id: string
+    script_id: string
+    action_id: string
+    instance_id: string
+  }>) {
+    return post<{
+      messages: Message[]
+      usages: Array<{ script_id: string; action_id: string; used_at: number }>
+    }>(`/chats/${chatId}/messages/regex-actions/claim`, { selections })
   },
 
   update(chatId: string, messageId: string, input: UpdateMessageInput) {

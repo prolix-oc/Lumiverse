@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { Search, UserPlus } from 'lucide-react'
+import { Search, UserPlus, X } from 'lucide-react'
 import { CloseButton } from '@/components/shared/CloseButton'
 import { useStore } from '@/store'
 import { chatsApi } from '@/api/chats'
@@ -13,6 +13,7 @@ import { toast } from '@/lib/toast'
 import { Spinner } from '@/components/shared/Spinner'
 import Pagination from '@/components/shared/Pagination'
 import styles from './AddGroupMemberModal.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 const CHARS_PER_PAGE = 50
 
@@ -104,7 +105,7 @@ export default function AddGroupMemberModal() {
         setAddingId(null)
       }
     },
-    [chatId, allSummaries, memberIds, setGroupCharacterIds, addingId]
+    [chatId, allSummaries, memberIds, setGroupCharacterIds, addingId, t]
   )
 
   useEffect(() => {
@@ -168,9 +169,15 @@ export default function AddGroupMemberModal() {
                 className={styles.searchInput}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
                 placeholder={t('addGroupMember.searchPlaceholder')}
                 autoFocus
               />
+              {search && (
+                <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                  <X size={13} />
+                </button>
+              )}
             </div>
 
             {loading ? (

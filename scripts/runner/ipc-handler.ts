@@ -5,14 +5,15 @@ import {
   applyUpdate,
   switchBranch,
   ensureDependencies,
+  ensureFrontendDependencies,
   rebuildFrontend,
+  runWithServerStopped,
 } from "./git-ops.js";
 import { writeTrustAnyOrigin } from "./env-config.js";
 import {
   PROJECT_ROOT,
   AVAILABLE_BRANCHES,
   TIMEOUT_BUN_CACHE_MS,
-  TIMEOUT_BUN_INSTALL_MS,
 } from "./lib/constants.js";
 import { spawnAsync } from "./lib/spawn-async.js";
 
@@ -215,33 +216,9 @@ export async function handleIPCMessage(msg: any): Promise<void> {
 
     case "ensure-deps": {
       try {
-        progress(id, "ensure-deps", "Installing backend dependencies...");
-        const backend = await spawnAsync(["bun", "install"], {
-          cwd: PROJECT_ROOT,
-          timeoutMs: TIMEOUT_BUN_INSTALL_MS,
-        });
-        if (backend.exitCode !== 0) {
-          const reason = backend.timedOut
-            ? `backend install timed out after ${TIMEOUT_BUN_INSTALL_MS / 1000}s`
-            : backend.stderr.trim() || "backend install failed";
-          respond(id, false, undefined, reason);
-          break;
-        }
-
-        progress(id, "ensure-deps", "Installing frontend dependencies...");
         const frontendDir = join(PROJECT_ROOT, "frontend");
-        const frontend = await spawnAsync(["bun", "install"], {
-          cwd: frontendDir,
-          timeoutMs: TIMEOUT_BUN_INSTALL_MS,
-        });
-        if (frontend.exitCode !== 0) {
-          const reason = frontend.timedOut
-            ? `frontend install timed out after ${TIMEOUT_BUN_INSTALL_MS / 1000}s`
-            : frontend.stderr.trim() || "frontend install failed";
-          respond(id, false, undefined, reason);
-          break;
-        }
-
+        progress(id, "ensure-deps", "Installing backend and frontend dependencies...");
+        await ensureDependencies(frontendDir);
         respond(id, true, { message: "Dependencies installed successfully" });
       } catch (err) {
         respond(id, false, undefined, err instanceof Error ? err.message : "Install failed");
@@ -263,19 +240,22 @@ export async function handleIPCMessage(msg: any): Promise<void> {
         await waitForResponseFlush();
         const frontendDir = join(PROJECT_ROOT, "frontend");
 
-        progress(id, "rebuild", "Stopping server for dependency checks and frontend rebuild...");
-        await stopServer();
+        progress(id, "rebuild", "Stopping server for frontend rebuild...");
+        await runWithServerStopped(
+          "Frontend rebuild",
+          () => stopServer(),
+          () => { startServer(isDev); return Promise.resolve(); },
+          async () => {
+            progress(id, "rebuild", "Installing frontend dependencies...");
+            await ensureFrontendDependencies(frontendDir);
 
-        progress(id, "rebuild", "Installing backend and frontend dependencies...");
-        await ensureDependencies(frontendDir);
-
-        progress(id, "rebuild", "Waiting for Vite build to finish...");
-        await rebuildFrontend(frontendDir);
-
-        startServer(isDev);
+            progress(id, "rebuild", "Waiting for Vite build to finish...");
+            await rebuildFrontend(frontendDir);
+          },
+        );
       } catch (err) {
         console.error("[runner] Frontend rebuild failed:", err);
-        console.error("[runner] Server remains stopped because the rebuild did not complete successfully.");
+        console.error("[runner] Server restarted with the previous validated frontend bundle.");
       } finally {
         operationInProgress = null;
       }

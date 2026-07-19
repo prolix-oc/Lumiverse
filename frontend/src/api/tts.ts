@@ -32,18 +32,23 @@ export const ttsApi = {
   async synthesizeStream(
     connectionId: string,
     text: string,
-    options?: { voice?: string; model?: string; speed?: number }
+    options?: { voice?: string; model?: string; speed?: number; outputFormat?: string; signal?: AbortSignal }
   ): Promise<Response> {
     return fetch(`${BASE_URL}/tts/synthesize/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
       credentials: 'include',
+      signal: options?.signal,
       body: JSON.stringify({
         connectionId,
         text,
         voice: options?.voice,
         model: options?.model,
         parameters: options?.speed != null ? { speed: options.speed } : undefined,
+        outputFormat: options?.outputFormat,
       }),
     })
   },

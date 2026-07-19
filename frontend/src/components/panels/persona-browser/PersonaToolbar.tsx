@@ -5,9 +5,6 @@ import {
   Layers,
   Crown,
   Link2,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
   LayoutGrid,
   List,
   Plus,
@@ -15,11 +12,14 @@ import {
   Check,
   RefreshCw,
   Globe,
+  CheckSquare,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import type { PersonaFilterType, PersonaSortField, PersonaSortDirection, PersonaViewMode } from '@/types/store'
 import styles from './PersonaToolbar.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
+import { SortControl } from '@/components/shared/SortControl'
 
 interface PersonaToolbarProps {
   searchQuery: string
@@ -38,11 +38,14 @@ interface PersonaToolbarProps {
   onGlobalLibraryClick: () => void
   filteredCount: number
   totalCount: number
+  batchMode: boolean
+  onBatchModeChange: (enabled: boolean) => void
 }
 
 const SORT_OPTION_KEYS: { value: PersonaSortField; labelKey: string }[] = [
   { value: 'name', labelKey: 'sort.name' },
   { value: 'created', labelKey: 'sort.created' },
+  { value: 'updated_at', labelKey: 'sort.updatedAt' },
 ]
 
 export default function PersonaToolbar({
@@ -62,27 +65,16 @@ export default function PersonaToolbar({
   onGlobalLibraryClick,
   filteredCount,
   totalCount,
+  batchMode,
+  onBatchModeChange,
 }: PersonaToolbarProps) {
   const { t: tc } = useTranslation('common')
   const { t } = useTranslation('panels')
-  const [sortOpen, setSortOpen] = useState(false)
   const [showCreatePopover, setShowCreatePopover] = useState(false)
   const [creatingFolderMode, setCreatingFolderMode] = useState(false)
   const [creatingFolderName, setCreatingFolderName] = useState('')
-  const sortRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!sortOpen) return
-    const handler = (e: MouseEvent) => {
-      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
-        setSortOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [sortOpen])
 
   useEffect(() => {
     if (!showCreatePopover) return
@@ -122,10 +114,11 @@ export default function PersonaToolbar({
           className={styles.searchInput}
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
+          onKeyDown={(e) => clearSearchOnEscape(e, searchQuery, () => onSearchChange(''))}
           placeholder={t('personaToolbar.searchPersonas')}
         />
         {searchQuery && (
-          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')}>
+          <button type="button" className={styles.clearBtn} onClick={() => onSearchChange('')} aria-label={tc('actions.clear')}>
             <X size={14} />
           </button>
         )}
@@ -226,41 +219,19 @@ export default function PersonaToolbar({
           </button>
         </div>
 
-        <div className={styles.sortContainer} ref={sortRef}>
-          <button
-            type="button"
-            className={styles.iconBtn}
-            onClick={() => setSortOpen(!sortOpen)}
-            title={t('personaToolbar.sortBy', { field: t(`personaToolbar.${SORT_OPTION_KEYS.find((o) => o.value === sortField)?.labelKey ?? 'sort.name'}`) })}
-          >
-            <ArrowUpDown size={14} />
-          </button>
-          {sortOpen && (
-            <div className={styles.sortDropdown}>
-              {SORT_OPTION_KEYS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={clsx(styles.sortItem, sortField === opt.value && styles.sortItemActive)}
-                  onClick={() => {
-                    onSortFieldChange(opt.value)
-                    setSortOpen(false)
-                  }}
-                >
-                  {t(`personaToolbar.${opt.labelKey}`)}
-                </button>
-              ))}
-            </div>
-          )}
-          <button
-            type="button"
-            className={styles.iconBtn}
-            onClick={onToggleSortDirection}
-            title={sortDirection === 'asc' ? t('personaToolbar.ascending') : t('personaToolbar.descending')}
-          >
-            {sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
-          </button>
-        </div>
+        <SortControl
+          options={SORT_OPTION_KEYS.map((option) => ({
+            value: option.value,
+            label: t(`personaToolbar.${option.labelKey}`),
+          }))}
+          value={sortField}
+          onChange={onSortFieldChange}
+          title={t('personaToolbar.sortBy', { field: t(`personaToolbar.${SORT_OPTION_KEYS.find((option) => option.value === sortField)?.labelKey ?? 'sort.name'}`) })}
+          direction={sortDirection}
+          onToggleDirection={onToggleSortDirection}
+          ascendingTitle={t('personaToolbar.ascending')}
+          descendingTitle={t('personaToolbar.descending')}
+        />
 
         <button
           type="button"
@@ -278,6 +249,15 @@ export default function PersonaToolbar({
           title={t('personaToolbar.globalAddonsLibrary')}
         >
           <Globe size={14} />
+        </button>
+
+        <button
+          type="button"
+          className={clsx(styles.iconBtn, batchMode && styles.iconBtnActive)}
+          onClick={() => onBatchModeChange(!batchMode)}
+          title={batchMode ? t('personaToolbar.exitBatchMode') : t('personaToolbar.batchSelect')}
+        >
+          <CheckSquare size={14} />
         </button>
 
         <button

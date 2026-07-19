@@ -43,6 +43,7 @@ export enum EventType {
   // Images
   IMAGE_UPLOADED = "IMAGE_UPLOADED",
   IMAGE_DELETED = "IMAGE_DELETED",
+  WALLPAPER_UPLOAD_PROGRESS = "WALLPAPER_UPLOAD_PROGRESS",
 
   // Settings
   SETTINGS_UPDATED = "SETTINGS_UPDATED",
@@ -114,6 +115,7 @@ export enum EventType {
 
   // Avatar
   CHARACTER_AVATAR_CHANGED = "CHARACTER_AVATAR_CHANGED",
+  CHARACTER_EXPORT_PROGRESS = "CHARACTER_EXPORT_PROGRESS",
 
   // Image Gen Connections
   IMAGE_GEN_CONNECTION_CHANGED = "IMAGE_GEN_CONNECTION_CHANGED",
@@ -200,6 +202,23 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = "SYSTEM_DISK_LOW",
+  SYSTEM_SMART_ALERT = "SYSTEM_SMART_ALERT",
+
+  // Multiplayer rooms (broadcast to the room:{roomId} topic). Peer chat
+  // messages and bot stream tokens reuse MESSAGE_SENT / STREAM_TOKEN_RECEIVED /
+  // GENERATION_* (re-broadcast to the room topic by the fan-out listener) — these
+  // only cover room lifecycle, turn, persona-relay and moderation.
+  ROOM_STATUS = "ROOM_STATUS",
+  ROOM_PARTICIPANT_JOINED = "ROOM_PARTICIPANT_JOINED",
+  ROOM_PARTICIPANT_LEFT = "ROOM_PARTICIPANT_LEFT",
+  ROOM_PARTICIPANT_KICKED = "ROOM_PARTICIPANT_KICKED",
+  ROOM_PERSONA_CHANGED = "ROOM_PERSONA_CHANGED",
+  ROOM_TURN_CHANGED = "ROOM_TURN_CHANGED",
+  ROOM_TURN_SKIPPED = "ROOM_TURN_SKIPPED",
+  ROOM_PRESENCE = "ROOM_PRESENCE",
+  ROOM_ROUND_COMPLETE = "ROOM_ROUND_COMPLETE",
+  /** Host-only: a fresh remote invite code (auto-rolled after one is redeemed). */
+  ROOM_INVITE_CODE = "ROOM_INVITE_CODE",
 }
 
 export interface EventMessage {

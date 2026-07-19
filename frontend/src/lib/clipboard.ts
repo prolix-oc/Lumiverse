@@ -15,9 +15,24 @@ export function getSelectionTextWithin(withinEl: HTMLElement | null): string {
   return text
 }
 
+const GENERIC_CLIPBOARD_FAILURE = 'The operation failed for an operation-specific reason'
+const TEXT_CLIPBOARD_FAILURE = 'Could not copy text to the clipboard. Check your browser clipboard permission and try again.'
+const IMAGE_CLIPBOARD_FAILURE = 'Could not copy the image to the clipboard. Check your browser clipboard permission and try again.'
+
+function describeClipboardFailure(error: unknown, message: string): Error {
+  if (error instanceof Error && error.message.includes(GENERIC_CLIPBOARD_FAILURE)) {
+    return new Error(message, { cause: error })
+  }
+  return error instanceof Error ? error : new Error(String(error))
+}
+
 export async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (error) {
+      throw describeClipboardFailure(error, TEXT_CLIPBOARD_FAILURE)
+    }
     return
   }
 
@@ -67,7 +82,11 @@ export async function copyImageToClipboard(src: string): Promise<void> {
     // Some engines reject a promise-valued ClipboardItem — retry with a
     // fully-resolved blob.
     const png = await toPngBlob()
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    } catch (error) {
+      throw describeClipboardFailure(error, IMAGE_CLIPBOARD_FAILURE)
+    }
   }
 }
 

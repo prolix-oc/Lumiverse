@@ -105,4 +105,14 @@ export function registerChatMacros(): void {
     returnType: "integer",
     handler: (ctx) => String(ctx.env.chat.currentSwipeId),
   });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "rejectedSwipe",
+    category: "Chat",
+    description: "Content of the regenerate/swipe target before the new swipe was staged",
+    returnType: "string",
+    aliases: ["rejectedGeneration", "regeneratedMessage"],
+    handler: (ctx) => ctx.env.chat.rejectedSwipe,
+  });
 }

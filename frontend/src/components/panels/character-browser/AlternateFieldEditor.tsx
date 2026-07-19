@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Plus, X, Pencil, Check } from 'lucide-react'
 import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
+import TokenCountButton from '@/components/shared/TokenCountButton'
 import { uuidv7 } from '@/lib/uuid'
 import styles from './AlternateFieldEditor.module.css'
 import editorStyles from './CharacterEditorPage.module.css'
@@ -129,12 +130,15 @@ export default function AlternateFieldEditor({
   if (!hasAlternates) {
     return (
       <div className={editorStyles.fieldGroup}>
-        <div className={styles.labelRow}>
+        <div className={styles.headerRow}>
           <span className={editorStyles.fieldLabel}>{label}</span>
-          <button type="button" className={styles.addVariantLink} onClick={handleAddVariant}>
-            <Plus size={11} />
-            {t('characterEditor.alternateField.addVariant')}
-          </button>
+          <div className={styles.headerActions}>
+            <TokenCountButton text={value} />
+            <button type="button" className={styles.addVariantLink} onClick={handleAddVariant}>
+              <Plus size={11} />
+              {t('characterEditor.alternateField.addVariant')}
+            </button>
+          </div>
         </div>
         <span className={editorStyles.fieldHelper}>{helper}</span>
         <ExpandableTextarea
@@ -151,10 +155,11 @@ export default function AlternateFieldEditor({
 
   return (
     <div className={editorStyles.fieldGroup}>
-      <div className={styles.labelRow}>
+      <div className={styles.headerRow}>
         <span className={editorStyles.fieldLabel}>{label}</span>
-        <span className={editorStyles.fieldHelper}>{helper}</span>
+        <TokenCountButton text={activeContent} />
       </div>
+      <span className={editorStyles.fieldHelper}>{helper}</span>
 
       {/* Variant tabs */}
       <div className={styles.variantBar}>

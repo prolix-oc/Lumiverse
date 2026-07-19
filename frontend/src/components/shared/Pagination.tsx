@@ -12,6 +12,7 @@ interface PaginationProps {
   perPageOptions?: number[]
   onPerPageChange?: (perPage: number) => void
   totalItems?: number
+  className?: string
 }
 
 export default function Pagination({
@@ -22,6 +23,7 @@ export default function Pagination({
   perPageOptions,
   onPerPageChange,
   totalItems,
+  className,
 }: PaginationProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'pagination' })
   const handlePrev = useCallback(() => {
@@ -49,7 +51,7 @@ export default function Pagination({
   }
 
   return (
-    <div className={styles.pagination}>
+    <div className={clsx(styles.pagination, className)}>
       {onPerPageChange && perPageOptions && (
         <div className={styles.perPage}>
           <select

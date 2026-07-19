@@ -1,4 +1,8 @@
-# Weaver
+---
+title: Dream Weaver
+---
+
+# Dream Weaver
 
 The Weaver is Lumiverse's authoring studio. It turns an idea into finished, playable content — a **character** you chat with, a **world** you roleplay in, or a rebuild of something you **import** — by interviewing you about your idea, gathering everything into a single coherent source called the **Bible**, checking that source against a quality bar, and only then writing the output. Whatever you build lands in your regular library as a normal card; you author in the Weaver and play from the library.
 

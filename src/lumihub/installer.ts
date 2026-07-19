@@ -6,12 +6,12 @@ import * as svc from "../services/characters.service";
 import * as cardSvc from "../services/character-card.service";
 import * as images from "../services/images.service";
 import * as gallerySvc from "../services/character-gallery.service";
+import { fetchChubGalleryUrls, fetchChubJson } from "../services/chub-api.service";
 import { safeFetch } from "../utils/safe-fetch";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { rewriteBotBooruUrl } from "../utils/botbooru";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import { getFirstUserId } from "../auth/seed";
 import * as wbSvc from "../services/world-books.service";
 import * as presetsSvc from "../services/presets.service";
 import * as regexSvc from "../services/regex-scripts.service";
@@ -19,6 +19,9 @@ import * as settingsSvc from "../services/settings.service";
 import * as themeAssetsSvc from "../services/theme-assets.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
 import { applyCharxModulesAndAssets } from "../services/charx-import.service";
+import { resolveSealedPresetBlocksForInstall, type SealedManifest } from "./sealed-presets";
+import { cloneSafePlainJsonObject } from "./payload-validation";
+import type { PromptBlock, PromptVariableDef, PromptVariableValue } from "../types/preset";
 import type {
   InstallCharacterPayload,
   InstallPresetPayload,
@@ -36,14 +39,14 @@ import type {
  */
 export async function installCharacter(
   requestId: string,
+  userId: string,
   payload: InstallCharacterPayload
 ): Promise<InstallResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
     return {
       requestId,
       success: false,
-      error: "No owner user configured on this Lumiverse instance",
+      error: "No target user configured for this LumiHub install",
       errorCode: "UNKNOWN",
     };
   }
@@ -72,7 +75,7 @@ export async function installCharacter(
       stampInstallSource(userId, result.characterId, payload);
 
       // Download and import gallery images (best-effort, non-blocking)
-      if (payload.galleryImageUrls && payload.galleryImageUrls.length > 0) {
+      if (payload.source !== "chub" && payload.galleryImageUrls && payload.galleryImageUrls.length > 0) {
         importGalleryFromUrls(userId, result.characterId, payload.galleryImageUrls).catch((err) => {
           console.warn("[LumiHub Installer] Gallery import failed:", err);
         });
@@ -399,17 +402,7 @@ async function installFromChub(
     };
   }
 
-  // Fetch from Chub API (same logic as characters.routes.ts fetchChubCharacter)
-  const apiUrl = `https://gateway.chub.ai/api/characters/${chubPath}?full=true`;
-  const res = await safeFetch(apiUrl, {
-    timeoutMs: 15_000,
-    headers: { "Accept": "application/json", "User-Agent": "Lumiverse" },
-  });
-  if (!res.ok) {
-    return { requestId, success: false, error: `Chub API returned ${res.status}`, errorCode: "UNKNOWN" };
-  }
-
-  const data = (await res.json()) as any;
+  const data = await fetchChubJson(`characters/${chubPath}?full=true`);
   const node = data?.node;
   if (!node) {
     return { requestId, success: false, error: "Invalid Chub API response", errorCode: "PARSE_ERROR" };
@@ -471,6 +464,17 @@ async function installFromChub(
 
   maybeExtractWorldbook(userId, character.id, name, payload);
 
+  try {
+    const galleryUrls = payload.galleryImageUrls?.length
+      ? payload.galleryImageUrls
+      : await fetchChubGalleryUrls(node.id);
+    if (galleryUrls.length > 0) {
+      await importGalleryFromUrls(userId, character.id, galleryUrls);
+    }
+  } catch (err) {
+    console.warn("[LumiHub Installer] Chub gallery import failed:", err);
+  }
+
   const final = svc.getCharacter(userId, character.id);
 
   notifyCharacterCreated(userId, character.id);
@@ -493,11 +497,11 @@ async function installFromChub(
  */
 export async function installWorldbook(
   requestId: string,
+  userId: string,
   payload: InstallWorldbookPayload
 ): Promise<InstallWorldbookResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -544,11 +548,18 @@ export async function installWorldbook(
     try {
       const wb = wbSvc.getWorldBook(userId, result.worldBook.id);
       if (wb) {
+        // Prefer the explicit creator sent by LumiHub so the manifest/stats slug
+        const sourceCreator =
+          (typeof payload.worldbookCreator === "string" && payload.worldbookCreator.trim())
+            ? payload.worldbookCreator.trim()
+            : payload.worldbookName.includes("/")
+              ? payload.worldbookName.split("/")[0]
+              : "unknown";
         wbSvc.updateWorldBook(userId, result.worldBook.id, {
           metadata: {
             ...wb.metadata,
             _lumiverse_install_source: payload.source,
-            source_creator: payload.worldbookName.includes("/") ? payload.worldbookName.split("/")[0] : "unknown",
+            source_creator: sourceCreator,
           },
         });
       }
@@ -572,14 +583,14 @@ export async function installWorldbook(
   }
 }
 
-/** Install a theme export from LumiHub into the owner's active theme settings. */
+/** Install a theme export from LumiHub into the linked user's active theme settings. */
 export async function installTheme(
   requestId: string,
+  userId: string,
   payload: InstallThemePayload,
 ): Promise<InstallThemeResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -626,14 +637,15 @@ export async function installTheme(
   }
 }
 
-/** Install a Loom preset export from LumiHub into the owner's preset library. */
+/** Install a Loom preset export from LumiHub into the linked user's preset library. */
 export async function installPreset(
   requestId: string,
+  userId: string,
   payload: InstallPresetPayload,
+  dependencies: InstallPresetDependencies = {},
 ): Promise<InstallPresetResultPayload> {
-  const userId = getFirstUserId();
   if (!userId) {
-    return { requestId, success: false, error: "No owner user configured on this Lumiverse instance" };
+    return { requestId, success: false, error: "No target user configured for this LumiHub install" };
   }
 
   try {
@@ -653,28 +665,67 @@ export async function installPreset(
       : null;
     const presetSlug = typeof payload.presetSlug === "string" ? payload.presetSlug : null;
     const presetCreator = typeof payload.presetCreator === "string" ? payload.presetCreator : null;
+    // LumiHub detects installed presets by canonical creator/name slug. Prefer
+    // the immutable Hub id, then use that same slug identity as a constrained
+    // fallback so a re-created/migrated Hub listing still updates the installed
+    // row instead of producing a second local copy.
+    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId)
+      ?? (presetSlug ? presetsSvc.findLumihubPresetBySlug(userId, presetSlug) : null);
+    const existingPassthroughMetadata = existing
+      ? extractPresetPassthroughMetadata({ metadata: existing.metadata })
+      : {};
+    const passthroughMetadata = extractPresetPassthroughMetadata(p);
+    const sealedPreset = resolveInstallSealedManifest(payload);
+    const sealedPresetVersion = typeof sealedPreset?.version === "string" ? sealedPreset.version : presetVersion;
+    const materializedBlocks = await materializeSealedPresetBlocks(
+      userId,
+      blocks,
+      payload.presetId,
+      sealedPresetVersion,
+      sealedPreset,
+      dependencies.resolveSealedBlocks ?? resolveSealedPresetBlocksForInstall,
+    );
+    const incomingSamplerOverrides = isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {};
+    const incomingCustomBody = isPlainObject(p.customBody) ? p.customBody : {};
+    const incomingPromptVariables = isPlainObject(p.promptVariables) ? p.promptVariables : {};
+    const samplerOverrides = existing && isPlainObject(existing.parameters?.samplerOverrides)
+      ? existing.parameters.samplerOverrides
+      : incomingSamplerOverrides;
+    const customBody = existing && isPlainObject(existing.parameters?.customBody)
+      ? existing.parameters.customBody
+      : incomingCustomBody;
+    const promptVariables = existing
+      ? mergePromptVariableSelections(
+          existing.prompt_order,
+          materializedBlocks,
+          existing.metadata?.promptVariables,
+          incomingPromptVariables,
+        )
+      : incomingPromptVariables;
 
     const presetInput = {
       name,
       provider: "loom",
       parameters: {
-        samplerOverrides: isPlainObject(p.samplerOverrides) ? p.samplerOverrides : {},
-        customBody: isPlainObject(p.customBody) ? p.customBody : {},
+        samplerOverrides,
+        customBody,
       },
-      prompt_order: blocks,
+      prompt_order: materializedBlocks,
       prompts: {
         promptBehavior: isPlainObject(p.promptBehavior) ? p.promptBehavior : {},
         completionSettings: isPlainObject(p.completionSettings) ? p.completionSettings : {},
         advancedSettings: isPlainObject(p.advancedSettings) ? p.advancedSettings : {},
       },
       metadata: {
+        ...existingPassthroughMetadata,
+        ...passthroughMetadata,
         source: isPlainObject(p.source) ? p.source : null,
         modelProfiles: isPlainObject(p.modelProfiles) ? p.modelProfiles : {},
         schemaVersion: typeof p.schemaVersion === "number" ? p.schemaVersion : exported.schemaVersion ?? 1,
         description: typeof p.description === "string" ? p.description : "",
         isDefault: !!p.isDefault,
         lastProfileKey: typeof p.lastProfileKey === "string" ? p.lastProfileKey : null,
-        promptVariables: isPlainObject(p.promptVariables) ? p.promptVariables : {},
+        promptVariables,
         compatibility: isPlainObject(exported.compatibility) ? exported.compatibility : {},
         coverUrl: typeof exported.cover_url === "string" ? exported.cover_url : null,
         _lumiverse_install_source: "lumihub",
@@ -682,15 +733,18 @@ export async function installPreset(
         _lumiverse_preset_version: presetVersion,
         _lumiverse_preset_slug: presetSlug,
         _lumiverse_preset_creator: presetCreator,
+        _lumiverse_sealed_preset: sealedPreset,
       },
     };
 
     // Update the existing installation in place when this preset was installed
     // from LumiHub before, so "Update" advances the version instead of duplicating.
-    const existing = presetsSvc.findPresetByLumihubId(userId, payload.presetId);
     let saved;
     if (existing) {
-      saved = presetsSvc.updatePreset(userId, existing.id, presetInput)!;
+      saved = presetsSvc.updatePreset(userId, existing.id, {
+        ...presetInput,
+        expected_cache_revision: existing.cache_revision,
+      })!;
     } else {
       saved = presetsSvc.createPreset(userId, presetInput);
       eventBus.emit(EventType.PRESET_CHANGED, { id: saved.id, preset: saved }, userId);
@@ -731,8 +785,304 @@ export async function installPreset(
   }
 }
 
+export interface InstallPresetDependencies {
+  resolveSealedBlocks?: typeof resolveSealedPresetBlocksForInstall;
+}
+
+/**
+ * Newer hubs send the sealed manifest beside presetData; older/alternate Hub
+ * paths only embed it in compatibility. Accept both representations so a
+ * protocol-version skew cannot turn a sealed placeholder into a successful,
+ * unresolved install.
+ */
+function resolveInstallSealedManifest(payload: InstallPresetPayload): SealedManifest | null {
+  const direct = parseSealedManifest(payload.sealedPreset);
+  const compatibility = isPlainObject(payload.presetData?.compatibility)
+    ? payload.presetData.compatibility
+    : null;
+  const lumiverse = compatibility && isPlainObject(compatibility.lumiverse)
+    ? compatibility.lumiverse
+    : null;
+  const embedded = parseSealedManifest(lumiverse?.sealedPreset);
+
+  if (direct && embedded && !sealedManifestsEqual(direct, embedded)) {
+    throw new Error("LumiHub returned inconsistent sealed preset manifests");
+  }
+  return direct ?? embedded;
+}
+
+function parseSealedManifest(value: unknown): SealedManifest | null {
+  if (!isPlainObject(value) || !Array.isArray(value.blocks) || value.blocks.length > 200) return null;
+  if (value.version !== null && value.version !== undefined && (typeof value.version !== "string" || value.version.length > 64)) {
+    return null;
+  }
+  const blocks: Array<{ key: string; sha256: string }> = [];
+  for (const entry of value.blocks) {
+    if (!isPlainObject(entry) || typeof entry.key !== "string" || !entry.key || entry.key.length > 256) return null;
+    if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.sha256)) return null;
+    blocks.push({ key: entry.key, sha256: entry.sha256.toLowerCase() });
+  }
+  return {
+    version: typeof value.version === "string" ? value.version : null,
+    blocks,
+  };
+}
+
+function sealedManifestsEqual(left: SealedManifest, right: SealedManifest): boolean {
+  if ((left.version ?? null) !== (right.version ?? null)) return false;
+  const normalize = (manifest: SealedManifest) => (manifest.blocks ?? [])
+    .map((block) => `${block.key ?? ""}:${(block.sha256 ?? "").toLowerCase()}`)
+    .sort();
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
 function isPlainObject(value: unknown): value is Record<string, any> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Clone metadata supplied by the hub before spreading it into the persisted
+ * metadata object. Install requests normally arrive from JSON, but keeping the
+ * check here makes direct callers obey the same plain-JSON contract and avoids
+ * invoking getters or copying values from arbitrary prototypes.
+ */
+function extractPresetPassthroughMetadata(
+  preset: Record<string, any>,
+): Record<string, any> {
+  const serializedField = readPresetMetadataField(preset, "metadata");
+  const internalField = readPresetMetadataField(preset, "passthroughMetadata");
+  const serializedMetadata = serializedField.present
+    ? clonePresetMetadata(serializedField.value, "metadata")
+    : {};
+  const internalMetadata = internalField.present
+    ? clonePresetMetadata(internalField.value, "passthroughMetadata")
+    : {};
+
+  // Both forms have appeared in exports. If an export carries both, the
+  // internal Loom bag wins conflicts while the installer-owned fields below
+  // remain authoritative either way.
+  return { ...serializedMetadata, ...internalMetadata };
+}
+
+function readPresetMetadataField(
+  preset: Record<string, any>,
+  fieldName: "metadata" | "passthroughMetadata",
+): { present: boolean; value?: unknown } {
+  const descriptor = Object.getOwnPropertyDescriptor(preset, fieldName);
+  if (!descriptor) return { present: false };
+  if (!Object.hasOwn(descriptor, "value")) {
+    throw new Error(`Preset export has invalid ${fieldName}`);
+  }
+  return { present: true, value: descriptor.value };
+}
+
+function clonePresetMetadata(value: unknown, fieldName: string): Record<string, any> {
+  try {
+    return cloneSafePlainJsonObject(value) as Record<string, any>;
+  } catch {
+    throw new Error(`Preset export has invalid ${fieldName}`);
+  }
+}
+
+/**
+ * Carry user-selected variable values into the updated published definition.
+ * Blocks are matched by stable block id; variables prefer their stable id and
+ * fall back to name for older exports. Incompatible type changes fall back to
+ * the publisher's new value/default, while modest range/option drift is adapted.
+ */
+function mergePromptVariableSelections(
+  existingBlocksValue: unknown,
+  updatedBlocksValue: unknown,
+  existingValuesValue: unknown,
+  incomingValuesValue: unknown,
+): Record<string, Record<string, PromptVariableValue>> {
+  const existingBlocks = Array.isArray(existingBlocksValue) ? existingBlocksValue as PromptBlock[] : [];
+  const updatedBlocks = Array.isArray(updatedBlocksValue) ? updatedBlocksValue as PromptBlock[] : [];
+  const existingValues = isPlainObject(existingValuesValue) ? existingValuesValue : {};
+  const incomingValues = isPlainObject(incomingValuesValue) ? incomingValuesValue : {};
+  const merged: Record<string, Record<string, PromptVariableValue>> = {};
+
+  for (const [blockId, bucket] of Object.entries(incomingValues)) {
+    if (isPlainObject(bucket)) merged[blockId] = { ...bucket } as Record<string, PromptVariableValue>;
+  }
+
+  const existingBlockById = new Map(
+    existingBlocks
+      .filter((block) => isPlainObject(block) && typeof block.id === "string")
+      .map((block) => [block.id, block]),
+  );
+
+  for (const updatedBlock of updatedBlocks) {
+    if (!isPlainObject(updatedBlock) || typeof updatedBlock.id !== "string" || !Array.isArray(updatedBlock.variables)) continue;
+    const existingBlock = existingBlockById.get(updatedBlock.id);
+    if (!existingBlock || !Array.isArray(existingBlock.variables)) continue;
+    const existingBucket = existingValues[updatedBlock.id];
+    if (!isPlainObject(existingBucket)) continue;
+
+    const oldDefs = existingBlock.variables.filter(isPromptVariableDef);
+    const oldDefById = new Map(oldDefs.map((def) => [def.id, def]));
+    const oldDefByName = new Map(oldDefs.map((def) => [def.name, def]));
+    const nextBucket = merged[updatedBlock.id] ?? {};
+
+    for (const updatedDef of updatedBlock.variables) {
+      if (!isPromptVariableDef(updatedDef)) continue;
+      const oldDef = oldDefById.get(updatedDef.id) ?? oldDefByName.get(updatedDef.name);
+      if (!oldDef || !Object.hasOwn(existingBucket, oldDef.name)) continue;
+      const retained = adaptPromptVariableSelection(oldDef, updatedDef, existingBucket[oldDef.name]);
+      if (retained !== undefined) nextBucket[updatedDef.name] = retained;
+    }
+
+    if (Object.keys(nextBucket).length > 0) merged[updatedBlock.id] = nextBucket;
+  }
+
+  return merged;
+}
+
+function isPromptVariableDef(value: unknown): value is PromptVariableDef {
+  if (!isPlainObject(value) || typeof value.id !== "string" || typeof value.name !== "string") return false;
+  switch (value.type) {
+    case "text":
+    case "textarea":
+    case "number":
+    case "slider":
+    case "switch":
+      return true;
+    case "select":
+    case "multiselect":
+      return Array.isArray(value.options);
+    default:
+      return false;
+  }
+}
+
+function adaptPromptVariableSelection(
+  oldDef: PromptVariableDef,
+  updatedDef: PromptVariableDef,
+  value: unknown,
+): PromptVariableValue | undefined {
+  const oldFamily = promptVariableFamily(oldDef.type);
+  const updatedFamily = promptVariableFamily(updatedDef.type);
+  if (oldFamily !== updatedFamily) return undefined;
+
+  switch (updatedFamily) {
+    case "text":
+      return typeof value === "string" ? value : undefined;
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+      const min = "min" in updatedDef && typeof updatedDef.min === "number" ? updatedDef.min : undefined;
+      const max = "max" in updatedDef && typeof updatedDef.max === "number" ? updatedDef.max : undefined;
+      return Math.min(max ?? Infinity, Math.max(min ?? -Infinity, value));
+    }
+    case "switch":
+      return value === 0 || value === 1 ? value : undefined;
+    case "select": {
+      if (updatedDef.type !== "select" || oldDef.type !== "select" || typeof value !== "string") return undefined;
+      return mapPromptOptionId(oldDef, updatedDef, value);
+    }
+    case "multiselect": {
+      if (updatedDef.type !== "multiselect" || oldDef.type !== "multiselect" || !Array.isArray(value)) return undefined;
+      const retained = value
+        .filter((id): id is string => typeof id === "string")
+        .map((id) => mapPromptOptionId(oldDef, updatedDef, id))
+        .filter((id): id is string => typeof id === "string");
+      return retained.length > 0 || value.length === 0 ? [...new Set(retained)] : undefined;
+    }
+  }
+}
+
+function promptVariableFamily(type: PromptVariableDef["type"]): "text" | "number" | "switch" | "select" | "multiselect" {
+  if (type === "text" || type === "textarea") return "text";
+  if (type === "number" || type === "slider") return "number";
+  return type;
+}
+
+function mapPromptOptionId(
+  oldDef: Extract<PromptVariableDef, { type: "select" | "multiselect" }>,
+  updatedDef: Extract<PromptVariableDef, { type: "select" | "multiselect" }>,
+  selectedId: string,
+): string | undefined {
+  const updatedOptions = updatedDef.options.filter(isPromptVariableOption);
+  const oldOptions = oldDef.options.filter(isPromptVariableOption);
+  if (updatedOptions.some((option) => option.id === selectedId)) return selectedId;
+  const oldValue = oldOptions.find((option) => option.id === selectedId)?.value;
+  if (oldValue === undefined) return undefined;
+  return updatedOptions.find((option) => option.value === oldValue)?.id;
+}
+
+function isPromptVariableOption(value: unknown): value is { id: string; label: string; value: string } {
+  return isPlainObject(value)
+    && typeof value.id === "string"
+    && typeof value.label === "string"
+    && typeof value.value === "string";
+}
+
+async function materializeSealedPresetBlocks(
+  userId: string,
+  blocks: any[],
+  hubPresetId: string,
+  version: string | null,
+  sealedPreset: SealedManifest | null,
+  resolveSealedBlocks: typeof resolveSealedPresetBlocksForInstall,
+): Promise<any[]> {
+  const placeholderKeys = new Set<string>();
+  for (const block of blocks) {
+    if (!isPlainObject(block) || typeof block.content !== "string") continue;
+    const key = extractExactSealedPlaceholder(block.content);
+    if (key) placeholderKeys.add(key);
+  }
+  if (!placeholderKeys.size) return blocks;
+  if (!sealedPreset) {
+    throw new Error("LumiHub preset contains sealed placeholders but no sealed manifest");
+  }
+  const manifestBlocks = Array.isArray(sealedPreset?.blocks) ? sealedPreset.blocks : [];
+  if (!manifestBlocks.length) {
+    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is empty");
+  }
+
+  const manifestByKey = new Map<string, { sha256: string }>();
+  for (const entry of manifestBlocks) {
+    if (typeof entry?.key === "string" && typeof entry?.sha256 === "string") {
+      manifestByKey.set(entry.key, { sha256: entry.sha256 });
+    }
+  }
+  if (!manifestByKey.size) {
+    throw new Error("LumiHub preset contains sealed placeholders but the sealed manifest is invalid");
+  }
+
+  for (const key of placeholderKeys) {
+    if (!manifestByKey.has(key)) {
+      throw new Error(`Sealed preset manifest is missing prompt block: ${key}`);
+    }
+  }
+
+  const resolved = await resolveSealedBlocks(userId, hubPresetId, version, sealedPreset);
+  for (const key of placeholderKeys) {
+    if (typeof resolved[key] !== "string") {
+      throw new Error(`Unable to fetch or verify sealed preset block: ${key}`);
+    }
+  }
+
+  return blocks.map((block) => {
+    if (!isPlainObject(block) || typeof block.content !== "string") return block;
+    const key = extractExactSealedPlaceholder(block.content);
+    const manifestEntry = key ? manifestByKey.get(key) : null;
+    if (!key || !manifestEntry) return block;
+    return {
+      ...block,
+      content: resolved[key],
+      sealed: true,
+      sealedKey: key,
+      sealedSource: "lumihub",
+      sealedOriginPresetId: hubPresetId,
+      sealedOriginVersion: version,
+      sealedSha256: manifestEntry.sha256,
+    };
+  });
+}
+
+function extractExactSealedPlaceholder(content: string): string | null {
+  const match = content.trim().match(/^\{\{(?:presetBlock|pblock)::([^}]+)\}\}$/);
+  return match?.[1]?.trim() || null;
 }
 
 /**

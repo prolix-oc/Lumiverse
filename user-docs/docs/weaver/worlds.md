@@ -1,3 +1,7 @@
+---
+title: Worlds
+---
+
 # Worlds
 
 A **World** is a place you roleplay in. You chat with the world itself: a **narrator** that sets scenes, runs the place, and voices the people in it, while `{{user}}` plays their own part inside it. Where a character build produces one person, a world build produces a stage with a cast.

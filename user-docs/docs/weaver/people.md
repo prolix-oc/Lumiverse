@@ -1,3 +1,7 @@
+---
+title: People
+---
+
 # People
 
 A world is only as alive as the people in it. The **People** pane — on the rail of every finalized world's dashboard — is where the world's population lives: from names the narrator can drop in passing, up to fully voiced profiles, up to standalone character cards that carry the world with them.

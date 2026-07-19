@@ -1,3 +1,7 @@
+---
+title: Prompt Blocks
+---
+
 # Prompt Blocks
 
 Prompt blocks are the building pieces of your preset. Each block is a section of text that gets assembled into the final prompt sent to the AI.

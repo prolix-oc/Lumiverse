@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   contrastRatio,
   extractColorsFromRawPixels,
+  rgbToHsl,
   type RGB,
 } from "./color-extraction.service";
 
@@ -140,5 +141,106 @@ describe("extractColorsFromRawPixels", () => {
     expect(luminance(result.ui.light.accent)).toBeLessThanOrEqual(154);
     expect(contrastRatio(result.ui.light.accent, result.ui.light.surface)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(result.ui.light.text, result.ui.light.surface)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test("preserves perceptually distinct hues instead of collapsing into a single mid-tone family", () => {
+    const red = { r: 210, g: 60, b: 60 };
+    const green = { r: 60, g: 180, b: 80 };
+    const blue = { r: 60, g: 80, b: 210 };
+    const gold = { r: 230, g: 180, b: 50 };
+
+    const data = makeImage(16, 16, (x, y) => {
+      if (x < 8 && y < 8) return red;
+      if (x >= 8 && y < 8) return green;
+      if (x < 8 && y >= 8) return blue;
+      return gold;
+    });
+
+    const result = extractColorsFromRawPixels(data, 16, 16, 4);
+
+    // The palette should contain a member of each distinct hue family.
+    const hasRedLike = result.palette.some((c) => c.r > c.g && c.r > c.b && c.r > 120);
+    const hasGreenLike = result.palette.some((c) => c.g > c.r && c.g > c.b && c.g > 120);
+    const hasBlueLike = result.palette.some((c) => c.b > c.r && c.b > c.g && c.b > 120);
+    const hasGoldLike = result.palette.some((c) => c.r > c.b && c.g > c.b && c.r > 160);
+
+    expect(result.diversity.isUniform).toBe(false);
+    expect(hasRedLike || hasGoldLike).toBe(true);
+    expect(hasGreenLike).toBe(true);
+    expect(hasBlueLike).toBe(true);
+  });
+
+  test("classifies Vibrant and Muted swatches from a colorful image", () => {
+    const red = { r: 220, g: 60, b: 60 };
+    const grey = { r: 140, g: 140, b: 140 };
+
+    const data = makeImage(16, 16, (x) => (x < 8 ? red : grey));
+
+    const result = extractColorsFromRawPixels(data, 16, 16, 4);
+
+    expect(result.swatches.vibrant).not.toBeNull();
+    expect(result.swatches.muted).not.toBeNull();
+  });
+
+  test("produces an ambient gradient and character overlay", () => {
+    const red = { r: 210, g: 60, b: 60 };
+    const green = { r: 60, g: 180, b: 80 };
+
+    const data = makeImage(12, 12, (x) => (x < 6 ? red : green));
+
+    const result = extractColorsFromRawPixels(data, 12, 12, 4);
+
+    expect(result.ambient.dark).toBeDefined();
+    expect(result.ambient.light).toBeDefined();
+    expect(result.overlay.accent).toBeDefined();
+    expect(result.overlay.baseColors.primary).toMatch(/^rgb\(/);
+    expect(result.overlay.baseColorsLight.primary).toMatch(/^rgb\(/);
+  });
+
+  test("anchors dark and light accents to the same vibrant hue family", () => {
+    const gold = { r: 230, g: 180, b: 50 };
+    const blue = { r: 50, g: 70, b: 200 };
+
+    const data = makeImage(16, 16, (x) => (x < 8 ? gold : blue));
+
+    const result = extractColorsFromRawPixels(data, 16, 16, 4);
+
+    // Both accents should be roughly the same hue (within ~30 degrees) so the
+    // UI doesn't feel like a completely different theme when toggling modes.
+    const darkHue = rgbToHsl(result.ui.dark.accent.r, result.ui.dark.accent.g, result.ui.dark.accent.b).h;
+    const lightHue = rgbToHsl(result.ui.light.accent.r, result.ui.light.accent.g, result.ui.light.accent.b).h;
+    const hueDiff = Math.abs(darkHue - lightHue);
+    expect(Math.min(hueDiff, 360 - hueDiff)).toBeLessThanOrEqual(45);
+  });
+
+  test("anchors pastel surfaces to the image's hue family instead of fixed gray", () => {
+    const pink = { r: 255, g: 182, b: 193 };
+    const lavender = { r: 216, g: 191, b: 216 };
+    const paleBlue = { r: 230, g: 230, b: 250 };
+
+    const data = makeImage(16, 16, (x, y) => {
+      if (y < 4) return pink;
+      if (y < 8) return lavender;
+      if (y < 12) return paleBlue;
+      return { r: 245, g: 245, b: 220 };
+    });
+
+    const result = extractColorsFromRawPixels(data, 16, 16, 4);
+    const dominantHue = rgbToHsl(result.dominant.r, result.dominant.g, result.dominant.b).h;
+    const darkSurfaceHue = rgbToHsl(result.ui.dark.surface.r, result.ui.dark.surface.g, result.ui.dark.surface.b).h;
+    const darkAccentHue = rgbToHsl(result.ui.dark.accent.r, result.ui.dark.accent.g, result.ui.dark.accent.b).h;
+
+    // Surface should sit in the same hue family as the dominant image color
+    // (pink/red), not drift to the old fixed blue-gray.
+    const surfaceHueDiff = Math.abs(darkSurfaceHue - dominantHue);
+    expect(Math.min(surfaceHueDiff, 360 - surfaceHueDiff)).toBeLessThanOrEqual(60);
+
+    // Accent should be even closer to the dominant hue family.
+    const accentHueDiff = Math.abs(darkAccentHue - dominantHue);
+    expect(Math.min(accentHueDiff, 360 - accentHueDiff)).toBeLessThanOrEqual(35);
+
+    // It should still be a proper dark surface, not brown/gray.
+    expect(luminance(result.ui.dark.surface)).toBeGreaterThanOrEqual(24);
+    expect(luminance(result.ui.dark.surface)).toBeLessThan(70);
   });
 });

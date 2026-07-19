@@ -21,6 +21,7 @@ import { worldBooksApi } from '@/api/world-books'
 import type { WorldBook, WorldBookDiagnostics } from '@/types/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './WorldBookDiagnosticsModal.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type DiagnosticVectorEntry = WorldBookDiagnostics['vector_trace'][number]
 type DiagnosticOutcomeCode = DiagnosticVectorEntry['final_outcome_code']
@@ -33,6 +34,7 @@ function getDiagnosticBreakdownLabels(t: TFunction<'panels'>): Array<{
   return [
     { key: 'vectorSimilarity', label: t('worldBookDiagnostics.breakdown.vectorSimilarity') },
     { key: 'lexicalContentBoost', label: t('worldBookDiagnostics.breakdown.lexicalContentBoost') },
+    { key: 'supportingContextBoost', label: t('worldBookDiagnostics.breakdown.supportingContextBoost') },
     { key: 'primaryExact', label: t('worldBookDiagnostics.breakdown.primaryExact') },
     { key: 'primaryPartial', label: t('worldBookDiagnostics.breakdown.primaryPartial') },
     { key: 'secondaryExact', label: t('worldBookDiagnostics.breakdown.secondaryExact') },
@@ -529,6 +531,13 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
       `Rerank cutoff: ${formatDiagnosticNumber(diagnostics.embeddings.rerank_cutoff)}`,
       `Ready: ${diagnostics.embeddings.ready}`,
       '',
+      'WORLD-BOOK QUERY SCOPE',
+      `Global scan depth: ${diagnostics.query_scope.configured_scan_depth ?? 'Unlimited'}`,
+      `Visible messages available: ${diagnostics.query_scope.visible_messages_available}`,
+      `Vector messages selected: ${diagnostics.query_scope.vector_messages_selected}`,
+      `Vector query token limit: ${diagnostics.query_scope.max_tokens}`,
+      `Vector query token-truncated: ${diagnostics.query_scope.token_truncated ? 'Yes' : 'No'}`,
+      '',
       'FINAL WORLD INFO STATS',
       `Total candidates: ${diagnostics.stats.totalCandidates}`,
       `Activated before budget: ${diagnostics.stats.activatedBeforeBudget}`,
@@ -549,6 +558,14 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
       'QUERY PREVIEW',
       diagnostics.query_preview || '(empty)',
       '',
+      'LEXICAL QUERY PREVIEWS',
+      ...(diagnostics.lexical_query_previews.length > 0
+        ? diagnostics.lexical_query_previews.flatMap((batch, index) => [
+          `Batch ${index + 1} (${batch.kind})`,
+          batch.text,
+          '',
+        ])
+        : ['(none)', '']),
       'BLOCKERS / NOTES',
     ]
 
@@ -626,7 +643,6 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
     keywordHitIds,
     noteMessages,
     overlapCount,
-    pulledTraceCount,
     t,
   ])
 
@@ -880,16 +896,28 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                         </div>
                       ) : (
                         <>
-                          <label className={styles.searchField}>
+                          <div className={styles.searchField}>
                             <Search size={14} className={styles.searchIcon} />
                             <input
                               type="text"
                               className={styles.searchInput}
                               value={traceSearch}
                               onChange={(event) => setTraceSearch(event.target.value)}
+                              onKeyDown={(event) => clearSearchOnEscape(event, traceSearch, () => setTraceSearch(''))}
                               placeholder={t('worldBookDiagnostics.sections.searchPlaceholder')}
+                              aria-label={t('worldBookDiagnostics.sections.searchPlaceholder')}
                             />
-                          </label>
+                            {traceSearch && (
+                              <button
+                                type="button"
+                                className={styles.searchClear}
+                                onClick={() => setTraceSearch('')}
+                                aria-label={t('worldBookDiagnostics.sections.searchPlaceholder')}
+                              >
+                                <X size={13} />
+                              </button>
+                            )}
+                          </div>
                           <div className={styles.traceSearchMeta}>
                             {traceSearch.trim()
                               ? t('worldBookDiagnostics.sections.searchMatch', {
@@ -930,9 +958,21 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                         <h3 className={styles.sectionTitle}>{t('worldBookDiagnostics.sections.queryTitle')}</h3>
                       </div>
                     </div>
-                    <div className={styles.queryBlock}>
+                    <div
+                      className={clsx(styles.queryBlock, styles.scrollPanel, styles.queryPreviewScroll)}
+                      role="region"
+                      aria-label={t('worldBookDiagnostics.sections.queryTitle')}
+                      tabIndex={0}
+                    >
                       {diagnostics.query_preview || t('worldBookDiagnostics.sections.noQuery')}
                     </div>
+                    {diagnostics.lexical_query_previews.map((batch, index) => (
+                      <div className={styles.queryBlock} key={`lexical-query-${index}`}>
+                        <strong>FTS batch {index + 1} ({batch.kind})</strong>
+                        {'\n'}
+                        {batch.text}
+                      </div>
+                    ))}
                   </section>
 
                   <section className={styles.sectionCard}>
@@ -958,6 +998,26 @@ export default function WorldBookDiagnosticsModal({ book, chatId, onClose }: Pro
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.worldBookVectorization')}</span>
                         <span className={styles.factValue}>{diagnostics.embeddings.vectorize_world_books ? t('worldBookDiagnostics.on') : t('worldBookDiagnostics.off')}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.globalScanDepth')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.configured_scan_depth ?? t('worldBookDiagnostics.unlimited')}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.visibleMessagesAvailable')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.visible_messages_available}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorMessagesSelected')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.vector_messages_selected}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorQueryTokenLimit')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.max_tokens}</span>
+                      </div>
+                      <div className={styles.factRow}>
+                        <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.vectorQueryTruncated')}</span>
+                        <span className={styles.factValue}>{diagnostics.query_scope.token_truncated ? t('worldBookDiagnostics.yes') : t('worldBookDiagnostics.no')}</span>
                       </div>
                       <div className={styles.factRow}>
                         <span className={styles.factLabel}>{t('worldBookDiagnostics.facts.similarityThreshold')}</span>

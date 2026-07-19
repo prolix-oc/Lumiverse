@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { UISlice } from '@/types/store'
 
 let toastCounter = 0
+let settingsScrollCounter = 0
 
 export const createUISlice: StateCreator<UISlice> = (set) => ({
   activeModal: null,
@@ -12,6 +13,7 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   drawerTab: null,
   settingsModalOpen: false,
   settingsActiveView: 'display',
+  settingsScrollTarget: null,
   portraitPanelOpen: false,
   commandPaletteOpen: false,
   toasts: [],
@@ -30,8 +32,12 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   closeDrawer: () => set({ drawerOpen: false }),
   setDrawerTab: (tab) => set({ drawerTab: tab }),
 
-  openSettings: (view = 'display') =>
-    set({ settingsModalOpen: true, settingsActiveView: view }),
+  openSettings: (view = 'display', target) =>
+    set({
+      settingsModalOpen: true,
+      settingsActiveView: view,
+      settingsScrollTarget: target ? { ...target, nonce: ++settingsScrollCounter } : null,
+    }),
   closeSettings: () => set({ settingsModalOpen: false }),
 
   openCommandPalette: () => set({ commandPaletteOpen: true }),
@@ -48,6 +54,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
     return id
   },
 
+  updateToast: (id, update) =>
+    set((state) => ({
+      toasts: state.toasts.map((toast) => (toast.id === id ? { ...toast, ...update, id } : toast)),
+    })),
+
   removeToast: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
@@ -56,8 +67,11 @@ export const createUISlice: StateCreator<UISlice> = (set) => ({
   incrementBadgeCount: () => set((state) => ({ badgeCount: state.badgeCount + 1 })),
   resetBadgeCount: () => set({ badgeCount: 0 }),
 
-  lastRegenFeedback: '',
-  setLastRegenFeedback: (text) => set({ lastRegenFeedback: text }),
+  lastRegenFeedback: {},
+  setLastRegenFeedback: (chatId, text) =>
+    set((state) => ({
+      lastRegenFeedback: { ...state.lastRegenFeedback, [chatId]: text },
+    })),
 
   editingMessageId: null,
   setEditingMessageId: (id) => set({ editingMessageId: id }),

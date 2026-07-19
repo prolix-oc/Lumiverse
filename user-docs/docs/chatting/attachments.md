@@ -1,3 +1,7 @@
+---
+title: Attachments
+---
+
 # Attachments
 
 You can send images and audio files alongside your messages. When the AI supports multimodal input (vision or audio), it can see and respond to your attachments.

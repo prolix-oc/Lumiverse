@@ -1,3 +1,7 @@
+---
+title: Creating Personas
+---
+
 # Creating Personas
 
 Setting up a persona takes just a minute and makes a noticeable difference in how the AI addresses and interacts with you.

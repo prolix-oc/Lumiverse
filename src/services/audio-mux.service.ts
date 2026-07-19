@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { isFfmpegBinaryAvailable, resetFfmpegBinaryResolution, resolveFfmpegBinary } from "./ffmpeg-binary.service";
 
 export interface AudioSegment {
   data: Uint8Array | Buffer;
@@ -14,30 +15,19 @@ export interface MuxResult {
   muxed_with_ffmpeg: boolean;
 }
 
-let ffmpegAvailability: boolean | null = null;
-
 /**
- * Check whether `ffmpeg` is present on PATH. Cached after the first call so
- * subsequent muxes don't re-spawn a probe per request. Force re-detection by
- * calling `resetFfmpegProbe()` (used in tests).
+ * Check whether an ffmpeg binary is available. Native Termux stays on the
+ * system `ffmpeg`; other runtimes try PATH first and then the optional
+ * `ffmpeg-static` fallback. Cached after the first call so subsequent muxes
+ * don't re-spawn a probe per request. Force re-detection by calling
+ * `resetFfmpegProbe()` (used in tests).
  */
 export async function isFfmpegAvailable(): Promise<boolean> {
-  if (ffmpegAvailability !== null) return ffmpegAvailability;
-  try {
-    const proc = Bun.spawn(["ffmpeg", "-version"], {
-      stdout: "ignore",
-      stderr: "ignore",
-    });
-    const code = await proc.exited;
-    ffmpegAvailability = code === 0;
-  } catch {
-    ffmpegAvailability = false;
-  }
-  return ffmpegAvailability;
+  return isFfmpegBinaryAvailable();
 }
 
 export function resetFfmpegProbe(): void {
-  ffmpegAvailability = null;
+  resetFfmpegBinaryResolution();
 }
 
 function extForMime(mime: string): string {
@@ -321,7 +311,10 @@ function quoteConcatPath(p: string): string {
 }
 
 async function runFfmpeg(args: string[]): Promise<{ ok: boolean; stderr: string }> {
-  const proc = Bun.spawn(["ffmpeg", "-hide_banner", "-loglevel", "error", ...args], {
+  const ffmpeg = await resolveFfmpegBinary();
+  if (!ffmpeg) return { ok: false, stderr: "ffmpeg unavailable" };
+
+  const proc = Bun.spawn([ffmpeg, "-hide_banner", "-loglevel", "error", ...args], {
     stdout: "ignore",
     stderr: "pipe",
   });

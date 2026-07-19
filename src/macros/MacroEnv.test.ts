@@ -160,6 +160,152 @@ describe("buildEnv persona pronouns", () => {
   });
 });
 
+describe("buildEnv rejected swipe", () => {
+  test("defaults rejectedSwipe to empty", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.chat.rejectedSwipe).toBe("");
+  });
+
+  test("threads rejectedSwipe into chat macro state", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "regenerate",
+      connection: null,
+      rejectedSwipe: "Yes I am!",
+    });
+
+    expect(env.chat.rejectedSwipe).toBe("Yes I am!");
+  });
+});
+
+describe("buildEnv user input", () => {
+  test("threads the raw input-bar draft into macro state", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      userInput: "  Preserve this exact draft\n",
+    });
+
+    expect(env.extra.userInput).toBe("  Preserve this exact draft\n");
+  });
+});
+
+describe("buildEnv variables", () => {
+  test("does not rehydrate transient local macro variables from chat metadata", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: {
+        ...baseChat,
+        metadata: {
+          macro_variables: {
+            local: { stale: "from-disabled-block" },
+            global: { theme: "noir" },
+          },
+          chat_variables: { mood: "calm" },
+        },
+      },
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.variables.local.has("stale")).toBe(false);
+    expect(env.variables.global.get("theme")).toBe("noir");
+    expect(env.variables.chat.get("mood")).toBe("calm");
+  });
+});
+
+describe("buildEnv lastMessageTime", () => {
+  test("is undefined when there are no messages", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.extra.lastMessageTime).toBeUndefined();
+  });
+
+  test("is derived from the last message's send_date in milliseconds", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: null,
+      chat: baseChat,
+      messages: [
+        makeMessage({ content: "Hello", send_date: 1_700_000_000 }),
+        makeMessage({ id: "msg-2", content: "World", index_in_chat: 1, send_date: 1_700_000_060 }),
+      ],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.extra.lastMessageTime).toBe(1_700_000_060_000);
+  });
+});
+
+describe("buildEnv focused group character state", () => {
+  test("keeps focused member card fields separate from merged card fields", () => {
+    const focusedCharacter: Character = {
+      ...baseCharacter,
+      id: "char-2",
+      name: "Charlie",
+      description: "Focused description",
+      personality: "Focused personality",
+    };
+
+    const env = buildEnv({
+      character: {
+        ...baseCharacter,
+        description: "Merged description",
+        personality: "Merged personality",
+      },
+      focusedCharacter,
+      persona: null,
+      chat: {
+        ...baseChat,
+        metadata: {
+          group: true,
+          character_ids: ["char-1", "char-2"],
+          group_card_mode: "merge",
+        },
+      },
+      messages: [],
+      generationType: "normal",
+      connection: null,
+      targetCharacterId: "char-2",
+    });
+
+    expect(env.names.charGroupFocused).toBe("Charlie");
+    expect(env.character.description).toBe("Merged description");
+    expect(env.character.personality).toBe("Merged personality");
+    expect(env.extra.groupFocusedCharacter).toMatchObject({
+      id: "char-2",
+      name: "Charlie",
+      description: "Focused description",
+      personality: "Focused personality",
+    });
+  });
+});
+
 describe("buildEnv groupCardMode", () => {
   test("returns 'solo' for non-group chats regardless of metadata", () => {
     const env = buildEnv({

@@ -1,3 +1,7 @@
+---
+title: OOC
+---
+
 # Out-of-Character (OOC) Comments
 
 OOC comments are special asides the AI can generate during roleplay — character-level thoughts, meta-commentary, or narrative observations that exist outside the story itself. Think of them as margin notes from the character (or council) to the reader.

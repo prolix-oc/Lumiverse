@@ -10,6 +10,13 @@ export const ARCHIVE_SCHEMA_VERSION = 1;
 
 export const ARCHIVE_PRODUCER = "lumiverse";
 
+/**
+ * Marker written by exports that use the bounded fixed-window NDJSON path.
+ * Its absence identifies archives created before this compatibility marker
+ * existed; the importer then uses its separately bounded legacy reader.
+ */
+export const NDJSON_FORMAT_VERSION = 1;
+
 export interface ArchiveEmbeddingConfig {
   provider: string | null;
   model: string | null;
@@ -30,6 +37,11 @@ export interface ArchiveManifest {
   archiveId: string;
   /** Lumiverse server version that produced the archive, if known. */
   producerVersion: string | null;
+  /**
+   * Optional so archives exported before this marker remain valid. A value of
+   * 1 or newer means individual NDJSON records obey the modern 4 MiB cap.
+   */
+  ndjsonFormatVersion?: number;
   /** Did the export include LanceDB vectors? */
   includeVectors: boolean;
   /**
@@ -68,6 +80,7 @@ export function createManifest(input: {
     exportedAt: Math.floor(Date.now() / 1000),
     archiveId: input.archiveId,
     producerVersion: input.producerVersion,
+    ndjsonFormatVersion: NDJSON_FORMAT_VERSION,
     includeVectors: input.includeVectors,
     embeddingConfig: input.embeddingConfig,
     counts: input.counts,
@@ -105,6 +118,12 @@ export function parseManifest(raw: unknown): ArchiveManifest {
   }) as ArchiveEmbeddingConfig;
   const counts = (m.counts ?? {}) as Record<string, number>;
   const missingFiles = Array.isArray(m.missingFiles) ? (m.missingFiles as string[]) : [];
+  const ndjsonFormatVersion =
+    typeof m.ndjsonFormatVersion === "number" &&
+    Number.isInteger(m.ndjsonFormatVersion) &&
+    m.ndjsonFormatVersion >= NDJSON_FORMAT_VERSION
+      ? m.ndjsonFormatVersion
+      : undefined;
 
   return {
     schemaVersion,
@@ -112,6 +131,7 @@ export function parseManifest(raw: unknown): ArchiveManifest {
     exportedAt: Number(m.exportedAt) || 0,
     archiveId: String(m.archiveId || ""),
     producerVersion: m.producerVersion ?? null,
+    ndjsonFormatVersion,
     includeVectors,
     embeddingConfig,
     counts,

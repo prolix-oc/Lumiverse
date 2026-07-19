@@ -43,7 +43,7 @@
     "backHome": "ホームに戻る",
     "regenerate": "再生成",
     "continue": "続行",
-    "sendAsPersona": "次のメッセージをペルソナとして送信",
+    "sendAsPersona": "このチャットのペルソナを切り替え",
     "personaAddons": "ペルソナアドオン",
     "personaAddonsCustomized": "ペルソナアドオン—このチャット用にカスタマイズ",
     "guidedGenerations": "ガイド付き世代",
@@ -63,6 +63,11 @@
     "stopGeneration": "生成を停止",
     "sendMessage": "メッセージを送信",
     "sendMessageQueueHint": "メッセージを送信（ {{mod}} +クリックしてキューに入る）",
+    "sendMessageTouchQueueHint": "メッセージを送信（長押しでキュー）",
+    "holdToQueue": "長押しでキュー",
+    "keepHoldingToQueue": "そのまま長押し",
+    "releaseToQueue": "離してキュー",
+    "queueingMessage": "キューに追加中…",
     "sendQueuedMessages": "すべての送信待ちメールを送信(S)_BAR_/_BAR_$[~setProps ~label &apos;送信&apos;]",
     "nudgeFreshReply": "新鮮な返信を得るためにナッジする",
     "processingSpeech": "音声処理中",
@@ -81,12 +86,25 @@
     "modCmd": "CMD",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "チャット内を検索",
+    "placeholder": "チャット内を検索…",
+    "clear": "検索テキストをクリア",
+    "previous": "前の結果",
+    "next": "次の結果",
+    "close": "検索を閉じる",
+    "matchCount": "{{current}} / {{total}}",
+    "noMatches": "結果なし",
+    "loading": "検索中…",
+    "searchFailed": "このチャットを検索できませんでした"
+  },
   "quickMenu": {
     "noGuidedGenerations": "ガイド付き世代が設定されていません。",
+    "disableAllGuidedGenerations": "すべてのガイド付き生成を無効化",
     "manageInSettings": "設定で管理",
     "noQuickReplySets": "有効なクイック返信セットはありません。",
     "untitledReply": "無題の返信",
-    "clearOneShotPersona": "ワンショットペルソナをクリア",
+    "clearOneShotPersona": "チャットのペルソナをクリア",
     "noPersonas": "利用可能なペルソナはありません。",
     "manageChats": "チャットを管理",
     "manageConnections": "接続を管理",
@@ -159,6 +177,7 @@
     "creatingChatCortex": "バックグラウンドでチャットを作成し、Memory Cortexを準備しています…",
     "failedCreateChat": "チャットを作成できませんでした",
     "failedStartNewChat": "新しいチャットを開始できませんでした",
+    "failedDeleteChat": "このチャットを削除できませんでした",
     "failedOpenChat": "開けませんでした",
     "characterImported": "「{{name}}」がインポートされました",
     "importFailed": "読み込めませんでした",
@@ -194,7 +213,8 @@
     "noMemoryRebuildNeeded": "このチャットにはメモリの再構築は必要ありませんでした。",
     "failedRecompileMemories": "メモリの再コンパイルに失敗しました",
     "chatDocuments": "チャットドキュメント",
-    "chatDocumentsNamed": "{{name}}チャット"
+    "chatDocumentsNamed": "{{name}}チャット",
+    "failedSaveChatPersona": "このチャットのペルソナを保存できませんでした"
   },
   "addGroupMember": {
     "title": "グループメンバー",
@@ -362,7 +382,9 @@
     "fork": {
       "title": "フォークチャット",
       "message": "このメッセージで新しいチャットブランチを作成しますか？この時点までのすべてのメッセージがコピーされます。",
-      "confirm": "フォーク"
+      "confirm": "フォーク",
+      "nameLabel": "チャット名（任意）",
+      "namePlaceholder": "空欄のままにすると自動で名前が付けられます"
     },
     "delete": {
       "title": "削除",
@@ -375,5 +397,11 @@
       "message": "これにより、このメッセージはチャットから完全に削除されます。",
       "confirm": "削除"
     }
+  },
+  "newChatConfirm": {
+    "title": "新しいチャットを開始",
+    "message": "新しいチャットを開始してもよろしいですか？",
+    "confirm": "新しいチャットを開始",
+    "deleteThisChat": "このチャットを削除"
   }
 }

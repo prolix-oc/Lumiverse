@@ -226,6 +226,10 @@
   margin-bottom: 12px;
 }
 
+.paginationBar {
+  margin-top: 4px;
+}
+
 .card {
   border: 1px solid var(--lumiverse-border);
   border-radius: 8px;

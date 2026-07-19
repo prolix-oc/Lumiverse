@@ -5,6 +5,8 @@ export interface MessageAttachment {
   original_filename: string;
   width?: number;             // images only
   height?: number;            // images only
+  /** Image-only: bounded WebP data URL for multiplayer peers that cannot fetch the host's image row. */
+  relay_preview_url?: string;
   /**
    * Audio-only: the message swipe this audio was generated for. Audio is
    * a per-swipe artifact (regenerating a swipe should not invalidate the
@@ -31,6 +33,23 @@ export interface Message {
   parent_message_id: string | null;
   branch_id: string | null;
   created_at: number;
+}
+
+/** A persisted, currently-visible message that matched a chat find query. */
+export interface ChatMessageSearchMatch {
+  id: string;
+  index_in_chat: number;
+  /** Zero-based position in the persisted chat history. */
+  offset: number;
+}
+
+export interface ChatMessageSearchResult {
+  data: ChatMessageSearchMatch[];
+  /** Total matching messages, including any omitted by the response cap. */
+  total: number;
+  /** Total persisted messages in the chat at the time of the search. */
+  message_total: number;
+  truncated: boolean;
 }
 
 export interface CreateMessageInput {

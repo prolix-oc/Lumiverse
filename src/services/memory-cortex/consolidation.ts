@@ -493,9 +493,11 @@ async function generateConsolidationSummary(
 
     const json = extractJson(response.content);
     if (json) {
+      const parsedSummary = typeof json.summary === "string" ? json.summary.trim() : "";
+      const parsedTitle = typeof json.title === "string" ? json.title.trim() : "";
       return {
-        summary: json.summary || extractiveConsolidation(chunks, extraScaffoldTags),
-        title: json.title || null,
+        summary: parsedSummary || extractiveConsolidation(chunks, extraScaffoldTags),
+        title: parsedTitle || null,
       };
     }
   } catch (err) {
@@ -546,9 +548,11 @@ async function generateArcSummary(
 
     const json = extractJson(response.content);
     if (json) {
+      const parsedSummary = typeof json.summary === "string" ? json.summary.trim() : "";
+      const parsedTitle = typeof json.title === "string" ? json.title.trim() : "";
       return {
-        summary: json.summary || combinedSummaries,
-        title: json.title || null,
+        summary: parsedSummary || combinedSummaries,
+        title: parsedTitle || null,
       };
     }
   } catch (err) {

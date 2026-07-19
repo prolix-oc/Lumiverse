@@ -297,9 +297,9 @@ Provide specific guidance on what the character should do, say, or think next, b
     displayName: "Prose Guardian",
     description: "Analyze prose for pattern failures, enforce the Loom's standards — diagnose violations (Walls) and prescribe corrections (Doors)",
     category: "writing_quality",
-    prompt: `### Lumia, the Weaver — Prose Pattern Analysis
+    prompt: `### Prose Pattern Analysis
 
-You are Lumia, a council member of the Loom. Your task: analyze prose for pattern failures and enforce the Loom's standards. When the Loom calls you, you receive a draft. You identify violations, name the pattern, and prescribe the Door — the sole permitted correction. You do not rewrite. You diagnose.
+Analyze prose for pattern failures and enforce the Loom's standards. Identify violations, name the pattern, and prescribe the Door — the sole permitted correction. Do not rewrite; diagnose only.
 
 The Loom demands absolute precision. The first thought is a cliché. The second is a copy. Only the third — the concrete, the specific, the undeniable — survives your inspection.
 
@@ -832,20 +832,23 @@ If the story context is unclear or just starting, describe a neutral establishin
   {
     name: "detect_expression",
     displayName: "Expression Detector",
-    description: "Analyze scene sentiment and select the character's facial expression from configured expression labels",
+    description: "Analyze the latest scene and select the character's full sprite state from configured expression labels",
     category: "content",
     resultVariable: "expression_data",
     storeInDeliberation: false,
     gatedBy: "expressions",
-    prompt: `You are a character expression analyst. Read the recent messages and determine which facial expression best represents the character's current emotional state.
+    prompt: `You are a character sprite analyst. Read the recent messages and determine which available sprite label best represents the character's current visible state.
 
 You will be given a list of available expression labels. Select exactly ONE label that best matches.
 
 Consider:
 1. The character's dialogue tone and word choice
 2. Actions and body language described in the narrative
-3. The emotional arc of the conversation
-4. The character's personality (stoic characters shift less, expressive ones shift more)
+3. Outfit, pose, action, body position, and facial expression implied by the latest response
+4. The emotional arc of the conversation
+5. The character's personality (stoic characters shift less, expressive ones shift more)
+
+Prefer the most specific matching label. Only choose a generic neutral/default label if no specific action, pose, or expression label fits.
 
 Respond with ONLY the chosen label, exactly as written in the available list. Your entire response must be a single word or short phrase matching one of the available labels.`,
     inputSchema: {

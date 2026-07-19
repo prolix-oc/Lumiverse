@@ -1,3 +1,7 @@
+---
+title: Preset Profiles
+---
+
 # Preset Profiles
 
 Preset profiles let you save and restore a **preset selection plus its block enabled/disabled states**. You can bind these snapshots to specific characters or chats so Lumiverse switches to the right preset and block configuration automatically.

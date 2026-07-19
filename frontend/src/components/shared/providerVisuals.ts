@@ -5,6 +5,7 @@ export const PROVIDER_COLORS: Record<string, string> = {
   anthropic: '#d97757',
   google: '#4285f4',
   google_vertex: '#34a853',
+  bedrock: '#ff9900',
   openrouter: '#6366f1',
   infermatic: '#8b5cf6',
   nanogpt: '#10b981',
@@ -17,6 +18,8 @@ export const PROVIDER_COLORS: Record<string, string> = {
   openai_tts: '#10a37f',
   elevenlabs: '#8b5cf6',
   kokoro: '#f59e0b',
+  cartesia: '#5046e5',
+  qwen3_tts_server: '#f97316',
   // fallback
   custom: 'var(--lumiverse-text-dim)',
 }

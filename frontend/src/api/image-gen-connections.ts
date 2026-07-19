@@ -25,6 +25,7 @@ export type ComfyUIMappedFieldSemantic =
   | 'width'
   | 'height'
   | 'checkpoint'
+  | 'unet'
   | 'custom'
 
 export interface ComfyUIFieldMapping {
@@ -43,6 +44,18 @@ export interface ComfyUIWorkflowConfig {
   imported_at: number
   needs_reimport?: boolean
   unknown_nodes?: string[]
+}
+
+export interface ComfyUIWorkflowSummary {
+  id: string
+  name: string
+  updated_at: number
+  node_count: number
+}
+
+export interface ComfyUIWorkflowList {
+  workflows: ComfyUIWorkflowSummary[]
+  active_id: string | null
 }
 
 export const imageGenConnectionsApi = {
@@ -100,6 +113,26 @@ export const imageGenConnectionsApi = {
 
   updateComfyUIWorkflowMappings(id: string, mappings: ComfyUIFieldMapping[]) {
     return put<{ config: ComfyUIWorkflowConfig }>(`/image-gen-connections/${id}/comfyui/workflow/mappings`, { mappings })
+  },
+
+  listComfyUIWorkflows(id: string) {
+    return get<ComfyUIWorkflowList>(`/image-gen-connections/${id}/comfyui/workflows`)
+  },
+
+  saveComfyUIWorkflow(id: string, name: string) {
+    return post<ComfyUIWorkflowList>(`/image-gen-connections/${id}/comfyui/workflows`, { name })
+  },
+
+  renameComfyUIWorkflow(id: string, workflowId: string, name: string) {
+    return put<ComfyUIWorkflowList>(`/image-gen-connections/${id}/comfyui/workflows/${workflowId}`, { name })
+  },
+
+  activateComfyUIWorkflow(id: string, workflowId: string) {
+    return post<{ config: ComfyUIWorkflowConfig } & ComfyUIWorkflowList>(`/image-gen-connections/${id}/comfyui/workflows/${workflowId}/activate`)
+  },
+
+  deleteComfyUIWorkflow(id: string, workflowId: string) {
+    return del<ComfyUIWorkflowList>(`/image-gen-connections/${id}/comfyui/workflows/${workflowId}`)
   },
 
   async getComfyUICapabilities(id: string, forceRefresh = false) {

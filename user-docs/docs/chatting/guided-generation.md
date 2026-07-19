@@ -1,3 +1,7 @@
+---
+title: Guided Generation
+---
+
 # Guided Generation
 
 Guided generation lets you attach reusable prompt fragments to your messages — short instructions that shape the AI's response without you having to type them every time.

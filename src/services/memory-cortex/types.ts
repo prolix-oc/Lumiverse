@@ -497,6 +497,7 @@ export interface ChunkIngestionData {
   chunkId: string;
   chatId: string;
   userId: string;
+  characterId: string | null;
   content: string;
   messageIds: string[];
   startMessageIndex: number;

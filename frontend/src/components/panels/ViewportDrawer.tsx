@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Sparkles, Settings, Puzzle } from 'lucide-react'
 import { useStore } from '@/store'
@@ -41,8 +41,10 @@ export default function ViewportDrawer() {
   const openSettings = useStore((s) => s.openSettings)
   const openModal = useStore((s) => s.openModal)
   const setSetting = useStore((s) => s.setSetting)
+  const settingsLoaded = useStore((s) => s.settingsLoaded)
   const drawerSettings = useStore((s) => s.drawerSettings)
   const drawerTabs = useStore((s) => s.drawerTabs)
+  const hiddenPlacements = useStore((s) => s.hiddenPlacements)
   const isGroupChat = useStore((s) => s.isGroupChat)
 
   const isMobile = useIsMobile()
@@ -74,9 +76,10 @@ export default function ViewportDrawer() {
     }
   }, [updateTabListScroll])
 
-  const showTabLabels = drawerSettings.showTabLabels ?? false
+  const showTabLabels = drawerSettings.showTabLabels ?? true
   const hiddenTabIds = sanitizeHiddenDrawerTabIds(drawerSettings.hiddenTabIds)
   const hiddenTabIdsSet = new Set(hiddenTabIds)
+  const hiddenPlacementIdsSet = new Set(hiddenPlacements)
   const tabOrder = sanitizeDrawerTabOrder(drawerSettings.tabOrder)
 
   const updateDrawer = useCallback(
@@ -95,10 +98,13 @@ export default function ViewportDrawer() {
   const orderedDrawerTabs = applyDrawerTabOrder(drawerTabs, tabOrder)
   const orderedExtensionEntries = applyDrawerTabOrder(extensionEntries, tabOrder)
   const visibleBuiltInTabs = orderedBuiltInTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id))
-  const visibleDrawerTabs = orderedDrawerTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id))
-  const visibleExtensionEntries = orderedExtensionEntries.filter((entry) => !hiddenTabIdsSet.has(entry.id))
+  const visibleDrawerTabs = orderedDrawerTabs.filter((tab) => !hiddenTabIdsSet.has(tab.id) && !hiddenPlacementIdsSet.has(tab.id))
+  const visibleExtensionEntries = orderedExtensionEntries.filter((entry) => !hiddenTabIdsSet.has(entry.id) && !hiddenPlacementIdsSet.has(entry.id))
   const requestedActiveTab = drawerTab || 'profile'
-  const allTabs = [...visibleBuiltInTabs, ...visibleExtensionEntries]
+  const allTabs = useMemo(
+    () => [...visibleBuiltInTabs, ...visibleExtensionEntries],
+    [visibleBuiltInTabs, visibleExtensionEntries],
+  )
   const activeTab = allTabs.some((tab) => tab.id === requestedActiveTab) ? requestedActiveTab : 'profile'
   const activeTabConfig = allTabs.find((t) => t.id === activeTab) || DRAWER_TABS[0]
 
@@ -169,6 +175,8 @@ export default function ViewportDrawer() {
     }
   })()
 
+  if (!settingsLoaded) return null
+
   return (
     <>
       <AnimatePresence>
@@ -186,6 +194,7 @@ export default function ViewportDrawer() {
       <div
         className={clsx(
           styles.wrapper,
+          isCompact && styles.wrapperCompact,
           isRight ? styles.wrapperRight : styles.wrapperLeft,
           drawerOpen && styles.wrapperOpen,
         )}
@@ -303,7 +312,7 @@ export default function ViewportDrawer() {
               </h2>
               <CloseButton onClick={closeDrawer} />
             </div>
-            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser') && styles.panelContentFull)} ref={panelContentRef}>
+            <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser' || activeTab === 'lorebook') && styles.panelContentFull)} ref={panelContentRef}>
               <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>
           </div>

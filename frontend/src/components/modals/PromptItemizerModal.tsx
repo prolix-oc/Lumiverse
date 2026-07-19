@@ -53,6 +53,7 @@ export default function PromptItemizerModal() {
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const getActivePresetForGeneration = useStore((s) => s.getActivePresetForGeneration)
 
   const messageId = modalProps?.messageId as string | undefined
@@ -61,6 +62,15 @@ export default function PromptItemizerModal() {
     const m = messages.find((x) => x.id === messageId) as { chat_id?: string } | undefined
     return m?.chat_id ?? activeChatId
   }, [messageId, messages, activeChatId])
+  const rawTargetCharacterId = useMemo(() => {
+    const sourceMessage = messageId
+      ? messages.find((x) => x.id === messageId)
+      : null
+    if (typeof sourceMessage?.extra?.character_id === 'string') {
+      return sourceMessage.extra.character_id
+    }
+    return activeGroupCharacterId ?? activeCharacterId ?? null
+  }, [messageId, messages, activeGroupCharacterId, activeCharacterId])
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<BreakdownCacheEntry | null>(null)
@@ -90,6 +100,7 @@ export default function PromptItemizerModal() {
           entries: res.entries,
           messages: res.messages,
           totalTokens: res.totalTokens,
+          chatHistoryTokens: res.chatHistoryTokens,
           maxContext: res.maxContext,
           model: res.model,
           provider: res.provider,
@@ -130,6 +141,7 @@ export default function PromptItemizerModal() {
         preset_id: presetId,
         force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
         exclude_message_id: messageId,
+        target_character_id: rawTargetCharacterId || undefined,
       })
       setRawData(res)
       return res
@@ -139,7 +151,7 @@ export default function PromptItemizerModal() {
     } finally {
       setRawLoading(false)
     }
-  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration])
+  }, [rawData, chatId, messageId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, rawTargetCharacterId, t])
 
   const handleToggleRaw = useCallback(async () => {
     if (rawView !== 'off') {
@@ -170,7 +182,17 @@ export default function PromptItemizerModal() {
   const groups = useMemo(() => (data ? groupBreakdownEntries(data.entries) : []), [data])
   const groupLabel = useCallback((id: string, fallback: string) => translateBreakdownGroupLabel(id, t), [t])
   const sidecarGroup = groups.find((g) => g.id === 'sidecar')
+  const chatHistoryGroup = data?.chatHistoryTokens != null && data.chatHistoryTokens > 0
+    ? {
+        id: 'chatHistory',
+        label: 'Chat History',
+        color: '#d4a842',
+        tokens: data.chatHistoryTokens,
+        entries: [],
+      }
+    : null
   const mainGroups = groups.filter((g) => g.id !== 'sidecar')
+  const summaryGroups = chatHistoryGroup ? [chatHistoryGroup, ...mainGroups] : mainGroups
   const flatEntries = useMemo(
     () => groups.flatMap((group) => group.entries.map((entry, index) => ({
       key: getEntryKey(group.id, index),
@@ -280,7 +302,13 @@ export default function PromptItemizerModal() {
             {!loading && !data && <div className={styles.empty}>{t('empty')}</div>}
             {!loading && data && rawView === 'off' && (
               <>
-                <StackedBar groups={mainGroups} total={data.totalTokens} groupLabel={groupLabel} />
+                <StackedBar groups={summaryGroups} total={data.totalTokens} groupLabel={groupLabel} />
+                {data.chatHistoryTokens != null && data.chatHistoryTokens > 0 && (
+                  <div className={styles.cacheSummary}>
+                    <span>{t('chatHistoryTokens')}</span>
+                    <span className={styles.cacheSummaryMetric}>{ts('tokens', { count: data.chatHistoryTokens })}</span>
+                  </div>
+                )}
                 {anthropicCacheUsage && (
                   <div className={styles.cacheSummary}>
                     <span>{t('anthropicCache')}</span>
@@ -308,7 +336,7 @@ export default function PromptItemizerModal() {
                     )}
                   </div>
                 )}
-                <Legend groups={mainGroups} groupLabel={groupLabel} />
+                <Legend groups={summaryGroups} groupLabel={groupLabel} />
                 {mainGroups.map((group) => (
                   <GroupAccordion
                     key={group.id}
@@ -421,6 +449,11 @@ export default function PromptItemizerModal() {
               {sidecarGroup && sidecarGroup.tokens > 0 && (
                 <span className={styles.footerMax} style={{ marginLeft: 6, color: '#e05daa' }}>
                   {t('footerSidecar', { count: sidecarGroup.tokens })}
+                </span>
+              )}
+              {data.chatHistoryTokens != null && data.chatHistoryTokens > 0 && (
+                <span className={styles.footerMax} style={{ marginLeft: 6 }}>
+                  {t('footerChatHistory', { count: data.chatHistoryTokens })}
                 </span>
               )}
               <div className={styles.footerSpacer} />

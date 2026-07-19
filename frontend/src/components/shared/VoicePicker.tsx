@@ -53,7 +53,7 @@ export default function VoicePicker({
   const ttsProfiles = useStore((s) => s.ttsProfiles)
   const ttsProviders = useStore((s) => s.ttsProviders)
 
-  const [voicesByConnection, setVoicesByConnection] = useState<Record<string, TtsVoice[]>>({})
+  const [voicesByConnection, setVoicesByConnection] = useState<Record<string, { updatedAt: number; voices: TtsVoice[] }>>({})
   const [voicesLoading, setVoicesLoading] = useState(false)
 
   const activeConnection = useMemo(
@@ -70,20 +70,27 @@ export default function VoicePicker({
   // a connection profile.
   useEffect(() => {
     if (!activeConnection) return
-    if (voicesByConnection[activeConnection.id]) return
+    const cached = voicesByConnection[activeConnection.id]
+    if (cached && cached.updatedAt === activeConnection.updated_at) return
     let cancelled = false
     setVoicesLoading(true)
     ttsConnectionsApi
       .voices(activeConnection.id)
       .then((result) => {
         if (cancelled) return
-        setVoicesByConnection((prev) => ({ ...prev, [activeConnection.id]: result.voices }))
+        setVoicesByConnection((prev) => ({
+          ...prev,
+          [activeConnection.id]: { updatedAt: activeConnection.updated_at, voices: result.voices },
+        }))
       })
       .catch(() => {
         if (cancelled) return
         // Cache an empty list so we don't refetch on every interaction —
         // user falls back to the static voice list or manual entry.
-        setVoicesByConnection((prev) => ({ ...prev, [activeConnection.id]: [] }))
+        setVoicesByConnection((prev) => ({
+          ...prev,
+          [activeConnection.id]: { updatedAt: activeConnection.updated_at, voices: [] },
+        }))
       })
       .finally(() => {
         if (!cancelled) setVoicesLoading(false)
@@ -93,7 +100,7 @@ export default function VoicePicker({
 
   const voiceOptions = useMemo(() => {
     if (!activeConnection) return []
-    const dynamicVoices = voicesByConnection[activeConnection.id] ?? []
+    const dynamicVoices = voicesByConnection[activeConnection.id]?.voices ?? []
     const staticVoices = provider?.capabilities?.staticVoices ?? []
     const merged = dynamicVoices.length > 0 ? dynamicVoices : staticVoices
     const options = merged.map((v) => ({

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useParams } from 'react-router'
+import { useNavigate, useParams } from 'react-router'
 import { UserRound, ListChecks } from 'lucide-react'
 import { useStore } from '@/store'
 import { toast } from '@/lib/toast'
@@ -11,10 +11,15 @@ import { loadoutsApi } from '@/api/loadouts'
 import { recoverPooledGeneration } from '@/lib/generation-recovery'
 import { charactersApi } from '@/api/characters'
 import { packsApi } from '@/api/packs'
-import { imagesApi } from '@/api/images'
 import { expressionsApi } from '@/api/expressions'
-import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
+import { personaToastName } from '@/store/slices/personas'
+import {
+  CHAT_PERSONA_METADATA_KEY,
+  resolveChatPersonaSelection,
+  setPersistedChatPersonaId,
+} from '@/lib/chatPersonaSelection'
 import type { WallpaperRef } from '@/types/store'
+import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
@@ -22,6 +27,7 @@ import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
 import MessageSelectBar from './MessageSelectBar'
 import InputArea from './InputArea'
+import ChatFindBar, { type ChatFindNavigationTarget } from './ChatFindBar'
 import ScrollToBottom from './ScrollToBottom'
 import CouncilPill from './CouncilPill'
 import PortraitPanel from './PortraitPanel'
@@ -49,6 +55,14 @@ interface SpindleNotice {
 const SPINDLE_NOTICE_SHOW_DELAY_MS = 180
 const SPINDLE_NOTICE_HIDE_DELAY_MS = 280
 const SPINDLE_NOTICE_MIN_VISIBLE_MS = 700
+const WALLPAPER_TRANSITION_HALF_MS = 260
+const WALLPAPER_READY_FALLBACK_MS = 5000
+const CHAT_CHROME_ENTER_MS = 90
+const CHAT_CHROME_LEAVE_MS = 220
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+}
 
 interface CortexRebuildStatus {
   chatId?: string
@@ -172,7 +186,7 @@ function buildSpindleNotice(payload: SpindlePreGenerationActivityPayload, t: (ke
 export default function ChatView() {
   const { t } = useTranslation('chat')
   const { chatId } = useParams<{ chatId: string }>()
-  const autoSwitchedPersonaIdRef = useRef<string | null>(null)
+  const navigate = useNavigate()
   const spindleActiveRef = useRef(new Map<string, SpindlePreGenerationActivityPayload>())
   const spindleLatestRef = useRef<SpindlePreGenerationActivityPayload | null>(null)
   const spindleShowTimerRef = useRef<number | null>(null)
@@ -181,6 +195,10 @@ export default function ChatView() {
   const [ingestionStatus, setIngestionStatus] = useState<CortexIngestionStatus | null>(null)
   const [rebuildStatus, setRebuildStatus] = useState<CortexRebuildStatus | null>(null)
   const [spindleNotice, setSpindleNotice] = useState<SpindleNotice | null>(null)
+  const [chatFindOpen, setChatFindOpen] = useState(false)
+  const [chatFindFocusRequest, setChatFindFocusRequest] = useState(0)
+  const [chatFindQuery, setChatFindQuery] = useState('')
+  const [chatFindTarget, setChatFindTarget] = useState<ChatFindNavigationTarget | null>(null)
   const setActiveChat = useStore((s) => s.setActiveChat)
   const setMessages = useStore((s) => s.setMessages)
   const messages = useStore((s) => s.messages)
@@ -198,14 +216,126 @@ export default function ChatView() {
   const chatWidthMode = useStore((s) => s.chatWidthMode)
   const chatContentMaxWidth = useStore((s) => s.chatContentMaxWidth)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const wallpaperTransitionTimeouts = useRef<number[]>([])
+  const chromeEnterTimerRef = useRef<number | null>(null)
+  const chromeLeaveTimerRef = useRef<number | null>(null)
+  const [chatChromeEntering, setChatChromeEntering] = useState(() => !prefersReducedMotion())
+  const [chatChromeLeaving, setChatChromeLeaving] = useState(false)
   const messageSelectMode = useStore((s) => s.messageSelectMode)
   const setMessageSelectMode = useStore((s) => s.setMessageSelectMode)
+  const activeModal = useStore((s) => s.activeModal)
+  const commandPaletteOpen = useStore((s) => s.commandPaletteOpen)
   const toggleSelectMode = useCallback(() => {
     setMessageSelectMode(!messageSelectMode)
   }, [messageSelectMode, setMessageSelectMode])
 
+  const closeChatFind = useCallback(() => {
+    setChatFindOpen(false)
+    setChatFindQuery('')
+    setChatFindTarget(null)
+  }, [])
+
+  const openChatFind = useCallback(() => {
+    setChatFindOpen(true)
+    setChatFindFocusRequest((request) => request + 1)
+  }, [])
+
+  const clearChatFindTarget = useCallback(() => {
+    setChatFindTarget(null)
+  }, [])
+
+  useEffect(() => {
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if (activeModal || commandPaletteOpen) return
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'f') return
+
+      event.preventDefault()
+      openChatFind()
+    }
+
+    // Deliberately use the bubbling phase. ExpandedTextEditor owns its find
+    // shortcut from a capture listener and stops propagation, so its local
+    // Find remains authoritative when it is open above a chat.
+    document.addEventListener('keydown', handleFindShortcut)
+    return () => document.removeEventListener('keydown', handleFindShortcut)
+  }, [activeModal, commandPaletteOpen, openChatFind])
+
+  useEffect(() => {
+    setChatFindOpen(false)
+    setChatFindQuery('')
+    setChatFindTarget(null)
+  }, [chatId])
+
   useSwipeKeyboard()
   useEditKeyboard()
+
+  useLayoutEffect(() => {
+    if (!chatId) return
+
+    if (chromeEnterTimerRef.current !== null) {
+      window.clearTimeout(chromeEnterTimerRef.current)
+      chromeEnterTimerRef.current = null
+    }
+
+    if (prefersReducedMotion()) {
+      setChatChromeEntering(false)
+      document.body.removeAttribute('data-chat-chrome-entering')
+      return
+    }
+
+    setChatChromeEntering(true)
+    document.body.setAttribute('data-chat-chrome-entering', 'true')
+    const handlePopulated = () => {
+      setChatChromeEntering(false)
+      document.body.removeAttribute('data-chat-chrome-entering')
+      if (chromeEnterTimerRef.current !== null) {
+        window.clearTimeout(chromeEnterTimerRef.current)
+        chromeEnterTimerRef.current = null
+      }
+    }
+    window.addEventListener('lumiverse:chat-items-populated', handlePopulated, { once: true })
+
+    // Fallback if virtualizer fails or is completely empty
+    chromeEnterTimerRef.current = window.setTimeout(() => {
+      chromeEnterTimerRef.current = null
+      setChatChromeEntering(false)
+      document.body.removeAttribute('data-chat-chrome-entering')
+    }, Math.max(CHAT_CHROME_ENTER_MS, 400))
+
+    return () => {
+      window.removeEventListener('lumiverse:chat-items-populated', handlePopulated)
+      if (chromeEnterTimerRef.current !== null) {
+        window.clearTimeout(chromeEnterTimerRef.current)
+        chromeEnterTimerRef.current = null
+      }
+      document.body.removeAttribute('data-chat-chrome-entering')
+    }
+  }, [chatId])
+
+  useEffect(() => {
+    return () => {
+      if (chromeLeaveTimerRef.current !== null) {
+        window.clearTimeout(chromeLeaveTimerRef.current)
+        chromeLeaveTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const handleNavigateHome = useCallback(() => {
+    if (chromeLeaveTimerRef.current !== null) return
+
+    if (prefersReducedMotion()) {
+      navigate('/')
+      return
+    }
+
+    setChatChromeLeaving(true)
+    chromeLeaveTimerRef.current = window.setTimeout(() => {
+      chromeLeaveTimerRef.current = null
+      navigate('/')
+    }, CHAT_CHROME_LEAVE_MS)
+  }, [navigate])
 
   const cortexNotice = useMemo(() => buildCortexNotice(ingestionStatus, rebuildStatus, t), [ingestionStatus, rebuildStatus, t])
 
@@ -362,7 +492,7 @@ export default function ChatView() {
       offGenerationProgress()
       offGenerationEnd()
     }
-  }, [chatId])
+  }, [chatId, t])
 
   const innerStyle = useMemo(() => {
     switch (chatWidthMode) {
@@ -380,6 +510,12 @@ export default function ChatView() {
     let cancelled = false
 
     const loadChat = async () => {
+      // Multiplayer peers don't own this chat — the host's instance can't be
+      // fetched via the owner API. The join hydration + room WS events populate
+      // the view instead, so skip the normal owner-scoped load.
+      const mp = useStore.getState()
+      if (mp.mpRoomId && !mp.mpIsHost && mp.mpChatId === chatId) return
+
       try {
         const pageSize = useStore.getState().messagesPerPage || 50
 
@@ -394,6 +530,14 @@ export default function ChatView() {
         useStore.getState().setActiveChatDisplayOwner(chat.character_display_owner ?? null)
         useStore.getState().setActiveChatName(chat.name ?? null)
         setMessages(msgPage.data, msgPage.total)
+
+        if (msgPage.data.length === 0) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              window.dispatchEvent(new CustomEvent('lumiverse:chat-items-populated'))
+            })
+          })
+        }
 
         // Chat-derived store state, applied synchronously with setMessages so
         // it lands in the same render batch. Each of these used to trickle in
@@ -501,10 +645,9 @@ export default function ChatView() {
 
         const openedCharacter = await characterPromise
 
-        // Character bindings are temporary chat-context overrides. When a chat
-        // has no binding, fall back to the user's default persona instead of
-        // leaking the previous chat's bound persona into the new chat.
-        // Temporary chats are persona-less — leave the global persona alone.
+        // Resolve persona per chat: explicit chat selections win, then
+        // character/tag auto-bindings, then the default persona. Temporary
+        // chats are persona-less — leave the global persona alone.
         if (chat.metadata?.temporary !== true) {
           const {
             characterPersonaBindings,
@@ -512,38 +655,54 @@ export default function ChatView() {
             personas: allPersonas,
             setActivePersona,
             activePersonaId,
+            setActiveChatMetadata,
           } = useStore.getState()
-          const defaultPersonaId = allPersonas.find((p) => p.is_default)?.id ?? null
-          const resolvedBinding = resolveAutoPersonaBinding({
+          const resolvedPersona = resolveChatPersonaSelection({
+            metadata: chat.metadata,
             characterId: chat.character_id,
             characterTags: openedCharacter?.tags ?? [],
             personas: allPersonas,
             characterPersonaBindings,
             personaTagBindings,
           })
-          const boundPersona = resolvedBinding.personaId
-            ? allPersonas.find((p) => p.id === resolvedBinding.personaId) ?? null
+          const resolvedChatPersona = resolvedPersona.personaId
+            ? allPersonas.find((p) => p.id === resolvedPersona.personaId) ?? null
             : null
 
-          if (resolvedBinding.personaId && boundPersona) {
-            if (activePersonaId !== resolvedBinding.personaId) {
-              setActivePersona(resolvedBinding.personaId)
-              toast.info(t('chatView.switchedPersona', { name: personaToastName(boundPersona) }))
+          if (resolvedPersona.persistedPersonaStale) {
+            const nextMetadata = setPersistedChatPersonaId(chat.metadata, null)
+            chat.metadata = nextMetadata ?? {}
+            if (!cancelled) {
+              setActiveChatMetadata(nextMetadata)
             }
-            autoSwitchedPersonaIdRef.current = resolvedBinding.personaId
+            chatsApi.patchMetadata(chatId, { [CHAT_PERSONA_METADATA_KEY]: null }).catch(() => {})
+          }
 
+          if (!cancelled && activePersonaId !== resolvedPersona.personaId) {
+            setActivePersona(resolvedPersona.personaId)
+            if (resolvedChatPersona && resolvedPersona.source !== 'default') {
+              toast.info(t('chatView.switchedPersona', { name: personaToastName(resolvedChatPersona) }))
+            }
+          }
+
+          if (
+            (resolvedPersona.source === 'character' || resolvedPersona.source === 'tag') &&
+            resolvedChatPersona &&
+            resolvedPersona.addonStates &&
+            Object.keys(resolvedPersona.addonStates).length > 0 &&
+            !cancelled
+          ) {
             // Apply the binding's add-on snapshot so the bound selections take
             // effect and are visible in this chat. Seed only when the chat has
             // no per-chat states for the persona yet, so a fresh chat picks up
             // the binding while later in-chat tweaks are never clobbered.
             if (
-              resolvedBinding.addonStates &&
-              Object.keys(resolvedBinding.addonStates).length > 0 &&
-              !cancelled
+              resolvedPersona.addonStates &&
+              Object.keys(resolvedPersona.addonStates).length > 0
             ) {
               const existing = (chat.metadata?.persona_addon_states ?? {}) as Record<string, Record<string, boolean>>
-              if (!existing[resolvedBinding.personaId]) {
-                const nextStates = { ...existing, [resolvedBinding.personaId]: { ...resolvedBinding.addonStates } }
+              if (!existing[resolvedChatPersona.id]) {
+                const nextStates = { ...existing, [resolvedChatPersona.id]: { ...resolvedPersona.addonStates } }
                 // Fold into chat.metadata and re-publish the snapshot (the
                 // canonical publish already happened alongside setMessages);
                 // persist for future opens.
@@ -552,19 +711,6 @@ export default function ChatView() {
                 chatsApi.patchMetadata(chatId, { persona_addon_states: nextStates }).catch(() => {})
               }
             }
-
-          } else {
-            const shouldRestoreDefault =
-              autoSwitchedPersonaIdRef.current !== null &&
-              defaultPersonaId !== null &&
-              activePersonaId !== defaultPersonaId &&
-              (activePersonaId === null || autoSwitchedPersonaIdRef.current === activePersonaId)
-
-            if (shouldRestoreDefault) {
-              setActivePersona(defaultPersonaId)
-            }
-
-            autoSwitchedPersonaIdRef.current = null
           }
         }
 
@@ -630,7 +776,7 @@ export default function ChatView() {
     return () => {
       cancelled = true
     }
-  }, [chatId, setActiveChat, setMessages])
+  }, [chatId, setActiveChat, setMessages, t])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -659,13 +805,60 @@ export default function ChatView() {
     return { image_id: imageId, type: 'image' }
   }, [useCharacterBackground, activeCharacterId, characters, activeChatMetadata])
 
-  // Resolve effective wallpaper: per-chat > global > character avatar
-  const effectiveWallpaper = activeChatWallpaper ?? wallpaper.global ?? characterBackground
-  const wallpaperUrl = effectiveWallpaper?.image_id ? imagesApi.url(effectiveWallpaper.image_id) : null
-  const wallpaperIsVideo = effectiveWallpaper?.type === 'video'
-  const wallpaperOpacity = wallpaper.opacity ?? 0.3
-  const wallpaperFit = wallpaper.fit ?? 'cover'
-  const hasAnyBackground = !!(sceneBackground || wallpaperUrl)
+  // Global wallpaper is persistent in App so video playback survives route
+  // changes. ChatView only renders overrides above it.
+  const effectiveWallpaper = activeChatWallpaper ?? (wallpaper.global ? null : characterBackground)
+  const effectiveWallpaperKey = effectiveWallpaper ? `${effectiveWallpaper.type}:${effectiveWallpaper.image_id}` : 'none'
+  const [displayedWallpaper, setDisplayedWallpaper] = useState<WallpaperRef | null>(effectiveWallpaper)
+  const displayedWallpaperKeyRef = useRef(effectiveWallpaperKey)
+  const pendingWallpaperReadyKeyRef = useRef<string | null>(null)
+  const [wallpaperTransitioning, setWallpaperTransitioning] = useState(false)
+  const hasAnyBackground = !!(sceneBackground || displayedWallpaper?.image_id || wallpaper.global?.image_id)
+
+  useEffect(() => {
+    if (displayedWallpaperKeyRef.current === effectiveWallpaperKey) return
+
+    wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
+    wallpaperTransitionTimeouts.current = []
+    setWallpaperTransitioning(true)
+
+    const swapTimer = window.setTimeout(() => {
+      displayedWallpaperKeyRef.current = effectiveWallpaperKey
+      setDisplayedWallpaper(effectiveWallpaper)
+      if (!effectiveWallpaper) {
+        pendingWallpaperReadyKeyRef.current = null
+        const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
+        wallpaperTransitionTimeouts.current.push(revealTimer)
+        return
+      }
+
+      pendingWallpaperReadyKeyRef.current = effectiveWallpaperKey
+      const fallbackTimer = window.setTimeout(() => {
+        if (pendingWallpaperReadyKeyRef.current !== effectiveWallpaperKey) return
+        pendingWallpaperReadyKeyRef.current = null
+        setWallpaperTransitioning(false)
+      }, WALLPAPER_READY_FALLBACK_MS)
+      wallpaperTransitionTimeouts.current.push(fallbackTimer)
+    }, WALLPAPER_TRANSITION_HALF_MS)
+
+    wallpaperTransitionTimeouts.current.push(swapTimer)
+  }, [effectiveWallpaper, effectiveWallpaperKey])
+
+  useEffect(() => {
+    return () => {
+      wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
+      wallpaperTransitionTimeouts.current = []
+    }
+  }, [])
+
+  const handleWallpaperVisualReady = useCallback((wallpaperKey: string) => {
+    if (pendingWallpaperReadyKeyRef.current !== wallpaperKey) return
+    pendingWallpaperReadyKeyRef.current = null
+    wallpaperTransitionTimeouts.current.forEach(window.clearTimeout)
+    wallpaperTransitionTimeouts.current = []
+    const revealTimer = window.setTimeout(() => setWallpaperTransitioning(false), 40)
+    wallpaperTransitionTimeouts.current.push(revealTimer)
+  }, [])
 
   // Sync data-chat-bg on the root so message card CSS can skip backdrop-filter
   // when the background is a solid color (blur on solid = pure GPU waste).
@@ -679,7 +872,7 @@ export default function ChatView() {
     return () => root.removeAttribute('data-chat-bg')
   }, [hasAnyBackground])
 
-  // Sync bubble opt-out attributes so CSS can suppress effects.
+  // Sync chat style opt-out attributes so message CSS can suppress effects.
   const bubbleDisableHover = useStore((s) => s.bubbleDisableHover)
   const bubbleHideAvatarBg = useStore((s) => s.bubbleHideAvatarBg)
   const bubbleOpacity = useStore((s) => s.bubbleOpacity ?? 1)
@@ -706,38 +899,19 @@ export default function ChatView() {
       className={clsx(
         styles.container,
         isStreaming && styles.streaming,
-        (sceneBackground || wallpaperUrl) && styles.hasSceneBackground
+        hasAnyBackground && styles.hasSceneBackground
       )}
+      data-streaming={isStreaming || undefined}
     >
       {/* Wallpaper layer (z-index 0) — lowest background, overridden by scene */}
-      {wallpaperUrl && !wallpaperIsVideo && (
-        <div
-          className={styles.wallpaperLayer}
-          style={{
-            backgroundImage: `url("${wallpaperUrl}")`,
-            opacity: sceneBackground ? 0 : wallpaperOpacity,
-            objectFit: wallpaperFit,
-            backgroundSize: wallpaperFit === 'fill' ? '100% 100%' : wallpaperFit,
-            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
-          }}
-        />
-      )}
-      {wallpaperUrl && wallpaperIsVideo && (
-        <video
-          ref={videoRef}
-          className={styles.wallpaperVideoLayer}
-          src={wallpaperUrl}
-          autoPlay
-          muted
-          loop
-          playsInline
-          style={{
-            opacity: sceneBackground ? 0 : wallpaperOpacity,
-            objectFit: wallpaperFit === 'fill' ? 'fill' : wallpaperFit,
-            filter: (wallpaper.blur ?? 0) > 0 ? `blur(${wallpaper.blur}px)` : undefined,
-          }}
-        />
-      )}
+      <WallpaperLayer
+        wallpaper={displayedWallpaper}
+        settings={wallpaper}
+        hidden={!!sceneBackground}
+        videoRef={videoRef}
+        fadeInOnMount
+        onVisualReady={handleWallpaperVisualReady}
+      />
 
       {/* Scene background layer — overrides wallpaper when active */}
       <div
@@ -755,6 +929,7 @@ export default function ChatView() {
           transitionDuration: `${Math.max(100, imageGeneration.fadeTransitionMs ?? 800)}ms`,
         }}
       />
+      <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
       <div className={styles.body} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
         {portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
@@ -801,7 +976,13 @@ export default function ChatView() {
               )}
             </div>
           )}
-          <div className={styles.chatColumnInner} style={innerStyle} data-select-mode={messageSelectMode || undefined}>
+          <div
+            className={styles.chatColumnInner}
+            style={innerStyle}
+            data-select-mode={messageSelectMode || undefined}
+            data-chat-chrome-entering={chatChromeEntering || undefined}
+            data-chat-chrome-leaving={(wallpaperTransitioning || chatChromeLeaving) || undefined}
+          >
             <div className={styles.chatToolbar}>
               <button
                 type="button"
@@ -812,11 +993,26 @@ export default function ChatView() {
                 <ListChecks size={14} />
               </button>
             </div>
-            <MessageList messages={messages} chatId={chatId} isStreaming={isStreaming} />
+            <ChatFindBar
+              chatId={chatId}
+              open={chatFindOpen}
+              focusRequest={chatFindFocusRequest}
+              onClose={closeChatFind}
+              onNavigate={setChatFindTarget}
+              onClearTarget={clearChatFindTarget}
+              onQueryChange={setChatFindQuery}
+            />
+            <MessageList
+              messages={messages}
+              chatId={chatId}
+              isStreaming={isStreaming}
+              findTarget={chatFindTarget}
+              findQuery={chatFindQuery}
+            />
             <ScrollToBottom />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
-            <InputArea chatId={chatId} />
+            <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>
 

@@ -5,14 +5,59 @@
   transition: background var(--lumiverse-transition-fast);
 }
 
+.itemDragging {
+  z-index: 5;
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary));
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
+}
+
 .itemActive {
-  background: var(--lumiverse-primary-light);
+  /* Solid color-mix (not --lumiverse-primary-light's 10% alpha overlay) so
+     the active card reads as opaque instead of see-through against the
+     page background. */
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
 }
 
 .itemRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.dragHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  margin-left: 6px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  touch-action: none;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+@media (hover: hover) {
+  .dragHandle:hover {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+  }
+}
+
+.dragHandle:active {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+  cursor: grabbing;
+}
+
+.dragHandle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 1px;
 }
 
 .itemBtn {
@@ -44,6 +89,11 @@
   justify-content: center;
   flex-shrink: 0;
   border: 1px solid var(--lumiverse-border);
+}
+
+.rouletteIcon {
+  background: color-mix(in srgb, #0f9f8f 14%, transparent);
+  color: #0f9f8f;
 }
 
 .itemInfo {
@@ -121,7 +171,7 @@
 }
 
 .testMessage {
-  padding: 0 8px 8px 50px;
+  padding: 0 8px 8px 82px;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   animation: fadeIn 0.2s ease-out;
 }
@@ -138,7 +188,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 8px 50px;
+  padding: 8px 12px 8px 82px;
   background: var(--lumiverse-primary-light);
   border: none;
   border-radius: 0 0 10px 10px;
@@ -164,7 +214,14 @@
   display: flex;
   align-items: baseline;
   gap: 0;
-  padding: 0 10px 10px 50px;
+  padding: 0 10px 10px 82px;
+}
+
+/* The fadeIn animation runs only on the bar's initial mount for a given
+   profile (controlled by JS via the `animatedBarKeys` Set and a per-
+   instance ref in ConnectionItem.tsx — false→true of `show*` adds the key,
+   true→false removes it so re-activation animates again). */
+.creditsBarAnimateIn {
   animation: fadeIn 0.2s ease-out;
 }
 
@@ -228,4 +285,10 @@
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Hide credits/usage sections that aren't active, but keep them in DOM
+   so the card maintains a consistent height during drag operations. */
+.creditsHidden {
+  display: none;
 }

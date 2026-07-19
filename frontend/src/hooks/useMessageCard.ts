@@ -3,10 +3,25 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
-import { getCharacterAvatarThumbUrlById, getCharacterAvatarLargeUrlById, getCharacterAvatarUrlById, getPersonaAvatarThumbUrlById, getPersonaAvatarLargeUrlById, getPersonaAvatarUrlById, getCharacterAvatarTiers, getPersonaAvatarTiers, getImageTiers, type AvatarTierUrls } from '@/lib/avatarUrls'
+import {
+  getCharacterAvatarThumbUrlById,
+  getCharacterAvatarLargeUrlById,
+  getCharacterAvatarUrlById,
+  getPersonaAvatarThumbUrlById,
+  getPersonaAvatarLargeUrlById,
+  getPersonaAvatarUrlById,
+  getCharacterAvatarTiers,
+  getImageTiers,
+  pickPersonaOriginalImageId,
+  pickPersonaThumbImageId,
+  type AvatarTierUrls,
+} from '@/lib/avatarUrls'
 import { imagesApi } from '@/api/images'
 import type { Message } from '@/types/api'
 import type { GenerationMetrics } from '@/types/ws-events'
+import { resolveMultiplayerMessageAuthor } from '@/lib/multiplayerMessageAuthor'
+
+const CONTEXT_HISTORY_ANCHOR_KEY = 'context_history_anchor_message_id'
 
 /**
  * Strip thinking/reasoning tags from content and extract the thoughts.
@@ -39,6 +54,7 @@ function parseThinkingTags(content: string): { cleaned: string; thoughts: string
 
 export function useMessageCard(message: Message, chatId: string) {
   const { t } = useTranslation('chat', { keyPrefix: 'toast' })
+  const { t: tChat } = useTranslation('chat')
   const { t: tc } = useTranslation('chat', { keyPrefix: 'messageCard' })
   const navigate = useNavigate()
   const editingMessageId = useStore((s) => s.editingMessageId)
@@ -59,17 +75,54 @@ export function useMessageCard(message: Message, chatId: string) {
   const messages = useStore((s) => s.messages)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const personas = useStore((s) => s.personas)
+  const mpRoomId = useStore((s) => s.mpRoomId)
+  const mpIsHost = useStore((s) => s.mpIsHost)
+  const mpCharacterAvatar = useStore((s) => s.mpCharacterAvatar)
   const autoParse = useStore((s) => s.reasoningSettings.autoParse)
   const activeChatAvatarId = useStore((s) => s.activeChatAvatarId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
   const isBubbleMode = useStore((s) => s.chatSheldDisplayMode) === 'bubble'
 
-  const streamingContent = useStore((s) => s.streamingContent)
-  const streamingReasoning = useStore((s) => s.streamingReasoning)
-  const streamingReasoningDuration = useStore((s) => s.streamingReasoningDuration)
-  const streamingReasoningStartedAt = useStore((s) => s.streamingReasoningStartedAt)
   const regeneratingMessageId = useStore((s) => s.regeneratingMessageId)
   const streamingSwipeId = useStore((s) => s.streamingSwipeId)
   const streamingGenerationType = useStore((s) => s.streamingGenerationType)
+  const streamingContent = useStore((s) => {
+    if (!s.isStreaming) return ''
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return ''
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    if (s.regeneratingMessageId === message.id) return s.streamingContent
+    if (s.streamingGenerationType === 'continue' && isTailMessage && !message.is_user) return s.streamingContent
+    return ''
+  })
+  const streamingReasoning = useStore((s) => {
+    if (!s.isStreaming) return ''
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return ''
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoning : ''
+  })
+  const streamingReasoningDuration = useStore((s) => {
+    if (!s.isStreaming) return null
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return null
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoningDuration : null
+  })
+  const streamingReasoningStartedAt = useStore((s) => {
+    if (!s.isStreaming) return null
+    const onSwipe = s.streamingSwipeId == null || message.swipe_id === s.streamingSwipeId
+    if (!onSwipe) return null
+    const isTailMessage = s.messages.length > 0 && s.messages[s.messages.length - 1].id === message.id
+    const isStreamingMessage = s.regeneratingMessageId === message.id
+      || (isTailMessage && !message.is_user && (!s.regeneratingMessageId || s.streamingGenerationType === 'continue'))
+    return isStreamingMessage ? s.streamingReasoningStartedAt : null
+  })
 
   const isUser = message.is_user
   const isLastMessage = messages.length > 0 && messages[messages.length - 1].id === message.id
@@ -151,68 +204,70 @@ export function useMessageCard(message: Message, chatId: string) {
 
   const effectiveCharId = messageCharacterId || activeCharacterId
   const getCharAvatarUrl = isBubbleMode ? getCharacterAvatarLargeUrlById : getCharacterAvatarThumbUrlById
-  const getPersonaAvatarUrl = isBubbleMode ? getPersonaAvatarLargeUrlById : getPersonaAvatarThumbUrlById
   const getImageUrl = isBubbleMode ? imagesApi.largeUrl : imagesApi.smallUrl
   const characterAvatarCropImageId = typeof effectiveCharacter?.extensions?.avatar_crop_image_id === 'string'
     ? effectiveCharacter.extensions.avatar_crop_image_id
     : null
+  const effectivePersona = messagePersona ?? activePersona
+  const personaAvatarId = userPersonaId ?? activePersona?.id ?? null
+  const personaCropImageId = pickPersonaThumbImageId(effectivePersona)
+  const personaOriginalImageId = pickPersonaOriginalImageId(effectivePersona)
+  const personaAvatarFallbackUrl = isBubbleMode
+    ? getPersonaAvatarLargeUrlById(personaAvatarId, null)
+    : getPersonaAvatarThumbUrlById(personaAvatarId, null)
   const activeAltAvatar = activeChatAvatarId && effectiveCharId === activeCharacterId
     ? (effectiveCharacter?.extensions?.alternate_avatars as Array<{ image_id: string; original_image_id?: string }> | undefined)
         ?.find((avatar) => avatar.image_id === activeChatAvatarId)
     : null
 
+  // Multiplayer peers can't fetch the owner-scoped character-avatar endpoint —
+  // the host relays a compressed copy of the bot avatar. Use it for non-user
+  // messages when we're a peer (the host renders the real character avatar).
+  const peerBotAvatar = !isUser && mpRoomId && !mpIsHost ? mpCharacterAvatar : null
+
   const avatarUrl = isUser
-    ? getPersonaAvatarUrl(
-        userPersonaId ?? activePersona?.id ?? null,
-        messagePersona?.image_id ?? activePersona?.image_id ?? null
-      )
-    : (activeChatAvatarId && effectiveCharId === activeCharacterId)
-      ? getImageUrl(activeChatAvatarId)
-      : getCharAvatarUrl(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
+    ? (personaCropImageId ? getImageUrl(personaCropImageId) : personaAvatarFallbackUrl)
+    : peerBotAvatar
+      ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
+        ? getImageUrl(activeChatAvatarId)
+        : getCharAvatarUrl(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null))
 
   // Full-size avatar URL for lightbox/floating viewer (no resize)
   const fullAvatarUrl = isUser
-    ? getPersonaAvatarUrlById(
-        userPersonaId ?? activePersona?.id ?? null,
-        messagePersona?.image_id ?? activePersona?.image_id ?? null
-      )
-    : (activeChatAvatarId && effectiveCharId === activeCharacterId)
-      ? imagesApi.url(activeAltAvatar?.original_image_id || activeChatAvatarId)
-      : getCharacterAvatarUrlById(
-          effectiveCharId,
-          typeof effectiveCharacter?.extensions?.original_image_id === 'string'
-            ? effectiveCharacter.extensions.original_image_id
-            : effectiveCharacter?.image_id ?? null
-        )
+    ? (personaOriginalImageId ? imagesApi.url(personaOriginalImageId) : getPersonaAvatarUrlById(personaAvatarId, null))
+    : peerBotAvatar
+      ?? ((activeChatAvatarId && effectiveCharId === activeCharacterId)
+        ? imagesApi.url(activeAltAvatar?.original_image_id || activeChatAvatarId)
+        : getCharacterAvatarUrlById(
+            effectiveCharId,
+            typeof effectiveCharacter?.extensions?.original_image_id === 'string'
+              ? effectiveCharacter.extensions.original_image_id
+              : effectiveCharacter?.image_id ?? null
+          ))
 
   // ── Full sm/lg/full tier matrix for theme overrides. `cropped` is the 1:1
   //    square variant; `original` is the uploaded aspect ratio. Mirrors the
   //    avatarUrl/fullAvatarUrl resolution above so they stay consistent. ──
-  const personaAvatarId = userPersonaId ?? activePersona?.id ?? null
-  const personaImageId = messagePersona?.image_id ?? activePersona?.image_id ?? null
   const characterOriginalImageId = typeof effectiveCharacter?.extensions?.original_image_id === 'string'
     ? effectiveCharacter.extensions.original_image_id
     : effectiveCharacter?.image_id ?? null
   const usesChatAvatar = !!activeChatAvatarId && effectiveCharId === activeCharacterId
 
   const croppedAvatarTiers: AvatarTierUrls = isUser
-    ? getPersonaAvatarTiers(personaAvatarId, personaImageId)
+    ? getImageTiers(personaCropImageId)
     : usesChatAvatar
       ? getImageTiers(activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
 
   const originalAvatarTiers: AvatarTierUrls = isUser
-    ? getPersonaAvatarTiers(personaAvatarId, personaImageId)
+    ? getImageTiers(personaOriginalImageId)
     : usesChatAvatar
       ? getImageTiers(activeAltAvatar?.original_image_id || activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterOriginalImageId)
 
   const avatar = useMemo(
     () => ({ cropped: croppedAvatarTiers, original: originalAvatarTiers }),
-    [
-      croppedAvatarTiers.sm, croppedAvatarTiers.lg, croppedAvatarTiers.full,
-      originalAvatarTiers.sm, originalAvatarTiers.lg, originalAvatarTiers.full,
-    ],
+    [croppedAvatarTiers, originalAvatarTiers],
   )
 
   const macroUserName = useMemo(() => {
@@ -321,6 +376,38 @@ export function useMessageCard(message: Message, chatId: string) {
   }, [chatId, message.id, message.swipe_id])
 
   const isHidden = message.extra?.hidden === true
+  const contextAnchorMessageId = typeof activeChatMetadata?.[CONTEXT_HISTORY_ANCHOR_KEY] === 'string'
+    ? activeChatMetadata[CONTEXT_HISTORY_ANCHOR_KEY] as string
+    : null
+  const isContextAnchor = contextAnchorMessageId === message.id
+
+  const handleToggleContextAnchor = useCallback(async () => {
+    if (isHidden) return
+
+    const previousMetadata = activeChatMetadata
+    const nextAnchorMessageId = isContextAnchor ? null : message.id
+    const optimisticMetadata = {
+      ...(previousMetadata ?? {}),
+      ...(nextAnchorMessageId ? { [CONTEXT_HISTORY_ANCHOR_KEY]: nextAnchorMessageId } : {}),
+    }
+    if (!nextAnchorMessageId) delete optimisticMetadata[CONTEXT_HISTORY_ANCHOR_KEY]
+    setActiveChatMetadata(optimisticMetadata)
+
+    try {
+      const updated = await chatsApi.patchMetadata(chatId, {
+        [CONTEXT_HISTORY_ANCHOR_KEY]: nextAnchorMessageId,
+      })
+      setActiveChatMetadata(updated.metadata ?? null)
+      addToast({
+        type: 'success',
+        message: tChat(isContextAnchor ? 'messageActions.contextAnchorCleared' : 'messageActions.contextAnchorSet'),
+      })
+    } catch (err) {
+      console.error('[MessageCard] Failed to update context anchor:', err)
+      setActiveChatMetadata(previousMetadata)
+      addToast({ type: 'error', message: tChat('messageActions.contextAnchorFailed') })
+    }
+  }, [activeChatMetadata, addToast, chatId, isContextAnchor, isHidden, message.id, setActiveChatMetadata, tChat])
 
   const handleToggleHidden = useCallback(async () => {
     try {
@@ -329,19 +416,27 @@ export function useMessageCard(message: Message, chatId: string) {
       if (!newHidden) delete extra.hidden
       const updated = await messagesApi.update(chatId, message.id, { extra })
       updateMessage(updated.id, updated)
+      if (newHidden && isContextAnchor) {
+        const updatedChat = await chatsApi.patchMetadata(chatId, {
+          [CONTEXT_HISTORY_ANCHOR_KEY]: null,
+        })
+        setActiveChatMetadata(updatedChat.metadata ?? null)
+      }
     } catch (err) {
       console.error('[MessageCard] Failed to toggle hidden:', err)
     }
-  }, [chatId, message.id, message.extra, updateMessage])
+  }, [chatId, isContextAnchor, message.id, message.extra, setActiveChatMetadata, updateMessage])
 
   const handleFork = useCallback(() => {
     openModal('confirm', {
       title: tc('fork.title'),
       message: tc('fork.message'),
       confirmText: tc('fork.confirm'),
-      onConfirm: async () => {
+      inputLabel: tc('fork.nameLabel'),
+      inputPlaceholder: tc('fork.namePlaceholder'),
+      onConfirm: async (name: string) => {
         try {
-          const newChat = await chatsApi.branch(chatId, message.id)
+          const newChat = await chatsApi.branch(chatId, message.id, name)
           navigate(`/chat/${newChat.id}`)
         } catch (err) {
           console.error('[MessageCard] Failed to fork chat:', err)
@@ -377,6 +472,33 @@ export function useMessageCard(message: Message, chatId: string) {
     }
   }, [message.is_user, message.swipes, openModal, doDeleteMessage, doDeleteSwipe, tc])
 
+  // Multiplayer author resolution. Peer-authored messages persist a stamped
+  // snapshot in `extra.mp`; that saved row is authoritative for historical
+  // rendering and must not be rewritten by later peer persona/avatar changes.
+  // Unstamped room messages (the host's own local-account turns) still fall
+  // back to the live roster because no per-message snapshot exists for them.
+  // Non-reactive read on purpose: avoids re-rendering every card on
+  // typing/presence churn.
+  // eslint-disable-next-line react-compiler/react-compiler
+  const mpStore = useStore.getState()
+  const mpAuthor = resolveMultiplayerMessageAuthor({
+    message,
+    roomId: mpStore.mpRoomId,
+    participants: mpStore.mpParticipants,
+    fallbackDisplayName: displayName,
+  })
+  const isMpAuthor = !!mpAuthor
+  const mpAvatarData = mpAuthor?.avatarUrl || ''
+  const mpDisplayName = mpAuthor?.displayName || displayName
+  const mpAvatarUrl = isMpAuthor ? (mpAvatarData || null) : avatarUrl
+  const mpFullAvatarUrl = isMpAuthor ? (mpAvatarData || null) : fullAvatarUrl
+  const mpAvatar: typeof avatar = isMpAuthor
+    ? {
+        cropped: { sm: mpAvatarData, lg: mpAvatarData, full: mpAvatarData },
+        original: { sm: mpAvatarData, lg: mpAvatarData, full: mpAvatarData },
+      }
+    : avatar
+
   return {
     isEditing,
     editContent,
@@ -393,17 +515,19 @@ export function useMessageCard(message: Message, chatId: string) {
     reasoningStartedAt,
     tokenCount,
     generationMetrics,
-    avatarUrl,
-    fullAvatarUrl,
-    avatar,
-    displayName,
+    avatarUrl: mpAvatarUrl,
+    fullAvatarUrl: mpFullAvatarUrl,
+    avatar: mpAvatar,
+    displayName: mpDisplayName,
     macroUserName,
     isHidden,
+    isContextAnchor,
     handleEdit,
     handleSaveEdit,
     handleCancelEdit,
     handleDelete,
     handleToggleHidden,
+    handleToggleContextAnchor,
     handleFork,
   }
 }

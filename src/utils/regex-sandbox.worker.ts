@@ -7,7 +7,8 @@ import { runRegexRequest, type RegexRequest } from "./regex-sandbox-core";
  * an evaluation exceeds its timeout.
  *
  * Protocol:
- *   in:  { id, op: "replace" | "test" | "collect", pattern, flags, input, replacement? }
+ *   in:  { id, op: "replace" | "test" | "collect" | "capture-replacements",
+ *          pattern, flags, input, replacement? }
  *   out: { id, ok: true, result } | { id, ok: false, error }
  */
 

@@ -1,3 +1,7 @@
+---
+title: Alternate Fields & Avatars
+---
+
 # Alternate Fields & Avatars
 
 Sometimes you want a character to behave differently depending on the context — a different personality for a comedy scenario, a different description after a time skip, or a different avatar for a costume change. Alternate fields and avatars let you create these variants without duplicating the entire character.

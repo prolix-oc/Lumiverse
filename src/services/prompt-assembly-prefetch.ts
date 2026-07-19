@@ -16,16 +16,14 @@ import * as personasSvc from "./personas.service";
 import * as connectionsSvc from "./connections.service";
 import * as presetsSvc from "./presets.service";
 import * as settingsSvc from "./settings.service";
-import * as worldBooksSvc from "./world-books.service";
 import * as embeddingsSvc from "./embeddings.service";
 import * as globalAddonsSvc from "./global-addons.service";
 import { applyPersonaAddonStates } from "./persona-addon-states";
 import { normalizeCortexConfig, DEFAULT_CORTEX_CONFIG } from "./memory-cortex/config";
-import { getCharacterWorldBookIds } from "../utils/character-world-books";
 import { getCharacterDatabankIds } from "../utils/character-databanks";
 import { resolveActiveDatabankIds } from "./databank/scope-resolver.service";
-import type { BookSource } from "./prompt-assembly.service";
 import { createPromptAssemblyProfiler } from "./prompt-assembly-profiler";
+import { collectWorldInfoSources } from "./world-info-sources.service";
 
 /**
  * All settings keys the assembly pipeline may need. Loaded in a single
@@ -127,18 +125,16 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
   );
 
   const connection = profiler.measureSync("connection", () =>
-    ctx.connectionId
-      ? connectionsSvc.getConnection(ctx.userId, ctx.connectionId)
-      : connectionsSvc.getDefaultConnection(ctx.userId)
+    connectionsSvc.resolveConnection(ctx.userId, ctx.connectionId)
   );
 
   // No-preset temp chats skip preset loading entirely (assembly re-checks the
   // same flag and falls back to the raw legacy message mapping).
-  const resolvedPresetId = isNoPresetChatMetadata(chat.metadata)
+  const resolvedPresetId = isNoPresetChatMetadata(chat.metadata) && !ctx.presetOverride
     ? null
     : ctx.presetId || connection?.preset_id;
   const preset = profiler.measureSync("preset", () =>
-    resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null
+    ctx.presetOverride ?? (resolvedPresetId ? presetsSvc.getPreset(ctx.userId, resolvedPresetId) : null)
   );
 
   // ── 3. Embedding config (1 setting + 1 secret decrypt — only async op) ─
@@ -194,76 +190,38 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     }
   }
 
-  // ── 4. World book entries (2 queries total) ──────────────────────────
-  const globalWorldBooks = (allSettings.get("globalWorldBooks") as string[] | undefined) ?? [];
-  const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
-  const charBookIds = getCharacterWorldBookIds(character.extensions);
-  const personaBookId = persona?.attached_world_book_id;
-
-  // Collect all book IDs in source-priority order (character → persona → chat → global)
-  // while deduplicating
-  const allBookIds: string[] = [];
-  const bookSourceMap = new Map<string, BookSource>();
-  const seen = new Set<string>();
-
-  for (const id of charBookIds) {
-    if (seen.has(id)) continue;
-    seen.add(id); allBookIds.push(id); bookSourceMap.set(id, "character");
-  }
-  if (personaBookId && !seen.has(personaBookId)) {
-    seen.add(personaBookId); allBookIds.push(personaBookId); bookSourceMap.set(personaBookId, "persona");
-  }
-  for (const id of chatWorldBookIds) {
-    if (seen.has(id)) continue;
-    seen.add(id); allBookIds.push(id); bookSourceMap.set(id, "chat");
-  }
-  for (const id of globalWorldBooks) {
-    if (seen.has(id)) continue;
-    seen.add(id); allBookIds.push(id); bookSourceMap.set(id, "global");
-  }
-
-  const entriesByBook = profiler.measureSync("world-book-entries", () =>
-    worldBooksSvc.listEntriesForBooks(ctx.userId, allBookIds)
-  );
-  const embeddedCharacterBook = character.extensions?.character_book;
-  const allEntries: import("../types/world-book").WorldBookEntry[] = [];
-  for (const bookId of allBookIds) {
-    const bookEntries = entriesByBook.get(bookId);
-    if (bookEntries && bookEntries.length > 0) {
-      allEntries.push(...bookEntries);
-      continue;
-    }
-    if (!embeddedCharacterBook) continue;
-    const book = worldBooksSvc.getWorldBook(ctx.userId, bookId);
-    if (
-      book?.metadata?.source === "character" &&
-      book.metadata?.source_character_id === character.id
-    ) {
-      allEntries.push(
-        ...worldBooksSvc.materializeCharacterBookEntriesForRuntime(
-          bookId,
-          embeddedCharacterBook,
-        ),
-      );
-    }
-  }
-
-  // Large lorebooks make listEntriesForBooks + row hydration a noticeable
-  // synchronous stretch. Give pending navigation/status requests a chance to run
-  // before group character loads and cortex config derivation continue.
-  if (allEntries.length > 200) {
-    await profiler.measure("post-world-books-yield", () => new Promise<void>(r => setTimeout(r, 0)));
-    if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
-  }
-
-  // ── 5. Group characters (1 batch query) ──────────────────────────────
-  const isGroup = chat.metadata?.group === true;
+  // ── 4. Group characters (1 batch query) ──────────────────────────────
+  // Loaded before world info so group lorebook modes can resolve attached
+  // books from inactive/unmuted members without per-member DB lookups.
+  const isGroup = chat.metadata?.group === true || chat.metadata?.group === 1;
   const groupCharacterIds: string[] = isGroup ? (chat.metadata.character_ids || []) : [];
   const groupCharacters = profiler.measureSync("group-characters", () =>
     groupCharacterIds.length > 0
       ? charactersSvc.getCharactersByIds(ctx.userId, groupCharacterIds)
       : undefined
   );
+
+  // ── 5. World book entries (2 queries total) ──────────────────────────
+  const globalWorldBooks = (allSettings.get("globalWorldBooks") as string[] | undefined) ?? [];
+  const chatWorldBookIds = (chat.metadata?.chat_world_book_ids as string[] | undefined) ?? [];
+  const worldInfoSources = profiler.measureSync("world-book-entries", () =>
+    collectWorldInfoSources(
+      ctx.userId,
+      character,
+      persona,
+      globalWorldBooks,
+      chatWorldBookIds,
+      { chat, groupCharacters },
+    )
+  );
+
+  // Large lorebooks make listEntriesForBooks + row hydration a noticeable
+  // synchronous stretch. Give pending navigation/status requests a chance to run
+  // before group character loads and cortex config derivation continue.
+  if (worldInfoSources.entries.length > 200) {
+    await profiler.measure("post-world-books-yield", () => new Promise<void>(r => setTimeout(r, 0)));
+    if (ctx.signal?.aborted) throw ctx.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
 
   // ── 6. Derive cortex config from settings (pure computation) ─────────
   const cortexConfig = profiler.measureSync("cortex-config", () => {
@@ -282,11 +240,7 @@ export async function prefetchAssemblyData(ctx: AssemblyContext): Promise<Prefet
     preset,
     allSettings,
     embeddingConfig,
-    worldInfoSources: {
-      entries: allEntries,
-      worldBookIds: allBookIds,
-      bookSourceMap,
-    },
+    worldInfoSources,
     groupCharacters,
     cortexConfig,
   };

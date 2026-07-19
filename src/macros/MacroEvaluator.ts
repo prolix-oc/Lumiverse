@@ -16,11 +16,22 @@ import {
   type MacroInterceptorPhase,
 } from "../spindle/macro-interceptor";
 
-const MAX_NESTING_DEPTH = 20;
+const DEFAULT_MAX_MACRO_RESOLUTIONS = 10_000;
+const ASYNC_UNWIND_INTERVAL = 64;
 
 export interface EvaluateOptions {
   phase?: MacroInterceptorPhase;
   sourceHint?: string;
+  /** Safety budget for one evaluate() call. This is a work cap, not a nesting cap. */
+  maxMacroResolutions?: number;
+}
+
+interface EvaluationState {
+  diagnostics: MacroDiagnostic[];
+  macroResolutions: number;
+  maxMacroResolutions: number;
+  activeExpansions: Set<string>;
+  halted: boolean;
 }
 
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
@@ -47,6 +58,13 @@ export async function evaluate(
   let processed = preprocessLegacy(input);
 
   const diagnostics: MacroDiagnostic[] = [];
+  const state: EvaluationState = {
+    diagnostics,
+    macroResolutions: 0,
+    maxMacroResolutions: options?.maxMacroResolutions ?? DEFAULT_MAX_MACRO_RESOLUTIONS,
+    activeExpansions: new Set(),
+    halted: false,
+  };
   let text = processed;
 
   const userId = typeof env.extra?.userId === "string" ? env.extra.userId : undefined;
@@ -84,8 +102,9 @@ export async function evaluate(
       if (!text.includes("{{")) break;
     }
 
-    const ast = parse(text);
-    const result = await evaluateNodes(ast, recordingEnv, registry, 0, 0, diagnostics);
+    const ast = parseForEvaluation(text, state);
+    if (!ast) break;
+    const result = await evaluateNodes(ast, recordingEnv, registry, 0, 0, state);
     if (result === text) break; // No change — converged
     text = result;
     if (!text.includes("{{")) break; // No more macros to resolve
@@ -162,30 +181,40 @@ async function evaluateNodes(
   registry: MacroRegistry,
   globalOffset: number,
   depth: number,
-  diagnostics: MacroDiagnostic[],
+  state: EvaluationState,
 ): Promise<string> {
-  if (depth > MAX_NESTING_DEPTH) {
-    diagnostics.push({
-      level: "error",
-      message: `Maximum nesting depth (${MAX_NESTING_DEPTH}) exceeded`,
-    });
+  if (state.halted) return "";
+
+  // Deep finite macro trees should not be rejected, but periodically yielding
+  // prevents recursive async evaluation from monopolizing the JS stack.
+  if (depth > 0 && depth % ASYNC_UNWIND_INTERVAL === 0) {
+    await Promise.resolve();
+  }
+
+  if (env.signal?.aborted) {
+    throw env.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+
+  if (!consumeMacroBudget(nodes, state)) {
     return "";
   }
 
   let result = "";
 
   for (const node of nodes) {
+    if (state.halted) break;
+
     switch (node.type) {
       case "text":
         result += node.value;
         break;
 
       case "macro":
-        result += await evaluateMacroNode(node, env, registry, globalOffset, depth, diagnostics);
+        result += await evaluateMacroNode(node, env, registry, globalOffset, depth, state);
         break;
 
       case "scoped_macro":
-        result += await evaluateScopedMacroNode(node, env, registry, globalOffset, depth, diagnostics);
+        result += await evaluateScopedMacroNode(node, env, registry, globalOffset, depth, state);
         break;
     }
   }
@@ -274,7 +303,7 @@ async function evaluateMacroNode(
   registry: MacroRegistry,
   globalOffset: number,
   depth: number,
-  diagnostics: MacroDiagnostic[],
+  state: EvaluationState,
 ): Promise<string> {
   const def = registry.getMacro(node.name);
 
@@ -290,13 +319,13 @@ async function evaluateMacroNode(
     } else if (typeof dynamic === "function") {
       rawResult = String(
         await Promise.resolve(
-          dynamic(buildExecContext(node, [], env, registry, globalOffset, depth, diagnostics))
+          dynamic(buildExecContext(node, [], env, registry, globalOffset, depth, state))
         )
       );
     } else if (typeof dynamic === "object" && dynamic.handler) {
       rawResult = String(
         await Promise.resolve(
-          dynamic.handler(buildExecContext(node, [], env, registry, globalOffset, depth, diagnostics))
+          dynamic.handler(buildExecContext(node, [], env, registry, globalOffset, depth, state))
         )
       );
     } else {
@@ -304,7 +333,7 @@ async function evaluateMacroNode(
     }
     // Dynamic macros don't carry a terminal flag, so always check for nested
     // macros to stay consistent with registry macro behavior.
-    return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
+    return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, state);
   }
 
   if (!def) {
@@ -322,12 +351,15 @@ async function evaluateMacroNode(
     resolvedArgs = [];
     for (const argNodes of node.args) {
       resolvedArgs.push(
-        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, diagnostics)
+        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, state)
       );
+      if (state.halted) return "";
     }
   }
 
-  const ctx = buildExecContext(node, resolvedArgs, env, registry, globalOffset, depth, diagnostics);
+  if (state.halted) return "";
+
+  const ctx = buildExecContext(node, resolvedArgs, env, registry, globalOffset, depth, state);
 
   try {
     const rawResult = String(await Promise.resolve(def.handler(ctx)));
@@ -338,12 +370,12 @@ async function evaluateMacroNode(
     // {{getvar::x}} → "{{user}}" → "Alice") into a single depth-first pass.
     // Terminal macros (guaranteed never to return {{...}}) skip the check.
     if (!def.terminal) {
-      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
+      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, state);
     }
 
     return rawResult;
   } catch (err: any) {
-    diagnostics.push({
+    state.diagnostics.push({
       level: "error",
       message: `Error in macro {{${node.name}}}: ${err.message}`,
       macroName: node.name,
@@ -364,11 +396,27 @@ async function expandIfNeeded(
   registry: MacroRegistry,
   globalOffset: number,
   depth: number,
-  diagnostics: MacroDiagnostic[],
+  state: EvaluationState,
 ): Promise<string> {
-  if (!text.includes("{{") || depth >= MAX_NESTING_DEPTH) return text;
-  const innerAst = parse(text);
-  const expanded = await evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, diagnostics);
+  if (!text.includes("{{") || state.halted) return text;
+  if (state.activeExpansions.has(text)) {
+    state.diagnostics.push({
+      level: "error",
+      message: "Recursive macro expansion detected; leaving unresolved macro text",
+    });
+    return text;
+  }
+
+  const innerAst = parseForEvaluation(text, state);
+  if (!innerAst) return text;
+
+  state.activeExpansions.add(text);
+  let expanded: string;
+  try {
+    expanded = await evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, state);
+  } finally {
+    state.activeExpansions.delete(text);
+  }
   // Convergence guard: avoid infinite recursion from self-referential
   // variables (e.g., x = "{{getvar::x}}") by checking if expansion
   // actually changed the text.
@@ -381,13 +429,13 @@ async function evaluateScopedMacroNode(
   registry: MacroRegistry,
   globalOffset: number,
   depth: number,
-  diagnostics: MacroDiagnostic[],
+  state: EvaluationState,
 ): Promise<string> {
   const def = registry.getMacro(node.name);
 
   if (!def) {
     // Unknown scoped macro — evaluate body and return it
-    return await evaluateNodes(node.body, env, registry, globalOffset, depth + 1, diagnostics);
+    return await evaluateNodes(node.body, env, registry, globalOffset, depth + 1, state);
   }
 
   // Resolve arguments
@@ -398,8 +446,9 @@ async function evaluateScopedMacroNode(
     resolvedArgs = [];
     for (const argNodes of node.args) {
       resolvedArgs.push(
-        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, diagnostics)
+        await evaluateNodes(stripArgFraming(argNodes), env, registry, globalOffset, depth + 1, state)
       );
+      if (state.halted) return "";
     }
   }
 
@@ -408,7 +457,9 @@ async function evaluateScopedMacroNode(
   // effects in the unselected branch.
   const body = def.delayArgResolution
     ? reconstructNodes(node.body)
-    : await evaluateNodes(node.body, env, registry, globalOffset, depth + 1, diagnostics);
+    : await evaluateNodes(node.body, env, registry, globalOffset, depth + 1, state);
+
+  if (state.halted) return "";
 
   const ctx: MacroExecContext = {
     name: node.name,
@@ -423,13 +474,13 @@ async function evaluateScopedMacroNode(
     globalOffset,
     env,
     resolve: (text: string) => {
-      const innerAst = parse(text);
-      return evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, diagnostics);
+      const innerAst = parseForEvaluation(text, state);
+      return innerAst ? evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, state) : text;
     },
     resolveNodes: (nodes: AstNode[]) =>
-      evaluateNodes(nodes, env, registry, globalOffset, depth + 1, diagnostics),
+      evaluateNodes(nodes, env, registry, globalOffset, depth + 1, state),
     warn: (message: string) => {
-      diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
+      state.diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
     },
   };
 
@@ -438,12 +489,12 @@ async function evaluateScopedMacroNode(
 
     // Recursive inline expansion — same pattern as evaluateMacroNode.
     if (!def.terminal) {
-      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, diagnostics);
+      return await expandIfNeeded(rawResult, env, registry, globalOffset, depth, state);
     }
 
     return rawResult;
   } catch (err: any) {
-    diagnostics.push({
+    state.diagnostics.push({
       level: "error",
       message: `Error in scoped macro {{${node.name}}}: ${err.message}`,
       macroName: node.name,
@@ -460,7 +511,7 @@ function buildExecContext(
   registry: MacroRegistry,
   globalOffset: number,
   depth: number,
-  diagnostics: MacroDiagnostic[],
+  state: EvaluationState,
 ): MacroExecContext {
   return {
     name: node.name,
@@ -475,15 +526,48 @@ function buildExecContext(
     globalOffset,
     env,
     resolve: (text: string) => {
-      const innerAst = parse(text);
-      return evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, diagnostics);
+      const innerAst = parseForEvaluation(text, state);
+      return innerAst ? evaluateNodes(innerAst, env, registry, globalOffset, depth + 1, state) : text;
     },
     resolveNodes: (nodes: AstNode[]) =>
-      evaluateNodes(nodes, env, registry, globalOffset, depth + 1, diagnostics),
+      evaluateNodes(nodes, env, registry, globalOffset, depth + 1, state),
     warn: (message: string) => {
-      diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
+      state.diagnostics.push({ level: "warn", message, macroName: node.name, offset: node.offset });
     },
   };
+}
+
+function parseForEvaluation(input: string, state: EvaluationState): AstNode[] | null {
+  try {
+    return parse(input);
+  } catch (err: any) {
+    state.diagnostics.push({
+      level: "error",
+      message: `Macro parse failed: ${err?.message || String(err)}`,
+    });
+    state.halted = true;
+    return null;
+  }
+}
+
+function consumeMacroBudget(nodes: AstNode[], state: EvaluationState): boolean {
+  if (state.halted) return false;
+
+  let count = 0;
+  for (const node of nodes) {
+    if (node.type === "macro" || node.type === "scoped_macro") count++;
+  }
+  if (count === 0) return true;
+
+  state.macroResolutions += count;
+  if (state.macroResolutions <= state.maxMacroResolutions) return true;
+
+  state.halted = true;
+  state.diagnostics.push({
+    level: "error",
+    message: `Macro resolution budget exceeded (${state.maxMacroResolutions})`,
+  });
+  return false;
 }
 
 function snapshotEnvForInterceptor(env: MacroEnv): {

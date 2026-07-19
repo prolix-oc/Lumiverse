@@ -28,8 +28,12 @@
   background: var(--lumiverse-gradient-modal);
   border-radius: 16px;
   border: 1px solid var(--lumiverse-primary-020);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px var(--lumiverse-primary-015);
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   overflow: hidden;
+}
+
+:global([data-glass]) .modal {
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px var(--lumiverse-primary-015);
 }
 
 /* Header */
@@ -252,16 +256,332 @@
   gap: 4px;
 }
 
+.fieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .fieldLabel {
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
 }
 
+.perspectiveLayerGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.perspectiveStackEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.perspectiveLayerList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perspectiveLayerRow {
+  display: grid;
+  grid-template-columns: 32px 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 12px;
+  background: var(--lumiverse-fill-subtle);
+  transition:
+    border-color var(--lumiverse-transition-fast),
+    background var(--lumiverse-transition-fast),
+    box-shadow var(--lumiverse-transition-fast);
+}
+
+.perspectiveLayerDragging {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  z-index: 2;
+}
+
+.perspectiveLayerDrag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 9px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+}
+
+.perspectiveLayerDrag:active {
+  cursor: grabbing;
+}
+
+.perspectiveLayerDrag:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.perspectiveLayerRowPreview {
+  position: relative;
+  overflow: hidden;
+  min-height: 92px;
+  border-radius: 10px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+}
+
+.perspectiveLayerRowImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.perspectiveLayerRowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.perspectiveLayerRowTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perspectiveLayerNameInput {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+}
+
+.perspectiveLayerNameInput:focus {
+  border-color: var(--lumiverse-primary-050);
+}
+
+.perspectiveLayerSliderRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.perspectiveLayerSliderHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-muted);
+}
+
+.perspectiveLayerEmptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 80px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: 12px;
+  color: var(--lumiverse-text-dim);
+  background: var(--lumiverse-fill-subtle);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.perspectiveLayerAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast);
+}
+
+.perspectiveLayerAdd:hover {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+}
+
+.perspectiveLayerAdd:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+.perspectiveLayerCard {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 12px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.perspectiveLayerPreview {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  background:
+    linear-gradient(135deg, var(--lumiverse-primary-010), transparent),
+    var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  overflow: hidden;
+}
+
+.perspectiveLayerImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.perspectiveLayerEmpty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--lumiverse-text-dim);
+}
+
+.perspectiveLayerBusy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--lumiverse-fill-heavy);
+  color: var(--lumiverse-primary-contrast, #fff);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+
+.perspectiveLayerBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px;
+}
+
+.perspectiveLayerTitle {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 650;
+  color: var(--lumiverse-text);
+}
+
+.perspectiveLayerHint {
+  min-height: 28px;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  color: var(--lumiverse-text-dim);
+}
+
+.perspectiveLayerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.perspectiveLayerUpload,
+.perspectiveLayerRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 26px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+  transition:
+    background var(--lumiverse-transition-fast),
+    color var(--lumiverse-transition-fast),
+    border-color var(--lumiverse-transition-fast);
+}
+
+.perspectiveLayerUpload {
+  flex: 1;
+  padding: 0 8px;
+}
+
+.perspectiveLayerRemove {
+  width: 28px;
+  padding: 0;
+}
+
+.perspectiveLayerUpload:hover,
+.perspectiveLayerRemove:hover {
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-text);
+}
+
+.perspectiveLayerUpload:has(input:disabled),
+.perspectiveLayerRemove:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+
+@media (max-width: 640px) {
+  .perspectiveLayerGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .fieldHelper {
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim);
   margin-bottom: 2px;
+}
+
+.creatorAttribution {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: -6px;
+}
+
+.creatorAttributionLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-primary);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.creatorAttributionLink:hover {
+  color: var(--lumiverse-text);
+  text-decoration: underline;
 }
 
 .fieldTextarea {
@@ -315,12 +635,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .greetingLabel {
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text-dim);
+}
+
+.greetingActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .removeBtn {
@@ -444,18 +773,75 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex: 1;
+  min-height: 0;
 }
 
 .galleryHeader {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex-shrink: 0;
 }
 
-.galleryGrid {
+.galleryScrollArea {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--lumiverse-border) 55%, transparent) transparent;
+}
+
+.galleryScrollArea::-webkit-scrollbar {
+  width: 5px;
+}
+
+.galleryScrollArea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.galleryScrollArea::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--lumiverse-border) 55%, transparent);
+  border-radius: 999px;
+}
+
+.galleryScrollArea::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--lumiverse-text-muted) 65%, transparent);
+}
+
+.galleryVirtualContainer {
+  position: relative;
+  width: 100%;
+}
+
+.galleryGridRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
+  box-sizing: border-box;
+  contain: layout style;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .galleryScrollArea {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .galleryScrollArea::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  .galleryGridRow {
+    will-change: auto;
+  }
 }
 
 .galleryItem {
@@ -761,7 +1147,7 @@
     max-height: 100%;
     height: 100%;
     border-radius: 0;
-    padding-top: env(safe-area-inset-top, 12px);
+    padding-top: var(--app-interactive-safe-top, env(safe-area-inset-top, 12px));
   }
 
   .header {

@@ -1,3 +1,7 @@
+---
+title: Glossary
+---
+
 # Glossary
 
 Key terms used throughout Lumiverse and these guides.

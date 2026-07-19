@@ -40,6 +40,7 @@ export interface InstallWorldbookPayload {
   source: "lumihub" | "chub";
   worldbookId: string;
   worldbookName: string;
+  worldbookCreator?: string;
   /** Inline worldbook data (for lumihub-sourced). */
   worldbookData?: { name: string; description: string; entries: Record<string, any>[] };
   /** Import URL for Chub-sourced lorebooks. */
@@ -82,6 +83,11 @@ export interface InstallPresetPayload {
   presetSlug?: string | null;
   /** Export shape returned by LumiHub's /presets/:id/export endpoint. */
   presetData: Record<string, any>;
+  /** Manifest for private Hub-side preset blocks; content is fetched separately. */
+  sealedPreset?: {
+    version: string | null;
+    blocks: Array<{ key: string; sha256: string }>;
+  } | null;
 }
 
 export interface InstallPresetResultPayload {

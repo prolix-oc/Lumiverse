@@ -50,12 +50,30 @@
 .card:hover {
   background: var(--lumiverse-bg-elevated);
   border-color: var(--lumiverse-border);
+}
+
+:global([data-glass]) .card:hover {
   box-shadow: 0 0 16px var(--lumiverse-primary-010);
 }
 
 :global([data-theme-mode='light']) .card:hover {
   border-color: var(--lumiverse-fill-subtle);
+}
+
+:global([data-glass][data-theme-mode='light']) .card:hover {
   box-shadow: 0 0 12px rgba(0, 0, 0, 0.04);
+}
+
+/* Reuse the Bubble-mode opt-out attribute so the shared chat hover/tap
+   highlight setting also keeps Minimal rows at their base fill. */
+:global([data-no-bubble-hover]) .card:hover {
+  background: var(--lcs-glass-bg);
+  border-color: var(--lcs-glass-border);
+  box-shadow: none;
+}
+
+:global([data-glass][data-no-bubble-hover]) .card:hover {
+  box-shadow: none;
 }
 
 /* Hidden draft message — dimmed, darkened, dashed border */
@@ -184,6 +202,16 @@
   background: var(--lumiverse-fill-deepest);
   border: 1px solid var(--lumiverse-border);
   line-height: 1;
+}
+
+/* User metadata sits on the right side of the row. Keep the badge itself as
+   one unit; the wrapping header can still move the whole pill below the name
+   when horizontal space is tight. */
+.user .metaPill {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  max-width: none;
+  white-space: nowrap;
 }
 
 .metaSegment {
@@ -362,4 +390,11 @@
   .streaming {
     will-change: auto;
   }
+}
+
+/* ── Scroll-time CSS suppression ── */
+:global([data-scrolling]) .card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  transition: none !important;
 }

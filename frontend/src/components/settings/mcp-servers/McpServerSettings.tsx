@@ -55,7 +55,7 @@ export default function McpServerSettings() {
 
     init()
     return () => { cancelled = true }
-  }, [])
+  }, [setServers, setStatus])
 
   const handleCreate = useCallback(async (input: CreateMcpServerInput) => {
     try {

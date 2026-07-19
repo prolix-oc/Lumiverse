@@ -34,6 +34,19 @@ interface MemoryEnvData {
   };
 }
 
+const DEFAULT_MEMORY_HEADER_TEMPLATE = `Long-term continuity notes from earlier in this conversation.
+These are retrieval results, not live chat history.
+Use them only to preserve continuity.
+Do not quote, continue, imitate, or replay their wording, actions, emotional beats, or dialogue.
+If an event appears complete, treat it as background consequence rather than repeating it.
+
+{{memories}}`;
+
+const DEFAULT_MEMORY_CHUNK_TEMPLATE = `Earlier retrieved context:
+{{content}}
+
+Use only the continuity-relevant facts/state above. Do not reuse its phrasing.`;
+
 function getMemory(ctx: MacroExecContext): MemoryEnvData {
   return (ctx.env.extra.memory ?? {
     chunks: [],
@@ -41,9 +54,9 @@ function getMemory(ctx: MacroExecContext): MemoryEnvData {
     count: 0,
     enabled: false,
     settings: {
-      chunkTemplate: "{{content}}",
+      chunkTemplate: DEFAULT_MEMORY_CHUNK_TEMPLATE,
       chunkSeparator: "\n---\n",
-      memoryHeaderTemplate: "Relevant context from earlier in this conversation:\n{{memories}}",
+      memoryHeaderTemplate: DEFAULT_MEMORY_HEADER_TEMPLATE,
     },
   }) as MemoryEnvData;
 }

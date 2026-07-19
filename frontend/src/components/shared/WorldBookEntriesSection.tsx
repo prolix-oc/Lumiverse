@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { createPortal } from 'react-dom'
 import { useWorldBookEntryLabels } from '@/lib/i18n/worldBookEntryLabels'
+import { useLoomOptionLabels } from '@/lib/i18n/loomOptionLabels'
 import {
   ArrowDown,
   ArrowUp,
@@ -14,6 +16,7 @@ import {
   MoreVertical,
   MoveRight,
   Plus,
+  Plug,
   Search,
   Square,
   Tag,
@@ -32,9 +35,13 @@ import {
   MouseSensor,
   TouchSensor,
   KeyboardSensor,
+  DragOverlay,
   closestCenter,
   useSensor,
   useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
+  type DraggableAttributes,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -44,14 +51,23 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
+import { useScrollGate } from '@/hooks/useScrollGate'
+import useIsMobile from '@/hooks/useIsMobile'
 import clsx from 'clsx'
 import { worldBooksApi } from '@/api/world-books'
+import { wsClient } from '@/ws/client'
+import { EventType } from '@/ws/events'
+import type {
+  WorldBookChangedPayload,
+  WorldBookEntryChangedPayload,
+  WorldBookEntryDeletedPayload,
+} from '@/types/ws-events'
 import WorldBookEntryEditor from '@/components/shared/WorldBookEntryEditor'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import { ModalPresentation } from '@/components/shared/ModalPresentation'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import { FormField, Select, TextInput, Button } from '@/components/shared/FormComponents'
-import { ModalShell } from '@/components/shared/ModalShell'
 import Pagination from '@/components/shared/Pagination'
 import { useStore } from '@/store'
 import type {
@@ -65,9 +81,75 @@ import type {
   WorldBookEntryPageSize,
 } from '@/types/store'
 import styles from './WorldBookEntriesSection.module.css'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 const DEFAULT_PAGE_SIZE = 50 as const
 const CUSTOM_PAGE_SIZE = 200 as const
+const ENTRY_FIELD_VISIBLE_TOP_GUTTER = 12
+const ENTRY_FIELD_KEYBOARD_GUTTER = 72
+const ENTRY_FIELD_REVEAL_THRESHOLD = 10
+const ENTRY_FIELD_FOCUS_SETTLE_DELAYS = [40, 180, 360, 520] as const
+
+/** Ignore WORLD_BOOK_ENTRY_CHANGED echoes of our own writes for this long. */
+const SELF_ECHO_WINDOW_MS = 2_000
+
+function isEditableEntryField(target: EventTarget | null): target is HTMLElement {
+  if (!(target instanceof HTMLElement)) return false
+  if (!target.closest('[data-world-book-entry-editor="true"]')) return false
+  if (target.isContentEditable) return true
+  if (target instanceof HTMLTextAreaElement) return !target.disabled && !target.readOnly
+  if (target instanceof HTMLSelectElement) return !target.disabled
+  if (!(target instanceof HTMLInputElement) || target.disabled || target.readOnly) return false
+
+  return ![
+    'button',
+    'checkbox',
+    'color',
+    'file',
+    'hidden',
+    'image',
+    'radio',
+    'range',
+    'reset',
+    'submit',
+  ].includes(target.type)
+}
+
+function parseCssPx(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function getEntryFieldBottomGutter(container: HTMLElement): number {
+  const style = getComputedStyle(container)
+  const footerHeight = parseCssPx(style.getPropertyValue('--worldbook-footer-height'))
+  return Math.max(ENTRY_FIELD_KEYBOARD_GUTTER, footerHeight + ENTRY_FIELD_VISIBLE_TOP_GUTTER)
+}
+
+function getEntryFieldRevealDelta(target: HTMLElement, container: HTMLElement) {
+  const targetRect = target.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+  const visibleTop = Math.max(containerRect.top, 0) + ENTRY_FIELD_VISIBLE_TOP_GUTTER
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - getEntryFieldBottomGutter(container)
+
+  if (targetRect.bottom > visibleBottom) {
+    return targetRect.bottom - visibleBottom
+  }
+  if (targetRect.top < visibleTop) {
+    return targetRect.top - visibleTop
+  }
+  return 0
+}
+
+function revealEntryFieldTarget(target: HTMLElement | null, container: HTMLElement | null) {
+  if (!target || !container || !container.contains(target)) return
+  if (document.activeElement !== target && !target.contains(document.activeElement)) return
+
+  const delta = getEntryFieldRevealDelta(target, container)
+  if (Math.abs(delta) < ENTRY_FIELD_REVEAL_THRESHOLD) return
+  container.scrollTop += delta
+}
 
 function mapSortForApi(sortBy: WorldBookEntrySortBy): 'order' | 'priority' | 'created' | 'updated' | 'name' {
   return sortBy === 'custom' ? 'order' : sortBy
@@ -99,7 +181,13 @@ interface EntryRowProps {
   onOpenPositionMenu: (entryId: string, position: ContextMenuPos) => void
 }
 
-function SortableEntryRow({
+interface EntryRowContentProps extends EntryRowProps {
+  dragHandleAttributes?: DraggableAttributes
+  dragHandleListeners?: Record<string, unknown>
+  isDragging?: boolean
+}
+
+function EntryRowContent({
   entry,
   expanded,
   dragEnabled,
@@ -112,19 +200,14 @@ function SortableEntryRow({
   onOpenMenu,
   onOpenTypeMenu,
   onOpenPositionMenu,
-}: EntryRowProps) {
+  dragHandleAttributes,
+  dragHandleListeners,
+  isDragging,
+}: EntryRowContentProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
+  const { t: tEntryFields } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entryEditor.fields' })
   const labels = useWorldBookEntryLabels()
-  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
-    id: entry.id,
-    disabled: !dragEnabled,
-  })
-  const { setNodeRef, style } = useScaledSortableStyle({
-    setNodeRef: setSortableRef,
-    transform,
-    transition,
-    isDragging,
-  })
+  const { markerLabel } = useLoomOptionLabels()
 
   const controlWrapProps = {
     onClick: (e: React.MouseEvent) => e.stopPropagation(),
@@ -132,7 +215,7 @@ function SortableEntryRow({
   }
 
   return (
-    <div ref={setNodeRef} style={style} className={clsx(isDragging && styles.rowDragging)}>
+    <div className={clsx(isDragging && styles.rowDragging)}>
       <div
         className={clsx(
           styles.entryRow,
@@ -168,8 +251,8 @@ function SortableEntryRow({
               title={dragEnabled ? t('dragReorder') : t('dragUnavailable')}
               aria-label={t('dragHandle')}
               tabIndex={-1}
-              {...attributes}
-              {...listeners}
+              {...dragHandleAttributes}
+              {...dragHandleListeners}
             >
               <GripVertical size={13} />
             </button>
@@ -209,9 +292,17 @@ function SortableEntryRow({
                   title={t('changeEntryPosition')}
                   aria-label={t('changeEntryPositionFrom', { position: labels.positionLabel(entry.position) })}
                 >
-                  <span>{labels.positionLabel(entry.position)}</span>
+                  <span>{entry.position === 7 && entry.wi_marker ? `${labels.positionLabel(entry.position)} · ${markerLabel(entry.wi_marker)}` : labels.positionLabel(entry.position)}</span>
                   <ChevronDown size={11} />
                 </button>
+                <span
+                  className={clsx(styles.entryMetaItem, styles.orderBadge)}
+                  title={`${tEntryFields('order')}: ${entry.order_value.toLocaleString()}`}
+                  {...controlWrapProps}
+                >
+                  <Hash size={10} aria-hidden="true" />
+                  <span>{entry.order_value.toLocaleString()}</span>
+                </span>
               </div>
             </div>
 
@@ -253,6 +344,38 @@ function SortableEntryRow({
   )
 }
 
+function SortableEntryRow(props: EntryRowProps) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+    id: props.entry.id,
+    disabled: !props.dragEnabled,
+  })
+  const { setNodeRef, style } = useScaledSortableStyle({
+    setNodeRef: setSortableRef,
+    transform,
+    transition,
+    isDragging,
+  })
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <EntryRowContent
+        {...props}
+        dragHandleAttributes={attributes}
+        dragHandleListeners={listeners}
+        isDragging={isDragging}
+      />
+    </div>
+  )
+}
+
+function EntryRow(props: EntryRowProps) {
+  if (!props.dragEnabled) {
+    return <EntryRowContent {...props} />
+  }
+
+  return <SortableEntryRow {...props} />
+}
+
 interface MoveCopyModalState {
   mode: 'move' | 'copy'
   entryIds: string[]
@@ -278,12 +401,16 @@ interface WorldBookEntriesSectionProps {
   books: WorldBook[]
   selectedBookId: string
   onRefreshVectorSummary?: (bookId: string) => Promise<void> | void
+  scrollContainerRef?: { current: HTMLDivElement | null }
+  paginationContainer?: HTMLDivElement | null
 }
 
 export default function WorldBookEntriesSection({
   books,
   selectedBookId,
   onRefreshVectorSummary,
+  scrollContainerRef,
+  paginationContainer,
 }: WorldBookEntriesSectionProps) {
   const { t } = useTranslation('panels', { keyPrefix: 'worldBookPanel' })
   const { t: te } = useTranslation('panels', { keyPrefix: 'worldBookPanel.entries' })
@@ -292,6 +419,7 @@ export default function WorldBookEntriesSection({
   const formatEntryCount = useFormatEntryCount()
   const worldBookEntryViewPrefs = useStore((s) => s.worldBookEntryViewPrefs)
   const setSetting = useStore((s) => s.setSetting)
+  const isMobile = useIsMobile()
 
   const [entries, setEntries] = useState<WorldBookEntry[]>([])
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null)
@@ -302,6 +430,7 @@ export default function WorldBookEntriesSection({
   const [entrySortBy, setEntrySortBy] = useState<WorldBookEntrySortBy>('custom')
   const [entrySortDir, setEntrySortDir] = useState<WorldBookEntrySortDir>('asc')
   const [entryPageSize, setEntryPageSize] = useState<WorldBookEntryPageSize>(DEFAULT_PAGE_SIZE)
+  const [mobileListOptionsOpen, setMobileListOptionsOpen] = useState(false)
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entryId: string; position: ContextMenuPos } | null>(null)
@@ -322,6 +451,100 @@ export default function WorldBookEntriesSection({
   const [bulkDepth, setBulkDepth] = useState('4')
   const [pendingAction, setPendingAction] = useState(false)
   const entryTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const sectionRef = useRef<HTMLDivElement>(null)
+  const localScrollRef = useRef<HTMLDivElement>(null)
+  const focusedEntryFieldRef = useRef<HTMLElement | null>(null)
+  const focusRevealFrameRef = useRef(0)
+  const focusRevealTimersRef = useRef<number[]>([])
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
+  const activeScrollRef = scrollContainerRef ?? localScrollRef
+  const usesSharedScroll = scrollContainerRef != null
+  useScrollGate(activeScrollRef)
+
+  const clearFocusRevealTimers = useCallback(() => {
+    for (const timer of focusRevealTimersRef.current) {
+      window.clearTimeout(timer)
+    }
+    focusRevealTimersRef.current = []
+  }, [])
+
+  const scheduleEntryFieldReveal = useCallback((target = focusedEntryFieldRef.current) => {
+    if (typeof window === 'undefined' || navigator.maxTouchPoints <= 0) return
+    if (!target) return
+
+    if (focusRevealFrameRef.current) {
+      window.cancelAnimationFrame(focusRevealFrameRef.current)
+    }
+    focusRevealFrameRef.current = window.requestAnimationFrame(() => {
+      focusRevealFrameRef.current = 0
+      revealEntryFieldTarget(target, activeScrollRef.current)
+    })
+  }, [activeScrollRef])
+
+  const scheduleEntryFieldFocusCorrection = useCallback((target: HTMLElement) => {
+    focusedEntryFieldRef.current = target
+    clearFocusRevealTimers()
+    scheduleEntryFieldReveal(target)
+    focusRevealTimersRef.current = ENTRY_FIELD_FOCUS_SETTLE_DELAYS.map((delay) =>
+      window.setTimeout(() => scheduleEntryFieldReveal(target), delay)
+    )
+  }, [clearFocusRevealTimers, scheduleEntryFieldReveal])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || navigator.maxTouchPoints <= 0) return
+    const root = sectionRef.current
+    if (!root) return
+
+    const handleFocusIn = (event: FocusEvent) => {
+      if (!isEditableEntryField(event.target)) return
+      scheduleEntryFieldFocusCorrection(event.target)
+    }
+
+    const handleFocusOut = (event: FocusEvent) => {
+      if (event.target === focusedEntryFieldRef.current) {
+        focusedEntryFieldRef.current = null
+      }
+    }
+
+    const handleInput = (event: Event) => {
+      if (!isEditableEntryField(event.target)) return
+      focusedEntryFieldRef.current = event.target
+      scheduleEntryFieldReveal(event.target)
+    }
+
+    const handleViewportChange = () => {
+      scheduleEntryFieldReveal()
+    }
+
+    root.addEventListener('focusin', handleFocusIn)
+    root.addEventListener('focusout', handleFocusOut)
+    root.addEventListener('input', handleInput)
+    window.visualViewport?.addEventListener('resize', handleViewportChange)
+    window.visualViewport?.addEventListener('scroll', handleViewportChange)
+
+    return () => {
+      root.removeEventListener('focusin', handleFocusIn)
+      root.removeEventListener('focusout', handleFocusOut)
+      root.removeEventListener('input', handleInput)
+      window.visualViewport?.removeEventListener('resize', handleViewportChange)
+      window.visualViewport?.removeEventListener('scroll', handleViewportChange)
+      clearFocusRevealTimers()
+      if (focusRevealFrameRef.current) {
+        window.cancelAnimationFrame(focusRevealFrameRef.current)
+        focusRevealFrameRef.current = 0
+      }
+    }
+  }, [clearFocusRevealTimers, scheduleEntryFieldFocusCorrection, scheduleEntryFieldReveal])
+
+  // ── Live-sync (WORLD_BOOK_ENTRY_* / WORLD_BOOK_CHANGED) ──
+  // Mirror of `entries` for use inside WS handlers without re-subscribing.
+  const entriesRef = useRef<WorldBookEntry[]>(entries)
+  useEffect(() => { entriesRef.current = entries }, [entries])
+  // entryId → timestamp of the last local write; used to ignore our own echoes.
+  const recentLocalWrites = useRef<Map<string, number>>(new Map())
+  // Always-current silent refetch of the visible page, called from WS handlers.
+  const liveRefetchRef = useRef<() => void>(() => {})
+  const liveRefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const pageSize = entryPageSize === 'all' ? null : entryPageSize
   const entryTotalPages = pageSize ? Math.max(1, Math.ceil(entryTotal / pageSize)) : 1
@@ -336,6 +559,18 @@ export default function WorldBookEntriesSection({
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
         .map((book) => ({ value: book.id, label: book.name, group: book.folder || undefined })),
     [books, selectedBookId],
+  )
+  const currentSortLabel = useMemo(
+    () => labels.sortOptions.find((option) => option.value === entrySortBy)?.label ?? entrySortBy,
+    [entrySortBy, labels.sortOptions],
+  )
+  const currentPageSizeLabel = useMemo(
+    () => labels.pageSizeOptions.find((option) => String(option.value) === String(entryPageSize))?.label ?? String(entryPageSize),
+    [entryPageSize, labels.pageSizeOptions],
+  )
+  const mobileListOptionsSummary = useMemo(
+    () => `${currentSortLabel} | ${currentPageSizeLabel}`,
+    [currentPageSizeLabel, currentSortLabel],
   )
   const allSelected = entries.length > 0 && selectedIds.length === entries.length
   const selectedCount = selectedIds.length
@@ -404,8 +639,12 @@ export default function WorldBookEntriesSection({
     sortDir: WorldBookEntrySortDir,
     search: string,
     nextPageSize: WorldBookEntryPageSize,
+    opts?: { silent?: boolean },
   ) => {
-    setLoadingEntries(true)
+    // Silent loads (live-sync refetches) skip the loading flash so they don't
+    // momentarily unmount an expanded entry editor and drop in-progress text.
+    const silent = opts?.silent ?? false
+    if (!silent) setLoadingEntries(true)
     try {
       const res = nextPageSize === 'all'
         ? await fetchAllEntries(bookId, sortBy, sortDir, search)
@@ -423,7 +662,7 @@ export default function WorldBookEntriesSection({
         setEntryPage(totalPages)
       }
     } finally {
-      setLoadingEntries(false)
+      if (!silent) setLoadingEntries(false)
     }
   }, [fetchAllEntries])
 
@@ -438,6 +677,7 @@ export default function WorldBookEntriesSection({
     setEntryPageSize(pref.pageSize || DEFAULT_PAGE_SIZE)
     setEntryPage(1)
     setEntrySearchFilter('')
+    setMobileListOptionsOpen(false)
     setSelectedEntryId(null)
     setSelectMode(false)
     setSelectedIds([])
@@ -454,6 +694,65 @@ export default function WorldBookEntriesSection({
     return () => clearTimeout(handle)
   }, [selectedBookId, entryPage, entrySortBy, entrySortDir, entrySearchFilter, entryPageSize, loadEntries])
 
+  // Keep the silent-refetch closure current so the WS subscription (bound once
+  // per book) always refetches the page/sort/filter the user is actually viewing.
+  useEffect(() => {
+    liveRefetchRef.current = () => {
+      if (!selectedBookId) return
+      void loadEntries(selectedBookId, entryPage, entrySortBy, entrySortDir, entrySearchFilter.trim(), entryPageSize, { silent: true })
+    }
+  })
+
+  const scheduleLiveRefetch = useCallback(() => {
+    clearTimeout(liveRefetchTimer.current)
+    liveRefetchTimer.current = setTimeout(() => liveRefetchRef.current(), 250)
+  }, [])
+
+  // Reflect world-book changes made elsewhere (another tab/device, or a Spindle
+  // extension) into the open editor. WORLD_BOOK_ENTRY_CHANGED carries the full
+  // entry, so a visible entry is patched in place — safe because the entry editor
+  // keeps edited text in id-keyed local state and won't re-sync a same-id patch.
+  // Unknown entries (newly created / on another page) and structural book changes
+  // (reorder, bulk ops) trigger a silent refetch of the visible page instead.
+  useEffect(() => {
+    if (!selectedBookId) return
+    const isSelfEcho = (id: string) => {
+      const ts = recentLocalWrites.current.get(id)
+      if (ts == null) return false
+      if (Date.now() - ts > SELF_ECHO_WINDOW_MS) {
+        recentLocalWrites.current.delete(id)
+        return false
+      }
+      return true
+    }
+    const offEntryChanged = wsClient.on(EventType.WORLD_BOOK_ENTRY_CHANGED, (p: WorldBookEntryChangedPayload) => {
+      if (!p?.entry || p.worldBookId !== selectedBookId || isSelfEcho(p.id)) return
+      if (!entriesRef.current.some((e) => e.id === p.id)) {
+        scheduleLiveRefetch()
+        return
+      }
+      setEntries((cur) => cur.map((e) => (e.id === p.id ? p.entry : e)))
+    })
+    const offEntryDeleted = wsClient.on(EventType.WORLD_BOOK_ENTRY_DELETED, (p: WorldBookEntryDeletedPayload) => {
+      if (!p?.id || p.worldBookId !== selectedBookId) return
+      if (!entriesRef.current.some((e) => e.id === p.id)) return
+      setEntries((cur) => cur.filter((e) => e.id !== p.id))
+      setEntryTotal((tot) => Math.max(0, tot - 1))
+      setSelectedEntryId((cur) => (cur === p.id ? null : cur))
+      setSelectedIds((cur) => cur.filter((id) => id !== p.id))
+    })
+    const offBookChanged = wsClient.on(EventType.WORLD_BOOK_CHANGED, (p: WorldBookChangedPayload) => {
+      if (p?.id !== selectedBookId) return
+      scheduleLiveRefetch()
+    })
+    return () => {
+      offEntryChanged()
+      offEntryDeleted()
+      offBookChanged()
+      clearTimeout(liveRefetchTimer.current)
+    }
+  }, [selectedBookId, scheduleLiveRefetch])
+
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => entries.some((entry) => entry.id === id)))
   }, [entries])
@@ -464,6 +763,7 @@ export default function WorldBookEntriesSection({
 
   const updateEntry = useCallback((entryId: string, updates: Record<string, any>) => {
     setEntries((current) => current.map((entry) => (entry.id === entryId ? { ...entry, ...updates } : entry)))
+    recentLocalWrites.current.set(entryId, Date.now())
     void worldBooksApi.updateEntry(selectedBookId, entryId, updates)
       .then(async () => {
         await refreshVectorSummary()
@@ -475,6 +775,7 @@ export default function WorldBookEntriesSection({
 
   const debouncedUpdateEntry = useCallback((entryId: string, updates: Record<string, any>) => {
     setEntries((current) => current.map((entry) => (entry.id === entryId ? { ...entry, ...updates } : entry)))
+    recentLocalWrites.current.set(entryId, Date.now())
     const key = `${entryId}:${Object.keys(updates).sort().join(',')}`
     clearTimeout(entryTimers.current[key])
     entryTimers.current[key] = setTimeout(() => {
@@ -494,6 +795,7 @@ export default function WorldBookEntriesSection({
       key: [],
       content: '',
     })
+    recentLocalWrites.current.set(entry.id, Date.now())
     setSelectedEntryId(entry.id)
     setEntryPage(1)
     await loadEntries(selectedBookId, 1, entrySortBy, entrySortDir, entrySearchFilter.trim(), entryPageSize)
@@ -654,7 +956,12 @@ export default function WorldBookEntriesSection({
     })
   }, [entrySortBy, entrySortDir, persistViewPref, selectedBookId])
 
-  const handleDragEnd = useCallback(async ({ active, over }: any) => {
+  const handleDragStart = useCallback(({ active }: DragStartEvent) => {
+    setActiveDragId(String(active.id))
+  }, [])
+
+  const handleDragEnd = useCallback(async ({ active, over }: DragEndEvent) => {
+    setActiveDragId(null)
     if (!dragEnabled || !over || active.id === over.id) return
     const oldIndex = entries.findIndex((entry) => entry.id === active.id)
     const newIndex = entries.findIndex((entry) => entry.id === over.id)
@@ -672,6 +979,7 @@ export default function WorldBookEntriesSection({
   const selectedEntry = contextMenu ? entries.find((entry) => entry.id === contextMenu.entryId) ?? null : null
   const selectedTypeEntry = typeMenu ? entries.find((entry) => entry.id === typeMenu.entryId) ?? null : null
   const selectedPositionEntry = positionMenu ? entries.find((entry) => entry.id === positionMenu.entryId) ?? null : null
+  const activeDragEntry = activeDragId ? entries.find((entry) => entry.id === activeDragId) ?? null : null
   const contextMenuItems: ContextMenuEntry[] = selectedEntry
     ? [
         {
@@ -773,7 +1081,9 @@ export default function WorldBookEntriesSection({
                 ? <BetweenHorizontalEnd size={14} />
                 : option.value === 7
                   ? <MapPin size={14} />
-                  : <Hash size={14} />,
+                  : option.value === 8
+                    ? <Plug size={14} />
+                    : <Hash size={14} />,
         active: selectedPositionEntry.position === option.value,
         onClick: () => {
           updateEntry(selectedPositionEntry.id, { position: option.value })
@@ -781,12 +1091,45 @@ export default function WorldBookEntriesSection({
         },
       }))
     : []
+  const paginationControls = entryPageSize !== 'all' && entryTotalPages > 1 ? (
+    <Pagination
+      className={styles.entryPaginationControls}
+      currentPage={entryPage}
+      totalPages={entryTotalPages}
+      onPageChange={(page) => {
+        setEntryPage(page)
+        setSelectedEntryId(null)
+        setSelectedIds([])
+      }}
+      totalItems={entryTotal}
+    />
+  ) : null
+  const pagination = paginationControls && !paginationContainer ? (
+    <div className={styles.entryPagination}>
+      {paginationControls}
+    </div>
+  ) : null
+  const dockedPagination = paginationControls && paginationContainer
+    ? createPortal(
+        <div className={styles.entryPaginationDocked}>
+          {paginationControls}
+        </div>,
+        paginationContainer,
+      )
+    : null
 
   return (
-    <>
-      <div className={styles.entryListHeader}>
+    <div
+      ref={sectionRef}
+      className={clsx(
+        styles.section,
+        usesSharedScroll ? styles.sectionSharedScroll : styles.sectionStandaloneScroll,
+        isMobile && styles.sectionMobile,
+      )}
+    >
+      <div className={clsx(styles.entryListHeader, isMobile && styles.entryListHeaderMobile)}>
         <span className={styles.entryListTitle}>{te('entriesTitle', { count: entryTotal })}</span>
-        <div className={styles.toolbarActions}>
+        <div className={clsx(styles.toolbarActions, isMobile && styles.toolbarActionsMobile)}>
           <button
             type="button"
             className={clsx(styles.toolbarBtn, selectMode && styles.toolbarBtnActive)}
@@ -808,56 +1151,96 @@ export default function WorldBookEntriesSection({
         </div>
       </div>
 
-      <div className={styles.entrySortRow}>
-        <select
-          className={styles.entrySortSelect}
-          value={entrySortBy}
-          onChange={(e) => handleSortByChange(e.target.value as WorldBookEntrySortBy)}
-          title={te('sortBy')}
-        >
-          {labels.sortOptions.map((option) => (
-            <option key={option.value} value={option.value}>{te('sortPrefix', { label: option.label })}</option>
-          ))}
-        </select>
-        <select
-          className={styles.entryPageSizeSelect}
-          value={String(entryPageSize)}
-          onChange={(e) => handlePageSizeChange(e.target.value)}
-          title={te('perPage')}
-        >
-          {labels.pageSizeOptions.map((option) => (
-            <option key={String(option.value)} value={String(option.value)}>{option.label}</option>
-          ))}
-        </select>
-        {entrySortBy !== 'custom' && (
+      <div className={clsx(styles.entrySearchRow, isMobile && styles.entrySearchRowMobile)}>
+        <div className={styles.entrySearch}>
+          <Search size={14} className={styles.entrySearchIcon} />
+          <input
+            type="text"
+            className={styles.entrySearchInput}
+            placeholder={te('searchAll')}
+            aria-label={te('searchAll')}
+            value={entrySearchFilter}
+            onChange={(e) => {
+              setEntrySearchFilter(e.target.value)
+              setEntryPage(1)
+              setSelectedEntryId(null)
+            }}
+            onKeyDown={(e) => clearSearchOnEscape(e, entrySearchFilter, () => {
+              setEntrySearchFilter('')
+              setEntryPage(1)
+              setSelectedEntryId(null)
+            })}
+          />
+          {entrySearchFilter && (
+            <button
+              type="button"
+              className={styles.entrySearchClear}
+              onClick={() => {
+                setEntrySearchFilter('')
+                setEntryPage(1)
+                setSelectedEntryId(null)
+              }}
+              aria-label={tc('actions.clear')}
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        {isMobile && (
           <button
             type="button"
-            className={styles.entrySortDirBtn}
-            onClick={handleToggleSortDir}
-            title={entrySortDir === 'asc' ? te('sortAsc') : te('sortDesc')}
+            className={clsx(styles.listOptionsToggle, mobileListOptionsOpen && styles.listOptionsToggleActive)}
+            onClick={() => setMobileListOptionsOpen((current) => !current)}
+            aria-expanded={mobileListOptionsOpen}
+            title={te('sortBy')}
           >
-            {entrySortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-            <ArrowUpDown size={10} />
+            <ArrowUpDown size={13} />
+            <span className={styles.listOptionsSummary}>{mobileListOptionsSummary}</span>
+            <ChevronDown
+              size={12}
+              className={clsx(styles.listOptionsChevron, mobileListOptionsOpen && styles.listOptionsChevronOpen)}
+            />
           </button>
         )}
       </div>
 
-      <label className={styles.entrySearch}>
-        <Search size={14} className={styles.entrySearchIcon} />
-        <input
-          type="text"
-          className={styles.entrySearchInput}
-          placeholder={te('searchAll')}
-          value={entrySearchFilter}
-          onChange={(e) => {
-            setEntrySearchFilter(e.target.value)
-            setEntryPage(1)
-            setSelectedEntryId(null)
-          }}
-        />
-      </label>
+      {(!isMobile || mobileListOptionsOpen) && (
+        <div className={clsx(styles.entrySortRow, isMobile && styles.entrySortRowMobile)}>
+          <select
+            className={styles.entrySortSelect}
+            value={entrySortBy}
+            onChange={(e) => handleSortByChange(e.target.value as WorldBookEntrySortBy)}
+            title={te('sortBy')}
+          >
+            {labels.sortOptions.map((option) => (
+              <option key={option.value} value={option.value}>{te('sortPrefix', { label: option.label })}</option>
+            ))}
+          </select>
+          <select
+            className={styles.entryPageSizeSelect}
+            value={String(entryPageSize)}
+            onChange={(e) => handlePageSizeChange(e.target.value)}
+            title={te('perPage')}
+          >
+            {labels.pageSizeOptions.map((option) => (
+              <option key={String(option.value)} value={String(option.value)}>{option.label}</option>
+            ))}
+          </select>
+          {entrySortBy !== 'custom' && (
+            <button
+              type="button"
+              className={styles.entrySortDirBtn}
+              onClick={handleToggleSortDir}
+              title={entrySortDir === 'asc' ? te('sortAsc') : te('sortDesc')}
+            >
+              {entrySortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+              <ArrowUpDown size={10} />
+            </button>
+          )}
+        </div>
+      )}
 
-      {dragUnavailableReason && (
+      {dragUnavailableReason && (!isMobile || mobileListOptionsOpen) && (
         <div className={styles.customSortHint}>
           <Hash size={12} />
           <span>{dragUnavailableReason}</span>
@@ -964,47 +1347,67 @@ export default function WorldBookEntriesSection({
         <div className={styles.emptyState}>{te('loading')}</div>
       ) : (
         <>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
             <SortableContext items={entries.map((entry) => entry.id)} strategy={verticalListSortingStrategy}>
-              <div className={styles.entryList}>
-                {entries.map((entry) => (
-                  <SortableEntryRow
-                    key={entry.id}
-                    entry={entry}
-                    expanded={selectedEntryId === entry.id}
-                    dragEnabled={dragEnabled}
-                    selectMode={selectMode}
-                    selected={selectedIds.includes(entry.id)}
-                    onToggleExpand={() => setSelectedEntryId((current) => (current === entry.id ? null : entry.id))}
-                    onToggleSelect={() => handleToggleSelect(entry.id)}
-                    onUpdate={updateEntry}
-                    onDebouncedUpdate={debouncedUpdateEntry}
-                    onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
-                    onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
-                    onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
-                  />
-                ))}
-                {entries.length === 0 && (
-                  <div className={styles.emptyState}>
-                    {entrySearchFilter.trim() ? te('noMatch') : te('empty')}
-                  </div>
-                )}
+              <div
+                ref={usesSharedScroll ? undefined : localScrollRef}
+                className={clsx(styles.entryScroll, usesSharedScroll && styles.entryScrollShared)}
+              >
+                <div className={styles.entryList}>
+                  {entries.length === 0 ? (
+                    <div className={styles.emptyState}>
+                      {entrySearchFilter.trim() ? te('noMatch') : te('empty')}
+                    </div>
+                  ) : (
+                    entries.map((entry, index) => (
+                      <div
+                        key={entry.id}
+                        data-index={index}
+                        data-entry-id={entry.id}
+                        className={styles.entryListItem}
+                      >
+                        <EntryRow
+                          entry={entry}
+                          expanded={selectedEntryId === entry.id}
+                          dragEnabled={dragEnabled}
+                          selectMode={selectMode}
+                          selected={selectedIds.includes(entry.id)}
+                          onToggleExpand={() => setSelectedEntryId((current) => (current === entry.id ? null : entry.id))}
+                          onToggleSelect={() => handleToggleSelect(entry.id)}
+                          onUpdate={updateEntry}
+                          onDebouncedUpdate={debouncedUpdateEntry}
+                          onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                          onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                          onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </SortableContext>
+            <DragOverlay dropAnimation={null}>
+              {activeDragEntry && (
+                <EntryRowContent
+                  entry={activeDragEntry}
+                  expanded={selectedEntryId === activeDragEntry.id}
+                  dragEnabled={dragEnabled}
+                  selectMode={selectMode}
+                  selected={selectedIds.includes(activeDragEntry.id)}
+                  onToggleExpand={() => setSelectedEntryId((current) => (current === activeDragEntry.id ? null : activeDragEntry.id))}
+                  onToggleSelect={() => handleToggleSelect(activeDragEntry.id)}
+                  onUpdate={updateEntry}
+                  onDebouncedUpdate={debouncedUpdateEntry}
+                  onOpenMenu={(entryId, position) => setContextMenu({ entryId, position })}
+                  onOpenTypeMenu={(entryId, position) => setTypeMenu({ entryId, position })}
+                  onOpenPositionMenu={(entryId, position) => setPositionMenu({ entryId, position })}
+                  isDragging
+                />
+              )}
+            </DragOverlay>
           </DndContext>
 
-          {entryPageSize !== 'all' && entryTotalPages > 1 && (
-            <Pagination
-              currentPage={entryPage}
-              totalPages={entryTotalPages}
-              onPageChange={(page) => {
-                setEntryPage(page)
-                setSelectedEntryId(null)
-                setSelectedIds([])
-              }}
-              totalItems={entryTotal}
-            />
-          )}
+          {pagination}
         </>
       )}
 
@@ -1047,128 +1450,151 @@ export default function WorldBookEntriesSection({
       )}
 
       {moveCopyState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setMoveCopyState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{moveCopyState.title}</h3>
-            <p className={styles.dialogText}>
-              {selectedBook ? te('moveCopyFrom', { name: selectedBook.name }) : null}
-            </p>
-            <FormField label={te('targetWorldBook')} className={styles.dialogFormField}>
-              <SearchableSelect
-                value={moveTargetBookId}
-                onChange={(value) => setMoveTargetBookId(value || '')}
-                options={availableTargetBooks}
-                placeholder={te('chooseWorldBook')}
-                searchPlaceholder={t('searchWorldBooks')}
-                emptyMessage={te('noOtherBooks')}
-                portal
-              />
-            </FormField>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setMoveCopyState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setMoveCopyState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={moveCopyState.title}
+          subtitle={selectedBook ? te('moveCopyFrom', { name: selectedBook.name }) : undefined}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setMoveCopyState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleMoveOrCopy()} disabled={pendingAction || !moveTargetBookId}>
                 {moveCopyState.confirmText}
               </Button>
-            </div>
-          </div>
-        </ModalShell>
+            </>
+          )}
+        >
+          <FormField label={te('targetWorldBook')} className={styles.dialogFormField}>
+            <SearchableSelect
+              value={moveTargetBookId}
+              onChange={(value) => setMoveTargetBookId(value || '')}
+              options={availableTargetBooks}
+              placeholder={te('chooseWorldBook')}
+              searchPlaceholder={t('searchWorldBooks')}
+              emptyMessage={te('noOtherBooks')}
+              portal
+            />
+          </FormField>
+        </ModalPresentation>
       )}
+      {dockedPagination}
 
       {renumberState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setRenumberState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('renumberTitle')}</h3>
-            <p className={styles.dialogText}>{te('renumberHint')}</p>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('startNumber')} className={styles.dialogFormField}>
-                <TextInput
-                  type="number"
-                  value={renumberStart}
-                  onChange={setRenumberStart}
-                  placeholder={te('startNumberPlaceholder')}
-                />
-              </FormField>
-              <FormField label={te('step')} className={styles.dialogFormField}>
-                <TextInput type="number" min={1} value={renumberStep} onChange={setRenumberStep} />
-              </FormField>
-              <FormField label={te('direction')} className={styles.dialogFormField}>
-                <Select
-                  value={renumberDirection}
-                  onChange={(value) => setRenumberDirection(value as 'asc' | 'desc')}
-                  options={[
-                    { value: 'asc', label: te('sortAsc') },
-                    { value: 'desc', label: te('sortDesc') },
-                  ]}
-                />
-              </FormField>
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setRenumberState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setRenumberState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('renumberTitle')}
+          subtitle={te('renumberHint')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setRenumberState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkRenumber()} disabled={pendingAction}>{tc('actions.apply')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('startNumber')} className={styles.dialogFormField}>
+              <TextInput
+                type="number"
+                value={renumberStart}
+                onChange={setRenumberStart}
+                placeholder={te('startNumberPlaceholder')}
+              />
+            </FormField>
+            <FormField label={te('step')} className={styles.dialogFormField}>
+              <TextInput type="number" min={1} value={renumberStep} onChange={setRenumberStep} />
+            </FormField>
+            <FormField label={te('direction')} className={styles.dialogFormField}>
+              <Select
+                value={renumberDirection}
+                onChange={(value) => setRenumberDirection(value as 'asc' | 'desc')}
+                options={[
+                  { value: 'asc', label: te('sortAsc') },
+                  { value: 'desc', label: te('sortDesc') },
+                ]}
+              />
+            </FormField>
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
 
       {keywordState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setKeywordState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('keywordTitle')}</h3>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('keyword')} className={styles.dialogFormField}>
-                <TextInput
-                  value={keywordValue}
-                  onChange={setKeywordValue}
-                  placeholder={te('keywordPlaceholder')}
-                />
-              </FormField>
-              <FormField label={te('keywordList')} className={styles.dialogFormField}>
-                <Select
-                  value={keywordTarget}
-                  onChange={(value) => setKeywordTarget(value as 'primary' | 'secondary')}
-                  options={[
-                    { value: 'primary', label: te('keywordPrimary') },
-                    { value: 'secondary', label: te('keywordSecondary') },
-                  ]}
-                />
-              </FormField>
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setKeywordState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setKeywordState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('keywordTitle')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setKeywordState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkKeyword()} disabled={pendingAction || !keywordValue.trim()}>{tc('actions.add')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('keyword')} className={styles.dialogFormField}>
+              <TextInput
+                value={keywordValue}
+                onChange={setKeywordValue}
+                placeholder={te('keywordPlaceholder')}
+              />
+            </FormField>
+            <FormField label={te('keywordList')} className={styles.dialogFormField}>
+              <Select
+                value={keywordTarget}
+                onChange={(value) => setKeywordTarget(value as 'primary' | 'secondary')}
+                options={[
+                  { value: 'primary', label: te('keywordPrimary') },
+                  { value: 'secondary', label: te('keywordSecondary') },
+                ]}
+              />
+            </FormField>
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
 
       {positionState && (
-        <ModalShell isOpen={true} onClose={() => !pendingAction && setPositionState(null)} maxWidth="520px">
-          <div className={styles.dialogBody}>
-            <h3 className={styles.dialogTitle}>{te('setPositionTitle')}</h3>
-            <div className={styles.dialogGrid}>
-              <FormField label={te('position')} className={styles.dialogFormField}>
-                <Select
-                  value={String(bulkPosition)}
-                  onChange={(value) => setBulkPosition(Number(value))}
-                  options={labels.positionOptions.map((opt) => ({
-                    value: String(opt.value),
-                    label: opt.label,
-                  }))}
-                />
-              </FormField>
-              {bulkPosition === 4 && (
-                <FormField label={te('depth')} className={styles.dialogFormField}>
-                  <TextInput type="number" min={0} value={bulkDepth} onChange={setBulkDepth} />
-                </FormField>
-              )}
-            </div>
-            <div className={styles.dialogActions}>
-              <Button variant="secondary" onClick={() => setPositionState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
+        <ModalPresentation
+          isOpen={true}
+          onClose={() => !pendingAction && setPositionState(null)}
+          maxWidth="clamp(320px, 90vw, min(520px, var(--lumiverse-content-max-width, 520px)))"
+          closeOnBackdrop={!pendingAction}
+          closeOnEscape={!pendingAction}
+          title={te('setPositionTitle')}
+          footer={(
+            <>
+              <Button variant="ghost" onClick={() => setPositionState(null)} disabled={pendingAction}>{tc('actions.cancel')}</Button>
               <Button variant="primary" onClick={() => void handleBulkSetPosition()} disabled={pendingAction}>{tc('actions.apply')}</Button>
-            </div>
+            </>
+          )}
+        >
+          <div className={styles.dialogGrid}>
+            <FormField label={te('position')} className={styles.dialogFormField}>
+              <Select
+                value={String(bulkPosition)}
+                onChange={(value) => setBulkPosition(Number(value))}
+                options={labels.positionOptions.map((opt) => ({
+                  value: String(opt.value),
+                  label: opt.label,
+                }))}
+              />
+            </FormField>
+            {bulkPosition === 4 && (
+              <FormField label={te('depth')} className={styles.dialogFormField}>
+                <TextInput type="number" min={0} value={bulkDepth} onChange={setBulkDepth} />
+              </FormField>
+            )}
           </div>
-        </ModalShell>
+        </ModalPresentation>
       )}
-    </>
+    </div>
   )
 }

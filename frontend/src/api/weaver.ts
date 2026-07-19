@@ -517,11 +517,12 @@ export function getInterviewState(sessionId: string): Promise<WeaverInterviewSta
 export function generateQuestion(
   sessionId: string,
   input: { steer?: string; avoid?: string[] } = {},
+  signal?: AbortSignal,
 ): Promise<{ question: WeaverInterviewQuestion | null }> {
   return post<{ question: WeaverInterviewQuestion | null }>(
     `/weaver/sessions/${sessionId}/interview/question`,
     input,
-    LLM_CALL,
+    { ...LLM_CALL, signal },
   )
 }
 
@@ -897,6 +898,7 @@ export interface WeaverTuning {
   harvest_cap: number | null
   generation_temperature: number | null
   review_temperature: number | null
+  text_timeout_seconds: number | null
 }
 
 export interface WeaverTuningResponse {

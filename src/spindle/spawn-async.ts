@@ -9,20 +9,24 @@
  * helper on any spawn that shells out to a network- or disk-heavy binary.
  *
  * Stability notes (Bun 1.3.x):
- *   - We use `Bun.readableStreamToText` (the documented, direct Bun API)
- *     instead of `new Response(stream).text()`; the latter has shown races
- *     with Bun's internal stream cleanup under load.
+ *   - We drain streams through their readers so a timed-out command can
+ *     cancel those reads. A child process such as Git's HTTP transport can
+ *     outlive its parent while retaining stdout/stderr, and waiting for an
+ *     inherited pipe to close would otherwise defeat the timeout.
  *   - `stdin: "ignore"` prevents the child from inheriting our stdin; some
  *     build tools probe stdin and that probe has been implicated in
  *     subprocess-cleanup segfaults.
- *   - We only attach an AbortController when `timeoutMs` is actually set;
- *     attaching an unused signal has been linked to cleanup races.
+ *   - Use Bun's native `timeout` support instead of driving cancellation
+ *     through an AbortController. Bun owns the subprocess lifecycle, so its
+ *     timeout reliably kills a child that is stalled on network I/O.
  */
 
 export interface SpawnAsyncResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** True if the process was aborted due to timeoutMs. */
+  timedOut: boolean;
 }
 
 export interface SpawnAsyncOptions {
@@ -38,18 +42,58 @@ export interface SpawnAsyncOptions {
   ignoreStdout?: boolean;
 }
 
+interface StreamDrain {
+  text: Promise<string>;
+  cancel(): Promise<void>;
+}
+
+function startStreamDrain(
+  stream: ReadableStream<Uint8Array> | null | undefined
+): StreamDrain {
+  if (!stream) {
+    return {
+      text: Promise.resolve(""),
+      cancel: async () => {},
+    };
+  }
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const text = (async () => {
+    let output = "";
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) output += decoder.decode(value, { stream: true });
+      }
+      return output + decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
+  })();
+
+  return {
+    text,
+    async cancel() {
+      try {
+        await reader.cancel();
+      } catch {
+        // The read may have completed and released its lock before timeout.
+      }
+    },
+  };
+}
+
 export async function spawnAsync(
   cmd: string[],
   opts: SpawnAsyncOptions = {}
 ): Promise<SpawnAsyncResult> {
   const hasTimeout = typeof opts.timeoutMs === "number" && opts.timeoutMs > 0;
-  const controller = hasTimeout ? new AbortController() : undefined;
-  const timer = controller
-    ? setTimeout(() => controller.abort(), opts.timeoutMs)
-    : undefined;
 
-  // Only attach signal when a timeout actually exists — passing an unused
-  // signal has shown cleanup-path instability in Bun 1.3.x.
+  // Bun enforces this deadline in its subprocess implementation. This is
+  // important for network commands such as `git pull`: a JS-side abort can
+  // leave a stalled child alive on older Bun releases.
   const proc = Bun.spawn({
     cmd,
     cwd: opts.cwd,
@@ -57,35 +101,53 @@ export async function spawnAsync(
     stdin: "ignore",
     stdout: opts.ignoreStdout ? "ignore" : "pipe",
     stderr: "pipe",
-    ...(controller ? { signal: controller.signal } : {}),
+    ...(hasTimeout ? { timeout: opts.timeoutMs } : {}),
   });
 
   try {
     // Start draining streams immediately so the child's pipe buffers don't
     // fill and cause a write-side deadlock for verbose commands like
-    // `bun install`. Race them against proc.exited so we always return
-    // once the child is gone.
-    const stdoutPromise = opts.ignoreStdout || !proc.stdout
-      ? Promise.resolve("")
-      : Bun.readableStreamToText(proc.stdout as ReadableStream);
-    const stderrPromise = proc.stderr
-      ? Bun.readableStreamToText(proc.stderr as ReadableStream)
-      : Promise.resolve("");
+    // `bun install`.
+    const stdout = opts.ignoreStdout
+      ? startStreamDrain(undefined)
+      : startStreamDrain(proc.stdout as ReadableStream<Uint8Array> | null);
+    const stderr = startStreamDrain(
+      proc.stderr as ReadableStream<Uint8Array> | null
+    );
+    const exitCode = await proc.exited;
 
-    const [stdout, stderr, exitCode] = await Promise.all([
-      stdoutPromise,
-      stderrPromise,
-      proc.exited,
-    ]);
+    if (hasTimeout && proc.killed) {
+      // Killing the direct child does not guarantee that its descendants have
+      // released inherited output pipes. Close our read ends and return now,
+      // so a dead or private remote cannot stall the next bulk update.
+      await Promise.all([stdout.cancel(), stderr.cancel()]);
+      void Promise.allSettled([stdout.text, stderr.text]);
+      return {
+        exitCode: exitCode ?? -1,
+        stdout: "",
+        stderr: `Command timed out after ${opts.timeoutMs}ms`,
+        timedOut: true,
+      };
+    }
 
-    return { exitCode: exitCode ?? -1, stdout, stderr };
+    const [stdoutText, stderrText] = await Promise.all([stdout.text, stderr.text]);
+
+    return {
+      exitCode: exitCode ?? -1,
+      stdout: stdoutText,
+      stderr: stderrText,
+      timedOut: false,
+    };
   } catch (err: any) {
     const stderr =
-      err?.name === "AbortError"
+      hasTimeout && proc.killed
         ? `Command timed out after ${opts.timeoutMs}ms`
         : err?.message || String(err);
-    return { exitCode: -1, stdout: "", stderr };
-  } finally {
-    if (timer) clearTimeout(timer);
+    return {
+      exitCode: -1,
+      stdout: "",
+      stderr,
+      timedOut: hasTimeout && proc.killed,
+    };
   }
 }

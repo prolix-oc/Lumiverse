@@ -15,11 +15,21 @@ function getLanIPs(): string[] {
   return ips;
 }
 
+export const DEFAULT_DISK_WARNING_USAGE_THRESHOLD = 0.9;
+export const DEFAULT_DISK_WARNING_MIN_FREE_BYTES = 100 * 1024 * 1024 * 1024;
+
 export interface EnvConfig {
   port: number;
   /** @deprecated Use resolveEncryptionKey() instead. Kept for migration only. */
   encryptionKey: string;
   dataDir: string;
+  /**
+   * Default disk warning usage threshold as a 0..1 ratio. The warning fires
+   * only when this AND diskWarningMinFreeBytes are both crossed.
+   */
+  diskWarningUsageThreshold: number;
+  /** Default absolute free-space floor for low-disk warnings. */
+  diskWarningMinFreeBytes: number;
   frontendDir: string;
   ownerUsername: string;
   /** @deprecated Only used for legacy migration to owner.credentials. */
@@ -28,6 +38,8 @@ export interface EnvConfig {
   trustedOrigins: string[];
   trustedOriginsSet: Set<string>;
   trustAnyOrigin: boolean;
+  /** Suppress user custom CSS and component overrides without deleting them. */
+  safeThemeMode: boolean;
   spindleEphemeralGlobalMaxBytes: number;
   spindleEphemeralExtensionDefaultMaxBytes: number;
   spindleEphemeralExtensionMaxOverrides: Record<string, number>;
@@ -51,6 +63,23 @@ export interface EnvConfig {
    * on a known-good filesystem with disk headroom. See CLAUDE.md.
    */
   sqliteMmapEnabled: boolean;
+  /**
+   * Optional environment override for the vector database backend. When
+   * `provider` is set, it takes precedence over the owner's stored
+   * `vectorStoreConfig` (for headless/Docker self-hosting) and the operator UI
+   * renders the connection as read-only. Empty `provider` = use stored config.
+   */
+  vectorStore: {
+    provider: string; // "" | "lancedb" | "qdrant" | "milvus"
+    qdrantUrl: string;
+    qdrantApiKey: string;
+    milvusAddress: string;
+    milvusUsername: string;
+    milvusPassword: string;
+    milvusSsl: boolean;
+    milvusConnectTimeoutMs: number | undefined;
+    milvusRequestTimeoutMs: number | undefined;
+  };
 }
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -59,6 +88,32 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   const parsed = parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
+}
+
+function parseOptionalPositiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
+function parseOptionalNonNegativeIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return parsed;
+}
+
+function parseRatioOrPercentEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  if (parsed <= 1) return parsed;
+  if (parsed <= 100) return parsed / 100;
+  return fallback;
 }
 
 function parseEphemeralOverrides(raw?: string): Record<string, number> {
@@ -90,6 +145,14 @@ export function loadEnv(): EnvConfig {
   // Resolve to absolute path at startup so file operations are immune to
   // CWD changes — critical on Termux where proot/grun wrappers can shift CWD.
   const dataDir = resolve(process.env.DATA_DIR || "./data");
+  const diskWarningUsageThreshold = parseRatioOrPercentEnv(
+    "LUMIVERSE_DISK_WARNING_USAGE_PERCENT",
+    DEFAULT_DISK_WARNING_USAGE_THRESHOLD,
+  );
+  const diskWarningMinFreeBytes = parsePositiveIntEnv(
+    "LUMIVERSE_DISK_WARNING_MIN_FREE_BYTES",
+    DEFAULT_DISK_WARNING_MIN_FREE_BYTES,
+  );
 
   const frontendDir = process.env.FRONTEND_DIR || "";
 
@@ -104,6 +167,9 @@ export function loadEnv(): EnvConfig {
   const authSecret = process.env.AUTH_SECRET || "";
 
   const trustAnyOrigin = process.env.TRUST_ANY_ORIGIN === "true";
+  const safeThemeMode = ["1", "true", "yes", "on"].includes(
+    (process.env.LUMIVERSE_SAFE_THEME || "").trim().toLowerCase(),
+  );
   const trustedOrigins = process.env.TRUSTED_ORIGINS
     ? process.env.TRUSTED_ORIGINS.split(",").map((o) => o.trim())
     : [
@@ -146,10 +212,26 @@ export function loadEnv(): EnvConfig {
     process.env.LUMIVERSE_SQLITE_MMAP_ENABLED === "true" &&
     process.env.LUMIVERSE_SQLITE_MMAP_DISABLED !== "true";
 
+  // Optional vector-store backend override (headless/Docker). When provider is
+  // set it wins over the owner's stored vectorStoreConfig. Parsed once here.
+  const vectorStore = {
+    provider: (process.env.LUMIVERSE_VECTOR_STORE_PROVIDER || "").trim().toLowerCase(),
+    qdrantUrl: (process.env.LUMIVERSE_QDRANT_URL || "").trim(),
+    qdrantApiKey: process.env.LUMIVERSE_QDRANT_API_KEY || "",
+    milvusAddress: (process.env.LUMIVERSE_MILVUS_ADDRESS || "").trim(),
+    milvusUsername: process.env.LUMIVERSE_MILVUS_USERNAME || "",
+    milvusPassword: process.env.LUMIVERSE_MILVUS_PASSWORD || "",
+    milvusSsl: process.env.LUMIVERSE_MILVUS_SSL === "true",
+    milvusConnectTimeoutMs: parseOptionalPositiveIntEnv("LUMIVERSE_MILVUS_CONNECT_TIMEOUT_MS"),
+    milvusRequestTimeoutMs: parseOptionalNonNegativeIntEnv("LUMIVERSE_MILVUS_REQUEST_TIMEOUT_MS"),
+  };
+
   return {
     port,
     encryptionKey,
     dataDir,
+    diskWarningUsageThreshold,
+    diskWarningMinFreeBytes,
     frontendDir,
     ownerUsername,
     ownerPassword,
@@ -157,6 +239,7 @@ export function loadEnv(): EnvConfig {
     trustedOrigins,
     trustedOriginsSet,
     trustAnyOrigin,
+    safeThemeMode,
     spindleEphemeralGlobalMaxBytes,
     spindleEphemeralExtensionDefaultMaxBytes,
     spindleEphemeralExtensionMaxOverrides,
@@ -168,6 +251,7 @@ export function loadEnv(): EnvConfig {
     stForceNewMigration,
     pollinationsAppKey,
     sqliteMmapEnabled,
+    vectorStore,
   };
 }
 

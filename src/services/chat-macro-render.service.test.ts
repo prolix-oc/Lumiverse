@@ -50,6 +50,7 @@ function makeEnv(): MacroEnv {
       firstIncludedMessageId: -1,
       lastSwipeId: 0,
       currentSwipeId: 0,
+      rejectedSwipe: "",
     },
     system: {
       model: "",
@@ -122,7 +123,7 @@ describe("resolveRenderedChatMessages", () => {
 
     expect(result.resolvedById.get("user-1")).toBe("");
     expect(result.resolvedById.get("assistant-1")).toBe("Mood: calm, stance: guard, theme: noir");
-    expect(result.localVariables).toEqual({ stance: "guard" });
+    expect("localVariables" in result).toBe(false);
     expect(result.globalVariables).toEqual({ theme: "noir" });
     expect(result.chatVariables).toEqual({ mood: "calm" });
   });

@@ -40,8 +40,27 @@ export enum EventType {
   GROUP_TURN_STARTED = 'GROUP_TURN_STARTED',
   GROUP_ROUND_COMPLETE = 'GROUP_ROUND_COMPLETE',
 
+  // Multiplayer rooms
+  ROOM_STATUS = 'ROOM_STATUS',
+  ROOM_PARTICIPANT_JOINED = 'ROOM_PARTICIPANT_JOINED',
+  ROOM_PARTICIPANT_LEFT = 'ROOM_PARTICIPANT_LEFT',
+  ROOM_PARTICIPANT_KICKED = 'ROOM_PARTICIPANT_KICKED',
+  ROOM_PERSONA_CHANGED = 'ROOM_PERSONA_CHANGED',
+  ROOM_TURN_CHANGED = 'ROOM_TURN_CHANGED',
+  ROOM_TURN_SKIPPED = 'ROOM_TURN_SKIPPED',
+  ROOM_PRESENCE = 'ROOM_PRESENCE',
+  ROOM_ROUND_COMPLETE = 'ROOM_ROUND_COMPLETE',
+  ROOM_INVITE_CODE = 'ROOM_INVITE_CODE',
+  ROOM_JOIN_REJECTED = 'ROOM_JOIN_REJECTED',
+
   // World Info
   WORLD_INFO_ACTIVATED = 'WORLD_INFO_ACTIVATED',
+
+  // World Books (lorebook editor live-sync — mirror src/ws/events.ts)
+  WORLD_BOOK_CHANGED = 'WORLD_BOOK_CHANGED',
+  WORLD_BOOK_DELETED = 'WORLD_BOOK_DELETED',
+  WORLD_BOOK_ENTRY_CHANGED = 'WORLD_BOOK_ENTRY_CHANGED',
+  WORLD_BOOK_ENTRY_DELETED = 'WORLD_BOOK_ENTRY_DELETED',
 
   // Spindle extension events
   SPINDLE_EXTENSION_LOADED = 'SPINDLE_EXTENSION_LOADED',
@@ -93,6 +112,10 @@ export enum EventType {
 
   // Avatar
   CHARACTER_AVATAR_CHANGED = 'CHARACTER_AVATAR_CHANGED',
+  CHARACTER_EXPORT_PROGRESS = 'CHARACTER_EXPORT_PROGRESS',
+
+  // Wallpaper uploads
+  WALLPAPER_UPLOAD_PROGRESS = 'WALLPAPER_UPLOAD_PROGRESS',
 
   // Import progress
   IMPORT_GALLERY_PROGRESS = 'IMPORT_GALLERY_PROGRESS',
@@ -148,6 +171,7 @@ export enum EventType {
 
   // System health
   SYSTEM_DISK_LOW = 'SYSTEM_DISK_LOW',
+  SYSTEM_SMART_ALERT = 'SYSTEM_SMART_ALERT',
 }
 
 export interface SystemDiskLowPayload {
@@ -158,6 +182,32 @@ export interface SystemDiskLowPayload {
   totalBytes: number
   /** 0..1, the threshold that was crossed */
   thresholdPercent: number
+  thresholdFreeBytes: number
+}
+
+export interface SystemSmartAlertPayload {
+  checkedAt: string
+  drives: Array<{
+    device: string
+    model: string | null
+    status: 'warning' | 'failing'
+    conditions: Array<{
+      severity: 'warning' | 'failing'
+      message: string
+    }>
+  }>
+}
+
+export interface WallpaperUploadProgressPayload {
+  uploadId: string
+  phase: 'received' | 'transcoding_primary' | 'transcoding_variant' | 'extracting_poster' | 'finalizing' | 'completed'
+  step: number
+  totalSteps: number
+  codec?: 'h264' | 'hevc'
+  phaseProgressPct?: number
+  currentTimeMs?: number
+  durationMs?: number
+  speed?: number
 }
 
 export interface SummarizationStartedPayload {
@@ -263,6 +313,10 @@ export interface ContextClipStats {
   tokenizerUsed: string
   budgetInvalid?: boolean
   fixedOverBudget?: boolean
+  anchorActive?: boolean
+  protectedHistoryTokens?: number
+  remainingBeforeAnchor?: number
+  anchorOverflow?: boolean
 }
 
 export interface GenerationStartedPayload {
@@ -271,6 +325,7 @@ export interface GenerationStartedPayload {
   targetMessageId?: string
   /** Swipe index the generation streams into (for swipe-gated streaming display). */
   targetSwipeId?: number
+  generationType?: string
   characterId?: string
   characterName?: string
   contextClipStats?: ContextClipStats
@@ -310,6 +365,7 @@ export interface GenerationEndedPayload {
   messageId?: string
   content?: string
   error?: string
+  generationType?: string
   tokenCount?: number
   generationMetrics?: GenerationMetrics
 }
@@ -414,6 +470,87 @@ export interface GroupRoundCompletePayload {
   charactersSpoken: string[]
 }
 
+// ── Multiplayer room payloads ──
+import type { RoomParticipant, RoomStateView, PersonaSnapshot } from '@/types/multiplayer'
+
+export interface RoomBasePayload {
+  chatId: string
+  roomId: string
+}
+/** In-flight host generation embedded in hydration so a peer joining mid-stream
+ *  resumes the reply already in progress (instead of only seeing it complete). */
+export interface RoomHydrationGeneration {
+  active: boolean
+  generationId: string
+  status: string
+  content: string
+  reasoning: string
+  contentOffset: number
+  reasoningOffset: number
+  generationType?: string
+  targetMessageId?: string
+  targetSwipeId?: number
+  characterName?: string
+  characterId?: string
+  reasoningStartedAt?: number
+  reasoningDurationMs?: number
+}
+export interface RoomStatusPayload extends RoomBasePayload {
+  status?: string
+  room?: RoomStateView
+  /** Present on the private hydration payload sent to a joining socket. */
+  messages?: unknown[]
+  chatName?: string
+  characterName?: string
+  /** Compressed WebP data URL of the bot avatar, so peers can render it. */
+  characterAvatar?: string | null
+  /** Present when a generation was streaming as the joining socket hydrated. */
+  generation?: RoomHydrationGeneration | null
+}
+export interface RoomInviteCodePayload extends RoomBasePayload {
+  code: string
+  expiresAt?: number
+  server?: string
+}
+export interface RoomJoinRejectedPayload extends RoomBasePayload {
+  reason?: 'not_found' | 'closed' | 'banned' | 'full' | 'kicked' | string
+}
+export interface RoomParticipantJoinedPayload extends RoomBasePayload {
+  participant: RoomParticipant
+}
+export interface RoomParticipantLeftPayload extends RoomBasePayload {
+  participantId: string
+}
+export interface RoomParticipantKickedPayload extends RoomBasePayload {
+  participantId: string
+  banned: boolean
+}
+export interface RoomPersonaChangedPayload extends RoomBasePayload {
+  participantId: string
+  persona: PersonaSnapshot | null
+  displayName: string
+}
+export interface RoomTurnChangedPayload extends RoomBasePayload {
+  turnStrategy: 'round_robin' | 'freeform'
+  currentTurnParticipantId: string | null
+  turnOrder: string[]
+  round: number
+  freeformDeadline: number | null
+  /** True on the event that opens a freeform window. */
+  windowOpen?: boolean
+}
+export interface RoomTurnSkippedPayload extends RoomBasePayload {
+  skippedParticipantId: string
+  currentTurnParticipantId: string | null
+}
+export interface RoomPresencePayload extends RoomBasePayload {
+  participantId: string
+  typing: boolean
+}
+export interface RoomRoundCompletePayload extends RoomBasePayload {
+  round: number
+}
+
 export interface LumiPipelineStartedPayload {
   chatId: string
   moduleCount: number
@@ -477,6 +614,26 @@ export interface MigrationCompletedPayload {
 export interface MigrationFailedPayload {
   migrationId: string
   error: string
+}
+
+// ---- World Books (lorebook editor live-sync) ----
+/** Emitted on book create/update and on structural entry ops (reorder, bulk). */
+export interface WorldBookChangedPayload {
+  id: string
+  worldBook: import('./api').WorldBook
+}
+export interface WorldBookDeletedPayload {
+  id: string
+}
+/** Emitted on entry create/update. Carries the full entry so the editor can patch in place. */
+export interface WorldBookEntryChangedPayload {
+  id: string
+  worldBookId: string
+  entry: import('./api').WorldBookEntry
+}
+export interface WorldBookEntryDeletedPayload {
+  id: string
+  worldBookId: string
 }
 
 // ---- Council Tool Failure ----

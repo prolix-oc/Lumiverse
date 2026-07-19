@@ -224,7 +224,9 @@ export function StudioHome({ onClose }: { onClose: () => void }) {
   if (tuningOpen) {
     return (
       <div className={clsx(s.root, styles.surfaceEnter)}>
-        <TuningPane onBack={() => setTuningOpen(false)} />
+        <div className={styles.paneScroll}>
+          <TuningPane onBack={() => setTuningOpen(false)} />
+        </div>
       </div>
     )
   }

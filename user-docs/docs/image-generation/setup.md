@@ -1,3 +1,7 @@
+---
+title: Setup & Providers
+---
+
 # Setup & Providers
 
 Image generation uses its own connection profiles, separate from your LLM connections. You can have as many as you like and switch between them per chat.

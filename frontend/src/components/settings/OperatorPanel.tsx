@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   RefreshCw,
@@ -23,20 +23,33 @@ import { spinClass } from '@/components/shared/Spinner'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
 import { useStore } from '@/store'
 import {
+  type DiskWarningSettings,
   type DatabaseMaintenanceSettings,
   operatorApi,
   type DatabaseTuningSettings,
   type DnsSettings,
   type OperatorDatabaseStatus,
+  type OperatorDiskWarningStatus,
   type OperatorDnsStatus,
   type OperatorSharpStatus,
+  type OperatorSmartctlStatus,
   type OperatorStatus,
   type SharpSettings,
+  type SmartDriveStatus,
   type TrustedHostEntry,
   type TrustedHostsResponse,
 } from '@/api/operator'
 import { settingsApi } from '@/api/settings'
-import { embeddingsApi, type VectorStoreHealth } from '@/api/embeddings'
+import { ApiError } from '@/api/client'
+import {
+  embeddingsApi,
+  type UpdateVectorStoreConfigInput,
+  type VectorStoreConfigStatus,
+  type VectorStoreHealth,
+  type VectorStoreProviderId,
+  type VectorStoreTuningProfile,
+  type VectorStoreTestResult,
+} from '@/api/embeddings'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import styles from './OperatorPanel.module.css'
@@ -116,6 +129,27 @@ function formatTimestamp(ts: number | null | undefined): string {
   return new Date(ts).toLocaleString()
 }
 
+function formatIsoTimestamp(timestamp: string | null | undefined): string {
+  if (!timestamp) return '—'
+  const value = new Date(timestamp)
+  return Number.isNaN(value.getTime()) ? '—' : value.toLocaleString()
+}
+
+function formatSmartNumber(value: number | null): string {
+  return value == null ? '—' : value.toLocaleString()
+}
+
+function smartStatusTranslationKey(status: SmartDriveStatus): string {
+  const keys: Record<SmartDriveStatus, string> = {
+    ok: 'operator.smartStatusOk',
+    warning: 'operator.smartStatusWarning',
+    failing: 'operator.smartStatusFailing',
+    unavailable: 'operator.smartStatusUnavailable',
+    standby: 'operator.smartStatusStandby',
+  }
+  return keys[status]
+}
+
 function normalizeDatabaseTuning(input: DatabaseTuningSettings): DatabaseTuningSettings {
   const cacheMemoryPercent = input.cacheMemoryPercent == null || !Number.isFinite(input.cacheMemoryPercent) || input.cacheMemoryPercent === 0
     ? null
@@ -156,6 +190,125 @@ function normalizeDatabaseMaintenance(input: DatabaseMaintenanceSettings): Datab
   }
 }
 
+function vectorProviderLabel(provider: VectorStoreHealth['provider'] | undefined): string {
+  switch (provider) {
+    case 'qdrant': return 'Qdrant'
+    case 'milvus': return 'Milvus'
+    case 'lancedb': return 'LanceDB'
+    default: return 'Unknown'
+  }
+}
+
+function vectorScoreLabel(kind: VectorStoreHealth['capabilities'] extends infer C ? C extends { scoreKind: infer K } ? K : never : never): string {
+  return kind === 'cosine_distance' ? 'cosine distance' : 'cosine similarity'
+}
+
+const DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER = 3
+const DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP = 200
+
+interface VectorStoreDraft {
+  provider: VectorStoreProviderId
+  tuningProfile: VectorStoreTuningProfile
+  qdrantUrl: string
+  qdrantCollectionPrefix: string
+  milvusAddress: string
+  milvusDatabase: string
+  milvusUsername: string
+  milvusSsl: boolean
+  milvusTransport: 'grpc' | 'http'
+  milvusConnectTimeoutMs: number
+  milvusRequestTimeoutMs: number
+  milvusHybridCandidateMultiplier: number
+  milvusHybridCandidateCap: number
+}
+
+function vectorDraftFromConfig(config: VectorStoreConfigStatus | null): VectorStoreDraft {
+  return {
+    provider: config?.provider ?? 'lancedb',
+    tuningProfile: config?.tuningProfile ?? 'balanced',
+    qdrantUrl: config?.qdrant?.url ?? '',
+    qdrantCollectionPrefix: config?.qdrant?.collectionPrefix ?? 'lumiverse_',
+    milvusAddress: config?.milvus?.address ?? '',
+    milvusDatabase: config?.milvus?.database ?? '',
+    milvusUsername: config?.milvus?.username ?? '',
+    milvusSsl: config?.milvus?.ssl ?? false,
+    milvusTransport: config?.milvus?.transport ?? 'grpc',
+    milvusConnectTimeoutMs: config?.milvus?.connectTimeoutMs ?? 5000,
+    milvusRequestTimeoutMs: config?.milvus?.requestTimeoutMs ?? 60000,
+    milvusHybridCandidateMultiplier: config?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER,
+    milvusHybridCandidateCap: config?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP,
+  }
+}
+
+function vectorDraftToPayload(
+  draft: VectorStoreDraft,
+  qdrantApiKey: string,
+  milvusPassword: string,
+): UpdateVectorStoreConfigInput {
+  const payload: UpdateVectorStoreConfigInput = { provider: draft.provider, tuningProfile: draft.tuningProfile }
+  const trimmedQdrantKey = qdrantApiKey.trim()
+  const trimmedMilvusPassword = milvusPassword.trim()
+
+  if (draft.provider === 'qdrant') {
+    payload.qdrant = {
+      url: draft.qdrantUrl.trim(),
+      collectionPrefix: draft.qdrantCollectionPrefix.trim() || undefined,
+    }
+    if (trimmedQdrantKey) payload.qdrant_api_key = trimmedQdrantKey
+  }
+
+  if (draft.provider === 'milvus') {
+    payload.milvus = {
+      address: draft.milvusAddress.trim(),
+      database: draft.milvusDatabase.trim() || undefined,
+      username: draft.milvusUsername.trim() || undefined,
+      ssl: draft.milvusSsl,
+      transport: draft.milvusTransport,
+      connectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(draft.milvusConnectTimeoutMs))),
+      requestTimeoutMs: Math.max(0, Math.min(300000, Math.round(draft.milvusRequestTimeoutMs))),
+    }
+    payload.milvusHybridSearch = {
+      candidateMultiplier: Math.max(1, Math.min(10, Math.round(draft.milvusHybridCandidateMultiplier))),
+      candidateCap: Math.max(1, Math.min(2000, Math.round(draft.milvusHybridCandidateCap))),
+    }
+    if (trimmedMilvusPassword) payload.milvus_password = trimmedMilvusPassword
+  }
+
+  return payload
+}
+
+function vectorTuningProfileHint(profile: VectorStoreTuningProfile): string {
+  switch (profile) {
+    case 'low_latency': return 'More RAM/index work for lower query latency.'
+    case 'low_memory': return 'Lower memory footprint with on-disk/IVF-style tradeoffs.'
+    case 'bulk_reindex': return 'Faster backfills; switch back after reindexing for normal live recall.'
+    case 'balanced':
+    default: return 'Safe default for mixed live chat, world books, and Memory Cortex.'
+  }
+}
+
+function vectorStoreErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    const body = err.body as { error?: unknown; message?: unknown } | undefined
+    if (typeof body?.error === 'string' && body.error.trim()) return body.error
+    if (typeof body?.message === 'string' && body.message.trim()) return body.message
+  }
+  if (err instanceof Error && err.message) return err.message
+  return fallback
+}
+
+function vectorStoreTestResultFromError(err: unknown, provider: VectorStoreProviderId): VectorStoreTestResult | null {
+  if (!(err instanceof ApiError)) return null
+  const body = err.body as Partial<VectorStoreTestResult> | undefined
+  if (!body || typeof body !== 'object') return null
+  if (typeof body.ok !== 'boolean') return null
+  return {
+    ok: body.ok,
+    provider: body.provider ?? provider,
+    error: typeof body.error === 'string' ? body.error : undefined,
+  }
+}
+
 function normalizeSharpSettings(input: SharpSettings): SharpSettings {
   const normalizeInt = (value: number | null | undefined, min: number, max: number) => {
     if (value == null || !Number.isFinite(value)) return null
@@ -168,6 +321,28 @@ function normalizeSharpSettings(input: SharpSettings): SharpSettings {
     cacheFiles: normalizeInt(input.cacheFiles, 0, 2048),
     cacheItems: normalizeInt(input.cacheItems, 1, 4096),
   }
+}
+
+function normalizeDiskWarningSettings(input: DiskWarningSettings): DiskWarningSettings {
+  const usagePercentThreshold = input.usagePercentThreshold == null || !Number.isFinite(input.usagePercentThreshold)
+    ? null
+    : Math.max(0.01, Math.min(1, input.usagePercentThreshold))
+  const minFreeBytesThreshold = input.minFreeBytesThreshold == null || !Number.isFinite(input.minFreeBytesThreshold)
+    ? null
+    : Math.max(0, Math.floor(input.minFreeBytesThreshold))
+  return { usagePercentThreshold, minFreeBytesThreshold }
+}
+
+function formatThresholdPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  const pct = value * 100
+  return Number.isInteger(pct) ? pct.toFixed(0) : pct.toFixed(1)
+}
+
+function formatGiBValue(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes)) return '—'
+  const gib = bytes / (1024 * 1024 * 1024)
+  return Number.isInteger(gib) ? gib.toFixed(0) : gib.toFixed(1)
 }
 
 // ─── Confirmation state ─────────────────────────────────────────────────────
@@ -271,6 +446,7 @@ function LogViewer() {
 // ─── Main Panel ─────────────────────────────────────────────────────────────
 
 type VectorBusyOp = 'compacting' | 'resetting'
+type VectorConfigBusyOp = 'testing' | 'switching' | 'saving'
 
 export default function OperatorPanel() {
   const { t } = useTranslation('settings')
@@ -279,6 +455,12 @@ export default function OperatorPanel() {
   const [dbStatus, setDbStatus] = useState<OperatorDatabaseStatus | null>(null)
   const [dbTuning, setDbTuning] = useState<DatabaseTuningSettings>({ cacheMemoryPercent: null, mmapSizeBytes: null })
   const [dbMaintenanceSettings, setDbMaintenanceSettings] = useState<DatabaseMaintenanceSettings>({})
+  const [diskWarningStatus, setDiskWarningStatus] = useState<OperatorDiskWarningStatus | null>(null)
+  const [diskWarningSettings, setDiskWarningSettings] = useState<DiskWarningSettings>({})
+  const [smartctlStatus, setSmartctlStatus] = useState<OperatorSmartctlStatus | null>(null)
+  const [smartctlError, setSmartctlError] = useState<string | null>(null)
+  const [smartctlRefreshing, setSmartctlRefreshing] = useState(false)
+  const [smartctlInstalling, setSmartctlInstalling] = useState(false)
   const [sharpStatus, setSharpStatus] = useState<OperatorSharpStatus | null>(null)
   const [sharpSettings, setSharpSettings] = useState<SharpSettings>({})
   const [dnsStatus, setDnsStatus] = useState<OperatorDnsStatus | null>(null)
@@ -291,6 +473,12 @@ export default function OperatorPanel() {
   const [isShutdown, setIsShutdown] = useState(false)
   const [vectorHealth, setVectorHealth] = useState<VectorStoreHealth | null>(null)
   const [vectorBusy, setVectorBusy] = useState<VectorBusyOp | null>(null)
+  const [vectorConfig, setVectorConfig] = useState<VectorStoreConfigStatus | null>(null)
+  const [vectorDraft, setVectorDraft] = useState<VectorStoreDraft>(() => vectorDraftFromConfig(null))
+  const [qdrantApiKeyDraft, setQdrantApiKeyDraft] = useState('')
+  const [milvusPasswordDraft, setMilvusPasswordDraft] = useState('')
+  const [vectorConfigBusy, setVectorConfigBusy] = useState<VectorConfigBusyOp | null>(null)
+  const [vectorTestResult, setVectorTestResult] = useState<VectorStoreTestResult | null>(null)
   const [trustedHosts, setTrustedHosts] = useState<TrustedHostsResponse | null>(null)
   const [trustedHostsLoading, setTrustedHostsLoading] = useState(true)
   const [trustedHostsError, setTrustedHostsError] = useState<string | null>(null)
@@ -303,6 +491,7 @@ export default function OperatorPanel() {
   // show "Reconnecting..." once the WS drops and recover on reconnect.
   const pendingRestartOp = useRef<string | null>(null)
   const trustedHostsRequestId = useRef(0)
+  const vectorDraftDirty = useRef(false)
 
   const normalizedStoreBusy = normalizeOperatorOperation(storeBusy)
   const effectiveBusy = reconnecting ? 'reconnecting' : (normalizedStoreBusy || normalizeOperatorOperation(busy))
@@ -310,6 +499,24 @@ export default function OperatorPanel() {
     ? storeProgressMessage
     : null
   const ipcAvailable = status?.ipcAvailable ?? false
+  const vectorProvider = vectorProviderLabel(vectorHealth?.provider)
+  const vectorCapabilities = vectorHealth?.capabilities
+  const vectorSupportsOptimize = vectorCapabilities?.supportsOptimize !== false
+  const vectorSupportsLexical = vectorCapabilities?.nativeLexical === true
+  const vectorIsExternal = vectorCapabilities?.externalService === true
+  const vectorConfigManagedByEnv = vectorConfig?.managedByEnv === true
+  const vectorMilvusCandidateMultiplier = vectorConfig?.milvusHybridSearch?.candidateMultiplier ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER
+  const vectorMilvusCandidateCap = vectorConfig?.milvusHybridSearch?.candidateCap ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP
+  const vectorRuntimeTuningChanged = !!vectorConfig && (
+    vectorDraft.tuningProfile !== (vectorConfig.tuningProfile ?? 'balanced')
+    || (
+      vectorDraft.provider === 'milvus'
+      && (
+        vectorDraft.milvusHybridCandidateMultiplier !== vectorMilvusCandidateMultiplier
+        || vectorDraft.milvusHybridCandidateCap !== vectorMilvusCandidateCap
+      )
+    )
+  )
   const ipcHint = useMemo(() => {
     if (!status) return null
     switch (status.ipcReason) {
@@ -335,6 +542,7 @@ export default function OperatorPanel() {
       'clearing cache': t('operator.busyClearingCache'),
       'installing dependencies': t('operator.busyInstallingDeps'),
       'saving database tuning': t('operator.busySavingDbTuning'),
+      'saving disk warning settings': t('operator.busySavingDiskWarning'),
       'saving sharp settings': t('operator.busySavingSharp'),
       'saving database maintenance': t('operator.busySavingDbMaintenance'),
       'refreshing database stats': t('operator.busyRefreshingDbStats'),
@@ -423,6 +631,32 @@ export default function OperatorPanel() {
     }
   }, [])
 
+  const refreshDiskWarningSettings = useCallback(async () => {
+    try {
+      const next = await operatorApi.getDiskWarning()
+      setDiskWarningStatus(next)
+      setDiskWarningSettings({
+        usagePercentThreshold: next.configuredSettings.usagePercentThreshold ?? null,
+        minFreeBytesThreshold: next.configuredSettings.minFreeBytesThreshold ?? null,
+      })
+      return next
+    } catch {
+      return null
+    }
+  }, [])
+
+  const refreshSmartctl = useCallback(async (force = false) => {
+    try {
+      const next = await operatorApi.getSmartctl(force)
+      setSmartctlStatus(next)
+      setSmartctlError(null)
+      return next
+    } catch (err) {
+      setSmartctlError(err instanceof Error ? err.message : t('operator.smartRefreshFailed'))
+      return null
+    }
+  }, [t])
+
   const saveTrustedHosts = useCallback(async (nextConfigured: string[]) => {
     try {
       trustedHostsRequestId.current += 1
@@ -464,6 +698,110 @@ export default function OperatorPanel() {
     }
   }, [])
 
+  const refreshVectorConfig = useCallback(async (resetDraft = false) => {
+    try {
+      const config = await embeddingsApi.getVectorStoreConfig()
+      setVectorConfig(config)
+      if (resetDraft || !vectorDraftDirty.current) {
+        vectorDraftDirty.current = false
+        setVectorDraft(vectorDraftFromConfig(config))
+        setVectorTestResult(null)
+        setQdrantApiKeyDraft('')
+        setMilvusPasswordDraft('')
+      }
+      return config
+    } catch {
+      return null
+    }
+  }, [])
+
+  const updateVectorDraft = useCallback((value: SetStateAction<VectorStoreDraft>) => {
+    vectorDraftDirty.current = true
+    setVectorDraft(value)
+  }, [])
+
+  const handleVectorProviderChange = useCallback((provider: VectorStoreProviderId) => {
+    updateVectorDraft((prev) => ({ ...prev, provider }))
+    setVectorTestResult(null)
+  }, [updateVectorDraft])
+
+  const handleVectorTest = useCallback(async () => {
+    setVectorConfigBusy('testing')
+    setVectorTestResult(null)
+    try {
+      const result = await embeddingsApi.testVectorStore(vectorDraftToPayload(vectorDraft, qdrantApiKeyDraft, milvusPasswordDraft))
+      setVectorTestResult(result)
+      addToast({ type: result.ok ? 'success' : 'error', message: result.ok ? 'Vector store connection OK' : (result.error || 'Vector store connection failed') })
+    } catch (err) {
+      const result = vectorStoreTestResultFromError(err, vectorDraft.provider)
+      const message = result?.error || vectorStoreErrorMessage(err, 'Vector store connection failed')
+      setVectorTestResult(result ?? { ok: false, provider: vectorDraft.provider, error: message })
+      addToast({ type: 'error', message })
+    } finally {
+      setVectorConfigBusy(null)
+    }
+  }, [addToast, milvusPasswordDraft, qdrantApiKeyDraft, vectorDraft])
+
+  const handleVectorSwitch = useCallback(async () => {
+    setVectorConfigBusy('switching')
+    setVectorTestResult(null)
+    try {
+      const result = await embeddingsApi.switchVectorStore(vectorDraftToPayload(vectorDraft, qdrantApiKeyDraft, milvusPasswordDraft))
+      setVectorConfig(result)
+      vectorDraftDirty.current = false
+      setVectorDraft(vectorDraftFromConfig(result))
+      setQdrantApiKeyDraft('')
+      setMilvusPasswordDraft('')
+      await refreshVectorHealth()
+      addToast({
+        type: 'success',
+        message: result.reindexScheduled
+          ? 'Vector store switched. Existing content was marked for reindexing.'
+          : 'Vector store switched.',
+      })
+    } catch (err) {
+      const message = vectorStoreErrorMessage(err, 'Failed to switch vector store')
+      addToast({ type: 'error', message })
+    } finally {
+      setVectorConfigBusy(null)
+    }
+  }, [addToast, milvusPasswordDraft, qdrantApiKeyDraft, refreshVectorHealth, vectorDraft])
+
+  const handleVectorSaveRuntimeTuning = useCallback(async () => {
+    setVectorConfigBusy('saving')
+    setVectorTestResult(null)
+    try {
+      const result = await embeddingsApi.updateVectorStoreConfig({
+        tuningProfile: vectorDraft.tuningProfile,
+        ...(vectorDraft.provider === 'milvus'
+          ? {
+              milvusHybridSearch: {
+                candidateMultiplier: vectorDraft.milvusHybridCandidateMultiplier,
+                candidateCap: vectorDraft.milvusHybridCandidateCap,
+              },
+            }
+          : {}),
+      })
+      setVectorConfig(result)
+      vectorDraftDirty.current = false
+      setVectorDraft(vectorDraftFromConfig(result))
+      await refreshVectorHealth()
+      addToast({ type: 'success', message: 'Vector store runtime tuning saved.' })
+    } catch (err) {
+      const message = vectorStoreErrorMessage(err, 'Failed to save vector store runtime tuning')
+      addToast({ type: 'error', message })
+    } finally {
+      setVectorConfigBusy(null)
+    }
+  }, [
+    addToast,
+    refreshVectorHealth,
+    vectorDraft.milvusHybridCandidateCap,
+    vectorDraft.milvusHybridCandidateMultiplier,
+    vectorDraft.provider,
+    vectorDraft.tuningProfile,
+  ])
+
   const handleVectorOptimize = useCallback(async () => {
     setVectorBusy('compacting')
     try {
@@ -480,7 +818,7 @@ export default function OperatorPanel() {
   const handleVectorReset = useCallback(async () => {
     setVectorBusy('resetting')
     try {
-      await embeddingsApi.forceReset()
+      await embeddingsApi.resetVectorStore()
       await refreshVectorHealth()
       addToast({ type: 'success', message: t('operator.vectorResetSuccess') })
     } catch {
@@ -494,14 +832,23 @@ export default function OperatorPanel() {
   useEffect(() => {
     let mounted = true
     const fetchStatus = async () => {
-      const [s] = await Promise.all([refreshStatus(), refreshDatabase(), refreshVectorHealth(), refreshSharpSettings(), refreshDnsSettings()])
+      const [s] = await Promise.all([
+        refreshStatus(),
+        refreshDatabase(),
+        refreshVectorHealth(),
+        refreshVectorConfig(),
+        refreshSharpSettings(),
+        refreshDnsSettings(),
+        refreshDiskWarningSettings(),
+        refreshSmartctl(),
+      ])
       if (mounted && s) setLoading(false)
       else if (mounted) setLoading(false)
     }
     fetchStatus()
     const interval = setInterval(fetchStatus, 30_000)
     return () => { mounted = false; clearInterval(interval) }
-  }, [refreshDatabase, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshVectorHealth])
+  }, [refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshSmartctl, refreshStatus, refreshVectorConfig, refreshVectorHealth])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -554,8 +901,10 @@ export default function OperatorPanel() {
       // Re-fetch status (new PID, uptime reset, possibly new branch/version)
       refreshStatus()
       refreshDatabase()
+      refreshDiskWarningSettings()
       refreshSharpSettings()
       refreshDnsSettings()
+      refreshSmartctl()
       refreshTrustedHosts()
 
       // Re-subscribe to log streaming
@@ -566,7 +915,7 @@ export default function OperatorPanel() {
       clearInterval(disconnectPoll)
       unsub()
     }
-  }, [reconnecting, refreshDatabase, refreshDnsSettings, refreshSharpSettings, refreshStatus, refreshTrustedHosts])
+  }, [reconnecting, refreshDatabase, refreshDiskWarningSettings, refreshDnsSettings, refreshSharpSettings, refreshSmartctl, refreshStatus, refreshTrustedHosts])
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
@@ -826,6 +1175,23 @@ export default function OperatorPanel() {
     setBusy(null)
   }, [addToast, dnsSettings])
 
+  const handleSaveDiskWarningSettings = useCallback(async () => {
+    setBusy('saving disk warning settings')
+    try {
+      const normalized = normalizeDiskWarningSettings(diskWarningSettings)
+      const next = await operatorApi.putDiskWarning(normalized)
+      setDiskWarningStatus(next)
+      setDiskWarningSettings({
+        usagePercentThreshold: next.configuredSettings.usagePercentThreshold ?? null,
+        minFreeBytesThreshold: next.configuredSettings.minFreeBytesThreshold ?? null,
+      })
+      addToast({ type: 'success', message: t('operator.diskWarningApplySuccess') })
+    } catch (err) {
+      addToast({ type: 'error', message: err instanceof Error ? err.message : t('operator.diskWarningApplyFailed') })
+    }
+    setBusy(null)
+  }, [addToast, diskWarningSettings, t])
+
   const handleRunVacuumNow = useCallback(() => {
     const normalizedTuning = normalizeDatabaseTuning(dbTuning)
     const normalizedMaintenance = normalizeDatabaseMaintenance(dbMaintenanceSettings)
@@ -894,6 +1260,43 @@ export default function OperatorPanel() {
     }
   }, [refreshDatabase])
 
+  const handleRefreshSmartctl = useCallback(async () => {
+    setSmartctlRefreshing(true)
+    try {
+      const next = await refreshSmartctl(true)
+      if (!next) addToast({ type: 'error', message: t('operator.smartRefreshFailed') })
+    } finally {
+      setSmartctlRefreshing(false)
+    }
+  }, [addToast, refreshSmartctl, t])
+
+  const handleInstallSmartctl = useCallback(async () => {
+    setSmartctlInstalling(true)
+    try {
+      const result = await operatorApi.installSmartctl()
+      setSmartctlStatus((prev) => prev ? { ...prev, ...result.status, snapshot: prev.snapshot } : null)
+      if (result.installed) {
+        addToast({ type: 'success', message: t('operator.smartInstallSuccess') })
+        await refreshSmartctl(true)
+      } else {
+        setSmartctlError(result.error ?? t('operator.smartInstallFailed'))
+      }
+    } catch (err) {
+      const body = err instanceof ApiError ? err.body : null
+      if (body && typeof body === 'object' && 'status' in body) {
+        const result = body as { status?: Omit<OperatorSmartctlStatus, 'snapshot'>; error?: string }
+        if (result.status) {
+          setSmartctlStatus((prev) => prev ? { ...prev, ...result.status, snapshot: prev.snapshot } : prev)
+        }
+        setSmartctlError(result.error ?? t('operator.smartInstallFailed'))
+      } else {
+        setSmartctlError(err instanceof Error ? err.message : t('operator.smartInstallFailed'))
+      }
+    } finally {
+      setSmartctlInstalling(false)
+    }
+  }, [addToast, refreshSmartctl, t])
+
   const hostSourceLabel = useCallback(
     (source: TrustedHostEntry['source']) => t(hostSourceKey(source)),
     [t],
@@ -935,6 +1338,7 @@ export default function OperatorPanel() {
   const maintenanceState = dbStatus?.maintenanceState
   const vacuumDiskWarning = dbStats?.vacuumHasEnoughFreeBytes === false
   const trustedHostsReady = !!trustedHosts
+  const smartSnapshot = smartctlStatus?.snapshot ?? smartctlStatus?.latestSnapshot
 
   return (
     <div className={styles.container}>
@@ -1272,6 +1676,227 @@ export default function OperatorPanel() {
         </div>
       </div>
 
+      {/* Disk Health */}
+      <div className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>{t('operator.diskHealth')}</span>
+          <div className={styles.controls}>
+            {smartctlStatus?.availability === 'installable' && (
+              <button
+                className={styles.controlBtnPrimary}
+                disabled={smartctlInstalling || smartctlRefreshing}
+                onClick={handleInstallSmartctl}
+              >
+                {smartctlInstalling ? <Loader2 size={14} className={spinClass} /> : <Download size={14} />}
+                {smartctlInstalling ? t('operator.smartInstalling') : t('operator.smartInstall')}
+              </button>
+            )}
+            <button
+              className={styles.controlBtn}
+              disabled={smartctlRefreshing || smartctlInstalling}
+              onClick={handleRefreshSmartctl}
+            >
+              <RefreshCw size={14} className={smartctlRefreshing ? spinClass : undefined} />
+              {t('operator.smartRefresh')}
+            </button>
+          </div>
+        </div>
+        <div className={styles.sectionBody}>
+          <div className={styles.smartAvailability}>
+            <span className={clsx(styles.smartAvailabilityDot, smartctlStatus?.availability === 'available' ? styles.smartOk : styles.smartUnavailable)} />
+            <span>
+              {smartctlStatus?.binary
+                ? t('operator.smartAvailable', {
+                  version: smartctlStatus.binary.version ? `v${smartctlStatus.binary.version}` : 'smartctl',
+                  path: smartctlStatus.binary.path,
+                })
+                : smartctlStatus?.message ?? t('operator.smartLoading')}
+            </span>
+          </div>
+
+          {smartctlError && <div className={styles.warningBanner}>{smartctlError}</div>}
+          {smartctlStatus?.installPlan && (
+            <span className={styles.fieldHint}>
+              {t('operator.smartInstallCommand', { command: smartctlStatus.installPlan.command.join(' ') })}
+            </span>
+          )}
+          {smartSnapshot?.error && <div className={styles.warningBanner}>{t('operator.smartCheckError', { error: smartSnapshot.error })}</div>}
+
+          {smartSnapshot && !smartSnapshot.error && (
+            <>
+              <span className={styles.fieldHint}>{t('operator.smartLastChecked', { time: formatIsoTimestamp(smartSnapshot.checkedAt) })}</span>
+              {smartSnapshot.drives.length === 0 ? (
+                <div className={styles.disabledHint}>{t('operator.smartNoDrives')}</div>
+              ) : (
+                <div className={styles.smartDriveList}>
+                  {smartSnapshot.drives.map((drive) => {
+                    const ssd = drive.kind === 'ssd' ? drive.ssd : null
+                    const hdd = drive.kind === 'hdd' ? drive.hdd : null
+                    return (
+                    <div className={styles.smartDrive} key={drive.device}>
+                      <div className={styles.smartDriveHeader}>
+                        <div>
+                          <div className={styles.smartDriveName}>{drive.model ?? drive.device}</div>
+                          <div className={styles.dbMono}>{drive.device}{drive.protocol ? ` · ${drive.protocol}` : ''}{drive.kind && drive.kind !== 'unknown' ? ` · ${drive.kind.toUpperCase()}` : ''}</div>
+                        </div>
+                        <span className={clsx(
+                          styles.smartBadge,
+                          drive.status === 'ok' && styles.smartOk,
+                          drive.status === 'warning' && styles.smartWarning,
+                          drive.status === 'failing' && styles.smartFailing,
+                          (drive.status === 'unavailable' || drive.status === 'standby') && styles.smartUnavailable,
+                        )}>
+                          {t(smartStatusTranslationKey(drive.status))}
+                        </span>
+                      </div>
+
+                      <div className={styles.smartMetrics}>
+                        <div className={styles.smartMetric}>
+                          <span>{t('operator.smartTemperature')}</span>
+                          <strong>{drive.temperatureC == null ? '—' : t('operator.smartTemperatureValue', { value: drive.temperatureC })}</strong>
+                        </div>
+                        {hdd?.powerOnHours != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerOnHours')}</span>
+                            <strong>{formatSmartNumber(hdd.powerOnHours)}</strong>
+                          </div>
+                        )}
+                        {hdd?.powerCycles != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerCycles')}</span>
+                            <strong>{formatSmartNumber(hdd.powerCycles)}</strong>
+                          </div>
+                        )}
+                        {hdd?.startStopCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartStartStopCount')}</span>
+                            <strong>{formatSmartNumber(hdd.startStopCount)}</strong>
+                          </div>
+                        )}
+                        {hdd?.loadCycleCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartLoadCycleCount')}</span>
+                            <strong>{formatSmartNumber(hdd.loadCycleCount)}</strong>
+                          </div>
+                        )}
+                        {ssd?.percentageUsed != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartWearUsed')}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.percentageUsed })}</strong>
+                          </div>
+                        )}
+                        {ssd?.percentageRemaining != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartEnduranceRemaining')}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.percentageRemaining })}</strong>
+                          </div>
+                        )}
+                        {ssd?.availableSparePercent != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{ssd.availableSpareThresholdPercent == null
+                              ? t('operator.smartAvailableSpare')
+                              : t('operator.smartAvailableSpareThreshold', { threshold: ssd.availableSpareThresholdPercent })}</span>
+                            <strong>{t('operator.smartPercentValue', { value: ssd.availableSparePercent })}</strong>
+                          </div>
+                        )}
+                        {ssd?.dataWrittenBytes != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartDataWritten')}</span>
+                            <strong>{formatBytes(ssd.dataWrittenBytes)}</strong>
+                          </div>
+                        )}
+                        {ssd?.powerOnHours != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerOnHours')}</span>
+                            <strong>{formatSmartNumber(ssd.powerOnHours)}</strong>
+                          </div>
+                        )}
+                        {ssd?.powerCycles != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPowerCycles')}</span>
+                            <strong>{formatSmartNumber(ssd.powerCycles)}</strong>
+                          </div>
+                        )}
+                        {ssd?.mediaErrors != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartMediaErrors')}</span>
+                            <strong>{formatSmartNumber(ssd.mediaErrors)}</strong>
+                          </div>
+                        )}
+                        {ssd?.unsafeShutdowns != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartUnsafeShutdowns')}</span>
+                            <strong>{formatSmartNumber(ssd.unsafeShutdowns)}</strong>
+                          </div>
+                        )}
+                        {ssd?.wearLevelingCount != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartWearLeveling')}</span>
+                            <strong>{formatSmartNumber(ssd.wearLevelingCount)}</strong>
+                          </div>
+                        )}
+                        {ssd?.reservedBlocksUsed != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartReservedBlocksUsed')}</span>
+                            <strong>{formatSmartNumber(ssd.reservedBlocksUsed)}</strong>
+                          </div>
+                        )}
+                        {ssd?.programFailures != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartProgramFailures')}</span>
+                            <strong>{formatSmartNumber(ssd.programFailures)}</strong>
+                          </div>
+                        )}
+                        {ssd?.eraseFailures != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartEraseFailures')}</span>
+                            <strong>{formatSmartNumber(ssd.eraseFailures)}</strong>
+                          </div>
+                        )}
+                        {drive.criticalWarning != null && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartCriticalWarning')}</span>
+                            <strong>{formatSmartNumber(drive.criticalWarning)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.reallocatedSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{drive.kind === 'ssd' ? t('operator.smartNandReallocated') : t('operator.smartReallocated')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.reallocatedSectors)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.pendingSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartPending')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.pendingSectors)}</strong>
+                          </div>
+                        )}
+                        {(drive.kind !== 'ssd' || drive.ataAttributes.uncorrectableSectors != null) && (
+                          <div className={styles.smartMetric}>
+                            <span>{t('operator.smartUncorrectable')}</span>
+                            <strong>{formatSmartNumber(drive.ataAttributes.uncorrectableSectors)}</strong>
+                          </div>
+                        )}
+                      </div>
+
+                      {drive.alertConditions?.length > 0 && (
+                        <div className={styles.warningBanner}>
+                          {drive.alertConditions.map((condition, index) => (
+                            <div key={`${condition.severity}-${condition.message}-${index}`}>{condition.message}</div>
+                          ))}
+                        </div>
+                      )}
+                      {drive.message && <div className={styles.fieldHint}>{drive.message}</div>}
+                    </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Database */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
@@ -1347,8 +1972,19 @@ export default function OperatorPanel() {
                     ? t('operator.dbDiskUnknown')
                     : dbStats?.vacuumHasEnoughFreeBytes
                       ? t('operator.dbDiskEnough')
-                      : t('operator.dbDiskNotEnough'),
+                  : t('operator.dbDiskNotEnough'),
                 })}
+              </span>
+            </div>
+            <div className={styles.dbInfoBlock}>
+              <span className={styles.statusLabel}>{t('operator.dbDiskWarningEffective')}</span>
+              <span className={styles.dbInlineText}>
+                {diskWarningStatus
+                  ? t('operator.dbDiskWarningEffectiveValue', {
+                    percent: formatThresholdPercent(diskWarningStatus.effectiveSettings.usagePercentThreshold),
+                    free: formatBytes(diskWarningStatus.effectiveSettings.minFreeBytesThreshold),
+                  })
+                  : '—'}
               </span>
             </div>
           </div>
@@ -1361,6 +1997,47 @@ export default function OperatorPanel() {
               })}
             </div>
           )}
+
+          <div className={styles.tuningGrid}>
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>{t('operator.dbDiskWarnPercent')}</span>
+              <NumericInput
+                min={1}
+                max={100}
+                step={0.5}
+                className={styles.fieldInput}
+                placeholder={t('operator.placeholderDefault', {
+                  value: formatThresholdPercent(diskWarningStatus?.defaults.usagePercentThreshold ?? 0.9),
+                })}
+                value={diskWarningSettings.usagePercentThreshold == null ? null : Number((diskWarningSettings.usagePercentThreshold * 100).toFixed(2))}
+                allowEmpty
+                onChange={(value) => setDiskWarningSettings((prev) => ({
+                  ...prev,
+                  usagePercentThreshold: value == null ? null : value / 100,
+                }))}
+              />
+              <span className={styles.fieldHint}>{t('operator.dbDiskWarnPercentHint')}</span>
+            </label>
+
+            <label className={styles.fieldGroup}>
+              <span className={styles.fieldLabel}>{t('operator.dbDiskWarnFree')}</span>
+              <NumericInput
+                min={0}
+                step={10}
+                className={styles.fieldInput}
+                placeholder={t('operator.placeholderDefault', {
+                  value: formatGiBValue(diskWarningStatus?.defaults.minFreeBytesThreshold ?? (100 * 1024 * 1024 * 1024)),
+                })}
+                value={diskWarningSettings.minFreeBytesThreshold == null ? null : Number((diskWarningSettings.minFreeBytesThreshold / (1024 * 1024 * 1024)).toFixed(2))}
+                allowEmpty
+                onChange={(value) => setDiskWarningSettings((prev) => ({
+                  ...prev,
+                  minFreeBytesThreshold: value == null ? null : Math.round(value * 1024 * 1024 * 1024),
+                }))}
+              />
+              <span className={styles.fieldHint}>{t('operator.dbDiskWarnFreeHint')}</span>
+            </label>
+          </div>
 
           <div className={styles.tuningGrid}>
             <label className={styles.fieldGroup}>
@@ -1592,6 +2269,10 @@ export default function OperatorPanel() {
               <RefreshCw size={14} />
               {t('operator.dbRefreshStats')}
             </button>
+            <button className={styles.controlBtn} disabled={!!effectiveBusy} onClick={handleSaveDiskWarningSettings}>
+              <HardDrive size={14} />
+              {t('operator.dbSaveDiskWarning')}
+            </button>
             <button className={styles.controlBtn} disabled={!!effectiveBusy} onClick={handleSaveDatabaseTuning}>
               <HardDrive size={14} />
               {t('operator.dbSaveTuning')}
@@ -1806,12 +2487,320 @@ export default function OperatorPanel() {
         </div>
       </div>
 
-      {/* LanceDB Vector Store */}
+      {/* Vector Store */}
       <div className={styles.section}>
         <div className={styles.sectionHeader}>
-          <span className={styles.sectionTitle}>{t('operator.vectorStore')}</span>
+          <span className={styles.sectionTitle}>Vector Store ({vectorProvider})</span>
         </div>
         <div className={styles.sectionBody}>
+          {vectorHealth && (
+            <div className={styles.dbInfoGrid} style={{ marginBottom: 16 }}>
+              <div className={styles.dbInfoBlock}>
+                <span className={styles.statusLabel}>Provider</span>
+                <span className={styles.dbInlineText}>{vectorProvider}</span>
+              </div>
+              <div className={styles.dbInfoBlock}>
+                <span className={styles.statusLabel}>Service</span>
+                <span className={styles.dbInlineText}>{vectorIsExternal ? 'External' : 'Embedded'}</span>
+              </div>
+              <div className={styles.dbInfoBlock}>
+                <span className={styles.statusLabel}>Lexical Search</span>
+                <span className={styles.dbInlineText}>{vectorSupportsLexical ? 'Native' : 'Vector-only'}</span>
+              </div>
+              {vectorCapabilities && (
+                <div className={styles.dbInfoBlock}>
+                  <span className={styles.statusLabel}>Score Mode</span>
+                  <span className={styles.dbInlineText}>{vectorScoreLabel(vectorCapabilities.scoreKind)}</span>
+                </div>
+              )}
+              {vectorConfig?.tuningProfile && (
+                <div className={styles.dbInfoBlock}>
+                  <span className={styles.statusLabel}>Tuning</span>
+                  <span className={styles.dbInlineText}>{vectorConfig.tuningProfile.replace('_', ' ')}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {vectorConfig && (
+            <div className={styles.dbInfoGrid} style={{ marginBottom: 16 }}>
+              {vectorConfigManagedByEnv && (
+                <div className={styles.warningBanner}>
+                  Vector store provider and connection are managed by environment variables. Runtime tuning can still be saved here.
+                </div>
+              )}
+
+              <div className={styles.tuningGrid}>
+                <label className={styles.fieldGroup}>
+                  <span className={styles.fieldLabel}>Provider</span>
+                  <select
+                    className={styles.fieldInput}
+                    value={vectorDraft.provider}
+                    disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                    onChange={(e) => handleVectorProviderChange(e.target.value as VectorStoreProviderId)}
+                  >
+                    <option value="lancedb">LanceDB (embedded)</option>
+                    <option value="qdrant">Qdrant (external)</option>
+                    <option value="milvus">Milvus (external)</option>
+                  </select>
+                  <span className={styles.fieldHint}>
+                    Switching validates the connection first, then marks existing vectors for reindexing from SQLite.
+                  </span>
+                </label>
+
+                <label className={styles.fieldGroup}>
+                  <span className={styles.fieldLabel}>Tuning Profile</span>
+                  <select
+                    className={styles.fieldInput}
+                    value={vectorDraft.tuningProfile}
+                    disabled={!!vectorConfigBusy}
+                    onChange={(e) => updateVectorDraft((prev) => ({ ...prev, tuningProfile: e.target.value as VectorStoreTuningProfile }))}
+                  >
+                    <option value="balanced">Balanced</option>
+                    <option value="low_latency">Low latency</option>
+                    <option value="low_memory">Low memory</option>
+                    <option value="bulk_reindex">Bulk reindex</option>
+                  </select>
+                  <span className={styles.fieldHint}>{vectorTuningProfileHint(vectorDraft.tuningProfile)}</span>
+                </label>
+
+                {vectorDraft.provider === 'qdrant' && (
+                  <>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Qdrant URL</span>
+                      <input
+                        className={styles.fieldInput}
+                        placeholder="http://localhost:6333"
+                        value={vectorDraft.qdrantUrl}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, qdrantUrl: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Collection Prefix</span>
+                      <input
+                        className={styles.fieldInput}
+                        placeholder="lumiverse_"
+                        value={vectorDraft.qdrantCollectionPrefix}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, qdrantCollectionPrefix: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>API Key</span>
+                      <input
+                        type="password"
+                        className={styles.fieldInput}
+                        placeholder={vectorConfig.qdrantHasApiKey ? 'Saved key will be reused' : 'Optional'}
+                        value={qdrantApiKeyDraft}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => {
+                          vectorDraftDirty.current = true
+                          setQdrantApiKeyDraft(e.target.value)
+                        }}
+                      />
+                    </label>
+                  </>
+                )}
+
+                {vectorDraft.provider === 'milvus' && (
+                  <>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Milvus Address</span>
+                      <input
+                        className={styles.fieldInput}
+                        placeholder="localhost:19530"
+                        value={vectorDraft.milvusAddress}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusAddress: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Database</span>
+                      <input
+                        className={styles.fieldInput}
+                        placeholder="default"
+                        value={vectorDraft.milvusDatabase}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusDatabase: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Username</span>
+                      <input
+                        className={styles.fieldInput}
+                        placeholder="Optional"
+                        value={vectorDraft.milvusUsername}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusUsername: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Password</span>
+                      <input
+                        type="password"
+                        className={styles.fieldInput}
+                        placeholder={vectorConfig.milvusHasPassword ? 'Saved password will be reused' : 'Optional'}
+                        value={milvusPasswordDraft}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => {
+                          vectorDraftDirty.current = true
+                          setMilvusPasswordDraft(e.target.value)
+                        }}
+                      />
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Transport</span>
+                      <select
+                        className={styles.fieldInput}
+                        value={vectorDraft.milvusTransport}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(e) => updateVectorDraft((prev) => ({ ...prev, milvusTransport: e.target.value as 'grpc' | 'http' }))}
+                      >
+                        <option value="grpc">gRPC</option>
+                      </select>
+                      <span className={styles.fieldHint}>Lumiverse uses the Milvus gRPC endpoint, usually port 19530.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Connect Timeout (ms)</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1000}
+                        max={60000}
+                        step={500}
+                        integer
+                        value={vectorDraft.milvusConnectTimeoutMs}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusConnectTimeoutMs: Math.max(1000, Math.min(60000, Math.round(value ?? 5000))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Used only for the initial TCP reachability probe before the SDK connects.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Request Timeout (ms)</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={0}
+                        max={300000}
+                        step={1000}
+                        integer
+                        value={vectorDraft.milvusRequestTimeoutMs}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusRequestTimeoutMs: Math.max(0, Math.min(300000, Math.round(value ?? 60000))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Applied to Milvus gRPC requests, including Memory Cortex searches. Use 0 to disable the SDK deadline.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Hybrid Candidate Multiplier</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1}
+                        max={10}
+                        step={1}
+                        integer
+                        value={vectorDraft.milvusHybridCandidateMultiplier}
+                        disabled={!!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusHybridCandidateMultiplier: Math.max(1, Math.min(10, Math.round(value ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_MULTIPLIER))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Per-leg over-fetch before Milvus reranks dense and BM25 hits. Final result count still comes from the feature&apos;s Top-K setting.</span>
+                    </label>
+                    <label className={styles.fieldGroup}>
+                      <span className={styles.fieldLabel}>Hybrid Candidate Cap</span>
+                      <NumericInput
+                        className={styles.fieldInput}
+                        min={1}
+                        max={2000}
+                        step={10}
+                        integer
+                        value={vectorDraft.milvusHybridCandidateCap}
+                        disabled={!!vectorConfigBusy}
+                        onChange={(value) => updateVectorDraft((prev) => ({
+                          ...prev,
+                          milvusHybridCandidateCap: Math.max(1, Math.min(2000, Math.round(value ?? DEFAULT_MILVUS_HYBRID_CANDIDATE_CAP))),
+                        }))}
+                      />
+                      <span className={styles.fieldHint}>Upper bound on dense and BM25 candidates per leg before reranking. Keep this above your expected Top-K if you want actual hybrid over-fetch.</span>
+                    </label>
+                    <div className={styles.toggleRowCompact}>
+                      <span className={styles.remoteHint}>Use TLS/SSL</span>
+                      <Toggle.Switch
+                        checked={vectorDraft.milvusSsl}
+                        disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                        onChange={(checked) => updateVectorDraft((prev) => ({ ...prev, milvusSsl: checked }))}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {vectorTestResult && (
+                <div className={vectorTestResult.ok ? styles.disabledHint : styles.warningBanner}>
+                  {vectorTestResult.ok
+                    ? `${vectorProviderLabel(vectorTestResult.provider)} connection test passed.`
+                    : vectorTestResult.error || 'Vector store connection test failed.'}
+                </div>
+              )}
+
+              <div className={styles.controls}>
+                <button
+                  className={styles.controlBtn}
+                  disabled={!!vectorConfigBusy}
+                  onClick={() => refreshVectorConfig(true)}
+                >
+                  <RefreshCw size={14} />
+                  Reload Config
+                </button>
+                <button
+                  className={styles.controlBtnPrimary}
+                  disabled={!vectorRuntimeTuningChanged || !!vectorConfigBusy}
+                  onClick={handleVectorSaveRuntimeTuning}
+                >
+                  {vectorConfigBusy === 'saving'
+                    ? <Loader2 size={14} className={spinClass} />
+                    : <HardDrive size={14} />}
+                  Apply Runtime Tuning
+                </button>
+                <button
+                  className={styles.controlBtnPrimary}
+                  disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                  onClick={handleVectorTest}
+                >
+                  {vectorConfigBusy === 'testing'
+                    ? <Loader2 size={14} className={spinClass} />
+                    : <Wifi size={14} />}
+                  Test Connection
+                </button>
+                <button
+                  className={styles.controlBtnDanger}
+                  disabled={vectorConfigManagedByEnv || !!vectorConfigBusy}
+                  onClick={() => setConfirm({
+                    title: 'Switch Vector Store',
+                    message: 'This validates the target store, switches the active vector database, clears vector caches, and marks existing content for reindexing. Existing vectors are not migrated.',
+                    variant: 'warning',
+                    confirmText: 'Switch Store',
+                    onConfirm: async () => {
+                      setConfirm(null)
+                      await handleVectorSwitch()
+                    },
+                  })}
+                >
+                  {vectorConfigBusy === 'switching'
+                    ? <Loader2 size={14} className={spinClass} />
+                    : <GitBranch size={14} />}
+                  Switch Store
+                </button>
+              </div>
+            </div>
+          )}
+
           {vectorHealth ? (
             vectorHealth.exists ? (
               <>
@@ -1835,22 +2824,36 @@ export default function OperatorPanel() {
                             <span className={styles.statusLabel}>{t('operator.vectorIndex')}</span>
                             <span className={styles.statusValue}>{tableHealth.vectorIndexReady ? t('operator.indexActive') : t('operator.indexPending')}</span>
                           </div>
-                          <div className={styles.statusCard}>
-                            <span className={styles.statusLabel}>{t('operator.vectorScalarIndexes')}</span>
-                            <span className={styles.statusValue}>{tableHealth.scalarIndexReady ? t('operator.indexActive') : t('operator.indexPending')}</span>
-                          </div>
-                          <div className={styles.statusCard}>
-                            <span className={styles.statusLabel}>{t('operator.vectorFtsIndex')}</span>
-                            <span className={styles.statusValue}>{tableHealth.ftsIndexReady ? t('operator.indexActive') : t('operator.indexPending')}</span>
-                          </div>
-                          <div className={styles.statusCard}>
-                            <span className={styles.statusLabel}>{t('operator.vectorUnindexedRows')}</span>
-                            <span className={styles.statusValue}>{tableHealth.unindexedRowEstimate.toLocaleString()}</span>
-                          </div>
-                          <div className={styles.statusCard}>
-                            <span className={styles.statusLabel}>{t('operator.vectorIndexes')}</span>
-                            <span className={styles.statusValue}>{tableHealth.indexes.length}</span>
-                          </div>
+                          {vectorCapabilities?.managesOwnIndexes !== false && (
+                            <>
+                              <div className={styles.statusCard}>
+                                <span className={styles.statusLabel}>{t('operator.vectorScalarIndexes')}</span>
+                                <span className={styles.statusValue}>{tableHealth.scalarIndexReady ? t('operator.indexActive') : t('operator.indexPending')}</span>
+                              </div>
+                              {vectorSupportsLexical && (
+                                <div className={styles.statusCard}>
+                                  <span className={styles.statusLabel}>{t('operator.vectorFtsIndex')}</span>
+                                  <span className={styles.statusValue}>{tableHealth.ftsIndexReady ? t('operator.indexActive') : t('operator.indexPending')}</span>
+                                </div>
+                              )}
+                              <div className={styles.statusCard}>
+                                <span className={styles.statusLabel}>{t('operator.vectorUnindexedRows')}</span>
+                                <span className={styles.statusValue}>{tableHealth.unindexedRowEstimate.toLocaleString()}</span>
+                              </div>
+                            </>
+                          )}
+                          {tableHealth.dimension != null && (
+                            <div className={styles.statusCard}>
+                              <span className={styles.statusLabel}>Dimension</span>
+                              <span className={styles.statusValue}>{tableHealth.dimension}</span>
+                            </div>
+                          )}
+                          {tableHealth.indexes.length > 0 && (
+                            <div className={styles.statusCard}>
+                              <span className={styles.statusLabel}>{t('operator.vectorIndexes')}</span>
+                              <span className={styles.statusValue}>{tableHealth.indexes.length}</span>
+                            </div>
+                          )}
                         </div>
 
                         {tableHealth.indexes.length > 0 && (
@@ -1898,13 +2901,14 @@ export default function OperatorPanel() {
             </button>
             <button
               className={styles.controlBtnPrimary}
-              disabled={!!vectorBusy || !vectorHealth?.exists}
+              disabled={!!vectorBusy || !vectorHealth?.exists || !vectorSupportsOptimize}
               onClick={handleVectorOptimize}
+              title={vectorSupportsOptimize ? undefined : `${vectorProvider} handles optimization server-side`}
             >
               {vectorBusy === 'compacting'
                 ? <Loader2 size={14} className={spinClass} />
                 : <Hammer size={14} />}
-              {t('operator.compactRebuildIndex')}
+              {vectorSupportsOptimize ? t('operator.compactRebuildIndex') : 'Server-managed Optimization'}
             </button>
             <button
               className={styles.controlBtnDanger}
@@ -1923,7 +2927,7 @@ export default function OperatorPanel() {
               {vectorBusy === 'resetting'
                 ? <Loader2 size={14} className={spinClass} />
                 : <Trash2 size={14} />}
-              {t('operator.forceReset')}
+              {vectorIsExternal ? 'Drop Collections' : t('operator.forceReset')}
             </button>
           </div>
         </div>

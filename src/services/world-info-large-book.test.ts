@@ -50,6 +50,8 @@ function makeEntry(overrides: Partial<WorldBookEntry> = {}): WorldBookEntry {
     world_book_id: "book-a",
     uid: overrides.uid ?? crypto.randomUUID(),
     outlet_name: null,
+    wi_marker: null,
+    wi_marker_side: null,
     key: [],
     keysecondary: [],
     content: filler,
@@ -130,6 +132,7 @@ function asVectorCandidate(entry: WorldBookEntry, finalScore = 0.8): VectorActiv
       commentExact: 0,
       commentPartial: 0,
       focusBoost: 0,
+      supportingContextBoost: 0,
       priority: 0,
       broadPenalty: 0,
       focusMissPenalty: 0,
@@ -151,6 +154,45 @@ describe("finalizeActivatedWorldInfoEntries", () => {
 });
 
 describe("activateWorldInfo recursion settings", () => {
+  test("activation cache invalidates on same-length keyword and message content changes", () => {
+    const entryId = crypto.randomUUID();
+    const uid = crypto.randomUUID();
+    const messageId = crypto.randomUUID();
+
+    const first = makeEntry({
+      id: entryId,
+      uid,
+      key: ["alpha"],
+      content: "first",
+      vectorized: false,
+    });
+    const second = makeEntry({
+      id: entryId,
+      uid,
+      key: ["bravo"],
+      content: "reply",
+      vectorized: false,
+    });
+
+    const firstResult = activateWorldInfo({
+      entries: [first],
+      messages: [{ ...makeMessage("alpha"), id: messageId }],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+    expect(firstResult.activatedEntries.map((entry) => entry.content)).toEqual(["first"]);
+
+    const secondResult = activateWorldInfo({
+      entries: [second],
+      messages: [{ ...makeMessage("bravo"), id: messageId }],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+    expect(secondResult.activatedEntries.map((entry) => entry.content)).toEqual(["reply"]);
+  });
+
   test("maxRecursionPasses=0 only performs the base keyword scan", () => {
     const first = makeEntry({
       key: ["alpha"],
@@ -267,18 +309,78 @@ describe("activateWorldInfo recursion settings", () => {
 describe("normalizeWorldInfoSettings", () => {
   test("normalizes invalid and zero-valued world info settings", () => {
     expect(normalizeWorldInfoSettings({
+      forceCaseSensitive: true,
+      forceMatchWholeWords: true,
       globalScanDepth: 0,
       maxRecursionPasses: -1,
       maxActivatedEntries: -5,
       maxTokenBudget: -100,
       minPriority: -2,
     })).toEqual({
+      forceCaseSensitive: true,
+      forceMatchWholeWords: true,
       globalScanDepth: null,
       maxRecursionPasses: 0,
       maxActivatedEntries: 0,
       maxTokenBudget: 0,
       minPriority: 0,
     });
+  });
+
+  test("defaults global keyword matching overrides to off", () => {
+    expect(normalizeWorldInfoSettings({})).toMatchObject({
+      forceCaseSensitive: false,
+      forceMatchWholeWords: false,
+    });
+  });
+});
+
+describe("global keyword matching overrides", () => {
+  test("forces case-sensitive matching without changing the entry", () => {
+    const entry = makeEntry({ key: ["Thornfield"], selective: false, vectorized: false });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("thornfield")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { forceCaseSensitive: true },
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
+    expect(entry.case_sensitive).toBe(false);
+  });
+
+  test("forces whole-word matching without changing the entry", () => {
+    const entry = makeEntry({ key: ["fire"], selective: false, vectorized: false });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("firehouse")],
+      chatTurn: 1,
+      wiState: {},
+      settings: { forceMatchWholeWords: true },
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
+    expect(entry.match_whole_words).toBe(false);
+  });
+
+  test("keeps per-entry matching options when global overrides are off", () => {
+    const entry = makeEntry({
+      key: ["Thornfield"],
+      selective: false,
+      vectorized: false,
+      case_sensitive: true,
+      match_whole_words: true,
+    });
+    const result = activateWorldInfo({
+      entries: [entry],
+      messages: [makeMessage("thornfields")],
+      chatTurn: 1,
+      wiState: {},
+      settings: {},
+    });
+
+    expect(result.activatedEntries).toHaveLength(0);
   });
 });
 
@@ -290,6 +392,22 @@ describe("normalizeWorldInfoSettings", () => {
 // ---------------------------------------------------------------------------
 
 describe("mergeActivatedWorldInfoEntries — user-shape (9000+ entries, keys=[], vectorized)", () => {
+  test("includes the source book name in activated entry summaries", () => {
+    const entry = makeEntry({ world_book_id: "book-lore" });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [entry],
+      [],
+      {},
+      new Map([["book-lore", "character"]]),
+      new Map([["book-lore", "Character Lore"]]),
+    );
+
+    expect(result.activatedWorldInfo).toEqual([
+      expect.objectContaining({ id: entry.id, bookName: "Character Lore" }),
+    ]);
+  });
+
   test("accepts all 15 vector candidates when settings are default", () => {
     const vectorCandidates = Array.from({ length: 15 }, (_, i) =>
       asVectorCandidate(makeEntry({ order_value: i + 1, comment: `memory #${i + 1}` })),
@@ -442,6 +560,69 @@ describe("mergeActivatedWorldInfoEntries — priority/order tie-breaking", () =>
 
     expect(result.keywordActivated).toBe(5);
     expect(result.vectorActivated).toBe(10);
+  });
+});
+
+describe("mergeActivatedWorldInfoEntries — unified finalization", () => {
+  test("content deduplication cannot undo a score-boosted vector winner", () => {
+    const keywordA = makeEntry({ id: "keyword-a", order_value: 1, content: "keyword a" });
+    const keywordB = makeEntry({ id: "keyword-b", order_value: 2, content: "duplicate lore" });
+    const keywordDuplicate = makeEntry({ id: "keyword-dupe", order_value: 3, content: "duplicate lore" });
+    const vector = makeEntry({ id: "vector-winner", order_value: 1000, content: "vector lore", priority: 10 });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [keywordA, keywordB, keywordDuplicate],
+      [asVectorCandidate(vector, 1)],
+      { maxActivatedEntries: 2 },
+    );
+
+    expect(result.deduplicated).toBe(1);
+    expect(result.activatedEntries.map((entry) => entry.id)).toContain("vector-winner");
+    expect(result.vectorDispositions.get("vector-winner")?.code).toBe("activated");
+  });
+
+  test("vector relevance competes under a token-only budget without mutating priority", () => {
+    const keyword = makeEntry({ id: "token-keyword", order_value: 1, content: "k".repeat(160), priority: 10 });
+    const vector = makeEntry({ id: "token-vector", order_value: 1000, content: "v".repeat(160), priority: 10 });
+
+    const result = mergeActivatedWorldInfoEntries(
+      [keyword],
+      [asVectorCandidate(vector, 1)],
+      { maxTokenBudget: 40 },
+    );
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["token-vector"]);
+    expect(result.activatedEntries[0]?.priority).toBe(10);
+    expect(result.vectorDispositions.get("token-vector")?.code).toBe("activated");
+  });
+
+  test("group overrides apply across keyword and vector sources", () => {
+    const keyword = makeEntry({ id: "group-keyword", group_name: "shared", priority: 50 });
+    const vector = makeEntry({
+      id: "group-vector",
+      group_name: "shared",
+      group_override: true,
+      priority: 5,
+    });
+
+    const result = mergeActivatedWorldInfoEntries([keyword], [asVectorCandidate(vector, 1)]);
+
+    expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["group-vector"]);
+    expect(result.vectorDispositions.get("group-vector")?.code).toBe("activated");
+  });
+
+  test("group weights apply across keyword and vector sources", () => {
+    const keyword = makeEntry({ id: "weighted-keyword", group_name: "weighted", group_weight: 1 });
+    const vector = makeEntry({ id: "weighted-vector", group_name: "weighted", group_weight: 100 });
+    const originalRandom = Math.random;
+    Math.random = () => 0.99;
+    try {
+      const result = mergeActivatedWorldInfoEntries([keyword], [asVectorCandidate(vector, 1)]);
+      expect(result.activatedEntries.map((entry) => entry.id)).toEqual(["weighted-vector"]);
+      expect(result.vectorDispositions.get("weighted-vector")?.code).toBe("activated");
+    } finally {
+      Math.random = originalRandom;
+    }
   });
 });
 

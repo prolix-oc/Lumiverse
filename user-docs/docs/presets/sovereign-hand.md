@@ -1,3 +1,7 @@
+---
+title: Sovereign Hand
+---
+
 # Sovereign Hand
 
 Sovereign Hand is a co-pilot mode that reframes how the AI interprets your messages. Instead of treating what you write as your character's dialogue, the AI treats it as **directorial instructions** — stage directions from the author telling the story what should happen next.

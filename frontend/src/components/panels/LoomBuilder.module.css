@@ -48,6 +48,79 @@
   position: relative;
   z-index: 10;
   flex-wrap: wrap;
+  container-type: inline-size;
+}
+
+.presetSelector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.presetSelect {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.extensionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--lumiverse-border);
+  flex-shrink: 0;
+}
+
+.extensionToolbar > div {
+  min-width: 0;
+}
+
+.extensionTabBar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px 0;
+  border-bottom: 1px solid var(--lumiverse-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.extensionTab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.extensionTab:hover {
+  color: var(--lumiverse-text);
+}
+
+.extensionTabActive {
+  color: var(--lumiverse-primary);
+  border-bottom-color: var(--lumiverse-primary);
+}
+
+.extensionTabContent {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
 }
 
 .searchToggle {
@@ -58,6 +131,35 @@
   color: var(--lumiverse-primary);
   border-color: var(--lumiverse-primary-020);
   background: var(--lumiverse-primary-010);
+}
+
+/* Keep the preset selector usable in narrow sidebars. The bulk action remains
+   discoverable through its icon and tooltip, while its text returns when the
+   toolbar has enough room for both controls. */
+@container (max-width: 620px) {
+  .categoryToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .categoryToggle .toolbarButtonLabel {
+    display: none;
+  }
+}
+
+@container (max-width: 440px) {
+  .searchToggle {
+    width: 36px;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .searchToggle .toolbarButtonLabel {
+    display: none;
+  }
 }
 
 .searchBarRow {
@@ -360,6 +462,60 @@
   background: var(--lumiverse-fill-strong, rgba(0, 0, 0, 0.25));
 }
 
+.rootDropSlotWrap {
+  position: relative;
+  height: 0;
+  margin: 0;
+  overflow: visible;
+}
+
+.rootDropSlot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  z-index: 2;
+  height: 18px;
+  opacity: 0;
+  border-radius: 8px;
+  border: 1px dashed transparent;
+  background: transparent;
+  transition: opacity var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.rootDropSlotActive {
+  opacity: 1;
+  border: 1px dashed var(--lumiverse-border-neutral, rgba(128, 128, 128, 0.16));
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.03));
+}
+
+.rootDropSlotOver {
+  border-color: var(--lumiverse-primary-muted);
+  background: var(--lumiverse-primary-010);
+  box-shadow: inset 0 0 0 1px var(--lumiverse-primary-020);
+}
+
+.rootDropSlotAppendArmed {
+  opacity: 1;
+  border-color: var(--lumiverse-primary);
+  background: color-mix(in srgb, var(--lumiverse-primary) 24%, transparent);
+  animation: rootDropAppendFlash 0.6s steps(2, jump-none) infinite;
+}
+
+@keyframes rootDropAppendFlash {
+  0%, 100% {
+    border-color: var(--lumiverse-primary);
+    background: color-mix(in srgb, var(--lumiverse-primary) 34%, transparent);
+    box-shadow: inset 0 0 0 1px var(--lumiverse-primary), 0 0 0 3px color-mix(in srgb, var(--lumiverse-primary) 26%, transparent);
+  }
+
+  50% {
+    border-color: color-mix(in srgb, var(--lumiverse-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent);
+    box-shadow: inset 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
 .itemIndented {
   margin-left: 14px;
   border-left: 2px solid var(--lumiverse-primary-020);
@@ -594,6 +750,97 @@
 .btnSmall {
   padding: 5px 10px;
   font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.blockNameIconSealed {
+  color: color-mix(in srgb, var(--lumiverse-primary) 75%, var(--lumiverse-text));
+}
+
+.sealedBlockPanel {
+  border: 1px dashed color-mix(in srgb, var(--lumiverse-border) 86%, var(--lumiverse-text-dim));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04)) 64%, transparent);
+  overflow: hidden;
+}
+
+.sealedBlockPanelActive {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--lumiverse-primary) 42%, var(--lumiverse-border));
+  background: color-mix(in srgb, var(--lumiverse-primary) 7%, transparent);
+}
+
+.sealedBlockReveal {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 0;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.sealedBlockReveal:hover {
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+}
+
+.sealedBlockRevealCopy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.sealedBlockChevron {
+  flex-shrink: 0;
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.sealedBlockChevronOpen {
+  transform: rotate(180deg);
+}
+
+.sealedBlockBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 11px 11px;
+}
+
+.sealedBlockText {
+  margin: 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+}
+
+.sealedBlockArmRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--lumiverse-primary) 28%, var(--lumiverse-border));
+  color: var(--lumiverse-text);
+  background: color-mix(in srgb, var(--lumiverse-primary) 6%, transparent);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.sealedBlockArmRow input {
+  margin-top: 1px;
+}
+
+.sealedBlockArmRowDisabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* ── Configure prompt variables action ── */
@@ -1030,32 +1277,6 @@
 }
 
 
-/* ============================================================================
-   CUSTOM BODY
-   ============================================================================ */
-
-.customBodyTextarea {
-  width: 100%;
-  min-height: 64px;
-  padding: 10px 12px;
-  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
-  border: 1px solid var(--lumiverse-border);
-  border-radius: 8px;
-  color: var(--lumiverse-text);
-  font-size: calc(12px * var(--lumiverse-font-scale, 1));
-  font-family: var(--lumiverse-font-mono, monospace);
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color var(--lumiverse-transition-fast), box-shadow var(--lumiverse-transition-fast);
-}
-
-.customBodyTextarea:focus {
-  border-color: var(--lumiverse-primary-muted);
-  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
-}
-
 .jsonError {
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-danger, #ef4444);
@@ -1470,10 +1691,7 @@
 
 .blockNameRow {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
   min-width: 0;
 }
 
@@ -1481,7 +1699,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 160px;
+  flex: 1 1 auto;
   min-width: 0;
   font-size: calc(13px * var(--lumiverse-font-scale, 1));
   font-weight: 500;
@@ -1509,9 +1727,10 @@
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   min-width: 0;
+  align-self: center;
 }
 
 .triggerBadgeList {
@@ -1560,6 +1779,94 @@
 
 .triggerCheckbox {
   accent-color: var(--lumiverse-primary);
+}
+
+.tagTriggerField {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+}
+
+.tagTriggerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary);
+  border: 1px solid var(--lumiverse-primary-020);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  line-height: 1;
+}
+
+.tagTriggerChipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tagTriggerChipRemove:hover {
+  background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
+}
+
+.tagTriggerDraftRow {
+  flex: 1 1 220px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tagTriggerDraftInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  outline: none;
+  padding: 4px 0;
+}
+
+.tagTriggerDraftInput::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.tagTriggerDraftAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast), opacity var(--lumiverse-transition-fast);
+}
+
+.tagTriggerDraftAdd:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.05));
+  color: var(--lumiverse-text);
+}
+
+.tagTriggerDraftAdd:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ============================================================================

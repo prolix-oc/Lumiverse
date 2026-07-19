@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import type { AppMountState } from '@/store/slices/spindle-placement'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
+import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 
 interface Props {
   mount: AppMountState
@@ -21,32 +22,38 @@ export default function SpindleAppMount({ mount }: Props) {
     const container = containerRef.current
     container.style.display = mount.visible ? '' : 'none'
 
-    if (!container.contains(mount.root)) {
-      container.replaceChildren(mount.root)
-    }
+    const cancel = scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(mount.extensionId, mount.root)) return
+      if (!container.isConnected && !document.body.isConnected) return
 
-    if (mount.position === 'app-overlay') {
-      const appRoot = document.querySelector('[data-app-root]')
-      if (appRoot) {
-        container.style.position = 'relative'
-        container.style.zIndex = '9990'
-        appRoot.appendChild(container)
+      if (!container.contains(mount.root)) {
+        container.replaceChildren(mount.root)
+      }
+
+      if (mount.position === 'app-overlay') {
+        const appRoot = document.querySelector('[data-app-root]')
+        if (appRoot) {
+          container.style.position = 'relative'
+          container.style.zIndex = '9990'
+          appRoot.appendChild(container)
+        } else {
+          container.style.position = ''
+          container.style.zIndex = ''
+          document.body.appendChild(container)
+        }
+      } else if (mount.position === 'start') {
+        container.style.position = ''
+        container.style.zIndex = ''
+        document.body.insertBefore(container, document.body.firstChild)
       } else {
         container.style.position = ''
         container.style.zIndex = ''
         document.body.appendChild(container)
       }
-    } else if (mount.position === 'start') {
-      container.style.position = ''
-      container.style.zIndex = ''
-      document.body.insertBefore(container, document.body.firstChild)
-    } else {
-      container.style.position = ''
-      container.style.zIndex = ''
-      document.body.appendChild(container)
-    }
+    }, { phase: 'paint' })
 
     return () => {
+      cancel()
       try { container.remove() } catch { /* no-op */ }
     }
   }, [mount.id, mount.extensionId, mount.className, mount.position, mount.visible, mount.root])

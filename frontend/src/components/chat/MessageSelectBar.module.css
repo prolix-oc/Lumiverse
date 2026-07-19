@@ -4,15 +4,15 @@
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--lumiverse-primary-010);
+  background: color-mix(in srgb, var(--lumiverse-bg-elevated) 88%, var(--lumiverse-primary) 12%);
   border: 1px solid var(--lumiverse-primary);
   border-radius: 10px;
   position: absolute;
   bottom: 110px;
   left: 12px;
   right: 12px;
-  backdrop-filter: blur(12px);
   z-index: 21;
+  transition: opacity 180ms ease, transform 180ms ease, background var(--lumiverse-transition-fast);
 }
 
 :global(html[data-ios-pwa]) .bar {

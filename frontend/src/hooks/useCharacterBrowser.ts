@@ -128,7 +128,7 @@ export function useCharacterBrowser() {
         )
       },
     )
-  }, [!!importProgress])
+  }, [importProgress])
 
   // Refresh gallery when LumiHub install completes (external mutation)
   useEffect(() => {
@@ -161,6 +161,8 @@ export function useCharacterBrowser() {
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const prevSummaryParamsRef = useRef<Record<string, any> | null>(null)
+  const summaryInitialFetchDoneRef = useRef(false)
   useEffect(() => {
     debounceRef.current = setTimeout(() => setDebouncedQuery(searchQuery), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(debounceRef.current)
@@ -233,12 +235,18 @@ export function useCharacterBrowser() {
   useEffect(() => {
     if (!settingsLoaded) return
 
+    const params = buildSummaryParams()
+    const paramsChanged = JSON.stringify(params) !== JSON.stringify(prevSummaryParamsRef.current)
+    prevSummaryParamsRef.current = params
+
     let cancelled = false
     favoriteMutationSeqRef.current += 1
-    setLoading(true)
+    if (paramsChanged || !summaryInitialFetchDoneRef.current) {
+      setLoading(true)
+    }
 
     charactersApi
-      .listSummaries(buildSummaryParams())
+      .listSummaries(params)
       .then((result) => {
         if (cancelled) return
         setBrowserItems(result.data)
@@ -249,7 +257,10 @@ export function useCharacterBrowser() {
         console.error('[CharacterBrowser] Failed to load summaries:', err)
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          summaryInitialFetchDoneRef.current = true
+        }
       })
 
     return () => { cancelled = true }
@@ -420,22 +431,55 @@ export function useCharacterBrowser() {
     setPendingAltFieldsSummary([])
   }, [])
 
-  // Import URL
+  // Import one or more newline-separated URLs
   const importUrl = useCallback(
-    async (url: string) => {
-      setImportProgress({ step: 'processing', percent: 100, filename: url })
+    async (input: string) => {
+      const urls = input.split(/\r?\n/).map((url) => url.trim()).filter(Boolean)
+      if (urls.length === 0) return
+
+      setImportProgress({ step: 'processing', percent: 100, filename: urls.length === 1 ? urls[0] : `${urls.length} URLs` })
       setImportError(null)
+      const imported: Character[] = []
+      const failures: string[] = []
+      let lorebookPromptQueued = !!pendingLorebookImport
       try {
-        const result = await charactersApi.importUrl(url)
-        addCharacter(result.character)
-        setBrowserTotal((t) => t + 1)
-        setFetchVersion((v) => v + 1)
-        toast.success(i18n.t('chat.toast.characterImported', { name: result.character.name }))
-        if (getEmbeddedCharacterBookEntryCount(result.character.extensions) > 0
-            && !(result.character.extensions?.world_book_ids?.length > 0)) {
-          setPendingLorebookImport(result.character)
+        for (let i = 0; i < urls.length; i++) {
+          const url = urls[i]
+          setImportProgress({
+            step: 'processing',
+            percent: 100,
+            filename: urls.length === 1 ? url : `${i + 1}/${urls.length}: ${url}`,
+          })
+          try {
+            const result = await charactersApi.importUrl(url)
+            addCharacter(result.character)
+            imported.push(result.character)
+            if (getEmbeddedCharacterBookEntryCount(result.character.extensions) > 0
+                && !(result.character.extensions?.world_book_ids?.length > 0)
+                && !lorebookPromptQueued) {
+              setPendingLorebookImport(result.character)
+              lorebookPromptQueued = true
+            }
+            maybeShowImportedLoraHint(result.character)
+          } catch (err: any) {
+            const msg = err?.body?.error || err?.body?.message || err?.message || 'Import failed'
+            failures.push(`${url}: ${msg}`)
+          }
         }
-        maybeShowImportedLoraHint(result.character)
+
+        if (imported.length > 0) {
+          setBrowserTotal((t) => t + imported.length)
+        }
+        setFetchVersion((v) => v + 1)
+        if (imported.length === 1) {
+          toast.success(i18n.t('chat.toast.characterImported', { name: imported[0].name }))
+        } else if (imported.length > 1) {
+          toast.success(`Imported ${imported.length} characters`)
+        }
+
+        if (failures.length > 0) {
+          throw new Error(failures.join('\n'))
+        }
       } catch (err: any) {
         const msg = err?.body?.message || err?.message || 'Import failed'
         setImportError(msg)
@@ -444,7 +488,7 @@ export function useCharacterBrowser() {
         setImportProgress(null)
       }
     },
-    [addCharacter]
+    [addCharacter, pendingLorebookImport]
   )
 
   // Batch delete
@@ -667,7 +711,7 @@ export function useCharacterBrowser() {
       const wasFavorite = favorites.includes(id)
       const nextFavorites = wasFavorite
         ? favorites.filter((favoriteId) => favoriteId !== id)
-        : [...favorites, id].slice(0, 15)
+        : [...favorites, id]
       const requestSeq = ++favoriteMutationSeqRef.current
 
       toggleFavorite(id)

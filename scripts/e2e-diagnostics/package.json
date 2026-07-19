@@ -1,0 +1,13 @@
+{
+  "name": "lumiverse-e2e-diagnostics",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "diagnose": "node diagnose.mjs",
+    "diagnose:spindle": "node diagnose-spindle.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.61.0"
+  }
+}

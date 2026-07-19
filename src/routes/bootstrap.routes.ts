@@ -1,7 +1,20 @@
 import { Hono } from "hono";
-import { buildBootstrapPayload } from "../services/bootstrap.service";
+import { buildBootstrapPayload, buildLandingBootstrapPayload } from "../services/bootstrap.service";
 
 const app = new Hono();
+
+/**
+ * GET /api/v1/bootstrap/landing
+ *
+ * Minimal first-paint payload for the landing page. This intentionally avoids
+ * the full startup fan-out so theme, wallpaper, layout, and recent chats can
+ * render without waiting on unrelated panels or extension metadata.
+ */
+app.get("/landing", (c) => {
+  const userId = c.get("userId");
+  const result = buildLandingBootstrapPayload(userId);
+  return c.json(result);
+});
 
 /**
  * GET /api/v1/bootstrap
@@ -27,6 +40,7 @@ app.get("/", async (c) => {
   const role = session?.user?.role || "user";
 
   const result = await buildBootstrapPayload(userId, role);
+  if (c.req.raw.signal.aborted) return new Response(null, { status: 204 });
   return c.json(result);
 });
 

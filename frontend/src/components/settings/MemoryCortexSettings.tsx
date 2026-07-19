@@ -250,14 +250,14 @@ export default function MemoryCortexSettings() {
       }
     });
     return () => unsub();
-  }, [activeChatId, addToast, loadStats]);
+  }, [activeChatId, addToast, loadStats, t]);
   useEffect(() => {
     if (config?.sidecar?.connectionProfileId) {
       fetchModels(config.sidecar.connectionProfileId);
     }
   }, [config?.sidecar?.connectionProfileId, fetchModels]);
 
-  const updateConfig = async (patch: Partial<CortexConfig>) => {
+  const updateConfig = useCallback(async (patch: Partial<CortexConfig>) => {
     if (!config) return;
     const optimistic = { ...config, ...patch };
     setConfig(optimistic);
@@ -268,7 +268,7 @@ export default function MemoryCortexSettings() {
       setConfig(config); // Revert
       addToast({ type: "error", message: t("memoryCortex.saveFailed") });
     }
-  };
+  }, [config, addToast, t]);
 
   const updateThoughtMarkers = useCallback((patch: Partial<CortexConfig["thoughtMarkers"]>) => {
     if (!config) return;
@@ -278,7 +278,7 @@ export default function MemoryCortexSettings() {
         ...patch,
       },
     });
-  }, [config]);
+  }, [config, updateConfig]);
 
   const applyPreset = async (mode: PresetMode) => {
     try {
@@ -804,6 +804,9 @@ export default function MemoryCortexSettings() {
                     </div>
                     <div className={styles.toggleRow}>
                       <Toggle.Checkbox checked={config.retrieval.relationshipInjection} onChange={(v) => updateConfig({ retrieval: { ...config.retrieval, relationshipInjection: v } })} label={t("memoryCortex.relationshipEdges")} hint={t("memoryCortex.relationshipEdgesHint")} />
+                    </div>
+                    <div className={styles.toggleRow}>
+                      <Toggle.Checkbox checked={config.retrieval.arcInjection} onChange={(v) => updateConfig({ retrieval: { ...config.retrieval, arcInjection: v } })} label={t("memoryCortex.arcSummaries")} hint={t("memoryCortex.arcSummariesHint")} />
                     </div>
                     <div className={styles.infoRow}>
                       <span className={styles.infoLabel}>{t("memoryCortex.contextTokenBudget")}</span>

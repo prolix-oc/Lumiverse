@@ -46,11 +46,17 @@ export default function GreetingPickerModal({
 
   const [galleryItems, setGalleryItems] = useState<CharacterGalleryItem[]>([])
   const [galleryOpenIndex, setGalleryOpenIndex] = useState<number | null>(null)
-  const greetingBgs = (character.extensions?.greeting_backgrounds ?? {}) as Record<number, string>
+  const [greetingBgs, setGreetingBgs] = useState<Record<number, string>>(
+    () => (character.extensions?.greeting_backgrounds ?? {}) as Record<number, string>,
+  )
 
   useEffect(() => {
     characterGalleryApi.list(character.id).then(setGalleryItems).catch(() => {})
   }, [character.id])
+
+  useEffect(() => {
+    setGreetingBgs((character.extensions?.greeting_backgrounds ?? {}) as Record<number, string>)
+  }, [character])
 
   const assignBackground = useCallback(async (greetingIndex: number, imageId: string | null) => {
     const updated = { ...greetingBgs }
@@ -63,7 +69,7 @@ export default function GreetingPickerModal({
       await charactersApi.update(character.id, {
         extensions: { ...character.extensions, greeting_backgrounds: updated },
       })
-      character.extensions = { ...character.extensions, greeting_backgrounds: updated }
+      setGreetingBgs(updated)
     } catch {}
     setGalleryOpenIndex(null)
   }, [character, greetingBgs])

@@ -179,9 +179,11 @@ export const COMMANDS: Command[] = [
         title: tc('confirm.forkChat.title'),
         message: tc('confirm.forkChat.message'),
         confirmText: tc('confirm.forkChat.confirm'),
-        onConfirm: async () => {
+        inputLabel: tc('confirm.forkChat.nameLabel'),
+        inputPlaceholder: tc('confirm.forkChat.namePlaceholder'),
+        onConfirm: async (name: string) => {
           try {
-            const newChat = await chatsApi.branch(activeChatId, lastMessage.id)
+            const newChat = await chatsApi.branch(activeChatId, lastMessage.id, name)
             navigate(`/chat/${newChat.id}`)
           } catch {
             useStore.getState().addToast({ type: 'error', message: tc('toast.failedForkChat') })
@@ -289,7 +291,16 @@ export const COMMANDS: Command[] = [
     group: 'actions',
     scope: 'chat-idle',
     run: async () => {
-      const { activeChatId, activeProfileId, activePersonaId, activeCharacterId, getActivePresetForGeneration, openModal, addToast } = useStore.getState()
+      const {
+        activeChatId,
+        activeProfileId,
+        activePersonaId,
+        activeCharacterId,
+        activeGroupCharacterId,
+        getActivePresetForGeneration,
+        openModal,
+        addToast,
+      } = useStore.getState()
       if (!activeChatId) return
       try {
         const presetId = getActivePresetForGeneration() || undefined
@@ -299,6 +310,7 @@ export const COMMANDS: Command[] = [
           persona_id: activePersonaId || undefined,
           preset_id: presetId,
           force_preset_id: shouldForceLoomRuntimePreset(presetId, activeChatId, activeCharacterId, activeProfileId),
+          target_character_id: activeGroupCharacterId ?? activeCharacterId ?? undefined,
         })
 
         openModal('dryRun', result)

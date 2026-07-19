@@ -6,12 +6,10 @@ import styles from './DepthControls.module.css'
 interface DepthControlsProps {
   radiusScale: number
   enableGlass: boolean
-  useFullAvatar: boolean
   fontScale: number
   uiScale: number
   onRadiusChange: (v: number) => void
   onGlassToggle: (v: boolean) => void
-  onFullAvatarToggle: (v: boolean) => void
   onFontScaleChange: (v: number) => void
   onUiScaleChange: (v: number) => void
 }
@@ -31,12 +29,10 @@ function commitFromInput(e: React.SyntheticEvent, commit: (v: number) => void) {
 export default function DepthControls({
   radiusScale,
   enableGlass,
-  useFullAvatar,
   fontScale,
   uiScale,
   onRadiusChange,
   onGlassToggle,
-  onFullAvatarToggle,
   onFontScaleChange,
   onUiScaleChange,
 }: DepthControlsProps) {
@@ -109,13 +105,6 @@ export default function DepthControls({
         checked={enableGlass}
         onChange={onGlassToggle}
         label={t('glassEffects')}
-      />
-
-      {/* Full-size avatar toggle */}
-      <Toggle.Checkbox
-        checked={useFullAvatar}
-        onChange={onFullAvatarToggle}
-        label={t('useFullAvatar')}
       />
     </div>
   )

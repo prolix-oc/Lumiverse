@@ -129,6 +129,10 @@ interface LlmMessageDTO {
   role: "system" | "user" | "assistant"
   content: string | LlmMessagePartDTO[]
   name?: string
+  __isChatHistory?: boolean
+  __isWorldInfoEntry?: boolean
+  sourceMessageId?: string
+  sourceIndexInChat?: number
 }
 
 type LlmMessagePartDTO =
@@ -140,6 +144,10 @@ type LlmMessagePartDTO =
 ```
 
 `content` accepts a plain string or an array of typed parts. Tool calls and tool results are first-class parts — see [Generation › Tool calling](generation.md#tool-calling).
+
+`__isChatHistory` is set on interceptor input messages that originate from stored chat turns. When present, `sourceMessageId` and `sourceIndexInChat` identify the source chat message where available.
+
+`__isWorldInfoEntry` is set on interceptor input messages that are standalone World Info / world-book entries in the assembled prompt. World Info inserted inline through marker macros is part of the surrounding prompt block and is not flagged as a separate message.
 
 ## Context Object
 
@@ -154,6 +162,10 @@ The `context` parameter is an object containing metadata about the current gener
 | `activatedWorldInfo` | `array` | World info entries activated for this generation |
 
 The context is read-only for informational purposes. To influence the generation, return modified messages or parameters.
+
+`"quiet"` can describe a host generation route, but calls made through
+`spindle.generate.quiet()` are direct provider calls and do **not** re-enter
+this interceptor chain. The same is true for extension `raw` and `batch` calls.
 
 ## Timeout
 

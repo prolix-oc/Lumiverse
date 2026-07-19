@@ -1,3 +1,7 @@
+---
+title: Context Filters
+---
+
 # Context Filters
 
 Context filters strip formatting, tags, and structural content from **older messages** before they're sent to the AI. This keeps the prompt clean and saves context space without affecting how recent messages appear.

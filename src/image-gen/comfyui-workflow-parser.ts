@@ -15,6 +15,7 @@ export interface DetectedInjectionPoint {
     | "width"
     | "height"
     | "checkpoint"
+    | "unet"
     | "lora_name"
     | "lora_strength_model"
     | "lora_strength_clip"
@@ -58,6 +59,9 @@ const KNOWN_FIELD_HINTS: Record<string, Record<string, DetectedInjectionPoint["s
   },
   CheckpointLoaderSimple: {
     ckpt_name: "checkpoint",
+  },
+  UNETLoader: {
+    unet_name: "unet",
   },
   LoraLoader: {
     lora_name: "lora_name",

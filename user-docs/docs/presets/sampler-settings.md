@@ -1,3 +1,7 @@
+---
+title: Sampler Settings
+---
+
 # Sampler Settings
 
 Sampler settings control *how* the AI generates text — the randomness, creativity, length, and repetition tendencies of its output.

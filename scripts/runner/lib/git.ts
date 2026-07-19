@@ -5,11 +5,20 @@ export interface GitResult {
   out: string;
 }
 
+const GIT_WORKTREE_CACHE_MS = 60_000;
+
+type CachedGitWorkTree = {
+  value: boolean;
+  expiresAt: number;
+};
+
+let cachedGitWorkTree: CachedGitWorkTree | null = null;
+
 /**
  * Run a synchronous git command and return the result.
  * Uses Bun.spawnSync for simplicity in git operations.
  */
-export function runGit(...args: string[]): GitResult {
+function runGitRaw(...args: string[]): GitResult {
   const result = Bun.spawnSync(["git", ...args], {
     cwd: PROJECT_ROOT,
     stdout: "pipe",
@@ -19,6 +28,30 @@ export function runGit(...args: string[]): GitResult {
     ok: result.exitCode === 0,
     out: result.stdout.toString().trim(),
   };
+}
+
+export function isGitWorkTree(forceRefresh = false): boolean {
+  const now = Date.now();
+  if (!forceRefresh && cachedGitWorkTree && cachedGitWorkTree.expiresAt > now) {
+    return cachedGitWorkTree.value;
+  }
+
+  const probe = runGitRaw("rev-parse", "--is-inside-work-tree");
+  const value = probe.ok && probe.out === "true";
+
+  cachedGitWorkTree = {
+    value,
+    expiresAt: now + GIT_WORKTREE_CACHE_MS,
+  };
+
+  return value;
+}
+
+export function runGit(...args: string[]): GitResult {
+  if (!isGitWorkTree()) {
+    return { ok: false, out: "" };
+  }
+  return runGitRaw(...args);
 }
 
 /**

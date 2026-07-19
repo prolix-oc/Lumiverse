@@ -38,6 +38,7 @@ const LOOM_KEEP_REGEXES = LOOM_TAGS_KEEP_CONTENT.map((tag) => ({
 
 // HTML formatting tags to strip (preserves inner text)
 const HTML_FORMAT_TAGS = ["span", "b", "i", "u", "em", "strong", "s", "strike", "sub", "sup", "mark", "small", "big"];
+const HTML_INLINE_TAGS = new Set([...HTML_FORMAT_TAGS, "font", "a", "abbr", "cite", "q", "kbd", "code", "var", "time"]);
 const HTML_TAG_REGEXES = HTML_FORMAT_TAGS.map((tag) => ({
   open: new RegExp(`<${tag}(?:\\s[^>]*)?>`, "gi"),
   close: new RegExp(`</${tag}>`, "gi"),
@@ -86,23 +87,41 @@ export function stripLoomTags(content: string): string {
   return result;
 }
 
-/** Strip HTML formatting tags (preserving inner text) + div handling. */
+/**
+ * Strip HTML markup from chat-history context.
+ *
+ * Inline formatting wrappers keep their authored text. Block-level/custom
+ * elements are treated as UI islands and removed wholesale so embedded HTML
+ * widgets do not leak code, labels, or layout text into the prompt.
+ */
 export function stripHtmlFormattingTags(content: string): string {
   let result = content;
 
-  // Handle divs: extract codeblock containers, then strip remaining divs
+  result = result.replace(/<\s*br\s*\/?>/gi, "\n");
+
+  // Remove paired non-inline elements with their content. Iterate so nested
+  // islands collapse outward without preserving their inner scaffolding.
   let prev: string;
   let iter = 0;
   do {
     if (++iter > MAX_FILTER_ITERATIONS) break;
     prev = result;
     result = result.replace(
-      /<div[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>(\s*```[\s\S]*?```\s*)<\/div>/gi,
-      "$1",
+      /<\s*([a-zA-Z][\w:-]*)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/g,
+      (match, tag: string) =>
+        HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
     );
-    result = result.replace(/<div(?:\s[^>]*)?>([\s\S]*?)<\/div>/gi, "$1");
   } while (result !== prev);
-  result = result.replace(/<\/div>/gi, "");
+
+  result = result.replace(/<\s*([a-zA-Z][\w:-]*)\b[^>]*\/\s*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
+  result = result.replace(/<\s*\/\s*([a-zA-Z][\w:-]*)\s*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
+  result = result.replace(/<\s*([a-zA-Z][\w:-]*)\b[^>]*>/g, (match, tag: string) =>
+    HTML_INLINE_TAGS.has(tag.toLowerCase()) ? match : " ",
+  );
 
   // Strip formatting tags (preserve inner text)
   for (const { open, close } of HTML_TAG_REGEXES) {
@@ -112,7 +131,9 @@ export function stripHtmlFormattingTags(content: string): string {
     result = result.replace(close, "");
   }
 
-  return result;
+  result = result.replace(/[ \t\f\v]*\n[ \t\f\v]*/g, "\n");
+  result = result.replace(/[ \t\f\v]{2,}/g, " ");
+  return collapseExcessiveNewlines(result).trim();
 }
 
 /** Collapse 3+ consecutive newlines to 2 (standard paragraph break). */
@@ -232,6 +253,13 @@ export interface StripNonProseOptions {
    */
   keepFontTags?: boolean;
   /**
+   * Nested HTML tag names that remain intact inside preserved font/color
+   * blocks. The tags still get removed anywhere else by the strict prose pass.
+   * Memory Cortex uses this for configured thought delimiters so it can
+   * classify thought colors before stripping formatting.
+   */
+  preserveFontInnerTags?: string[];
+  /**
    * Additional scaffolding tag names (beyond DEFAULT_SCAFFOLD_TAGS) whose
    * inner content should be stripped wholesale. Lowercase, no angle brackets.
    * Used to support user-defined HUD / status / tracker tags without code
@@ -281,14 +309,40 @@ export function stripAllXmlTagsAndContent(content: string): string {
   return result;
 }
 
-/** Within a preserved font block, strip any nested tag markers but keep their
- *  text so inline emphasis (`<b>important</b>`) inside authored colored prose
- *  passes through as plain text. The outer font tag itself is untouched. */
-function cleanFontBlockInner(fontBlock: string): string {
+/** Normalize user-supplied HTML tag names before using them in a regex. */
+function normalizeHtmlTagNames(tagNames?: string[]): string[] {
+  if (!tagNames?.length) return [];
+  return [...new Set(
+    tagNames
+      .map((tag) => tag.trim().toLowerCase())
+      .filter((tag) => /^[a-zA-Z][\w:-]*$/.test(tag)),
+  )];
+}
+
+/** Preserve configured nested tags while removing all other inner markup. */
+function preserveConfiguredInnerTags(content: string, tagNames: string[]): string {
+  if (tagNames.length === 0) return stripAllHtmlTagsPreserveContent(content);
+
+  const preserved: string[] = [];
+  const protectedContent = content.replace(
+    new RegExp(`<\\s*\\/?\\s*(?:${tagNames.join("|")})\\b[^>]*>`, "gi"),
+    (match) => {
+      preserved.push(match);
+      return `\x00FTI${preserved.length - 1}\x00`;
+    },
+  );
+  return stripAllHtmlTagsPreserveContent(protectedContent).replace(
+    /\x00FTI(\d+)\x00/g,
+    (_, index) => preserved[Number(index)] ?? "",
+  );
+}
+
+/** Within a preserved font block, strip nested formatting but keep its prose. */
+function cleanFontBlockInner(fontBlock: string, preserveInnerTags: string[] = []): string {
   const m = fontBlock.match(/^(<\s*(font|span)\b[^>]*>)([\s\S]*?)(<\s*\/\s*\2\s*>)$/i);
   if (!m) return fontBlock;
   const [, open, , inner, close] = m;
-  return open + stripAllHtmlTagsPreserveContent(inner) + close;
+  return open + preserveConfiguredInnerTags(inner, preserveInnerTags) + close;
 }
 
 /**
@@ -310,9 +364,21 @@ function cleanFontBlockInner(fontBlock: string): string {
  */
 export function stripNonProseTags(content: string, options?: StripNonProseOptions): string {
   let result = content;
+  const preserveFontInnerTags = options?.keepFontTags
+    ? normalizeHtmlTagNames(options.preserveFontInnerTags)
+    : [];
 
-  result = result.replace(/\s*<(think|thinking|reasoning)>[\s\S]*?<\/\1>\s*/gi, " ");
-  result = result.replace(/\s*<(think|thinking|reasoning)>[\s\S]*$/gi, "");
+  // A configured thought tag must survive only inside a color block. A
+  // top-level reasoning block still gets removed by the strict prose pass,
+  // and a font block inside a details/HUD/UI wrapper cannot escape that
+  // wrapper because only its sentinel reaches the strict pass.
+  const reasoningTags = ["think", "thinking", "reasoning"]
+    .filter((tag) => !preserveFontInnerTags.includes(tag));
+  if (reasoningTags.length > 0) {
+    const tagPattern = reasoningTags.join("|");
+    result = result.replace(new RegExp(`\\s*<(${tagPattern})>[\\s\\S]*?<\\/\\1>\\s*`, "gi"), " ");
+    result = result.replace(new RegExp(`\\s*<(${tagPattern})>[\\s\\S]*$`, "gi"), "");
+  }
 
   result = stripDetailsBlocks(result);
   result = stripLoomTags(result);
@@ -328,7 +394,7 @@ export function stripNonProseTags(content: string, options?: StripNonProseOption
     const stash: string[] = [];
     const stashPair = (re: RegExp) => {
       result = result.replace(re, (match) => {
-        stash.push(cleanFontBlockInner(match));
+        stash.push(cleanFontBlockInner(match, preserveFontInnerTags));
         return `\x00FT${stash.length - 1}\x00`;
       });
     };

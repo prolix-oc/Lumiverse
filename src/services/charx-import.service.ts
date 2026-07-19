@@ -21,10 +21,10 @@ import * as exprSvc from "./expressions.service";
 import * as wbSvc from "./world-books.service";
 import * as cardSvc from "./character-card.service";
 import { getCharacterWorldBookIds, setCharacterWorldBookIds } from "../utils/character-world-books";
+import { LANDING_PERSPECTIVE_LAYERS_KEY } from "./characters.service";
 import { mapWithConcurrency } from "../utils/concurrency";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
-import type { CreateRegexScriptInput } from "../types/regex-script";
 
 const GALLERY_UPLOAD_CONCURRENCY = 6;
 
@@ -199,6 +199,33 @@ export async function applyCharxModulesAndAssets(
       }
     }
 
+    // Landing perspective layers (ordered back → front)
+    const landingLayers: Array<{ id: string; image_id: string; label?: string; intensity: number }> = [];
+    if (Array.isArray(lumiverseModules.landing_perspective_layers)) {
+      for (const layer of lumiverseModules.landing_perspective_layers) {
+        if (!layer || typeof layer !== "object") continue;
+        const path = typeof layer.path === "string" ? layer.path : null;
+        if (!path) continue;
+        const assetFile = assetFiles.get(path);
+        if (!assetFile) continue;
+        const img = await images.uploadOptimizedWebpImage(userId, assetFile, { owner_character_id: character.id });
+        landingLayers.push({
+          id: typeof layer.id === "string" && layer.id ? layer.id : crypto.randomUUID(),
+          image_id: img.id,
+          ...(typeof layer.label === "string" && layer.label ? { label: layer.label } : {}),
+          intensity: typeof layer.intensity === "number" && Number.isFinite(layer.intensity)
+            ? Math.max(0, Math.min(1.5, Math.round(layer.intensity * 100) / 100))
+            : 0.6,
+        });
+        consumedPaths.add(path);
+        assetImageMap.set(path, img.id);
+        if (landingLayers.length >= 5) break;
+      }
+      if (landingLayers.length > 0) {
+        extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = landingLayers;
+      }
+    }
+
     // World books
     let importedWorldBookCount = 0;
     if (importWorldBooks && Array.isArray(lumiverseModules.world_books) && lumiverseModules.world_books.length > 0) {
@@ -221,24 +248,20 @@ export async function applyCharxModulesAndAssets(
     // Bundled regex scripts — rebound to the new character on import
     let regexScriptCount = 0;
     if (lumiverseModules.regex_scripts?.length) {
-      for (const bundled of lumiverseModules.regex_scripts) {
-        try {
-          regexSvc.createRegexScript(userId, {
-            ...(bundled as CreateRegexScriptInput),
-            scope: "character",
-            scope_id: character.id,
-            character_id: character.id,
-            metadata: { ...bundled.metadata, source: "charx_bundle" },
-          });
-          regexScriptCount++;
-        } catch { /* skip individual failures */ }
-      }
+      regexScriptCount = regexSvc.importCharacterBoundRegexScripts(
+        userId,
+        character.id,
+        { lumiverse_modules: { regex_scripts: lumiverseModules.regex_scripts } },
+        { bundleSource: "charx_bundle" },
+      );
     }
 
     lumiverseModulesSummary = {
       has_expressions: !!extensions.expressions,
       has_alternate_fields: !!lumiverseModules.alternate_fields,
       has_alternate_avatars: altAvatars.length > 0,
+      has_landing_perspective_layers: landingLayers.length > 0,
+      landing_perspective_layer_count: landingLayers.length,
       has_world_books: importedWorldBookCount > 0,
       world_book_count: importedWorldBookCount,
       expression_count: Object.keys(extensions.expressions?.mappings || {}).length,

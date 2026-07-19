@@ -12,35 +12,79 @@ import { imageGenConnectionSecretKey } from "./image-gen-connections.service";
 import * as imageGenBindingsSvc from "./image-gen-preset-bindings.service";
 import * as characterLoraSvc from "./character-lora.service";
 import { buildMacroEnvForChat } from "./chats.service";
+import { getActivatedWorldInfoEntriesForChat, resolveWorldInfoOutlets } from "./prompt-assembly.service";
 import { evaluate as evaluateMacros, registry as macroRegistry } from "../macros";
+import sharp from "../utils/sharp-config";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
 import { getComfyUIObjectInfo, resolveComfyTarget } from "../image-gen/comfyui-discovery";
 import { normalizeComfyUIWorkflow } from "../image-gen/comfyui-import";
 import { readComfyUIConfig } from "../image-gen/comfyui-workflow-storage";
-import { patchWorkflow, type ComfyUIPatchValues } from "../image-gen/comfyui-workflow-patch";
+import { patchWorkflow, type ComfyUIPatchValues, type LoraEntry } from "../image-gen/comfyui-workflow-patch";
 import { uploadComfyImage } from "../image-gen/providers/comfy-runner";
+import type { ImageParameterSchemaMap } from "../image-gen/param-schema";
 import { rawGenerate } from "./generate.service";
 import type { LlmMessage } from "../llm/types";
 import type { ImageGenRequest } from "../image-gen/types";
 import type { Message } from "../types/message";
 import type { ImageGenConnectionProfile } from "../types/image-gen-connection";
+import { scheduleLowPriorityTask } from "../utils/low-priority-task";
+import { clampErrorMessage, describeProviderError } from "../utils/provider-errors";
 
 // Ensure image gen providers are registered
 import "../image-gen/index";
+export type { LoraEntry } from "../image-gen/comfyui-workflow-patch";
 
 const IMAGE_SETTINGS_KEY = "imageGeneration";
+const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
+const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
+const OUTLET_MACRO_RE = /\{\{outlet::/i;
+
+export interface LoraPreset {
+  id: string;
+  name: string;
+  loras: LoraEntry[];
+  base_tags?: string;
+}
+
+async function buildRelayImagePreview(dataUrl: string): Promise<string | undefined> {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) return undefined;
+  const input = Buffer.from(match[2], "base64");
+
+  for (const size of [640, 480, 320]) {
+    for (const quality of [75, 60, 45, 30]) {
+      try {
+        const output = await sharp(input)
+          .resize(size, size, { fit: "inside", withoutEnlargement: true })
+          .webp({ quality })
+          .toBuffer();
+        const preview = `data:image/webp;base64,${output.toString("base64")}`;
+        if (preview.length <= RELAY_IMAGE_PREVIEW_MAX_CHARS) return preview;
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
 
 interface ImageGenSettings {
   enabled: boolean;
   activeImageGenConnectionId?: string | null;
   includeCharacters: boolean;
+  includePersona: boolean;
   promptMode?: ImageGenPromptMode;
   customPrompt?: string;
   customNegativePrompt?: string;
   activePromptPresetId?: string | null;
   promptPresets?: ImageGenPromptPreset[];
+  loraPresets?: LoraPreset[];
+  activeLoraPresetId?: string | null;
+  bypassCharacterLora?: boolean;
+  bypassActiveLoraPreset?: boolean;
+  loraStrengthScale?: number;
   promptParserConnectionId?: string | null;
   promptParserModel?: string;
   promptParserParameters?: Record<string, any>;
@@ -86,11 +130,17 @@ const DEFAULT_IMAGE_SETTINGS: ImageGenSettings = {
   enabled: false,
   activeImageGenConnectionId: null,
   includeCharacters: false,
+  includePersona: false,
   promptMode: "scene",
   customPrompt: "",
   customNegativePrompt: "",
   activePromptPresetId: null,
   promptPresets: [],
+  loraPresets: [],
+  activeLoraPresetId: null,
+  bypassCharacterLora: false,
+  bypassActiveLoraPreset: false,
+  loraStrengthScale: 1,
   promptParserConnectionId: null,
   promptParserModel: "",
   promptParserParameters: {},
@@ -114,6 +164,12 @@ function resolveContextMessageLimit(settings: ImageGenSettings): number {
   const raw = Number(settings.promptContextMessageLimit);
   if (!Number.isFinite(raw) || raw < 1) return DEFAULT_PROMPT_CONTEXT_MESSAGE_LIMIT;
   return Math.floor(raw);
+}
+
+export function resolveActiveLoraPreset(settings: ImageGenSettings): LoraPreset | null {
+  const activeId = settings.activeLoraPresetId;
+  if (!activeId || !Array.isArray(settings.loraPresets)) return null;
+  return settings.loraPresets.find((preset) => preset.id === activeId) ?? null;
 }
 
 export interface SceneData {
@@ -183,6 +239,9 @@ export interface GenerateImageOptions {
   prompt?: string;
   negativePrompt?: string;
   promptPresetId?: string | null;
+  bypassCharacterLora?: boolean;
+  bypassActiveLoraPreset?: boolean;
+  loraStrengthScale?: number;
   outputTarget?: ImageGenOutputTarget;
   /** Existing message to attach the generated image to (output target = attach_to_message). */
   attachToMessageId?: string;
@@ -201,10 +260,7 @@ const SCENE_FIELDS: Array<keyof SceneData> = ["environment", "time_of_day", "wea
 const CUSTOM_PROMPT_PARSER_SYSTEM =
   "You are a visual scene analyst and image-prompt writer. Read the current roleplay chat context and rewrite it into the final image generation prompt. Preserve the current scene, visible subjects, actions, composition, lighting, and mood. Follow the user's parser instructions, but do not treat those instructions as the final prompt unless they explicitly say so. Return either plain prompt text or JSON with keys prompt and negative_prompt. Do not include markdown fences unless returning JSON.";
 
-const CHARACTER_AWARE_SCENE_INSTRUCTIONS = `Character-aware mode is enabled because the user selected Include Characters.
-Override any earlier environment-only instruction: include visible characters and the user persona when the context supports it.
-
-In addition to the base scene keys, include these optional JSON keys:
+const SUBJECT_AWARE_SCENE_SCHEMA = `In addition to the base scene keys, include these optional JSON keys:
 - character_names: comma-separated names of visible subjects.
 - character_appearances: array of objects with name, role, appearance, and tags. Use concise visual image-generation tags in tags.
 - composition_subjects: the main subject grouping or pose/action relationship.
@@ -212,7 +268,29 @@ In addition to the base scene keys, include these optional JSON keys:
 - composition_camera: camera angle or lens direction.
 - composition_rating: array of concise composition tags.
 
-Do not invent unsupported character details. Use character/persona descriptions and the latest chat actions.`;
+Do not invent unsupported subject details. Use the selected character/persona descriptions and the latest chat actions.`;
+
+export function buildSceneSubjectInstructions(includeCharacters: boolean, includePersona: boolean): string {
+  if (!includeCharacters && !includePersona) return "";
+
+  const selected = [
+    includeCharacters ? "roleplay characters" : "",
+    includePersona ? "the user persona" : "",
+  ].filter(Boolean).join(" and ");
+  const visibleSubjects = [
+    includeCharacters ? "visible roleplay characters" : "",
+    includePersona ? "the visible user persona" : "",
+  ].filter(Boolean).join(" and ");
+  const excluded = [
+    !includeCharacters ? "roleplay characters" : "",
+    !includePersona ? "the user persona" : "",
+  ].filter(Boolean).join(" and ");
+
+  return `Subject-aware mode is enabled because the user selected ${selected} for inclusion.
+Override any earlier environment-only instruction: include ${visibleSubjects} when the chat context supports it.${excluded ? ` Do not include ${excluded} as image subjects.` : ""}
+
+${SUBJECT_AWARE_SCENE_SCHEMA}`;
+}
 
 // Tracks in-flight image generations keyed by `${userId}:${chatId}` so a new
 // request for the same chat can abort an existing one mid-flight.
@@ -287,7 +365,10 @@ export async function generateSceneBackground(
       ? "custom"
       : opts?.promptMode || settings.promptMode || "scene";
     const outputTarget = opts?.outputTarget || settings.outputTarget || "background";
-    const params = { ...connection.default_parameters };
+    const params = normalizeGenerationParameters(
+      { ...connection.default_parameters },
+      provider.capabilities.parameters,
+    );
     normalizeRandomSeed(params, !!provider.capabilities.parameters.seed);
     resolveProviderRandomSeed(params, connection.provider);
     const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
@@ -331,20 +412,46 @@ export async function generateSceneBackground(
       }
     }
 
-    // Resolve the active chat's character LoRA binding (if any) and weave it
-    // into the prompt + provider params. Done before provider-specific work so
-    // every provider that opts in sees the spliced prompt; only Comfy/Swarm
-    // actually consume the workflow/body LoRA params today.
-    const characterLora = resolveCharacterLoraForChat(userId, chatId);
-    if (characterLora?.base_tags) {
-      promptResult.prompt = composeWithBaseTags(characterLora.base_tags, promptResult.prompt);
+    // Resolve ordered LoRA layers before provider-specific work so every
+    // provider sees the same prompt tags; Comfy/Swarm/SD API consume params.
+    const bypassChar = opts?.bypassCharacterLora ?? settings.bypassCharacterLora ?? false;
+    const bypassPreset = opts?.bypassActiveLoraPreset ?? settings.bypassActiveLoraPreset ?? false;
+    const characterLora = bypassChar ? null : resolveCharacterLoraForChat(userId, chatId);
+    const activePreset = bypassPreset ? null : resolveActiveLoraPreset(settings);
+    let combinedLoras: LoraEntry[] = [
+      ...(activePreset?.loras ?? []),
+      ...(characterLora
+        ? [
+            {
+              lora_name: characterLora.lora_name,
+              weight_model: characterLora.weight_model,
+              weight_clip: characterLora.weight_clip,
+            },
+          ]
+        : []),
+    ];
+    const rawScale = opts?.loraStrengthScale ?? settings.loraStrengthScale ?? 1;
+    const scale = Number.isFinite(rawScale) ? Math.min(2, Math.max(0, rawScale)) : 1;
+    if (scale !== 1) {
+      combinedLoras = combinedLoras.map((entry) => ({
+        ...entry,
+        weight_model: Math.max(0, entry.weight_model * scale),
+        weight_clip: Math.max(0, (entry.weight_clip ?? entry.weight_model) * scale),
+      }));
     }
+
+    const tags = [activePreset?.base_tags, characterLora?.base_tags].filter(Boolean).join(", ");
+    if (tags) promptResult.prompt = composeWithBaseTags(tags, promptResult.prompt);
 
     if (!promptResult.prompt.trim()) throw new Error("Image generation prompt is required");
     if (promptResult.negativePrompt) params.negativePrompt = promptResult.negativePrompt;
 
-    if (characterLora) {
-      applyCharacterLoraToParams(connection.provider, params, characterLora);
+    // Swarm needs matching list normalization even when callers supply only raw layers.
+    if (
+      combinedLoras.length > 0
+      || (connection.provider === "swarmui" && params.loras !== undefined)
+    ) {
+      applyLorasToParams(connection.provider, params, combinedLoras);
     }
 
     // For NovelAI: pre-resolve director reference images (orchestration concern)
@@ -356,7 +463,7 @@ export async function generateSceneBackground(
 
       // Pass character tags from scene analysis
       const charTags =
-        settings.includeCharacters && Array.isArray((promptResult.scene as any)?.character_appearances)
+        (settings.includeCharacters || settings.includePersona) && Array.isArray((promptResult.scene as any)?.character_appearances)
           ? (promptResult.scene as any).character_appearances
               .map((c: any) => ({ tags: String(c?.tags || "") }))
               .filter((c: any) => c.tags)
@@ -382,7 +489,15 @@ export async function generateSceneBackground(
     }
 
     if (connection.provider === "comfyui" || connection.provider === "swarmui") {
-      await applyComfyUIWorkflowConfig(connection, params, promptResult.prompt, promptResult.negativePrompt, characterLora, apiKey ?? undefined);
+      await applyComfyUIWorkflowConfig(
+        connection,
+        params,
+        promptResult.prompt,
+        promptResult.negativePrompt,
+        combinedLoras,
+        !activePreset,
+        apiKey ?? undefined,
+      );
     }
 
     const generationTimeoutSecs = resolveTimeoutSeconds(opts?.generationTimeoutSeconds, settings.generationTimeoutSeconds ?? 300);
@@ -407,9 +522,10 @@ export async function generateSceneBackground(
         userId,
       });
     } catch (err) {
+      const message = clampErrorMessage(describeProviderError(err, "Image generation failed"));
       eventBus.emit(
         EventType.IMAGE_GEN_ERROR,
-        { assetId: jobId, chatId, message: err instanceof Error ? err.message : String(err) },
+        { assetId: jobId, chatId, message },
         userId,
       );
       throw resolveAbortReason(generationSignal.signal) ?? err;
@@ -430,6 +546,7 @@ export async function generateSceneBackground(
       );
       imageId = image.id;
       imageUrl = `/api/v1/image-gen/results/${image.id}`;
+      const relayPreviewUrl = await buildRelayImagePreview(response.imageDataUrl);
 
       const newAttachment = {
         type: "image" as const,
@@ -438,6 +555,7 @@ export async function generateSceneBackground(
         original_filename: image.original_filename,
         width: image.width ?? undefined,
         height: image.height ?? undefined,
+        relay_preview_url: relayPreviewUrl,
       };
       const imageGenMeta = {
         provider: connection.provider,
@@ -494,13 +612,13 @@ export async function generateSceneBackground(
       if (settings.addToGallery !== false) {
         const characterId = chatsSvc.getChat(userId, chatId)?.character_id;
         if (characterId) {
-          queueMicrotask(() => {
+          scheduleLowPriorityTask(() => {
             try {
               gallerySvc.linkImageToGallery(userId, characterId, image.id, "Generated image");
             } catch (err) {
               console.warn("[image-gen] Gallery linkage failed (non-fatal):", err);
             }
-          });
+          }, { label: "image gallery linkage" });
         }
       }
     }
@@ -602,8 +720,13 @@ export async function previewImagePrompt(
   }
   const connection = imageGenConnSvc.getConnection(userId, connectionId);
   if (!connection) throw new Error("Image generation connection not found");
+  const provider = getImageProvider(connection.provider);
+  if (!provider) throw new Error(`Unknown image generation provider: ${connection.provider}`);
 
-  const params = { ...connection.default_parameters };
+  const params = normalizeGenerationParameters(
+    { ...connection.default_parameters },
+    provider.capabilities.parameters,
+  );
   const promptInput = await resolvePromptInput(userId, chatId, settings, opts);
   const promptMode = opts?.promptMode || settings.promptMode || "scene";
   const promptTimeoutSecs = resolveTimeoutSeconds(opts?.promptGenerationTimeoutSeconds, settings.promptGenerationTimeoutSeconds ?? 60);
@@ -742,12 +865,23 @@ function resolveAbortReason(signal: AbortSignal): Error | null {
   return signal.aborted && signal.reason instanceof Error ? signal.reason : null;
 }
 
+function isResolvedSourceImage(value: unknown): value is { data: string; mimeType?: string } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "data" in value &&
+    typeof value.data === "string" &&
+    (!("mimeType" in value) || typeof value.mimeType === "string")
+  );
+}
+
 async function applyComfyUIWorkflowConfig(
   connection: ImageGenConnectionProfile,
-  params: Record<string, any>,
+  params: Record<string, unknown>,
   prompt: string,
-  negativePrompt?: string,
-  characterLora?: characterLoraSvc.CharacterLoraBinding | null,
+  negativePrompt: string | undefined,
+  loras: LoraEntry[] | undefined,
+  useLegacySingleLora: boolean,
   apiKey?: string,
 ): Promise<void> {
   if (params.workflow && typeof params.workflow === "object") return;
@@ -777,7 +911,7 @@ async function applyComfyUIWorkflowConfig(
 
   const patchValues: ComfyUIPatchValues = {
     positive_prompt: prompt,
-    negative_prompt: negativePrompt || params.negativePrompt,
+    negative_prompt: negativePrompt || stringParam(params.negativePrompt),
     steps: numberParam(params.steps),
     cfg: numberParam(params.cfg),
     sampler_name: stringParam(params.sampler_name),
@@ -785,13 +919,17 @@ async function applyComfyUIWorkflowConfig(
     width: numberParam(params.width),
     height: numberParam(params.height),
     checkpoint: stringParam(params.checkpoint || params.ckpt_name),
+    unet: stringParam(params.unet || params.unet_name),
     custom: customValues,
   };
 
-  if (characterLora) {
-    patchValues.lora_name = characterLora.lora_name;
-    patchValues.lora_strength_model = characterLora.weight_model;
-    patchValues.lora_strength_clip = characterLora.weight_clip;
+  if (useLegacySingleLora && loras && loras.length > 0) {
+    const lora = loras[0];
+    patchValues.lora_name = lora.lora_name;
+    patchValues.lora_strength_model = lora.weight_model;
+    patchValues.lora_strength_clip = lora.weight_clip ?? lora.weight_model;
+  } else if (loras && loras.length > 0) {
+    patchValues.loras = loras;
   }
 
   const extraFieldValues = params.comfyui_field_values;
@@ -812,9 +950,9 @@ async function applyComfyUIWorkflowConfig(
     // mapping without a configured source image is a no-op (the workflow keeps
     // its embedded LoadImage default).
     const sourceImage = Array.isArray(params.resolvedSourceImages)
-      ? params.resolvedSourceImages[0]
+      ? params.resolvedSourceImages.find(isResolvedSourceImage)
       : undefined;
-    if (sourceImage?.data && patchValues.init_image === undefined) {
+    if (sourceImage && patchValues.init_image === undefined) {
       const uploaded = await uploadComfyImage(
         target.baseUrl,
         { data: sourceImage.data, mimeType: sourceImage.mimeType },
@@ -852,34 +990,58 @@ function composeWithBaseTags(baseTags: string, prompt: string): string {
 }
 
 /**
- * Wire the per-character LoRA into provider-specific parameter slots.
- * ComfyUI consumes them via patchWorkflow later in the pipeline; SwarmUI
- * gets `loras` + `loraWeights` body params. Other providers ignore the
- * binding (base tags still apply via the prompt prepend).
+ * Wire ordered LoRA layers into provider-specific parameter slots.
  *
- * Honors user-supplied values: if the connection's default_parameters already
- * specify a LoRA (e.g. for a non-character image gen), the character binding
- * is layered on top via comma-joined parameter strings — SwarmUI accepts
- * multi-LoRA via parallel comma-separated lists.
+ * Honors user-supplied values: existing provider params remain first, then the
+ * active preset entries, then the character binding. SwarmUI accepts parallel
+ * comma-separated lists; SD API consumes a JSON array parsed by its provider.
  */
-function applyCharacterLoraToParams(
+function applyLorasToParams(
   provider: string,
-  params: Record<string, any>,
-  binding: characterLoraSvc.CharacterLoraBinding,
+  params: Record<string, unknown>,
+  loras: LoraEntry[],
 ): void {
   if (provider === "swarmui") {
-    const existingNames = stringParam(params.loras);
-    const existingWeights = stringParam(params.loraWeights);
-    params.loras = existingNames ? `${existingNames},${binding.lora_name}` : binding.lora_name;
-    // SwarmUI requires parallel lists; we use weight_model as the SwarmUI
-    // weight (it has a single strength field, not separate model/clip).
-    params.loraWeights = existingWeights
-      ? `${existingWeights},${binding.weight_model}`
-      : String(binding.weight_model);
+    const nameSlots = commaSeparatedSlots(params.loras);
+    const weightSlots = commaSeparatedSlots(params.loraWeights);
+    const existingNames: string[] = [];
+    const existingWeights: string[] = [];
+    for (const [index, name] of nameSlots.entries()) {
+      if (!name) continue;
+      existingNames.push(name);
+      // Swarm aligns names and weights by index; bare existing names use its default weight.
+      existingWeights.push(weightSlots[index] || "1");
+    }
+
+    params.loras = [
+      ...existingNames,
+      ...loras.map((entry) => entry.lora_name),
+    ].join(",");
+    params.loraWeights = [
+      ...existingWeights,
+      ...loras.map((entry) => String(entry.weight_model)),
+    ].join(",");
     return;
   }
-  // ComfyUI is handled by applyComfyUIWorkflowConfig which reads the binding
-  // directly. Other providers don't have a LoRA story to wire into.
+
+  if (provider === "sdapi") {
+    let existing: unknown[] = [];
+    if (typeof params.lora === "string" && params.lora.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(params.lora);
+        if (Array.isArray(parsed)) existing = parsed;
+      } catch {
+        existing = [];
+      }
+    } else if (Array.isArray(params.lora)) {
+      existing = params.lora;
+    }
+
+    params.lora = JSON.stringify([
+      ...existing,
+      ...loras.map((entry) => ({ path: entry.lora_name, multiplier: entry.weight_model })),
+    ]);
+  }
 }
 
 function numberParam(value: unknown): number | undefined {
@@ -891,8 +1053,74 @@ function numberParam(value: unknown): number | undefined {
   return undefined;
 }
 
+function snapNumericParam(
+  value: number,
+  min: number,
+  max: number,
+  step: number | undefined,
+  integer: boolean,
+): number {
+  let normalized = Math.min(max, Math.max(min, value));
+
+  if (typeof step === "number" && Number.isFinite(step) && step > 0) {
+    normalized = Math.round((normalized - min) / step) * step + min;
+  } else if (integer) {
+    normalized = Math.round(normalized);
+  }
+
+  normalized = Math.min(max, Math.max(min, normalized));
+
+  if (integer) return Math.round(normalized);
+
+  if (typeof step === "number" && Number.isFinite(step) && step > 0) {
+    const decimals = (String(step).split(".")[1] || "").length;
+    return decimals > 0 ? Number(normalized.toFixed(decimals)) : normalized;
+  }
+
+  return normalized;
+}
+
+function normalizeGenerationParameters(
+  params: Record<string, any>,
+  schemaMap: ImageParameterSchemaMap,
+): Record<string, any> {
+  const next = { ...(params || {}) };
+
+  for (const [key, schema] of Object.entries(schemaMap)) {
+    if (next[key] == null) continue;
+    if (schema.type !== "number" && schema.type !== "integer") continue;
+
+    const numeric = numberParam(next[key]);
+    if (numeric === undefined) continue;
+
+    if (schema.min !== undefined && schema.max !== undefined) {
+      next[key] = snapNumericParam(
+        numeric,
+        schema.min,
+        schema.max,
+        schema.step,
+        schema.type === "integer",
+      );
+      continue;
+    }
+
+    if (schema.type === "integer") next[key] = Math.round(numeric);
+  }
+
+  return next;
+}
+
 function stringParam(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function commaSeparatedSlots(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : [value];
+  return values.flatMap((item) => {
+    if (typeof item === "string") return item.split(",").map((part) => part.trim());
+    if (typeof item === "number" && Number.isFinite(item)) return [String(item)];
+    return [""];
+  });
 }
 
 function resolveComfySeedParam(value: unknown): number | undefined {
@@ -1111,7 +1339,12 @@ async function resolveImagePrompt(
   const scene = await analyzeScene(userId, chatId, settings, signal);
   return {
     scene,
-    prompt: buildImagePrompt(scene, providerName, settings.includeCharacters, imageParams),
+    prompt: buildImagePrompt(
+      scene,
+      providerName,
+      settings.includeCharacters || settings.includePersona,
+      imageParams,
+    ),
     negativePrompt: input.negativePrompt,
   };
 }
@@ -1133,7 +1366,7 @@ async function parseCustomPrompt(
         role: "system",
         content: CUSTOM_PROMPT_PARSER_SYSTEM,
       },
-      ...buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings, signal),
       {
         role: "user",
         content: `Parser instructions from the user:\n${input.prompt}\n\nReturn the final image prompt now.`,
@@ -1199,6 +1432,7 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
 
   const tool = BUILTIN_TOOLS_MAP.get("generate_scene");
   if (!tool) throw new Error("generate_scene council tool is unavailable");
+  const subjectInstructions = buildSceneSubjectInstructions(settings.includeCharacters, settings.includePersona);
 
   const response = await rawGenerate(userId, {
     provider: parser.connection.provider,
@@ -1207,9 +1441,9 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
     messages: [
       {
         role: "system",
-        content: `${tool.prompt}${settings.includeCharacters ? `\n\n${CHARACTER_AWARE_SCENE_INSTRUCTIONS}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
+        content: `${tool.prompt}${subjectInstructions ? `\n\n${subjectInstructions}` : ""}\n\nYou must return ONLY valid JSON with the requested schema keys and no markdown fences.`,
       },
-      ...buildContextMessages(userId, chatId, settings),
+      ...await buildContextMessages(userId, chatId, settings, signal),
       { role: "user", content: "Return scene JSON now." },
     ],
     parameters: {
@@ -1221,40 +1455,80 @@ async function analyzeScene(userId: string, chatId: string, settings: ImageGenSe
   return parseSceneJson(response.content || "");
 }
 
-function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings): LlmMessage[] {
+export async function buildContextMessages(userId: string, chatId: string, settings: ImageGenSettings, signal?: AbortSignal): Promise<LlmMessage[]> {
   const includeCharacters = settings.includeCharacters;
+  const includePersona = settings.includePersona;
   const msgs: LlmMessage[] = [];
+  const env = buildMacroEnvForChat(userId, chatId);
+
+  // Resolve base macros ({{user}}/{{char}}/vars, etc.) in any text sent to the
+  // image-gen prompt parser. Mirrors resolvePromptPreset's best-effort path:
+  // macros are a convenience, so a resolution failure must never block a
+  // generation — the raw text is returned instead.
+  const resolve = async (text: string | undefined | null): Promise<string> => {
+    if (!text || !env || !HAS_MACRO_RE.test(text)) return text ?? "";
+    try {
+      return (await evaluateMacros(text, env, macroRegistry)).text;
+    } catch {
+      return text;
+    }
+  };
+
   const chat = chatsSvc.getChat(userId, chatId);
-  if (chat) {
-    const char = chat.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
-    if (char) {
-      const charInfo = [
-        char.name && `Name: ${char.name}`,
-        char.description && `Description: ${char.description}`,
-        char.scenario && `Scenario: ${char.scenario}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (charInfo) msgs.push({ role: "system", content: `## Character Information\n${charInfo}` });
+  const char = chat?.character_id ? charactersSvc.getCharacter(userId, chat.character_id) : null;
+  const persona = includePersona ? personasSvc.resolvePersonaOrDefault(userId) : null;
+  const recentMessages = chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings));
+
+  // {{outlet::name}} only resolves after world-info activation. Mirror the
+  // display-preprocess path (chats.routes.ts, PR #205) so the parser sees the
+  // same outlet content the user sees. Activation is chat-wide, so populate
+  // the outlet map once before resolving any field.
+  if (env) {
+    const outletCandidates = [
+      includeCharacters ? char?.description : undefined,
+      includeCharacters ? char?.scenario : undefined,
+      persona?.title,
+      persona?.description,
+      ...recentMessages.map((m) => m.content),
+    ];
+    if (outletCandidates.some((s) => s && OUTLET_MACRO_RE.test(s))) {
+      try {
+        const entries = await getActivatedWorldInfoEntriesForChat(userId, chatId);
+        await resolveWorldInfoOutlets(entries, env, signal);
+      } catch {
+        // Leave outlets unresolved — base macro resolution still runs.
+      }
     }
   }
-  if (includeCharacters) {
-    const persona = personasSvc.resolvePersonaOrDefault(userId);
-    if (persona) {
-      const personaInfo = [
-        persona.name && `Name: ${persona.name}`,
-        persona.title && `Title: ${persona.title}`,
-        persona.description && `Description: ${persona.description}`,
-        (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
-          `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
-    }
+
+  if (includeCharacters && chat && char) {
+    const description = await resolve(char.description);
+    const scenario = await resolve(char.scenario);
+    const charInfo = [
+      char.name && `Name: ${char.name}`,
+      description && `Description: ${description}`,
+      scenario && `Scenario: ${scenario}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (charInfo) msgs.push({ role: "system", content: `## Character Information\n${charInfo}` });
   }
-  for (const m of chatsSvc.getMessages(userId, chatId).slice(-resolveContextMessageLimit(settings))) {
-    msgs.push({ role: m.is_user ? "user" : "assistant", content: m.content });
+  if (persona) {
+    const title = await resolve(persona.title);
+    const description = await resolve(persona.description);
+    const personaInfo = [
+      persona.name && `Name: ${persona.name}`,
+      title && `Title: ${title}`,
+      description && `Description: ${description}`,
+      (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
+        `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (personaInfo) msgs.push({ role: "system", content: `## User Persona\n${personaInfo}` });
+  }
+  for (const m of recentMessages) {
+    msgs.push({ role: m.is_user ? "user" : "assistant", content: await resolve(m.content) });
   }
   return msgs;
 }
@@ -1304,7 +1578,7 @@ function parseSceneJson(input: string): SceneData {
 function buildImagePrompt(
   scene: SceneData,
   providerName: string,
-  includeCharacters: boolean,
+  includeSubjects: boolean,
   params: Record<string, any>
 ): string {
   if (providerName === "novelai") {
@@ -1313,10 +1587,10 @@ function buildImagePrompt(
     const compositionRating = Array.isArray((scene as any).composition_rating)
       ? (scene as any).composition_rating
       : null;
-    if (includeCharacters && compositionRating?.length) tags.push(...compositionRating.map((v: any) => String(v)));
-    if (includeCharacters && (scene as any).composition_subjects) tags.push(String((scene as any).composition_subjects));
-    if (includeCharacters && (scene as any).composition_shot) tags.push(String((scene as any).composition_shot));
-    if (includeCharacters && (scene as any).composition_camera) tags.push(String((scene as any).composition_camera));
+    if (includeSubjects && compositionRating?.length) tags.push(...compositionRating.map((v: any) => String(v)));
+    if (includeSubjects && (scene as any).composition_subjects) tags.push(String((scene as any).composition_subjects));
+    if (includeSubjects && (scene as any).composition_shot) tags.push(String((scene as any).composition_shot));
+    if (includeSubjects && (scene as any).composition_camera) tags.push(String((scene as any).composition_camera));
 
     if (scene.environment) tags.push(scene.environment);
     if (scene.time_of_day) tags.push(scene.time_of_day);
@@ -1325,7 +1599,7 @@ function buildImagePrompt(
     if (scene.focal_detail) tags.push(scene.focal_detail);
     if (scene.palette_override) tags.push(scene.palette_override);
 
-    if (includeCharacters) {
+    if (includeSubjects) {
       const names = String((scene as any).character_names || "")
         .split(",")
         .map((n) => n.trim().toLowerCase())
@@ -1356,7 +1630,7 @@ function buildImagePrompt(
   if (scene.mood) prompt += ` Mood: ${scene.mood}.`;
   if (scene.focal_detail) prompt += ` Focus: ${scene.focal_detail}.`;
   if (scene.palette_override) prompt += ` Colors: ${scene.palette_override}.`;
-  if (includeCharacters) {
+  if (includeSubjects) {
     if (scene.character_names) prompt += ` Characters: ${scene.character_names}.`;
     if (Array.isArray(scene.character_appearances) && scene.character_appearances.length > 0) {
       const appearances = scene.character_appearances
@@ -1500,7 +1774,17 @@ function uint8ToBase64(bytes: Uint8Array): string {
 
 export function getImageGenSettings(userId: string): ImageGenSettings {
   const row = settingsSvc.getSetting(userId, IMAGE_SETTINGS_KEY);
-  const settings = { ...DEFAULT_IMAGE_SETTINGS, ...(row?.value || {}) };
+  const stored = row?.value || {};
+  const settings = {
+    ...DEFAULT_IMAGE_SETTINGS,
+    ...stored,
+    // Before persona inclusion had its own switch, Include Characters meant
+    // "characters and persona". Preserve that behavior for existing rows.
+    includePersona:
+      typeof stored.includePersona === "boolean"
+        ? stored.includePersona
+        : Boolean(stored.includeCharacters),
+  };
   const savedConnectionId = settings.activeImageGenConnectionId || null;
   const savedConnection = savedConnectionId
     ? imageGenConnSvc.getConnection(userId, savedConnectionId)
@@ -1636,6 +1920,7 @@ const IMAGE_GEN_EXPORT_VERSION = 1;
  */
 const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string" | "object"> = {
   includeCharacters: "boolean",
+  includePersona: "boolean",
   promptMode: "string",
   customPrompt: "string",
   customNegativePrompt: "string",
@@ -1652,6 +1937,11 @@ const TRANSFERABLE_SETTING_TYPES: Record<string, "boolean" | "number" | "string"
   promptGenerationTimeoutSeconds: "number",
   generationTimeoutSeconds: "number",
   promptContextMessageLimit: "number",
+  loraPresets: "object",
+  activeLoraPresetId: "string",
+  bypassCharacterLora: "boolean",
+  bypassActiveLoraPreset: "boolean",
+  loraStrengthScale: "number",
 };
 
 const PROMPT_MODES: ImageGenPromptMode[] = ["scene", "custom", "parsed_custom"];
@@ -1714,9 +2004,10 @@ export function exportImageGenConfig(
 
   if (options?.includeSettings !== false) {
     const transferable: Partial<ImageGenSettings> = {};
-    for (const key of Object.keys(TRANSFERABLE_SETTING_TYPES)) {
-      const value = (settings as any)[key];
-      if (value !== undefined) (transferable as any)[key] = value;
+    for (const [key, value] of Object.entries(settings)) {
+      if (key in TRANSFERABLE_SETTING_TYPES && value !== undefined) {
+        Object.assign(transferable, { [key]: value });
+      }
     }
     // The active preset reference only travels alongside the preset itself.
     if (settings.activePromptPresetId && out.presets?.some((p) => p.id === settings.activePromptPresetId)) {
@@ -1826,17 +2117,63 @@ export async function importImageGenConfig(
 
   const next: ImageGenSettings = { ...current, promptPresets: presets };
   let importedSettings = false;
+  let importedLoraPresets = false;
   if (payload.settings && typeof payload.settings === "object" && !Array.isArray(payload.settings)) {
     for (const [key, type] of Object.entries(TRANSFERABLE_SETTING_TYPES)) {
       const value = payload.settings[key];
+      if (key === "activeLoraPresetId") continue;
+      if (key === "loraStrengthScale") {
+        if (value === undefined) continue;
+        const scale =
+          typeof value === "number" && Number.isFinite(value)
+            ? Math.min(2, Math.max(0, value))
+            : 1;
+        next.loraStrengthScale = scale;
+        importedSettings = true;
+        continue;
+      }
       if (value === undefined || value === null) continue;
+      if (key === "loraPresets") {
+        if (!Array.isArray(value)) {
+          errors.push(`Setting "${key}" has an unexpected value and was skipped`);
+          continue;
+        }
+        const loraPresets: LoraPreset[] = [];
+        for (let i = 0; i < value.length; i++) {
+          const preset = sanitizeLoraPresetForImport(value[i], i, errors);
+          if (preset) loraPresets.push(preset);
+        }
+        next.loraPresets = loraPresets;
+        importedSettings = true;
+        importedLoraPresets = true;
+        continue;
+      }
       if (!isTransferableValue(key, type, value)) {
         errors.push(`Setting "${key}" has an unexpected value and was skipped`);
         continue;
       }
-      (next as any)[key] = value;
+      Object.assign(next, { [key]: value });
       importedSettings = true;
     }
+    // Version 1 exports created before the split only contain the old combined
+    // switch. Treat it as both switches, matching persisted-row migration.
+    if (
+      typeof payload.settings.includeCharacters === "boolean"
+      && !("includePersona" in payload.settings)
+    ) {
+      next.includePersona = payload.settings.includeCharacters;
+      importedSettings = true;
+    }
+    if ("activeLoraPresetId" in payload.settings || importedLoraPresets) {
+      const activeLoraPresetId = payload.settings.activeLoraPresetId;
+      next.activeLoraPresetId =
+        typeof activeLoraPresetId === "string" &&
+        (next.loraPresets ?? []).some((preset) => preset.id === activeLoraPresetId)
+          ? activeLoraPresetId
+          : null;
+      importedSettings = true;
+    }
+
     const activeId = payload.settings.activePromptPresetId;
     if (typeof activeId === "string" && presets.some((p) => p.id === activeId && (p.kind ?? "main") === "main")) {
       next.activePromptPresetId = activeId;
@@ -1923,7 +2260,7 @@ export async function importImageGenConfig(
 function isTransferableValue(key: string, type: string, value: unknown): boolean {
   if (key === "promptMode") return PROMPT_MODES.includes(value as ImageGenPromptMode);
   if (key === "outputTarget") return OUTPUT_TARGETS.includes(value as ImageGenOutputTarget);
-  if (type === "object") return typeof value === "object" && !Array.isArray(value);
+  if (type === "object") return value !== null && typeof value === "object" && !Array.isArray(value);
   if (type === "number") return typeof value === "number" && Number.isFinite(value);
   return typeof value === type;
 }
@@ -1952,4 +2289,88 @@ function sanitizePresetForImport(
     negativePrompt: typeof entry.negativePrompt === "string" ? entry.negativePrompt : undefined,
     kind: PRESET_KINDS.includes(entry.kind) ? entry.kind : "main",
   };
+}
+
+function sanitizeLoraPresetForImport(
+  entry: unknown,
+  index: number,
+  errors: string[],
+): LoraPreset | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    errors.push(`LoRA preset ${index}: not an object`);
+    return null;
+  }
+
+  const name = "name" in entry && typeof entry.name === "string" ? entry.name.trim() : "";
+  if (!name) {
+    errors.push(`LoRA preset ${index}: missing name`);
+    return null;
+  }
+
+  const rawLoras = "loras" in entry ? entry.loras : undefined;
+  if (!Array.isArray(rawLoras)) {
+    errors.push(`LoRA preset ${index}: loras must be an array`);
+    return null;
+  }
+
+  const loras: LoraEntry[] = [];
+  for (let i = 0; i < rawLoras.length; i++) {
+    const lora = sanitizeLoraEntryForImport(rawLoras[i], index, i, errors);
+    if (!lora) return null;
+    loras.push(lora);
+  }
+
+  const preset: LoraPreset = {
+    id: "id" in entry && typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID(),
+    name,
+    loras,
+  };
+  if ("base_tags" in entry && typeof entry.base_tags === "string") preset.base_tags = entry.base_tags;
+  return preset;
+}
+
+function sanitizeLoraEntryForImport(
+  entry: unknown,
+  presetIndex: number,
+  loraIndex: number,
+  errors: string[],
+): LoraEntry | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: not an object`);
+    return null;
+  }
+
+  const loraName = "lora_name" in entry && typeof entry.lora_name === "string" ? entry.lora_name.trim() : "";
+  if (!loraName) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: missing lora_name`);
+    return null;
+  }
+
+  const weightModel = coerceLoraImportWeight(
+    "weight_model" in entry ? entry.weight_model : undefined,
+    1,
+  );
+  if (weightModel === null) {
+    errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: invalid weight_model`);
+    return null;
+  }
+
+  const lora: LoraEntry = { lora_name: loraName, weight_model: weightModel };
+  if ("weight_clip" in entry && entry.weight_clip !== undefined && entry.weight_clip !== null) {
+    const weightClip = coerceLoraImportWeight(entry.weight_clip);
+    if (weightClip === null) {
+      errors.push(`LoRA preset ${presetIndex}, entry ${loraIndex}: invalid weight_clip`);
+      return null;
+    }
+    lora.weight_clip = weightClip;
+  }
+  return lora;
+}
+
+function coerceLoraImportWeight(value: unknown, fallback?: number): number | null {
+  if (value === undefined || value === null || value === "") {
+    return fallback === undefined ? null : Math.min(2, Math.max(0, fallback));
+  }
+  const weight = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(weight) ? Math.min(2, Math.max(0, weight)) : null;
 }

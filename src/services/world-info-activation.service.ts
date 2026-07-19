@@ -22,6 +22,10 @@ export type WiState = Record<string, WiEntryState>;
  * compatibility (no limits applied when unset).
  */
 export interface WorldInfoSettings {
+  /** Force case-sensitive keyword matching for every entry. */
+  forceCaseSensitive: boolean;
+  /** Force whole-word keyword matching for every non-regex entry. */
+  forceMatchWholeWords: boolean;
   /** Default scan depth for entries with scan_depth=null. null = scan all messages. */
   globalScanDepth: number | null;
   /** Max recursion passes for keyword chaining (0 = no recursion). */
@@ -36,6 +40,8 @@ export interface WorldInfoSettings {
 }
 
 export const DEFAULT_WORLD_INFO_SETTINGS: WorldInfoSettings = {
+  forceCaseSensitive: false,
+  forceMatchWholeWords: false,
   globalScanDepth: null,
   maxRecursionPasses: 3,
   maxActivatedEntries: 0,
@@ -60,6 +66,8 @@ export function normalizeWorldInfoSettings(
       : defaultScanDepth;
 
   return {
+    forceCaseSensitive: input.forceCaseSensitive === true,
+    forceMatchWholeWords: input.forceMatchWholeWords === true,
     globalScanDepth,
     maxRecursionPasses: nonNegativeInteger(
       input.maxRecursionPasses,
@@ -123,6 +131,8 @@ export interface FinalizedWorldInfoEntries {
 export interface FinalizeWorldInfoOptions {
   skipGroupLogic?: boolean;
   preserveOrder?: boolean;
+  /** Internal competition priorities used only for budget ordering. */
+  budgetPriorityById?: ReadonlyMap<string, number>;
 }
 
 // ─── Activation cache (short-TTL for rapid dry-run optimization) ───
@@ -155,14 +165,43 @@ function computeWiActivationCacheKey(input: ActivationInput): string {
   const entries = input.entries;
   const messages = input.messages;
   const wiState = input.wiState;
-  const settings = input.settings ?? {};
+  const settings = normalizeWorldInfoSettings(input.settings);
   const entrySig = entries
-    .map(
-      (e) =>
-        `${e.uid}:${e.disabled ? 1 : 0}:${e.constant ? 1 : 0}:${e.priority}:${e.key?.length ?? 0}:${e.keysecondary?.length ?? 0}:${e.content?.length ?? 0}`
-    )
+    .map((e) => JSON.stringify({
+      id: e.id,
+      uid: e.uid,
+      world_book_id: e.world_book_id,
+      key: e.key,
+      keysecondary: e.keysecondary,
+      content: e.content,
+      position: e.position,
+      depth: e.depth,
+      role: e.role,
+      order_value: e.order_value,
+      selective: e.selective,
+      constant: e.constant,
+      disabled: e.disabled,
+      group_name: e.group_name,
+      group_override: e.group_override,
+      group_weight: e.group_weight,
+      probability: e.probability,
+      scan_depth: e.scan_depth,
+      case_sensitive: e.case_sensitive,
+      match_whole_words: e.match_whole_words,
+      use_regex: e.use_regex,
+      prevent_recursion: e.prevent_recursion,
+      exclude_recursion: e.exclude_recursion,
+      delay_until_recursion: e.delay_until_recursion,
+      priority: e.priority,
+      sticky: e.sticky,
+      cooldown: e.cooldown,
+      delay: e.delay,
+      selective_logic: e.selective_logic,
+      use_probability: e.use_probability,
+      vectorized: e.vectorized,
+    }))
     .join("|");
-  const msgSig = messages.map((m) => `${m.id}:${m.content?.length ?? 0}`).join("|");
+  const msgSig = messages.map((m) => JSON.stringify({ id: m.id, content: m.content })).join("|");
   const stateSig = JSON.stringify(wiState);
   const settingsSig = JSON.stringify(settings);
   return `${entrySig}::${msgSig}::${stateSig}::${settingsSig}`;
@@ -324,12 +363,14 @@ export function finalizeActivatedWorldInfoEntries(
 
   const afterGroups = options.skipGroupLogic
     ? [...entries]
-    : applyGroupLogic([...entries]);
+    : applyWorldInfoGroupLogic([...entries]);
   const insertableEntries = afterGroups.filter(hasMeaningfulWorldInfoContent);
 
   if (!options.preserveOrder) {
     insertableEntries.sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
+      const aPriority = options.budgetPriorityById?.get(a.id) ?? a.priority;
+      const bPriority = options.budgetPriorityById?.get(b.id) ?? b.priority;
+      if (bPriority !== aPriority) return bPriority - aPriority;
       return a.order_value - b.order_value;
     });
   }
@@ -437,7 +478,10 @@ function runAhoCorasickPasses(args: AhoCorasickPassArgs): number {
     activated, activatedUids, blockedByCooldown, matchedThisTurn, delayIncremented,
     maxPasses } = args;
 
-  const matcher = new WorldInfoMatcher(conditional);
+  const matcher = new WorldInfoMatcher(conditional, {
+    forceCaseSensitive: settings.forceCaseSensitive,
+    forceMatchWholeWords: settings.forceMatchWholeWords,
+  });
   const state: ScanState = makeScanState();
 
   // Pass 0 base: scan messages once per unique effective scan_depth.
@@ -573,7 +617,7 @@ function joinMessageContents(messages: Message[]): string {
  * - group_override: highest priority entry wins
  * - Otherwise: weighted random selection by group_weight
  */
-function applyGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
+export function applyWorldInfoGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
   const grouped = new Map<string, WorldBookEntry[]>();
   const ungrouped: WorldBookEntry[] = [];
 
@@ -627,7 +671,8 @@ function applyGroupLogic(entries: WorldBookEntry[]): WorldBookEntry[] {
 /**
  * Bucket activated entries into WorldInfoCache positions:
  *  0 = before, 1 = after, 2 = AN before, 3 = AN after,
- *  4 = depth-based, 5 = EM before, 6 = EM after
+ *  4 = depth-based, 5 = EM before, 6 = EM after, 7 = at-marker,
+ *  8 = outlet-only (excluded from all position buckets; surfaces only via {{outlet::name}})
  */
 function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
   const cache: WorldInfoCache = {
@@ -639,6 +684,7 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
     emBefore: [],
     emAfter: [],
     atMarker: [],
+    pinnedMarkers: [],
   };
 
   for (const entry of entries) {
@@ -675,7 +721,24 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
         cache.emAfter.push({ content, role, entryLabel });
         break;
       case 7:
-        cache.atMarker.push({ content, role, entryLabel });
+        if (typeof entry.wi_marker === "string" && entry.wi_marker.length > 0) {
+          // Marker-pinned: splice adjacent to the loom block whose marker
+          // matches, instead of joining the legacy {{wi_marker}} pool.
+          cache.pinnedMarkers.push({
+            content,
+            role,
+            entryLabel,
+            marker: entry.wi_marker,
+            side: entry.wi_marker_side === "before" ? "before" : "after",
+          });
+        } else {
+          // Legacy: position-7 entries without a pin join the {{wi_marker}} pool.
+          cache.atMarker.push({ content, role, entryLabel });
+        }
+        break;
+      case 8:
+        // Outlet-only: not injected at any position; resolved solely via the
+        // {{outlet::name}} macro from `activatedEntries`.
         break;
       default:
         // Unknown position — treat as "before"
@@ -683,7 +746,6 @@ function bucketByPosition(entries: WorldBookEntry[]): WorldInfoCache {
         break;
     }
   }
-
   return cache;
 }
 

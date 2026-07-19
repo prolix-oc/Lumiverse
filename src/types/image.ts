@@ -3,6 +3,7 @@ export interface Image {
   filename: string;
   original_filename: string;
   mime_type: string;
+  byte_size: number;
   width: number | null;
   height: number | null;
   has_thumbnail: boolean;

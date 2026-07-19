@@ -1,9 +1,10 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FormField, TextInput, Select, Button } from '@/components/shared/FormComponents'
+import { FormField, TextInput, TextArea, Select, Button } from '@/components/shared/FormComponents'
 import { Toggle } from '@/components/shared/Toggle'
 import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
 import { ttsConnectionsApi } from '@/api/tts-connections'
+import { isQwenTtsProvider, QWEN_LANGUAGE_OPTIONS } from '@/lib/qwenTts'
 import type {
   TtsProviderInfo,
   TtsConnectionProfile,
@@ -28,6 +29,7 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
   const [model, setModel] = useState(profile?.model || '')
   const [voice, setVoice] = useState(profile?.voice || '')
   const [isDefault, setIsDefault] = useState(profile?.is_default || false)
+  const [defaultParameters, setDefaultParameters] = useState<Record<string, any>>(profile?.default_parameters || {})
 
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [voicesLoading, setVoicesLoading] = useState(false)
@@ -37,6 +39,15 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
   const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }))
   const selectedProvider = providers.find((p) => p.id === provider)
   const capabilities = selectedProvider?.capabilities
+  const isQwen = isQwenTtsProvider(provider)
+  const qwenLanguage = typeof defaultParameters.language === 'string'
+    && QWEN_LANGUAGE_OPTIONS.some((option) => option.value === defaultParameters.language)
+    ? defaultParameters.language
+    : 'Auto'
+  const qwenInstruct = typeof defaultParameters.instruct === 'string'
+    ? defaultParameters.instruct
+    : ''
+  const qwenUseStreaming = defaultParameters.use_streaming_endpoint !== false
 
   const modelOptions = useMemo(() => {
     const options = models.length > 0 ? models : capabilities?.staticModels || []
@@ -121,8 +132,54 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
     }
   }, [profile?.id, capabilities?.modelListStyle, fetchModels])
 
+  const setQwenLanguage = useCallback((next: string) => {
+    setDefaultParameters((prev) => {
+      const updated = { ...prev }
+      if (!next || next === 'Auto') {
+        delete updated.language
+      } else {
+        updated.language = next
+      }
+      return updated
+    })
+  }, [])
+
+  const setQwenInstruct = useCallback((next: string) => {
+    setDefaultParameters((prev) => {
+      const updated = { ...prev }
+      if (!next.trim()) {
+        delete updated.instruct
+      } else {
+        updated.instruct = next
+      }
+      return updated
+    })
+  }, [])
+
+  const setQwenUseStreaming = useCallback((next: boolean) => {
+    setDefaultParameters((prev) => {
+      const updated = { ...prev }
+      if (next) {
+        delete updated.use_streaming_endpoint
+      } else {
+        updated.use_streaming_endpoint = false
+      }
+      return updated
+    })
+  }, [])
+
   const handleSubmit = useCallback(() => {
     if (!name.trim()) return
+    const qwenDefaults: Record<string, any> = {}
+    if (isQwen && typeof defaultParameters.language === 'string' && defaultParameters.language) {
+      qwenDefaults.language = defaultParameters.language
+    }
+    if (isQwen && typeof defaultParameters.instruct === 'string' && defaultParameters.instruct.trim()) {
+      qwenDefaults.instruct = defaultParameters.instruct.trim()
+    }
+    if (isQwen && defaultParameters.use_streaming_endpoint === false) {
+      qwenDefaults.use_streaming_endpoint = false
+    }
     onSave({
       name: name.trim(),
       provider,
@@ -131,8 +188,9 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
       model: model.trim() || undefined,
       voice: voice.trim() || undefined,
       is_default: isDefault,
+      default_parameters: isQwen ? qwenDefaults : undefined,
     })
-  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, onSave])
+  }, [name, provider, apiKey, apiUrl, model, voice, isDefault, isQwen, defaultParameters, onSave])
 
   return (
     <div className={styles.form}>
@@ -190,10 +248,52 @@ export default function TTSConnectionForm({ providers, profile, onSave, onCancel
           autoRefreshOnFocus={capabilities?.voiceListStyle === 'dynamic'}
           refreshKey={`${provider}:${profile?.id || ''}:voices`}
           appearance="standard"
-          placeholder={t('ttsConnectionForm.voicePlaceholder')}
+          placeholder={isQwen ? t('ttsConnectionForm.qwenVoicePlaceholder') : t('ttsConnectionForm.voicePlaceholder')}
           emptyMessage={t('ttsConnectionForm.noVoices')}
         />
       </FormField>
+
+      {isQwen && (
+        <>
+          <FormField label={t('ttsConnectionForm.qwenLanguage')} hint={t('ttsConnectionForm.qwenLanguageHint')}>
+            <Select
+              value={qwenLanguage}
+              onChange={setQwenLanguage}
+              options={QWEN_LANGUAGE_OPTIONS.map((option) => ({
+                value: option.value,
+                label: option.value === 'Auto' ? t('ttsConnectionForm.qwenLanguageAuto') : option.label,
+              }))}
+            />
+          </FormField>
+
+          <FormField label={t('ttsConnectionForm.qwenInstruct')} hint={t('ttsConnectionForm.qwenInstructHint')}>
+            <TextArea
+              value={qwenInstruct}
+              onChange={setQwenInstruct}
+              placeholder={t('ttsConnectionForm.qwenInstructPlaceholder')}
+              rows={3}
+            />
+          </FormField>
+
+          <FormField label="">
+            <Toggle.Checkbox
+              checked={qwenUseStreaming}
+              onChange={setQwenUseStreaming}
+              label={t('ttsConnectionForm.qwenUseStreaming')}
+              hint={t('ttsConnectionForm.qwenUseStreamingHint')}
+            />
+          </FormField>
+
+          <div className={styles.bindingCard}>
+            <div className={styles.bindingCardTitle}>{t('ttsConnectionForm.qwenCloneTitle')}</div>
+            <div className={styles.bindingCardHint}>
+              {profile
+                ? t('ttsConnectionForm.qwenCloneHintSaved')
+                : t('ttsConnectionForm.qwenCloneHintUnsaved')}
+            </div>
+          </div>
+        </>
+      )}
 
       <FormField label="">
         <Toggle.Checkbox checked={isDefault} onChange={setIsDefault} label={t('ttsConnectionForm.setDefault')} />

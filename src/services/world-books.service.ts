@@ -1,4 +1,5 @@
 import { getDb } from "../db/connection";
+import { zipSync, strToU8 } from "fflate";
 import type {
   WorldBook, WorldBookEntry,
   CreateWorldBookInput, UpdateWorldBookInput,
@@ -12,6 +13,10 @@ import type { PaginationParams, PaginatedResult } from "../types/pagination";
 import { paginatedQuery } from "./pagination";
 import * as embeddingsSvc from "./embeddings.service";
 import * as vectorizationQueue from "./vectorization-queue.service";
+import {
+  desiredWorldBookVectorIndexStatus,
+  isWorldBookEntryVectorEligible,
+} from "./world-book-vector-state";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 
@@ -21,6 +26,10 @@ function emitWorldBookChanged(userId: string, id: string): void {
   eventBus.emit(EventType.WORLD_BOOK_CHANGED, { id, worldBook }, userId);
 }
 
+function emitWorldBookDeleted(userId: string, id: string): void {
+  eventBus.emit(EventType.WORLD_BOOK_DELETED, { id }, userId);
+}
+
 function emitWorldBookEntryChanged(userId: string, id: string): void {
   const entry = getEntry(userId, id);
   if (!entry) return;
@@ -28,11 +37,47 @@ function emitWorldBookEntryChanged(userId: string, id: string): void {
 }
 
 const ENTRY_OUTLET_NAME_KEYS = ["outlet_name", "outletName"] as const;
+const ENTRY_WI_MARKER_KEYS = ["wi_marker", "wiMarker"] as const;
+const ENTRY_WI_MARKER_SIDE_KEYS = ["wi_marker_side", "wiMarkerSide"] as const;
+
+// Valid WI marker ids — must match ADDABLE_MARKERS in
+// frontend/src/lib/loom/constants.ts. Pinned-marker entries splice adjacent
+// to the loom block whose `marker` equals this id.
+const VALID_WI_MARKERS: Record<string, true> = {
+  chat_history: true,
+  world_info_before: true,
+  world_info_after: true,
+  char_description: true,
+  char_personality: true,
+  persona_description: true,
+  scenario: true,
+  dialogue_examples: true,
+  main_prompt: true,
+  enhance_definitions: true,
+  jailbreak: true,
+  nsfw_prompt: true,
+};
 
 function normalizeEntryOutletName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// Marker id must be one of the 12 valid ids; anything else coerces to null.
+function normalizeEntryWiMarker(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return VALID_WI_MARKERS[normalized] === true ? normalized : null;
+}
+
+// Side is "before" | "after" (case-insensitive); anything else coerces to null.
+function normalizeEntryWiMarkerSide(value: unknown): "before" | "after" | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "before") return "before";
+  if (normalized === "after") return "after";
+  return null;
 }
 
 function cloneUnknownRecord(value: unknown): Record<string, any> {
@@ -43,23 +88,51 @@ function cloneUnknownRecord(value: unknown): Record<string, any> {
 function splitManagedEntryExtensions(raw: unknown): {
   extensions: Record<string, any>;
   outletName: string | null;
+  wiMarker: string | null;
+  wiMarkerSide: "before" | "after" | null;
 } {
   const extensions = typeof raw === "string"
     ? JSON.parse(raw)
     : cloneUnknownRecord(raw);
   const next = cloneUnknownRecord(extensions);
   const outletName = normalizeEntryOutletName(next.outlet_name ?? next.outletName);
+  const wiMarker = normalizeEntryWiMarker(next.wi_marker ?? next.wiMarker);
+  const wiMarkerSide = normalizeEntryWiMarkerSide(next.wi_marker_side ?? next.wiMarkerSide);
   for (const key of ENTRY_OUTLET_NAME_KEYS) delete next[key];
-  return { extensions: next, outletName };
+  for (const key of ENTRY_WI_MARKER_KEYS) delete next[key];
+  for (const key of ENTRY_WI_MARKER_SIDE_KEYS) delete next[key];
+  return { extensions: next, outletName, wiMarker, wiMarkerSide };
 }
 
-function buildStoredEntryExtensions(raw: unknown, outletValue: unknown): string {
-  const { extensions, outletName: embeddedOutletName } = splitManagedEntryExtensions(raw);
+function buildStoredEntryExtensions(
+  raw: unknown,
+  outletValue: unknown,
+  wiMarkerValue?: unknown,
+  wiMarkerSideValue?: unknown,
+): string {
+  const {
+    extensions,
+    outletName: embeddedOutletName,
+    wiMarker: embeddedWiMarker,
+    wiMarkerSide: embeddedWiMarkerSide,
+  } = splitManagedEntryExtensions(raw);
   const outletName = outletValue !== undefined
     ? normalizeEntryOutletName(outletValue)
     : embeddedOutletName;
+  const wiMarker = wiMarkerValue !== undefined
+    ? normalizeEntryWiMarker(wiMarkerValue)
+    : embeddedWiMarker;
+  const wiMarkerSide = wiMarkerSideValue !== undefined
+    ? normalizeEntryWiMarkerSide(wiMarkerSideValue)
+    : embeddedWiMarkerSide;
   if (outletName) {
     extensions.outlet_name = outletName;
+  }
+  if (wiMarker) {
+    extensions.wi_marker = wiMarker;
+  }
+  if (wiMarkerSide) {
+    extensions.wi_marker_side = wiMarkerSide;
   }
   return JSON.stringify(extensions);
 }
@@ -87,15 +160,21 @@ function normalizeVectorIndexStatus(row: any): WorldBookVectorIndexStatus {
   ) {
     return row.vector_index_status;
   }
-  return row.vectorized ? "pending" : "not_enabled";
+  return desiredWorldBookVectorIndexStatus({
+    vectorized: !!row.vectorized,
+    disabled: !!row.disabled,
+    content: typeof row.content === "string" ? row.content : "",
+  });
 }
 
 function rowToEntry(row: any): WorldBookEntry {
   const vectorIndexStatus = normalizeVectorIndexStatus(row);
-  const { extensions, outletName } = splitManagedEntryExtensions(row.extensions);
+  const { extensions, outletName, wiMarker, wiMarkerSide } = splitManagedEntryExtensions(row.extensions);
   return {
     ...row,
     outlet_name: outletName,
+    wi_marker: wiMarker,
+    wi_marker_side: wiMarkerSide,
     key: JSON.parse(row.key),
     keysecondary: JSON.parse(row.keysecondary),
     role: row.role || null,
@@ -120,13 +199,17 @@ function rowToEntry(row: any): WorldBookEntry {
   };
 }
 
-function getPendingVectorIndexState(vectorized: boolean): {
+function getPendingVectorIndexState(entry: { vectorized: boolean; disabled?: boolean; content?: string | null }): {
   vector_index_status: WorldBookVectorIndexStatus;
   vector_indexed_at: null;
   vector_index_error: null;
 } {
   return {
-    vector_index_status: vectorized ? "pending" : "not_enabled",
+    vector_index_status: desiredWorldBookVectorIndexStatus({
+      vectorized: !!entry.vectorized,
+      disabled: !!entry.disabled,
+      content: entry.content ?? "",
+    }),
     vector_indexed_at: null,
     vector_index_error: null,
   };
@@ -161,6 +244,22 @@ function normalizeKeywordList(values: string[]): string[] {
     normalized.push(trimmed);
   }
   return normalized;
+}
+
+function importExtensionRecord(raw: any): Record<string, any> {
+  return raw?.extensions && typeof raw.extensions === "object" && !Array.isArray(raw.extensions)
+    ? raw.extensions
+    : {};
+}
+
+function importValue(raw: any, extensions: Record<string, any>, ...keys: string[]): any {
+  for (const key of keys) {
+    if (raw[key] !== undefined) return raw[key];
+  }
+  for (const key of keys) {
+    if (extensions[key] !== undefined) return extensions[key];
+  }
+  return undefined;
 }
 
 export function normalizeImportedEntries(raw: unknown): any[] {
@@ -222,6 +321,7 @@ function normalizeImportedPosition(position: unknown): number {
 }
 
 export function normalizeImportedEntryInput(raw: any, index: number): CreateWorldBookEntryInput {
+  const ext = importExtensionRecord(raw);
   const keys: string[] = Array.isArray(raw.keys) ? raw.keys
     : Array.isArray(raw.key) ? raw.key
     : typeof raw.key === "string" ? raw.key.split(",").map((k: string) => k.trim()).filter(Boolean)
@@ -250,7 +350,8 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     "prevent_recursion", "preventRecursion", "exclude_recursion", "excludeRecursion",
     "delay_until_recursion", "delayUntilRecursion",
     "priority", "sticky", "cooldown", "delay",
-    "id", "entry", "uid", "vectorized", "extensions", "outlet_name", "outletName",
+    "id", "entry", "uid", "vectorized", "extensions",
+    "outlet_name", "outletName", "wi_marker", "wiMarker", "wi_marker_side", "wiMarkerSide",
   ]);
   const extras: Record<string, any> = {};
   for (const [k, v] of Object.entries(raw)) {
@@ -258,7 +359,9 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
   }
 
   return {
-    outlet_name: raw.outlet_name ?? raw.outletName,
+    outlet_name: importValue(raw, ext, "outlet_name", "outletName"),
+    wi_marker: importValue(raw, ext, "wi_marker", "wiMarker"),
+    wi_marker_side: importValue(raw, ext, "wi_marker_side", "wiMarkerSide"),
     key: keys,
     keysecondary: secondaryKeys,
     content: raw.content || "",
@@ -266,29 +369,29 @@ export function normalizeImportedEntryInput(raw: any, index: number): CreateWorl
     disabled: !enabled,
     order_value: resolveImportOrder(raw, index),
     position: normalizeImportedPosition(raw.position),
-    depth: raw.depth ?? 4,
+    depth: importValue(raw, ext, "depth") ?? 4,
     role: normalizeImportRole(raw.role) || undefined,
-    selective: raw.selective ?? false,
-    constant: raw.constant ?? false,
-    case_sensitive: raw.case_sensitive ?? raw.caseSensitive ?? false,
-    match_whole_words: raw.match_whole_words ?? raw.matchWholeWords ?? false,
-    group_name: raw.group || raw.group_name || "",
-    group_override: raw.group_override ?? raw.groupOverride ?? false,
-    group_weight: raw.group_weight ?? raw.groupWeight ?? 100,
-    probability: raw.probability ?? 100,
-    scan_depth: raw.scan_depth ?? raw.scanDepth ?? undefined,
-    automation_id: raw.automation_id || raw.automationId || undefined,
-    selective_logic: raw.selectiveLogic ?? raw.selective_logic ?? 0,
-    use_probability: raw.useProbability !== undefined ? raw.useProbability : (raw.use_probability !== undefined ? raw.use_probability : true),
-    use_regex: raw.use_regex ?? raw.useRegex ?? false,
-    prevent_recursion: raw.prevent_recursion ?? raw.preventRecursion ?? false,
-    exclude_recursion: raw.exclude_recursion ?? raw.excludeRecursion ?? false,
-    delay_until_recursion: raw.delay_until_recursion ?? raw.delayUntilRecursion ?? false,
-    priority: raw.priority ?? 10,
-    sticky: raw.sticky ?? 0,
-    cooldown: raw.cooldown ?? 0,
-    delay: raw.delay ?? 0,
-    vectorized: raw.vectorized ?? false,
+    selective: importValue(raw, ext, "selective") ?? false,
+    constant: importValue(raw, ext, "constant") ?? false,
+    case_sensitive: importValue(raw, ext, "case_sensitive", "caseSensitive") ?? false,
+    match_whole_words: importValue(raw, ext, "match_whole_words", "matchWholeWords") ?? false,
+    group_name: importValue(raw, ext, "group", "group_name") || "",
+    group_override: importValue(raw, ext, "group_override", "groupOverride") ?? false,
+    group_weight: importValue(raw, ext, "group_weight", "groupWeight") ?? 100,
+    probability: importValue(raw, ext, "probability") ?? 100,
+    scan_depth: importValue(raw, ext, "scan_depth", "scanDepth") ?? undefined,
+    automation_id: importValue(raw, ext, "automation_id", "automationId") || undefined,
+    selective_logic: importValue(raw, ext, "selectiveLogic", "selective_logic") ?? 0,
+    use_probability: importValue(raw, ext, "useProbability", "use_probability") ?? true,
+    use_regex: importValue(raw, ext, "use_regex", "useRegex") ?? false,
+    prevent_recursion: importValue(raw, ext, "prevent_recursion", "preventRecursion") ?? false,
+    exclude_recursion: importValue(raw, ext, "exclude_recursion", "excludeRecursion") ?? false,
+    delay_until_recursion: importValue(raw, ext, "delay_until_recursion", "delayUntilRecursion") ?? false,
+    priority: importValue(raw, ext, "priority") ?? 10,
+    sticky: importValue(raw, ext, "sticky") ?? 0,
+    cooldown: importValue(raw, ext, "cooldown") ?? 0,
+    delay: importValue(raw, ext, "delay") ?? 0,
+    vectorized: importValue(raw, ext, "vectorized") ?? false,
     extensions: { ...raw.extensions, ...extras },
   };
 }
@@ -301,11 +404,15 @@ export function materializeCharacterBookEntriesForRuntime(
   return rawEntries.map((raw, index) => {
     const input = normalizeImportedEntryInput(raw, index);
     const outletName = normalizeEntryOutletName(input.outlet_name);
+    const wiMarker = normalizeEntryWiMarker(input.wi_marker);
+    const wiMarkerSide = normalizeEntryWiMarkerSide(input.wi_marker_side);
     return {
       id: typeof raw.id === "string" && raw.id ? raw.id : crypto.randomUUID(),
       world_book_id: worldBookId,
       uid: typeof raw.uid === "string" && raw.uid ? raw.uid : crypto.randomUUID(),
       outlet_name: outletName,
+      wi_marker: wiMarker,
+      wi_marker_side: wiMarkerSide,
       key: input.key ?? [],
       keysecondary: input.keysecondary ?? [],
       content: input.content ?? "",
@@ -359,28 +466,35 @@ function getEntriesForBook(userId: string, worldBookId: string, entryIds: string
   return rows.map(rowToEntry);
 }
 
-function setEntriesPendingReindex(entryIds: string[]): void {
-  if (entryIds.length === 0) return;
-  const placeholders = entryIds.map(() => "?").join(", ");
-  getDb().query(
+function setEntriesPendingReindex(entries: WorldBookEntry[]): void {
+  if (entries.length === 0) return;
+  const stmt = getDb().query(
     `UPDATE world_book_entries
-     SET vector_index_status = 'pending', vector_indexed_at = NULL, vector_index_error = NULL
-     WHERE id IN (${placeholders})`
-  ).run(...entryIds);
+     SET vector_index_status = ?, vector_indexed_at = NULL, vector_index_error = NULL
+     WHERE id = ?`,
+  );
+  for (const entry of entries) {
+    stmt.run(desiredWorldBookVectorIndexStatus(entry), entry.id);
+  }
+}
+
+function deleteWorldBookVectorsAndMaybeRequeue(userId: string, entry: WorldBookEntry, requeue: boolean): void {
+  void (async () => {
+    try {
+      await embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id);
+    } catch (err: unknown) {
+      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
+    } finally {
+      if (requeue && isWorldBookEntryVectorEligible(entry)) {
+        vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id, 4, true);
+      }
+    }
+  })();
 }
 
 function queueReindexForEntries(userId: string, entries: WorldBookEntry[]): void {
   for (const entry of entries) {
-    if (!entry.vectorized) {
-      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-      });
-      continue;
-    }
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
-    vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+    deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
   }
 }
 
@@ -424,6 +538,42 @@ export function listWorldBooks(userId: string, pagination: PaginationParams): Pa
 
 export function getWorldBook(userId: string, id: string): WorldBook | null {
   const row = getDb().query("SELECT * FROM world_books WHERE id = ? AND user_id = ?").get(id, userId) as any;
+  return row ? rowToBook(row) : null;
+}
+
+/**
+ * Resolve the standalone world book that already represents a character's
+ * embedded `character_book`, if one exists. Prefer a currently-attached book
+ * ID first, then fall back to the auto-managed import, then the newest manual
+ * import for that character so repeated "import lorebook" clicks do not spawn
+ * duplicates.
+ */
+export function findImportedCharacterBookWorldBook(
+  userId: string,
+  characterId: string,
+  preferredIds: string[] = [],
+): WorldBook | null {
+  const preferred = preferredIds.filter((id) => typeof id === "string" && id);
+  const preferredPlaceholders = preferred.map(() => "?").join(", ");
+  const preferredOrder = preferred.length > 0
+    ? `CASE WHEN id IN (${preferredPlaceholders}) THEN 0 ELSE 1 END,`
+    : "";
+
+  const row = getDb().query(
+    `SELECT *
+       FROM world_books
+      WHERE user_id = ?
+        AND json_extract(metadata, '$.source') = 'character'
+        AND json_extract(metadata, '$.source_character_id') = ?
+      ORDER BY
+        ${preferredOrder}
+        CASE WHEN json_extract(metadata, '$.auto_managed_by_character') = 1 THEN 0 ELSE 1 END,
+        updated_at DESC,
+        created_at DESC,
+        id ASC
+      LIMIT 1`
+  ).get(userId, characterId, ...preferred) as any;
+
   return row ? rowToBook(row) : null;
 }
 
@@ -487,13 +637,195 @@ export function updateWorldBook(userId: string, id: string, input: UpdateWorldBo
   return getWorldBook(userId, id)!;
 }
 
-export function deleteWorldBook(userId: string, id: string): boolean {
-  const deleted = getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0;
-  if (deleted) eventBus.emit(EventType.WORLD_BOOK_DELETED, { id }, userId);
+/**
+ * Rename a folder by moving every one of the user's world books in that
+ * folder. Folders are represented by the `folder` value on each world book,
+ * rather than a separate database entity.
+ */
+export function renameWorldBookFolder(userId: string, oldName: string, newName: string): WorldBook[] {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, source) as any[];
+  if (rows.length === 0) return [];
+
+  if (source === target) {
+    return rows.map(rowToBook);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(target, now, userId, source);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: target, updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
+/**
+ * Delete an organizational folder without deleting its lorebooks. Its books
+ * are moved into the unfiled bucket, represented by an empty folder string.
+ */
+export function deleteWorldBookFolder(userId: string, name: string): WorldBook[] {
+  const folder = name.trim();
+  if (!folder) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM world_books WHERE user_id = ? AND folder = ?")
+    .all(userId, folder) as any[];
+  if (rows.length === 0) return [];
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE world_books SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ?")
+    .run(now, userId, folder);
+
+  const updated = rows.map((row) => rowToBook({ ...row, folder: "", updated_at: now }));
+  for (const worldBook of updated) {
+    emitWorldBookChanged(userId, worldBook.id);
+  }
+  return updated;
+}
+
+function getWorldBookEntryIdsForDelete(userId: string, worldBookIds: string[]): string[] {
+  if (worldBookIds.length === 0) return [];
+  const placeholders = worldBookIds.map(() => "?").join(", ");
+  return (getDb().query(
+    `SELECT e.id
+     FROM world_book_entries e
+     JOIN world_books wb ON wb.id = e.world_book_id
+     WHERE wb.user_id = ? AND e.world_book_id IN (${placeholders})`
+  ).all(userId, ...worldBookIds) as Array<{ id: string }>).map((row) => row.id);
+}
+
+export async function deleteWorldBook(userId: string, id: string): Promise<boolean> {
+  if (!getWorldBook(userId, id)) return false;
+  const entryIds = getWorldBookEntryIdsForDelete(userId, [id]);
+  const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
+    userId,
+    [id],
+    entryIds,
+    () => getDb().query("DELETE FROM world_books WHERE id = ? AND user_id = ?").run(id, userId).changes > 0,
+  );
+  if (deleted) emitWorldBookDeleted(userId, id);
   return deleted;
 }
 
-export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): number {
+export async function bulkDeleteWorldBooks(userId: string, ids: string[]): Promise<{ deleted: string[] }> {
+  const uniqueIds = dedupeWorldBookIds(ids);
+  if (uniqueIds.length === 0) return { deleted: [] };
+  const db = getDb();
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const ownedIds = (db.query(
+    `SELECT id FROM world_books WHERE user_id = ? AND id IN (${placeholders})`
+  ).all(userId, ...uniqueIds) as Array<{ id: string }>).map((row) => row.id);
+  const ownedSet = new Set(ownedIds);
+  const orderedOwnedIds = uniqueIds.filter((id) => ownedSet.has(id));
+  if (orderedOwnedIds.length === 0) return { deleted: [] };
+  const entryIds = getWorldBookEntryIdsForDelete(userId, orderedOwnedIds);
+
+  const deleted = await embeddingsSvc.deleteWorldBookEmbeddingsBeforeSourceDelete(
+    userId,
+    orderedOwnedIds,
+    entryIds,
+    () => {
+      const removed: string[] = [];
+      db.transaction(() => {
+        const stmt = db.query("DELETE FROM world_books WHERE id = ? AND user_id = ?");
+        for (const id of orderedOwnedIds) {
+          if (stmt.run(id, userId).changes > 0) removed.push(id);
+        }
+      })();
+      return removed;
+    },
+  );
+
+  for (const id of deleted) {
+    emitWorldBookDeleted(userId, id);
+  }
+
+  return { deleted };
+}
+
+export function bulkUpdateWorldBooksFolder(userId: string, ids: string[], folder: string): { updated: number } {
+  const uniqueIds = dedupeWorldBookIds(ids);
+  const normalizedFolder = folder.trim();
+  const now = Math.floor(Date.now() / 1000);
+  const updatedIds: string[] = [];
+  const db = getDb();
+
+  db.transaction(() => {
+    const stmt = db.query("UPDATE world_books SET folder = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+    for (const id of uniqueIds) {
+      if (stmt.run(normalizedFolder, now, id, userId).changes > 0) updatedIds.push(id);
+    }
+  })();
+
+  for (const id of updatedIds) {
+    emitWorldBookChanged(userId, id);
+  }
+
+  return { updated: updatedIds.length };
+}
+
+export function bulkExportWorldBooks(
+  userId: string,
+  ids: string[],
+  format: WorldBookExportFormat = "lumiverse"
+): { filename: string; bytes: Uint8Array } {
+  const entries: Record<string, Uint8Array> = {};
+  const usedNames = new Set<string>();
+
+  for (const id of dedupeWorldBookIds(ids)) {
+    const payload = exportWorldBook(userId, id, format);
+    if (!payload) continue;
+
+    const bookName = typeof payload.name === "string" ? payload.name : "";
+    const baseName = sanitizeWorldBookExportFilenameBase(bookName, id);
+    const entryName = makeUniqueWorldBookExportEntryName(baseName, usedNames);
+    entries[entryName] = strToU8(JSON.stringify(payload, null, 2));
+  }
+
+  return {
+    filename: buildWorldBooksExportFilename(),
+    bytes: zipSync(entries),
+  };
+}
+
+function dedupeWorldBookIds(ids: string[]): string[] {
+  return [...new Set(ids)];
+}
+
+function sanitizeWorldBookExportFilenameBase(name: string, fallback: string): string {
+  const sanitized = name.replace(/[\/\\:*?"<>|\x00-\x1F\x7F]/g, "").trim();
+  return sanitized || fallback;
+}
+
+function makeUniqueWorldBookExportEntryName(baseName: string, usedNames: Set<string>): string {
+  let candidate = `${baseName}.json`;
+  let index = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${baseName} (${index}).json`;
+    index += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function buildWorldBooksExportFilename(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `world-books-${year}${month}${day}.zip`;
+}
+
+export async function deleteAutoManagedCharacterWorldBooks(userId: string, characterId: string): Promise<number> {
   const rows = getDb().query(
     `SELECT id
        FROM world_books
@@ -502,12 +834,7 @@ export function deleteAutoManagedCharacterWorldBooks(userId: string, characterId
         AND json_extract(metadata, '$.source_character_id') = ?`
   ).all(userId, characterId) as Array<{ id: string }>;
 
-  let deleted = 0;
-  for (const row of rows) {
-    if (deleteWorldBook(userId, row.id)) deleted += 1;
-  }
-
-  return deleted;
+  return (await bulkDeleteWorldBooks(userId, rows.map((row) => row.id))).deleted.length;
 }
 
 export function getWorldBookVectorSummary(userId: string, worldBookId: string): WorldBookVectorSummary | null {
@@ -553,7 +880,10 @@ export function setWorldBookSemanticActivation(
     updatedEntries = db.query(
       `UPDATE world_book_entries
        SET vectorized = 1,
-           vector_index_status = 'pending',
+           vector_index_status = CASE
+             WHEN disabled = 0 AND length(trim(content)) > 0 THEN 'pending'
+             ELSE 'not_enabled'
+           END,
            vector_indexed_at = NULL,
            vector_index_error = NULL,
            updated_at = ?
@@ -596,13 +926,13 @@ export function setWorldBookSemanticActivation(
 export function getConvertToVectorizedPreview(
   userId: string,
   worldBookId: string,
-): { total: number; eligible: number; keys_to_clear: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
+): { total: number; eligible: number; keys_to_clear: number; keys_retained: number; constant_skipped: number; already_vectorized: number; empty_skipped: number; disabled_skipped: number } | null {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
   const entries = listEntries(userId, worldBookId);
 
   let eligible = 0;
-  let keysToClear = 0;
+  let keysRetained = 0;
   let constantSkipped = 0;
   let alreadyVectorized = 0;
   let emptySkipped = 0;
@@ -614,14 +944,14 @@ export function getConvertToVectorizedPreview(
     if (!hasContent) { emptySkipped++; continue; }
     if (entry.disabled) { disabledSkipped++; continue; }
     const hasKeys = (entry.key?.length ?? 0) > 0 || (entry.keysecondary?.length ?? 0) > 0;
-    if (entry.vectorized && !hasKeys) { alreadyVectorized++; continue; }
+    if (entry.vectorized) { alreadyVectorized++; continue; }
     eligible++;
     if (hasKeys) {
-      keysToClear++;
+      keysRetained++;
     }
   }
 
-  return { total: entries.length, eligible, keys_to_clear: keysToClear, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
+  return { total: entries.length, eligible, keys_to_clear: 0, keys_retained: keysRetained, constant_skipped: constantSkipped, already_vectorized: alreadyVectorized, empty_skipped: emptySkipped, disabled_skipped: disabledSkipped };
 }
 
 export function convertToVectorized(
@@ -637,8 +967,6 @@ export function convertToVectorized(
   const converted = db.query(
     `UPDATE world_book_entries
       SET vectorized = 1,
-          key = '[]',
-          keysecondary = '[]',
           vector_index_status = 'pending',
           vector_indexed_at = NULL,
           vector_index_error = NULL,
@@ -647,7 +975,7 @@ export function convertToVectorized(
         AND constant = 0
         AND disabled = 0
         AND length(trim(content)) > 0
-        AND (vectorized = 0 OR key != '[]' OR keysecondary != '[]')`
+        AND vectorized = 0`
   ).run(now, worldBookId).changes;
 
   if (converted > 0) {
@@ -770,14 +1098,20 @@ export function listEntries(userId: string, worldBookId: string): WorldBookEntry
 
 /**
  * Batch-load entries for multiple world books in 2 queries (ownership + entries).
- * Returns a Map from bookId → entries[], preserving per-book grouping.
+ * Returns a Map from bookId → entries[], preserving per-book grouping. When
+ * provided, `bookNameMap` is populated from the ownership query at no extra cost.
  */
-export function listEntriesForBooks(userId: string, bookIds: string[]): Map<string, WorldBookEntry[]> {
+export function listEntriesForBooks(
+  userId: string,
+  bookIds: string[],
+  bookNameMap?: Map<string, string>,
+): Map<string, WorldBookEntry[]> {
   if (bookIds.length === 0) return new Map();
   const ph = bookIds.map(() => "?").join(", ");
   const owned = getDb()
-    .query(`SELECT id FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
-    .all(...bookIds, userId) as { id: string }[];
+    .query(`SELECT id, name FROM world_books WHERE id IN (${ph}) AND user_id = ?`)
+    .all(...bookIds, userId) as { id: string; name: string }[];
+  for (const book of owned) bookNameMap?.set(book.id, book.name);
   const ownedSet = new Set(owned.map(b => b.id));
   const validIds = bookIds.filter(id => ownedSet.has(id));
   if (validIds.length === 0) return new Map();
@@ -813,8 +1147,17 @@ export function createEntry(
   const uid = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   const vectorized = !!input.vectorized;
-  const vectorIndexState = getPendingVectorIndexState(vectorized);
-  const storedExtensions = buildStoredEntryExtensions(input.extensions, input.outlet_name);
+  const vectorIndexState = getPendingVectorIndexState({
+    vectorized,
+    disabled: !!input.disabled,
+    content: input.content || "",
+  });
+  const storedExtensions = buildStoredEntryExtensions(
+    input.extensions,
+    input.outlet_name,
+    input.wi_marker,
+    input.wi_marker_side,
+  );
 
   getDb()
     .query(
@@ -870,7 +1213,7 @@ export function createEntry(
 
   touchWorldBook(worldBookId, now);
   const created = getEntry(userId, id)!;
-  if (created.vectorized) {
+  if (isWorldBookEntryVectorEligible(created)) {
     vectorizationQueue.queueWorldBookEntryVectorization(userId, created.id);
   }
   if (opts?.emitEvent !== false) emitWorldBookEntryChanged(userId, id);
@@ -904,17 +1247,27 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
     if (input[f] !== undefined) { fields.push(`${f} = ?`); values.push(input[f] ? 1 : 0); }
   }
 
-  if (input.extensions !== undefined || input.outlet_name !== undefined) {
+  if (
+    input.extensions !== undefined
+    || input.outlet_name !== undefined
+    || input.wi_marker !== undefined
+    || input.wi_marker_side !== undefined
+  ) {
     fields.push("extensions = ?");
     values.push(buildStoredEntryExtensions(
       input.extensions ?? existing.extensions,
       input.outlet_name !== undefined ? input.outlet_name : existing.outlet_name,
+      input.wi_marker !== undefined ? input.wi_marker : existing.wi_marker,
+      input.wi_marker_side !== undefined ? input.wi_marker_side : existing.wi_marker_side,
     ));
   }
 
   if (shouldResetVectorIndex(input)) {
-    const nextVectorized = input.vectorized ?? existing.vectorized;
-    const vectorIndexState = getPendingVectorIndexState(nextVectorized);
+    const vectorIndexState = getPendingVectorIndexState({
+      vectorized: input.vectorized ?? existing.vectorized,
+      disabled: input.disabled ?? existing.disabled,
+      content: input.content ?? existing.content,
+    });
     fields.push("vector_index_status = ?");
     values.push(vectorIndexState.vector_index_status);
     fields.push("vector_indexed_at = ?");
@@ -932,30 +1285,32 @@ export function updateEntry(userId: string, id: string, input: UpdateWorldBookEn
   getDb().query(`UPDATE world_book_entries SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   touchWorldBook(existing.world_book_id, values[values.length - 2]);
   const updated = getEntry(userId, id)!;
-  if (updated.vectorized) {
-    if (shouldResetVectorIndex(input) || updated.vector_index_status !== "indexed") {
-      vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
-    }
-  } else {
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, updated.id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
+  if (!updated.vectorized) {
+    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, false);
+  } else if (shouldResetVectorIndex(input)) {
+    deleteWorldBookVectorsAndMaybeRequeue(userId, updated, true);
+  } else if (updated.vector_index_status !== "indexed" && isWorldBookEntryVectorEligible(updated)) {
+    vectorizationQueue.queueWorldBookEntryVectorization(userId, updated.id);
   }
   emitWorldBookEntryChanged(userId, id);
   return updated;
 }
 
-export function deleteEntry(userId: string, id: string): boolean {
+export async function deleteEntry(userId: string, id: string): Promise<boolean> {
   // Verify the entry belongs to a world book owned by this user
   const entry = getEntry(userId, id);
   if (!entry) return false;
 
-  const deleted = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
+  const deleted = await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(
+    userId,
+    [id],
+    () => {
+      const removed = getDb().query("DELETE FROM world_book_entries WHERE id = ?").run(id).changes > 0;
+      if (removed) touchWorldBook(entry.world_book_id);
+      return removed;
+    },
+  );
   if (deleted) {
-    touchWorldBook(entry.world_book_id);
-    void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, id).catch((err: unknown) => {
-      console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-    });
     eventBus.emit(EventType.WORLD_BOOK_ENTRY_DELETED, { id, worldBookId: entry.world_book_id }, userId);
   }
   return deleted;
@@ -975,6 +1330,8 @@ export function duplicateEntry(userId: string, entryId: string, input?: Duplicat
 
   return createEntry(userId, targetBook.id, {
     outlet_name: existing.outlet_name,
+    wi_marker: existing.wi_marker,
+    wi_marker_side: existing.wi_marker_side,
     key: [...existing.key],
     keysecondary: [...existing.keysecondary],
     content: existing.content,
@@ -1040,11 +1397,11 @@ export function reorderEntries(userId: string, worldBookId: string, orderedIds: 
   return true;
 }
 
-export function bulkOperateEntries(
+export async function bulkOperateEntries(
   userId: string,
   worldBookId: string,
   input: WorldBookEntryBulkActionInput,
-): WorldBookEntryBulkActionResult | null {
+): Promise<WorldBookEntryBulkActionResult | null> {
   const book = getWorldBook(userId, worldBookId);
   if (!book) return null;
 
@@ -1063,16 +1420,13 @@ export function bulkOperateEntries(
   const db = getDb();
 
   if (input.action === "delete") {
-    db.transaction(() => {
-      const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
-      uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
-      touchWorldBook(worldBookId, now);
-    })();
-    for (const entry of orderedEntries) {
-      void embeddingsSvc.deleteWorldBookEntryEmbeddings(userId, entry.id).catch((err: unknown) => {
-        console.warn("[embeddings] Failed to remove world book entry vectors:", err);
-      });
-    }
+    await embeddingsSvc.deleteWorldBookEntryEmbeddingsBeforeSourceDelete(userId, uniqueIds, () => {
+      db.transaction(() => {
+        const stmt = db.query("DELETE FROM world_book_entries WHERE id = ? AND world_book_id = ?");
+        uniqueIds.forEach((entryId) => stmt.run(entryId, worldBookId));
+        touchWorldBook(worldBookId, now);
+      })();
+    });
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
   }
@@ -1093,7 +1447,7 @@ export function bulkOperateEntries(
         stmt.run(
           targetBook.id,
           now,
-          entry.vectorized ? "pending" : "not_enabled",
+          desiredWorldBookVectorIndexStatus(entry),
           entry.id,
           worldBookId,
         );
@@ -1150,9 +1504,9 @@ export function bulkOperateEntries(
     })();
 
     const affectedVectorized = orderedEntries.filter((entry) => entry.vectorized);
-    setEntriesPendingReindex(affectedVectorized.map((entry) => entry.id));
+    setEntriesPendingReindex(affectedVectorized);
     for (const entry of affectedVectorized) {
-      vectorizationQueue.queueWorldBookEntryVectorization(userId, entry.id);
+      deleteWorldBookVectorsAndMaybeRequeue(userId, entry, true);
     }
     emitWorldBookChanged(userId, worldBookId);
     return { action: input.action, affected: uniqueIds.length };
@@ -1160,8 +1514,8 @@ export function bulkOperateEntries(
 
   if (input.action === "set_position") {
     const position = Number.isFinite(input.position) ? Math.trunc(input.position) : 0;
-    if (position < 0 || position > 7) {
-      throw new Error("position must be between 0 and 7");
+    if (position < 0 || position > 8) {
+      throw new Error("position must be between 0 and 8");
     }
     const depth = position === 4 && Number.isFinite(input.depth) ? Math.trunc(input.depth!) : 4;
     db.transaction(() => {
@@ -1283,8 +1637,17 @@ function bulkInsertEntries(
         const id = crypto.randomUUID();
         const uid = crypto.randomUUID();
         const vectorized = options.forceVectorizedOff ? false : !!input.vectorized;
-        const vectorIndexState = getPendingVectorIndexState(vectorized);
-        const extensionsJson = buildStoredEntryExtensions(input.extensions, input.outlet_name);
+        const vectorIndexState = getPendingVectorIndexState({
+          vectorized,
+          disabled: !!input.disabled,
+          content: input.content || "",
+        });
+        const extensionsJson = buildStoredEntryExtensions(
+          input.extensions,
+          input.outlet_name,
+          input.wi_marker,
+          input.wi_marker_side,
+        );
 
         insert.run(
           id, worldBookId, uid,
@@ -1326,7 +1689,7 @@ function bulkInsertEntries(
         );
 
         insertedIds.push(id);
-        if (vectorized) vectorizedIds.push(id);
+        if (vectorIndexState.vector_index_status === "pending") vectorizedIds.push(id);
       }
     });
     tx();
@@ -1537,6 +1900,8 @@ function entryToCharacterBookSpec(entry: WorldBookEntry, index: number): Record<
     uid: entry.uid,
   };
   if (entry.outlet_name) extensions.outlet_name = entry.outlet_name;
+  if (entry.wi_marker) extensions.wi_marker = entry.wi_marker;
+  if (entry.wi_marker_side) extensions.wi_marker_side = entry.wi_marker_side;
 
   return {
     id: index,
@@ -1606,6 +1971,8 @@ function exportSillyTavern(book: WorldBook, entries: WorldBookEntry[]): Record<s
           delay: entry.delay,
           vectorized: entry.vectorized,
           ...(entry.outlet_name ? { outlet_name: entry.outlet_name } : {}),
+          ...(entry.wi_marker ? { wi_marker: entry.wi_marker } : {}),
+          ...(entry.wi_marker_side ? { wi_marker_side: entry.wi_marker_side } : {}),
           ...entry.extensions,
         },
       ])

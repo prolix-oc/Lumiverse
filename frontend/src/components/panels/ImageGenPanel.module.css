@@ -88,6 +88,105 @@
   flex: 1;
 }
 
+.loraRows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.loraRow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 10px;
+  background: var(--lumiverse-fill-subtle);
+}
+.loraRowDragging {
+  z-index: 5;
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--lumiverse-primary-040, var(--lumiverse-primary));
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-bg-deep));
+}
+
+
+.loraRowHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.loraRowHeading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+}
+
+
+.loraRowTitle {
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+}
+.loraDragHandle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  touch-action: none;
+  transition: background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+@media (hover: hover) {
+  .loraDragHandle:hover:not(.loraDragHandleDisabled) {
+    background: var(--lumiverse-primary-015);
+    color: var(--lumiverse-text);
+  }
+}
+
+.loraDragHandle:active:not(.loraDragHandleDisabled) {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+  cursor: grabbing;
+}
+
+.loraDragHandle:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 1px;
+}
+
+.loraDragHandleDisabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+
+.loraFilenameControls {
+  display: grid;
+  gap: 8px;
+}
+
+.loraWeightGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .loraWeightGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .error {
   padding: 10px;
   border-radius: 8px;
@@ -96,6 +195,31 @@
   color: #ffd0d0;
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
 }
+.loraDiscoveryStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loraDiscoveryStatus:focus {
+  outline: 1.5px solid var(--lumiverse-primary-050);
+  outline-offset: 2px;
+}
+
+.loraReorderAnnouncement {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(100%);
+  white-space: nowrap;
+}
+
 
 .workflowCard {
   display: flex;

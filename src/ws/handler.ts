@@ -7,6 +7,8 @@ import { consumeTicket } from "./tickets";
 import { getWorkerHost } from "../spindle/lifecycle";
 import * as managerSvc from "../spindle/manager.service";
 import { getFirstUserId } from "../auth/seed";
+import { validateRoomCredential } from "../services/room-auth";
+import * as multiplayerSvc from "../services/multiplayer.service";
 
 const WS_MESSAGE_SIZE_LIMIT_DEFAULT = 1024 * 1024;
 const WS_MESSAGE_SIZE_LIMIT_SPINDLE_BACKEND_MSG = 4 * 1024 * 1024;
@@ -16,6 +18,11 @@ export const wsHandler = upgradeWebSocket((c) => {
   let userId: string | null = null;
   let userRole: string | null = null;
   let sessionId: string | null = null;
+  let heartbeatOnly = false;
+  // Multiplayer: set when this socket is a room participant (peer or joined
+  // local account). The participantId is connection-scoped and authoritative —
+  // inbound room_* messages NEVER trust a participantId from the payload.
+  let roomAuth: { roomId: string; participantId: string } | null = null;
 
   return {
     async onOpen(_event, ws) {
@@ -23,6 +30,51 @@ export const wsHandler = upgradeWebSocket((c) => {
 
       try {
         const url = new URL(c.req.url);
+        heartbeatOnly = url.searchParams.get("heartbeat") === "1";
+
+        // Auth path 3: room token (remote multiplayer peer, synthetic identity).
+        // A peer is NOT a host-local account: it gets NO userId, NO user:/system
+        // subscription, and only ever joins its room:{roomId} topic.
+        const roomToken = url.searchParams.get("roomToken");
+        if (roomToken) {
+          const credential = await validateRoomCredential({ roomToken });
+          if (!credential) {
+            ws.send(JSON.stringify({
+              event: "AUTH_ERROR",
+              payload: { message: "Invalid or expired room token" },
+              timestamp: Date.now(),
+            }));
+            ws.close(1008, "Invalid room token");
+            return;
+          }
+          const join = multiplayerSvc.joinByToken(credential.roomId, credential.subject, {
+            displayName: credential.displayName,
+          });
+          if (!join.ok) {
+            ws.send(JSON.stringify({
+              event: "AUTH_ERROR",
+              payload: { message: `Cannot join room: ${join.reason}`, reason: join.reason },
+              timestamp: Date.now(),
+            }));
+            ws.close(1008, "Join refused");
+            return;
+          }
+          const rawPeer = (ws as any).raw as import("bun").ServerWebSocket<unknown>;
+          // Token connections are always peers → subscribe to the feed topic.
+          if (rawPeer) eventBus.subscribeClientToRoom(rawPeer, join.room.id, join.participant.id, { feed: true });
+          roomAuth = { roomId: join.room.id, participantId: join.participant.id };
+          ws.send(JSON.stringify({
+            event: EventType.CONNECTED,
+            payload: { message: "Connected to room", userId: null, role: "peer", peer: true, roomId: join.room.id, participantId: join.participant.id },
+            timestamp: Date.now(),
+          }));
+          ws.send(JSON.stringify({
+            event: EventType.ROOM_STATUS,
+            payload: multiplayerSvc.buildHydrationPayload(join.room, join.participant.id),
+            timestamp: Date.now(),
+          }));
+          return;
+        }
 
         // Auth path 1: single-use ticket (preferred, avoids token in URL)
         const ticket = url.searchParams.get("ticket");
@@ -80,6 +132,14 @@ export const wsHandler = upgradeWebSocket((c) => {
           }
 
           sessionId = session.session.id;
+        }
+
+        // Dedicated browser-worker liveness connection. It authenticates like
+        // the application socket but never joins the event bus, so expensive
+        // or long-running application WS handlers cannot delay its pong.
+        if (heartbeatOnly) {
+          ws.send(JSON.stringify({ type: "heartbeat_ready", timestamp: Date.now() }));
+          return;
         }
 
         // Self-healing: first user (user 0) is always the instance owner.
@@ -149,6 +209,8 @@ export const wsHandler = upgradeWebSocket((c) => {
           return;
         }
 
+        if (heartbeatOnly) return;
+
         if (data.type === "visibility") {
           if (userId && sessionId) {
             eventBus.setUserVisibility(userId, sessionId, !!data.visible);
@@ -161,6 +223,90 @@ export const wsHandler = upgradeWebSocket((c) => {
             const chatId = typeof data.chatId === "string" ? data.chatId : null;
             eventBus.setClientStreamFocus(raw, userId, chatId);
           }
+          return;
+        }
+
+        // ── Multiplayer room inbound messages ──
+        // The acting participant is ALWAYS resolved from connection-scoped
+        // roomAuth — a participantId in the payload is never trusted.
+        if (data.type === "room_join") {
+          // Local-account user joining a room (multi-tab / LAN). Peers connect
+          // with a room token at upgrade instead (handled in onOpen).
+          if (!userId) return;
+          const roomId = typeof data.roomId === "string" ? data.roomId : null;
+          if (!roomId) return;
+          const join = multiplayerSvc.joinByUser(roomId, userId, {
+            displayName: typeof data.displayName === "string" ? data.displayName : undefined,
+            persona: data.persona,
+          });
+          if (!join.ok) {
+            ws.send(JSON.stringify({ event: "ROOM_JOIN_REJECTED", payload: { roomId, reason: join.reason }, timestamp: Date.now() }));
+            return;
+          }
+          // Only the host may set the room's character (bot) avatar — it's
+          // relayed to peers (who can't fetch the owner-scoped endpoint).
+          if (data.characterAvatar && join.participant.role === "host") {
+            multiplayerSvc.setRoomCharacterAvatar(join.room.id, data.characterAvatar);
+          }
+          // The host gets chat/gen events on its user topic already; only peers
+          // subscribe to the feed topic (avoids double-delivery to the host).
+          if (raw) {
+            eventBus.subscribeClientToRoom(raw, join.room.id, join.participant.id, {
+              feed: join.participant.role !== "host",
+            });
+          }
+          roomAuth = { roomId: join.room.id, participantId: join.participant.id };
+          ws.send(JSON.stringify({
+            event: EventType.ROOM_STATUS,
+            payload: multiplayerSvc.buildHydrationPayload(join.room, join.participant.id),
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+
+        if (data.type === "room_leave") {
+          if (!roomAuth) return;
+          multiplayerSvc.leaveParticipant(roomAuth.roomId, roomAuth.participantId);
+          if (raw) eventBus.unsubscribeClientFromRoom(raw, roomAuth.roomId, roomAuth.participantId);
+          roomAuth = null;
+          return;
+        }
+
+        if (data.type === "room_message") {
+          if (!roomAuth) return;
+          const result = multiplayerSvc.submitPeerMessage(
+            roomAuth.roomId,
+            roomAuth.participantId,
+            data.content,
+            data.associative_regex_append,
+          );
+          if (!result.ok) {
+            ws.send(JSON.stringify({ event: "ROOM_MESSAGE_REJECTED", payload: { reason: result.reason }, timestamp: Date.now() }));
+          }
+          return;
+        }
+
+        if (data.type === "room_persona_change") {
+          if (!roomAuth) return;
+          multiplayerSvc.updateParticipantPersona(roomAuth.roomId, roomAuth.participantId, data.persona);
+          return;
+        }
+
+        if (data.type === "room_persona_lorebook") {
+          if (!roomAuth) return;
+          multiplayerSvc.updateParticipantLorebook(roomAuth.roomId, roomAuth.participantId, data.lorebook);
+          return;
+        }
+
+        if (data.type === "room_typing") {
+          if (!roomAuth) return;
+          multiplayerSvc.markTyping(roomAuth.roomId, roomAuth.participantId, !!data.typing);
+          return;
+        }
+
+        if (data.type === "room_pass_turn") {
+          if (!roomAuth) return;
+          multiplayerSvc.passTurn(roomAuth.roomId, roomAuth.participantId);
           return;
         }
 
@@ -316,6 +462,10 @@ export const wsHandler = upgradeWebSocket((c) => {
       const raw = (ws as any).raw as import("bun").ServerWebSocket<unknown>;
       if (raw) {
         eventBus.removeClient(raw);
+      }
+      if (roomAuth) {
+        multiplayerSvc.handleDisconnect(roomAuth.roomId, roomAuth.participantId);
+        roomAuth = null;
       }
     },
   };

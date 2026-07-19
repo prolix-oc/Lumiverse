@@ -37,6 +37,27 @@ const newScript = await spindle.regex_scripts.create({
   scope_id: 'character-id',
 })
 
+// Create a display action associated with
+// <button data-regex-action="continue-scene">...</button>
+const interactiveScript = await spindle.regex_scripts.create({
+  name: 'Interactive scene',
+  find_regex: '<scene>([\\s\\S]*?)<\\/scene>',
+  replace_string: '<button data-regex-action="continue-scene">Continue $1</button>',
+  flags: 'g',
+  placement: ['ai_output'],
+  target: 'display',
+  actions: [{
+    id: 'continue-scene',
+    type: 'send',
+    multi_select: false,
+    cost: '1',
+    limit: '3',
+    title: 'Continue $1',
+    subtitle: '',
+    content: 'Continue with $1.',
+  }],
+})
+
 // Update a script
 const updated = await spindle.regex_scripts.update(newScript.id, {
   disabled: true,
@@ -93,6 +114,7 @@ const active = await spindle.regex_scripts.getActive({
 | `name` | `string` | Yes | Display name shown in the regex panel. |
 | `find_regex` | `string` | Yes | Pattern compiled with the JavaScript regex engine. Validated at create time. |
 | `replace_string` | `string` | No | Replacement template. Supports `$1` / `$&` / `$<name>` capture references. Default `""`. |
+| `actions` | `RegexActionDTO[]` | No | Associative actions for elements in display replacement HTML. Default `[]`. |
 | `flags` | `string` | No | Any subset of `dgimsuvy` (full JS regex flag set: `d` hasIndices, `g` global, `i` ignore-case, `m` multiline, `s` dotAll, `u` unicode, `v` unicodeSets, `y` sticky). No duplicates. Default `"gi"`. |
 | `placement` | `RegexPlacementDTO[]` | No | Which message roles the rule applies to. Default `["ai_output"]`. |
 | `scope` | `"global" \| "character" \| "chat"` | No | Default `"global"`. |
@@ -114,6 +136,27 @@ const active = await spindle.regex_scripts.getActive({
 
 Same fields as `RegexScriptCreateDTO`, all optional.
 
+## RegexActionDTO
+
+```ts
+{
+  id: string
+  type: "send" | "append"
+  multi_select: boolean
+  cost: string
+  limit: string
+  title: string
+  subtitle: string
+  content: string
+}
+```
+
+The action `id` associates with `data-regex-action="id"` (preferred) or `id="id"` in replacement HTML. Actions only activate for enabled scripts with the `display` target. `title`, `subtitle`, `content`, `cost`, and `limit` support native replacement captures such as `$1`, `$&`, and `$<name>`.
+
+A single-select `send` action creates a visible user turn and starts generation. A single-select `append` action waits for the next user turn and attaches hidden prompt content. When `multi_select` is true, `cost` is the option's positive numeric cost and `limit` is the block's positive total-cost bound. The resolved block limit is the lowest positive limit among its options.
+
+Multi-select options toggle in a provisional client-side pool. They can be removed until Send begins, at which point all selected options are atomically claimed and their visible `send` and hidden `append` modifiers are consumed together. A single-select `send` action is also a Send signal and joins the same atomic batch as its staged modifiers. Single-select `append` actions remain non-triggering. Claims are persisted on the source message, making committed options one-shot across rerenders and clients.
+
 ## RegexScriptDTO
 
 ```ts
@@ -123,8 +166,9 @@ Same fields as `RegexScriptCreateDTO`, all optional.
   script_id: string             // stable, normalized identifier (lowercase, _-only)
   find_regex: string
   replace_string: string
+  actions: RegexActionDTO[]
   flags: string                 // any subset of "dgimsuvy" (full JS regex flag set)
-  placement: ("user_input" | "ai_output" | "world_info" | "reasoning")[]
+  placement: ("user_input" | "ai_output" | "world_info" | "reasoning" | "memory")[]
   scope: "global" | "character" | "chat"
   scope_id: string | null       // character ID or chat ID when scoped
   target: "prompt" | "response" | "display"

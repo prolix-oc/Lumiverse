@@ -23,13 +23,15 @@ declare const spindle: import('lumiverse-spindle-types').SpindleAPI
 | [LLM Tools](llm-tools.md) | `tools` | Register function-calling tools + Council-eligible tools |
 | [Generation](generation.md) | `generation` | Fire LLM generations + inspect connections |
 | [Image Generation](image-generation.md) | `image_gen` | Generate images via image gen connection profiles |
-| [Images](images.md) | `images` | Read, upload, filter, and delete stored images |
+| [Images](images.md) | `images` | Read, upload, filter, and delete stored image/video assets |
+| [Media](media.md) | `media` | Convert audio/video, transcode with custom parameters, mux tracks, and compose still-image videos |
 | [Theme](theme.md) | `app_manipulation` | Apply CSS variable overrides on top of the user's theme |
 | [Storage](storage.md) | Free | Scoped file storage (extension + per-user) |
 | [Shared RPC Pool](shared-rpc-pool.md) | Free | Cross-extension latest-state and on-demand reads across the worker isolation boundary |
 | [Ephemeral Storage](ephemeral-storage.md) | `ephemeral_storage` | Temporary storage with TTL and quotas |
 | [Variables](variables.md) | Free | Local (chat-scoped) and global variable access |
 | [Tokens](tokens.md) | Free | Count text, message arrays, or stored chats against an explicit model or the main/sidecar model |
+| [Uploads](uploads.md) | Free | Receive large files via a resumable tus endpoint, then read them in the worker by id |
 | [Characters](characters.md) | `characters` | CRUD on character cards |
 | [Chats](chats.md) | `chats` | CRUD on chat sessions + active chat |
 | [Presets](presets.md) | `presets` | CRUD on user presets, prompt blocks, and category groups |

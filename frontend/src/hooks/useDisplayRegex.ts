@@ -56,6 +56,11 @@ interface DisplayPreprocessBody {
   rawContent: string
 }
 
+interface DisplayPreprocessOutcome {
+  content: string
+  ok: boolean
+}
+
 interface PendingDisplayPreprocess {
   body: DisplayPreprocessBody
   resolve: (value: string) => void
@@ -63,7 +68,7 @@ interface PendingDisplayPreprocess {
 
 const displayRegexResolutionCache = new Map<string, DisplayRegexCacheEntry>()
 const displayRegexContentCache = new Map<string, DisplayRegexContentCacheEntry>()
-const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<string>; touchedVars?: ReadonlySet<string>; messageId?: string }>()
+const displayPreprocessCache = new Map<string, { value?: string; promise?: Promise<DisplayPreprocessOutcome>; touchedVars?: ReadonlySet<string>; messageId?: string }>()
 const DISPLAY_PREPROCESS_CACHE_MAX = 500
 const displayRegexCacheListeners = new Set<() => void>()
 let displayRegexGlobalCv = 0
@@ -208,7 +213,7 @@ function enqueueDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): 
   })
 }
 
-function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<string> {
+function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Promise<DisplayPreprocessOutcome> {
   if (isDisplayChatOwned(chatId)) {
     const resolver = getDisplayResolverForChat(chatId)
     if (resolver) {
@@ -224,25 +229,31 @@ function fetchDisplayPreprocess(chatId: string, body: DisplayPreprocessBody): Pr
           },
         })
         .then((local) => {
-          if (local) return local.content
+          if (local) return { content: local.content, ok: true }
           console.error(`[display] resolver.resolveBody returned null for owned chat=${chatId}; showing raw (no backend fallback)`)
-          return body.rawContent
+          return { content: body.rawContent, ok: false }
         })
         .catch((err: unknown) => {
           console.error(`[display] resolver.resolveBody threw for owned chat=${chatId}; showing raw (no backend fallback)`, err)
-          return body.rawContent
+          return { content: body.rawContent, ok: false }
         })
     }
-    return Promise.resolve(body.rawContent)
+    return Promise.resolve({ content: body.rawContent, ok: false })
   }
-  return enqueueDisplayPreprocess(chatId, body)
+  return enqueueDisplayPreprocess(chatId, body).then((content) => ({ content, ok: true }))
 }
 
-export function useDisplayPreprocessed(
+interface DisplayPreprocessedState {
+  value: string
+  // False while the preprocess is pending or an owning resolver failed.
+  ready: boolean
+}
+
+function useDisplayPreprocessedState(
   content: string,
   chatId: string | null,
   opts: DisplayPreprocessOpts | undefined,
-): string {
+): DisplayPreprocessedState {
   const messageIdForSnapshot = opts?.messageId ?? null
   const getSnapshotForThisMessage = useCallback(
     () => getDisplayRegexCacheSnapshot(messageIdForSnapshot),
@@ -260,13 +271,13 @@ export function useDisplayPreprocessed(
   }, [content, opts?.messageId, opts?.role, chatId])
 
   const cached = key ? displayPreprocessCache.get(key)?.value : undefined
-  const [state, setState] = useState<{ key: string; value: string } | null>(() =>
-    key && cached !== undefined ? { key, value: cached } : null,
+  const [state, setState] = useState<{ key: string; value: string; ok: boolean } | null>(() =>
+    key && cached !== undefined ? { key, value: cached, ok: true } : null,
   )
 
   const lastRef = useRef<{ raw: string; value: string } | null>(null)
   if (key && cached !== undefined) lastRef.current = { raw: content, value: cached }
-  else if (key && state?.key === key) lastRef.current = { raw: content, value: state.value }
+  else if (key && state?.key === key && state.ok) lastRef.current = { raw: content, value: state.value }
 
   useEffect(() => {
     if (!key || !opts?.messageId || !chatId) {
@@ -274,17 +285,17 @@ export function useDisplayPreprocessed(
       return
     }
     let cancelled = false
-    const apply = (next: string) => {
-      if (!cancelled) setState({ key, value: next })
+    const apply = (next: DisplayPreprocessOutcome) => {
+      if (!cancelled) setState({ key, value: next.content, ok: next.ok })
     }
     const existing = displayPreprocessCache.get(key)
     if (existing?.value !== undefined) {
-      apply(existing.value)
+      apply({ content: existing.value, ok: true })
       return () => { cancelled = true }
     }
     if (!existing?.promise) {
       const messageIdForEntry = opts.messageId
-      let assignedPromise: Promise<string>
+      let assignedPromise: Promise<DisplayPreprocessOutcome>
       const promise = fetchDisplayPreprocess(chatId, {
         messageId: opts.messageId,
         role: opts.role,
@@ -292,14 +303,18 @@ export function useDisplayPreprocessed(
       })
         .then((next) => {
           if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
-            displayPreprocessCache.set(key, { value: next, messageId: messageIdForEntry })
-            if (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
-              const drop = displayPreprocessCache.size - DISPLAY_PREPROCESS_CACHE_MAX
-              let i = 0
-              for (const k of displayPreprocessCache.keys()) {
-                if (i++ >= drop) break
-                displayPreprocessCache.delete(k)
+            if (next.ok) {
+              displayPreprocessCache.set(key, { value: next.content, messageId: messageIdForEntry })
+              if (displayPreprocessCache.size > DISPLAY_PREPROCESS_CACHE_MAX) {
+                const drop = displayPreprocessCache.size - DISPLAY_PREPROCESS_CACHE_MAX
+                let i = 0
+                for (const k of displayPreprocessCache.keys()) {
+                  if (i++ >= drop) break
+                  displayPreprocessCache.delete(k)
+                }
               }
+            } else {
+              displayPreprocessCache.delete(key)
             }
           }
           return next
@@ -308,7 +323,7 @@ export function useDisplayPreprocessed(
           if (displayPreprocessCache.get(key)?.promise === assignedPromise) {
             displayPreprocessCache.delete(key)
           }
-          return content
+          return { content, ok: false }
         })
       assignedPromise = promise
       displayPreprocessCache.set(key, { promise, messageId: messageIdForEntry })
@@ -317,11 +332,19 @@ export function useDisplayPreprocessed(
     return () => { cancelled = true }
   }, [key, opts?.messageId, opts?.role, chatId, content, cvSnapshot])
 
-  if (!key) return content
-  if (cached !== undefined) return cached
-  if (state?.key === key) return state.value
-  if (lastRef.current?.raw === content) return lastRef.current.value
-  return content
+  if (!key) return { value: content, ready: true }
+  if (cached !== undefined) return { value: cached, ready: true }
+  if (state?.key === key) return { value: state.value, ready: state.ok }
+  if (lastRef.current?.raw === content) return { value: lastRef.current.value, ready: true }
+  return { value: content, ready: false }
+}
+
+export function useDisplayPreprocessed(
+  content: string,
+  chatId: string | null,
+  opts: DisplayPreprocessOpts | undefined,
+): string {
+  return useDisplayPreprocessedState(content, chatId, opts).value
 }
 
 const RAW_MACRO_RE = /\{\{(?!\s*(?:user|char|bot|notChar|not_char|charName)\s*\}\})/i
@@ -462,6 +485,7 @@ export function useDisplayRegex(
 ): string {
   const regexScripts = useStore((s) => s.regexScripts)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const activeGroupCharacterId = useStore((s) => s.activeGroupCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
   const activePersonaId = useStore((s) => s.activePersonaId)
   const messageIndex = useStore((s) => {
@@ -483,9 +507,13 @@ export function useDisplayRegex(
     if (messageIndex < 0) return undefined
     return { chat_index: String(messageIndex) }
   }, [messageIndex])
+  const macroCharacterId = activeGroupCharacterId ?? activeCharacterId
 
-  const content = useDisplayPreprocessed(rawContent, activeChatId, preprocessOpts)
+  const { value: content, ready: preprocessReady } = useDisplayPreprocessedState(rawContent, activeChatId, preprocessOpts)
   const pendingSlowReportsRef = useRef<SlowRegexReport[]>([])
+
+  // When an extension owns display, regex runs on preprocessed content only.
+  const regexGated = !!activeChatId && isDisplayChatOwned(activeChatId) && !preprocessReady
 
   const displayScripts = useMemo(
     () =>
@@ -527,7 +555,7 @@ export function useDisplayRegex(
 
     return JSON.stringify({
       activeChatId,
-      activeCharacterId,
+      macroCharacterId,
       activePersonaId,
       scripts: scriptsNeedingResolution.map((s) => [
         s.id,
@@ -537,7 +565,7 @@ export function useDisplayRegex(
         s.substitute_macros,
       ]),
     })
-  }, [scriptsNeedingResolution, activeChatId, activeCharacterId, activePersonaId])
+  }, [scriptsNeedingResolution, activeChatId, macroCharacterId, activePersonaId])
 
   const cachedTemplates = templateCacheKey ? displayRegexResolutionCache.get(templateCacheKey)?.value : undefined
   const [resolvedTemplatesState, setResolvedTemplatesState] = useState<ResolvedTemplatesState | null>(() => (
@@ -588,7 +616,7 @@ export function useDisplayRegex(
       let assignedPromise: Promise<ResolvedDisplayRegexTemplates>
       const promise = resolveTemplatesWithResolver(templates, {
         chatId: activeChatId ?? undefined,
-        characterId: activeCharacterId ?? undefined,
+        characterId: macroCharacterId ?? undefined,
         personaId: activePersonaId ?? undefined,
       })
         .then((res) => {
@@ -624,12 +652,12 @@ export function useDisplayRegex(
     displayRegexResolutionCache.get(templateCacheKey)?.promise?.then(applyResolvedTemplates)
 
     return () => { cancelled = true }
-  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, activeCharacterId, activePersonaId, cvSnapshot])
+  }, [scriptsNeedingResolution, templateCacheKey, activeChatId, macroCharacterId, activePersonaId, cvSnapshot])
 
   const fallbackContent = useMemo(
     () => {
       const slowReports: SlowRegexReport[] = []
-      if (displayScripts.length === 0) {
+      if (displayScripts.length === 0 || regexGated) {
         pendingSlowReportsRef.current = slowReports
         return content
       }
@@ -646,7 +674,7 @@ export function useDisplayRegex(
       pendingSlowReportsRef.current = slowReports
       return next
     },
-    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros],
+    [content, displayScripts, isUser, depth, macroCtx, resolvedTemplates, dynamicMacros, regexGated],
   )
 
   useEffect(() => {
@@ -674,11 +702,11 @@ export function useDisplayRegex(
   )
 
   const contentCacheKey = useMemo(() => {
-    if (displayScripts.length === 0 || !hasAsyncMacroScripts) return null
+    if (displayScripts.length === 0 || !hasAsyncMacroScripts || regexGated) return null
 
     return JSON.stringify({
       activeChatId,
-      activeCharacterId,
+      macroCharacterId,
       activePersonaId,
       isUser,
       depth,
@@ -704,7 +732,7 @@ export function useDisplayRegex(
     displayScripts,
     hasAsyncMacroScripts,
     activeChatId,
-    activeCharacterId,
+    macroCharacterId,
     activePersonaId,
     isUser,
     depth,
@@ -712,6 +740,7 @@ export function useDisplayRegex(
     content,
     resolvedTemplateKey,
     dynamicMacros,
+    regexGated,
   ])
 
   const cachedResolvedContent = contentCacheKey ? displayRegexContentCache.get(contentCacheKey)?.value : undefined
@@ -746,7 +775,7 @@ export function useDisplayRegex(
           isUser,
           depth,
           chatId: activeChatId ?? undefined,
-          characterId: activeCharacterId ?? undefined,
+          characterId: macroCharacterId ?? undefined,
           personaId: activePersonaId ?? undefined,
           macroCtx,
           resolvedFindPatterns: resolvedTemplates.resolvedFindPatterns,
@@ -757,7 +786,7 @@ export function useDisplayRegex(
         },
         (templates) => resolveMacrosBatchChunked(templates, {
           chat_id: activeChatId ?? undefined,
-          character_id: activeCharacterId ?? undefined,
+          character_id: macroCharacterId ?? undefined,
           persona_id: activePersonaId ?? undefined,
         }),
       )
@@ -803,11 +832,13 @@ export function useDisplayRegex(
     resolvedTemplateKey,
     resolvedTemplates,
     activeChatId,
-    activeCharacterId,
+    macroCharacterId,
     activePersonaId,
     contentCacheKey,
     dynamicMacros,
     cvSnapshot,
+    preprocessOpts?.messageId,
+    preprocessOpts?.role,
   ])
 
   // Carry the previous resolved value forward across cv-bumps and per-chunk

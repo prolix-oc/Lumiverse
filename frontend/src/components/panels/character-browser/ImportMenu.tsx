@@ -28,21 +28,26 @@ export default function ImportMenu({
   const fileInputRef = useRef<HTMLInputElement>(null)
   const tagLibraryInputRef = useRef<HTMLInputElement>(null)
 
-  // Close on outside click
+  // Close on outside click — pointerdown + guard required on Android
   useEffect(() => {
     if (!open) return
-    const handler = (e: MouseEvent) => {
+    const openedAt = Date.now()
+    const handler = (e: PointerEvent) => {
+      if (e.timeStamp < openedAt + 100) return
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
   }, [open])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length > 0) {
+      // Ask the mobile layout recovery shim to re-sync the viewport after the
+      // system file picker closes, before the modal opens.
+      window.dispatchEvent(new CustomEvent('lumiverse:recover-mobile-layout'))
       onImportFile(files)
     }
     setOpen(false)

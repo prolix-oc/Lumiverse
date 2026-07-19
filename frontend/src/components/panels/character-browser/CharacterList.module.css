@@ -4,3 +4,21 @@
   overflow-x: hidden;
   min-height: 0;
 }
+
+/* Suppress hover effects while scrolling — uses global selector
+   because child items are from a different CSS module */
+.scrollContainer[data-scrolling] :global(*) {
+  pointer-events: none;
+}
+
+/* Disable transforms while scrolling to keep the compositor layer tree small */
+.scrollContainer[data-scrolling] :global(*) {
+  transition: none !important;
+}
+
+.scrollContainer[data-scrolling] :global(img) {
+  --lazy-image-transform-transition: 0ms !important;
+  transition: none !important;
+  will-change: auto !important;
+  transform: none !important;
+}

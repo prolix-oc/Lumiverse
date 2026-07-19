@@ -16,6 +16,8 @@
   --app-viewport-offset-top: 0px;
   --app-viewport-offset-left: 0px;
   --app-keyboard-inset-bottom: 0px;
+  --app-window-controls-overlay-top: 0px;
+  --app-interactive-safe-top: env(safe-area-inset-top, 0px);
   --app-shell-height: var(--app-viewport-height);
   /* Scale-compensated full-viewport sizes. Inside the `body > *` zoom
      layer (see below), a raw `100vw`/`100vh` refers to the unzoomed
@@ -27,6 +29,17 @@
      `94vw` modals), wrap the raw unit: `calc(94vw / var(--lumiverse-ui-scale, 1))`. */
   --app-scaled-viewport-width: calc(var(--app-viewport-width) / var(--lumiverse-ui-scale, 1));
   --app-scaled-viewport-height: calc(var(--app-viewport-height) / var(--lumiverse-ui-scale, 1));
+}
+
+@media (display-mode: window-controls-overlay) {
+  :root {
+    --app-window-controls-overlay-top: env(titlebar-area-height, 32px);
+    --app-interactive-safe-top: calc(env(safe-area-inset-top, 0px) + var(--app-window-controls-overlay-top));
+  }
+
+  html[data-platform="macos"] {
+    --app-window-controls-overlay-top: max(env(titlebar-area-height, 40px), 40px);
+  }
 }
 
 html {
@@ -42,6 +55,7 @@ html {
      sideways. `clip` shuts that path down entirely. */
   overflow: clip;
   overscroll-behavior: none;
+  overscroll-behavior-x: none;
   -webkit-text-size-adjust: 100%;
   /* Let the browser choose optimal font rendering. On macOS Big Sur+,
      subpixel AA is disabled system-wide so `antialiased` only disables
@@ -54,6 +68,7 @@ html {
 body {
   overflow: clip;
   overscroll-behavior: none;
+  overscroll-behavior-x: none;
   font-family: var(--lumiverse-font-family);
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text);

@@ -1,4 +1,8 @@
-# Wallpapers
+---
+title: Wallpaper
+---
+
+# Wallpaper
 
 Set background images or videos behind your chat to enhance the atmosphere.
 
@@ -21,6 +25,21 @@ A wallpaper specific to one conversation:
 1. Open the **Wallpaper Panel** while in a chat
 2. Click **Set for Chat** and select an image or video file
 3. The wallpaper only appears in this chat
+
+### Wallpaper Library
+
+Every new wallpaper uploaded from this panel is also saved into your **Wallpaper Library** for reuse.
+
+1. Click **Browse Library** under either the **Global Wallpaper** or **Chat Wallpaper** section
+2. Pick any saved wallpaper from the modal gallery
+3. The chosen wallpaper is applied to the scope you opened the library from
+
+The library lists each saved wallpaper with:
+
+- Upload date
+- File size
+- Resolution
+- A static thumbnail preview for supported uploads
 
 Per-chat wallpapers override the global wallpaper. AI-generated scene backgrounds override both.
 

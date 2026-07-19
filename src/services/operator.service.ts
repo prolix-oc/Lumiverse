@@ -17,17 +17,9 @@ import {
   type WalCheckpointMode,
 } from "../db/maintenance";
 import { getAutomaticDatabaseMaintenanceStatus } from "../db/maintenance-scheduler";
+import { getGitMetadata } from "../utils/git-metadata";
 
-// ─── Git helpers (sync, lightweight) ────────────────────────────────────────
-
-function gitSync(...args: string[]): string {
-  const result = Bun.spawnSync(["git", ...args], {
-    cwd: import.meta.dir + "/../..",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  return result.exitCode === 0 ? result.stdout.toString().trim() : "";
-}
+// ─── Static metadata helpers ────────────────────────────────────────────────
 
 function readVersion(): string {
   try {
@@ -151,13 +143,15 @@ class OperatorService {
   // ── Status ────────────────────────────────────────────────────────────
 
   getLocalStatus(): Omit<OperatorStatus, "updateAvailable" | "commitsBehind" | "latestUpdateMessage"> {
+    const git = getGitMetadata();
+
     return {
       port: env.port,
       pid: process.pid,
       uptime: Date.now() - this.startedAt,
-      branch: gitSync("rev-parse", "--abbrev-ref", "HEAD") || "unknown",
+      branch: git.branch,
       version: this.version,
-      commit: gitSync("rev-parse", "--short", "HEAD") || "unknown",
+      commit: git.commit,
       remoteMode: env.trustAnyOrigin,
       ipcAvailable: this.ipcAvailable,
       ipcReason: this.ipcReason,

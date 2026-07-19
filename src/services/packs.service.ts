@@ -1,6 +1,7 @@
 import { getDb } from "../db/connection";
 import type {
   Pack, PackWithItems,
+  LumiaDlcCatalog, LumiaDlcPack,
   LumiaItem, LoomItem, LoomTool,
   CreatePackInput, UpdatePackInput,
   CreateLumiaItemInput, UpdateLumiaItemInput,
@@ -442,6 +443,77 @@ export function getAllLoomItems(userId: string, category?: string): LoomItem[] {
     .all(userId) as any[]).map(rowToLoomItem);
 }
 
+/**
+ * Return every DLC item available to a user in a single read-only catalog.
+ * Pack metadata is deliberately reduced to the extension-safe subset; the
+ * ownership id and arbitrary pack extras are not surfaced to extensions.
+ */
+export function getLumiaDlcCatalog(userId: string): LumiaDlcCatalog {
+  const db = getDb();
+  const packs = (db
+    .query(
+      `SELECT id, name, author, cover_url, version, is_custom, source_url, created_at, updated_at
+       FROM packs
+       WHERE user_id = ?
+       ORDER BY name COLLATE NOCASE ASC, id ASC`,
+    )
+    .all(userId) as any[])
+    .map((row): LumiaDlcPack => ({
+      ...row,
+      is_custom: !!row.is_custom,
+    }));
+
+  const lumiaItems = (db
+    .query(
+      `SELECT li.*
+       FROM lumia_items li
+       JOIN packs p ON li.pack_id = p.id
+       WHERE p.user_id = ?
+       ORDER BY p.name COLLATE NOCASE ASC, li.sort_order ASC, li.name COLLATE NOCASE ASC, li.id ASC`,
+    )
+    .all(userId) as any[])
+    .map(rowToLumiaItem);
+
+  const loomItems = (db
+    .query(
+      `SELECT li.*
+       FROM loom_items li
+       JOIN packs p ON li.pack_id = p.id
+       WHERE p.user_id = ?
+       ORDER BY p.name COLLATE NOCASE ASC, li.sort_order ASC, li.name COLLATE NOCASE ASC, li.id ASC`,
+    )
+    .all(userId) as any[])
+    .map(rowToLoomItem);
+
+  const narrativeStyles: LoomItem[] = [];
+  const utilities: LoomItem[] = [];
+  const retrofits: LoomItem[] = [];
+  for (const item of loomItems) {
+    if (item.category === "loom_utility") {
+      utilities.push(item);
+    } else if (item.category === "retrofit") {
+      retrofits.push(item);
+    } else {
+      // Pack imports normalize unknown categories to narrative styles. Keep the
+      // catalog equally resilient to legacy rows that predate that validation.
+      narrativeStyles.push(item);
+    }
+  }
+
+  const tools = (db
+    .query(
+      `SELECT lt.*
+       FROM loom_tools lt
+       JOIN packs p ON lt.pack_id = p.id
+       WHERE p.user_id = ?
+       ORDER BY p.name COLLATE NOCASE ASC, lt.sort_order ASC, lt.tool_name COLLATE NOCASE ASC, lt.id ASC`,
+    )
+    .all(userId) as any[])
+    .map(rowToLoomTool);
+
+  return { packs, lumiaItems, narrativeStyles, utilities, retrofits, tools };
+}
+
 // --- Import / Export ---
 
 /**
@@ -523,6 +595,7 @@ function normalizePackPayload(raw: any): PackImportPayload {
       scriptId: s.scriptId || s.script_id || "",
       findRegex: s.findRegex || s.find_regex || "",
       replaceString: s.replaceString || s.replace_string || "",
+      actions: s.actions || [],
       flags: s.flags || "gi",
       placement: s.placement || ["ai_output"],
       target: Array.isArray(s.target) ? s.target : [s.target || "response"],
@@ -628,6 +701,7 @@ export function importPack(userId: string, rawPayload: PackImportPayload): PackW
         script_id: s.scriptId || "",
         find_regex: s.findRegex,
         replace_string: s.replaceString || "",
+        actions: s.actions || [],
         flags: s.flags || "gi",
         placement: (s.placement as RegexPlacement[]) || ["ai_output"],
         scope: "global",
@@ -726,6 +800,7 @@ export function exportPack(userId: string, id: string): PackExportPayload | null
           scriptId: s.script_id || undefined,
           findRegex: s.find_regex,
           replaceString: s.replace_string || undefined,
+          actions: s.actions.length > 0 ? s.actions : undefined,
           flags: s.flags,
           placement: s.placement,
           target: s.target,

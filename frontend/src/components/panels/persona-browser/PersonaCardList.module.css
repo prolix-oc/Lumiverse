@@ -40,6 +40,24 @@
   box-shadow: 0 0 12px var(--lumiverse-primary-020);
 }
 
+.batchCheck {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-bg-elevated, var(--lumiverse-bg));
+  color: white;
+}
+
+.batchCheckSelected {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary);
+}
+
 .avatar {
   width: 40px;
   height: 40px;

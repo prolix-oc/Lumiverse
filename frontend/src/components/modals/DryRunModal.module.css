@@ -91,10 +91,33 @@
   background: var(--lumiverse-fill);
 }
 
+.messageRowClipBoundary {
+  border-color: rgba(255, 171, 0, 0.48);
+  background:
+    linear-gradient(90deg, rgba(255, 171, 0, 0.11), rgba(255, 171, 0, 0.03) 44%, transparent),
+    transparent;
+  box-shadow: inset 3px 0 0 rgba(255, 171, 0, 0.72);
+}
+
+.messageRowClipBoundary:hover {
+  background:
+    linear-gradient(90deg, rgba(255, 171, 0, 0.14), rgba(255, 171, 0, 0.05) 44%, transparent),
+    var(--lumiverse-fill);
+}
+
 .messageRowActive {
   border-color: var(--lumiverse-primary, #9370db);
   background: var(--lumiverse-primary-010);
   box-shadow: inset 0 0 0 1px var(--lumiverse-primary-015);
+}
+
+.messageRowClipBoundary.messageRowActive {
+  background:
+    linear-gradient(90deg, rgba(255, 171, 0, 0.12), rgba(255, 171, 0, 0.04) 44%, transparent),
+    var(--lumiverse-primary-010);
+  box-shadow:
+    inset 3px 0 0 rgba(255, 171, 0, 0.78),
+    inset 0 0 0 1px var(--lumiverse-primary-015);
 }
 
 .messageRowHeader {
@@ -121,6 +144,43 @@
 .messageIndex {
   font-size: calc(10px * var(--lumiverse-font-scale, 1));
   color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.3));
+}
+
+.messageClipBadge {
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 171, 0, 0.3);
+  border-radius: 999px;
+  color: #ffab00;
+  background: rgba(255, 171, 0, 0.08);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.messageReasoningBadge {
+  padding: 2px 6px;
+  border: 1px solid rgba(147, 112, 219, 0.28);
+  border-radius: 999px;
+  background: var(--lumiverse-primary-010);
+  color: var(--lumiverse-primary, #9370db);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.messagePartBadge {
+  padding: 2px 6px;
+  border: 1px solid rgba(91, 192, 222, 0.24);
+  border-radius: 999px;
+  background: rgba(91, 192, 222, 0.1);
+  color: rgba(146, 219, 241, 0.92);
+  font-size: calc(9px * var(--lumiverse-font-scale, 1));
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .messageMeta {
@@ -178,9 +238,34 @@
 .messageInspectorContent {
   flex: 1;
   min-height: 0;
-  margin: 0;
   padding: 12px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.messageInspectorSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.messageInspectorLabel {
+  margin: 0;
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--lumiverse-text-dim, rgba(230, 230, 240, 0.5));
+}
+
+.messageInspectorText {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.06));
+  border-radius: 8px;
+  background: var(--lumiverse-fill);
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   line-height: 1.6;
@@ -243,6 +328,14 @@
 
 .collapsibleHeader:hover {
   background: var(--lumiverse-fill-subtle);
+}
+
+.collapsibleTitleText {
+  min-width: 0;
+}
+
+.clippedInlineLabel {
+  color: #ffab00;
 }
 
 .chevron {

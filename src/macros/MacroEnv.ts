@@ -5,10 +5,17 @@ import type { Chat } from "../types/chat";
 import type { Message } from "../types/message";
 import type { ConnectionProfile } from "../types/connection-profile";
 import type { GenerationType } from "../llm/types";
-import type { MacroEnv, MacroHandler, MacroDefinition } from "./types";
+import type {
+  MacroEnv,
+  MacroHandler,
+  MacroDefinition,
+  PromptBlockMacroContext,
+} from "./types";
 
 export interface BuildEnvContext {
   character: Character;
+  /** Raw target/focused character card for group chats. Used by focused-member macros even when the main character card is merged. */
+  focusedCharacter?: Character;
   persona: Persona | null;
   chat: Chat;
   messages: Message[];
@@ -24,10 +31,14 @@ export interface BuildEnvContext {
   groupNotMutedNames?: string[];
   /** The target character ID for group chats (the character whose turn it is). */
   targetCharacterId?: string;
-  /** Pre-resolved name of the target/focused character. Falls back to character.name if targetCharacterId is set. */
+  /** Pre-resolved name of the target/focused character. Falls back to focusedCharacter/character when omitted. */
   targetCharacterName?: string;
   /** Optional abort signal — threaded onto MacroEnv so the evaluator can cancel between iterations. */
   signal?: AbortSignal;
+  /** Content of the regenerate/swipe target before the new swipe was staged. */
+  rejectedSwipe?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
 }
 
 export function resolvePersonaPronouns(persona: Persona | null): {
@@ -44,6 +55,7 @@ export function resolvePersonaPronouns(persona: Persona | null): {
 
 export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   const { character, persona, chat, messages, generationType, connection } = ctx;
+  const focusedCharacter = ctx.focusedCharacter ?? character;
   const personaPronouns = resolvePersonaPronouns(persona);
 
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
@@ -52,7 +64,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
 
   const isGroup = !!chat.metadata?.group && Array.isArray(chat.metadata?.character_ids);
   const allGroupNames = ctx.groupCharacterNames;
-  const focusedName = isGroup ? (ctx.targetCharacterName || character.name) : "";
+  const focusedName = isGroup ? (ctx.targetCharacterName || getEffectiveCharacterName(focusedCharacter)) : "";
   const groupLastSpeaker = isGroup
     ? (findLast(messages, (m) => !m.is_user)?.name || "")
     : "";
@@ -114,6 +126,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       firstIncludedMessageId: messages.length > 0 ? 0 : -1,
       lastSwipeId: lastMsg?.swipes ? lastMsg.swipes.length - 1 : 0,
       currentSwipeId: lastMsg?.swipe_id ?? 0,
+      rejectedSwipe: ctx.rejectedSwipe ?? "",
     },
     system: {
       model: connection?.model || "",
@@ -124,7 +137,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       isMobile: false,
     },
     variables: {
-      local: new Map(Object.entries((chat.metadata?.macro_variables?.local as Record<string, string>) || {})),
+      local: new Map(),
       global: new Map(Object.entries((chat.metadata?.macro_variables?.global as Record<string, string>) || {})),
       chat: new Map(Object.entries((chat.metadata?.chat_variables as Record<string, string>) || {})),
     },
@@ -133,10 +146,38 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
     signal: ctx.signal,
     extra: {
       userId: ctx.userId ?? (chat as any).user_id as string | undefined,
+      characterId: character.id,
+      groupFocusedCharacter: buildFocusedCharacterMacroState(focusedCharacter, chat, messages),
       messages: messages.map((m) => ({ content: m.content, name: m.name, is_user: m.is_user })),
       chatCreatedAt: (chat as any).created_at as number | undefined,
       characterTags: Array.isArray((character as any).tags) ? (character as any).tags : [],
+      lastMessageTime: lastMsg && typeof lastMsg.send_date === "number"
+        ? lastMsg.send_date * 1000
+        : undefined,
+      userInput: ctx.userInput ?? "",
     },
+  };
+}
+
+function buildFocusedCharacterMacroState(
+  character: Character,
+  chat: Chat,
+  messages: Message[],
+): Record<string, string> {
+  return {
+    id: character.id,
+    name: getEffectiveCharacterName(character),
+    description: character.description || "",
+    personality: character.personality || "",
+    scenario: character.scenario || "",
+    mesExamples: character.mes_example || "",
+    systemPrompt: character.system_prompt || "",
+    postHistoryInstructions: character.post_history_instructions || "",
+    depthPrompt: (character.extensions?.depth_prompt as string) || "",
+    creatorNotes: character.creator_notes || "",
+    version: (character.extensions?.version as string) || "",
+    creator: character.creator || "",
+    firstMessage: resolveChatGreeting(character, chat, messages),
   };
 }
 
@@ -153,6 +194,7 @@ export function cloneEnv(env: MacroEnv): MacroEnv {
       chat: new Map(env.variables.chat),
     },
     ...(env._chatVarsDirty ? { _chatVarsDirty: true } : {}),
+    ...(env.promptBlock ? { promptBlock: { ...env.promptBlock } } : {}),
     dynamicMacros: { ...env.dynamicMacros },
     _dynamicMacrosLower: env._dynamicMacrosLower
       ? new Map(env._dynamicMacrosLower)
@@ -160,6 +202,25 @@ export function cloneEnv(env: MacroEnv): MacroEnv {
     signal: env.signal,
     extra: { ...env.extra },
   };
+}
+
+/**
+ * Run work with the supplied preset block as the read-only macro context.
+ * The previous context is always restored so later assembly phases cannot
+ * accidentally inherit placement from an earlier block.
+ */
+export async function withPromptBlockContext<T>(
+  env: MacroEnv,
+  block: PromptBlockMacroContext,
+  work: () => T | Promise<T>,
+): Promise<T> {
+  const previous = env.promptBlock;
+  env.promptBlock = { ...block };
+  try {
+    return await work();
+  } finally {
+    env.promptBlock = previous;
+  }
 }
 
 function resolveChatGreeting(character: Character, chat: Chat, messages: Message[]): string {

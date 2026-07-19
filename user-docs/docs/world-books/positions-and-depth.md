@@ -1,3 +1,7 @@
+---
+title: Positions & Depth
+---
+
 # Positions & Depth
 
 When a World Book entry activates, it needs to go *somewhere* in the prompt. The **position** setting controls where.

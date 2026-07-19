@@ -3,8 +3,14 @@ import type { AuthSlice, AuthUser } from '@/types/store'
 import { authClient, getAuthErrorMessage, readAuthErrorResponseMeta, type AuthErrorResponseMeta } from '@/api/auth'
 import { post, get, del } from '@/api/client'
 import { resetUserScopedStoreState } from '../user-scoped-reset'
+import { setSettingsPersistenceScope } from './settings'
+import { setPresetSaveCoordinatorScope } from '@/lib/loom/preset-save-coordinator'
 
-export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
+let authMutationGeneration = 0
+let sessionCheckGeneration = 0
+let pendingLoginGeneration: number | null = null
+
+export const createAuthSlice: StateCreator<AuthSlice> = (set, getState) => ({
   user: null,
   session: null,
   isAuthenticated: false,
@@ -12,6 +18,9 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
   authError: null,
 
   login: async (username: string, password: string) => {
+    const mutationGeneration = ++authMutationGeneration
+    sessionCheckGeneration += 1
+    pendingLoginGeneration = mutationGeneration
     set({ authError: null })
     let responseMeta: AuthErrorResponseMeta | null = null
 
@@ -27,6 +36,7 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
           },
         },
       )
+      if (mutationGeneration !== authMutationGeneration) return
 
       if (error) {
         const message = getAuthErrorMessage(error, 'login', responseMeta)
@@ -36,6 +46,8 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
 
       if (data?.user) {
         resetUserScopedStoreState()
+        setSettingsPersistenceScope(data.user.id)
+        setPresetSaveCoordinatorScope(data.user.id)
         set({
           user: data.user as AuthUser,
           session: { token: data.token } as any,
@@ -45,14 +57,21 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
         })
       }
     } catch (error) {
+      if (mutationGeneration !== authMutationGeneration) return
       const message = getAuthErrorMessage(error, 'login', responseMeta)
-      set({ authError: message })
+      set({ authError: message, isAuthLoading: false })
       throw new Error(message)
+    } finally {
+      if (pendingLoginGeneration === mutationGeneration) {
+        pendingLoginGeneration = null
+      }
     }
   },
 
   logout: async () => {
-    await authClient.signOut()
+    authMutationGeneration += 1
+    sessionCheckGeneration += 1
+    pendingLoginGeneration = null
     resetUserScopedStoreState()
     set({
       user: null,
@@ -61,9 +80,13 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
       isAuthLoading: false,
       authError: null,
     })
+    await authClient.signOut()
   },
 
   checkSession: async () => {
+    const mutationGeneration = authMutationGeneration
+    const requestGeneration = ++sessionCheckGeneration
+    const startedDuringLogin = pendingLoginGeneration !== null
     set({ isAuthLoading: true, authError: null })
     let responseMeta: AuthErrorResponseMeta | null = null
     try {
@@ -74,7 +97,19 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
           },
         },
       })
+      if (
+        startedDuringLogin
+        || mutationGeneration !== authMutationGeneration
+        || requestGeneration !== sessionCheckGeneration
+      ) return
+
       if (data?.user) {
+        const currentUserId = getState().user?.id
+        if (currentUserId && currentUserId !== data.user.id) {
+          resetUserScopedStoreState()
+        }
+        setSettingsPersistenceScope(data.user.id)
+        setPresetSaveCoordinatorScope(data.user.id)
         set({
           user: data.user as AuthUser,
           session: data.session as any,
@@ -93,6 +128,11 @@ export const createAuthSlice: StateCreator<AuthSlice> = (set) => ({
         })
       }
     } catch (error) {
+      if (
+        startedDuringLogin
+        || mutationGeneration !== authMutationGeneration
+        || requestGeneration !== sessionCheckGeneration
+      ) return
       resetUserScopedStoreState()
       set({
         user: null,

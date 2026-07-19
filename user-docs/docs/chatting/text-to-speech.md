@@ -1,3 +1,7 @@
+---
+title: Text-to-Speech
+---
+
 # Text-to-Speech
 
 Lumiverse can speak assistant replies aloud using a configurable text-to-speech connection. You can play any message manually, or have new replies auto-play as they finish generating.

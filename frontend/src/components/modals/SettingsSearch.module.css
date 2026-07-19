@@ -78,7 +78,7 @@
   background: var(--lumiverse-bg);
   border: 1px solid var(--lumiverse-border-hover);
   border-radius: 12px;
-  box-shadow: var(--lumiverse-shadow-xl);
+  box-shadow: var(--lumiverse-shadow-md, 0 8px 24px rgba(0, 0, 0, 0.4));
   scrollbar-width: thin;
   scrollbar-color: var(--lcs-scrollbar-thumb, rgba(255, 255, 255, 0.1)) transparent;
 }
@@ -87,6 +87,7 @@
   background: color-mix(in srgb, var(--lumiverse-bg-deep) 88%, transparent);
   backdrop-filter: blur(var(--lcs-glass-soft-blur, 6px));
   border-color: var(--lcs-glass-border);
+  box-shadow: var(--lumiverse-shadow-xl);
 }
 
 .dropdown::-webkit-scrollbar {

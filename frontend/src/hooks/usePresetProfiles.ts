@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
+import { ApiError } from '@/api/client'
 import { presetProfilesApi, type PresetProfileBinding } from '@/api/preset-profiles'
+import { createPresetProfileSelectionController, type PresetProfileSelectionController } from './usePresetProfiles-selection'
+import { createPresetProfileMutationCoordinator, runPresetProfileMutation, type PresetProfileMutationCoordinator } from './preset-profile-mutation-coordinator'
 import type { PromptBlock } from '@/lib/loom/types'
 
 /**
@@ -15,6 +18,15 @@ function snapshotBlockStates(blocks: PromptBlock[]): Record<string, boolean> {
   return states
 }
 
+function refreshProfileBinding(
+  request: Promise<PresetProfileBinding>,
+): Promise<PresetProfileBinding | null> {
+  return request.catch((error: unknown) => {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  })
+}
+
 // Bindings are cached with the chat/character id they were fetched for so
 // stale fetches (e.g. left over from the previous chat) can't leak into the
 // current context. The `for` field holds the id the binding was fetched
@@ -26,6 +38,12 @@ type ConnectionSlot = { for: string | null; binding: PresetProfileBinding | null
 const EMPTY_CHAT_SLOT: ChatSlot = { for: null, binding: null }
 const EMPTY_CHAR_SLOT: CharSlot = { for: null, binding: null }
 const EMPTY_CONNECTION_SLOT: ConnectionSlot = { for: null, binding: null }
+const profileScopes = {
+  defaults: (id: string) => `defaults:${id}`,
+  chat: (id: string) => `chat-binding:${id}`,
+  character: (id: string) => `character-binding:${id}`,
+  connection: (id: string) => `connection-binding:${id}`,
+}
 
 export function usePresetProfiles(
   presetId: string | null,
@@ -35,78 +53,154 @@ export function usePresetProfiles(
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeProfileId = useStore((s) => s.activeProfileId)
-  const setActiveLoomPreset = useStore((s) => s.setActiveLoomPreset)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const addToast = useStore((s) => s.addToast)
 
+  const authUserId = useStore((s) => s.user?.id ?? null)
   const [defaults, setDefaults] = useState<PresetProfileBinding | null>(null)
+  const [defaultsFor, setDefaultsFor] = useState<string | null>(null)
   const [chatSlot, setChatSlot] = useState<ChatSlot>(EMPTY_CHAT_SLOT)
   const [charSlot, setCharSlot] = useState<CharSlot>(EMPTY_CHAR_SLOT)
   const [connectionSlot, setConnectionSlot] = useState<ConnectionSlot>(EMPTY_CONNECTION_SLOT)
+  const presetIdRef = useRef(presetId)
+  const authUserIdRef = useRef(authUserId)
+  presetIdRef.current = presetId
+  authUserIdRef.current = authUserId
+  const activeChatIdRef = useRef(activeChatId)
+  const activeCharacterIdRef = useRef(activeCharacterId)
+  const activeProfileIdRef = useRef(activeProfileId)
+  activeChatIdRef.current = activeChatId
+  activeCharacterIdRef.current = activeCharacterId
+  activeProfileIdRef.current = activeProfileId
+  const mutationCoordinatorRef = useRef<PresetProfileMutationCoordinator | null>(null)
+  if (!mutationCoordinatorRef.current) {
+    mutationCoordinatorRef.current = createPresetProfileMutationCoordinator()
+  }
+  const mutationCoordinator = mutationCoordinatorRef.current!
   const [isLoading, setIsLoading] = useState(false)
+  const mutationCountRef = useRef(0)
+  const beginMutation = useCallback(() => {
+    mutationCountRef.current += 1
+    setIsLoading(true)
+  }, [])
+  const endMutation = useCallback(() => {
+    mutationCountRef.current = Math.max(0, mutationCountRef.current - 1)
+    setIsLoading(mutationCountRef.current > 0)
+  }, [])
+  const selectionControllerRef = useRef<PresetProfileSelectionController | null>(null)
+  if (!selectionControllerRef.current) {
+    selectionControllerRef.current = createPresetProfileSelectionController()
+  }
+
+  useEffect(() => {
+    return () => {
+      selectionControllerRef.current?.cancel()
+      mutationCoordinator.invalidateMutations()
+    }
+  }, [activeChatId, activeCharacterId, activeProfileId, presetId, authUserId, mutationCoordinator])
 
   // Load defaults for the currently selected preset. Defaults are stored per
   // preset, so switching presets should load a different default snapshot.
   useEffect(() => {
-    if (!presetId) { setDefaults(null); return }
+    const targetPresetId = presetId
+    const scope = targetPresetId ? profileScopes.defaults(targetPresetId) : null
+    const fetchToken = scope ? mutationCoordinator.beginFetch(scope) : null
+    setDefaults(null)
+    setDefaultsFor(null)
+    if (!targetPresetId || !scope || !fetchToken) return
     let cancelled = false
-    presetProfilesApi.getDefaults(presetId)
-      .then((d) => { if (!cancelled) setDefaults(d) })
-      .catch(() => { if (!cancelled) setDefaults(null) })
+    presetProfilesApi.getDefaults(targetPresetId)
+      .then((d) => {
+        if (cancelled || !mutationCoordinator.isFetchCurrent(scope, fetchToken)) return
+        setDefaults(d)
+        setDefaultsFor(targetPresetId)
+      })
+      .catch(() => {
+        if (cancelled || !mutationCoordinator.isFetchCurrent(scope, fetchToken)) return
+        setDefaults(null)
+        setDefaultsFor(targetPresetId)
+      })
     return () => { cancelled = true }
-  }, [presetId])
+  }, [presetId, mutationCoordinator])
 
   // Load chat binding when chat changes. Stale fetches are discarded by the
   // cancelled flag, and the slot is keyed by the chat id it was fetched for so
   // downstream consumers can tell whether it's fresh for the current chat.
   useEffect(() => {
-    if (!activeChatId) {
+    const target = activeChatId
+    const scope = target ? profileScopes.chat(target) : null
+    const fetchToken = scope ? mutationCoordinator.beginFetch(scope) : null
+    if (!target) {
       setChatSlot(EMPTY_CHAT_SLOT)
       return
     }
-    const target = activeChatId
     let cancelled = false
-    // Drop any previous slot whose id doesn't match the new target so the
-    // consumer doesn't observe a stale X-binding during the fetch window.
     setChatSlot((prev) => (prev.for === target ? prev : EMPTY_CHAT_SLOT))
     presetProfilesApi.getChatBinding(target)
-      .then((b) => { if (!cancelled) setChatSlot({ for: target, binding: b }) })
-      .catch(() => { if (!cancelled) setChatSlot({ for: target, binding: null }) })
+      .then((b) => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setChatSlot({ for: target, binding: b })
+        }
+      })
+      .catch(() => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setChatSlot({ for: target, binding: null })
+        }
+      })
     return () => { cancelled = true }
-  }, [activeChatId])
+  }, [activeChatId, mutationCoordinator])
 
   // Load character binding when character changes (same pattern as chat).
   useEffect(() => {
-    if (!activeCharacterId) {
+    const target = activeCharacterId
+    const scope = target ? profileScopes.character(target) : null
+    const fetchToken = scope ? mutationCoordinator.beginFetch(scope) : null
+    if (!target) {
       setCharSlot(EMPTY_CHAR_SLOT)
       return
     }
-    const target = activeCharacterId
     let cancelled = false
     setCharSlot((prev) => (prev.for === target ? prev : EMPTY_CHAR_SLOT))
     presetProfilesApi.getCharacterBinding(target)
-      .then((b) => { if (!cancelled) setCharSlot({ for: target, binding: b }) })
-      .catch(() => { if (!cancelled) setCharSlot({ for: target, binding: null }) })
+      .then((b) => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setCharSlot({ for: target, binding: b })
+        }
+      })
+      .catch(() => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setCharSlot({ for: target, binding: null })
+        }
+      })
     return () => { cancelled = true }
-  }, [activeCharacterId])
+  }, [activeCharacterId, mutationCoordinator])
 
   // Load connection profile binding when active connection changes.
   useEffect(() => {
-    if (!activeProfileId) {
+    const target = activeProfileId
+    const scope = target ? profileScopes.connection(target) : null
+    const fetchToken = scope ? mutationCoordinator.beginFetch(scope) : null
+    if (!target) {
       setConnectionSlot(EMPTY_CONNECTION_SLOT)
       return
     }
-    const target = activeProfileId
     let cancelled = false
     setConnectionSlot((prev) => (prev.for === target ? prev : EMPTY_CONNECTION_SLOT))
     presetProfilesApi.getConnectionBinding(target)
-      .then((b) => { if (!cancelled) setConnectionSlot({ for: target, binding: b }) })
-      .catch(() => { if (!cancelled) setConnectionSlot({ for: target, binding: null }) })
+      .then((b) => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setConnectionSlot({ for: target, binding: b })
+        }
+      })
+      .catch(() => {
+        if (!cancelled && scope && fetchToken && mutationCoordinator.isFetchCurrent(scope, fetchToken)) {
+          setConnectionSlot({ for: target, binding: null })
+        }
+      })
     return () => { cancelled = true }
-  }, [activeProfileId])
+  }, [activeProfileId, mutationCoordinator])
 
-  // A binding is only considered "for" the current context if its `for` id
-  // still matches the store's active id. Anything else is stale.
+  // A binding is only considered current when it was fetched for the active id.
   const chatBinding = chatSlot.for === activeChatId ? chatSlot.binding : null
   const characterBinding = charSlot.for === activeCharacterId ? charSlot.binding : null
   const connectionBinding = connectionSlot.for === activeProfileId ? connectionSlot.binding : null
@@ -117,129 +211,240 @@ export function usePresetProfiles(
   const chatResolved = !activeChatId || chatSlot.for === activeChatId
   const characterResolved = !activeCharacterId || charSlot.for === activeCharacterId
   const connectionResolved = !activeProfileId || connectionSlot.for === activeProfileId
-  const isResolved = chatResolved && characterResolved && connectionResolved
+  const defaultsResolved = !presetId || defaultsFor === presetId
+  const isResolved = chatResolved && characterResolved && connectionResolved && defaultsResolved
 
-  const hasDefaults = defaults !== null
+  const hasDefaults = defaultsFor === presetId && defaults !== null
 
   // Capture defaults
   const captureDefaults = useCallback(async () => {
-    if (!presetId || !blocks) return
-    setIsLoading(true)
+    const targetPresetId = presetId
+    if (!targetPresetId || !blocks) return
+    const snapshot = snapshotBlockStates(blocks)
+    const scope = profileScopes.defaults(targetPresetId)
+    beginMutation()
     try {
-      const binding = await presetProfilesApi.captureDefaults(presetId, snapshotBlockStates(blocks))
-      setDefaults(binding)
-      addToast({ type: 'success', message: t('defaultsCaptured') })
-    } catch {
-      addToast({ type: 'error', message: t('captureDefaultsFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.captureDefaults(targetPresetId, snapshot),
+        canStart: () => authUserIdRef.current === authUserId && presetIdRef.current === targetPresetId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getDefaults(targetPresetId)),
+        isCurrent: (revision) => presetIdRef.current === targetPresetId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: (binding) => {
+          setDefaults(binding)
+          setDefaultsFor(targetPresetId)
+        },
+        recover: (binding) => {
+          if (presetIdRef.current === targetPresetId) {
+            setDefaults(binding)
+            setDefaultsFor(targetPresetId)
+          }
+        },
+      })
+      if (result === 'committed') addToast({ type: 'success', message: t('defaultsCaptured') })
+      if (result === 'failed') addToast({ type: 'error', message: t('captureDefaultsFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [presetId, blocks, addToast])
+  }, [presetId, blocks, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Clear defaults
   const clearDefaults = useCallback(async () => {
-    if (!presetId) return
-    setIsLoading(true)
+    const targetPresetId = presetId
+    if (!targetPresetId) return
+    const scope = profileScopes.defaults(targetPresetId)
+    beginMutation()
     try {
-      await presetProfilesApi.deleteDefaults(presetId)
-      setDefaults(null)
-      addToast({ type: 'info', message: t('defaultsCleared') })
-    } catch {
-      addToast({ type: 'error', message: t('clearDefaultsFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.deleteDefaults(targetPresetId),
+        canStart: () => authUserIdRef.current === authUserId && presetIdRef.current === targetPresetId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getDefaults(targetPresetId)),
+        isCurrent: (revision) => presetIdRef.current === targetPresetId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: () => {
+          setDefaults(null)
+          setDefaultsFor(targetPresetId)
+        },
+        recover: (binding) => {
+          if (presetIdRef.current === targetPresetId) {
+            setDefaults(binding)
+            setDefaultsFor(targetPresetId)
+          }
+        },
+      })
+      if (result === 'committed') addToast({ type: 'info', message: t('defaultsCleared') })
+      if (result === 'failed') addToast({ type: 'error', message: t('clearDefaultsFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [presetId, addToast])
+  }, [presetId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Bind to current chat
   const bindToChat = useCallback(async () => {
-    if (!presetId || !blocks || !activeChatId) return
-    setIsLoading(true)
+    const targetPresetId = presetId
+    const targetChatId = activeChatId
+    if (!targetPresetId || !blocks || !targetChatId) return
+    const snapshot = snapshotBlockStates(blocks)
+    const scope = profileScopes.chat(targetChatId)
+    beginMutation()
     try {
-      const binding = await presetProfilesApi.setChatBinding(activeChatId, presetId, snapshotBlockStates(blocks))
-      setChatSlot({ for: activeChatId, binding })
-      addToast({ type: 'success', message: t('boundToChat') })
-    } catch {
-      addToast({ type: 'error', message: t('bindChatFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.setChatBinding(targetChatId, targetPresetId, snapshot),
+        canStart: () => authUserIdRef.current === authUserId
+          && presetIdRef.current === targetPresetId
+          && activeChatIdRef.current === targetChatId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getChatBinding(targetChatId)),
+        isCurrent: (revision) => activeChatIdRef.current === targetChatId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: (binding) => setChatSlot({ for: targetChatId, binding }),
+        recover: (binding) => {
+          if (activeChatIdRef.current === targetChatId) setChatSlot({ for: targetChatId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'success', message: t('boundToChat') })
+      if (result === 'failed') addToast({ type: 'error', message: t('bindChatFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [presetId, blocks, activeChatId, addToast])
+  }, [presetId, blocks, activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current chat
   const unbindChat = useCallback(async () => {
-    if (!activeChatId) return
-    setIsLoading(true)
+    const targetChatId = activeChatId
+    if (!targetChatId) return
+    const scope = profileScopes.chat(targetChatId)
+    beginMutation()
     try {
-      await presetProfilesApi.deleteChatBinding(activeChatId)
-      setChatSlot({ for: activeChatId, binding: null })
-      addToast({ type: 'info', message: t('chatBindingRemoved') })
-    } catch {
-      addToast({ type: 'error', message: t('removeChatBindingFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.deleteChatBinding(targetChatId),
+        canStart: () => authUserIdRef.current === authUserId && activeChatIdRef.current === targetChatId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getChatBinding(targetChatId)),
+        isCurrent: (revision) => activeChatIdRef.current === targetChatId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: () => setChatSlot({ for: targetChatId, binding: null }),
+        recover: (binding) => {
+          if (activeChatIdRef.current === targetChatId) setChatSlot({ for: targetChatId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'info', message: t('chatBindingRemoved') })
+      if (result === 'failed') addToast({ type: 'error', message: t('removeChatBindingFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [activeChatId, addToast])
-
-  // Bind to current character
+  }, [activeChatId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
   const bindToCharacter = useCallback(async () => {
-    if (!presetId || !blocks || !activeCharacterId || isGroupChat) return
-    setIsLoading(true)
+    const targetPresetId = presetId
+    const targetCharacterId = activeCharacterId
+    if (!targetPresetId || !blocks || !targetCharacterId || isGroupChat) return
+    const snapshot = snapshotBlockStates(blocks)
+    const scope = profileScopes.character(targetCharacterId)
+    beginMutation()
     try {
-      const binding = await presetProfilesApi.setCharacterBinding(activeCharacterId, presetId, snapshotBlockStates(blocks))
-      setCharSlot({ for: activeCharacterId, binding })
-      addToast({ type: 'success', message: t('boundToCharacter') })
-    } catch {
-      addToast({ type: 'error', message: t('bindCharacterFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.setCharacterBinding(targetCharacterId, targetPresetId, snapshot),
+        canStart: () => authUserIdRef.current === authUserId
+          && presetIdRef.current === targetPresetId
+          && activeCharacterIdRef.current === targetCharacterId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getCharacterBinding(targetCharacterId)),
+        isCurrent: (revision) => activeCharacterIdRef.current === targetCharacterId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: (binding) => setCharSlot({ for: targetCharacterId, binding }),
+        recover: (binding) => {
+          if (activeCharacterIdRef.current === targetCharacterId) setCharSlot({ for: targetCharacterId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'success', message: t('boundToCharacter') })
+      if (result === 'failed') addToast({ type: 'error', message: t('bindCharacterFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [presetId, blocks, activeCharacterId, isGroupChat, addToast])
+  }, [presetId, blocks, activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current character
   const unbindCharacter = useCallback(async () => {
-    if (!activeCharacterId || isGroupChat) return
-    setIsLoading(true)
+    const targetCharacterId = activeCharacterId
+    if (!targetCharacterId || isGroupChat) return
+    const scope = profileScopes.character(targetCharacterId)
+    beginMutation()
     try {
-      await presetProfilesApi.deleteCharacterBinding(activeCharacterId)
-      setCharSlot({ for: activeCharacterId, binding: null })
-      addToast({ type: 'info', message: t('characterBindingRemoved') })
-    } catch {
-      addToast({ type: 'error', message: t('removeCharacterBindingFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.deleteCharacterBinding(targetCharacterId),
+        canStart: () => authUserIdRef.current === authUserId && activeCharacterIdRef.current === targetCharacterId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getCharacterBinding(targetCharacterId)),
+        isCurrent: (revision) => activeCharacterIdRef.current === targetCharacterId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: () => setCharSlot({ for: targetCharacterId, binding: null }),
+        recover: (binding) => {
+          if (activeCharacterIdRef.current === targetCharacterId) setCharSlot({ for: targetCharacterId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'info', message: t('characterBindingRemoved') })
+      if (result === 'failed') addToast({ type: 'error', message: t('removeCharacterBindingFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [activeCharacterId, isGroupChat, addToast])
-
+  }, [activeCharacterId, isGroupChat, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
   // Bind to current connection profile
   const bindToConnection = useCallback(async () => {
-    if (!presetId || !blocks || !activeProfileId) return
-    setIsLoading(true)
+    const targetPresetId = presetId
+    const targetProfileId = activeProfileId
+    if (!targetPresetId || !blocks || !targetProfileId) return
+    const snapshot = snapshotBlockStates(blocks)
+    const scope = profileScopes.connection(targetProfileId)
+    beginMutation()
     try {
-      const binding = await presetProfilesApi.setConnectionBinding(activeProfileId, presetId, snapshotBlockStates(blocks))
-      setConnectionSlot({ for: activeProfileId, binding })
-      addToast({ type: 'success', message: t('boundToConnection') })
-    } catch {
-      addToast({ type: 'error', message: t('bindConnectionFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.setConnectionBinding(targetProfileId, targetPresetId, snapshot),
+        canStart: () => authUserIdRef.current === authUserId
+          && presetIdRef.current === targetPresetId
+          && activeProfileIdRef.current === targetProfileId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getConnectionBinding(targetProfileId)),
+        isCurrent: (revision) => activeProfileIdRef.current === targetProfileId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: (binding) => setConnectionSlot({ for: targetProfileId, binding }),
+        recover: (binding) => {
+          if (activeProfileIdRef.current === targetProfileId) setConnectionSlot({ for: targetProfileId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'success', message: t('boundToConnection') })
+      if (result === 'failed') addToast({ type: 'error', message: t('bindConnectionFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [presetId, blocks, activeProfileId, addToast])
+  }, [presetId, blocks, activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Unbind from current connection profile
   const unbindConnection = useCallback(async () => {
-    if (!activeProfileId) return
-    setIsLoading(true)
+    const targetProfileId = activeProfileId
+    if (!targetProfileId) return
+    const scope = profileScopes.connection(targetProfileId)
+    beginMutation()
     try {
-      await presetProfilesApi.deleteConnectionBinding(activeProfileId)
-      setConnectionSlot({ for: activeProfileId, binding: null })
-      addToast({ type: 'info', message: t('connectionBindingRemoved') })
-    } catch {
-      addToast({ type: 'error', message: t('removeConnectionBindingFailed') })
+      const result = await runPresetProfileMutation({
+        coordinator: mutationCoordinator,
+        scope,
+        operation: () => presetProfilesApi.deleteConnectionBinding(targetProfileId),
+        canStart: () => authUserIdRef.current === authUserId && activeProfileIdRef.current === targetProfileId,
+        refresh: () => refreshProfileBinding(presetProfilesApi.getConnectionBinding(targetProfileId)),
+        isCurrent: (revision) => activeProfileIdRef.current === targetProfileId && mutationCoordinator.isMutationCurrent(scope, revision),
+        commit: () => setConnectionSlot({ for: targetProfileId, binding: null }),
+        recover: (binding) => {
+          if (activeProfileIdRef.current === targetProfileId) setConnectionSlot({ for: targetProfileId, binding })
+        },
+      })
+      if (result === 'committed') addToast({ type: 'info', message: t('connectionBindingRemoved') })
+      if (result === 'failed') addToast({ type: 'error', message: t('removeConnectionBindingFailed') })
     } finally {
-      setIsLoading(false)
+      endMutation()
     }
-  }, [activeProfileId, addToast])
+  }, [activeProfileId, addToast, beginMutation, endMutation, mutationCoordinator, authUserId, t])
 
   // Character bindings are skipped in group chats (per-member bindings are
   // ambiguous — backend resolveProfile applies the same gate).
@@ -252,26 +457,37 @@ export function usePresetProfiles(
     return presetId
   }, [chatBinding, characterBinding, characterBindingEnabled, connectionBinding, presetId])
 
+  // A binding can disappear or fall back to the current preset without
+  // changing the surrounding context ids. Retire an owned transition in that
+  // no-op case; the controller does nothing when no profile transition exists,
+  // so unrelated global selection requests remain untouched.
+  useEffect(() => {
+    if (!resolvedPresetId || resolvedPresetId === presetId) {
+      selectionControllerRef.current?.select(resolvedPresetId, presetId)
+    }
+  }, [resolvedPresetId, presetId])
+
   // Resolved active binding (chat > character > connection > defaults > none)
   const activeBinding = useMemo(() => {
+    const currentDefaults = defaultsFor === presetId ? defaults : null
     if (chatBinding) {
       if (chatBinding.linked_to_defaults) {
-        return defaults && defaults.preset_id === chatBinding.preset_id ? defaults : null
+        return currentDefaults && currentDefaults.preset_id === chatBinding.preset_id ? currentDefaults : null
       }
       return chatBinding
     }
     if (characterBindingEnabled && characterBinding) return characterBinding
     if (connectionBinding) return connectionBinding
-    if (defaults) return defaults
+    if (currentDefaults) return currentDefaults
     return null
-  }, [chatBinding, characterBinding, connectionBinding, defaults, characterBindingEnabled])
+  }, [chatBinding, characterBinding, connectionBinding, defaults, defaultsFor, presetId, characterBindingEnabled])
 
   // Determine active source
   const activeSource: 'chat' | 'character' | 'connection' | 'defaults' | 'none' = (() => {
     if (chatBinding) return 'chat'
     if (characterBindingEnabled && characterBinding) return 'character'
     if (connectionBinding) return 'connection'
-    if (defaults) return 'defaults'
+    if (defaultsFor === presetId && defaults) return 'defaults'
     return 'none'
   })()
 
@@ -280,9 +496,8 @@ export function usePresetProfiles(
   const hasConnectionBinding = connectionBinding !== null
 
   const selectResolvedPreset = useCallback(() => {
-    if (!resolvedPresetId || resolvedPresetId === presetId) return
-    setActiveLoomPreset(resolvedPresetId)
-  }, [resolvedPresetId, presetId, setActiveLoomPreset])
+    return selectionControllerRef.current?.select(resolvedPresetId, presetId) ?? null
+  }, [resolvedPresetId, presetId])
 
   return {
     // State

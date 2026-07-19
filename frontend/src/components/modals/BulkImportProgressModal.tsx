@@ -76,9 +76,10 @@ export default function BulkImportProgressModal({
         allResults.push(...response.results)
         setResults([...allResults])
         setProcessed(Math.min(i + chunk.length, files.length))
-      } catch {
+      } catch (err: any) {
+        const errorMessage = err?.body?.error || err?.body?.message || err?.message || t('bulkImport.requestFailed')
         for (const file of chunk) {
-          allResults.push({ filename: file.name, success: false, error: t('bulkImport.requestFailed') })
+          allResults.push({ filename: file.name, success: false, error: errorMessage })
         }
         setResults([...allResults])
         setProcessed(Math.min(i + chunk.length, files.length))

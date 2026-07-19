@@ -145,6 +145,12 @@
     linear-gradient(var(--lumiverse-bg, rgba(28, 24, 38, 0.95)), var(--lumiverse-bg, rgba(28, 24, 38, 0.95))),
     var(--lumiverse-bg-deep, #0a0812);
 }
+.popoverPortal[data-spindle-component-portal-owner-active='false'] {
+  /* Extension-owned portals are hidden while their placement is detached.
+     This author rule is needed because .popover's display:flex overrides
+     the browser's user-agent [hidden] rule. */
+  display: none !important;
+}
 
 /* Search */
 
@@ -179,6 +185,26 @@
   color: var(--lumiverse-text-muted);
   /* Same size as the input text so the placeholder is legible at the same cadence. */
   font-size: inherit;
+}
+
+.searchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+  cursor: pointer;
+}
+
+.searchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
 }
 
 /* iOS zooms form inputs when font-size < 16px. Force 16px on touch-oriented

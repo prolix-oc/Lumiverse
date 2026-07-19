@@ -2,6 +2,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  aspect-ratio: 3 / 4;
   border-radius: 16px;
   overflow: hidden;
   cursor: pointer;
@@ -13,6 +14,27 @@
               box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   contain: layout style paint;
   will-change: transform;
+}
+
+/* Gradient overlay at the card bottom that blends into the image for text
+   contrast. Uses the main background color so it seamlessly adapts
+   when CSS classes change with a new palette. */
+.card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 55%;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    var(--lumiverse-bg) 0%,
+    color-mix(in srgb, var(--lumiverse-bg) 92%, transparent) 25%,
+    color-mix(in srgb, var(--lumiverse-bg) 50%, transparent) 55%,
+    transparent 100%
+  );
+  z-index: 1;
 }
 
 .card:hover {
@@ -38,9 +60,10 @@
 
 /* Cover image */
 .imageWrap {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  aspect-ratio: 3 / 4;
+  height: 100%;
   background: var(--lumiverse-card-image-bg);
   display: flex;
   align-items: center;
@@ -55,7 +78,9 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  transition: transform 0.3s ease;
+  /* Sync image transform scale with the card's animation timing */
+  --lazy-image-transform-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .card:hover .coverImg {
@@ -175,6 +200,9 @@
 
 /* Info section at bottom */
 .info {
+  position: relative;
+  z-index: 2;
+  margin-top: auto;
   padding: 12px 14px 14px;
   display: flex;
   flex-direction: column;
@@ -234,6 +262,7 @@
 
 /* Compact variant (used in FavoritesSlider) */
 .compact {
+  aspect-ratio: auto;
   flex-direction: row;
   align-items: center;
   min-height: 52px;
@@ -245,6 +274,11 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+/* Compact cards don't use the image-fills-card layout or the gradient overlay */
+.compact::after {
+  display: none;
+}
+
 .compact:hover {
   transform: translateY(-1px);
   background: linear-gradient(180deg, var(--lumiverse-fill-hover) 0%, var(--lumiverse-fill) 100%);
@@ -253,6 +287,8 @@
 }
 
 .compact .imageWrap {
+  position: relative;
+  inset: auto;
   width: 36px;
   height: 36px;
   aspect-ratio: 1;
@@ -270,6 +306,7 @@
 }
 
 .compact .info {
+  margin-top: 0;
   padding: 0 22px 0 0;
   align-items: flex-start;
   justify-content: center;

@@ -1,6 +1,10 @@
 import { getDb } from "../db/connection";
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
+import {
+  worldBookVectorDesiredStatusSql,
+} from "./world-book-vector-state";
+import { WORLD_BOOK_VECTOR_SETTINGS_KEY } from "./world-book-vector-constants";
 
 export interface Setting {
   key: string;
@@ -10,10 +14,24 @@ export interface Setting {
 
 const MAX_SETTING_KEY_LENGTH = 200;
 const MAX_SETTING_VALUE_BYTES = 2 * 1024 * 1024; // 2 MB serialized JSON
+// Theme packs embed their assets as base64 in savedThemes. A fully supported
+// 250 MiB theme archive expands to about 333 MiB when represented as JSON, so
+// this leaves room for the manifest and saved-theme metadata.
+export const MAX_SAVED_THEMES_VALUE_BYTES = 350 * 1024 * 1024;
 const SETTING_KEY_PATTERN = /^[A-Za-z0-9._:-]{1,200}$/;
 
 export class InvalidSettingError extends Error {
   status = 400 as const;
+}
+
+function markWorldBookVectorStatesStaleForSettingsChange(userId: string): void {
+  getDb().query(
+    `UPDATE world_book_entries
+     SET vector_index_status = ${worldBookVectorDesiredStatusSql()},
+         vector_indexed_at = NULL,
+         vector_index_error = NULL
+     WHERE world_book_id IN (SELECT id FROM world_books WHERE user_id = ?)`
+  ).run(userId);
 }
 
 function assertValidKey(key: unknown): asserts key is string {
@@ -38,9 +56,12 @@ function serializeValueOrThrow(key: string, value: unknown): string {
   } catch (err: any) {
     throw new InvalidSettingError(`Setting "${key}" value is not JSON-serializable: ${err?.message || "unknown"}`);
   }
-  if (json.length > MAX_SETTING_VALUE_BYTES) {
+  const maxBytes = key === "savedThemes"
+    ? MAX_SAVED_THEMES_VALUE_BYTES
+    : MAX_SETTING_VALUE_BYTES;
+  if (json.length > maxBytes) {
     throw new InvalidSettingError(
-      `Setting "${key}" exceeds ${MAX_SETTING_VALUE_BYTES} bytes serialized`,
+      `Setting "${key}" exceeds ${maxBytes} bytes serialized`,
     );
   }
   return json;
@@ -74,6 +95,9 @@ export function putSetting(userId: string, key: string, value: any): Setting {
   assertValidKey(key);
   const json = serializeValueOrThrow(key, value);
   const now = Math.floor(Date.now() / 1000);
+  const existingRow = key === WORLD_BOOK_VECTOR_SETTINGS_KEY
+    ? getDb().query("SELECT value FROM settings WHERE key = ? AND user_id = ?").get(key, userId) as { value: string } | null
+    : null;
 
   getDb()
     .query(
@@ -81,6 +105,10 @@ export function putSetting(userId: string, key: string, value: any): Setting {
        ON CONFLICT(key, user_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     )
     .run(key, json, userId, now);
+
+  if (key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingRow?.value !== json) {
+    markWorldBookVectorStatesStaleForSettingsChange(userId);
+  }
 
   const setting = { key, value, updated_at: now };
   eventBus.emit(EventType.SETTINGS_UPDATED, { key, value }, userId);
@@ -113,6 +141,14 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
   const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const results: Setting[] = [];
+  const existingValues = prepared.some((entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY)
+    ? new Map(
+        (db
+          .query(`SELECT key, value FROM settings WHERE user_id = ? AND key IN (${prepared.map(() => "?").join(", ")})`)
+          .all(userId, ...prepared.map((entry) => entry.key)) as Array<{ key: string; value: string }>)
+          .map((row) => [row.key, row.value]),
+      )
+    : null;
 
   const upsert = db.query(
     `INSERT INTO settings (key, value, user_id, updated_at) VALUES (?, ?, ?, ?)
@@ -126,6 +162,13 @@ export function putMany(userId: string, settings: Record<string, any>): Setting[
     }
   });
   transaction();
+
+  const worldBookVectorSettingsChanged = prepared.some(
+    (entry) => entry.key === WORLD_BOOK_VECTOR_SETTINGS_KEY && existingValues?.get(entry.key) !== entry.json,
+  );
+  if (worldBookVectorSettingsChanged) {
+    markWorldBookVectorStatesStaleForSettingsChange(userId);
+  }
 
   eventBus.emit(EventType.SETTINGS_UPDATED, { keys: prepared.map((p) => p.key) }, userId);
   const activeChatEntry = prepared.find((p) => p.key === "activeChatId");

@@ -1,4 +1,8 @@
-# Embeddings & Vector Search
+---
+title: Embeddings
+---
+
+# Embeddings
 
 Embeddings power two features in Lumiverse: **semantic world book activation** (finding lorebook entries by meaning, not just keywords) and **long-term chat memory** (recalling relevant past moments). Both require an embedding provider to be configured.
 

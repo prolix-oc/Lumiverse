@@ -2,8 +2,15 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import Fuse from 'fuse.js'
 import { personasApi } from '@/api/personas'
+import { chatsApi } from '@/api/chats'
 import { useStore } from '@/store'
 import { personaToastName, resolveAutoPersonaBinding } from '@/store/slices/personas'
+import {
+  CHAT_PERSONA_METADATA_KEY,
+  getPersistedChatPersonaId,
+  resolveChatPersonaSelection,
+  setPersistedChatPersonaId,
+} from '@/lib/chatPersonaSelection'
 import { toast } from '@/lib/toast'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
 
@@ -22,7 +29,15 @@ export function usePersonaBrowser() {
   const updatePersonaInStore = useStore((s) => s.updatePersona)
   const removePersona = useStore((s) => s.removePersona)
   const activePersonaId = useStore((s) => s.activePersonaId)
+  const recentPersonaIds = useStore((s) => s.recentPersonaIds)
   const setActivePersona = useStore((s) => s.setActivePersona)
+  const activeChatId = useStore((s) => s.activeChatId)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
+  const setActiveChatMetadata = useStore((s) => s.setActiveChatMetadata)
+  const activeCharacterId = useStore((s) => s.activeCharacterId)
+  const characters = useStore((s) => s.characters)
+  const characterPersonaBindings = useStore((s) => s.characterPersonaBindings)
+  const personaTagBindings = useStore((s) => s.personaTagBindings)
   const searchQuery = useStore((s) => s.personaSearchQuery)
   const setSearchQuery = useStore((s) => s.setPersonaSearchQuery)
   const filterType = useStore((s) => s.personaFilterType)
@@ -39,6 +54,11 @@ export function usePersonaBrowser() {
   // Local state
   const [loading, setLoading] = useState(false)
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery)
+  const isChatScoped = !!activeChatId && activeChatMetadata?.temporary !== true
+  const persistedChatPersonaId = useMemo(
+    () => getPersistedChatPersonaId(activeChatMetadata),
+    [activeChatMetadata],
+  )
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -51,8 +71,7 @@ export function usePersonaBrowser() {
   const loadPersonas = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await personasApi.list({ limit: 200 })
-      setPersonas(result.data)
+      setPersonas(await personasApi.listAll())
     } catch (err) {
       console.error('[PersonaBrowser] Failed to load:', err)
     } finally {
@@ -111,7 +130,10 @@ export function usePersonaBrowser() {
           cmp = a.name.localeCompare(b.name)
           break
         case 'created':
-          cmp = (b.created_at || 0) - (a.created_at || 0)
+          cmp = (a.created_at || 0) - (b.created_at || 0)
+          break
+        case 'updated_at':
+          cmp = (a.updated_at || 0) - (b.updated_at || 0)
           break
       }
       return sortDirection === 'desc' ? -cmp : cmp
@@ -120,18 +142,34 @@ export function usePersonaBrowser() {
     return result
   }, [personas, filterType, debouncedQuery, fuse, sortField, sortDirection])
 
+  const recentPersonas = useMemo(() => {
+    const filteredById = new Map(filteredPersonas.map((persona) => [persona.id, persona]))
+    return recentPersonaIds
+      .map((id) => filteredById.get(id))
+      .filter((persona): persona is Persona => !!persona)
+  }, [filteredPersonas, recentPersonaIds])
+
+  const recentPersonaIdSet = useMemo(
+    () => new Set(recentPersonas.map((persona) => persona.id)),
+    [recentPersonas],
+  )
+  const regularPersonas = useMemo(
+    () => filteredPersonas.filter((persona) => !recentPersonaIdSet.has(persona.id)),
+    [filteredPersonas, recentPersonaIdSet],
+  )
+
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
   }, [filterType, debouncedQuery, sortField, sortDirection])
 
   // Paginate filtered results
-  const totalPages = Math.max(1, Math.ceil(filteredPersonas.length / personasPerPage))
+  const totalPages = Math.max(1, Math.ceil(regularPersonas.length / personasPerPage))
   const safePage = Math.min(currentPage, totalPages)
   const paginatedPersonas = useMemo(() => {
     const start = (safePage - 1) * personasPerPage
-    return filteredPersonas.slice(start, start + personasPerPage)
-  }, [filteredPersonas, safePage, personasPerPage])
+    return regularPersonas.slice(start, start + personasPerPage)
+  }, [regularPersonas, safePage, personasPerPage])
 
   // Group paginated personas by folder
   const groupedPersonas = useMemo(() => {
@@ -216,6 +254,32 @@ export function usePersonaBrowser() {
     [removePersona]
   )
 
+  const bulkUpdatePersonas = useCallback(
+    async (ids: string[], input: {
+      folder?: string
+      attached_world_book_id?: string | null
+      toggle_narrator?: boolean
+    }) => {
+      const result = await personasApi.bulkUpdate(ids, input)
+      if (result.updated.length > 0) {
+        const updatedById = new Map(result.updated.map((persona) => [persona.id, persona]))
+        const currentPersonas = useStore.getState().personas
+        setPersonas(currentPersonas.map((persona) => updatedById.get(persona.id) ?? persona))
+      }
+      return result
+    },
+    [setPersonas],
+  )
+
+  const bulkDeletePersonas = useCallback(
+    async (ids: string[]) => {
+      const result = await personasApi.bulkDelete(ids)
+      for (const id of result.deleted) removePersona(id)
+      return result
+    },
+    [removePersona],
+  )
+
   const duplicatePersona = useCallback(
     async (id: string) => {
       const persona = await personasApi.duplicate(id)
@@ -287,25 +351,77 @@ export function usePersonaBrowser() {
 
   const switchToPersona = useCallback(
     (id: string) => {
-      const deactivating = activePersonaId === id
-      setActivePersona(deactivating ? null : id)
-      if (deactivating) {
-        toast.info(t('personaDeactivated'))
-      } else {
+      const deactivating = isChatScoped ? persistedChatPersonaId === id : activePersonaId === id
+
+      if (!isChatScoped) {
+        setActivePersona(deactivating ? null : id)
+        if (deactivating) {
+          toast.info(t('personaDeactivated'))
+        } else {
+          const persona = personas.find((p) => p.id === id)
+          if (persona) {
+            toast.info(t('switchedToPersona', { name: personaToastName(persona) }))
+          }
+        }
+        return
+      }
+
+      const activeCharacter = activeCharacterId
+        ? characters.find((character) => character.id === activeCharacterId) ?? null
+        : null
+      const nextPersonaId = deactivating ? null : id
+      const previousMetadata = activeChatMetadata
+      const previousActivePersonaId = activePersonaId
+      const nextMetadata = setPersistedChatPersonaId(previousMetadata, nextPersonaId)
+      const fallbackPersonaId = nextPersonaId ?? resolveChatPersonaSelection({
+        metadata: nextMetadata,
+        characterId: activeCharacterId,
+        characterTags: activeCharacter?.tags ?? [],
+        personas,
+        characterPersonaBindings,
+        personaTagBindings,
+      }).personaId
+
+      setActiveChatMetadata(nextMetadata)
+      setActivePersona(fallbackPersonaId)
+
+      chatsApi.patchMetadata(activeChatId, { [CHAT_PERSONA_METADATA_KEY]: nextPersonaId }).then(() => {
+        if (deactivating) {
+          toast.info(t('personaDeactivated'))
+          return
+        }
         const persona = personas.find((p) => p.id === id)
         if (persona) {
           toast.info(t('switchedToPersona', { name: personaToastName(persona) }))
         }
-      }
+      }).catch((err) => {
+        console.error('[PersonaBrowser] Failed to save chat persona selection:', err)
+        setActiveChatMetadata(previousMetadata)
+        setActivePersona(previousActivePersonaId)
+        toast.error(t('failedSaveChatPersona'))
+      })
     },
-    [activePersonaId, setActivePersona, personas, t]
+    [
+      activeChatId,
+      activeChatMetadata,
+      activeCharacterId,
+      activePersonaId,
+      characters,
+      characterPersonaBindings,
+      isChatScoped,
+      personaTagBindings,
+      persistedChatPersonaId,
+      personas,
+      setActiveChatMetadata,
+      setActivePersona,
+      t,
+    ]
   )
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await personasApi.list({ limit: 200 })
-      setPersonas(result.data)
+      setPersonas(await personasApi.listAll())
     } catch (err) {
       console.error('[PersonaBrowser] Failed to refresh:', err)
     } finally {
@@ -317,6 +433,8 @@ export function usePersonaBrowser() {
     // State
     personas: paginatedPersonas,
     groupedPersonas,
+    recentPersonas: safePage === 1 ? recentPersonas : [],
+    allFilteredPersonas: filteredPersonas,
     allPersonas: personas,
     allFolders,
     totalFiltered: filteredPersonas.length,
@@ -328,6 +446,8 @@ export function usePersonaBrowser() {
     viewMode,
     selectedPersonaId,
     activePersonaId,
+    isChatScoped,
+    persistedChatPersonaId,
     currentPage: safePage,
     totalPages,
     personasPerPage,
@@ -346,6 +466,8 @@ export function usePersonaBrowser() {
     renameFolder,
     deleteFolder,
     deletePersona,
+    bulkUpdatePersonas,
+    bulkDeletePersonas,
     duplicatePersona,
     uploadAvatar,
     toggleDefault,

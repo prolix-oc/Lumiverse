@@ -87,6 +87,10 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
 
   const carriedRef = useRef<Set<string>>(new Set())
   useEffect(() => { carriedRef.current = new Set() }, [session.id])
+
+  const [confirmRenderKey, setConfirmRenderKey] = useState<string | null>(null)
+  const [keptEdits, setKeptEdits] = useState<string[]>([])
+  useEffect(() => { setConfirmRenderKey(null); setKeptEdits([]) }, [session.id])
   useEffect(() => {
     if (!bible) return
     for (const def of orderedDefs) {
@@ -135,6 +139,16 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
               />
             </div>
           )}
+          {keptEdits.length > 0 && (
+            <div className={styles.keptBand}>
+              <div className={styles.keptBandHead}>
+                <Icon name="pencil" size={15} />
+                <span className={styles.keptBandTitle}>{t('render.keptEditsTitle')}</span>
+                <IconBtn icon="x" size={14} cls={styles.sq22} title={t('render.keptEditsDismiss')} onClick={() => setKeptEdits([])} />
+              </div>
+              <div className={styles.keptBandBody}>{t('render.keptEditsBody', { fields: keptEdits.join(', ') })}</div>
+            </div>
+          )}
           <div className={styles.work}>
             <div className={styles.workRail}>
               <div>
@@ -164,8 +178,12 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
                           disabled={anyRendering}
                           onClick={(e) => {
                             e.stopPropagation()
-                            if (fieldBy.get(def.id)?.status === 'manually_edited') setFocusKey(def.id)
-                            else void renderOne(session.id, def.id)
+                            if (fieldBy.get(def.id)?.status === 'manually_edited') {
+                              setFocusKey(def.id)
+                              setConfirmRenderKey(def.id)
+                            } else {
+                              void renderOne(session.id, def.id)
+                            }
                           }}
                         />
                       </div>
@@ -193,6 +211,8 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
                   onEdit={(content) => void editOne(session.id, focusDef.id, content)}
                   onAccept={(accepted) => void acceptOne(session.id, focusDef.id, accepted)}
                   onNudge={(nudge, force) => void nudgeOne(session.id, focusDef.id, nudge, force)}
+                  confirmRender={confirmRenderKey === focusDef.id}
+                  onConfirmRenderConsumed={() => setConfirmRenderKey(null)}
                 />
               )}
             </div>
@@ -201,7 +221,10 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
       </div>
       <div className={styles.footer}>
         <Btn icon="arrowLeft" onClick={onBack}>{t('render.backToBible')}</Btn>
-        <Btn variant="primary" icon={anyRendering ? 'refresh' : 'sparkles'} spin={anyRendering} disabled={anyRendering} onClick={() => void renderAll(session.id)}>
+        <Btn variant="primary" icon={anyRendering ? 'refresh' : 'sparkles'} spin={anyRendering} disabled={anyRendering} onClick={() => {
+          setKeptEdits(orderedDefs.filter((d) => fieldBy.get(d.id)?.status === 'manually_edited').map((d) => d.label))
+          void renderAll(session.id)
+        }}>
           {anyRendering ? t('render.rendering') : hasAny ? t('render.renderAllAgain') : t('render.renderAll')}
         </Btn>
         <div className={styles.spacer} />
@@ -218,7 +241,7 @@ export function RenderStage({ session, onBack, onContinue }: { session: WeaverSe
   )
 }
 
-function FieldView({ def, field, status, anyRendering, hideAdvisories, onReRender, onEdit, onAccept, onNudge }: {
+function FieldView({ def, field, status, anyRendering, hideAdvisories, onReRender, onEdit, onAccept, onNudge, confirmRender, onConfirmRenderConsumed }: {
   def: WeaverFieldDef
   field: WeaverField | undefined
   status: string
@@ -228,6 +251,8 @@ function FieldView({ def, field, status, anyRendering, hideAdvisories, onReRende
   onEdit: (content: string) => void
   onAccept: (accepted: boolean) => void
   onNudge: (nudge: string, force?: boolean) => void
+  confirmRender: boolean
+  onConfirmRenderConsumed: () => void
 }) {
   const { t } = useTranslation('weaver')
   const isDirect = def.render === 'direct'
@@ -244,6 +269,11 @@ function FieldView({ def, field, status, anyRendering, hideAdvisories, onReRende
   const [pending, setPending] = useState<null | { kind: 'render' } | { kind: 'nudge'; text: string }>(null)
 
   useEffect(() => { setEditing(false); setNudge(''); setPending(null) }, [def.id])
+  useEffect(() => {
+    if (!confirmRender) return
+    setPending({ kind: 'render' })
+    onConfirmRenderConsumed()
+  }, [confirmRender, onConfirmRenderConsumed])
 
   const beginEdit = () => { setDraft(field?.content ?? ''); setEditing(true) }
   const requestReRender = () => { if (isEdited) setPending({ kind: 'render' }); else onReRender() }

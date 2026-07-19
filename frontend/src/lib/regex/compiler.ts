@@ -1,13 +1,96 @@
-import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetadata } from '@/types/regex'
+import type { RegexScript, RegexPlacement, RegexMacroMode, RegexPerformanceMetadata, RegexAction } from '@/types/regex'
 import type { DisplayMacroContext } from '@/lib/resolveDisplayMacros'
 import { isDisplayChatOwned, getDisplayResolverForChat } from '@/lib/spindle/display-resolver-registry'
 import type { SpindleDisplayContext } from 'lumiverse-spindle-types'
+import { getRegexSearchEnd, replaceWithinRegexSearchWindow } from './search-window'
 
 interface DisplayRegexMatch {
   fullMatch: string
   groups: Array<string | undefined>
   offset: number
   namedGroups?: Record<string, string>
+}
+
+interface ResolvedRegexAction extends RegexAction {
+  scriptId: string
+  instanceId: string
+}
+
+function resolveActionCost(value: string, fallback: number): number {
+  const parsed = Number(value.trim())
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function resolveActionLimit(value: string): number | null {
+  const parsed = Number(value.trim())
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+const REGEX_ACTION_ATTR_RE = /\b(?:data-regex-action|id)\s*=\s*(["'])(.*?)\1/i
+const REGEX_ACTION_OPEN_TAG_RE = /<([A-Za-z][\w:-]*)(\s[^<>]*?)?\s*\/?>/g
+
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function decorateRegexActionHtml(html: string, actions: ResolvedRegexAction[]): string {
+  if (actions.length === 0 || !html.includes('<')) return html
+  const byId = new Map(actions.map((action) => [action.id, action]))
+  const limits = actions
+    .filter((action) => action.multi_select)
+    .map((action) => resolveActionLimit(action.limit))
+    .filter((limit): limit is number => limit !== null)
+  const blockLimit = limits.length > 0 ? Math.min(...limits) : 0
+  return html.replace(REGEX_ACTION_OPEN_TAG_RE, (tag) => {
+    if (/^<\//.test(tag) || /\bdata-lumiverse-regex-action\s*=/.test(tag)) return tag
+    const association = tag.match(REGEX_ACTION_ATTR_RE)?.[2]
+    const action = association ? byId.get(association) : undefined
+    if (!action) return tag
+    const encoded = encodeURIComponent(JSON.stringify({
+      ...action,
+      cost: resolveActionCost(action.cost, 1),
+      limit: blockLimit,
+    }))
+    const label = [action.title, action.subtitle].filter(Boolean).join(' — ')
+    const attrs = [
+      `data-lumiverse-regex-action="${encoded}"`,
+      action.multi_select ? 'data-lumiverse-regex-action-multi="true"' : '',
+      'role="button"',
+      'tabindex="0"',
+      label ? `aria-label="${escapeHtmlAttribute(label)}"` : '',
+      action.title ? `title="${escapeHtmlAttribute(action.title)}"` : '',
+    ].filter(Boolean).join(' ')
+    return tag.replace(/\s*\/>$/, ` ${attrs} />`).replace(/(?<!\/)\s*>$/, ` ${attrs}>`)
+  })
+}
+
+function resolveRegexActions(script: RegexScript, match: DisplayRegexMatch, input: string): ResolvedRegexAction[] {
+  return script.actions.map((action) => ({
+    ...action,
+    title: substituteRegexCaptures(action.title, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    subtitle: substituteRegexCaptures(action.subtitle, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    content: substituteRegexCaptures(action.content, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    cost: substituteRegexCaptures(action.cost, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    limit: substituteRegexCaptures(action.limit, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+    ...(action.effects?.length ? {
+      effects: action.effects.map((effect) => ({
+        ...effect,
+        ...(effect.type === 'set_state' ? {
+          value: substituteRegexCaptures(effect.value, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+        } : effect.type === 'draft' ? {
+          content: substituteRegexCaptures(effect.content, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+        } : {}),
+      })),
+    } : {}),
+    scriptId: script.id,
+    instanceId: `${script.id}:${match.offset}:${match.offset + match.fullMatch.length}`,
+  }))
+}
+
+function decorateMatchReplacement(replacement: string, script: RegexScript, match: DisplayRegexMatch, input: string): string {
+  return script.actions.length > 0
+    ? decorateRegexActionHtml(replacement, resolveRegexActions(script, match, input))
+    : replacement
 }
 
 export function compileRegex(pattern: string, flags: string): RegExp | null {
@@ -101,10 +184,18 @@ function substituteRegexCaptures(
   })
 }
 
-function collectRegexMatches(input: string, regex: RegExp): DisplayRegexMatch[] {
+function collectRegexMatches(
+  input: string,
+  regex: RegExp,
+  pattern: string,
+  flags: string,
+  replacementTemplate: string,
+): DisplayRegexMatch[] {
   const matches: DisplayRegexMatch[] = []
+  const searchEnd = getRegexSearchEnd(input, pattern, flags, replacementTemplate)
+  const searchable = searchEnd === input.length ? input : input.slice(0, searchEnd)
 
-  input.replace(regex, (fullMatch, ...args) => {
+  searchable.replace(regex, (fullMatch, ...args) => {
     const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
     const namedGroups = hasNamedGroups ? args.pop() as Record<string, string> : undefined
     args.pop() as string
@@ -154,11 +245,13 @@ interface SlowRegexReport {
 }
 
 const DISPLAY_SLOW_REGEX_WARNING_MS = 5_000
+const REGEX_PERFORMANCE_ENGINE_VERSION = 2
 
 function getRegexPerformanceMetadata(script: RegexScript): RegexPerformanceMetadata | null {
   const raw = script.metadata?.regex_performance
   if (!raw || typeof raw !== 'object') return null
   if (raw.slow !== true || typeof raw.version !== 'number') return null
+  if (raw.engine_version !== REGEX_PERFORMANCE_ENGINE_VERSION) return null
   return raw as RegexPerformanceMetadata
 }
 
@@ -255,19 +348,36 @@ export function applyDisplayRegex(
       let replaceString = script.replace_string
 
       if (script.substitute_macros === 'raw') {
-        result = result.replace(regex, (fullMatch, ...args) => {
+        result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, (fullMatch, ...args) => {
           const hasNamedGroups = typeof args[args.length - 1] === 'object' && args[args.length - 1] !== null
           const namedGroups = hasNamedGroups ? args.pop() as Record<string, string> : undefined
           const input = args.pop() as string
           const offset = args.pop() as number
           const groups = args as Array<string | undefined>
           const withCaptures = substituteRegexCaptures(replaceString, fullMatch, groups, offset, input, namedGroups)
-          return context.macroCtx
+          const replacement = context.macroCtx
             ? resolveReplacementMacros(withCaptures, 'raw', context.macroCtx)
             : withCaptures
+          return decorateMatchReplacement(
+            replacement,
+            script,
+            { fullMatch, groups, offset, namedGroups },
+            input,
+          )
         })
       } else if (script.substitute_macros === 'after') {
-        result = result.replace(regex, replaceString)
+        if (script.actions.length > 0) {
+          const input = result
+          const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
+          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+            substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+            script,
+            match,
+            input,
+          )))
+        } else {
+          result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
+        }
       } else {
         // Prefer backend-resolved replacement string (full macro engine)
         if (script.substitute_macros !== 'none') {
@@ -282,7 +392,18 @@ export function applyDisplayRegex(
           }
         }
 
-        result = result.replace(regex, replaceString)
+        if (script.actions.length > 0) {
+          const input = result
+          const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
+          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+            substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+            script,
+            match,
+            input,
+          )))
+        } else {
+          result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
+        }
       }
 
       // Apply trim_strings
@@ -382,7 +503,13 @@ export async function applyDisplayRegexAsync(
 
     try {
       if (script.substitute_macros === 'raw') {
-        const matches = collectRegexMatches(result, regex)
+        const matches = collectRegexMatches(
+          result,
+          regex,
+          findRegex,
+          script.flags,
+          script.replace_string,
+        )
         if (matches.length > 0) {
           const templates: Record<string, string> = {}
           const fallbackReplacements = matches.map((match, index) => {
@@ -407,11 +534,23 @@ export async function applyDisplayRegexAsync(
           result = rebuildFromMatches(
             result,
             matches,
-            fallbackReplacements.map((value, index) => resolvedTemplates[`${script.id}:${index}`] ?? value),
+            fallbackReplacements.map((value, index) => decorateMatchReplacement(
+              resolvedTemplates[`${script.id}:${index}`] ?? value,
+              script,
+              matches[index],
+              result,
+            )),
           )
         }
       } else if (script.substitute_macros === 'after') {
-        const substituted = result.replace(regex, script.replace_string)
+        const input = result
+        const matches = collectRegexMatches(input, regex, findRegex, script.flags, script.replace_string)
+        const substituted = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+          substituteRegexCaptures(script.replace_string, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+          script,
+          match,
+          input,
+        )))
         if (hasMacroSyntax(substituted)) {
           const resolved = await resolveRawTemplates({ [`${script.id}:body`]: substituted })
           result = resolved[`${script.id}:body`] ?? substituted
@@ -431,7 +570,18 @@ export async function applyDisplayRegexAsync(
           }
         }
 
-        result = result.replace(regex, replaceString)
+        if (script.actions.length > 0) {
+          const input = result
+          const matches = collectRegexMatches(input, regex, findRegex, script.flags, replaceString)
+          result = rebuildFromMatches(input, matches, matches.map((match) => decorateMatchReplacement(
+            substituteRegexCaptures(replaceString, match.fullMatch, match.groups, match.offset, input, match.namedGroups),
+            script,
+            match,
+            input,
+          )))
+        } else {
+          result = replaceWithinRegexSearchWindow(result, regex, findRegex, script.flags, replaceString, replaceString)
+        }
       }
 
       for (const trim of script.trim_strings) {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, type CSSProperties } from 'react'
+import { useState, useCallback, useMemo, type CSSProperties, type SyntheticEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2 } from 'lucide-react'
 import type { MessageAttachment } from '@/types/api'
@@ -9,6 +9,7 @@ import { useLongPress } from '@/hooks/useLongPress'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ImageLightbox from '@/components/shared/ImageLightbox'
 import LazyImage from '@/components/shared/LazyImage'
+import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 import styles from './MessageAttachments.module.css'
 import clsx from 'clsx'
 
@@ -31,9 +32,20 @@ function getImageFrameStyle(att: MessageAttachment): CSSProperties | undefined {
   }
 }
 
+function getLocalImageUrl(att: MessageAttachment): string {
+  return imagesApi.url(att.image_id)
+}
+
+function getRelayPreviewUrl(att: MessageAttachment): string | null {
+  return typeof att.relay_preview_url === 'string' && att.relay_preview_url.startsWith('data:image/')
+    ? att.relay_preview_url
+    : null
+}
+
 export default function MessageAttachments({ attachments, isUser, chatId, messageId }: MessageAttachmentsProps) {
   const { t } = useTranslation('chat')
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [lightboxFallbackSrc, setLightboxFallbackSrc] = useState<string | null>(null)
   const [lightboxImageId, setLightboxImageId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos] = useState<ContextMenuPos | null>(null)
   const [targetImageId, setTargetImageId] = useState<string | null>(null)
@@ -43,11 +55,16 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
   const canActOnImage = messageContextMenuEnabled && !!chatId && !!messageId
   const closeLightbox = useCallback(() => {
     setLightboxSrc(null)
+    setLightboxFallbackSrc(null)
     setLightboxImageId(null)
   }, [])
-  const openLightbox = useCallback((imageId: string) => {
-    setLightboxImageId(imageId)
-    setLightboxSrc(imagesApi.url(imageId))
+  const openLightbox = useCallback((att: MessageAttachment) => {
+    setLightboxImageId(att.image_id)
+    setLightboxSrc(getLocalImageUrl(att))
+    setLightboxFallbackSrc(getRelayPreviewUrl(att))
+  }, [])
+  const notifyImageLayout = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    dispatchMessageContentLayout(event.currentTarget)
   }, [])
   const closeContextMenu = useCallback(() => {
     setContextMenuPos(null)
@@ -74,7 +91,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
     } catch (err: any) {
       addToast({ type: 'error', title: t('attachments.couldNotRemoveImage'), message: err?.body?.error || err?.message || 'Unknown error' })
     }
-  }, [addToast, chatId, closeContextMenu, messageId, targetImageId])
+  }, [addToast, chatId, closeContextMenu, messageId, targetImageId, t])
 
   // Removes the image currently shown in the lightbox. Throws on failure so the
   // lightbox surfaces its own error toast (the thumbnail context-menu path uses
@@ -139,7 +156,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.imageThumbUser}
               style={getImageFrameStyle(att)}
-              onClick={() => openLightbox(att.image_id)}
+              onClick={() => openLightbox(att)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
@@ -147,10 +164,22 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               title={att.original_filename}
             >
               <LazyImage
-                src={imagesApi.url(att.image_id)}
+                src={getLocalImageUrl(att)}
                 alt={att.original_filename}
                 style={{ objectFit: 'contain' }}
                 spinnerSize={18}
+                onLoad={notifyImageLayout}
+                onError={notifyImageLayout}
+                fallback={getRelayPreviewUrl(att) ? (
+                  <LazyImage
+                    src={getRelayPreviewUrl(att)}
+                    alt={att.original_filename}
+                    style={{ objectFit: 'contain' }}
+                    spinnerSize={18}
+                    onLoad={notifyImageLayout}
+                    onError={notifyImageLayout}
+                  />
+                ) : null}
               />
             </button>
           ) : (
@@ -159,14 +188,14 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               type="button"
               className={styles.inlineImageBtn}
               style={getImageFrameStyle(att)}
-              onClick={() => openLightbox(att.image_id)}
+              onClick={() => openLightbox(att)}
               onContextMenu={onImageContextMenu(att.image_id)}
               onTouchStart={canActOnImage ? onImageTouchStart(att.image_id) : undefined}
               onTouchMove={canActOnImage ? longPress.onTouchMove : undefined}
               onTouchEnd={canActOnImage ? longPress.onTouchEnd : undefined}
             >
               <LazyImage
-                src={imagesApi.url(att.image_id)}
+                src={getLocalImageUrl(att)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
                 style={att.width && att.height
@@ -175,6 +204,23 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
                 }
                 containerClassName={styles.inlineImageWrap}
                 spinnerSize={20}
+                onLoad={notifyImageLayout}
+                onError={notifyImageLayout}
+                fallback={getRelayPreviewUrl(att) ? (
+                  <LazyImage
+                    src={getRelayPreviewUrl(att)}
+                    alt={att.original_filename}
+                    className={styles.inlineImage}
+                    style={att.width && att.height
+                      ? { objectFit: 'contain' }
+                      : { objectFit: 'contain', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '240px' }
+                    }
+                    containerClassName={styles.inlineImageWrap}
+                    spinnerSize={20}
+                    onLoad={notifyImageLayout}
+                    onError={notifyImageLayout}
+                  />
+                ) : null}
               />
             </button>
           )
@@ -183,6 +229,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
 
       <ImageLightbox
         src={lightboxSrc}
+        fallbackSrc={lightboxFallbackSrc}
         onClose={closeLightbox}
         onDelete={canActOnImage ? deleteLightboxImage : undefined}
       />

@@ -118,6 +118,14 @@ const BLOCKED_HOSTNAMES = new Set([
   "metadata.goog",
 ]);
 
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/\.+$/g, "");
+}
+
+function isLocalhostName(hostname: string): boolean {
+  return hostname === "localhost" || hostname.endsWith(".localhost");
+}
+
 /**
  * Fallback resolver for environments where the system DNS resolver can't
  * see a hostname but a public DoH endpoint can (Termux + custom TLDs,
@@ -170,6 +178,7 @@ async function resolveViaDoh(
 }
 
 export interface ValidateHostOptions {
+  /** Allow loopback IP literals and RFC-localhost names, but not LAN/private ranges. */
   allowLoopback?: boolean;
   allowPrivate?: boolean;
   /**
@@ -181,14 +190,25 @@ export interface ValidateHostOptions {
   dnsTimeoutMs?: number;
 }
 
+function allowsLoopback(options?: ValidateHostOptions): boolean {
+  return Boolean(options?.allowLoopback || options?.allowPrivate);
+}
+
 export async function validateHost(hostname: string, options?: ValidateHostOptions): Promise<void> {
-  if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
+  hostname = normalizeHostname(hostname);
+
+  if (BLOCKED_HOSTNAMES.has(hostname)) {
     throw new SSRFError(`Blocked hostname: ${hostname}`);
+  }
+
+  if (isLocalhostName(hostname)) {
+    if (allowsLoopback(options)) return;
+    throw new SSRFError(`URL resolves to private IP: ${hostname}`);
   }
 
   // If hostname is already an IP literal, check directly
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
-    if (options?.allowLoopback && isLoopbackIPv4(hostname)) return;
+    if (allowsLoopback(options) && isLoopbackIPv4(hostname)) return;
     if (options?.allowPrivate && isPrivateIPv4(hostname)) return;
     if (isPrivateIPv4(hostname)) {
       throw new SSRFError(`URL resolves to private IP: ${hostname}`);
@@ -197,7 +217,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
   }
   if (hostname.startsWith("[") || hostname.includes(":")) {
     const bare = hostname.replace(/^\[|\]$/g, "");
-    if (options?.allowLoopback && isLoopbackIPv6(bare)) return;
+    if (allowsLoopback(options) && isLoopbackIPv6(bare)) return;
     if (options?.allowPrivate && isPrivateIPv6(bare)) return;
     if (isPrivateIPv6(bare)) {
       throw new SSRFError(`URL resolves to private IP: ${bare}`);
@@ -285,7 +305,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
   }
 
   for (const ip of v4Addrs) {
-    if (options?.allowLoopback && isLoopbackIPv4(ip)) continue;
+    if (allowsLoopback(options) && isLoopbackIPv4(ip)) continue;
     if (options?.allowPrivate && isPrivateIPv4(ip)) continue;
     if (isPrivateIPv4(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);
@@ -293,7 +313,7 @@ export async function validateHost(hostname: string, options?: ValidateHostOptio
   }
 
   for (const ip of v6Addrs) {
-    if (options?.allowLoopback && isLoopbackIPv6(ip)) continue;
+    if (allowsLoopback(options) && isLoopbackIPv6(ip)) continue;
     if (options?.allowPrivate && isPrivateIPv6(ip)) continue;
     if (isPrivateIPv6(ip)) {
       throw new SSRFError(`URL resolves to private IP: ${ip} (from ${hostname})`);

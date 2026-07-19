@@ -3,7 +3,7 @@ import {
   Sliders, MessageSquare, Users, PanelRight,
   Compass, Reply, HardDrive, Puzzle, Database, Hash, Activity,
   Globe, Bell, Import, Brain, Terminal, Volume2, Plug, Search, UserRound,
-  PackageOpen,
+  PackageOpen, KeyRound,
 } from 'lucide-react'
 import { useStore } from '@/store'
 import { translateSettingsField, translateSettingsSectionTitle } from '@/lib/i18n/resolveLabel'
@@ -251,6 +251,19 @@ export const SETTINGS_TABS: SettingsTabEntry[] = [
 
   // ── Admin/Owner-gated tabs ────────────────────────────────────────────────────
 
+  {
+    id: 'ssoProviders',
+    shortName: 'SSO',
+    tabName: 'Single Sign-On',
+    tabDescription: 'Configure owner-managed OpenID Connect sign-in providers',
+    tabIcon: KeyRound,
+    keywords: ['sso', 'single sign-on', 'openid', 'oidc', 'oauth', 'authelia', 'authentik', 'keycloak', 'identity provider'],
+    role: 'owner',
+    sections: [
+      { key: 'general', titleKey: 'ssoProviders.title', titleFallback: 'Single Sign-On', keywords: ['sso', 'oidc', 'openid connect', 'identity provider', 'client id', 'client secret', 'issuer', 'redirect uri'] },
+    ],
+    component: INLINE_SENTINEL,
+  },
   {
     id: 'operator',
     shortName: 'Operator',

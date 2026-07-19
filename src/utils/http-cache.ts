@@ -13,15 +13,21 @@ export const REVALIDATE_PRIVATE = "private, no-cache";
 
 /**
  * RFC 7232 If-None-Match evaluation: true when the client's header lists the
- * current etag (or "*"). Handles comma-separated lists and surrounding spaces.
+ * current entity tag (or "*"). If-None-Match uses weak comparison, so a weak
+ * tag and its otherwise-identical strong form represent the same resource.
  */
 export function ifNoneMatchSatisfies(
   ifNoneMatch: string | null | undefined,
   etag: string,
 ): boolean {
   if (!ifNoneMatch) return false;
+  const normalize = (value: string): string => {
+    const trimmed = value.trim();
+    return trimmed.startsWith("W/") ? trimmed.slice(2).trim() : trimmed;
+  };
+  const current = normalize(etag);
   return ifNoneMatch
     .split(",")
     .map((value) => value.trim())
-    .some((value) => value === "*" || value === etag);
+    .some((value) => value === "*" || normalize(value) === current);
 }

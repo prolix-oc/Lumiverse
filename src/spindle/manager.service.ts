@@ -23,14 +23,13 @@ import {
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
-import { spawnAsync } from "./spawn-async";
+import { spawnAsync, type SpawnAsyncResult } from "./spawn-async";
 import { normalizeSpindleHttpsUrl } from "./url-safety";
+import { bunCmd } from "../utils/bun-cmd";
 
 export type InstallScope = "operator" | "user";
-type ManagedSpindlePermission = SpindlePermission | "databanks" | "presets";
-
-function isManagedPermission(permission: string): permission is ManagedSpindlePermission {
-  return permission === "databanks" || permission === "presets" || isValidPermission(permission);
+function isManagedPermission(permission: string): permission is SpindlePermission {
+  return isValidPermission(permission);
 }
 
 type BackendSafetyCheck = {
@@ -68,6 +67,8 @@ const DANGEROUS_MODULE_LABELS = new Map<string, string>([
 
 const DANGEROUS_BUN_PROPERTIES = new Set(["file", "write", "spawn", "spawnSync", "serve", "connect", "listen"]);
 const DANGEROUS_PROCESS_PROPERTIES = new Set(["env", "exit", "kill", "chdir", "dlopen"]);
+const WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE = "LUMIVERSE_FORCE_SPINDLE_ASYNC_BUN";
+const warnedWindowsSpindleBunFallback = new Set<string>();
 
 const DANGEROUS_BACKEND_CHECKS: BackendSafetyCheck[] = [
   {
@@ -997,39 +998,6 @@ function applyStorageSeeds(identifier: string, manifest: SpindleManifest): void 
 }
 
 // ─── Termux-aware Bun command builders ───────────────────────────────────
-// On Termux, the bare `bun` binary can't execute natively. start.sh detects
-// the working invocation method and exports it via env vars so we can mirror
-// the same wrapping here when spawning bun subprocesses.
-
-/**
- * Build a command array for running `bun <args>`.
- * Mirrors start.sh's `_bun()` wrapper.
- */
-export function bunCmd(...args: string[]): string[] {
-  const method = process.env.LUMIVERSE_BUN_METHOD;
-  const bunPath = process.env.LUMIVERSE_BUN_PATH;
-
-  if (!method || !bunPath) return ["bun", ...args];
-
-  switch (method) {
-    case "direct":
-      return [bunPath, ...args];
-    case "grun":
-      return ["grun", bunPath, ...args];
-    case "proot": {
-      const prefix = process.env.PREFIX || "/data/data/com.termux/files/usr";
-      return [
-        "proot", "--link2symlink", "-0",
-        `${prefix}/glibc/lib/ld-linux-aarch64.so.1`,
-        "--library-path", `${prefix}/glibc/lib`,
-        bunPath, ...args,
-      ];
-    }
-    default:
-      return [bunPath, ...args];
-  }
-}
-
 /**
  * Build a command array for `bun install`.
  * On Termux, `bun install` always needs proot wrapping (Android's seccomp
@@ -1058,12 +1026,80 @@ export function bunInstallCmd(): string[] {
     return ["proot", "--link2symlink", "-0", bunPath, "install", "--ignore-scripts", "--backend=copyfile"];
   }
 
-  // grun/proot: explicit glibc linker + proot
+  if (method === "grun") {
+    // Keep using the user's working grun wrapper inside proot instead of
+    // reconstructing ld.so arguments ourselves. Native Termux installs can
+    // otherwise pass `grun bun --version` and still fail the real install path.
+    return ["proot", "--link2symlink", "-0", "grun", bunPath, "install", "--ignore-scripts", "--backend=copyfile"];
+  }
+
+  // proot/unknown: explicit glibc linker + proot
   return [
     "proot", "--link2symlink", "-0",
     glibcLd, "--library-path", `${prefix}/glibc/lib`,
     bunPath, "install", "--ignore-scripts", "--backend=copyfile",
   ];
+}
+
+/**
+ * Bun-on-Bun subprocesses that pipe stdout/stderr have been prone to host-process
+ * assertion failures on Windows during long-running extension installs/builds.
+ * Fall back to spawnSync there so the admin action may block briefly, but the
+ * server stays alive. Allow an escape hatch for users who want to try newer Bun
+ * builds without the fallback.
+ */
+export function shouldUseWindowsSpindleBunSyncFallback(
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (platform !== "win32") return false;
+  return env[WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE] !== "1";
+}
+
+function warnWindowsSpindleBunSyncFallback(context: string): void {
+  if (!shouldUseWindowsSpindleBunSyncFallback() || warnedWindowsSpindleBunFallback.has(context)) {
+    return;
+  }
+  warnedWindowsSpindleBunFallback.add(context);
+  console.warn(
+    `[Spindle] ${context} is using a synchronous Bun subprocess fallback on Windows to avoid known Bun.spawn pipe crashes. Set ${WINDOWS_SPINDLE_ASYNC_BUN_OVERRIDE}=1 to re-enable the async path.`,
+  );
+}
+
+async function runSpindleBunSubprocess(
+  cmd: string[],
+  opts: { cwd: string; context: string },
+): Promise<SpawnAsyncResult> {
+  if (!shouldUseWindowsSpindleBunSyncFallback()) {
+    return spawnAsync(cmd, { cwd: opts.cwd });
+  }
+
+  warnWindowsSpindleBunSyncFallback(opts.context);
+  const proc = Bun.spawnSync({
+    cmd,
+    cwd: opts.cwd,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  return {
+    exitCode: proc.exitCode ?? -1,
+    stdout: proc.stdout.toString(),
+    stderr: proc.stderr.toString(),
+    timedOut: false,
+  };
+}
+
+function formatCommandFailure(
+  result: Pick<SpawnAsyncResult, "exitCode" | "stdout" | "stderr">,
+  label: string,
+): string {
+  const stderr = result.stderr.trim();
+  if (stderr) return stderr;
+  const stdout = result.stdout.trim();
+  if (stdout) return stdout;
+  return `${label} exited with code ${result.exitCode}`;
 }
 
 // ─── Build ───────────────────────────────────────────────────────────────
@@ -1080,9 +1116,12 @@ export async function buildExtension(identifier: string): Promise<void> {
   // Always install dependencies first if package.json exists
   const pkgJson = join(repo, "package.json");
   if (existsSync(pkgJson)) {
-    const install = await spawnAsync(bunInstallCmd(), { cwd: repo });
+    const install = await runSpindleBunSubprocess(bunInstallCmd(), {
+      cwd: repo,
+      context: `dependency install for ${identifier}`,
+    });
     if (install.exitCode !== 0) {
-      throw new Error(`Dependency install failed: ${install.stderr}`);
+      throw new Error(`Dependency install failed: ${formatCommandFailure(install, "bun install")}`);
     }
   }
 
@@ -1114,23 +1153,29 @@ export async function buildExtension(identifier: string): Promise<void> {
 
   // Build backend entry if source exists
   if (needsBackendBuild) {
-    const proc = await spawnAsync(
+    const proc = await runSpindleBunSubprocess(
       bunCmd("build", "src/backend.ts", "--outfile", backendEntry, "--target", "bun"),
-      { cwd: repo }
+      {
+        cwd: repo,
+        context: `backend build for ${identifier}`,
+      }
     );
     if (proc.exitCode !== 0) {
-      throw new Error(`Backend build failed: ${proc.stderr}`);
+      throw new Error(`Backend build failed: ${formatCommandFailure(proc, "bun build")}`);
     }
   }
 
   // Build frontend entry if source exists
   if (needsFrontendBuild) {
-    const proc = await spawnAsync(
+    const proc = await runSpindleBunSubprocess(
       bunCmd("build", "src/frontend.ts", "--outfile", frontendEntry, "--target", "browser"),
-      { cwd: repo }
+      {
+        cwd: repo,
+        context: `frontend build for ${identifier}`,
+      }
     );
     if (proc.exitCode !== 0) {
-      throw new Error(`Frontend build failed: ${proc.stderr}`);
+      throw new Error(`Frontend build failed: ${formatCommandFailure(proc, "bun build")}`);
     }
   }
 
@@ -1279,6 +1324,38 @@ export async function install(
 
 // ─── Update ──────────────────────────────────────────────────────────────
 
+const LOCAL_GIT_COMMAND_TIMEOUT_MS = 15_000;
+const GIT_PULL_TIMEOUT_MS = 60_000;
+const GIT_FETCH_TIMEOUT_MS = 30_000;
+
+function spawnFailureReason(
+  proc: SpawnAsyncResult,
+  timeoutMs: number
+): string {
+  if (proc.timedOut) {
+    return `timed out after ${timeoutMs / 1000}s`;
+  }
+  return proc.stderr.trim() || proc.stdout.trim() || `exit code ${proc.exitCode}`;
+}
+
+async function runGitStep(
+  repo: string,
+  cmd: string[],
+  label: string,
+  options: { timeoutMs: number; ignoreStdout?: boolean }
+): Promise<void> {
+  const proc = await spawnAsync(cmd, {
+    cwd: repo,
+    timeoutMs: options.timeoutMs,
+    ignoreStdout: options.ignoreStdout,
+  });
+  if (proc.exitCode === 0) return;
+
+  throw new Error(
+    `${label} failed: ${spawnFailureReason(proc, options.timeoutMs)}`
+  );
+}
+
 export async function update(identifier: string): Promise<ExtensionInfo> {
   const repo = repoDir(identifier);
   if (!existsSync(repo)) {
@@ -1295,16 +1372,17 @@ export async function update(identifier: string): Promise<ExtensionInfo> {
   if (!devMode) {
     // Clean build artifacts and installed dependencies so git pull succeeds.
     // We don't read stdout for these — ignore it to reduce pipe overhead.
-    await spawnAsync(["git", "checkout", "."], { cwd: repo, ignoreStdout: true });
-    await spawnAsync(["git", "clean", "-fd"], { cwd: repo, ignoreStdout: true });
-
-    const pullProc = await spawnAsync(["git", "pull"], {
-      cwd: repo,
-      timeoutMs: 60_000,
+    await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
+      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+      ignoreStdout: true,
     });
-    if (pullProc.exitCode !== 0) {
-      throw new Error(`git pull failed: ${pullProc.stderr}`);
-    }
+    await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
+      timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+      ignoreStdout: true,
+    });
+    await runGitStep(repo, ["git", "pull"], "git pull", {
+      timeoutMs: GIT_PULL_TIMEOUT_MS,
+    });
   }
 
   // Re-read manifest — in non-dev mode the pull may have modified it; in
@@ -1451,7 +1529,7 @@ export function revokePermission(
   );
 }
 
-export function getGrantedPermissions(identifier: string): ManagedSpindlePermission[] {
+export function getGrantedPermissions(identifier: string): SpindlePermission[] {
   const db = getDb();
   const ext = db
     .query("SELECT id FROM extensions WHERE identifier = ?")
@@ -1462,12 +1540,12 @@ export function getGrantedPermissions(identifier: string): ManagedSpindlePermiss
     .query("SELECT permission FROM extension_grants WHERE extension_id = ?")
     .all(ext.id) as { permission: string }[];
 
-  return rows.map((r) => r.permission as ManagedSpindlePermission);
+  return rows.map((r) => r.permission as SpindlePermission);
 }
 
 export function hasPermission(
   identifier: string,
-  permission: ManagedSpindlePermission
+  permission: SpindlePermission
 ): boolean {
   return getGrantedPermissions(identifier).includes(permission);
 }
@@ -1573,6 +1651,18 @@ export async function getFrontendBundlePath(identifier: string): Promise<string 
   const repo = repoDir(identifier);
   const bundlePath = resolveWithin(repo, entry, "entry_frontend");
   return (await Bun.file(bundlePath).exists()) ? bundlePath : null;
+}
+
+export async function getFrontendBundleCacheKey(identifier: string): Promise<string | null> {
+  const bundlePath = await getFrontendBundlePath(identifier);
+  if (!bundlePath) return null;
+
+  try {
+    const stat = statSync(bundlePath);
+    return `${stat.size}-${Math.floor(stat.mtimeMs)}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function getBackendEntryPath(identifier: string): Promise<string | null> {
@@ -1772,33 +1862,38 @@ export async function switchBranch(
   }
 
   // Clean working tree
-  Bun.spawnSync({ cmd: ["git", "checkout", "."], cwd: repo });
-  Bun.spawnSync({ cmd: ["git", "clean", "-fd"], cwd: repo });
+  await runGitStep(repo, ["git", "checkout", "."], "git checkout .", {
+    ignoreStdout: true,
+    timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+  });
+  await runGitStep(repo, ["git", "clean", "-fd"], "git clean -fd", {
+    ignoreStdout: true,
+    timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS,
+  });
 
   // Widen the fetch refspec — shallow/single-branch clones only track one branch
-  Bun.spawnSync({
-    cmd: ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
-    cwd: repo,
-  });
+  await runGitStep(
+    repo,
+    ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+    "git config remote.origin.fetch",
+    { timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS }
+  );
 
   // Fetch the target branch (--depth=1 to keep it shallow)
-  const fetchProc = Bun.spawnSync({
-    cmd: ["git", "fetch", "--depth", "1", "origin", branch],
-    cwd: repo,
-    timeout: 30_000,
-  });
-  if (fetchProc.exitCode !== 0) {
-    throw new Error(`git fetch failed: ${fetchProc.stderr.toString()}`);
-  }
+  await runGitStep(
+    repo,
+    ["git", "fetch", "--depth", "1", "origin", branch],
+    `git fetch ${branch}`,
+    { timeoutMs: GIT_FETCH_TIMEOUT_MS }
+  );
 
   // Checkout the branch
-  const checkoutProc = Bun.spawnSync({
-    cmd: ["git", "checkout", "-B", branch, `origin/${branch}`],
-    cwd: repo,
-  });
-  if (checkoutProc.exitCode !== 0) {
-    throw new Error(`git checkout failed: ${checkoutProc.stderr.toString()}`);
-  }
+  await runGitStep(
+    repo,
+    ["git", "checkout", "-B", branch, `origin/${branch}`],
+    `git checkout ${branch}`,
+    { timeoutMs: LOCAL_GIT_COMMAND_TIMEOUT_MS }
+  );
 
   // Re-read manifest
   const manifest = await readManifest(identifier);
@@ -1821,11 +1916,8 @@ export async function switchBranch(
   if (hasBuildableSrc) {
     const distDir = join(repo, "dist");
     if (existsSync(distDir)) {
-      const lsFiles = Bun.spawnSync({
-        cmd: ["git", "ls-files", "dist"],
-        cwd: repo,
-      });
-      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.toString().trim().length > 0;
+      const lsFiles = await spawnAsync(["git", "ls-files", "dist"], { cwd: repo });
+      const distIsTracked = lsFiles.exitCode === 0 && lsFiles.stdout.trim().length > 0;
       if (!distIsTracked) {
         rmSync(distDir, { recursive: true });
       }
@@ -1865,7 +1957,7 @@ export async function switchBranch(
 
 async function rowToExtensionInfo(row: any): Promise<ExtensionInfo> {
   const identifier = row.identifier;
-  const permissions: ManagedSpindlePermission[] = parsePermissionsSafe<ManagedSpindlePermission>(row.permissions);
+  const permissions: SpindlePermission[] = parsePermissionsSafe<SpindlePermission>(row.permissions);
   const granted = getGrantedPermissions(identifier);
 
   let hasFrontend = false;

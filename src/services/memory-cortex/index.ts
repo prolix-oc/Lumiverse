@@ -5,14 +5,14 @@
  * It exposes:
  *
  *   - Retrieval: queryCortex() — the dual-pass retrieval engine
- *   - Ingestion: processChunk() — called when a new chat chunk is created
+ *   - Ingestion: scheduleProcessChunk() / processChunk() — queue or process a chat chunk
  *   - Rebuild:   rebuildCortex() — reconstruct all derived data from chunks
  *   - Config:    getCortexConfig(), putCortexConfig()
  *   - Formatting: cortexToMemoryResult() — backwards-compat adapter
  *
  * Integration:
  *   The prompt assembly pipeline calls queryCortex() during generation.
- *   The chat chunk creation pipeline calls processChunk() on new chunks.
+ *   The chat chunk creation pipeline calls scheduleProcessChunk() on new chunks.
  */
 
 import { getDb } from "../../db/connection";
@@ -43,9 +43,11 @@ import { processChunkFontColors, formatColorMapForPrompt, deleteColorMapForChat,
 import { extractRelationshipsHeuristic } from "./relationship-extractor";
 import { extractNPsFromChunk } from "./np-chunker";
 import { stripNonProseTags } from "../../utils/content-sanitizer";
+import * as regexScriptsSvc from "../regex-scripts.service";
 import { getLinkedCortexData, reindexVault, getVaultRow } from "./vault";
 import { eventBus } from "../../ws/bus";
 import { EventType } from "../../ws/events";
+import { enqueueChatPipelineTask, type ChatPipelineTaskResult } from "../chat-pipeline-coordinator.service";
 import type {
   ChunkIngestionData,
   CortexQuery,
@@ -86,6 +88,22 @@ export type {
 export { buildEmotionalContext } from "./emotional-context";
 export { formatEntitySnapshots, formatRelationships } from "./entity-context";
 export { extractNPsFromChunk } from "./np-chunker";
+
+/**
+ * Return the tag name for a configured HTML thought delimiter pair.
+ * The sanitizer needs this narrow hint so it can retain the delimiters inside
+ * a font block long enough for font attribution to classify the block.
+ */
+function getThoughtMarkerHtmlTags(markers: MemoryCortexConfig["thoughtMarkers"]): string[] {
+  const prefix = markers?.prefix?.trim();
+  const suffix = markers?.suffix?.trim();
+  if (!prefix || !suffix) return [];
+
+  const open = prefix.match(/^<\s*([a-zA-Z][\w:-]*)\b[^>]*>$/);
+  const close = suffix.match(/^<\s*\/\s*([a-zA-Z][\w:-]*)\s*>$/);
+  if (!open || !close || open[1].toLowerCase() !== close[1].toLowerCase()) return [];
+  return [open[1].toLowerCase()];
+}
 export {
   resolveCanonicalId,
   normalizeEntityName,
@@ -442,17 +460,15 @@ function buildCortexQueryKey(query: CortexQuery, config: MemoryCortexConfig): st
  * Returns null if no cached result exists or if it has expired.
  * This is a synchronous, non-blocking call — safe to use in the generation hot path.
  *
- * When `requireExcludedMessageId` is provided (regenerate/swipe), the cached
- * entry is only returned if that message was excluded when the entry was
- * warmed. Otherwise the entry could contain a chunk for the message being
- * regenerated and re-inject the prior swipe's text as a "memory". On a reject
- * the caller falls through to exclusion-aware vector retrieval, so correctness
- * is preserved at the cost of one cold retrieval in the (rare) cross-message
- * regen case. Normal sends pass nothing here and keep the fast warm-cache read.
+ * When `requiredExcludedMessageIds` is provided, the cached entry is only
+ * returned if every required message was excluded when the entry was warmed.
+ * Otherwise it could contain the regen target or current live-context tail and
+ * re-inject it as "memory". On a reject the caller falls through to
+ * exclusion-aware vector retrieval.
  */
 export function getCachedCortexResult(
   chatId: string,
-  requireExcludedMessageId?: string,
+  requiredExcludedMessageIds?: string | string[],
 ): CortexResult | null {
   const entry = cortexResultCache.get(chatId);
   if (!entry) return null;
@@ -460,14 +476,18 @@ export function getCachedCortexResult(
     cortexResultCache.delete(chatId);
     return null;
   }
-  if (
-    requireExcludedMessageId &&
-    !entry.excludeMessageIds.includes(requireExcludedMessageId)
-  ) {
-    // Stale-context entry: it was warmed without excluding the message we are
-    // now regenerating, so it may contain that message's own chunk. Treat as a
-    // miss and let the caller fall back to an exclusion-aware retrieval.
-    return null;
+  const required = typeof requiredExcludedMessageIds === "string"
+    ? [requiredExcludedMessageIds]
+    : (requiredExcludedMessageIds ?? []);
+  if (required.length > 0) {
+    const excluded = new Set(entry.excludeMessageIds);
+    for (const id of required) {
+      if (!excluded.has(id)) {
+        // Stale-context entry: it was warmed without excluding a message that is
+        // now live or being regenerated, so it may contain that chunk.
+        return null;
+      }
+    }
   }
   return entry.result;
 }
@@ -573,6 +593,11 @@ const cortexIngestionSamples = new Map<string, {
   totalMsTotal: number;
   last: CortexIngestionTimings | null;
 }>();
+const pendingIngestionStatusBroadcasts = new Map<string, {
+  userId: string;
+  status: CortexIngestionStatus;
+}>();
+let ingestionStatusBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getOrCreateIngestionStatus(chatId: string): CortexIngestionStatus {
   const existing = cortexIngestionStatus.get(chatId);
@@ -591,8 +616,24 @@ function getOrCreateIngestionStatus(chatId: string): CortexIngestionStatus {
   return created;
 }
 
+function flushIngestionStatusBroadcasts(): void {
+  ingestionStatusBroadcastTimer = null;
+  const pending = Array.from(pendingIngestionStatusBroadcasts.values());
+  pendingIngestionStatusBroadcasts.clear();
+  for (const { userId, status } of pending) {
+    eventBus.emit(EventType.CORTEX_INGESTION_PROGRESS, status, userId);
+  }
+  if (pendingIngestionStatusBroadcasts.size > 0) {
+    ingestionStatusBroadcastTimer = setTimeout(flushIngestionStatusBroadcasts, 0);
+  }
+}
+
 function emitIngestionStatus(userId: string, status: CortexIngestionStatus): void {
-  eventBus.emit(EventType.CORTEX_INGESTION_PROGRESS, status, userId);
+  // Coalesce same-turn status churn for a chat so live ingestion doesn't spam
+  // Bun's native publish/deferred-drain path on every phase transition.
+  pendingIngestionStatusBroadcasts.set(status.chatId, { userId, status });
+  if (ingestionStatusBroadcastTimer) return;
+  ingestionStatusBroadcastTimer = setTimeout(flushIngestionStatusBroadcasts, 0);
 }
 
 function updateIngestionStatus(
@@ -960,6 +1001,58 @@ export async function queryCortex(
  * @param generateRawFn - Optional: sidecar LLM call function
  * @param sidecarConnectionId - Optional: connection profile for sidecar
  */
+export function scheduleProcessChunk(
+  data: ChunkIngestionData,
+  characterNames: string[],
+  generateRawFn?: (opts: {
+    connectionId: string;
+    messages: Array<{ role: string; content: string }>;
+    parameters: Record<string, any>;
+    tools?: import("../../llm/types").ToolDefinition[];
+    signal?: AbortSignal;
+  }) => Promise<{ content: string; tool_calls?: Array<{ name: string; args: Record<string, unknown> }> }>,
+  sidecarConnectionId?: string,
+  descriptionAliases?: Map<string, string>,
+): Promise<ChatPipelineTaskResult<void>> {
+  const db = getDb();
+  const queuedRow = db
+    .query("SELECT updated_at FROM chat_chunks WHERE id = ? AND chat_id = ?")
+    .get(data.chunkId, data.chatId) as { updated_at?: number } | null;
+  const queuedRevision = queuedRow?.updated_at ?? null;
+
+  return enqueueChatPipelineTask({
+    chatId: data.chatId,
+    kind: "cortex_ingest",
+    dedupeKey: data.chunkId,
+    revision: queuedRevision,
+    preflight: () => {
+      const cfg = getCortexConfig(data.userId);
+      if (!cfg.enabled) return { action: "skip", reason: "cortex_disabled" } as const;
+
+      const row = db
+        .query(
+          "SELECT updated_at, cortex_warmup_signature FROM chat_chunks WHERE id = ? AND chat_id = ?",
+        )
+        .get(data.chunkId, data.chatId) as { updated_at?: number; cortex_warmup_signature?: string | null } | null;
+      if (!row) return { action: "skip", reason: "chunk_deleted" } as const;
+      if (queuedRevision != null && row.updated_at !== queuedRevision) {
+        return { action: "skip", reason: "chunk_revised" } as const;
+      }
+      if (row.cortex_warmup_signature === getCortexStructuralSignature(cfg)) {
+        return { action: "skip", reason: "already_warm" } as const;
+      }
+      return { action: "run" } as const;
+    },
+    run: () => processChunk(
+      data,
+      characterNames,
+      generateRawFn,
+      sidecarConnectionId,
+      descriptionAliases,
+    ),
+  });
+}
+
 export async function processChunk(
   data: ChunkIngestionData,
   characterNames: string[],
@@ -977,7 +1070,10 @@ export async function processChunk(
   /** Pre-computed heuristic output for this chunk. When provided, processChunk
    *  skips its own runHeuristicAnalysisInWorker call. Used by the batch rebuild
    *  path so the heuristic worker doesn't run twice (once to build arbiter
-   *  input, again during ingestion). */
+   *  input, again during ingestion).
+   *
+   *  External callers should normally use scheduleProcessChunk() so chunk
+   *  rebuilds, warmups, and live ingests share the same chat-scoped lane. */
   precomputedHeuristic?: import("./heuristic-runtime").HeuristicAnalysisOutput,
 ): Promise<void> {
   const config = getCortexConfig(data.userId);
@@ -1011,12 +1107,20 @@ export async function processChunk(
     let sidecarDiscoveredAliases: Array<{ canonicalName: string; alias: string; evidence?: string }> = [];
     let sidecarGrading: import("./types").SidecarGradedHeuristics | undefined;
 
-    const rawChunkContent = hydrateChunkContentFromMessages(data.messageIds, data.content);
+    const hydratedChunkContent = hydrateChunkContentFromMessages(data.messageIds, data.content);
+    // Cortex re-hydrates raw messages rather than reusing the sanitized vector
+    // chunk, so the memory strip must run on this path too.
+    const rawChunkContent = await regexScriptsSvc.applyMemoryIngestionRegex(
+      data.userId,
+      hydratedChunkContent,
+      { characterId: data.characterId, chatId: data.chatId },
+    );
     // Strip non-prose markup (HTML, <details>, <lumia_ooc>, scaffold blocks,
     // user-defined HUD tags, etc.) before any evaluator sees the chunk —
     // keeps font tags so attribution still works.
     const proseContent = stripNonProseTags(rawChunkContent, {
       keepFontTags: true,
+      preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
       extraScaffoldTags: config.nonProseScaffoldTags,
     });
     const thoughtDelimiters = config.thoughtMarkers;
@@ -1785,7 +1889,14 @@ export async function rebuildCortex(
   const sidecarAvailable = shouldUseCortexSidecar(config) && !!generateRawFn && !!sidecarConnectionId;
   const sidecarAnalysisActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
   const signal = options.signal;
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Cortex rebuild aborted", "AbortError");
+  }
   const db = getDb();
+  // Character scope for memory-strip scripts; matches the live ingestion path.
+  const characterId = (db
+    .query("SELECT character_id FROM chats WHERE id = ?")
+    .get(chatId) as { character_id: string | null } | undefined)?.character_id ?? null;
 
   console.info(
     `[memory-cortex] ${resumable ? "Warming" : "Rebuilding"} cortex for chat ${chatId} (sidecar: ${sidecarAvailable ? "yes" : "heuristic only"})`,
@@ -1853,6 +1964,7 @@ export async function rebuildCortex(
           chunks[i],
           chatId,
           userId,
+          characterId,
           characterNames,
           sidecarAvailable ? generateRawFn : undefined,
           sidecarAvailable ? sidecarConnectionId : undefined,
@@ -1912,7 +2024,11 @@ export async function rebuildCortex(
             // keepFontTags: true so the sidecar can still do color attribution.
             content: stripNonProseTags(
               hydrateChunkContentFromMessages(safeJsonArray(chunk.message_ids), chunk.content),
-              { keepFontTags: true, extraScaffoldTags: config.nonProseScaffoldTags },
+              {
+                keepFontTags: true,
+                preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
+                extraScaffoldTags: config.nonProseScaffoldTags,
+              },
             ),
           }));
 
@@ -1961,6 +2077,7 @@ export async function rebuildCortex(
                 // processChunkFontColors path is acceptable for grading input.
                 const proseContent = stripNonProseTags(raw, {
                   keepFontTags: true,
+                  preserveFontInnerTags: getThoughtMarkerHtmlTags(config.thoughtMarkers),
                   extraScaffoldTags: config.nonProseScaffoldTags,
                 });
                 const cleanContent = stripThoughtDelimiters(stripFontTags(proseContent), config.thoughtMarkers);
@@ -2045,15 +2162,15 @@ export async function rebuildCortex(
               const sidecarResult = sidecarResults[i];
               if (sidecarResult) {
                 await processChunkWithPrecomputedSidecar(
-                  chunk, chatId, userId, characterNames, sidecarResult, descriptionAliases,
+                  chunk, chatId, userId, characterId, characterNames, sidecarResult, descriptionAliases,
                   perChunkHeuristic[i] ?? undefined,
                 );
               } else {
-                await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+                await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases);
               }
             } catch {
               // fall back to heuristic on ingest failure
-              await processChunkFromRaw(chunk, chatId, userId, characterNames, undefined, undefined, descriptionAliases);
+              await processChunkFromRaw(chunk, chatId, userId, characterId, characterNames, undefined, undefined, descriptionAliases);
             }
             tickProgress();
           }
@@ -2106,6 +2223,7 @@ async function processChunkFromRaw(
   chunk: any,
   chatId: string,
   userId: string,
+  characterId: string | null,
   characterNames: string[],
   generateRawFn?: any,
   sidecarConnectionId?: string,
@@ -2116,6 +2234,7 @@ async function processChunkFromRaw(
       chunkId: chunk.id,
       chatId: chunk.chat_id || chatId,
       userId,
+      characterId,
       content: chunk.content,
       messageIds: safeJsonArray(chunk.message_ids),
       startMessageIndex: 0,
@@ -2138,6 +2257,7 @@ async function processChunkWithPrecomputedSidecar(
   chunk: any,
   chatId: string,
   userId: string,
+  characterId: string | null,
   characterNames: string[],
   sidecarResult: import("./types").SidecarExtractionResult,
   descriptionAliases?: Map<string, string>,
@@ -2214,6 +2334,7 @@ async function processChunkWithPrecomputedSidecar(
       chunkId: chunk.id,
       chatId: chunk.chat_id || chatId,
       userId,
+      characterId,
       content: chunk.content,
       messageIds: safeJsonArray(chunk.message_ids),
       startMessageIndex: 0,

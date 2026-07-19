@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '@/store'
 import { emptyPersonaPlan, type WeaverSession } from '@/api/weaver'
-import { connectionsApi } from '@/api/connections'
 import SearchableSelect, { type SearchableSelectOption } from '@/components/shared/SearchableSelect'
-import ModelCombobox from '@/components/panels/connection-manager/ModelCombobox'
+import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import { Btn, estimateTokens } from '../primitives'
 import styles from '../WeaverStudio.module.css'
 
@@ -14,45 +13,13 @@ const PERSONA_NONE = '__none__'
 function SessionConfigRail({ session }: { session: WeaverSession }) {
   const { t } = useTranslation('weaver')
   const personas = useStore((s) => s.personas)
-  const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const setConfig = useStore((s) => s.setWeaverSessionConfig)
   const buildTypes = useStore((s) => s.weaverBuildTypes)
   const narrationModes = useStore((s) => s.weaverNarrationModes)
   const loadNarrationModes = useStore((s) => s.loadWeaverNarrationModes)
 
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [modelLabels, setModelLabels] = useState<Record<string, string>>({})
-  const [loadingModels, setLoadingModels] = useState(false)
-
   const effectiveConnectionId = session.connection_id || activeProfileId || ''
-  const selectedConnection = useMemo(
-    () => profiles.find((p) => p.id === effectiveConnectionId),
-    [profiles, effectiveConnectionId],
-  )
-
-  const fetchModels = useCallback(async () => {
-    if (!effectiveConnectionId) {
-      setAvailableModels([])
-      setModelLabels({})
-      return
-    }
-    setLoadingModels(true)
-    try {
-      const result = await connectionsApi.models(effectiveConnectionId)
-      setAvailableModels(result.models || [])
-      setModelLabels(result.model_labels || {})
-    } catch {
-      setAvailableModels([])
-      setModelLabels({})
-    } finally {
-      setLoadingModels(false)
-    }
-  }, [effectiveConnectionId])
-
-  useEffect(() => {
-    void fetchModels()
-  }, [fetchModels])
 
   const personaOptions = useMemo<SearchableSelectOption[]>(() => {
     const opts: SearchableSelectOption[] = [{ value: PERSONA_NONE, label: t('panel.personaNone') }]
@@ -69,11 +36,6 @@ function SessionConfigRail({ session }: { session: WeaverSession }) {
   const narrationOptions = useMemo<SearchableSelectOption[]>(
     () => narrationModes.map((m) => ({ value: m.id, label: t(`dream.narration.${m.id}`, { defaultValue: m.label }) })),
     [narrationModes, t],
-  )
-
-  const connectionOptions = useMemo<SearchableSelectOption[]>(
-    () => profiles.map((p) => ({ value: p.id, label: p.name, sublabel: p.provider })),
-    [profiles],
   )
 
   const createNewPersona = session.persona_plan?.enabled ?? false
@@ -119,29 +81,18 @@ function SessionConfigRail({ session }: { session: WeaverSession }) {
       )}
       <div className={styles.configField}>
         <span className={styles.configLabel}>{t('panel.connection')}</span>
-        <SearchableSelect
-          options={connectionOptions}
+        <ConnectionSelect
+          kind="llm"
           value={effectiveConnectionId}
           onChange={(v) => void setConfig(session.id, { connection_id: v || null, model: null })}
+          withModel
+          modelValue={session.model ?? ''}
+          onModelChange={(m) => void setConfig(session.id, { model: m || null })}
+          seedDefaultModel={false}
           placeholder={t('panel.connectionNone')}
           ariaLabel={t('panel.connection')}
-          disabled={connectionOptions.length === 0}
+          modelPlaceholder={t('panel.modelNone')}
           portal
-        />
-      </div>
-      <div className={styles.configField}>
-        <span className={styles.configLabel}>{t('panel.model')}</span>
-        <ModelCombobox
-          value={session.model ?? ''}
-          onChange={(v) => void setConfig(session.id, { model: v || selectedConnection?.model || null })}
-          models={availableModels}
-          modelLabels={modelLabels}
-          loading={loadingModels}
-          onRefresh={fetchModels}
-          autoRefreshOnFocus
-          refreshKey={effectiveConnectionId}
-          placeholder={t('panel.modelNone')}
-          disabled={!effectiveConnectionId}
         />
       </div>
     </div>
@@ -228,7 +179,7 @@ export function DreamStage({ session, onAdvance }: { session: WeaverSession; onA
           </div>
         </div>
         {readbackError && <p className={styles.errorText}>{readbackError}</p>}
-        <div className={styles.scroll} style={{ display: 'flex' }}>
+        <div className={`${styles.scroll} ${styles.dreamScroll}`}>
           <div className={styles.dreamWrap}>
             <div className={styles.dreamGrid}>
               <div className={styles.dreamEdit}>

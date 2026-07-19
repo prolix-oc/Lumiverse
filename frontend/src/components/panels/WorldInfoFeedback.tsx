@@ -1,15 +1,17 @@
-import { useMemo, useState, type ComponentType } from 'react'
+import { useCallback, useMemo, useState, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Globe, MessageSquare } from 'lucide-react'
+import { BookOpen, Search, ChevronDown, ChevronRight, AlertTriangle, User, Users, Globe, MessageSquare } from 'lucide-react'
 import { IconUserStar } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import type { ActivatedWorldInfoEntry } from '@/types/api'
 import styles from './WorldInfoFeedback.module.css'
 
-const SCOPE_ORDER: Array<ActivatedWorldInfoEntry['bookSource']> = ['character', 'persona', 'chat', 'global']
+// 'peer' = a relayed multiplayer participant's attached persona lorebook.
+const SCOPE_ORDER: Array<ActivatedWorldInfoEntry['bookSource']> = ['character', 'persona', 'peer', 'chat', 'global']
 const SCOPE_ICONS: Record<string, ComponentType<{ size?: number | string; className?: string }>> = {
   character: IconUserStar,
   persona: User,
+  peer: Users,
   chat: MessageSquare,
   global: Globe,
 }
@@ -25,10 +27,10 @@ export default function WorldInfoFeedback() {
 
   const hasEvictions = worldInfoStats && (worldInfoStats.evictedByBudget > 0 || worldInfoStats.evictedByMinPriority > 0)
 
-  const scopeLabel = (scope: string) => {
+  const scopeLabel = useCallback((scope: string) => {
     const key = `scope.${scope}` as const
     return t(key, { defaultValue: scope })
-  }
+  }, [t])
 
   const groupedByScope = useMemo(() => {
     const groups: Array<{ scope: string; label: string; entries: ActivatedWorldInfoEntry[] }> = []
@@ -46,7 +48,7 @@ export default function WorldInfoFeedback() {
     }
 
     return groups
-  }, [activatedWorldInfo, t])
+  }, [activatedWorldInfo, scopeLabel])
 
   return (
     <div className={styles.container}>
@@ -149,7 +151,10 @@ function EntryCard({ entry }: { entry: ActivatedWorldInfoEntry }) {
             <Search size={12} className={styles.vectorIcon} />
           )}
         </span>
-        <span className={styles.entryComment}>{entry.comment || t('unnamed')}</span>
+        <span className={styles.entryText}>
+          <span className={styles.entryComment}>{entry.comment || t('unnamed')}</span>
+          {entry.bookName && <span className={styles.entryBook}>{entry.bookName}</span>}
+        </span>
         <span className={styles.methodBadge}>{entry.source}</span>
         {entry.source === 'vector' && entry.score != null && (
           <span className={styles.entryScore}>{t('distance', { score: entry.score.toFixed(3) })}</span>

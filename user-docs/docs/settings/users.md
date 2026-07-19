@@ -1,6 +1,12 @@
-# Users & Authentication
+---
+title: User Management
+---
+
+# User Management
 
 Lumiverse supports multiple users with role-based access control. The first account created during setup is the **owner** — the top-level admin.
+
+For OpenID Connect single sign-on setup, see [Single Sign-On](sso.md).
 
 ---
 

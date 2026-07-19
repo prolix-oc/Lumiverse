@@ -8,27 +8,111 @@
     "noResults": "No matching settings"
   },
   "tabs": {
-    "account": { "shortName": "Account", "tabName": "Account Settings", "tabDescription": "Manage your account details and password" },
-    "display": { "shortName": "Display", "tabName": "Display & Layout", "tabDescription": "Panel width, sidebar position, and layout options" },
-    "chat": { "shortName": "Chat", "tabName": "Chat Behavior", "tabDescription": "Message display mode, send key, and chat options" },
-    "extensions": { "shortName": "Extensions", "tabName": "Extension Settings", "tabDescription": "Manage Spindle extension configuration" },
-    "guided": { "shortName": "Guided Gen", "tabName": "Guided Generation", "tabDescription": "Configure guided generation sequences and prompt biases" },
-    "quickReplies": { "shortName": "Quick Replies", "tabName": "Quick Replies", "tabDescription": "Manage quick reply sets and message shortcuts" },
-    "extensionPools": { "shortName": "Extension Pools", "tabName": "Extension Pools", "tabDescription": "Configure extension resource pool limits" },
-    "webSearch": { "shortName": "Web Search", "tabName": "Web Search", "tabDescription": "Configure SearXNG-backed web search for council tools" },
-    "embeddings": { "shortName": "Embeddings", "tabName": "Embeddings", "tabDescription": "Configure embedding models and vector storage" },
-    "memoryCortex": { "shortName": "Memory Cortex", "tabName": "Memory Cortex Settings", "tabDescription": "Configure memory cortex extraction and salience" },
-    "notifications": { "shortName": "Notifications", "tabName": "Notifications", "tabDescription": "Configure notification preferences and alerts" },
-    "voice": { "shortName": "Voice", "tabName": "Voice & Speech", "tabDescription": "Text-to-speech, speech-to-text, and voice settings" },
-    "mcpServers": { "shortName": "MCP Servers", "tabName": "MCP Servers", "tabDescription": "Connect to external MCP tool servers for function calling" },
-    "advanced": { "shortName": "Advanced", "tabName": "Advanced Settings", "tabDescription": "Advanced configuration and debug options" },
-    "lumihub": { "shortName": "LumiHub", "tabName": "LumiHub", "tabDescription": "LumiHub cloud sync and sharing settings" },
-    "dataPortability": { "shortName": "Data", "tabName": "Data Portability", "tabDescription": "Export your data or import a previously exported archive" },
-    "diagnostics": { "shortName": "Diagnostics", "tabName": "Diagnostics", "tabDescription": "System health, performance metrics, and debug info" },
-    "operator": { "shortName": "Operator", "tabName": "Operator Panel", "tabDescription": "Server management, updates, and restart controls" },
-    "tokenizers": { "shortName": "Tokenizers", "tabName": "Tokenizer Manager", "tabDescription": "Manage and test tokenizer configurations" },
-    "users": { "shortName": "Users", "tabName": "User Management", "tabDescription": "Manage user accounts, roles, and permissions" },
-    "migration": { "shortName": "Migration", "tabName": "Migration", "tabDescription": "Import data from SillyTavern and other sources" }
+    "account": {
+      "shortName": "Account",
+      "tabName": "Account Settings",
+      "tabDescription": "Manage your account details and password"
+    },
+    "display": {
+      "shortName": "Display",
+      "tabName": "Display & Layout",
+      "tabDescription": "Panel width, sidebar position, and layout options"
+    },
+    "chat": {
+      "shortName": "Chat",
+      "tabName": "Chat Behavior",
+      "tabDescription": "Message display mode, send key, and chat options"
+    },
+    "extensions": {
+      "shortName": "Extensions",
+      "tabName": "Extension Settings",
+      "tabDescription": "Manage Spindle extension configuration"
+    },
+    "guided": {
+      "shortName": "Guided Gen",
+      "tabName": "Guided Generation",
+      "tabDescription": "Configure guided generation sequences and prompt biases"
+    },
+    "quickReplies": {
+      "shortName": "Quick Replies",
+      "tabName": "Quick Replies",
+      "tabDescription": "Manage quick reply sets and message shortcuts"
+    },
+    "extensionPools": {
+      "shortName": "Extension Pools",
+      "tabName": "Extension Pools",
+      "tabDescription": "Configure extension resource pool limits"
+    },
+    "webSearch": {
+      "shortName": "Web Search",
+      "tabName": "Web Search",
+      "tabDescription": "Configure SearXNG-backed web search for council tools"
+    },
+    "embeddings": {
+      "shortName": "Embeddings",
+      "tabName": "Embeddings",
+      "tabDescription": "Configure embedding models and vector storage"
+    },
+    "memoryCortex": {
+      "shortName": "Memory Cortex",
+      "tabName": "Memory Cortex Settings",
+      "tabDescription": "Configure memory cortex extraction and salience"
+    },
+    "notifications": {
+      "shortName": "Notifications",
+      "tabName": "Notifications",
+      "tabDescription": "Configure notification preferences and alerts"
+    },
+    "voice": {
+      "shortName": "Voice",
+      "tabName": "Voice & Speech",
+      "tabDescription": "Text-to-speech, speech-to-text, and voice settings"
+    },
+    "mcpServers": {
+      "shortName": "MCP Servers",
+      "tabName": "MCP Servers",
+      "tabDescription": "Connect to external MCP tool servers for function calling"
+    },
+    "advanced": {
+      "shortName": "Advanced",
+      "tabName": "Advanced Settings",
+      "tabDescription": "Advanced configuration and debug options"
+    },
+    "lumihub": {
+      "shortName": "LumiHub",
+      "tabName": "LumiHub",
+      "tabDescription": "LumiHub cloud sync and sharing settings"
+    },
+    "dataPortability": {
+      "shortName": "Data",
+      "tabName": "Data Portability",
+      "tabDescription": "Export your data or import a previously exported archive"
+    },
+    "diagnostics": {
+      "shortName": "Diagnostics",
+      "tabName": "Diagnostics",
+      "tabDescription": "System health, performance metrics, and debug info"
+    },
+    "operator": {
+      "shortName": "Operator",
+      "tabName": "Operator Panel",
+      "tabDescription": "Server management, updates, and restart controls"
+    },
+    "tokenizers": {
+      "shortName": "Tokenizers",
+      "tabName": "Tokenizer Manager",
+      "tabDescription": "Manage and test tokenizer configurations"
+    },
+    "users": {
+      "shortName": "Users",
+      "tabName": "User Management",
+      "tabDescription": "Manage user accounts, roles, and permissions"
+    },
+    "migration": {
+      "shortName": "Migration",
+      "tabName": "Migration",
+      "tabDescription": "Import data from SillyTavern and other sources"
+    }
   },
   "account": {
     "title": "Account",
@@ -338,6 +422,12 @@
     "userAlign": "User message alignment",
     "left": "Left",
     "right": "Right",
+    "minimalFullAvatar": "Use full-size avatars",
+    "minimalFullAvatarHint": "Minimal mode only. Uses the larger avatar image in message rows",
+    "bubbleFullAvatar": "Use full-size avatars",
+    "bubbleFullAvatarHint": "Bubble mode only. Uses the larger avatar image in message bubbles",
+    "bubbleHoverHighlight": "Highlight messages on hover/tap",
+    "bubbleHoverHighlightHint": "Uncheck to keep the base message fill when hovering or tapping a message",
     "bubbleAvatarBg": "Show character art in bubble backgrounds",
     "bubbleAvatarBgHint": "Uses the message avatar as a subtle dissolving background in Bubble mode",
     "bubbleOpacity": "Bubble opacity ({{pct}}%)",
@@ -351,9 +441,6 @@
     "customValue": "CUSTOM VALUE",
     "inputTitle": "Input",
     "enterToSend": "Press Enter to send",
-    "enterToSendHintOn": "Use Shift+Enter for new line",
-    "enterToSendHintOffMac": "Use Cmd+Enter to send",
-    "enterToSendHintOffWin": "Use Ctrl+Enter to send",
     "saveDraft": "Save draft input",
     "saveDraftHint": "Automatically saves your unsent message so it persists across page refreshes and chat switches",
     "portraitSide": "Portrait panel side",
@@ -366,11 +453,14 @@
     "regenSystemPrompt": "System Prompt",
     "regenHintUser": "Feedback is appended to the last user message as [OOC: ...]",
     "regenHintSystem": "Feedback is appended to the end of the system prompt as [OOC: ...]",
+    "regenIncludePrevious": "Include previous generation as reference in feedback",
     "messageInfoTitle": "Message Info",
     "showTokenCount": "Show token count in message pill",
     "showTokenCountHint": "Displays the token count for assistant messages in the timestamp badge below each message",
     "contextMenu": "Enable right-click / long-press menu on messages",
     "contextMenuHint": "When off, the in-app context menu won't appear — useful on mobile if you'd rather use the OS's native long-press to select and copy text without competing with the in-app menu.",
+    "preventDroppedMessageWarning": "Prevent warning on dropped messages",
+    "preventDroppedMessageWarningHint": "Stop showing warning toasts when older chat messages are dropped from the generation context.",
     "swipeTitle": "Swipe Navigation",
     "swipeHelper": "Navigate message swipes using touch gestures (mobile) or arrow keys (desktop). Hold Shift and hover to target a specific message.",
     "swipeGestures": "Enable swipe gestures & keyboard shortcuts"
@@ -397,7 +487,9 @@
     "positionBefore": "Before message",
     "positionAfter": "After message",
     "guideName": "Guide name",
-    "guideContent": "Guide prompt content"
+    "guideContent": "Guide prompt content",
+    "deleteGuideTitle": "Delete Guide",
+    "deleteGuideMessage": "Delete \"{{name}}\"?"
   },
   "quickReplies": {
     "title": "Quick Replies",
@@ -413,7 +505,11 @@
     "label": "Label",
     "message": "Message",
     "addReply": "Add Reply",
-    "remove": "Remove"
+    "remove": "Remove",
+    "deleteSetTitle": "Delete Quick Reply Set",
+    "deleteSetMessage": "Delete \"{{name}}\" and all of its replies?",
+    "deleteReplyTitle": "Delete Reply",
+    "deleteReplyMessage": "Delete \"{{name}}\"?"
   },
   "extensionPools": {
     "title": "Extension Ephemeral Pools",
@@ -520,7 +616,11 @@
     "errLinkFailed": "Failed to start linking",
     "errConnectFailed": "Failed to connect to LumiHub",
     "errUnlinkFailed": "Failed to unlink",
-    "defaultInstance": "My Lumiverse"
+    "defaultInstance": "My Lumiverse",
+    "statsSharingLabel": "Share anonymous usage stats with creators",
+    "statsSharingHint": "Off by default. When enabled, daily totals per installed card (times used, chats started, message counts) are sent to your linked LumiHub so creators can see how their work performs. Numbers only. Never chat content, names, or anything that identifies you; the hub also hides an asset's stats entirely until at least 5 different Lumiverses report it.",
+    "errStatsSharing": "Failed to update stats sharing.",
+    "statsSharingUnlinkedHint": "Off by default. You can turn this on after linking — nothing is ever shared until you do."
   },
   "dataPortability": {
     "exportTitle": "Export your data",
@@ -600,6 +700,11 @@
     "balanced": "Balanced",
     "aggressive": "Aggressive",
     "memoryModeHint": "Quick presets auto-configure chunking & exclusion. \"Manual\" unlocks all fields below.",
+    "injectionStrategy": "Injection Strategy",
+    "injectionStrategyMacroOnly": "Macro only — only inject where {{memories}} is used",
+    "injectionStrategyFallback": "Automatic fallback — inject before chat history if no macro is present",
+    "injectionStrategyDisabled": "Disabled — never inject long-term chat memory",
+    "injectionStrategyHint": "Macro only is recommended when using Memory Cortex or custom preset layouts. Automatic fallback preserves legacy behavior.",
     "chunking": "Chunking",
     "targetTokens": "Target Tokens",
     "maxTokens": "Max Tokens",
@@ -1003,6 +1108,8 @@
     "entitySnapshotsHint": "Include character/location summaries in the prompt",
     "relationshipEdges": "Relationship edges",
     "relationshipEdgesHint": "Include character relationships in the prompt",
+    "arcSummaries": "Arc summaries",
+    "arcSummariesHint": "Include story arc summaries in the prompt",
     "contextTokenBudget": "Context token budget",
     "memoryDecay": "Memory decay",
     "halfLifeTurns": "Half-life (turns)",
@@ -1059,6 +1166,7 @@
     "maintenance": "Maintenance",
     "remoteAccess": "Remote Access",
     "trustedHostnames": "Trusted Hostnames",
+    "diskHealth": "Disk Health",
     "database": "Database",
     "imageProcessing": "Image Processing",
     "vectorStore": "Vector Store (LanceDB)",
@@ -1085,6 +1193,7 @@
     "busyClearingCache": "Clearing package cache...",
     "busyInstallingDeps": "Installing dependencies...",
     "busySavingDbTuning": "Saving database tuning...",
+    "busySavingDiskWarning": "Saving disk warning settings...",
     "busySavingSharp": "Applying Sharp runtime settings...",
     "busySavingDbMaintenance": "Saving database maintenance...",
     "busyRefreshingDbStats": "Refreshing database stats...",
@@ -1106,6 +1215,48 @@
     "confirmRebuild": "Rebuild & Restart",
     "dbMaintenanceSuccess": "Database tuning refreshed and optimize completed.",
     "dbMaintenanceFailed": "Database maintenance failed.",
+    "diskWarningApplySuccess": "Disk warning settings applied.",
+    "diskWarningApplyFailed": "Failed to apply disk warning settings.",
+    "smartLoading": "Loading SMART disk health…",
+    "smartAvailable": "{{version}} is available at {{path}}.",
+    "smartInstall": "Install SMART Support",
+    "smartInstalling": "Installing…",
+    "smartInstallSuccess": "SMART support installed successfully.",
+    "smartInstallFailed": "Could not install SMART support.",
+    "smartInstallCommand": "If your operating system asks for local administrator approval, run: {{command}}",
+    "smartRefresh": "Refresh SMART Data",
+    "smartRefreshFailed": "Failed to refresh SMART disk health.",
+    "smartLastChecked": "Last checked {{time}}",
+    "smartNoDrives": "No supported physical drives were found. Containers need explicit host-device access.",
+    "smartCheckError": "SMART check unavailable: {{error}}",
+    "smartStatusOk": "Healthy",
+    "smartStatusWarning": "Warning",
+    "smartStatusFailing": "Failing",
+    "smartStatusUnavailable": "Unavailable",
+    "smartStatusStandby": "Standby",
+    "smartTemperature": "Temperature",
+    "smartTemperatureValue": "{{value}} °C",
+    "smartWearUsed": "Wear used",
+    "smartEnduranceRemaining": "Endurance remaining",
+    "smartAvailableSpare": "Available spare",
+    "smartAvailableSpareThreshold": "Available spare (threshold {{threshold}}%)",
+    "smartDataWritten": "Data written",
+    "smartPowerOnHours": "Power-on hours",
+    "smartPowerCycles": "Power cycles",
+    "smartStartStopCount": "Start/stop cycles",
+    "smartLoadCycleCount": "Load/unload cycles",
+    "smartMediaErrors": "Media errors",
+    "smartUnsafeShutdowns": "Unsafe shutdowns",
+    "smartWearLeveling": "Wear-leveling count",
+    "smartReservedBlocksUsed": "Reserved blocks used",
+    "smartProgramFailures": "Program failures",
+    "smartEraseFailures": "Erase failures",
+    "smartPercentValue": "{{value}}%",
+    "smartCriticalWarning": "Critical warning",
+    "smartReallocated": "Reallocated sectors",
+    "smartNandReallocated": "Reallocated NAND blocks",
+    "smartPending": "Pending sectors",
+    "smartUncorrectable": "Uncorrectable sectors",
     "sharpApplySuccess": "Sharp runtime settings applied.",
     "sharpApplyFailed": "Failed to apply Sharp settings.",
     "sharpResetSuccess": "Sharp runtime settings reset to defaults.",
@@ -1206,7 +1357,13 @@
     "dbDiskUnknown": "filesystem free space unknown",
     "dbDiskEnough": "enough free space detected",
     "dbDiskNotEnough": "not enough free space for a safe vacuum",
+    "dbDiskWarningEffective": "Low-Disk Warning",
+    "dbDiskWarningEffectiveValue": "warn at {{percent}}% used and {{free}} free",
     "dbVacuumUnsafe": "SQLite VACUUM is currently unsafe: estimated rewrite headroom is {{needed}}, but only {{free}} appears free on this volume.",
+    "dbDiskWarnPercent": "Warn when used >= (%)",
+    "dbDiskWarnPercentHint": "The low-disk toast only fires when both this usage threshold and the free-space floor below are crossed.",
+    "dbDiskWarnFree": "Warn when free <= (GiB)",
+    "dbDiskWarnFreeHint": "Large disks can sit above the percent threshold without warning if they still have more than this much free space.",
     "dbCachePercent": "Cache % of host RAM",
     "dbCachePercentHint": "Blank uses the automatic cache target. Current recommendation: {{size}}.",
     "dbMmapSize": "mmap size (MiB)",
@@ -1229,6 +1386,7 @@
     "dbRequireNoClients": "Require no visible clients",
     "dbRequireNoGenerations": "Require no active generations",
     "dbRefreshStats": "Refresh DB Stats",
+    "dbSaveDiskWarning": "Save Disk Warning",
     "dbSaveTuning": "Save Tuning",
     "dbSaveMaintenance": "Save Auto Maintenance",
     "dbApplyOptimize": "Apply Tuning + Optimize",

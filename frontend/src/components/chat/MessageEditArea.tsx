@@ -1,5 +1,5 @@
 import { Brain, Maximize2 } from 'lucide-react'
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
 import styles from './MessageEditArea.module.css'
@@ -13,10 +13,64 @@ interface MessageEditAreaProps {
   onChangeReasoning?: (value: string) => void
 }
 
+const EDITOR_VISIBLE_TOP_GUTTER = 12
+const EDITOR_KEYBOARD_GUTTER = 72
+const EDITOR_REVEAL_THRESHOLD = 12
+const EDITOR_MIN_MOBILE_HEIGHT = 140
+
 function autoResize(el: HTMLTextAreaElement | null) {
   if (!el) return
-  el.style.height = 'auto'
-  el.style.height = `${el.scrollHeight}px`
+  const computed = window.getComputedStyle(el)
+  let maxHeight = Number.parseFloat(computed.maxHeight)
+  if (navigator.maxTouchPoints > 0 && document.activeElement === el) {
+    const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+    const top = el.getBoundingClientRect().top
+    const availableHeight = Math.max(EDITOR_MIN_MOBILE_HEIGHT, viewportBottom - top - EDITOR_KEYBOARD_GUTTER)
+    maxHeight = Number.isFinite(maxHeight) && maxHeight > 0
+      ? Math.min(maxHeight, availableHeight)
+      : availableHeight
+  }
+  const nextHeight = el.scrollHeight
+  if (Number.isFinite(maxHeight) && maxHeight > 0) {
+    el.style.height = `${Math.min(nextHeight, maxHeight)}px`
+    el.style.overflowY = nextHeight > maxHeight ? 'auto' : 'hidden'
+    return
+  }
+  el.style.height = `${nextHeight}px`
+  el.style.overflowY = 'hidden'
+}
+
+function getEditorOcclusion(target: HTMLTextAreaElement | null) {
+  if (!target || document.activeElement !== target || navigator.maxTouchPoints <= 0) return null
+  const container = target.closest<HTMLElement>('[data-chat-scroll="true"]')
+  if (!container) return null
+
+  const targetRect = target.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+  const visibleTop = Math.max(containerRect.top, 0) + EDITOR_VISIBLE_TOP_GUTTER
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - EDITOR_KEYBOARD_GUTTER
+
+  let delta = 0
+  if (targetRect.bottom > visibleBottom) {
+    delta = targetRect.bottom - visibleBottom
+  } else if (targetRect.top < visibleTop) {
+    delta = targetRect.top - visibleTop
+  }
+
+  return { container, delta }
+}
+
+function syncEditorVisibility(target: HTMLTextAreaElement | null, correctedRef: MutableRefObject<boolean>) {
+  if (correctedRef.current) return
+  const occlusion = getEditorOcclusion(target)
+  if (!occlusion) return
+
+  const isOccluded = Math.abs(occlusion.delta) >= EDITOR_REVEAL_THRESHOLD
+  if (isOccluded) {
+    occlusion.container.scrollTop += occlusion.delta
+    correctedRef.current = true
+  }
 }
 
 export default function MessageEditArea({
@@ -29,24 +83,88 @@ export default function MessageEditArea({
   const hasReasoning = editReasoning != null && onChangeReasoning != null
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const reasoningRef = useRef<HTMLTextAreaElement>(null)
+  const contentRevealFrameRef = useRef(0)
+  const reasoningRevealFrameRef = useRef(0)
+  const focusCorrectionTimersRef = useRef<number[]>([])
+  const contentCorrectedForFocusRef = useRef(false)
+  const reasoningCorrectedForFocusRef = useRef(false)
   // Which field (if any) is currently open in the full-screen editor.
   const [expandedField, setExpandedField] = useState<'content' | 'reasoning' | null>(null)
   // Cursor position captured at expand time so the modal opens where the caret was.
   const expandCursorRef = useRef<number | null>(null)
 
+  const scheduleEditorVisibilitySync = useCallback((
+    targetRef: RefObject<HTMLTextAreaElement>,
+    correctedRef: MutableRefObject<boolean>,
+    frameRef: MutableRefObject<number>,
+  ) => {
+    cancelAnimationFrame(frameRef.current)
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0
+      syncEditorVisibility(targetRef.current, correctedRef)
+    })
+  }, [])
+
+  const clearFocusCorrectionTimers = useCallback(() => {
+    for (const timer of focusCorrectionTimersRef.current) {
+      window.clearTimeout(timer)
+    }
+    focusCorrectionTimersRef.current = []
+  }, [])
+
   // Fit to initial content on mount, and re-fit when the value changes externally.
   // useLayoutEffect prevents a paint frame at the wrong height.
-  useLayoutEffect(() => { autoResize(contentRef.current) }, [editContent])
-  useLayoutEffect(() => { autoResize(reasoningRef.current) }, [editReasoning])
+  useLayoutEffect(() => {
+    autoResize(contentRef.current)
+  }, [editContent])
+  useLayoutEffect(() => {
+    autoResize(reasoningRef.current)
+  }, [editReasoning])
+
+  useEffect(() => {
+    if (navigator.maxTouchPoints <= 0) return
+
+    const syncFocusedEditor = () => {
+      scheduleEditorVisibilitySync(contentRef, contentCorrectedForFocusRef, contentRevealFrameRef)
+      scheduleEditorVisibilitySync(reasoningRef, reasoningCorrectedForFocusRef, reasoningRevealFrameRef)
+    }
+
+    const viewport = window.visualViewport
+    viewport?.addEventListener('resize', syncFocusedEditor)
+    viewport?.addEventListener('scroll', syncFocusedEditor)
+
+    return () => {
+      viewport?.removeEventListener('resize', syncFocusedEditor)
+      viewport?.removeEventListener('scroll', syncFocusedEditor)
+    }
+  }, [scheduleEditorVisibilitySync])
+
+  useEffect(() => () => {
+    cancelAnimationFrame(contentRevealFrameRef.current)
+    cancelAnimationFrame(reasoningRevealFrameRef.current)
+    clearFocusCorrectionTimers()
+  }, [clearFocusCorrectionTimers])
+
+  const scheduleFocusCorrection = useCallback((
+    targetRef: RefObject<HTMLTextAreaElement>,
+    correctedRef: MutableRefObject<boolean>,
+    frameRef: MutableRefObject<number>,
+  ) => {
+    clearFocusCorrectionTimers()
+    correctedRef.current = false
+    scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef)
+    focusCorrectionTimersRef.current = [
+      window.setTimeout(() => scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef), 180),
+      window.setTimeout(() => scheduleEditorVisibilitySync(targetRef, correctedRef, frameRef), 360),
+    ]
+  }, [clearFocusCorrectionTimers, scheduleEditorVisibilitySync])
 
   const handleContentChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChangeContent(e.target.value)
-    autoResize(e.currentTarget)
   }, [onChangeContent])
 
   const handleReasoningChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChangeReasoning?.(e.target.value)
-    autoResize(e.currentTarget)
   }, [onChangeReasoning])
 
   const expandContent = useCallback(() => {
@@ -58,6 +176,14 @@ export default function MessageEditArea({
     expandCursorRef.current = reasoningRef.current?.selectionStart ?? null
     setExpandedField('reasoning')
   }, [])
+
+  const handleContentFocus = useCallback(() => {
+    scheduleFocusCorrection(contentRef, contentCorrectedForFocusRef, contentRevealFrameRef)
+  }, [scheduleFocusCorrection])
+
+  const handleReasoningFocus = useCallback(() => {
+    scheduleFocusCorrection(reasoningRef, reasoningCorrectedForFocusRef, reasoningRevealFrameRef)
+  }, [scheduleFocusCorrection])
 
   return (
     <div className={styles.editArea}>
@@ -75,6 +201,7 @@ export default function MessageEditArea({
               className={`${styles.editTextarea} ${styles.reasoningTextarea}`}
               value={editReasoning}
               onChange={handleReasoningChange}
+              onFocus={handleReasoningFocus}
               placeholder={t('messageEdit.reasoningPlaceholder')}
             />
             <button
@@ -103,6 +230,7 @@ export default function MessageEditArea({
             className={styles.editTextarea}
             value={editContent}
             onChange={handleContentChange}
+            onFocus={handleContentFocus}
             autoFocus
           />
           <button

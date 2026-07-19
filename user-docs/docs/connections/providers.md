@@ -1,3 +1,7 @@
+---
+title: Supported Providers
+---
+
 # Supported Providers
 
 Lumiverse supports 21 AI providers out of the box. Each provider has its own model catalog, API format, and capabilities.

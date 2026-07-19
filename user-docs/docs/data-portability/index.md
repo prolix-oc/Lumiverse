@@ -1,3 +1,7 @@
+---
+title: Data Portability
+---
+
 # Data Portability
 
 Move your entire Lumiverse account between machines, take periodic backups, or hand a fully-loaded environment off to another instance. Data Portability bundles **everything you own** into a single portable archive that any Lumiverse 1.0+ instance can restore.

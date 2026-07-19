@@ -7,9 +7,12 @@ export interface WeaverTuning {
   harvest_cap: number | null;
   generation_temperature: number | null;
   review_temperature: number | null;
+  text_timeout_seconds: number | null;
 }
 
 export const WEAVER_TUNING_KEY = "weaverTuning";
+
+export const WEAVER_TEXT_TIMEOUT_DEFAULT_SECONDS = 180;
 
 const COUNT_FIELDS = [
   "propose_count",
@@ -23,6 +26,8 @@ const COUNT_MIN = 1;
 const COUNT_MAX = 50;
 const TEMP_MIN = 0;
 const TEMP_MAX = 2;
+const TIMEOUT_MIN_SECONDS = 30;
+const TIMEOUT_MAX_SECONDS = 1200;
 
 function clampCount(value: unknown): number | null {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -36,11 +41,18 @@ function clampTemperature(value: unknown): number | null {
   return Math.min(TEMP_MAX, Math.max(TEMP_MIN, n));
 }
 
+function clampTimeoutSeconds(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.min(TIMEOUT_MAX_SECONDS, Math.max(TIMEOUT_MIN_SECONDS, Math.round(n)));
+}
+
 export function sanitizeWeaverTuning(raw: unknown): WeaverTuning {
   const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const out = {} as Record<string, number | null>;
   for (const f of COUNT_FIELDS) out[f] = clampCount(obj[f]);
   for (const f of TEMP_FIELDS) out[f] = clampTemperature(obj[f]);
+  out.text_timeout_seconds = clampTimeoutSeconds(obj.text_timeout_seconds);
   return out as unknown as WeaverTuning;
 }
 

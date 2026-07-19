@@ -14,6 +14,7 @@ import styles from './ImageLightbox.module.css'
 
 interface ImageLightboxProps {
   src: string | null
+  fallbackSrc?: string | null
   onClose: () => void
   /**
    * When provided, a "Delete" entry is added to the right-click / long-press
@@ -32,6 +33,7 @@ interface ImageLightboxProps {
 
 export default function ImageLightbox({
   src,
+  fallbackSrc,
   onClose,
   onDelete,
   deleteTitle,
@@ -39,6 +41,7 @@ export default function ImageLightbox({
   downloadFilename,
 }: ImageLightboxProps) {
   const { t } = useTranslation('shared', { keyPrefix: 'imageLightbox' })
+  const [currentSrc, setCurrentSrc] = useState(src)
   const [isLoading, setIsLoading] = useState(true)
   const [hasError, setHasError] = useState(false)
   const [menuPos, setMenuPos] = useState<ContextMenuPos | null>(null)
@@ -54,6 +57,7 @@ export default function ImageLightbox({
   confirmingRef.current = confirmingDelete
 
   useEffect(() => {
+    setCurrentSrc(src)
     if (src) {
       setIsLoading(true)
       setHasError(false)
@@ -62,7 +66,7 @@ export default function ImageLightbox({
       setConfirmingDelete(false)
       setDeleting(false)
     }
-  }, [src])
+  }, [src, fallbackSrc])
 
   useEffect(() => {
     if (!src) return
@@ -94,32 +98,38 @@ export default function ImageLightbox({
 
   const handleLoad = useCallback(() => setIsLoading(false), [])
   const handleError = useCallback(() => {
+    if (fallbackSrc && currentSrc !== fallbackSrc) {
+      setCurrentSrc(fallbackSrc)
+      setIsLoading(true)
+      setHasError(false)
+      return
+    }
     setIsLoading(false)
     setHasError(true)
-  }, [])
+  }, [currentSrc, fallbackSrc])
 
   const longPress = useLongPress({ onLongPress: (pos) => setMenuPos(pos) })
 
   const handleCopy = useCallback(async () => {
     setMenuPos(null)
-    if (!src) return
+    if (!currentSrc) return
     try {
-      await copyImageToClipboard(src)
+      await copyImageToClipboard(currentSrc)
       toast.success(t('copied'))
     } catch {
       toast.error(t('copyFailed'))
     }
-  }, [src, t])
+  }, [currentSrc, t])
 
   const handleDownload = useCallback(async () => {
     setMenuPos(null)
-    if (!src) return
+    if (!currentSrc) return
     try {
-      await downloadImageFromUrl(src, downloadFilename)
+      await downloadImageFromUrl(currentSrc, downloadFilename)
     } catch {
       toast.error(t('downloadFailed'))
     }
-  }, [src, downloadFilename, t])
+  }, [currentSrc, downloadFilename, t])
 
   const handleConfirmDelete = useCallback(async () => {
     if (!onDelete) return
@@ -178,7 +188,7 @@ export default function ImageLightbox({
               <div className={styles.error}>{t('loadFailed')}</div>
             ) : (
               <img
-                src={src}
+                src={currentSrc || ''}
                 alt=""
                 className={styles.image}
                 style={{ opacity: isLoading ? 0 : 1 }}

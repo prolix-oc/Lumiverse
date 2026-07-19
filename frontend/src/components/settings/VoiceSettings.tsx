@@ -4,11 +4,12 @@ import { Volume2, Mic, Play, ExternalLink } from 'lucide-react'
 import { useStore } from '@/store'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
-import { ttsApi } from '@/api/tts'
 import { Toggle } from '@/components/shared/Toggle'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
-import { speak, stop, setTTSVolume, setTTSSpeed, isSpeaking } from '@/lib/ttsAudio'
+import { speak, speakSegments, stop, setTTSVolume, setTTSSpeed, isSpeaking } from '@/lib/ttsAudio'
+import { formatTtsConnectionVoiceLabel } from '@/lib/qwenTts'
+import { synthesizeTtsSegments } from '@/lib/ttsSynthesis'
 import { isWebSpeechAvailable } from '@/lib/sttEngine'
 import styles from './VoiceSettings.module.css'
 import clsx from 'clsx'
@@ -46,6 +47,10 @@ export default function VoiceSettings() {
     () => ttsProfiles.find((p) => p.id === voiceSettings.ttsConnectionId) || null,
     [ttsProfiles, voiceSettings.ttsConnectionId]
   )
+  const activeVoiceLabel = useMemo(
+    () => (activeConnection ? formatTtsConnectionVoiceLabel(activeConnection) : ''),
+    [activeConnection],
+  )
 
   const handleTestTTS = async () => {
     if (!voiceSettings.ttsConnectionId) {
@@ -60,13 +65,19 @@ export default function VoiceSettings() {
     try {
       setTTSVolume(voiceSettings.ttsVolume)
       setTTSSpeed(voiceSettings.ttsSpeed)
-      const res = await ttsApi.synthesize(voiceSettings.ttsConnectionId, t('voice.ttsTestPhrase'))
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || `TTS error ${res.status}`)
+      const segments = await synthesizeTtsSegments(
+        voiceSettings.ttsConnectionId,
+        t('voice.ttsTestPhrase'),
+        { profile: activeConnection },
+      )
+      if (segments.length === 0) {
+        throw new Error(t('voice.ttsTestFailed'))
       }
-      const buffer = await res.arrayBuffer()
-      speak(buffer)
+      if (segments.length === 1) {
+        speak(segments[0].data)
+      } else {
+        speakSegments(segments.map((segment) => Promise.resolve(segment.data)))
+      }
     } catch (err: any) {
       addToast({ type: 'error', message: err.message || t('voice.ttsTestFailed') })
     } finally {
@@ -146,7 +157,7 @@ export default function VoiceSettings() {
           <div className={styles.infoBox}>
             {t('voice.provider')}: <strong>{activeConnection.provider}</strong>
             {activeConnection.model && <> &middot; {t('voice.model')}: <strong>{activeConnection.model}</strong></>}
-            {activeConnection.voice && <> &middot; {t('voice.voiceLabel')}: <strong>{activeConnection.voice}</strong></>}
+            {activeVoiceLabel && <> &middot; {t('voice.voiceLabel')}: <strong>{activeVoiceLabel}</strong></>}
           </div>
         )}
 

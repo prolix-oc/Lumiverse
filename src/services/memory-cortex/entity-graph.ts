@@ -785,6 +785,104 @@ export function persistLearnedAlias(entityId: string, alias: string, chatId?: st
   return true;
 }
 
+const MENTION_ROLE_RANK: Record<string, number> = {
+  absent: 0,
+  referenced: 1,
+  present: 2,
+  object: 3,
+  subject: 4,
+};
+
+function strongerMentionRole(a: string, b: string): string {
+  return (MENTION_ROLE_RANK[b] ?? 0) > (MENTION_ROLE_RANK[a] ?? 0) ? b : a;
+}
+
+function mergeMentionsIntoEntity(sourceId: string, targetId: string): void {
+  const db = getDb();
+  const sourceMentions = db
+    .query("SELECT * FROM memory_mentions WHERE entity_id = ?")
+    .all(sourceId) as MemoryMentionRow[];
+
+  const getTargetMention = db.query(
+    "SELECT * FROM memory_mentions WHERE entity_id = ? AND chunk_id = ?",
+  );
+  const updateTargetMention = db.query(
+    `UPDATE memory_mentions SET
+       role = ?,
+       excerpt = ?,
+       sentiment = ?,
+       created_at = ?
+     WHERE id = ?`,
+  );
+  const moveMention = db.query("UPDATE memory_mentions SET entity_id = ? WHERE id = ?");
+  const deleteMention = db.query("DELETE FROM memory_mentions WHERE id = ?");
+
+  for (const sourceMention of sourceMentions) {
+    const targetMention = getTargetMention.get(targetId, sourceMention.chunk_id) as MemoryMentionRow | null;
+    if (!targetMention) {
+      moveMention.run(targetId, sourceMention.id);
+      continue;
+    }
+
+    updateTargetMention.run(
+      strongerMentionRole(targetMention.role, sourceMention.role),
+      targetMention.excerpt ?? sourceMention.excerpt,
+      Math.abs(sourceMention.sentiment) > Math.abs(targetMention.sentiment)
+        ? sourceMention.sentiment
+        : targetMention.sentiment,
+      Math.min(targetMention.created_at, sourceMention.created_at),
+      targetMention.id,
+    );
+    deleteMention.run(sourceMention.id);
+  }
+}
+
+function mergeRelationsIntoEntity(sourceId: string, targetId: string): void {
+  const db = getDb();
+  const sourceRelations = db
+    .query(
+      `SELECT * FROM memory_relations
+       WHERE source_entity_id = ? OR target_entity_id = ?`,
+    )
+    .all(sourceId, sourceId) as MemoryRelationRow[];
+
+  const getCanonicalRelation = db.query(
+    `SELECT * FROM memory_relations
+     WHERE source_entity_id = ? AND target_entity_id = ? AND relation_type = ? AND id != ?`,
+  );
+  const moveRelation = db.query(
+    `UPDATE memory_relations SET
+       source_entity_id = ?,
+       target_entity_id = ?
+     WHERE id = ?`,
+  );
+  const deleteRelation = db.query("DELETE FROM memory_relations WHERE id = ?");
+
+  for (const relation of sourceRelations) {
+    const newSourceId = relation.source_entity_id === sourceId ? targetId : relation.source_entity_id;
+    const newTargetId = relation.target_entity_id === sourceId ? targetId : relation.target_entity_id;
+
+    if (newSourceId === newTargetId) {
+      deleteRelation.run(relation.id);
+      continue;
+    }
+
+    const canonical = getCanonicalRelation.get(
+      newSourceId,
+      newTargetId,
+      relation.relation_type,
+      relation.id,
+    ) as MemoryRelationRow | null;
+    if (canonical) {
+      mergeEdgePair(canonical.id, relation.id);
+      deleteRelation.run(relation.id);
+      continue;
+    }
+
+    moveRelation.run(newSourceId, newTargetId, relation.id);
+  }
+}
+
 /**
  * Merge source entity into target entity. Transfers aliases, facts,
  * mentions, and relations. Deletes the source entity.
@@ -793,6 +891,7 @@ export function mergeEntitiesInternal(
   sourceId: string,
   targetId: string,
 ): void {
+  if (sourceId === targetId) return;
   const db = getDb();
   const source = getEntity(sourceId);
   const target = getEntity(targetId);
@@ -843,12 +942,8 @@ export function mergeEntitiesInternal(
       now, targetId,
     );
 
-    db.query("UPDATE memory_mentions SET entity_id = ? WHERE entity_id = ?")
-      .run(targetId, sourceId);
-    db.query("UPDATE memory_relations SET source_entity_id = ? WHERE source_entity_id = ?")
-      .run(targetId, sourceId);
-    db.query("UPDATE memory_relations SET target_entity_id = ? WHERE target_entity_id = ?")
-      .run(targetId, sourceId);
+    mergeMentionsIntoEntity(sourceId, targetId);
+    mergeRelationsIntoEntity(sourceId, targetId);
 
     db.query("DELETE FROM memory_entities WHERE id = ?").run(sourceId);
   })();

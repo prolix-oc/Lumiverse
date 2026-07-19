@@ -27,6 +27,25 @@ describe("GuidedReasoningStreamParser", () => {
     expect(parser.flush()).toEqual({ content: "", reasoning: "" });
   });
 
+  test("drops structural leading blank lines after stripped reasoning at the start of a stream", () => {
+    const parser = new GuidedReasoningStreamParser({ prefix: "<think>", suffix: "</think>" }, true);
+
+    expect(parser.push("<think>plan</think>")).toEqual({ content: "", reasoning: "plan" });
+    expect(parser.push("\n\nAnswer")).toEqual({ content: "Answer", reasoning: "" });
+    expect(parser.flush()).toEqual({ content: "", reasoning: "" });
+  });
+
+  test("heals newline seams when visible content resumes after reasoning in a later chunk", () => {
+    const parser = new GuidedReasoningStreamParser({ prefix: "<think>", suffix: "</think>" }, true);
+
+    expect(parser.push("Visible line\n<think>plan</think>")).toEqual({
+      content: "Visible line\n",
+      reasoning: "plan",
+    });
+    expect(parser.push("\nNext line")).toEqual({ content: "Next line", reasoning: "" });
+    expect(parser.flush()).toEqual({ content: "", reasoning: "" });
+  });
+
   test("stays in content mode when delimiters are incomplete", () => {
     const parser = new GuidedReasoningStreamParser({ prefix: "<think>", suffix: "" }, true);
     expect(parser.push("<think>not parsed")).toEqual({ content: "<think>not parsed", reasoning: "" });
@@ -47,6 +66,28 @@ describe("reasoning delimiter helpers", () => {
     expect(extractDelimitedReasoning("A<think>one</think>B<think>two", delimiters)).toEqual({
       cleaned: "AB",
       reasoning: "onetwo",
+    });
+  });
+
+  test("heals newline seams left behind after reasoning extraction", () => {
+    const delimiters = { prefix: "<think>", suffix: "</think>" };
+    expect(extractDelimitedReasoning("A\n<think>one</think>\nB", delimiters)).toEqual({
+      cleaned: "A\nB",
+      reasoning: "one",
+    });
+  });
+
+  test("drops structural blank lines when reasoning wraps the start or end of visible content", () => {
+    const delimiters = { prefix: "<think>", suffix: "</think>" };
+
+    expect(extractDelimitedReasoning("<think>one</think>\n\nB", delimiters)).toEqual({
+      cleaned: "B",
+      reasoning: "one",
+    });
+
+    expect(extractDelimitedReasoning("A\n\n<think>one</think>", delimiters)).toEqual({
+      cleaned: "A",
+      reasoning: "one",
     });
   });
 

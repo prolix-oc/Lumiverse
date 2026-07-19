@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { useStore } from '@/store'
+import { scheduleSpindleDomTask } from './browser-scheduler'
 
 /**
  * Host-side replay registry for Spindle `dom.inject()` calls that land
@@ -233,43 +234,69 @@ export function replay(messageId: string, root: Element): void {
   if (!list || list.length === 0) return
 
   for (const record of list) {
-    // Already in place (bubble never truly unmounted, or replay fired
-    // redundantly). insertAdjacentElement would just move it back to the
-    // same slot, but skipping is cheaper and avoids spurious mutations.
-    if (record.element && root.contains(record.element)) continue
-
-    // Safety net: a wrapper with the same injection id is present from
-    // some path we didn't take. Don't double-insert.
-    if (root.querySelector(`[${DATA_INJ_ATTR}="${record.injectionId}"]`)) continue
-
-    const targetEl = resolveRelativePath(root, record.relativePath)
-    if (!targetEl) {
-      console.warn(
-        `[spindle] Could not resolve replay target for injection ${record.injectionId} ` +
-        `in message ${messageId} — bubble DOM structure changed since registration. Skipping.`,
-      )
-      continue
-    }
-
-    let wrapper = record.element
-    if (!wrapper) {
-      const sanitized = DOMPurify.sanitize(record.rawHtml, {
-        ADD_ATTR: [DATA_EXT_ATTR],
-        RETURN_DOM_FRAGMENT: true,
-        FORBID_TAGS: ['iframe', 'frame', 'object', 'embed', 'form'],
-        FORBID_ATTR: ['formaction'],
-      })
-      wrapper = document.createElement('div')
-      wrapper.setAttribute(DATA_EXT_ATTR, record.extensionId)
-      wrapper.setAttribute(DATA_INJ_ATTR, record.injectionId)
-      wrapper.appendChild(sanitized)
-      record.element = wrapper
-    }
-
-    // insertAdjacentElement detaches the wrapper from any prior parent
-    // and reattaches at the requested position. Identity is preserved.
-    targetEl.insertAdjacentElement(record.position, wrapper)
+    replayRecord(messageId, root, record)
   }
+}
+
+/**
+ * Queue a cooperative replay that runs after React commit. This avoids
+ * extension DOM re-attachment inside the bubble's layout effect path,
+ * which can visibly stall chat switches when a stored wrapper subtree is
+ * large or multiple extensions target the same message.
+ */
+export function scheduleReplay(messageId: string, root: Element): () => void {
+  const list = records.get(messageId)
+  if (!list || list.length === 0) return () => {}
+
+  const cancelers = list.map((record) =>
+    scheduleSpindleDomTask(() => {
+      if (!root.isConnected) return
+      replayRecord(messageId, root, record)
+    })
+  )
+
+  return () => {
+    for (const cancel of cancelers) cancel()
+  }
+}
+
+function replayRecord(messageId: string, root: Element, record: InjectionRecord): void {
+  // Already in place (bubble never truly unmounted, or replay fired
+  // redundantly). insertAdjacentElement would just move it back to the
+  // same slot, but skipping is cheaper and avoids spurious mutations.
+  if (record.element && root.contains(record.element)) return
+
+  // Safety net: a wrapper with the same injection id is present from
+  // some path we didn't take. Don't double-insert.
+  if (root.querySelector(`[${DATA_INJ_ATTR}="${record.injectionId}"]`)) return
+
+  const targetEl = resolveRelativePath(root, record.relativePath)
+  if (!targetEl) {
+    console.warn(
+      `[spindle] Could not resolve replay target for injection ${record.injectionId} ` +
+      `in message ${messageId} — bubble DOM structure changed since registration. Skipping.`,
+    )
+    return
+  }
+
+  let wrapper = record.element
+  if (!wrapper) {
+    const sanitized = DOMPurify.sanitize(record.rawHtml, {
+      ADD_ATTR: [DATA_EXT_ATTR],
+      RETURN_DOM_FRAGMENT: true,
+      FORBID_TAGS: ['iframe', 'frame', 'object', 'embed', 'form'],
+      FORBID_ATTR: ['formaction'],
+    })
+    wrapper = document.createElement('div')
+    wrapper.setAttribute(DATA_EXT_ATTR, record.extensionId)
+    wrapper.setAttribute(DATA_INJ_ATTR, record.injectionId)
+    wrapper.appendChild(sanitized)
+    record.element = wrapper
+  }
+
+  // insertAdjacentElement detaches the wrapper from any prior parent
+  // and reattaches at the requested position. Identity is preserved.
+  targetEl.insertAdjacentElement(record.position, wrapper)
 }
 
 /** Test/debug helper — drop everything. */

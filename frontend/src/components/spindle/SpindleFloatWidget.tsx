@@ -5,6 +5,8 @@ import { useStore } from '@/store'
 import useIsMobile from '@/hooks/useIsMobile'
 import ContextMenu, { type ContextMenuPos, type ContextMenuEntry } from '@/components/shared/ContextMenu'
 import { useLongPress } from '@/hooks/useLongPress'
+import { getLiveRootRecordExact } from '@/lib/spindle/live-root-registry'
+import { scheduleSpindleDomTask } from '@/lib/spindle/browser-scheduler'
 import styles from './SpindleFloatWidget.module.css'
 
 interface Props {
@@ -19,6 +21,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
 
   const dragging = useRef(false)
   const offset = useRef({ x: 0, y: 0 })
+  const contentHostRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState({ x: widget.x, y: widget.y })
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null)
 
@@ -29,6 +32,19 @@ export default function SpindleFloatWidget({ widget }: Props) {
   useEffect(() => {
     setPos({ x: widget.x, y: widget.y })
   }, [widget.x, widget.y])
+
+  useEffect(() => {
+    const host = contentHostRef.current
+    if (!host) return
+
+    return scheduleSpindleDomTask(() => {
+      if (!getLiveRootRecordExact(widget.extensionId, widget.root)) return
+      if (!host.isConnected) return
+      if (!host.contains(widget.root)) {
+        host.replaceChildren(widget.root)
+      }
+    }, { phase: 'paint' })
+  }, [widget.extensionId, widget.root])
 
   const clampPos = useCallback(
     (x: number, y: number) => {
@@ -163,11 +179,7 @@ export default function SpindleFloatWidget({ widget }: Props) {
         onTouchStart={(e) => { if (!widget.root.contains(e.target as Node)) longPress.onTouchStart(e) }}
         onContextMenu={handleContextMenu}
       >
-        <div className={styles.content} ref={(el) => {
-          if (el && !el.contains(widget.root)) {
-            el.replaceChildren(widget.root)
-          }
-        }} />
+        <div className={styles.content} ref={contentHostRef} />
       </div>
 
       <ContextMenu

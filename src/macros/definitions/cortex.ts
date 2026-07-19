@@ -25,10 +25,26 @@ interface CortexEnvData {
   entityContext: EntitySnapshot[];
   activeRelationships: RelationEdge[];
   arcContext: string | null;
+  formatted?: string;
+  colorMap?: string;
 }
 
 function getCortex(ctx: MacroExecContext): CortexEnvData | null {
   return ctx.env.extra.cortex ?? null;
+}
+
+function hasCortexContent(cortex: CortexEnvData | null): boolean {
+  return !!(
+    cortex &&
+    (
+      (cortex.memories?.length ?? 0) > 0 ||
+      (cortex.entityContext?.length ?? 0) > 0 ||
+      (cortex.activeRelationships?.length ?? 0) > 0 ||
+      cortex.arcContext ||
+      cortex.formatted ||
+      cortex.colorMap
+    )
+  );
 }
 
 export function registerCortexMacros(): void {
@@ -130,7 +146,7 @@ export function registerCortexMacros(): void {
     builtIn: true,
     handler(ctx: MacroExecContext): string {
       const cortex = getCortex(ctx);
-      return cortex && cortex.memories.length > 0 ? "yes" : "no";
+      return hasCortexContent(cortex) ? "yes" : "no";
     },
   });
 

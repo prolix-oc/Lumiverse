@@ -46,6 +46,11 @@ export type LlmMessagePart =
   | LlmToolUsePart
   | LlmToolResultPart;
 
+export interface DisplayContentPartSummary {
+  type: string;
+  count: number;
+}
+
 /**
  * A provider-native reasoning block that must be replayed verbatim on tool-use
  * continuations to preserve interleaved thinking. Currently produced by
@@ -89,6 +94,69 @@ export function getTextContent(msg: LlmMessage): string {
     .filter((p): p is LlmTextPart => p.type === "text")
     .map((p) => p.text)
     .join("");
+}
+
+export function describeContentForDisplay(
+  content: string | LlmMessagePart[],
+): { text: string; contentParts: DisplayContentPartSummary[] } {
+  if (typeof content === "string") {
+    return { text: content, contentParts: [] };
+  }
+
+  const partCounts = new Map<string, number>();
+  const countPart = (type: string) => {
+    partCounts.set(type, (partCounts.get(type) ?? 0) + 1);
+  };
+
+  const text = content
+    .map((part) => {
+      switch (part.type) {
+        case "text":
+          return part.text;
+        case "image":
+          countPart("image");
+          return `[image: ${part.mime_type}]`;
+        case "audio":
+          countPart("audio");
+          return `[audio: ${part.mime_type}]`;
+        case "tool_use":
+          countPart("tool_use");
+          return `[tool_call: ${part.name}(${JSON.stringify(part.input)})]`;
+        case "tool_result":
+          countPart("tool_result");
+          return `[tool_result${part.is_error ? " (error)" : ""}: ${part.content}]`;
+        default: {
+          const rawType =
+            typeof (part as { type?: unknown }).type === "string"
+              ? (part as { type: string }).type
+              : "part";
+          countPart(rawType);
+          return `[${rawType}]`;
+        }
+      }
+    })
+    .join("\n");
+
+  return {
+    text,
+    contentParts: [...partCounts.entries()].map(([type, count]) => ({
+      type,
+      count,
+    })),
+  };
+}
+
+/**
+ * Flatten message content to a human-readable string for display-only surfaces
+ * (e.g. the dry-run prompt viewer) that can't render multimodal parts. Text is
+ * inlined in order; non-text parts become bracketed placeholders so an
+ * image/audio/tool part is still visible. Unlike {@link getTextContent}, this
+ * never silently drops media — important for a debugging view.
+ */
+export function flattenContentForDisplay(
+  content: string | LlmMessagePart[],
+): string {
+  return describeContentForDisplay(content).text;
 }
 
 export interface GenerationRequest {
@@ -179,6 +247,12 @@ export interface AssemblyContext {
   chatId: string;
   connectionId?: string;
   presetId?: string;
+  /** Internal transient preset used by assembly-only callers. Never persisted. */
+  presetOverride?: import("../types/preset").Preset;
+  /** Skip per-chat/character/connection preset-profile block overrides. */
+  skipPresetProfileBinding?: boolean;
+  /** Whether macro handlers may commit side effects. Defaults to true. */
+  macroCommit?: boolean;
   /** When true, bypass preset-profile preset selection and use presetId directly. */
   forcePresetId?: boolean;
   generationType: GenerationType;
@@ -189,8 +263,12 @@ export interface AssemblyContext {
   impersonateMode?: ImpersonateMode;
   /** For impersonate: free-form user text from the input box, appended to the impersonation prompt. */
   impersonateInput?: string;
+  /** Exact input-bar draft snapshot captured when this generation started. */
+  userInput?: string;
   /** For regenerate: exclude this message from chat history (it has a blank swipe). */
   excludeMessageId?: string;
+  /** For regenerate/swipe: content of the active target swipe before it was replaced. */
+  rejectedSwipe?: string;
   /** For group chats: generate a response as this specific character. */
   targetCharacterId?: string;
   /** Council tool results (passed from generate.service when council executes before assembly). */
@@ -237,7 +315,8 @@ export interface PrefetchedData {
   worldInfoSources: {
     entries: import("../types/world-book").WorldBookEntry[];
     worldBookIds: string[];
-    bookSourceMap: Map<string, import("../services/prompt-assembly.service").BookSource>;
+    bookSourceMap: Map<string, import("../services/world-info-sources.service").BookSource>;
+    bookNameMap: Map<string, string>;
   };
   /** Group chat members, batch-loaded. */
   groupCharacters?: Map<string, import("../types/character").Character>;
@@ -262,8 +341,9 @@ export interface ActivatedWorldInfoEntry {
   keys: string[];
   source: 'keyword' | 'vector';
   score?: number;
-  bookSource?: 'character' | 'persona' | 'chat' | 'global';
+  bookSource?: 'character' | 'persona' | 'chat' | 'global' | 'peer';
   bookId?: string;
+  bookName?: string;
 }
 
 export interface MemoryStats {
@@ -300,7 +380,7 @@ export interface DatabankStats {
     | "skipped_no_active_banks"
     | "skipped_embeddings_disabled";
   retrievedChunks: Array<{
-    score: number;
+    score: number | null;
     tokenEstimate: number;
     documentName: string;
     databankId: string;
@@ -347,6 +427,14 @@ export interface ContextClipStats {
   budgetInvalid?: boolean;
   /** True when fixed prompt overhead alone is larger than the available input budget. */
   fixedOverBudget?: boolean;
+  /** True when a chat context anchor protected one or more history messages. */
+  anchorActive?: boolean;
+  /** Exact tokens required by the protected anchor tail. */
+  protectedHistoryTokens?: number;
+  /** Space left for history before the protected anchor. Negative means the anchor cannot fit. */
+  remainingBeforeAnchor?: number;
+  /** True when the protected anchor tail cannot fit in the remaining history budget. */
+  anchorOverflow?: boolean;
 }
 
 export interface AssemblyResult {

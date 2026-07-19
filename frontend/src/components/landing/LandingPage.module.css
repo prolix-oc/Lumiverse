@@ -1,9 +1,16 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .container {
   position: relative;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  background: var(--lumiverse-bg-deep);
+  background: transparent;
 }
 
 .container::-webkit-scrollbar {
@@ -29,6 +36,7 @@
   inset: 0;
   height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  z-index: 1;
   pointer-events: none;
   overflow: hidden;
 }
@@ -75,6 +83,7 @@
   inset: 0;
   height: var(--app-scaled-viewport-height, calc(100vh / var(--lumiverse-ui-scale, 1)));
   width: var(--app-scaled-viewport-width, calc(100vw / var(--lumiverse-ui-scale, 1)));
+  z-index: 1;
   pointer-events: none;
   background-image:
     linear-gradient(var(--lumiverse-primary-010) 1px, transparent 1px),
@@ -86,7 +95,7 @@
 /* Content */
 .content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   min-height: 100%;
@@ -306,9 +315,27 @@
   align-items: start;
 }
 
+.virtualChats {
+  position: relative;
+  width: 100%;
+}
+
+.virtualRow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.chatsLeaving {
+  pointer-events: none;
+}
+
 /* Card tilt wrapper — handles 3D tilt separately from framer-motion entry */
 .cardTilt {
   perspective: 800px;
+  transform-style: preserve-3d;
   transition: transform 400ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -321,10 +348,15 @@
   transition: transform 100ms ease-out;
 }
 
+.cardTilt.mobileMotionTilting {
+  transition: transform 180ms ease-out;
+}
+
 /* Card — uses CSS animation for entry (no lingering inline styles that
    would promote every card to its own compositor layer). */
 .card {
   position: relative;
+  transform-style: preserve-3d;
   border-radius: 16px;
   overflow: hidden;
   background: var(--lumiverse-card-bg);
@@ -333,6 +365,9 @@
   transition:
     box-shadow 300ms cubic-bezier(0.22, 1, 0.36, 1),
     border-color 200ms ease;
+}
+
+.cardEntry {
   animation: cardEntry 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -379,14 +414,15 @@
 .listAvatar picture img,
 .mosaicCell img,
 .mosaicCell picture img {
-  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+  --lazy-image-transform-transition: 500ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.card:hover .cardImage img,
-.card:hover .cardImage picture img,
+.card:hover .cardImage img:not(.perspectiveLayer),
+.card:hover .cardImage picture img:not(.perspectiveLayer),
 .listItem:hover .listAvatar img,
 .listItem:hover .listAvatar picture img {
   transform: scale(1.06);
+  will-change: transform;
 }
 
 /* Parallax — the image participates in the card's tilt but sits on a
@@ -405,9 +441,10 @@
    translate is scaled down to keep relative intensity in line with
    single cards (otherwise the same 8px shift reads twice as strong
    in a collage). */
-.cardTilt.tilting .cardImage img,
-.cardTilt.tilting .cardImage picture img,
+.cardTilt.tilting .cardImage img:not(.perspectiveLayer),
+.cardTilt.tilting .cardImage picture img:not(.perspectiveLayer),
 .cardTilt.tilting .cardAvatarFallback {
+  --lazy-image-transform-transition: 120ms ease-out;
   transition: transform 120ms ease-out;
   transform:
     translate3d(calc(var(--tilt-x, 0) * 8px), calc(var(--tilt-y, 0) * 8px), 0)
@@ -419,7 +456,7 @@
 
 .cardTilt.tilting .mosaicCell img,
 .cardTilt.tilting .mosaicCell picture img {
-  transition: transform 120ms ease-out;
+  --lazy-image-transform-transition: 120ms ease-out;
   transform:
     translate3d(calc(var(--tilt-x, 0) * 4px), calc(var(--tilt-y, 0) * 4px), 0)
     rotateX(calc(var(--tilt-y, 0) * 1deg))
@@ -428,10 +465,88 @@
   will-change: transform;
 }
 
+.perspectiveStack {
+  isolation: isolate;
+  background: var(--lumiverse-bg-deep);
+  transform-style: preserve-3d;
+}
+
+.perspectiveLayer {
+  --layer-origin-x: 0px;
+  --layer-origin-y: 0px;
+  --layer-origin-depth: 0px;
+  --layer-origin-tilt-x: 0deg;
+  --layer-origin-tilt-y: 0deg;
+  --layer-mouse-x: 0px;
+  --layer-mouse-y: 0px;
+  --layer-mouse-depth: 0px;
+  --layer-mouse-tilt-x: 0deg;
+  --layer-mouse-tilt-y: 0deg;
+  --layer-hover-depth: 0px;
+  --layer-hover-depth-target: 0px;
+  --layer-hover-scale: var(--layer-scale);
+  --layer-motion-x: 0px;
+  --layer-motion-y: 0px;
+  --layer-motion-depth: 0px;
+  --layer-tilt-amount: 0deg;
+  --layer-tilt-amount-neg: 0deg;
+  --layer-scale: 1;
+  position: absolute;
+  inset: -8%;
+  width: 116%;
+  height: 116%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  transform-origin: 50% 50%;
+  user-select: none;
+  pointer-events: none;
+  transform:
+    translate3d(
+      calc(var(--layer-origin-x) + var(--layer-mouse-x)),
+      calc(var(--layer-origin-y) + var(--layer-mouse-y)),
+      calc(var(--layer-origin-depth) + var(--layer-hover-depth) + var(--layer-mouse-depth))
+    )
+    rotateX(calc(var(--layer-origin-tilt-x) + var(--layer-mouse-tilt-x)))
+    rotateY(calc(var(--layer-origin-tilt-y) + var(--layer-mouse-tilt-y)))
+    scale(var(--layer-scale));
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.perspectiveStack .cardImageOverlay {
+  z-index: 3;
+}
+
+.card:hover .perspectiveLayer {
+  --layer-hover-depth: var(--layer-hover-depth-target);
+  --layer-scale: var(--layer-hover-scale);
+}
+
+.cardTilt.tilting .perspectiveLayer {
+  transition: transform 120ms ease-out;
+  will-change: transform;
+}
+
+.cardTilt.tilting .perspectiveLayer {
+  --layer-mouse-x: calc(var(--tilt-x, 0) * var(--layer-motion-x));
+  --layer-mouse-y: calc(var(--tilt-y, 0) * var(--layer-motion-y));
+  --layer-mouse-depth: calc(var(--tilt-y, 0) * var(--layer-motion-depth));
+  --layer-mouse-tilt-x: calc(var(--tilt-y, 0) * var(--layer-tilt-amount));
+  --layer-mouse-tilt-y: calc(var(--tilt-x, 0) * var(--layer-tilt-amount-neg));
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .cardTilt {
+  .cardTilt,
+  .cardTilt.tilting,
+  .cardTilt.mobileMotionTilting {
     perspective: none;
     transform: none !important;
+    transform-style: flat;
+  }
+  .card,
+  .cardTilt.tilting .card,
+  .cardTilt.mobileMotionTilting .card {
+    transform-style: flat;
   }
   .cardImage img,
   .cardImage picture img,
@@ -439,17 +554,26 @@
   .listAvatar picture img,
   .mosaicCell img,
   .mosaicCell picture img {
+    --lazy-image-transform-transition: 0ms;
     transition: none;
+    will-change: auto;
   }
-  .card:hover .cardImage img,
-  .card:hover .cardImage picture img,
+  .card:hover .cardImage img:not(.perspectiveLayer),
+  .card:hover .cardImage picture img:not(.perspectiveLayer),
   .listItem:hover .listAvatar img,
   .listItem:hover .listAvatar picture img,
-  .cardTilt.tilting .cardImage img,
-  .cardTilt.tilting .cardImage picture img,
+  .cardTilt.tilting .cardImage img:not(.perspectiveLayer),
+  .cardTilt.tilting .cardImage picture img:not(.perspectiveLayer),
+  .cardTilt.mobileMotionTilting .cardImage img:not(.perspectiveLayer),
+  .cardTilt.mobileMotionTilting .cardImage picture img:not(.perspectiveLayer),
   .cardTilt.tilting .mosaicCell img,
   .cardTilt.tilting .mosaicCell picture img,
-  .cardTilt.tilting .cardAvatarFallback {
+  .cardTilt.mobileMotionTilting .mosaicCell img,
+  .cardTilt.mobileMotionTilting .mosaicCell picture img,
+  .cardTilt.tilting .perspectiveLayer,
+  .cardTilt.mobileMotionTilting .perspectiveLayer,
+  .cardTilt.tilting .cardAvatarFallback,
+  .cardTilt.mobileMotionTilting .cardAvatarFallback {
     transform: none;
   }
   .card::after {
@@ -462,13 +586,60 @@
   pointer-events: none;
 }
 
+/* Disable all card hover/tilt/shine transforms while scrolling to keep the
+   compositor layer tree as small as possible during the scroll gesture. */
+.container[data-scrolling] .cardTilt {
+  perspective: none;
+  transform-style: flat;
+}
+
+.container[data-scrolling] .cardTilt .card {
+  transform-style: flat;
+}
+
+.container[data-scrolling] .card::after {
+  display: none;
+}
+
+.container[data-scrolling] .card,
+.container[data-scrolling] .listItem {
+  transition: none;
+}
+
+.container[data-scrolling] .cardImage img,
+.container[data-scrolling] .cardImage picture img,
+.container[data-scrolling] .listAvatar img,
+.container[data-scrolling] .listAvatar picture img,
+.container[data-scrolling] .mosaicCell img,
+.container[data-scrolling] .mosaicCell picture img,
+.container[data-scrolling] .cardAvatarFallback {
+  --lazy-image-transform-transition: 0ms;
+  transition: none !important;
+  will-change: auto;
+  transform: none !important;
+}
+
+.container[data-scrolling] .cardTilt.tilting .perspectiveLayer,
+.container[data-scrolling] .cardTilt.mobileMotionTilting .perspectiveLayer {
+  transition: none;
+  will-change: auto;
+  transform: none !important;
+}
+
+.container[data-scrolling] .perspectiveStack {
+  transform-style: flat;
+}
+
 .cardBtn {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
+  transform-style: preserve-3d;
   cursor: pointer;
   background: none;
   border: none;
+  padding: 0;
   text-align: left;
   color: inherit;
 }
@@ -477,6 +648,7 @@
   position: relative;
   aspect-ratio: 3 / 4;
   overflow: hidden;
+  transform-style: preserve-3d;
 }
 
 .cardImageOverlay {
@@ -692,6 +864,9 @@
     border-color var(--lumiverse-transition-fast),
     box-shadow var(--lumiverse-transition-fast),
     transform var(--lumiverse-transition-fast);
+}
+
+.listItemEntry {
   animation: cardEntry 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -978,20 +1153,12 @@
   color: var(--lumiverse-text-muted);
 }
 
-/* Footer */
-.footer {
-  text-align: center;
-  padding: 24px 0;
-  color: var(--lumiverse-text-hint);
-  font-size: calc(13px * var(--lumiverse-font-scale, 1));
-}
-
 @media (max-width: 600px) {
   .content {
     padding: 16px;
   }
   .gridCards {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
   }
   .compactList {
@@ -1015,5 +1182,11 @@
   .listTime,
   .listMeta {
     flex-shrink: 1;
+  }
+}
+
+@media (max-width: 364px) {
+  .gridCards {
+    grid-template-columns: 1fr;
   }
 }

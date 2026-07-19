@@ -1,3 +1,7 @@
+---
+title: Managing Packs
+---
+
 # Managing Packs
 
 Packs are managed through the **Content Workshop** panel.

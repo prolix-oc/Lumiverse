@@ -170,7 +170,7 @@ export function listCharacterSummaries(
     return listCharacterSummariesDiscover(userId, pagination, options);
   }
 
-  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
 
   // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
@@ -273,7 +273,7 @@ function listCharacterSummariesDiscover(
     };
   }
 
-  const whereClauses: string[] = ["c.user_id = ?"];
+  const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
   const whereParams: any[] = [userId];
 
   let extraJoin = "";
@@ -380,6 +380,85 @@ export function listCharacterTags(userId: string): { tag: string; count: number 
   return rows;
 }
 
+// ─── Bulk tag update (batch-select bar) ───────────────────────────────────
+
+export type CharacterTagBulkOperation = "add" | "remove" | "replace";
+
+export interface CharacterTagBulkInput {
+  ids: string[];
+  operation: CharacterTagBulkOperation;
+  tags: string[];
+}
+
+export interface CharacterTagBulkResult {
+  updated: number;
+  unchanged: number;
+}
+
+function applyTagOperation(current: string[], operation: CharacterTagBulkOperation, tags: string[]): string[] {
+  if (operation === "add") {
+    const merged = [...current];
+    for (const t of tags) if (!merged.includes(t)) merged.push(t);
+    return merged;
+  }
+  if (operation === "remove") {
+    const remove = new Set(tags);
+    return current.filter((t) => !remove.has(t));
+  }
+  return [...tags]; // replace
+}
+
+function stringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * Apply a tag operation to many characters in a single transaction.
+ * Mirrors the transactional pattern in tag-library-import.service.ts.
+ * Emits no per-character events; callers refresh the browser afterwards.
+ */
+export function bulkUpdateCharacterTags(userId: string, input: CharacterTagBulkInput): CharacterTagBulkResult {
+  const ids = Array.from(new Set(input.ids.filter((id) => typeof id === "string" && id.length > 0)));
+  if (ids.length === 0) throw new Error("At least one character id is required");
+  const operation = input.operation;
+  if (operation !== "add" && operation !== "remove" && operation !== "replace") {
+    throw new Error("Invalid tag operation");
+  }
+  const tags = Array.from(new Set(input.tags.map((t) => (typeof t === "string" ? t.trim() : "")).filter((t) => t.length > 0)));
+  if (tags.length === 0) throw new Error("At least one tag is required");
+
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = db
+    .query(`SELECT id, tags FROM characters WHERE id IN (${placeholders}) AND user_id = ?`)
+    .all(...ids, userId) as Array<{ id: string; tags: string | null }>;
+
+  const now = Math.floor(Date.now() / 1000);
+  const updateStmt = db.query("UPDATE characters SET tags = ?, updated_at = ? WHERE id = ? AND user_id = ?");
+  let updated = 0;
+  let unchanged = 0;
+  db.transaction(() => {
+    for (const row of rows) {
+      let current: string[] = [];
+      try {
+        const parsed = JSON.parse(row.tags || "[]");
+        if (Array.isArray(parsed)) current = parsed.filter((t) => typeof t === "string");
+      } catch {}
+      const next = applyTagOperation(current, operation, tags);
+      if (stringArraysEqual(current, next)) {
+        unchanged++;
+        continue;
+      }
+      updateStmt.run(JSON.stringify(next), now, row.id, userId);
+      updated++;
+    }
+  })();
+
+  return { updated, unchanged };
+}
+
 // ─── Avatar info (lightweight, no JSON parsing) ───────────────────────────
 
 export function getCharacterAvatarInfo(
@@ -400,9 +479,75 @@ export function getCharacterAvatarInfo(
 
 export type CharacterSortMode = "recent" | "discover";
 
-function rowToCharacter(row: any): Character {
+export type PerspectiveLayerKind = "background" | "framing" | "subject";
+export const LANDING_PERSPECTIVE_LAYERS_KEY = "landing_perspective_layers";
+export const MAX_LANDING_PERSPECTIVE_LAYERS = 5;
+
+export interface LandingPerspectiveLayer {
+  id: string;
+  image_id: string;
+  label?: string;
+  intensity: number;
+}
+
+export interface LandingPerspectiveLayerInput {
+  id?: string;
+  image_id: string;
+  label?: string;
+  intensity?: number;
+}
+
+function clampPerspectiveIntensity(value: unknown): number {
+  const num = typeof value === "number" && Number.isFinite(value) ? value : 0.6;
+  return Math.max(0, Math.min(1.5, Math.round(num * 100) / 100));
+}
+
+export function sanitizePerspectiveLayers(value: unknown): Record<PerspectiveLayerKind, string | undefined> {
+  const raw = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
   return {
-    ...row,
+    background: typeof raw.background === "string" ? raw.background : undefined,
+    framing: typeof raw.framing === "string" ? raw.framing : undefined,
+    subject: typeof raw.subject === "string" ? raw.subject : undefined,
+  };
+}
+
+export function normalizeLandingPerspectiveLayers(value: unknown): LandingPerspectiveLayer[] {
+  if (Array.isArray(value)) {
+    const seen = new Set<string>();
+    const layers: LandingPerspectiveLayer[] = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const entry = raw as Record<string, unknown>;
+      const imageId = typeof entry.image_id === "string" ? entry.image_id : null;
+      if (!imageId || seen.has(imageId)) continue;
+      seen.add(imageId);
+      const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : crypto.randomUUID();
+      const label = typeof entry.label === "string" && entry.label.trim() ? entry.label.trim().slice(0, 80) : undefined;
+      layers.push({ id, image_id: imageId, label, intensity: clampPerspectiveIntensity(entry.intensity) });
+      if (layers.length >= MAX_LANDING_PERSPECTIVE_LAYERS) break;
+    }
+    return layers;
+  }
+
+  const legacy = sanitizePerspectiveLayers(value);
+  const layers: LandingPerspectiveLayer[] = [];
+  if (legacy.background) layers.push({ id: "background", image_id: legacy.background, label: "Background", intensity: 0.15 });
+  if (legacy.framing) layers.push({ id: "framing", image_id: legacy.framing, label: "Framing", intensity: 1 });
+  if (legacy.subject) layers.push({ id: "subject", image_id: legacy.subject, label: "Subject", intensity: 0.6 });
+  return layers;
+}
+
+function sanitizePerspectiveLayerInputs(inputs: unknown): LandingPerspectiveLayer[] {
+  if (!Array.isArray(inputs)) return [];
+  return normalizeLandingPerspectiveLayers(inputs).slice(0, MAX_LANDING_PERSPECTIVE_LAYERS);
+}
+
+function rowToCharacter(row: any): Character {
+  const { deleting: _deleting, ...rest } = row;
+  return {
+    ...rest,
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
     tags: JSON.parse(row.tags),
@@ -435,8 +580,20 @@ function collectCharacterImageIds(character: Character): Set<string> {
   return ids;
 }
 
+function unreferencedImageIds(userId: string, ids: Iterable<string>): string[] {
+  const candidates = new Set<string>();
+  for (const imageId of ids) if (imageId) candidates.add(imageId);
+  if (candidates.size === 0) return [];
+  const referenced = imagesSvc.findReferencedImageIds(userId, candidates);
+  return [...candidates].filter((imageId) => !referenced.has(imageId));
+}
+
 function cleanupUnreferencedImageIds(userId: string, ids: Iterable<string>): void {
-  for (const imageId of ids) imagesSvc.deleteImageIfUnreferenced(userId, imageId);
+  const unreferenced = unreferencedImageIds(userId, ids);
+  if (unreferenced.length === 0) return;
+  void imagesSvc.deleteImagesBulk(userId, unreferenced).catch((err) =>
+    console.error("[characters] image cleanup failed:", err instanceof Error ? err.message : err)
+  );
 }
 
 function listCharacterGalleryImageIds(userId: string, characterId: string): string[] {
@@ -460,8 +617,8 @@ export function listCharactersForManifest(userId: string): Array<{ name: string;
 
 export function listCharacters(userId: string, pagination: PaginationParams): PaginatedResult<Character> {
   return paginatedQuery(
-    "SELECT * FROM characters WHERE user_id = ? ORDER BY updated_at DESC",
-    "SELECT COUNT(*) as count FROM characters WHERE user_id = ?",
+    "SELECT * FROM characters WHERE user_id = ? AND deleting = 0 ORDER BY updated_at DESC",
+    "SELECT COUNT(*) as count FROM characters WHERE user_id = ? AND deleting = 0",
     [userId],
     pagination,
     rowToCharacter
@@ -490,7 +647,7 @@ export function listCharactersDiscover(
   const shuffleValueSql = buildSeededShuffleValueSql(shuffleSeed);
 
   const countRow = db
-    .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ?")
+    .query("SELECT COUNT(*) as count FROM characters WHERE user_id = ? AND deleting = 0")
     .get(userId) as { count: number } | null;
   const total = countRow?.count ?? 0;
 
@@ -505,7 +662,7 @@ export function listCharactersDiscover(
       WHERE user_id = ? AND COALESCE(json_extract(metadata, '$.group'), 0) != 1
       GROUP BY character_id
     ) cs ON cs.character_id = c.id
-    WHERE c.user_id = ?
+    WHERE c.user_id = ? AND c.deleting = 0
     ORDER BY ((${shuffleValueSql}) - (${discoverBoostSql})) ASC,
              ${shuffleKeySql} ASC,
              c.updated_at DESC,
@@ -710,6 +867,126 @@ export async function replaceCharacterAvatar(userId: string, id: string, file: F
   return updated;
 }
 
+export async function setCharacterPerspectiveLayer(
+  userId: string,
+  id: string,
+  layer: PerspectiveLayerKind,
+  file: File,
+): Promise<Character | null> {
+  const updated = await addCharacterPerspectiveLayer(userId, id, file, {
+    id: layer,
+    label: layer[0].toUpperCase() + layer.slice(1),
+    intensity: layer === "background" ? 0.15 : layer === "subject" ? 0.6 : 1,
+  });
+  if (!updated) return null;
+  const layers = normalizeLandingPerspectiveLayers(updated.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  const replacement = layers[layers.length - 1];
+  const next = layers.filter((entry) => entry.id !== layer || entry.image_id === replacement.image_id);
+  return updateCharacterPerspectiveLayers(userId, id, next);
+}
+
+export async function addCharacterPerspectiveLayer(
+  userId: string,
+  id: string,
+  file: File,
+  input: { label?: string; intensity?: number; id?: string } = {},
+): Promise<Character | null> {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+
+  const currentLayers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  if (currentLayers.length >= MAX_LANDING_PERSPECTIVE_LAYERS) {
+    throw new Error(`Maximum ${MAX_LANDING_PERSPECTIVE_LAYERS} perspective layers`);
+  }
+
+  const oldImageIds = collectCharacterImageIds(existing);
+  const image = await imagesSvc.uploadOptimizedWebpImage(userId, file, { owner_character_id: id });
+  const extensions = { ...(existing.extensions ?? {}) };
+  const label = typeof input.label === "string" && input.label.trim()
+    ? input.label.trim().slice(0, 80)
+    : `Layer ${currentLayers.length + 1}`;
+  extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = [
+    ...currentLayers,
+    {
+      id: input.id?.trim() || crypto.randomUUID(),
+      image_id: image.id,
+      label,
+      intensity: clampPerspectiveIntensity(input.intensity),
+    },
+  ];
+
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  const updated = getCharacter(userId, id);
+  if (!updated) return null;
+  const newImageIds = collectCharacterImageIds(updated);
+  cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
+  eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function updateCharacterPerspectiveLayers(
+  userId: string,
+  id: string,
+  inputs: unknown,
+): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+
+  const oldImageIds = collectCharacterImageIds(existing);
+  const extensions = { ...(existing.extensions ?? {}) };
+  const layers = sanitizePerspectiveLayerInputs(inputs);
+  if (layers.length > 0) extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
+  else delete extensions[LANDING_PERSPECTIVE_LAYERS_KEY];
+
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  const updated = getCharacter(userId, id);
+  if (!updated) return null;
+  const newImageIds = collectCharacterImageIds(updated);
+  cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
+  eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function clearCharacterPerspectiveLayer(
+  userId: string,
+  id: string,
+  layer: PerspectiveLayerKind,
+): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+
+  const oldImageIds = collectCharacterImageIds(existing);
+  const extensions = { ...(existing.extensions ?? {}) };
+  const layers = normalizeLandingPerspectiveLayers(extensions[LANDING_PERSPECTIVE_LAYERS_KEY])
+    .filter((entry) => entry.id !== layer);
+  if (layers.length > 0) extensions[LANDING_PERSPECTIVE_LAYERS_KEY] = layers;
+  else delete extensions[LANDING_PERSPECTIVE_LAYERS_KEY];
+
+  getDb()
+    .query("UPDATE characters SET extensions = ?, updated_at = ? WHERE id = ? AND user_id = ?")
+    .run(JSON.stringify(extensions), Math.floor(Date.now() / 1000), id, userId);
+
+  const updated = getCharacter(userId, id);
+  if (!updated) return null;
+  const newImageIds = collectCharacterImageIds(updated);
+  cleanupUnreferencedImageIds(userId, [...oldImageIds].filter((imageId) => !newImageIds.has(imageId)));
+  eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function deleteCharacterPerspectiveLayer(userId: string, id: string, layerId: string): Character | null {
+  const existing = getCharacter(userId, id);
+  if (!existing) return null;
+  const layers = normalizeLandingPerspectiveLayers(existing.extensions?.[LANDING_PERSPECTIVE_LAYERS_KEY]);
+  return updateCharacterPerspectiveLayers(userId, id, layers.filter((entry) => entry.id !== layerId));
+}
+
 export function duplicateCharacter(userId: string, id: string): Character | null {
   const existing = getCharacter(userId, id);
   if (!existing) return null;
@@ -784,16 +1061,51 @@ export function setCharacterSourceFilename(userId: string, id: string, sourceFil
 export function deleteCharacter(userId: string, id: string): boolean {
   const existing = getCharacter(userId, id);
   if (!existing) return false;
+  const marked = getDb()
+    .query("UPDATE characters SET deleting = 1 WHERE id = ? AND user_id = ? AND deleting = 0")
+    .run(id, userId);
+  if (marked.changes === 0) return true;
+  eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
+  void runCharacterDeletionCascade(userId, id).catch((err) =>
+    console.error(`[characters] deletion cascade failed for ${id}:`, err instanceof Error ? err.message : err)
+  );
+  return true;
+}
+
+async function runCharacterDeletionCascade(userId: string, id: string): Promise<void> {
+  const existing = getCharacter(userId, id);
+  if (!existing) return;
   const imageIds = collectCharacterImageIds(existing);
   for (const imageId of listCharacterGalleryImageIds(userId, id)) imageIds.add(imageId);
+  const plan = imagesSvc.imageDeletePlan(userId, unreferencedImageIds(userId, imageIds));
 
-  const result = getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
-  if (result.changes > 0) {
-    cleanupUnreferencedImageIds(userId, imageIds);
-    if (existing.avatar_path) void filesSvc.deleteAvatar(existing.avatar_path);
-    deleteAutoManagedCharacterWorldBooks(userId, id);
+  await imagesSvc.unlinkPaths(plan.paths);
+  if (existing.avatar_path) await filesSvc.deleteAvatar(existing.avatar_path).catch(() => {});
+  await deleteAutoManagedCharacterWorldBooks(userId, id);
+
+  getDb().transaction(() => {
+    imagesSvc.deleteImageRowsOnly(userId, plan.rowIds);
     deleteRegexScriptsByCharacterId(userId, id);
-    eventBus.emit(EventType.CHARACTER_DELETED, { id }, userId);
+    getDb().query("DELETE FROM characters WHERE id = ? AND user_id = ?").run(id, userId);
+  })();
+}
+
+export async function resumePendingCharacterDeletions(): Promise<number> {
+  let rows: Array<{ id: string; user_id: string }>;
+  try {
+    rows = getDb()
+      .query("SELECT id, user_id FROM characters WHERE deleting = 1")
+      .all() as Array<{ id: string; user_id: string }>;
+  } catch {
+    return 0;
   }
-  return result.changes > 0;
+  for (const row of rows) {
+    try {
+      await runCharacterDeletionCascade(row.user_id, row.id);
+    } catch (err) {
+      console.error(`[characters] deletion resume failed for ${row.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  if (rows.length > 0) console.log(`[characters] resumed ${rows.length} interrupted deletion(s)`);
+  return rows.length;
 }

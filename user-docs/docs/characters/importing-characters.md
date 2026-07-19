@@ -1,3 +1,7 @@
+---
+title: Importing Characters
+---
+
 # Importing Characters
 
 The fastest way to populate your character library is by importing existing character cards. Lumiverse supports multiple import methods and formats.

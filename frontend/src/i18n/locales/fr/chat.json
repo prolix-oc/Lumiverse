@@ -43,7 +43,7 @@
     "backHome": "Retour à l'accueil",
     "regenerate": "Régénérer",
     "continue": "Continuer",
-    "sendAsPersona": "Envoyer le message suivant en tant que persona",
+    "sendAsPersona": "Changer de persona pour ce chat",
     "personaAddons": "Modules complémentaires Persona",
     "personaAddonsCustomized": "Modules complémentaires Persona — personnalisés pour ce chat",
     "guidedGenerations": "Générations guidées",
@@ -63,6 +63,11 @@
     "stopGeneration": "Arrêter la génération",
     "sendMessage": "Envoyer un message",
     "sendMessageQueueHint": "Envoyer un message ({{mod}}+cliquez pour mettre en file d'attente)",
+    "sendMessageTouchQueueHint": "Envoyer un message (maintenir pour mettre en file d'attente)",
+    "holdToQueue": "Maintenir pour mettre en file",
+    "keepHoldingToQueue": "Continuez à maintenir",
+    "releaseToQueue": "Relâchez pour mettre en file",
+    "queueingMessage": "Mise en file…",
     "sendQueuedMessages": "Envoyer des messages en file d'attente",
     "nudgeFreshReply": "Nudge pour une nouvelle réponse",
     "processingSpeech": "Traitement de la parole",
@@ -81,12 +86,25 @@
     "modCmd": "Commande",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "Rechercher dans le chat",
+    "placeholder": "Rechercher dans le chat…",
+    "clear": "Effacer le texte de recherche",
+    "previous": "Résultat précédent",
+    "next": "Résultat suivant",
+    "close": "Fermer la recherche",
+    "matchCount": "{{current}} sur {{total}}",
+    "noMatches": "Aucun résultat",
+    "loading": "Recherche…",
+    "searchFailed": "Impossible de rechercher dans ce chat"
+  },
   "quickMenu": {
     "noGuidedGenerations": "Aucune génération guidée configurée.",
+    "disableAllGuidedGenerations": "Désactiver toutes les générations guidées",
     "manageInSettings": "Gérer dans les paramètres",
     "noQuickReplySets": "Aucun jeu de réponses rapides activé.",
     "untitledReply": "Réponse sans titre",
-    "clearOneShotPersona": "Effacer le personnage unique",
+    "clearOneShotPersona": "Effacer la persona du chat",
     "noPersonas": "Aucun personnage disponible.",
     "manageChats": "Gérer les discussions",
     "manageConnections": "Gérer les connexions",
@@ -159,6 +177,7 @@
     "creatingChatCortex": "Création du chat et préparation du Cortex mémoire en arrière-plan…",
     "failedCreateChat": "Échec de la création du chat",
     "failedStartNewChat": "Échec du démarrage d'un nouveau chat",
+    "failedDeleteChat": "Impossible de supprimer ce chat",
     "failedOpenChat": "Échec de l'ouverture du chat",
     "characterImported": "\"{{name}}\" était importé",
     "importFailed": "Échec de l'importation",
@@ -194,7 +213,8 @@
     "noMemoryRebuildNeeded": "Aucune reconstruction de mémoire n'a été nécessaire pour cette discussion.",
     "failedRecompileMemories": "Échec de la recompilation des souvenirs",
     "chatDocuments": "Documents de discussion",
-    "chatDocumentsNamed": "{{name}} Bavarder"
+    "chatDocumentsNamed": "{{name}} Bavarder",
+    "failedSaveChatPersona": "Impossible d’enregistrer la persona pour ce chat"
   },
   "addGroupMember": {
     "title": "Ajouter un membre du groupe",
@@ -362,7 +382,9 @@
     "fork": {
       "title": "Bavarder",
       "message": "Créer une nouvelle branche de chat à ce message ? Tous les messages jusqu'à présent seront copiés.",
-      "confirm": "Fourchette"
+      "confirm": "Fourchette",
+      "nameLabel": "Nom du chat (facultatif)",
+      "namePlaceholder": "Laissez vide pour utiliser un nom automatique"
     },
     "delete": {
       "title": "Supprimer",
@@ -375,5 +397,11 @@
       "message": "Cela supprimera définitivement ce message du chat.",
       "confirm": "Supprimer"
     }
+  },
+  "newChatConfirm": {
+    "title": "Démarrer un nouveau chat",
+    "message": "Voulez-vous vraiment démarrer un nouveau chat ?",
+    "confirm": "Démarrer le chat",
+    "deleteThisChat": "Supprimer ce chat"
   }
 }

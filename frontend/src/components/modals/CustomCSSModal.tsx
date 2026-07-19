@@ -23,6 +23,7 @@ import CssVariablesReference from './CssVariablesReference'
 import ComponentCssReference from './ComponentCssReference'
 import styles from './CustomCSSModal.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type EditorTab = 'css' | 'tsx'
 
@@ -236,17 +237,23 @@ export default function CustomCSSModal() {
   }, [activeTab])
 
   // ── Validation ──
-  const validation = useMemo(() => {
-    if (activeTab === 'css') {
-      const src = currentCSS.trim()
-      if (!src) return { status: 'empty' as const }
-      const result = validateCSS(sanitizeCSS(src))
-      return result.valid ? { status: 'valid' as const } : { status: 'error' as const, error: result.error }
+  const [validation, setValidation] = useState<{ status: 'empty' | 'valid' | 'error'; error?: string }>({ status: 'empty' })
+
+  useEffect(() => {
+    async function runValidation() {
+      if (activeTab === 'css') {
+        const src = currentCSS.trim()
+        if (!src) { setValidation({ status: 'empty' }); return }
+        const result = validateCSS(sanitizeCSS(src))
+        setValidation(result.valid ? { status: 'valid' } : { status: 'error', error: result.error })
+        return
+      }
+      const src = currentTSX.trim()
+      if (!src) { setValidation({ status: 'empty' }); return }
+      const result = await validateTSX(src)
+      setValidation(result.valid ? { status: 'valid' } : { status: 'error', error: result.error })
     }
-    const src = currentTSX.trim()
-    if (!src) return { status: 'empty' as const }
-    const result = validateTSX(src)
-    return result.valid ? { status: 'valid' as const } : { status: 'error' as const, error: result.error }
+    runValidation()
   }, [activeTab, currentCSS, currentTSX])
 
   const byteCount = useMemo(
@@ -314,7 +321,7 @@ export default function CustomCSSModal() {
     } catch (err: any) {
       toast.error(err?.body?.error || err?.message || t('exportFailed'))
     }
-  }, [buildPackAssets, theme, customCSS, componentOverrides])
+  }, [buildPackAssets, theme, customCSS, componentOverrides, t])
 
   const handleImportPack = useCallback(async () => {
     const result = await importThemePack()
@@ -350,7 +357,7 @@ export default function CustomCSSModal() {
     } catch (err: any) {
       toast.error(err?.body?.error || err?.message || t('importFailed'))
     }
-  }, [applyThemePack, addSavedTheme])
+  }, [applyThemePack, addSavedTheme, t])
 
   const handleResetAll = useCallback(() => {
     openModal('confirm', {
@@ -481,12 +488,20 @@ export default function CustomCSSModal() {
         <div className={styles.body}>
           {/* ── Sidebar ────────────────────────────────────────── */}
           <div className={clsx(styles.sidebar, !sidebarOpen && styles.sidebarCollapsed)}>
-            <input
-              className={styles.searchInput}
-              placeholder={t('searchPlaceholder')}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <div className={styles.sidebarSearch}>
+              <input
+                className={styles.searchInput}
+                placeholder={t('searchPlaceholder')}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
+              />
+              {search && (
+                <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={tc('actions.clear')}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
             <div className={styles.componentList}>
               {/* Global entry */}
               {(!search.trim() || 'global'.includes(search.toLowerCase())) && (
@@ -586,7 +601,7 @@ export default function CustomCSSModal() {
               </div>
             </div>
 
-            {/* TSX sandbox notice */}
+            {/* TSX sandbox/additive-edit notice */}
             {activeTab === 'tsx' && !isGlobal && (
               <div className={styles.tsxNotice}>
                 <ShieldAlert size={14} className={styles.tsxNoticeIcon} />

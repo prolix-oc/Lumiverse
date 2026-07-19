@@ -12,13 +12,19 @@ const COUNT_FIELDS = [
   'harvest_cap',
 ] as const
 const TEMP_FIELDS = ['generation_temperature', 'review_temperature'] as const
-type TuningField = (typeof COUNT_FIELDS)[number] | (typeof TEMP_FIELDS)[number]
+const SECONDS_FIELDS = ['text_timeout_seconds'] as const
+type TuningField =
+  | (typeof COUNT_FIELDS)[number]
+  | (typeof TEMP_FIELDS)[number]
+  | (typeof SECONDS_FIELDS)[number]
+
+const ALL_FIELDS = [...COUNT_FIELDS, ...TEMP_FIELDS, ...SECONDS_FIELDS] as const
 
 type Drafts = Record<TuningField, string>
 
 function toDrafts(tuning: WeaverTuning): Drafts {
   const out = {} as Drafts
-  for (const f of [...COUNT_FIELDS, ...TEMP_FIELDS]) {
+  for (const f of ALL_FIELDS) {
     const v = tuning[f]
     out[f] = v == null ? '' : String(v)
   }
@@ -43,7 +49,7 @@ export function TuningPane({ onBack }: { onBack: () => void }) {
     if (!drafts || busy) return
     setBusy(true); setError(null); setSaved(false)
     const payload: Record<string, number | null> = {}
-    for (const f of [...COUNT_FIELDS, ...TEMP_FIELDS]) {
+    for (const f of ALL_FIELDS) {
       const raw = drafts[f].trim()
       payload[f] = raw === '' ? null : Number(raw)
     }
@@ -59,7 +65,7 @@ export function TuningPane({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const field = (f: TuningField, step: string, max: string) => {
+  const field = (f: TuningField, step: string, max: string, min = '0') => {
     const overridden = (drafts?.[f] ?? '').trim() !== ''
     return (
       <div key={f} className={styles.tuningRow}>
@@ -74,7 +80,7 @@ export function TuningPane({ onBack }: { onBack: () => void }) {
           className={`${styles.toolin} ${styles.tuningInput} ${overridden ? styles.tuningSet : ''}`}
           type="number"
           inputMode="decimal"
-          min="0"
+          min={min}
           max={max}
           step={step}
           value={drafts?.[f] ?? ''}
@@ -108,6 +114,12 @@ export function TuningPane({ onBack }: { onBack: () => void }) {
             <div className={styles.bandLabel}>{t('tuning.bands.model')}</div>
             <p className={styles.tuningBandHelp}>{t('tuning.tempsIntro')}</p>
             {TEMP_FIELDS.map((f) => field(f, '0.1', '2'))}
+          </section>
+
+          <section>
+            <div className={styles.bandLabel}>{t('tuning.bands.reliability')}</div>
+            <p className={styles.tuningBandHelp}>{t('tuning.reliabilityIntro')}</p>
+            {SECONDS_FIELDS.map((f) => field(f, '10', '1200', '30'))}
           </section>
 
           <section>

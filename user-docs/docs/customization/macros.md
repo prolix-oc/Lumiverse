@@ -1,3 +1,7 @@
+---
+title: Macros
+---
+
 # Macros
 
 Macros are template variables written as `{{macro_name}}` that get replaced with dynamic content during prompt assembly. They can be used in preset blocks, prompt text fields, chat messages, and included world book content.
@@ -41,15 +45,15 @@ Current time: 14:30 on Wednesday.
 | Category | Examples | Full List |
 |----------|----------|-----------|
 | **Names** | `{{user}}`, `{{char}}`, `{{group}}` | [Identity macros](../presets/macros-reference.md#identity-names) |
-| **Character data** | `{{description}}`, `{{personality}}`, `{{scenario}}` | [Character macros](../presets/macros-reference.md#character-data) |
+| **Character data** | `{{description}}`, `{{personality}}`, `{{scenario}}`, `{{charTags}}`, `{{hasTag}}` | [Character macros](../presets/macros-reference.md#character-data) |
 | **Chat state** | `{{lastMessage}}`, `{{messageCount}}`, `{{messageAt::0}}` | [Chat macros](../presets/macros-reference.md#chat-conversation) |
 | **String** | `{{upper}}`, `{{replace}}`, `{{len}}`, `{{split}}` | [String macros](../presets/macros-reference.md#string-manipulation) |
 | **Math** | `{{calc::2+3}}`, `{{clamp}}`, `{{min}}`, `{{max}}` | [Math macros](../presets/macros-reference.md#math) |
-| **Logic** | `{{switch}}`, `{{default}}`, `{{and}}`, `{{not}}` | [Logic macros](../presets/macros-reference.md#logic-comparisons) |
+| **Logic** | `{{switch}}`, `{{case}}`, `{{default}}`, `{{and}}`, `{{not}}`, `{{matches}}` | [Logic macros](../presets/macros-reference.md#logic-comparisons) |
 | **Random** | `{{random::1::100}}`, `{{pick::a::b::c}}`, `{{roll::2d6}}` | [Entropy macros](../presets/macros-reference.md#random-entropy) |
 | **Variables** | `{{.var}}` (local), `{{@var}}` (chat-persisted), `{{$var}}` (global) | [Variable macros](../presets/macros-reference.md#variables) |
 | **Prompt Variables** | `{{var::tone}}`, `{{varDefault::tone}}` | [Prompt variable macros](../presets/macros-reference.md#prompt-variables-preset-inputs) |
-| **Conditionals** | `{{if .var == 5}}...{{else}}...{{/if}}` | [Core macros](../presets/macros-reference.md#core-macros) |
+| **Conditionals** | `{{if .var == 5}}...{{elseif::...}}...{{else}}...{{/if}}`, `{{unless}}` | [Core macros](../presets/macros-reference.md#core-macros) |
 | **Memory & Retrieval** | `{{memories}}`, `{{databank}}`, `{{entities}}` | [Memory macros](../presets/macros-reference.md#memory) |
 | **Formatting** | `{{bullets}}`, `{{numbered}}` | [Formatting macros](../presets/macros-reference.md#formatting) |
 | **Council & Lumia** | `{{lumiaCouncilDeliberation}}`, `{{loomStyle}}` | [Council macros](../presets/macros-reference.md#lumia-council) |

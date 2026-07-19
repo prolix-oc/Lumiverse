@@ -44,6 +44,12 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong'
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'AbortError'
+}
+
+let questionAbort: AbortController | null = null
+
 export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (set, get) => ({
   weaverSessions: [],
   activeWeaverSessionId: null,
@@ -280,11 +286,14 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
 
   nextWeaverQuestion: async (sessionId, steer) => {
     if (get().activeWeaverSessionId !== sessionId) return
+    questionAbort?.abort()
+    const controller = new AbortController()
+    questionAbort = controller
     set({ weaverQuestionLoading: true, weaverInterviewError: null })
     try {
       const current = get().weaverQuestion
       const avoid = steer && current ? [current.prompt] : undefined
-      const { question } = await api.generateQuestion(sessionId, steer ? { steer, avoid } : {})
+      const { question } = await api.generateQuestion(sessionId, steer ? { steer, avoid } : {}, controller.signal)
       if (get().activeWeaverSessionId !== sessionId) return
       set({ weaverQuestion: question, weaverStateSessionId: sessionId })
       if (!question) {
@@ -294,10 +303,22 @@ export const createWeaverSlice: StateCreator<AppStore, [], [], WeaverSlice> = (s
       }
     } catch (err) {
       if (get().activeWeaverSessionId !== sessionId) return
+      // A cancel already set a friendly message and cleared loading — don't clobber it.
+      if (isAbortError(err)) return
       set({ weaverInterviewError: errorMessage(err) })
     } finally {
-      set({ weaverQuestionLoading: false })
+      if (questionAbort === controller) {
+        questionAbort = null
+        set({ weaverQuestionLoading: false })
+      }
     }
+  },
+
+  cancelWeaverQuestion: (sessionId, message) => {
+    if (get().activeWeaverSessionId !== sessionId) return
+    questionAbort?.abort()
+    questionAbort = null
+    set({ weaverQuestionLoading: false, weaverInterviewError: message })
   },
 
   answerWeaverQuestion: async (sessionId, input) => {

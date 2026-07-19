@@ -4,7 +4,7 @@ import { join, resolve } from "path";
 
 import { env } from "../env";
 import { shouldUseBunWorkers, warnBunWorkerFallback } from "../utils/bun-worker-guard";
-import { bunCmd } from "./manager.service";
+import { bunCmd } from "../utils/bun-cmd";
 
 export type RuntimeTransportMode = "worker" | "process" | "sandbox";
 

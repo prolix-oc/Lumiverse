@@ -30,8 +30,19 @@ const MESSAGE_PREVIEW_CAP = 220
 // Memory chunk previews are clipped to this many characters by default.
 const CHUNK_PREVIEW_CAP = 500
 
-function summarizeMessage(content: string): string {
-  const normalized = content.replace(/\s+/g, ' ').trim()
+function normalizePreviewText(text?: string): string {
+  if (!text) return ''
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function getContentPartBadges(message: DryRunMessage): string[] {
+  return (message.contentParts ?? [])
+    .filter((part) => part.count > 0)
+    .map((part) => `${part.type} x${part.count}`)
+}
+
+function summarizeMessage(message: DryRunMessage): string {
+  const normalized = normalizePreviewText(message.content) || normalizePreviewText(message.reasoning)
   if (!normalized) return i18n.t('shared.emptyMessage', { ns: 'modals' })
   return normalized.length > MESSAGE_PREVIEW_CAP
     ? `${normalized.slice(0, MESSAGE_PREVIEW_CAP - 1)}…`
@@ -47,18 +58,27 @@ interface MessageListItemProps {
   msg: DryRunMessage
   index: number
   selected: boolean
+  clipBoundary: boolean
+  clipBoundaryLabel?: string
   onSelect: () => void
 }
 
-function MessageListItem({ msg, index, selected, onSelect }: MessageListItemProps) {
+function MessageListItem({ msg, index, selected, clipBoundary, clipBoundaryLabel, onSelect }: MessageListItemProps) {
   const { t: ts } = useTranslation('modals', { keyPrefix: 'shared' })
-  const preview = summarizeMessage(msg.content)
+  const { t } = useTranslation('modals', { keyPrefix: 'dryRun' })
+  const preview = summarizeMessage(msg)
   const lineCount = countLines(msg.content)
+  const hasReasoning = normalizePreviewText(msg.reasoning).length > 0
+  const contentPartBadges = getContentPartBadges(msg)
 
   return (
     <button
       type="button"
-      className={clsx(styles.messageRow, selected && styles.messageRowActive)}
+      className={clsx(
+        styles.messageRow,
+        clipBoundary && styles.messageRowClipBoundary,
+        selected && styles.messageRowActive,
+      )}
       onClick={onSelect}
     >
       <div className={styles.messageRowHeader}>
@@ -66,6 +86,15 @@ function MessageListItem({ msg, index, selected, onSelect }: MessageListItemProp
           {msg.role}
         </Badge>
         <span className={styles.messageIndex}>#{index + 1}</span>
+        {clipBoundary && clipBoundaryLabel && (
+          <span className={styles.messageClipBadge}>{clipBoundaryLabel}</span>
+        )}
+        {hasReasoning && (
+          <span className={styles.messageReasoningBadge}>{t('reasoning')}</span>
+        )}
+        {contentPartBadges.map((badge) => (
+          <span key={badge} className={styles.messagePartBadge}>{badge}</span>
+        ))}
         <span className={styles.messageMeta}>
           {ts('chars', { count: msg.content.length })}
           {lineCount > 0 && ` • ${ts('lines', { count: lineCount })}`}
@@ -104,10 +133,12 @@ function ChunkPreview({ text }: ChunkPreviewProps) {
 interface VirtualizedMessagesProps {
   messages: DryRunMessage[]
   selectedIndex: number
+  clipBoundaryIndex: number
+  clipBoundaryLabel?: string
   onSelect: (index: number) => void
 }
 
-function VirtualizedMessages({ messages, selectedIndex, onSelect }: VirtualizedMessagesProps) {
+function VirtualizedMessages({ messages, selectedIndex, clipBoundaryIndex, clipBoundaryLabel, onSelect }: VirtualizedMessagesProps) {
   const parentRef = useRef<HTMLDivElement>(null)
 
   const virtualizer = useVirtualizer({
@@ -144,6 +175,8 @@ function VirtualizedMessages({ messages, selectedIndex, onSelect }: VirtualizedM
                 msg={msg}
                 index={virtualRow.index}
                 selected={selectedIndex === virtualRow.index}
+                clipBoundary={virtualRow.index === clipBoundaryIndex}
+                clipBoundaryLabel={clipBoundaryLabel}
                 onSelect={() => onSelect(virtualRow.index)}
               />
             </div>
@@ -160,7 +193,7 @@ export default function DryRunModal() {
   const modalProps = useStore((s) => s.modalProps) as DryRunResponse
   const closeModal = useStore((s) => s.closeModal)
 
-  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
+  const { messages, breakdown, parameters, assistantPrefill, model, provider, tokenCount, chatHistoryTokens, worldInfoStats, memoryStats, databankStats, contextClipStats } = modalProps
 
   const [messagesOpen, setMessagesOpen] = useState(
     messages.length <= MESSAGES_AUTO_COLLAPSE_THRESHOLD,
@@ -242,6 +275,24 @@ export default function DryRunModal() {
 
   const selectedMessage = messages[selectedMessageIndex] ?? null
   const selectedMessageLineCount = selectedMessage ? countLines(selectedMessage.content) : 0
+  const selectedMessageHasReasoning =
+    normalizePreviewText(selectedMessage?.reasoning).length > 0
+  const selectedMessageContentPartBadges = selectedMessage
+    ? getContentPartBadges(selectedMessage)
+    : []
+  const clippedMessagesText = contextClipStats?.enabled && contextClipStats.messagesDropped > 0
+    ? t('clipped', { count: contextClipStats.messagesDropped }).trim()
+    : ''
+  const clippedMessagesSeparator = clippedMessagesText.match(/^[,，、]\s*/)?.[0] ?? ', '
+  const clippedMessagesLabel = clippedMessagesText.replace(/^[,，、]\s*/, '').trim()
+  const clipBoundaryIndex = useMemo(() => {
+    if (!contextClipStats?.enabled || contextClipStats.messagesDropped <= 0 || messages.length === 0) return -1
+    const firstKeptHistoryIndex = messages.findIndex((msg) => msg.__chatHistorySource)
+    return firstKeptHistoryIndex >= 0 ? firstKeptHistoryIndex : 0
+  }, [contextClipStats?.enabled, contextClipStats?.messagesDropped, messages])
+  const clipBoundaryLabel = clipBoundaryIndex >= 0
+    ? t('clipBoundaryMarker', { defaultValue: 'first kept after clip' })
+    : undefined
 
   const handleSelectMessage = (index: number) => {
     setSelectedMessageIndex(index)
@@ -276,13 +327,16 @@ export default function DryRunModal() {
                   size={14}
                   className={clsx(styles.chevron, messagesOpen && styles.chevronOpen)}
                 />
-                {t('messages')} ({messages.length}
-                {contextClipStats?.enabled && contextClipStats.messagesDropped > 0 && (
-                  <span style={{ color: '#ffab00', marginLeft: 6 }}>
-                    {t('clipped', { count: contextClipStats.messagesDropped })}
-                  </span>
-                )}
-                )
+                <span className={styles.collapsibleTitleText}>
+                  {t('messages')} ({messages.length}
+                  {clippedMessagesLabel && (
+                    <>
+                      {clippedMessagesSeparator}
+                      <span className={styles.clippedInlineLabel}>{clippedMessagesLabel}</span>
+                    </>
+                  )}
+                  )
+                </span>
               </button>
               {messagesOpen && messages.length > 0 && (
                 <div
@@ -294,6 +348,8 @@ export default function DryRunModal() {
                   <VirtualizedMessages
                     messages={messages}
                     selectedIndex={selectedMessageIndex}
+                    clipBoundaryIndex={clipBoundaryIndex}
+                    clipBoundaryLabel={clipBoundaryLabel}
                     onSelect={handleSelectMessage}
                   />
                   <div className={styles.messageInspector}>
@@ -313,13 +369,31 @@ export default function DryRunModal() {
                               {selectedMessage.role}
                             </Badge>
                             <span className={styles.messageIndex}>#{selectedMessageIndex + 1}</span>
+                            {selectedMessageContentPartBadges.map((badge) => (
+                              <span key={badge} className={styles.messagePartBadge}>{badge}</span>
+                            ))}
                           </div>
                           <span className={styles.messageInspectorMeta}>
                             {ts('chars', { count: selectedMessage.content.length })}
                             {selectedMessageLineCount > 0 && ` • ${ts('lines', { count: selectedMessageLineCount })}`}
                           </span>
                         </div>
-                        <pre className={styles.messageInspectorContent}>{selectedMessage.content}</pre>
+                        <div className={styles.messageInspectorContent}>
+                          <div className={styles.messageInspectorSection}>
+                            <p className={styles.messageInspectorLabel}>{t('content')}</p>
+                            <pre className={styles.messageInspectorText}>
+                              {selectedMessage.content || ts('emptyMessage')}
+                            </pre>
+                          </div>
+                          {selectedMessageHasReasoning && (
+                            <div className={styles.messageInspectorSection}>
+                              <p className={styles.messageInspectorLabel}>{t('reasoning')}</p>
+                              <pre className={styles.messageInspectorText}>
+                                {selectedMessage.reasoning}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
                       </>
                     )}
                   </div>
@@ -354,6 +428,9 @@ export default function DryRunModal() {
                     {tokenCount && (
                       <div className={styles.breakdownSummary}>
                         <span>{t('totalTokens', { count: tokenCount.total_tokens })}</span>
+                        {chatHistoryTokens != null && chatHistoryTokens > 0 && (
+                          <span className={styles.breakdownSource}>{t('chatHistoryTokens', { count: chatHistoryTokens })}</span>
+                        )}
                         {tokenCount.tokenizer_name && (
                           <span className={styles.breakdownSource}>{t('viaTokenizer', { name: tokenCount.tokenizer_name })}</span>
                         )}
@@ -649,7 +726,7 @@ export default function DryRunModal() {
                                 {t('databank.chunkLine', {
                                   index: i + 1,
                                   document: chunk.documentName,
-                                  score: chunk.score.toFixed(4),
+                                  score: chunk.score != null ? chunk.score.toFixed(4) : 'n/a',
                                   tokens: chunk.tokenEstimate,
                                 })}
                               </span>
@@ -880,6 +957,11 @@ export default function DryRunModal() {
             {tokenCount && (
               <span className={styles.footerMax}>
                 {ts('tokens', { count: tokenCount.total_tokens })}
+              </span>
+            )}
+            {chatHistoryTokens != null && chatHistoryTokens > 0 && (
+              <span className={styles.footerMax}>
+                {t('footerChatHistory', { count: chatHistoryTokens })}
               </span>
             )}
             <div className={styles.footerSpacer} />

@@ -1,4 +1,8 @@
-# Branching
+---
+title: Branch Tree
+---
+
+# Branch Tree
 
 Branching lets you fork a conversation at any message, creating a new chat that diverges from that point. It's like a "save point" — you can explore a different direction without losing the original conversation.
 

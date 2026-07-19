@@ -1,3 +1,7 @@
+---
+title: Home
+---
+
 # Lumiverse User Guides
 
 Welcome to the official guides for **Lumiverse** — a powerful, self-hosted AI chat application for creative roleplay, storytelling, and conversation.
@@ -23,7 +27,7 @@ New to Lumiverse? Start here:
 | Guide | What You'll Learn |
 |-------|-------------------|
 | [Characters](characters/index.md) | Import, create, and customize AI characters |
-| [Weaver](weaver/index.md) | Author characters and whole worlds from your idea through a guided interview |
+| [Dream Weaver](weaver/index.md) | Author characters and whole worlds from your idea through a guided interview |
 | [Chatting](chatting/index.md) | Send messages, use swipes, branch conversations |
 | [Personas](personas/index.md) | Create your own identity for roleplay |
 | [Connections](connections/index.md) | Connect to AI providers (OpenAI, Claude, etc.) |
@@ -32,21 +36,21 @@ New to Lumiverse? Start here:
 
 | Guide | What You'll Learn |
 |-------|-------------------|
-| [Presets](presets/index.md) | Control how prompts are assembled and sent to the AI |
-| [World Books](world-books/index.md) | Build lorebooks that inject context based on keywords |
-| [Council & Lumia](council/index.md) | Set up multi-persona AI deliberation |
-| [Packs](packs/index.md) | Install and manage content packs (Lumias, Looms, Tools) |
+| [Reasoning](presets/index.md) | Control how prompts are assembled and sent to the AI |
+| [Lorebook](world-books/index.md) | Build lorebooks that inject context based on keywords |
+| [Council](council/index.md) | Set up multi-persona AI deliberation |
+| [Pack Browser](packs/index.md) | Install and manage content packs (Lumias, Looms, Tools) |
 | [Image Generation](image-generation/index.md) | Generate scene illustrations from your chats |
 | [Sovereign Hand](presets/sovereign-hand.md) | Direct the scene as an author instead of playing a character |
-| [Loom Summary](chatting/loom-summary.md) | Automatic story summarization for long conversations |
+| [Summary](chatting/loom-summary.md) | Automatic story summarization for long conversations |
 | [Long-Term Memory](chatting/memory.md) | Vector-based recall of relevant past moments |
 
 ### Customization
 
 | Guide | What You'll Learn |
 |-------|-------------------|
-| [Themes](customization/themes.md) | Change colors, fonts, and visual styles |
-| [Wallpapers](customization/wallpapers.md) | Set background images or videos |
+| [Theme](customization/themes.md) | Change colors, fonts, and visual styles |
+| [Wallpaper](customization/wallpapers.md) | Set background images or videos |
 | [Regex Scripts](customization/regex-scripts.md) | Transform text with find-and-replace rules |
 | [Macros](customization/macros.md) | Use template variables in your prompts |
 | [Display Modes](customization/display-modes.md) | Switch between minimal and bubble chat layouts |
@@ -56,9 +60,10 @@ New to Lumiverse? Start here:
 | Guide | What You'll Learn |
 |-------|-------------------|
 | [Embeddings](settings/embeddings.md) | Set up vector search for semantic lorebook and memory features |
-| [Push Notifications](settings/push-notifications.md) | Get notified when the AI responds |
+| [Notifications](settings/push-notifications.md) | Get notified when the AI responds |
 | [LumiHub](settings/lumihub.md) | Browse and install characters from the hub |
-| [Users & Auth](settings/users.md) | Manage users, roles, and passwords |
+| [User Management](settings/users.md) | Manage users, roles, and passwords |
+| [Single Sign-On](settings/sso.md) | Configure OIDC SSO with authentik, Authelia, or Keycloak |
 
 ### Data Portability
 

@@ -5,7 +5,9 @@ import { initI18n } from '@/i18n'
 import { registerSW } from 'virtual:pwa-register'
 import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
+import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { rememberRegistration } from './lib/swUpdater'
+import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
 import './theme/variables.css'
@@ -14,10 +16,20 @@ import './theme/global.css'
 
 installWindowOpenGuard()
 
+let reloading = false
+
 // Register service worker for PWA support — autoUpdate sends SKIP_WAITING
 // automatically when a new SW is detected.
 registerSW({
   immediate: true,
+  // vite-plugin-pwa calls this only after an updated (including externally
+  // updated) worker takes control. Keep the reload policy with the
+  // registration lifecycle instead of duplicating it with a browser listener.
+  onNeedReload() {
+    if (reloading) return
+    reloading = true
+    window.location.reload()
+  },
   onRegisteredSW(_swUrl, registration) {
     // Long-running tabs (especially PWAs) may stay open for days.
     // Periodically check for a new SW so deploys are picked up without
@@ -30,18 +42,6 @@ registerSW({
     // an "Updating…" state when a new worker is installing.
     rememberRegistration(registration)
   },
-})
-
-// Auto-reload when a new service worker takes control after a deploy.
-// The new SW calls clients.claim(), firing this event on all open tabs.
-// Guard: skip on first install (no previous controller) to avoid a
-// pointless reload when the user visits for the very first time.
-let reloading = false
-const hadController = !!navigator.serviceWorker?.controller
-navigator.serviceWorker?.addEventListener('controllerchange', () => {
-  if (!hadController || reloading) return
-  reloading = true
-  window.location.reload()
 })
 
 // Navigate when a push notification is clicked (SW posts NAVIGATE message)
@@ -64,6 +64,11 @@ const hasVirtualKeyboard = navigator.maxTouchPoints > 0
 // anything below this floor as an iOS viewport glitch (the stuck ~24px
 // residual), not a keyboard — prevents the input bar floating by a sliver.
 const KEYBOARD_MIN_INSET = 80
+// Hardware-keyboard focus on iPadOS can still show the compact input assistant
+// / autocomplete pill. It's much smaller than a soft keyboard, but still
+// occludes the bottom controls enough to trigger scroll bounce if ignored.
+const IOS_PWA_ACCESSORY_MIN_INSET = 44
+const isIOSStandalonePwa = (window.navigator as any).standalone === true && navigator.maxTouchPoints > 0
 
 function isEditableElement(el: EventTarget | Element | null): boolean {
   return (
@@ -109,12 +114,20 @@ function syncViewportVars() {
   if (isPortrait) basePortrait = base
   else baseLandscape = base
 
-  let keyboardInsetBottom = Math.max(0, Math.round(base - height - offsetTop))
-  // Focus gate + dead-zone. Only honour an inset when the keyboard is genuinely
-  // up (an editable element is focused) AND it clears the real-keyboard floor.
-  // This is what neutralises the iOS 26/27 bug: a stuck residual offset can no
-  // longer lift the bar once focus is gone.
-  if (!keyboardActive || keyboardInsetBottom < KEYBOARD_MIN_INSET) keyboardInsetBottom = 0
+  // In standalone iOS PWAs we explicitly cancel WebKit's visual-viewport pan
+  // (see the scrollTo(0, 0) handler below), so offsetTop is no longer layout
+  // we want to preserve. Measure bottom occlusion from the viewport shrink
+  // alone there; subtracting offsetTop collapses the real keyboard/pill inset
+  // back toward zero and leaves the input/list fighting scroll bounce.
+  const keyboardInsetBottom = computeViewportKeyboardInset({
+    fullHeight: base,
+    viewportHeight: height,
+    offsetTop,
+    keyboardActive,
+    ignoreOffsetTop: isIOSStandalonePwa,
+    keyboardMinInset: KEYBOARD_MIN_INSET,
+    accessoryMinInset: isIOSStandalonePwa ? IOS_PWA_ACCESSORY_MIN_INSET : KEYBOARD_MIN_INSET,
+  })
 
   root.style.setProperty('--app-viewport-width', `${width}px`)
   root.style.setProperty('--app-viewport-height', `${height}px`)
@@ -205,6 +218,24 @@ function findScrollContainer(el: HTMLElement | null): HTMLElement | null {
   return null
 }
 
+function revealFocusedTargetInContainer(target: HTMLElement, container: HTMLElement) {
+  const targetRect = target.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+  const viewportBottom = window.visualViewport?.height ?? window.innerHeight
+  const visibleTop = Math.max(containerRect.top, 0) + 12
+  const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - 18
+
+  let delta = 0
+  if (targetRect.bottom > visibleBottom) {
+    delta = targetRect.bottom - visibleBottom
+  } else if (targetRect.top < visibleTop) {
+    delta = targetRect.top - visibleTop
+  }
+
+  if (Math.abs(delta) < 1) return
+  container.scrollTop += delta
+}
+
 // ── iOS PWA: counteract visual viewport scroll ──
 // When the virtual keyboard opens in standalone mode, iOS scrolls the visual
 // viewport upward to reveal the focused input. This shifts the entire layout
@@ -222,7 +253,12 @@ window.visualViewport?.addEventListener('scroll', () => {
 // since iOS PWA shells may not advertise display-mode: standalone via CSS.
 const isStandalone =
   window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia('(display-mode: window-controls-overlay)').matches ||
   (window.navigator as any).standalone === true
+
+if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
+  document.documentElement.setAttribute('data-platform', 'macos')
+}
 
 if (isStandalone) {
   document.documentElement.setAttribute('data-pwa', '')
@@ -257,6 +293,7 @@ if (isStandalone) {
 const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent)
 
 if (!isWebKit) {
+  document.documentElement.setAttribute('data-resizes-content', '')
   const viewport = document.querySelector('meta[name="viewport"]')
   if (viewport) {
     viewport.setAttribute('content', viewport.getAttribute('content') + ', interactive-widget=resizes-content')
@@ -356,17 +393,45 @@ if ((window.navigator as any).standalone === true && navigator.maxTouchPoints > 
     if (!container) return
 
     setTimeout(() => {
-      const rect = (target as HTMLElement).getBoundingClientRect()
-      const vvBottom = window.visualViewport?.height ?? window.innerHeight
-      // If the input's bottom is behind the keyboard, scroll just enough
-      if (rect.bottom > vvBottom - 30) {
-        container.scrollBy({ top: rect.bottom - vvBottom + 60, behavior: 'smooth' })
-      }
+      revealFocusedTargetInContainer(target as HTMLElement, container)
     }, 350)
   })
 }
 
-void initI18n().then(() => {
+// ── Mobile layout recovery after native popups / backgrounding ──
+// iOS/Android can leave position:fixed/sticky elements shifted after system
+// file pickers, share sheets, or backgrounding. Blur any focused editable
+// control, reset every scroll path the browser may have panned, and re-sync
+// viewport measurements so the app shell snaps back to the viewport.
+if (navigator.maxTouchPoints > 0) {
+  function blurActiveEditable() {
+    if (isEditableElement(document.activeElement)) {
+      ;(document.activeElement as HTMLElement).blur()
+    }
+  }
+
+  function recoverMobileLayout() {
+    blurActiveEditable()
+    if (window.scrollY !== 0 || window.scrollX !== 0) window.scrollTo(0, 0)
+    if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0
+    if (document.body.scrollTop !== 0) document.body.scrollTop = 0
+    scheduleViewportSync()
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) blurActiveEditable()
+    else recoverMobileLayout()
+  })
+
+  window.addEventListener('pagehide', blurActiveEditable)
+  window.addEventListener('pageshow', recoverMobileLayout)
+  window.addEventListener('focus', recoverMobileLayout)
+  // Allow code paths that know a system popup just closed (e.g. file inputs)
+  // to request an explicit recovery even if no page-visibility event fired.
+  window.addEventListener('lumiverse:recover-mobile-layout', recoverMobileLayout)
+}
+
+void Promise.all([initI18n(), initializeSafeThemeMode()]).then(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary label="Application">

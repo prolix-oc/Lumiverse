@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cpus, totalmem, freemem, platform, arch, release, hostname } from "os";
-import { execSync } from "child_process";
 import { join } from "path";
+import { getGitMetadata } from "../utils/git-metadata";
 
 const app = new Hono();
 
@@ -16,14 +16,8 @@ async function getBackendVersion(): Promise<string> {
 }
 
 function getGitInfo(): { branch: string; commit: string } {
-  const projectRoot = join(import.meta.dir, "../..");
-  try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: projectRoot, encoding: "utf-8" }).trim();
-    const commit = execSync("git rev-parse --short HEAD", { cwd: projectRoot, encoding: "utf-8" }).trim();
-    return { branch, commit };
-  } catch {
-    return { branch: "unknown", commit: "unknown" };
-  }
+  const { branch, commit } = getGitMetadata();
+  return { branch, commit };
 }
 
 function getDiskUsage(): { total: number; used: number } | null {

@@ -5,6 +5,11 @@
   gap: 10px;
 }
 
+.entryListHeaderMobile {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .entryListTitle {
   font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
@@ -15,6 +20,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.toolbarActionsMobile {
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .toolbarBtn,
@@ -59,6 +70,23 @@
   margin-top: 8px;
 }
 
+.entrySortRowMobile {
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+}
+
+.entrySortRowMobile .entrySortSelect {
+  flex: 1 1 100%;
+}
+
+.entrySortRowMobile .entryPageSizeSelect {
+  flex: 1 1 132px;
+  min-width: 0;
+}
+
 .entrySortSelect,
 .entryPageSizeSelect,
 .entrySortDirBtn,
@@ -89,11 +117,23 @@
   cursor: pointer;
 }
 
-.entrySearch {
+.entrySearchRow {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+.entrySearchRowMobile {
+  flex-wrap: wrap;
+}
+
+.entrySearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
   padding: 7px 10px;
   border-radius: 8px;
   background: var(--lumiverse-fill-subtle);
@@ -117,6 +157,68 @@
   color: var(--lumiverse-text);
   font-size: calc(12px * var(--lumiverse-font-scale, 1));
   outline: none;
+}
+
+.entrySearchClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.entrySearchClear:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
+.listOptionsToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--lumiverse-border);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+  cursor: pointer;
+  transition: border-color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), color var(--lumiverse-transition-fast);
+}
+
+.listOptionsToggle:hover {
+  border-color: var(--lumiverse-primary);
+}
+
+.listOptionsToggleActive {
+  border-color: var(--lumiverse-primary);
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+}
+
+.listOptionsSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+}
+
+.listOptionsChevron {
+  flex-shrink: 0;
+  transition: transform var(--lumiverse-transition-fast);
+}
+
+.listOptionsChevronOpen {
+  transform: rotate(180deg);
 }
 
 .customSortHint,
@@ -163,11 +265,132 @@
   color: var(--lumiverse-error);
 }
 
-.entryList {
+.section {
+  padding: 0 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  min-height: 0;
+}
+
+.sectionStandaloneScroll {
+  flex: 1 1 auto;
+}
+
+.sectionSharedScroll {
+  flex: 0 0 auto;
+}
+
+.sectionMobile {
+  padding: 0;
+}
+
+.entryScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: calc(12px + var(--app-keyboard-inset-bottom, 0px));
+  scroll-padding-block: 10px calc(96px + var(--app-keyboard-inset-bottom, 0px));
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.entryScrollShared {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding-bottom: 0;
+  scroll-padding-block: 0;
+  overscroll-behavior: auto;
+  -webkit-overflow-scrolling: auto;
+}
+
+.entryList {
+  position: relative;
   margin-top: 10px;
+}
+
+.entryListItem {
+  padding-bottom: 8px;
+}
+
+.entryPagination {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  flex-shrink: 0;
+  margin-top: 8px;
+  padding: 8px 0 12px;
+  background: var(--lumiverse-bg-deep);
+  border-top: 1px solid color-mix(in srgb, var(--lumiverse-border) 55%, transparent);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.entryPagination::-webkit-scrollbar {
+  display: none;
+}
+
+.entryPaginationControls {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.entryPaginationDocked {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+@media (max-height: 860px) and (min-width: 720px) {
+  .section {
+    padding: 0 8px;
+  }
+
+  .entryListHeader {
+    gap: 8px;
+  }
+
+  .toolbarActions {
+    gap: 6px;
+  }
+
+  .toolbarBtn,
+  .newEntryBtn,
+  .bulkActionBtn {
+    padding: 5px 9px;
+  }
+
+  .entrySearchRow,
+  .entrySortRow {
+    margin-top: 6px;
+  }
+
+  .entrySearch {
+    padding: 5px 9px;
+  }
+
+  .entrySortSelect,
+  .entryPageSizeSelect,
+  .entrySortDirBtn {
+    padding-block: 5px;
+  }
+
+  .customSortHint,
+  .bulkBar {
+    margin-top: 6px;
+    padding: 8px 10px;
+  }
+
+  .entryList {
+    margin-top: 8px;
+  }
+
+  .entryListItem {
+    padding-bottom: 6px;
+  }
 }
 
 .rowDragging {
@@ -349,6 +572,17 @@
   color: var(--lumiverse-text-muted);
 }
 
+.orderBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orderBadge svg {
+  flex-shrink: 0;
+}
+
 .entryActions {
   display: flex;
   align-items: center;
@@ -450,8 +684,34 @@
 }
 
 @media (max-width: 640px) {
+  .entrySortRow {
+    flex-wrap: wrap;
+  }
+
+  .entrySortSelect {
+    flex: 1 1 100%;
+  }
+
+  .entryPageSizeSelect {
+    flex: 1 1 132px;
+    min-width: 0;
+  }
+
   .entryHeader {
     align-items: center;
+    gap: 8px;
+  }
+
+  .entryRow {
+    padding: 10px;
+  }
+
+  .dragHandleDisabled {
+    display: none;
+  }
+
+  .entryActions {
+    gap: 4px;
   }
 
   .expandBtn span {
@@ -468,21 +728,59 @@
 
   .entryComment {
     white-space: normal;
+    line-height: 1.35;
   }
 
-  .bulkBar,
+  .entryMeta {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .entryPagination {
+    margin-top: 6px;
+    padding: 6px 0 8px;
+  }
+
+  .entryPaginationControls {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .entryPaginationControls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .entryPaginationControls > * {
+    flex-shrink: 0;
+  }
+
   .entryListHeader {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .toolbarActions {
+    width: auto;
+    margin-left: auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .toolbarBtn,
+  .newEntryBtn {
+    flex: 0 1 auto;
+  }
+
+  .bulkBar {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .toolbarActions,
   .bulkActions {
     width: 100%;
   }
 
-  .toolbarBtn,
-  .newEntryBtn,
   .bulkActionBtn {
     flex: 1;
   }

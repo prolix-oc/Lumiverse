@@ -114,6 +114,31 @@ function interpolateToken(from: Rgba, to: Rgba, t: number): string {
   return `rgba(${Math.round(mix(from.r, to.r))}, ${Math.round(mix(from.g, to.g))}, ${Math.round(mix(from.b, to.b))}, ${mix(from.a, to.a).toFixed(3)})`
 }
 
+function toOpaqueRgb(color: string): string | null {
+  const parsed = parseColorToken(color)
+  if (!parsed) return null
+
+  // Native window chrome expects an opaque color. Composite translucent theme
+  // tokens against black, matching the app's deep shell background.
+  const mix = (channel: number) => Math.round(channel * parsed.a)
+  return `rgb(${mix(parsed.r)}, ${mix(parsed.g)}, ${mix(parsed.b)})`
+}
+
+function syncThemeColorMeta(vars: Record<string, string>) {
+  const color =
+    toOpaqueRgb(vars['--lumiverse-bg-deep'] ?? '') ??
+    toOpaqueRgb(vars['--lumiverse-bg'] ?? '') ??
+    '#0a0812'
+
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!meta) {
+    meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    document.head.appendChild(meta)
+  }
+  meta.content = color
+}
+
 function buildColorInterpolator(from: string, to: string): ((t: number) => string) | null {
   if (from === to) return null
 
@@ -346,6 +371,7 @@ export function useThemeApplicator() {
       }
 
       hadOverridesRef.current = hasOverrides
+      syncThemeColorMeta(vars)
 
       if (!root.hasAttribute('data-pwa')) {
         const us = parseFloat(vars['--lumiverse-ui-scale'] ?? '1') || 1

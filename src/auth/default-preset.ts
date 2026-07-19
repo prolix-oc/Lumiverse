@@ -1,5 +1,6 @@
 import { getDb } from "../db/connection";
 import * as settingsSvc from "../services/settings.service";
+import { DEFAULT_PROMPT_BEHAVIOR } from "../services/prompt-behavior";
 
 export const DEFAULT_PRESET_BLOCKS = [
   {
@@ -305,15 +306,7 @@ export const DEFAULT_PRESET_PARAMETERS = {
 };
 
 export const DEFAULT_PRESET_PROMPTS = {
-  promptBehavior: {
-    continueNudge: "[Continue your last message without repeating its original content.]",
-    emptySendNudge: "[Write the next reply only as {{char}}.]",
-    impersonationPrompt: "[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don't write as {{char}} or system. Don't describe actions of {{char}}.]",
-    groupNudge: "[Write the next reply only as {{char}}.]",
-    newChatPrompt: "[Start a new Chat]",
-    newGroupChatPrompt: "[Start a new group chat. Group members: {{group}}]",
-    sendIfEmpty: "",
-  },
+  promptBehavior: { ...DEFAULT_PROMPT_BEHAVIOR },
   completionSettings: {
     assistantPrefill: "",
     assistantImpersonation: "",
@@ -334,6 +327,10 @@ export const DEFAULT_PRESET_PROMPTS = {
   },
 };
 
+export const BUILTIN_DEFAULT_PRESET_SLUG = "lumiverse-builtin-default-loom";
+export const BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY = "builtinDefaultPresetSeedVersion";
+const BUILTIN_DEFAULT_PRESET_SEED_VERSION = 1;
+
 const DEFAULT_PRESET_METADATA = {
   source: null,
   modelProfiles: {},
@@ -343,38 +340,211 @@ const DEFAULT_PRESET_METADATA = {
   isDefault: true,
   lastProfileKey: null,
   promptVariables: {},
+  _lumiverse_preset_slug: BUILTIN_DEFAULT_PRESET_SLUG,
 };
 
 /**
- * Insert the built-in "Default" preset for a user if they have no presets yet.
- * Sets it as the active preset so new users can generate immediately.
+ * Signup path forces activation; rollout/backfill only activates when the user
+ * had no presets at all, so existing users keep their current selection.
  */
-export function seedDefaultPreset(userId: string): void {
-  const db = getDb();
+export interface SeedDefaultPresetOptions {
+  setActive?: boolean;
+  setActiveIfNoPresets?: boolean;
+}
 
-  const row = db
+export interface SeedDefaultPresetResult {
+  presetId: string;
+  seeded: boolean;
+  upgradedLegacy: boolean;
+  activated: boolean;
+}
+
+export interface DefaultPresetBackfillResult {
+  usersScanned: number;
+  seeded: number;
+  upgradedLegacy: number;
+  activated: number;
+  markedSeeded: number;
+}
+
+type PresetRow = {
+  id: string;
+  metadata: string;
+};
+
+function countUserPresets(userId: string): number {
+  const row = getDb()
     .query("SELECT COUNT(*) as count FROM presets WHERE user_id = ?")
     .get(userId) as { count: number } | null;
-  if (row && row.count > 0) return;
+  return row?.count ?? 0;
+}
 
-  const id = crypto.randomUUID();
-  const now = Math.floor(Date.now() / 1000);
+function getBuiltInDefaultPresetRow(userId: string): PresetRow | null {
+  return getDb()
+    .query(
+      "SELECT id, metadata FROM presets WHERE user_id = ? AND json_extract(metadata, '$._lumiverse_preset_slug') = ? LIMIT 1",
+    )
+    .get(userId, BUILTIN_DEFAULT_PRESET_SLUG) as PresetRow | null;
+}
 
-  db.query(
-    "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    id,
-    "Default",
-    "loom",
-    "classic",
-    JSON.stringify(DEFAULT_PRESET_PARAMETERS),
-    JSON.stringify(DEFAULT_PRESET_BLOCKS),
-    JSON.stringify(DEFAULT_PRESET_PROMPTS),
-    JSON.stringify(DEFAULT_PRESET_METADATA),
+/**
+ * Legacy builds seeded the Loom default with `metadata.isDefault = true` but no
+ * stable slug. Upgrade that row in place so rollout backfill doesn't create a
+ * duplicate for users who already received the built-in preset.
+ */
+function getLegacyBuiltInDefaultPresetRow(userId: string): PresetRow | null {
+  return getDb()
+    .query(
+      `SELECT id, metadata
+         FROM presets
+        WHERE user_id = ?
+          AND provider = 'loom'
+          AND COALESCE(json_extract(metadata, '$.isDefault'), 0) = 1
+          AND json_extract(metadata, '$.source') IS NULL
+        ORDER BY created_at ASC
+        LIMIT 1`,
+    )
+    .get(userId) as PresetRow | null;
+}
+
+function readJsonObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function upgradeLegacyPresetMetadata(userId: string, row: PresetRow): void {
+  const metadata = readJsonObject(row.metadata);
+  if (metadata._lumiverse_preset_slug === BUILTIN_DEFAULT_PRESET_SLUG) return;
+  metadata._lumiverse_preset_slug = BUILTIN_DEFAULT_PRESET_SLUG;
+  metadata.isDefault = true;
+  getDb()
+    .query("UPDATE presets SET metadata = ?, updated_at = ?, cache_revision = cache_revision + 1 WHERE id = ? AND user_id = ?")
+    .run(
+      JSON.stringify(metadata),
+      Math.floor(Date.now() / 1000),
+      row.id,
+      userId,
+    );
+}
+
+function getActivePresetId(userId: string): string | null {
+  const setting = settingsSvc.getSetting(userId, "activeLoomPresetId");
+  return typeof setting?.value === "string" && setting.value.trim()
+    ? setting.value
+    : null;
+}
+
+function markSeeded(userId: string): boolean {
+  const current = settingsSvc.getSetting(userId, BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY);
+  if (current?.value === BUILTIN_DEFAULT_PRESET_SEED_VERSION) return false;
+  settingsSvc.putSetting(
     userId,
-    now,
-    now,
+    BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY,
+    BUILTIN_DEFAULT_PRESET_SEED_VERSION,
   );
+  return true;
+}
 
-  settingsSvc.putSetting(userId, "activeLoomPresetId", id);
+function activatePreset(userId: string, presetId: string): boolean {
+  if (getActivePresetId(userId) === presetId) return false;
+  settingsSvc.putSetting(userId, "activeLoomPresetId", presetId);
+  return true;
+}
+
+/**
+ * Ensure the built-in Loom default exists for the user. The preset is tracked
+ * by a stable hidden metadata slug so existing users with unrelated presets
+ * still receive it, while legacy built-ins are upgraded in place.
+ */
+export function seedDefaultPreset(
+  userId: string,
+  options: SeedDefaultPresetOptions = {},
+): SeedDefaultPresetResult {
+  const db = getDb();
+  const presetCountBefore = countUserPresets(userId);
+  let row = getBuiltInDefaultPresetRow(userId);
+  let seeded = false;
+  let upgradedLegacy = false;
+
+  if (!row) {
+    const legacyRow = getLegacyBuiltInDefaultPresetRow(userId);
+    if (legacyRow) {
+      upgradeLegacyPresetMetadata(userId, legacyRow);
+      row = legacyRow;
+      upgradedLegacy = true;
+    }
+  }
+
+  if (!row) {
+    const id = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    db.query(
+      "INSERT INTO presets (id, name, provider, engine, parameters, prompt_order, prompts, metadata, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      id,
+      "Default",
+      "loom",
+      "classic",
+      JSON.stringify(DEFAULT_PRESET_PARAMETERS),
+      JSON.stringify(DEFAULT_PRESET_BLOCKS),
+      JSON.stringify(DEFAULT_PRESET_PROMPTS),
+      JSON.stringify(DEFAULT_PRESET_METADATA),
+      userId,
+      now,
+      now,
+    );
+    row = { id, metadata: JSON.stringify(DEFAULT_PRESET_METADATA) };
+    seeded = true;
+  }
+
+  const activated = options.setActive
+    ? activatePreset(userId, row.id)
+    : options.setActiveIfNoPresets && presetCountBefore === 0
+      ? activatePreset(userId, row.id)
+      : false;
+
+  markSeeded(userId);
+
+  return {
+    presetId: row.id,
+    seeded,
+    upgradedLegacy,
+    activated,
+  };
+}
+
+export function backfillDefaultPresets(): DefaultPresetBackfillResult {
+  const users = getDb()
+    .query('SELECT id FROM "user" ORDER BY createdAt ASC')
+    .all() as Array<{ id: string }>;
+
+  const result: DefaultPresetBackfillResult = {
+    usersScanned: users.length,
+    seeded: 0,
+    upgradedLegacy: 0,
+    activated: 0,
+    markedSeeded: 0,
+  };
+
+  for (const user of users) {
+    const alreadySeeded = settingsSvc.getSetting(
+      user.id,
+      BUILTIN_DEFAULT_PRESET_SEED_SETTING_KEY,
+    )?.value === BUILTIN_DEFAULT_PRESET_SEED_VERSION;
+    if (alreadySeeded) continue;
+
+    const seed = seedDefaultPreset(user.id, { setActiveIfNoPresets: true });
+    if (seed.seeded) result.seeded += 1;
+    if (seed.upgradedLegacy) result.upgradedLegacy += 1;
+    if (seed.activated) result.activated += 1;
+    result.markedSeeded += 1;
+  }
+
+  return result;
 }

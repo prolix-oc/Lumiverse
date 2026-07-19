@@ -10,6 +10,7 @@ import { packsApi } from '@/api/packs'
 import LazyImage from '@/components/shared/LazyImage'
 import styles from './LumiaSelector.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 type LumiaMode = 'definition' | 'behavior' | 'personality'
 
@@ -239,9 +240,10 @@ export default function LumiaSelector({ mode, onClose }: LumiaSelectorProps) {
             placeholder={t('searchPlaceholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => clearSearchOnEscape(e, searchTerm, () => setSearchTerm(''))}
           />
           {searchTerm && (
-            <button className={styles.searchClear} onClick={() => setSearchTerm('')}>
+            <button type="button" className={styles.searchClear} onClick={() => setSearchTerm('')} aria-label={tc('actions.clear')}>
               <XCircle size={14} />
             </button>
           )}

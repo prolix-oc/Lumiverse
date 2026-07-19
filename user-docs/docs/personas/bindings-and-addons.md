@@ -1,3 +1,7 @@
+---
+title: Bindings & Add-Ons
+---
+
 # Bindings & Add-Ons
 
 Beyond basic persona setup, Lumiverse offers several power features: **character bindings** and **tag bindings** that auto-activate personas, and **add-ons** that let you toggle extra persona content on and off.

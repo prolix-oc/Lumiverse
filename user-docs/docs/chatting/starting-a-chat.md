@@ -1,3 +1,7 @@
+---
+title: Starting a Chat
+---
+
 # Starting a Chat
 
 Every conversation in Lumiverse begins with selecting a character and creating a chat.

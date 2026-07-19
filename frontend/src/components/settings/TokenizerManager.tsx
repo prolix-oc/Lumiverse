@@ -5,6 +5,7 @@ import i18n from '@/i18n'
 import { Plus, Trash2, FlaskConical, Check, X, Search, AlertTriangle, ChevronRight, KeyRound, ExternalLink } from 'lucide-react'
 import { tokenizersApi, parseHfSource } from '@/api/tokenizers'
 import { Badge } from '@/components/shared/Badge'
+import Pagination from '@/components/shared/Pagination'
 import type { TokenizerConfig, TokenizerModelPattern, TokenizerTestResult, PatternTestResult, ResolveTokenizerResult } from '@/api/tokenizers'
 import styles from './TokenizerManager.module.css'
 
@@ -171,6 +172,20 @@ function ConfigsSection({ configs, onRefresh }: { configs: TokenizerConfig[]; on
   const { t } = useTranslation('settings')
   const { t: tc } = useTranslation('common')
 
+  const perPage = 10
+  const [currentPage, setCurrentPage] = useState(1)
+  const totalPages = Math.max(1, Math.ceil(configs.length / perPage))
+
+  // Keep the current page valid when the list grows or shrinks (e.g. add/delete)
+  // without jumping the user back to page 1.
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
+
+  const pageItems = configs.slice((currentPage - 1) * perPage, currentPage * perPage)
+
   // Paste-a-URL flow
   const [url, setUrl] = useState('')
   const [resolving, setResolving] = useState(false)
@@ -264,8 +279,19 @@ function ConfigsSection({ configs, onRefresh }: { configs: TokenizerConfig[]; on
       <p className={styles.sectionDesc}>{t('tokenizers.configsDesc')}</p>
 
       <div className={styles.cardList}>
-        {configs.map((c) => <TokenizerCard key={c.id} c={c} onDelete={handleDelete} />)}
+        {pageItems.map((c) => <TokenizerCard key={c.id} c={c} onDelete={handleDelete} />)}
       </div>
+
+      {totalPages > 1 && (
+        <div className={styles.paginationBar}>
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={configs.length}
+            onPageChange={setCurrentPage}
+          />
+        </div>
+      )}
 
       {error && <p className={styles.error}>{error}</p>}
 

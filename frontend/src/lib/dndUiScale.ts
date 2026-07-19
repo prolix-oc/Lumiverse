@@ -50,10 +50,22 @@ function scaledTransform(
   transform: Transform | null,
   scrollDx: number,
   scrollDy: number,
+  isDragging: boolean,
 ): string | undefined {
   if (!transform) return CSS.Transform.toString(transform)
   const uiScale = getUiScale()
-  if (uiScale === 1) return CSS.Transform.toString(transform)
+  // During drag, the FLIP animation transform may include scaleX/scaleY
+  // from useDerivedTransform. These scale factors compound with the pointer
+  // delta and cause the card to visually stretch or squish. Strip them —
+  // only keep the translation.
+  if (isDragging) {
+    return CSS.Transform.toString({
+      x: uiScale !== 1 ? (transform.x - scrollDx) / uiScale + scrollDx : transform.x,
+      y: uiScale !== 1 ? (transform.y - scrollDy) / uiScale + scrollDy : transform.y,
+      scaleX: 1,
+      scaleY: 1,
+    })
+  }
   return CSS.Transform.toString({
     ...transform,
     x: (transform.x - scrollDx) / uiScale + scrollDx,
@@ -118,7 +130,7 @@ export function useScaledSortableStyle({
   return {
     setNodeRef: ref,
     style: {
-      transform: scaledTransform(transform, scrollDx, scrollDy),
+      transform: scaledTransform(transform, scrollDx, scrollDy, isDragging),
       transition,
     },
   }

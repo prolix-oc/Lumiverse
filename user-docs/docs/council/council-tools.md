@@ -1,3 +1,7 @@
+---
+title: Council Tools
+---
+
 # Council Tools
 
 Council tools are specialized analysis functions that members can run during deliberation. Each tool sends a focused prompt to the sidecar LLM and returns structured results that feed into the main generation.

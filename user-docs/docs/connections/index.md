@@ -1,3 +1,7 @@
+---
+title: Connections
+---
+
 # Connections
 
 A **connection** links Lumiverse to an AI provider. It specifies which provider, model, and API key to use for generation. You need at least one connection to chat.

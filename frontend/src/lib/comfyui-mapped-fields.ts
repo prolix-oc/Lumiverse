@@ -26,6 +26,7 @@ const SEMANTIC_ORDER: ComfyUIMappedFieldSemantic[] = [
   'width',
   'height',
   'checkpoint',
+  'unet',
   'sampler_name',
   'scheduler',
 ]
@@ -41,6 +42,7 @@ const SEMANTIC_LABELS: Record<Exclude<ComfyUIMappedFieldSemantic, 'custom'>, str
   width: 'Width',
   height: 'Height',
   checkpoint: 'Checkpoint',
+  unet: 'UNet',
 }
 
 function formatLabel(value: string): string {
@@ -72,6 +74,8 @@ function getSemanticOptions(
   switch (semantic) {
     case 'checkpoint':
       return capabilities?.checkpoints ?? []
+    case 'unet':
+      return capabilities?.unets ?? []
     case 'sampler_name':
       return capabilities?.samplers ?? []
     case 'scheduler':

@@ -30,12 +30,21 @@ async function isToolGateEnabled(userId: string, tool: RuntimeCouncilToolDefinit
 }
 
 export function normalizeCouncilSettings(settings: CouncilSettings): CouncilSettings {
+  // The control was added after the initial Council settings shape. Read it
+  // defensively so profiles persisted before that release remain valid.
+  const toolsSettings = settings.toolsSettings as typeof settings.toolsSettings & {
+    excludeLatestUserMessage?: boolean;
+  };
+
   return {
     ...settings,
     toolsSettings: {
-      ...settings.toolsSettings,
-      timeoutMs: Math.max(MIN_COUNCIL_TOOL_TIMEOUT_MS, settings.toolsSettings.timeoutMs || 0),
-    },
+      ...toolsSettings,
+      timeoutMs: Math.max(MIN_COUNCIL_TOOL_TIMEOUT_MS, toolsSettings.timeoutMs || 0),
+      // Keep existing profiles compatible while ensuring this optional control
+      // always has a predictable value in API responses.
+      excludeLatestUserMessage: toolsSettings.excludeLatestUserMessage === true,
+    } as CouncilSettings["toolsSettings"],
   };
 }
 

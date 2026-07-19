@@ -25,7 +25,7 @@ function SpindleTextEditor() {
 
   useEffect(() => {
     if (req) setValue(req.value ?? '')
-  }, [reqId])
+  }, [reqId, req])
 
   // Stable close handler — never changes identity, reads from refs
   const handleClose = useRef(() => {

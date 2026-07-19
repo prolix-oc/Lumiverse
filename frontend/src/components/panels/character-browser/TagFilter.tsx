@@ -4,6 +4,7 @@ import { ChevronDown, X, Check, Ban } from 'lucide-react'
 import { getTagColor } from '@/lib/tagColors'
 import styles from './TagFilter.module.css'
 import clsx from 'clsx'
+import { clearSearchOnEscape } from '@/lib/clearableSearch'
 
 interface TagInfo {
   tag: string
@@ -50,7 +51,7 @@ export default function TagFilter({
 
   const activeCount = selectedTags.length + excludedTags.length
 
-  if (allTags.length === 0) return <div className={styles.placeholder} />
+  if (allTags.length === 0 && activeCount === 0) return null
 
   return (
     <div className={styles.container} ref={ref}>
@@ -78,14 +79,22 @@ export default function TagFilter({
       )}
       {open && (
         <div className={styles.dropdown}>
-          <input
-            type="text"
-            className={styles.search}
-            placeholder={t('characterBrowser.tagFilter.searchPlaceholder')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            autoFocus
-          />
+          <div className={styles.searchWrap}>
+            <input
+              type="text"
+              className={styles.search}
+              placeholder={t('characterBrowser.tagFilter.searchPlaceholder')}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => clearSearchOnEscape(e, search, () => setSearch(''))}
+              autoFocus
+            />
+            {search && (
+              <button type="button" className={styles.searchClear} onClick={() => setSearch('')} aria-label={t('characterBrowser.tagFilter.clearTags')}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
           <div className={styles.list}>
             {filtered.map(({ tag, count }) => {
               const color = getTagColor(tag)

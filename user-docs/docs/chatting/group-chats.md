@@ -1,3 +1,7 @@
+---
+title: Group Chats
+---
+
 # Group Chats
 
 Group chats let you have conversations with **multiple AI characters at once**. Characters interact with you and with each other, creating dynamic multi-character scenes.
@@ -82,6 +86,8 @@ These macros are especially useful in group chat presets:
 | `{{groupLastSpeaker}}` | Name of the character who spoke last |
 | `{{isGroupChat}}` | "yes" or "no" |
 | `{{charGroupFocused}}` | The currently targeted character's name |
+| `{{charGroupFocusedDescription}}` | The currently targeted character's description |
+| `{{charGroupFocusedPersonality}}` | The currently targeted character's personality |
 | `{{groupCardMode}}` | Card composition mode: "solo", "swap", "merge", or "merge_ignore_muted" |
 
 ---

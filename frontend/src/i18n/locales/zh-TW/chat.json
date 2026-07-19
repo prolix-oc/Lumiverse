@@ -43,7 +43,7 @@
     "backHome": "返回主頁",
     "regenerate": "重新生成",
     "continue": "繼續",
-    "sendAsPersona": "以人設身份發送下一條消息",
+    "sendAsPersona": "為此聊天切換人設",
     "personaAddons": "人設附加項",
     "personaAddonsCustomized": "人設附加項 — 已為本聊天定製",
     "guidedGenerations": "引導生成",
@@ -63,6 +63,11 @@
     "stopGeneration": "停止生成",
     "sendMessage": "發送消息",
     "sendMessageQueueHint": "發送消息（{{mod}}+點擊 加入隊列）",
+    "sendMessageTouchQueueHint": "發送消息（長按可加入隊列）",
+    "holdToQueue": "長按加入隊列",
+    "keepHoldingToQueue": "繼續長按以加入隊列",
+    "releaseToQueue": "放開即可加入隊列",
+    "queueingMessage": "正在加入隊列…",
     "sendQueuedMessages": "發送隊列中的消息",
     "nudgeFreshReply": "輕推以獲取新回覆",
     "processingSpeech": "正在處理語音",
@@ -81,12 +86,25 @@
     "modCmd": "Cmd",
     "modCtrl": "Ctrl"
   },
+  "findInChat": {
+    "open": "在聊天中尋找",
+    "placeholder": "在聊天中尋找…",
+    "clear": "清除尋找文字",
+    "previous": "上一個結果",
+    "next": "下一個結果",
+    "close": "關閉尋找",
+    "matchCount": "第 {{current}} 個，共 {{total}} 個",
+    "noMatches": "沒有結果",
+    "loading": "正在尋找…",
+    "searchFailed": "無法搜尋此聊天"
+  },
   "quickMenu": {
     "noGuidedGenerations": "未配置引導生成。",
+    "disableAllGuidedGenerations": "停用全部引導生成",
     "manageInSettings": "在設置中管理",
     "noQuickReplySets": "沒有已啟用的快捷回覆集。",
     "untitledReply": "未命名回覆",
-    "clearOneShotPersona": "清除一次性人設",
+    "clearOneShotPersona": "清除此聊天的人設",
     "noPersonas": "暫無可用人設。",
     "manageChats": "管理聊天",
     "manageConnections": "管理連接",
@@ -159,6 +177,7 @@
     "creatingChatCortex": "正在創建聊天並在後臺準備記憶皮層…",
     "failedCreateChat": "創建聊天失敗",
     "failedStartNewChat": "開始新聊天失敗",
+    "failedDeleteChat": "刪除此聊天失敗",
     "failedOpenChat": "打開聊天失敗",
     "characterImported": "已導入「{{name}}」",
     "importFailed": "導入失敗",
@@ -194,7 +213,8 @@
     "noMemoryRebuildNeeded": "此聊天無需重建記憶。",
     "failedRecompileMemories": "重新編譯記憶失敗",
     "chatDocuments": "聊天文檔",
-    "chatDocumentsNamed": "{{name}} 聊天"
+    "chatDocumentsNamed": "{{name}} 聊天",
+    "failedSaveChatPersona": "無法儲存此聊天的人設"
   },
   "addGroupMember": {
     "title": "添加群組成員",
@@ -362,7 +382,9 @@
     "fork": {
       "title": "分叉聊天",
       "message": "從此消息創建新的聊天分支？將複製此點之前的所有消息。",
-      "confirm": "分叉"
+      "confirm": "分叉",
+      "nameLabel": "聊天名稱（可選）",
+      "namePlaceholder": "留空即可使用自動產生的名稱"
     },
     "delete": {
       "title": "刪除",
@@ -375,5 +397,11 @@
       "message": "這將永久從聊天中移除此消息。",
       "confirm": "刪除"
     }
+  },
+  "newChatConfirm": {
+    "title": "開始新聊天",
+    "message": "確定要開始新聊天嗎？",
+    "confirm": "開始新聊天",
+    "deleteThisChat": "刪除此聊天"
   }
 }

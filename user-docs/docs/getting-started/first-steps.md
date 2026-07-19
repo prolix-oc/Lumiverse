@@ -1,3 +1,7 @@
+---
+title: First Steps
+---
+
 # First Steps
 
 This guide walks you through everything you need to go from a fresh install to your first conversation.
