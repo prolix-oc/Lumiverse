@@ -5,14 +5,14 @@ import { beginActiveLoomPresetSelection } from '@/lib/loom/preset-selection-coor
 
 export function useBoundPresetSelection() {
   const isAuthenticated = useStore((s) => s.isAuthenticated)
-  const settingsLoaded = useStore((s) => s.settingsLoaded)
+  const fullSettingsLoaded = useStore((s) => s.fullSettingsLoaded)
   const activeChatId = useStore((s) => s.activeChatId)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeProfileId = useStore((s) => s.activeProfileId)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
 
   useEffect(() => {
-    if (!isAuthenticated || !settingsLoaded || !activeChatId) return
+    if (!isAuthenticated || !fullSettingsLoaded || !activeChatId) return
 
     let cancelled = false
     const selectionAbort = new AbortController()
@@ -47,5 +47,5 @@ export function useBoundPresetSelection() {
       selection.cancel()
       selectionAbort.abort()
     }
-  }, [activeChatId, activeCharacterId, activeLoomPresetId, activeProfileId, isAuthenticated, settingsLoaded])
+  }, [activeChatId, activeCharacterId, activeLoomPresetId, activeProfileId, isAuthenticated, fullSettingsLoaded])
 }

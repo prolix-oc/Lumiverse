@@ -71,6 +71,7 @@ import type { MacroGroup, PromptBlock, PromptVariableValues } from '@/lib/loom/t
 import {
   cloneLoomOptions,
   cloneLoomValue,
+  HOST_ONLY_BLOCK_FIELDS,
   normalizeMacroCatalog,
   patchLoomOptions,
   type NormalizedLoomOptions,
@@ -1377,7 +1378,17 @@ function LoomBlockEditorBridge({
     const previousValue = valueRef.current
     let cloned: SpindleLoomBlockEditorValue
     try {
-      const normalizedBlocks = normalizeCategoryBlockState(blocks)
+      // Blocks arrive from the host block editor, which emits host-only
+      // fields on every save (placementBinding, and seal metadata when
+      // trusted features are on). The public DTO rejects them by design, so
+      // strip them at the boundary before validating — otherwise every save
+      // fails with "unknown field" and the editor reports validationFailed.
+      const publicBlocks = blocks.map((block) => {
+        const clean = { ...block } as Record<string, unknown>
+        for (const key of HOST_ONLY_BLOCK_FIELDS) delete clean[key]
+        return clean as unknown as PromptBlock
+      })
+      const normalizedBlocks = normalizeCategoryBlockState(publicBlocks)
       cloned = cloneLoomValue({
         blocks: normalizedBlocks,
         promptVariableValues: reconcilePromptVariableValues(

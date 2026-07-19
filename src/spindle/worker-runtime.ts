@@ -89,6 +89,7 @@ import type {
 } from "../services/media.service";
 import { initializeSandbox } from "./worker-runtime-sandbox";
 import { deserializeWorkerResponseError } from "./worker-response-error";
+import { deriveCharacterOverlay } from "../utils/color-engine";
 import {
   assertValidSharedRpcEndpoint,
   normalizeOwnedSharedRpcEndpoint,
@@ -534,6 +535,15 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
   /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
   dlc: {
     getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
+  };
+  theme: SpindleAPI["theme"] & {
+    deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any>;
   };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
   contracts: Readonly<Record<string, number>>;
@@ -1925,6 +1935,17 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "color_extract", requestId, imageId, userId });
       return result;
+    },
+    async deriveOverlay(palette: {
+      palette: Array<{ r: number; g: number; b: number }>;
+      ui: {
+        dark: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+        light: { surface: { r: number; g: number; b: number }; text: { r: number; g: number; b: number }; mutedText: { r: number; g: number; b: number }; accent: { r: number; g: number; b: number }; accentText: { r: number; g: number; b: number } };
+      };
+    }): Promise<any> {
+      // Pure computation: derive the character-aware overlay locally without a
+      // host round-trip. This keeps palette → overlay fast for extensions.
+      return deriveCharacterOverlay(palette.palette, palette.ui);
     },
     async generateVariables(config: {
       accent: { h: number; s: number; l: number };

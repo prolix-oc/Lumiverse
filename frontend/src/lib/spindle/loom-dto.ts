@@ -27,6 +27,23 @@ type LoomGraphClone = {
 
 type UnknownRecord = Record<string, unknown>
 
+/**
+ * Block fields owned by the host app that the public Loom DTO deliberately
+ * rejects: prompt-variable placement bindings and LumiHub seal metadata.
+ * Host components (the production block editor) emit them on every save, so
+ * anything crossing the extension boundary must strip them first — the
+ * trusted preset-editor adapter keeps its own copy and merges them back.
+ */
+export const HOST_ONLY_BLOCK_FIELDS = [
+  'placementBinding',
+  'sealed',
+  'sealedKey',
+  'sealedSource',
+  'sealedOriginPresetId',
+  'sealedOriginVersion',
+  'sealedSha256',
+] as const
+
 const LOOM_BLOCK_KEYS: Record<string, true> = {
   id: true,
   name: true,

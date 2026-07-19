@@ -3028,6 +3028,23 @@ function AdvancedSettings() {
               </span>
             </div>
 
+            {/* Injection Strategy */}
+            <div className={styles.field}>
+              <label className={styles.fieldLabel}>{t('advanced.injectionStrategy')}</label>
+              <select
+                className={styles.select}
+                value={cfg.injectionStrategy}
+                onChange={(e) => update({ injectionStrategy: e.target.value as ChatMemorySettings['injectionStrategy'] })}
+              >
+                <option value="macro_only">{t('advanced.injectionStrategyMacroOnly')}</option>
+                <option value="fallback">{t('advanced.injectionStrategyFallback')}</option>
+                <option value="disabled">{t('advanced.injectionStrategyDisabled')}</option>
+              </select>
+              <span className={styles.placeholder} style={{ marginTop: 2, fontSize: 11 }}>
+                {t('advanced.injectionStrategyHint')}
+              </span>
+            </div>
+
             {/* Section: Chunking */}
             <CollapsibleSection title={t('advanced.chunking')} defaultExpanded={false}>
               <div className={styles.memoryGrid}>

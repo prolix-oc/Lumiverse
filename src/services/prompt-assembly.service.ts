@@ -2109,11 +2109,17 @@ export async function assemblePrompt(
       : linkedMemoryText
     : memoryResult.formatted;
 
+  const memoryInjectionStrategy =
+    chatMemSettings?.injectionStrategy ??
+    embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS.injectionStrategy;
+  const effectiveMemoryEnabled =
+    memoryResult.enabled && memoryInjectionStrategy !== "disabled";
+
   macroEnv.extra.memory = {
     chunks: memoryResult.chunks,
     formatted: combinedFormatted,
     count: memoryResult.count,
-    enabled: memoryResult.enabled,
+    enabled: effectiveMemoryEnabled,
     settings: chatMemSettings ?? embeddingsSvc.DEFAULT_CHAT_MEMORY_SETTINGS,
   };
   profiler.addPhase("memory-retrieval", performance.now() - phaseStartedAt);
@@ -2405,8 +2411,13 @@ export async function assemblePrompt(
     // ---- Handle by marker type ----
 
     if (block.marker === "chat_history") {
-      // Inject memories as system message ONLY if no macro handles them
-      if (!macroHandlesMemory && memoryResult.count > 0) {
+      // Inject memories as system message ONLY if no macro handles them AND
+      // the global injection strategy allows fallback injection.
+      if (
+        !macroHandlesMemory &&
+        memoryResult.count > 0 &&
+        memoryInjectionStrategy === "fallback"
+      ) {
         const memoryContent = memoryResult.formatted;
         result.push({ role: "system", content: memoryContent });
         breakdown.push({
@@ -3415,15 +3426,17 @@ export async function assemblePrompt(
 
   // Build memory stats for dry-run diagnostics
   const memoryStats: MemoryStats = {
-    enabled: memoryResult.enabled,
+    enabled: effectiveMemoryEnabled,
     chunksRetrieved: memoryResult.count,
     chunksAvailable: memoryResult.chunksAvailable,
     chunksPending: memoryResult.chunksPending,
-    injectionMethod: !memoryResult.enabled
+    injectionMethod: !effectiveMemoryEnabled
       ? "disabled"
       : macroHandlesMemory
         ? "macro"
-        : "fallback",
+        : memoryInjectionStrategy === "fallback"
+          ? "fallback"
+          : "disabled",
     retrievedChunks: memoryResult.chunks.map((c) => ({
       score: c.score,
       tokenEstimate: Math.ceil(c.content.length / 4),

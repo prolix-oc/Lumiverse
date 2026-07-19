@@ -15,7 +15,7 @@ import {
   Pencil, Settings2, ChevronRight,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { extractPalette, getSurfaceColor, type ImagePalette, type RGB } from '@/lib/colorExtraction'
+import { extractPalette, type ImagePalette } from '@/lib/colorExtraction'
 import { deriveHeroTextVars } from '@/lib/characterTheme'
 import type { Character } from '@/types/api'
 import PanelFadeIn from '@/components/shared/PanelFadeIn'
@@ -47,10 +47,6 @@ function getCachedPalette(src: string): Promise<ImagePalette> {
     throw err
   })
   return rememberCacheEntry(heroPaletteCache, src, promise)
-}
-
-function surfaceKey(surface: RGB | null): string {
-  return surface ? `${surface.r},${surface.g},${surface.b}` : 'none'
 }
 
 function renderProfileMarkdown(text: string): string {
@@ -181,19 +177,12 @@ function SingleCharacterProfile({
     let cancelled = false
 
     const sampleHeroImage = async () => {
-      const surface = await new Promise<RGB | null>((resolve) => {
-        requestAnimationFrame(() => {
-          if (cancelled) {
-            resolve(null)
-            return
-          }
-          resolve(heroMetaRef.current ? getSurfaceColor(heroMetaRef.current) : null)
-        })
-      })
-
-      if (cancelled) return
-
-      const varsCacheKey = `${heroSampleUrl}|${surfaceKey(surface)}`
+      // The hero text sits directly on the hero image, not on the page
+      // background. The palette's bottom/center region already models that
+      // backing, so we don't blend in the DOM surface (which would pull the
+      // result toward the page background and away from the image's actual
+      // colors).
+      const varsCacheKey = heroSampleUrl
       const cachedVars = heroTextVarsCache.get(varsCacheKey)
       if (cachedVars) {
         setHeroTextVars(cachedVars)
@@ -207,7 +196,7 @@ function SingleCharacterProfile({
         const vars = rememberCacheEntry(
           heroTextVarsCache,
           varsCacheKey,
-          deriveHeroTextVars(palette, surface ?? undefined) as CSSProperties,
+          deriveHeroTextVars(palette) as CSSProperties,
         )
         setHeroTextVars(vars)
       } catch {

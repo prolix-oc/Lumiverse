@@ -1164,6 +1164,7 @@ export interface ChatMemorySettings {
   splitOnTimeGapMinutes: number
   maxMessagesPerChunk: number
   quickMode: 'conservative' | 'balanced' | 'aggressive' | null
+  injectionStrategy: 'fallback' | 'macro_only' | 'disabled'
 }
 
 export interface WorldInfoSettings {

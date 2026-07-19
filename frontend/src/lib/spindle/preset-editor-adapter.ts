@@ -7,7 +7,7 @@ import type {
 import type { Preset } from '@/types/api'
 import type { LoomPreset, PromptBlock, PromptVariableDef } from '@/lib/loom/types'
 import { marshalUpdate, unmarshalPreset } from '@/lib/loom/service'
-import { cloneLoomValue, cloneUnvalidatedLoomGraph, LOOM_DTO_LIMITS } from './loom-dto'
+import { cloneLoomValue, cloneUnvalidatedLoomGraph, HOST_ONLY_BLOCK_FIELDS, LOOM_DTO_LIMITS } from './loom-dto'
 import type { SpindlePresetEditorDraft } from './preset-editor-types'
 
 type DataProperty = { present: true; value: unknown } | { present: false; value?: undefined }
@@ -46,15 +46,7 @@ const PUBLIC_VARIABLE_KEYS = [
 
 const PUBLIC_OPTION_KEYS = ['id', 'label', 'value'] as const
 
-const HOST_BLOCK_FIELDS = [
-  'placementBinding',
-  'sealed',
-  'sealedKey',
-  'sealedSource',
-  'sealedOriginPresetId',
-  'sealedOriginVersion',
-  'sealedSha256',
-] as const
+const HOST_BLOCK_FIELDS = HOST_ONLY_BLOCK_FIELDS
 
 const DRAFT_KEYS = [
   'id',

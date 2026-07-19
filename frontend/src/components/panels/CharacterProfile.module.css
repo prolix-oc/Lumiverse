@@ -157,19 +157,24 @@
   /* Fallbacks before JS applies — derived from the theme's own text color */
   --hero-contrast-shifted: var(--lumiverse-text);
   --hero-contrast-muted-shifted: var(--lumiverse-text-muted);
+  --hero-contrast-name-shifted: var(--lumiverse-text);
   --hero-text-scrim: rgba(0, 0, 0, 0.28);
+  --hero-ambient: var(--hero-ambient-dark, none);
 }
 
 :global([data-theme-mode='dark']) .heroMeta {
   --hero-contrast-shifted: var(--hero-contrast-dark, var(--lumiverse-text));
   --hero-contrast-muted-shifted: var(--hero-contrast-muted-dark, var(--lumiverse-text-muted));
+  --hero-contrast-name-shifted: var(--hero-contrast-name-dark, var(--hero-contrast-shifted));
   --hero-text-scrim: var(--hero-text-scrim-dark, rgba(0, 0, 0, 0.28));
 }
 
 :global([data-theme-mode='light']) .heroMeta {
   --hero-contrast-shifted: var(--hero-contrast-light, var(--lumiverse-text));
   --hero-contrast-muted-shifted: var(--hero-contrast-muted-light, var(--lumiverse-text-muted));
+  --hero-contrast-name-shifted: var(--hero-contrast-name-light, var(--hero-contrast-shifted));
   --hero-text-scrim: var(--hero-text-scrim-light, rgba(255, 255, 255, 0.35));
+  --hero-ambient: var(--hero-ambient-light, none);
 }
 
 .avatarFallback {
@@ -189,7 +194,9 @@
   font-size: calc(22px * var(--lumiverse-font-scale, 1));
   font-weight: 700;
   text-align: center;
-  color: var(--hero-contrast-shifted);
+  /* The name sits highest in the hero overlay, over the least-faded image —
+   * it gets its own band-specific contrast color. */
+  color: var(--hero-contrast-name-shifted);
 }
 
 .creator {

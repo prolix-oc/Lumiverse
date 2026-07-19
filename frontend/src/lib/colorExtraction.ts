@@ -18,6 +18,62 @@ export interface ReadableColorScheme {
   accentText: RGB
 }
 
+export interface ColorSwatch {
+  color: RGB
+  population: number
+  hsl: { h: number; s: number; l: number }
+}
+
+export interface ColorSwatches {
+  vibrant: ColorSwatch | null
+  muted: ColorSwatch | null
+  darkVibrant: ColorSwatch | null
+  lightVibrant: ColorSwatch | null
+  darkMuted: ColorSwatch | null
+  lightMuted: ColorSwatch | null
+}
+
+export interface AmbientGradient {
+  dark: RGB
+  light: RGB
+}
+
+export interface CharacterColorOverlay {
+  accent: { h: number; s: number; l: number }
+  baseColors: {
+    primary: string
+    secondary: string
+    background: string
+    text: string
+  }
+  baseColorsLight: {
+    primary: string
+    secondary: string
+    background: string
+    text: string
+  }
+}
+
+export interface RegionExtremes {
+  darkest: RGB
+  lightest: RGB
+}
+
+export interface TextZoneCluster {
+  /** Mean raw image color of the cluster (pre-composite). */
+  color: RGB
+  /** Fraction of the band this cluster represents (0–1, run-length deduped). */
+  weight: number
+  /** Mean row of the cluster as a fraction of image height (0–1). */
+  meanY: number
+  /** Hero mask opacity at meanY — how much of the image actually shows. */
+  alpha: number
+}
+
+export interface TextZoneBand {
+  clusters: TextZoneCluster[]
+}
+
 export interface ImagePalette {
   dominant: RGB
   regions: {
@@ -40,6 +96,10 @@ export interface ImagePalette {
   average: RGB
   isLight: boolean
   palette: RGB[]
+  /** New fields added in the palette engine overhaul. Older cached palettes
+   *  may not have these, so consumers should treat them as optional. */
+  swatches?: ColorSwatches
+  ambient?: AmbientGradient
   diversity: {
     score: number
     isUniform: boolean
@@ -49,9 +109,32 @@ export interface ImagePalette {
     dark: ReadableColorScheme
     light: ReadableColorScheme
   }
+  overlay?: CharacterColorOverlay
+  /** Per-region darkest/lightest averages (e.g. bottom.darkest is the average
+   *  of the darkest 20% of pixels in the bottom region). Lets consumers pick
+   *  text colors that are guaranteed to contrast with the worst-case part of
+   *  the region where the text will render. */
+  regionExtremes?: {
+    top: RegionExtremes
+    center: RegionExtremes
+    bottom: RegionExtremes
+    left: RegionExtremes
+    right: RegionExtremes
+  }
+  /** Color clusters sampled from the hero text overlay's actual footprint
+   *  (horizontally centered, lower third of the image), split into a `name`
+   *  band and a `meta` band. Weights are run-length deduped so long smooth
+   *  gradients don't outvote small distinct features, and each cluster
+   *  carries the hero mask's alpha at its mean row so consumers can
+   *  composite it with the page surface. */
+  textZone?: {
+    name: TextZoneBand
+    meta: TextZoneBand
+  }
 }
 
 const DEFAULT_FALLBACK_HUE = 263
+const MIN_SEED_CHROMA = 5
 const MIN_UI_CONTRAST = 3
 const MIN_TEXT_CONTRAST = 4.5
 const DARK_SURFACE_MIN_LUM = 24
@@ -555,6 +638,150 @@ function dominantFromData(data: Uint8ClampedArray): DominantResult {
 const HUE_BINS = 12
 const LUM_BINS = 5
 
+// ── K-means palette extraction in CIELAB ──
+
+interface LabPixel { lab: LabColor; rgb: RGB; weight: number }
+
+function kMeansPalette(pixels: LabPixel[], k: number, maxIterations = 12): LabColor[] {
+  if (pixels.length === 0) return []
+  if (k > pixels.length) k = pixels.length
+  if (k <= 0) return []
+
+  const quantStep = 24
+  const buckets = new Map<string, { lab: LabColor; weight: number }>()
+  for (const p of pixels) {
+    const key = `${Math.round(p.lab.L / quantStep)}-${Math.round(p.lab.a / quantStep)}-${Math.round(p.lab.b / quantStep)}`
+    const existing = buckets.get(key)
+    if (existing) {
+      existing.weight += p.weight
+    } else {
+      buckets.set(key, { lab: p.lab, weight: p.weight })
+    }
+  }
+  const sorted = Array.from(buckets.values()).sort((a, b) => b.weight - a.weight)
+  const centroids: LabColor[] = sorted.slice(0, k).map((b) => ({ ...b.lab }))
+
+  if (centroids.length === 0) {
+    return pixels.slice(0, k).map((p) => ({ ...p.lab }))
+  }
+
+  while (centroids.length < k) {
+    const source = centroids[centroids.length % sorted.length] ?? pixels[0].lab
+    centroids.push({ L: source.L, a: source.a + 5, b: source.b })
+  }
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    const sums: LabColor[] = centroids.map(() => ({ L: 0, a: 0, b: 0 }))
+    const counts = new Array(centroids.length).fill(0)
+
+    for (const p of pixels) {
+      let bestIdx = 0
+      let bestDist = Infinity
+      for (let i = 0; i < centroids.length; i++) {
+        const d = deltaE(p.lab, centroids[i])
+        if (d < bestDist) {
+          bestDist = d
+          bestIdx = i
+        }
+      }
+      sums[bestIdx].L += p.lab.L * p.weight
+      sums[bestIdx].a += p.lab.a * p.weight
+      sums[bestIdx].b += p.lab.b * p.weight
+      counts[bestIdx] += p.weight
+    }
+
+    let moved = false
+    for (let i = 0; i < centroids.length; i++) {
+      if (counts[i] === 0) continue
+      const next = {
+        L: sums[i].L / counts[i],
+        a: sums[i].a / counts[i],
+        b: sums[i].b / counts[i],
+      }
+      if (deltaE(next, centroids[i]) > 0.5) moved = true
+      centroids[i] = next
+    }
+
+    if (!moved) break
+  }
+
+  return centroids
+}
+
+function buildKMeansPalette(
+  data: Uint8ClampedArray,
+  desiredCount: number,
+): { palette: RGB[]; populations: number[] } {
+  const pixels: LabPixel[] = []
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 48) continue
+    const rgb: RGB = { r: data[i], g: data[i + 1], b: data[i + 2] }
+    pixels.push({ lab: rgbToLab(rgb), rgb, weight: 1 })
+  }
+
+  if (pixels.length === 0) return { palette: [], populations: [] }
+
+  const centroids = kMeansPalette(pixels, Math.max(desiredCount + 2, 8))
+  const populations = new Array(centroids.length).fill(0)
+  for (const p of pixels) {
+    let bestIdx = 0
+    let bestDist = Infinity
+    for (let i = 0; i < centroids.length; i++) {
+      const d = deltaE(p.lab, centroids[i])
+      if (d < bestDist) {
+        bestDist = d
+        bestIdx = i
+      }
+    }
+    populations[bestIdx]++
+  }
+
+  const colors = centroids.map((lab) => labToRgb(lab))
+  const indexed = colors.map((color, i) => ({ color, population: populations[i] }))
+  indexed.sort((a, b) => b.population - a.population)
+
+  return {
+    palette: indexed.map((x) => x.color),
+    populations: indexed.map((x) => x.population),
+  }
+}
+
+// ── Swatch classification (Android Palette-style) ──
+
+function classifySwatches(palette: RGB[], populations: number[]): ColorSwatches {
+  const swatches = palette.map((color, i) => ({
+    color,
+    population: populations[i] ?? 0,
+    hsl: rgbToHsl(color.r, color.g, color.b),
+  }))
+
+  const vibrant = swatches
+    .filter((s) => s.hsl.s >= 30 && s.hsl.l >= 30 && s.hsl.l <= 70)
+    .sort((a, b) => b.population * b.hsl.s - a.population * a.hsl.s)[0] ?? null
+
+  const muted = swatches
+    .filter((s) => s.hsl.s >= 10 && s.hsl.s < 40 && s.hsl.l >= 30 && s.hsl.l <= 80)
+    .sort((a, b) => b.population - a.population)[0] ?? null
+
+  const darkVibrant = swatches
+    .filter((s) => s.hsl.s >= 30 && s.hsl.l < 40)
+    .sort((a, b) => b.population * b.hsl.s - a.population * a.hsl.s)[0] ?? null
+
+  const lightVibrant = swatches
+    .filter((s) => s.hsl.s >= 30 && s.hsl.l > 60)
+    .sort((a, b) => b.population * b.hsl.s - a.population * a.hsl.s)[0] ?? null
+
+  const darkMuted = swatches
+    .filter((s) => s.hsl.s < 40 && s.hsl.l < 40)
+    .sort((a, b) => b.population - a.population)[0] ?? null
+
+  const lightMuted = swatches
+    .filter((s) => s.hsl.s < 40 && s.hsl.l > 70)
+    .sort((a, b) => b.population - a.population)[0] ?? null
+
+  return { vibrant, muted, darkVibrant, lightVibrant, darkMuted, lightMuted }
+}
+
 function selectDistinctColors(candidates: CandidateColor[], desiredCount: number, diversityScore: number): RGB[] {
   if (candidates.length === 0) return []
 
@@ -647,11 +874,61 @@ function selectDistinctColors(candidates: CandidateColor[], desiredCount: number
 }
 
 function pickFallbackHue(dominant: RGB, average: RGB): number {
-  const dominantHsl = rgbToHsl(dominant.r, dominant.g, dominant.b)
-  if (dominantHsl.s >= 16) return dominantHsl.h
-  const averageHsl = rgbToHsl(average.r, average.g, average.b)
-  if (averageHsl.s >= 12) return averageHsl.h
-  return DEFAULT_FALLBACK_HUE
+  const candidates = [
+    { color: dominant, weight: 1.0 },
+    { color: average, weight: 0.7 },
+  ]
+
+  let bestHue = DEFAULT_FALLBACK_HUE
+  let bestScore = -1
+
+  for (const { color, weight } of candidates) {
+    const lab = rgbToLab(color)
+    const chroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b)
+    const hsl = rgbToHsl(color.r, color.g, color.b)
+    const lPenalty =
+      hsl.l < 10 ? 0.1 :
+      hsl.l > 88 ? 0.2 :
+      hsl.l < 22 || hsl.l > 78 ? 0.6 : 1
+    const score = chroma * lPenalty * weight
+    if (score > bestScore) {
+      bestScore = score
+      bestHue = hsl.h
+    }
+  }
+
+  return bestHue
+}
+
+function pickSeedHue(palette: RGB[], dominant: RGB, average: RGB): number {
+  const vibrant = dedupeColors([...palette])
+    .map((c) => ({ color: c, hsl: rgbToHsl(c.r, c.g, c.b) }))
+    .filter((c) => c.hsl.s >= 26 && c.hsl.l >= 18 && c.hsl.l <= 82)
+    .sort((a, b) => b.hsl.s - a.hsl.s)[0]
+  if (vibrant) return vibrant.hsl.h
+
+  const chromatic = dedupeColors([dominant, average, ...palette])
+    .map((c) => ({ color: c, lab: rgbToLab(c), hsl: rgbToHsl(c.r, c.g, c.b) }))
+    .filter((c) => c.hsl.l >= 8 && c.hsl.l <= 92)
+    .sort((a, b) => {
+      const ca = Math.sqrt(a.lab.a * a.lab.a + a.lab.b * a.lab.b)
+      const cb = Math.sqrt(b.lab.a * b.lab.a + b.lab.b * b.lab.b)
+      return cb - ca
+    })[0]
+  if (chromatic && Math.sqrt(chromatic.lab.a ** 2 + chromatic.lab.b ** 2) >= MIN_SEED_CHROMA) {
+    return chromatic.hsl.h
+  }
+
+  return pickFallbackHue(dominant, average)
+}
+
+function deriveSurfaceFromSeed(seedHue: number, mode: 'dark' | 'light'): RGB {
+  const sat = mode === 'dark' ? 10 : 6
+  const light = mode === 'dark' ? 13 : 94
+  const rgb = hslToRgb(seedHue, sat, light)
+  return mode === 'dark'
+    ? constrainLuminance(rgb, DARK_SURFACE_MIN_LUM, DARK_SURFACE_MAX_LUM)
+    : constrainLuminance(rgb, LIGHT_SURFACE_MIN_LUM, LIGHT_SURFACE_MAX_LUM)
 }
 
 function buildFallbackPalette(dominant: RGB, average: RGB): RGB[] {
@@ -714,54 +991,26 @@ function dedupeColors(colors: RGB[]): RGB[] {
   return unique
 }
 
-function scoreSurfaceColor(color: RGB, mode: 'dark' | 'light'): number {
-  const lum = luminance(color.r, color.g, color.b)
-  const hsl = rgbToHsl(color.r, color.g, color.b)
-  const targetLum = mode === 'dark' ? 34 : 228
-  const lumRange = mode === 'dark' ? 138 : 108
-  const lumScore = 1 - clamp(Math.abs(lum - targetLum) / lumRange, 0, 1)
-  const satPenalty = mode === 'dark'
-    ? clamp(1 - Math.max(0, hsl.s - 34) / 92, 0.48, 1)
-    : clamp(1 - Math.max(0, hsl.s - 28) / 96, 0.54, 1)
-  const extremePenalty = mode === 'dark'
-    ? lum > 132 ? 0.08 : lum > 96 ? 0.34 : lum < 8 ? 0.82 : 1
-    : lum < 92 ? 0.08 : lum < 136 ? 0.36 : lum > 248 ? 0.88 : 1
-  return lumScore * satPenalty * extremePenalty
-}
-
-function pickSurfaceBase(colors: RGB[], average: RGB, mode: 'dark' | 'light'): RGB {
-  const candidates = dedupeColors([average, ...colors])
-  let best = candidates[0] ?? average
-  let bestScore = -1
-
-  for (const candidate of candidates) {
-    const score = scoreSurfaceColor(candidate, mode)
-    if (score > bestScore) {
-      best = candidate
-      bestScore = score
-    }
-  }
-
-  return mixColors(best, average, mode === 'dark' ? 0.08 : 0.12)
-}
-
-function pickAccentBase(colors: RGB[], surface: RGB): RGB {
+function pickAccentBase(colors: RGB[], surface: RGB, seedHue: number): RGB {
   const candidates = dedupeColors(colors)
   let best = candidates[0] ?? surface
   let bestScore = -1
 
   const surfaceLab = rgbToLab(surface)
-  const surfaceHsl = rgbToHsl(surface.r, surface.g, surface.b)
 
   for (const candidate of candidates) {
     const hsl = rgbToHsl(candidate.r, candidate.g, candidate.b)
-    const vibrancy = 0.35 + (hsl.s / 100) * 0.95
-    const rawHueDiff = Math.abs(hsl.h - surfaceHsl.h)
+    const lab = rgbToLab(candidate)
+    const chroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b)
+    const vibrancy = clamp(chroma / 60, 0, 1) * 0.8 + (hsl.s / 100) * 0.6
+
+    const rawHueDiff = Math.abs(hsl.h - seedHue)
     const hueDiff = Math.min(rawHueDiff, 360 - rawHueDiff)
-    const hueSep = hueDiff / 180
-    const separation = clamp(deltaE(rgbToLab(candidate), surfaceLab) / 140, 0, 1)
+    const hueMatch = 1 - clamp(hueDiff / 90, 0, 1)
+    const separation = clamp(deltaE(lab, surfaceLab) / 140, 0, 1)
     const lightPenalty = hsl.l < 10 || hsl.l > 92 ? 0.35 : hsl.l < 18 || hsl.l > 84 ? 0.68 : 1
-    const score = vibrancy * (0.2 + separation * 0.7 + hueSep * 0.55) * lightPenalty
+
+    const score = hueMatch * 2.0 + vibrancy * 1.2 + separation * 0.5 + lightPenalty
     if (score > bestScore) {
       best = candidate
       bestScore = score
@@ -775,17 +1024,11 @@ function deriveReadableScheme(
   surfaceBase: RGB,
   accentBase: RGB,
   mode: 'dark' | 'light',
-  luminanceProfile: LuminanceProfile
+  _luminanceProfile: LuminanceProfile
 ): ReadableColorScheme {
-  const darkMixWeight = luminanceProfile.mostlyTooDark ? 0.78 : 0.66
-  const lightMixWeight = luminanceProfile.mostlyTooLight ? 0.86 : 0.74
-  let surface = mode === 'dark'
-    ? mixColors(surfaceBase, { r: 18, g: 22, b: 30 }, darkMixWeight)
-    : mixColors(surfaceBase, { r: 248, g: 250, b: 252 }, lightMixWeight)
-
-  surface = mode === 'dark'
-    ? constrainLuminance(surface, DARK_SURFACE_MIN_LUM, DARK_SURFACE_MAX_LUM)
-    : constrainLuminance(surface, LIGHT_SURFACE_MIN_LUM, LIGHT_SURFACE_MAX_LUM)
+  const surface = mode === 'dark'
+    ? constrainLuminance(surfaceBase, DARK_SURFACE_MIN_LUM, DARK_SURFACE_MAX_LUM)
+    : constrainLuminance(surfaceBase, LIGHT_SURFACE_MIN_LUM, LIGHT_SURFACE_MAX_LUM)
 
   const accent = tuneAccentForSurface(accentBase, surface, mode)
   let accentText = pickReadableTextColor(accent, surface, MIN_TEXT_CONTRAST)
@@ -805,21 +1048,360 @@ function deriveUiSchemes(
   luminanceProfile: LuminanceProfile = { mostlyTooDark: false, mostlyTooLight: false }
 ): { dark: ReadableColorScheme; light: ReadableColorScheme } {
   const colors = dedupeColors([dominant, average, ...palette])
-  const darkSurfaceBase = pickSurfaceBase(colors, average, 'dark')
-  const lightSurfaceBase = pickSurfaceBase(colors, average, 'light')
-  const darkAccentBase = pickAccentBase(colors, darkSurfaceBase)
-  const lightAccentBase = pickAccentBase(colors, lightSurfaceBase)
+  const seedHue = pickSeedHue(palette, dominant, average)
+
+  const darkSurfaceBase = deriveSurfaceFromSeed(seedHue, 'dark')
+  const lightSurfaceBase = deriveSurfaceFromSeed(seedHue, 'light')
+
+  const vibrant = colors
+    .map((c) => ({ color: c, hsl: rgbToHsl(c.r, c.g, c.b) }))
+    .filter((c) => c.hsl.s >= 26 && c.hsl.l >= 18 && c.hsl.l <= 82)
+    .sort((a, b) => b.hsl.s - a.hsl.s)[0]
+
+  const darkAccentBase = vibrant
+    ? tuneAccentForSurface(vibrant.color, darkSurfaceBase, 'dark')
+    : pickAccentBase(colors, darkSurfaceBase, seedHue)
+  const lightAccentBase = vibrant
+    ? tuneAccentForSurface(vibrant.color, lightSurfaceBase, 'light')
+    : pickAccentBase(colors, lightSurfaceBase, seedHue)
+
   return {
     dark: deriveReadableScheme(darkSurfaceBase, darkAccentBase, 'dark', luminanceProfile),
     light: deriveReadableScheme(lightSurfaceBase, lightAccentBase, 'light', luminanceProfile),
   }
 }
 
+// ── Ambient gradient colors (Apple Music / YouTube Ambient Mode style) ──
+
+function deriveAmbientGradient(
+  palette: RGB[],
+  dominant: RGB,
+  average: RGB,
+  swatches: ColorSwatches
+): AmbientGradient {
+  const seed = swatches.vibrant?.color ?? swatches.muted?.color ?? dominant
+
+  const darkBase = rgbToLab(seed)
+  const dark = labToRgb({
+    L: clamp(darkBase.L * 0.55, 12, 28),
+    a: darkBase.a * 0.85,
+    b: darkBase.b * 0.85,
+  })
+
+  const lightBase = rgbToLab(seed)
+  const light = labToRgb({
+    L: clamp(lightBase.L * 1.25 + 18, 220, 245),
+    a: lightBase.a * 0.35,
+    b: lightBase.b * 0.35,
+  })
+
+  return {
+    dark: mixColors(dark, average, 0.15),
+    light: mixColors(light, average, 0.22),
+  }
+}
+
+// ── Character-aware overlay ──
+
+const REF_DARK_BG: RGB = { r: 10, g: 10, b: 15 }
+const REF_LIGHT_BG: RGB = { r: 250, g: 250, b: 252 }
+const DARK_MODE_MAX_LUM = 215
+const LIGHT_MODE_MIN_LUM = 50
+const MIN_VIBRANT_SAT = 20
+
+function pickMostVibrant(
+  palette: RGB[],
+  dominant: RGB,
+  regions: ImagePalette['regions'],
+  flatness: ImagePalette['flatness'],
+  average: RGB
+): { h: number; s: number; l: number } {
+  const candidates: Array<{ rgb: RGB; flatness: number }> = [
+    { rgb: dominant, flatness: flatness.full },
+    { rgb: regions.top, flatness: flatness.top },
+    { rgb: regions.center, flatness: flatness.center },
+    { rgb: regions.bottom, flatness: flatness.bottom },
+    { rgb: regions.left, flatness: flatness.left },
+    { rgb: regions.right, flatness: flatness.right },
+    { rgb: average, flatness: 0 },
+    ...palette.map((rgb) => ({ rgb, flatness: 0 })),
+  ]
+
+  let best: { h: number; s: number; l: number } | null = null
+  let bestScore = -1
+
+  for (const { rgb, flatness: flat } of candidates) {
+    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b)
+    const lPenalty = hsl.l < 15 ? 0.3 : hsl.l > 85 ? 0.4 : 1
+    const flatPenalty = flat > 0.5 ? Math.max(0.1, 1 - flat) : 1
+    const score = hsl.s * lPenalty * flatPenalty
+    if (score > bestScore) {
+      bestScore = score
+      best = hsl
+    }
+  }
+
+  if (!best || best.s < MIN_VIBRANT_SAT) {
+    const fallback = rgbToHsl(dominant.r, dominant.g, dominant.b)
+    return { h: fallback.h, s: Math.max(fallback.s, 45), l: 55 }
+  }
+
+  return best
+}
+
+export function deriveCharacterNameVarsFromPalette(palette: ImagePalette): { dark: string; light: string } {
+  const hsl = pickMostVibrant(palette.palette, palette.dominant, palette.regions, palette.flatness, palette.average)
+
+  const darkS = clamp(hsl.s + 10, 45, 80)
+  let darkL = clamp(hsl.l, 72, 85)
+
+  const lightS = clamp(hsl.s + 15, 50, 85)
+  let lightL = clamp(hsl.l, 25, 38)
+
+  let darkRgb = ensureContrast(hslToRgb(hsl.h, darkS, darkL), REF_DARK_BG, MIN_TEXT_CONTRAST)
+  darkRgb = constrainLuminance(darkRgb, undefined, DARK_MODE_MAX_LUM)
+  darkL = rgbToHsl(darkRgb.r, darkRgb.g, darkRgb.b).l
+
+  let lightRgb = ensureContrast(hslToRgb(hsl.h, lightS, lightL), REF_LIGHT_BG, MIN_TEXT_CONTRAST)
+  lightRgb = constrainLuminance(lightRgb, LIGHT_MODE_MIN_LUM, undefined)
+  lightL = rgbToHsl(lightRgb.r, lightRgb.g, lightRgb.b).l
+
+  return {
+    dark: `hsl(${hsl.h}, ${darkS}%, ${darkL}%)`,
+    light: `hsl(${hsl.h}, ${lightS}%, ${lightL}%)`,
+  }
+}
+
+function deriveSecondaryTone(seed: RGB, surface: RGB, mode: 'dark' | 'light'): RGB {
+  const hsl = rgbToHsl(seed.r, seed.g, seed.b)
+  let secondary = hslToRgb(
+    hsl.h,
+    clamp(hsl.s, mode === 'dark' ? 20 : 16, mode === 'dark' ? 58 : 48),
+    mode === 'dark' ? clamp(hsl.l, 42, 60) : clamp(hsl.l, 30, 46)
+  )
+
+  secondary = ensureContrast(secondary, surface, MIN_TEXT_CONTRAST)
+  return mode === 'dark'
+    ? constrainLuminance(secondary, undefined, DARK_MODE_MAX_LUM)
+    : constrainLuminance(secondary, LIGHT_MODE_MIN_LUM, undefined)
+}
+
+export function deriveCharacterOverlayFromPalette(palette: ImagePalette): CharacterColorOverlay {
+  const darkAccent = palette.ui.dark.accent
+  const lightAccent = palette.ui.light.accent
+  const primaryHsl = rgbToHsl(darkAccent.r, darkAccent.g, darkAccent.b)
+
+  const secondarySeed = palette.palette[1] ?? palette.palette[0] ?? darkAccent
+  const secondaryDark = deriveSecondaryTone(secondarySeed, palette.ui.dark.surface, 'dark')
+  const secondaryLight = deriveSecondaryTone(secondarySeed, palette.ui.light.surface, 'light')
+
+  return {
+    accent: { h: primaryHsl.h, s: primaryHsl.s, l: primaryHsl.l },
+    baseColors: {
+      primary: rgbToCss(darkAccent),
+      secondary: rgbToCss(secondaryDark),
+      background: rgbToCss(palette.ui.dark.surface),
+      text: rgbToCss(palette.ui.dark.text),
+    },
+    baseColorsLight: {
+      primary: rgbToCss(lightAccent),
+      secondary: rgbToCss(secondaryLight),
+      background: rgbToCss(palette.ui.light.surface),
+      text: rgbToCss(palette.ui.light.text),
+    },
+  }
+}
+
+function rgbToCss(color: RGB): string {
+  return `rgb(${color.r} ${color.g} ${color.b})`
+}
+
 // ── Region sampling ──
 
-const SAMPLE_SIZE = 48
+const SAMPLE_SIZE = 64
 
 interface Region { x: number; y: number; w: number; h: number }
+
+/**
+ * Compute the average of the darkest `percentile` and lightest `percentile`
+ * pixels in a region. This is more robust than the absolute min/max because it
+ * ignores tiny specks and gives a representative extreme color for the region.
+ */
+function regionExtremesFromData(data: Uint8ClampedArray, percentile = 0.2): RegionExtremes {
+  const pixels: { rgb: RGB; lum: number }[] = []
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 48) continue
+    const rgb: RGB = { r: data[i], g: data[i + 1], b: data[i + 2] }
+    const lum = luminance(rgb.r, rgb.g, rgb.b)
+    pixels.push({ rgb, lum })
+  }
+
+  if (pixels.length === 0) {
+    const grey: RGB = { r: 128, g: 128, b: 128 }
+    return { darkest: grey, lightest: grey }
+  }
+
+  pixels.sort((a, b) => a.lum - b.lum)
+  const count = Math.max(1, Math.floor(pixels.length * percentile))
+  const darkest = pixels.slice(0, count)
+  const lightest = pixels.slice(-count)
+
+  const average = (arr: typeof darkest) => ({
+    r: Math.round(arr.reduce((s, p) => s + p.rgb.r, 0) / arr.length),
+    g: Math.round(arr.reduce((s, p) => s + p.rgb.g, 0) / arr.length),
+    b: Math.round(arr.reduce((s, p) => s + p.rgb.b, 0) / arr.length),
+  })
+
+  return { darkest: average(darkest), lightest: average(lightest) }
+}
+
+// ── Hero text-zone sampling ──
+
+/** The hero text overlay (`.heroMeta`) sits over the lower-center of the hero
+ *  image: horizontally centered with page padding, starting at ~70% of image
+ *  height (margin-top: -45% of *width* over a 2:3 image). The name is the
+ *  topmost element; edit button / creator / tags flow below it. */
+const TEXT_ZONE_X0 = 0.10
+const TEXT_ZONE_X1 = 0.90
+const TEXT_ZONE_NAME_Y0 = 0.68
+const TEXT_ZONE_NAME_Y1 = 0.82
+const TEXT_ZONE_META_Y1 = 1.0
+const TEXT_ZONE_LAB_STEP = 10
+const TEXT_ZONE_MIN_WEIGHT = 0.05
+const TEXT_ZONE_MAX_CLUSTERS = 8
+
+/**
+ * Opacity of `.heroImage`'s CSS mask at a given fraction of image height.
+ * Mirrors `mask-image: linear-gradient(to bottom, black 55%, rgba(0,0,0,0.5) 75%, transparent 95%)`.
+ */
+export function heroMaskAlpha(y: number): number {
+  if (y <= 0.55) return 1
+  if (y < 0.75) return 1 - 0.5 * ((y - 0.55) / 0.2)
+  if (y < 0.95) return 0.5 * (1 - (y - 0.75) / 0.2)
+  return 0
+}
+
+function extractTextZoneBand(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  y0Frac: number,
+  y1Frac: number
+): TextZoneBand {
+  const x0 = Math.max(0, Math.floor(TEXT_ZONE_X0 * width))
+  const x1 = Math.min(width, Math.ceil(TEXT_ZONE_X1 * width))
+  const y0 = Math.max(0, Math.floor(y0Frac * height))
+  const y1 = Math.min(height, Math.ceil(y1Frac * height))
+
+  interface Bucket { weight: number; r: number; g: number; b: number; y: number }
+  const buckets = new Map<string, Bucket>()
+
+  for (let y = y0; y < y1; y++) {
+    let runKey: string | null = null
+    let runLen = 0
+    let runR = 0
+    let runG = 0
+    let runB = 0
+
+    const flush = () => {
+      if (runKey === null || runLen === 0) return
+      // A run of consecutive similar pixels is one visual feature — weight it
+      // by sqrt(runLength) so long smooth gradients don't outvote the small
+      // distinct elements (line art, strokes) the text actually overlaps.
+      const w = Math.sqrt(runLen)
+      const invLen = 1 / runLen
+      const bucket = buckets.get(runKey)
+      if (bucket) {
+        bucket.weight += w
+        bucket.r += runR * invLen * w
+        bucket.g += runG * invLen * w
+        bucket.b += runB * invLen * w
+        bucket.y += y * w
+      } else {
+        buckets.set(runKey, {
+          weight: w,
+          r: runR * invLen * w,
+          g: runG * invLen * w,
+          b: runB * invLen * w,
+          y: y * w,
+        })
+      }
+      runKey = null
+      runLen = 0
+      runR = 0
+      runG = 0
+      runB = 0
+    }
+
+    for (let x = x0; x < x1; x++) {
+      const i = (y * width + x) * 4
+      if (data[i + 3] < 48) {
+        flush()
+        continue
+      }
+      const lab = rgbToLab({ r: data[i], g: data[i + 1], b: data[i + 2] })
+      const key = `${Math.round(lab.L / TEXT_ZONE_LAB_STEP)}-${Math.round(lab.a / TEXT_ZONE_LAB_STEP)}-${Math.round(lab.b / TEXT_ZONE_LAB_STEP)}`
+      if (key === runKey) {
+        runLen++
+        runR += data[i]
+        runG += data[i + 1]
+        runB += data[i + 2]
+      } else {
+        flush()
+        runKey = key
+        runLen = 1
+        runR = data[i]
+        runG = data[i + 1]
+        runB = data[i + 2]
+      }
+    }
+    flush()
+  }
+
+  let total = 0
+  buckets.forEach((b) => { total += b.weight })
+  if (total === 0) return { clusters: [] }
+
+  const significant = Array.from(buckets.values())
+    .filter((b) => b.weight / total >= TEXT_ZONE_MIN_WEIGHT)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, TEXT_ZONE_MAX_CLUSTERS)
+
+  let sigTotal = 0
+  significant.forEach((b) => { sigTotal += b.weight })
+
+  return {
+    clusters: significant.map((b) => {
+      const meanY = (b.y / b.weight + 0.5) / height
+      return {
+        color: {
+          r: Math.round(b.r / b.weight),
+          g: Math.round(b.g / b.weight),
+          b: Math.round(b.b / b.weight),
+        },
+        weight: b.weight / sigTotal,
+        meanY,
+        alpha: heroMaskAlpha(meanY),
+      }
+    }),
+  }
+}
+
+/**
+ * Sample the hero text footprint from a raw RGBA buffer into cluster
+ * statistics for the name and meta bands. Pure — works on any RGBA buffer
+ * (canvas `getImageData` in the browser, sharp raw output in tooling).
+ */
+export function extractTextZoneFromData(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number
+): { name: TextZoneBand; meta: TextZoneBand } {
+  return {
+    name: extractTextZoneBand(data, width, height, TEXT_ZONE_NAME_Y0, TEXT_ZONE_NAME_Y1),
+    meta: extractTextZoneBand(data, width, height, TEXT_ZONE_NAME_Y1, TEXT_ZONE_META_Y1),
+  }
+}
 
 function getRegions(w: number, h: number): Record<string, Region> {
   const third_w = Math.floor(w / 3)
@@ -893,6 +1475,26 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
     const grey: RGB = { r: 128, g: 128, b: 128 }
     const flatRegions = { top: 1, center: 1, bottom: 1, left: 1, right: 1, full: 1 }
     const fallbackPalette = buildFallbackPalette(grey, grey)
+    const fallbackUi = deriveUiSchemes(fallbackPalette, grey, grey)
+    const fallbackSwatches = classifySwatches(fallbackPalette, fallbackPalette.map(() => 1))
+    const fallbackAmbient = deriveAmbientGradient(fallbackPalette, grey, grey, fallbackSwatches)
+    const fallbackOverlay = deriveCharacterOverlayFromPalette({
+      dominant: grey,
+      regions: { top: grey, center: grey, bottom: grey, left: grey, right: grey },
+      flatness: flatRegions,
+      average: grey,
+      isLight: false,
+      palette: fallbackPalette,
+      swatches: fallbackSwatches,
+      ambient: fallbackAmbient,
+      diversity: { score: 0, isUniform: true, usedFallback: true },
+      ui: fallbackUi,
+      overlay: { accent: { h: 0, s: 0, l: 0 }, baseColors: { primary: '', secondary: '', background: '', text: '' }, baseColorsLight: { primary: '', secondary: '', background: '', text: '' } },
+    })
+    const fallbackExtremes: RegionExtremes = { darkest: grey, lightest: grey }
+    const fallbackTextZone: TextZoneBand = {
+      clusters: [{ color: grey, weight: 1, meanY: 0.85, alpha: heroMaskAlpha(0.85) }],
+    }
     return {
       dominant: grey,
       regions: { top: grey, center: grey, bottom: grey, left: grey, right: grey },
@@ -900,8 +1502,19 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
       average: grey,
       isLight: false,
       palette: fallbackPalette,
+      swatches: fallbackSwatches,
+      ambient: fallbackAmbient,
       diversity: { score: 0, isUniform: true, usedFallback: true },
-      ui: deriveUiSchemes(fallbackPalette, grey, grey),
+      ui: fallbackUi,
+      overlay: fallbackOverlay,
+      regionExtremes: {
+        top: fallbackExtremes,
+        center: fallbackExtremes,
+        bottom: fallbackExtremes,
+        left: fallbackExtremes,
+        right: fallbackExtremes,
+      },
+      textZone: { name: fallbackTextZone, meta: fallbackTextZone },
     }
   }
 
@@ -919,19 +1532,26 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
   const regions = {} as ImagePalette['regions']
   const flatness = { full: fullAnalysis.dominant.flatness } as ImagePalette['flatness']
   const regionCandidates: CandidateColor[] = []
+  const regionExtremes = {} as NonNullable<ImagePalette['regionExtremes']>
   for (const [name, rect] of Object.entries(regionDefs)) {
     const regionData = ctx.getImageData(rect.x, rect.y, rect.w, rect.h).data
     const result = dominantFromData(regionData)
     ;(regions as any)[name] = result.color
     ;(flatness as any)[name] = result.flatness
+    ;(regionExtremes as any)[name] = regionExtremesFromData(regionData)
     regionCandidates.push({
       color: result.color,
       score: scoreCandidate(result.color, Math.max(1, (rect.w * rect.h) * Math.max(0.35, 1 - result.flatness))),
     })
   }
 
+  const textZone = extractTextZoneFromData(fullData, SAMPLE_SIZE, SAMPLE_SIZE)
+
+  const { palette: kMeansPalette, populations } = buildKMeansPalette(fullData, 6)
+
   const diversePalette = selectDistinctColors(
     [
+      ...kMeansPalette.map((color, i) => ({ color, score: scoreCandidate(color, populations[i] ?? 1) })),
       ...fullAnalysis.candidates,
       ...regionCandidates,
       { color: fullAnalysis.average, score: scoreCandidate(fullAnalysis.average, SAMPLE_SIZE * SAMPLE_SIZE * 0.18) },
@@ -945,6 +1565,21 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
     ? buildFallbackPalette(fullAnalysis.dominant.color, fullAnalysis.average)
     : diversePalette
   const ui = deriveUiSchemes(palette, fullAnalysis.dominant.color, fullAnalysis.average, fullAnalysis.luminanceProfile)
+  const swatches = classifySwatches(palette, isUniform ? palette.map(() => 1) : populations)
+  const ambient = deriveAmbientGradient(palette, fullAnalysis.dominant.color, fullAnalysis.average, swatches)
+  const overlay = deriveCharacterOverlayFromPalette({
+    dominant: fullAnalysis.dominant.color,
+    regions,
+    flatness,
+    average: fullAnalysis.average,
+    isLight: false,
+    palette,
+    swatches,
+    ambient,
+    diversity: { score: 0, isUniform, usedFallback: isUniform },
+    ui,
+    overlay: { accent: { h: 0, s: 0, l: 0 }, baseColors: { primary: '', secondary: '', background: '', text: '' }, baseColorsLight: { primary: '', secondary: '', background: '', text: '' } },
+  })
   const isLight = luminance(fullAnalysis.dominant.color.r, fullAnalysis.dominant.color.g, fullAnalysis.dominant.color.b) > 152
 
   return {
@@ -954,12 +1589,17 @@ export async function extractPalette(src: string): Promise<ImagePalette> {
     average: fullAnalysis.average,
     isLight,
     palette,
+    swatches,
+    ambient,
     diversity: {
       score: Number(fullAnalysis.diversityScore.toFixed(3)),
       isUniform,
       usedFallback: isUniform,
     },
     ui,
+    overlay,
+    regionExtremes,
+    textZone,
   }
 }
 

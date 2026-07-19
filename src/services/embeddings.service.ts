@@ -310,6 +310,9 @@ export interface ChatMemorySettings {
 
   // --- Quick Mode ---
   quickMode: "conservative" | "balanced" | "aggressive" | null; // Default "balanced". null = manual
+
+  // --- Injection Strategy ---
+  injectionStrategy: "fallback" | "macro_only" | "disabled"; // Default "macro_only"
 }
 
 export interface PerChatMemoryOverrides {
@@ -352,6 +355,7 @@ export const DEFAULT_CHAT_MEMORY_SETTINGS: ChatMemorySettings = {
   splitOnTimeGapMinutes: 0,
   maxMessagesPerChunk: 0,
   quickMode: "balanced",
+  injectionStrategy: "macro_only",
 };
 
 const CHAT_MEMORY_SETTINGS_KEY = "chatMemorySettings";
@@ -386,6 +390,9 @@ export function normalizeChatMemorySettings(input: any): ChatMemorySettings {
     quickMode: input?.quickMode === null ? null
       : ["conservative", "balanced", "aggressive"].includes(input?.quickMode) ? input.quickMode
       : d.quickMode,
+    injectionStrategy: ["fallback", "macro_only", "disabled"].includes(input?.injectionStrategy)
+      ? input.injectionStrategy
+      : d.injectionStrategy,
   };
 }
 

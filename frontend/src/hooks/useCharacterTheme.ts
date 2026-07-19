@@ -31,7 +31,7 @@ const paletteCache = new Map<string, ImagePalette>()
 // (~1KB each) makes re-entry instantaneous. Map insertion order doubles as
 // LRU order; bump PALETTE_CACHE_VERSION when ImagePalette's shape changes.
 const PALETTE_CACHE_KEY = '__lumiverse_palette_cache'
-const PALETTE_CACHE_VERSION = 1
+const PALETTE_CACHE_VERSION = 3
 const PALETTE_CACHE_MAX = 60
 
 try {
