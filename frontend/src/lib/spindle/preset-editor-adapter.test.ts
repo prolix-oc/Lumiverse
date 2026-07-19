@@ -26,6 +26,32 @@ describe('preset editor draft adapter', () => {
     expect(Object.hasOwn(draft.blocks[0]!, 'variables')).toBe(false)
   })
 
+  test('projects LumiHub placement bindings out of the public draft and restores them on save', () => {
+    const current = createNewLoomPreset('LumiHub placement binding')
+    const block = current.blocks[0]!
+    block.variables = [{
+      id: 'placement-id',
+      name: 'placement',
+      label: 'Placement',
+      type: 'select',
+      defaultValue: 'history',
+      options: [{ id: 'history', label: 'In history', value: 'history' }],
+    }]
+    block.placementBinding = {
+      variableId: 'placement-id',
+      options: {
+        history: { role: 'assistant', position: 'in_history', depth: 3 },
+      },
+    }
+
+    const draft = toPresetEditorDraft(current)
+
+    expect(Object.hasOwn(draft.blocks[0]!, 'placementBinding')).toBe(false)
+
+    const next = applyPresetEditorDraft(current, draft)
+    expect(next.blocks[0]?.placementBinding).toEqual(block.placementBinding)
+  })
+
   test('accepts published drafts without promptVariables and reconciles current values', () => {
     const current = createNewLoomPreset('Published-shape source')
     const block = current.blocks[0]!
