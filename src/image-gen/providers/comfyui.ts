@@ -47,6 +47,7 @@ export class ComfyUIImageProvider implements ImageProvider {
     apiKeyRequired: false,
     modelListStyle: "dynamic",
     defaultUrl: "http://localhost:8188",
+    websocketPreviewStreaming: { previews: true, status: true },
   }
 
   async generate(

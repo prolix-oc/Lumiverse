@@ -488,7 +488,9 @@ type RuntimeWorkerToHost =
       tabId?: string;
       viewId?: string;
       userId?: string;
-    };
+    }
+  | { type: "image_gen_generate_stream"; requestId: string; input: Record<string, unknown> }
+  | { type: "image_gen_cancel_stream"; requestId: string };
 
 type RuntimeHostToWorker =
   | HostToWorker
@@ -525,13 +527,38 @@ type RuntimeHostToWorker =
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
-  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
+  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string }
+  | { type: "image_gen_stream_chunk"; requestId: string; event: ImageGenStreamEvent }
+  | { type: "image_gen_stream_error"; requestId: string; error: string };
+
+type ImageGenStreamEvent =
+  | {
+      type: "status";
+      step?: number;
+      totalSteps?: number;
+      nodeId?: string;
+    }
+  | {
+      type: "preview";
+      imageDataUrl: string;
+      step?: number;
+      totalSteps?: number;
+      nodeId?: string;
+    }
+  | {
+      type: "done";
+      result: Record<string, unknown>;
+    };
+
+type ImageGenStreamInput = Parameters<SpindleAPI["imageGen"]["generate"]>[0] & {
+  signal?: AbortSignal;
+};
 
 // `presets` is replaced wholesale (not intersected) because the local
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
 // runtime CRUD surface on the native type avoids narrowing data returned by
 // newer hosts when the installed public type package lags a release.
-type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
+type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
   /** Read-only Lumia DLC catalog. Public extension types expose this as `spindle.dlc`. */
   dlc: {
     getCatalog(options?: { userId?: string }): Promise<LumiaDlcCatalog>;
@@ -546,6 +573,14 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets"> & {
     }): Promise<any>;
   };
   assemble(input: AssembleRequest, userId?: string): Promise<AssembleResult>;
+  imageGen: SpindleAPI["imageGen"] & {
+    /**
+     * Generate through a provider that explicitly supports WebSocket preview
+     * images and status updates. The terminal `done` event contains the saved
+     * image result. Breaking out of the iterator aborts the upstream job.
+     */
+    generateStream(input: ImageGenStreamInput): AsyncGenerator<ImageGenStreamEvent, void, void>;
+  };
   contracts: Readonly<Record<string, number>>;
   registerContextHandler(
     handler: (context: unknown) => Promise<unknown>,
@@ -794,6 +829,10 @@ const pendingResponses = new Map<
 const streamingGenerations = new Map<
   string,
   { push: (chunk: StreamChunkDTO) => void; fail: (reason: unknown) => void }
+>();
+const streamingImageGenerations = new Map<
+  string,
+  { push: (event: ImageGenStreamEvent) => void; fail: (reason: unknown) => void }
 >();
 let interceptHandler:
   | ((
@@ -1114,6 +1153,78 @@ function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, voi
       if (!terminated) {
         post({ type: "cancel_generation", requestId });
       }
+    }
+  })();
+}
+
+/**
+ * Start an image generation that exposes its provider WebSocket status and
+ * preview frames. The host rejects providers that did not opt into this
+ * capability, so extensions never receive a misleading partial stream.
+ */
+function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<ImageGenStreamEvent, void, void> {
+  const signal = input?.signal;
+  const { signal: _omit, ...payload } = input ?? {};
+  void _omit;
+
+  if (signal?.aborted) {
+    const err = makeAbortError((signal.reason as any)?.message);
+    return (async function* (): AsyncGenerator<ImageGenStreamEvent, void, void> {
+      throw err;
+    })();
+  }
+
+  const requestId = crypto.randomUUID();
+  type QueueItem =
+    | { kind: "event"; event: ImageGenStreamEvent }
+    | { kind: "error"; error: unknown };
+
+  const queue: QueueItem[] = [];
+  let waiter: ((item: QueueItem) => void) | null = null;
+  let terminated = false;
+
+  const push = (event: ImageGenStreamEvent) => {
+    if (terminated) return;
+    if (event.type === "done") terminated = true;
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve({ kind: "event", event });
+    } else {
+      queue.push({ kind: "event", event });
+    }
+  };
+  const fail = (error: unknown) => {
+    if (terminated) return;
+    terminated = true;
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve({ kind: "error", error });
+    } else {
+      queue.push({ kind: "error", error });
+    }
+  };
+
+  streamingImageGenerations.set(requestId, { push, fail });
+  const onAbort = () => post({ type: "image_gen_cancel_stream", requestId });
+  signal?.addEventListener("abort", onAbort, { once: true });
+  post({ type: "image_gen_generate_stream", requestId, input: payload });
+
+  return (async function* (): AsyncGenerator<ImageGenStreamEvent, void, void> {
+    try {
+      while (true) {
+        const item = queue.length > 0
+          ? queue.shift()!
+          : await new Promise<QueueItem>((resolve) => { waiter = resolve; });
+        if (item.kind === "error") throw item.error;
+        yield item.event;
+        if (item.event.type === "done") return;
+      }
+    } finally {
+      streamingImageGenerations.delete(requestId);
+      signal?.removeEventListener("abort", onAbort);
+      if (!terminated) post({ type: "image_gen_cancel_stream", requestId });
     }
   })();
 }
@@ -1884,6 +1995,9 @@ const spindleApi: RuntimeSpindleAPI = {
     async generate(input: any): Promise<any> {
       const requestId = crypto.randomUUID();
       return request({ type: "image_gen_generate", requestId, input });
+    },
+    generateStream(input: ImageGenStreamInput): AsyncGenerator<ImageGenStreamEvent, void, void> {
+      return requestImageGenStream(input);
     },
     async getProviders(userId?: string): Promise<any[]> {
       const requestId = crypto.randomUUID();
@@ -4037,6 +4151,23 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
         } else {
           stream.fail(new Error(msg.error));
         }
+      }
+      break;
+    }
+
+    case "image_gen_stream_chunk": {
+      streamingImageGenerations.get(msg.requestId)?.push(msg.event);
+      break;
+    }
+
+    case "image_gen_stream_error": {
+      const stream = streamingImageGenerations.get(msg.requestId);
+      if (stream) {
+        stream.fail(
+          msg.error.startsWith("AbortError:")
+            ? makeAbortError(msg.error.slice("AbortError:".length).trim())
+            : new Error(msg.error),
+        );
       }
       break;
     }

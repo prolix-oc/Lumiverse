@@ -2,7 +2,7 @@
 
 !!! warning "Permission required: `image_gen`"
 
-Generate images programmatically via the user's configured image gen connection profiles. Supports listing providers, connections, available models, and firing image generations.
+Generate images programmatically via the user's configured image gen connection profiles. Supports listing providers, connections, available models, ordinary request/response generations, and WebSocket-backed preview streams where the provider supports them.
 
 ## `spindle.imageGen.generate(input)`
 
@@ -46,6 +46,122 @@ const result = await spindle.imageGen.generate({
   },
 })
 ```
+
+## `spindle.imageGen.generateStream(input)`
+
+Generate an image while receiving live WebSocket status updates and preview frames. This API is available only for connection providers that advertise `websocketPreviewStreaming`; currently, that includes **SwarmUI** and **ComfyUI**.
+
+Unlike [`generate()`](#spindleimagegengenerateinput), this returns an async iterator. It yields a terminal `done` event rather than returning the final image directly.
+
+```ts
+let latestPreview: string | undefined
+
+const stream = spindle.imageGen.generateStream({
+  connection_id: 'my-swarmui-connection',
+  prompt: 'An art-deco observatory under a meteor shower',
+  parameters: { steps: 30 },
+})
+
+for await (const event of stream) {
+  switch (event.type) {
+    case 'status':
+      // SwarmUI reports percentage-derived progress; ComfyUI may report
+      // execution nodes instead of numerical steps.
+      spindle.log.info(
+        `Progress: ${event.step ?? '?'} / ${event.totalSteps ?? '?'} ` +
+        `(node: ${event.nodeId ?? 'n/a'})`,
+      )
+      break
+
+    case 'preview':
+      // A data URL such as data:image/png;base64,...
+      // Forward it to your frontend or replace the previous preview in memory.
+      latestPreview = event.imageDataUrl
+      spindle.sendToFrontend({ type: 'image-preview', imageDataUrl: latestPreview })
+      break
+
+    case 'done':
+      // Same shape as the result from spindle.imageGen.generate().
+      spindle.log.info(`Saved generated image: ${event.result.imageId ?? 'not persisted'}`)
+      break
+  }
+}
+```
+
+For an operator-scoped extension, pass the relevant `userId` as the second argument to `sendToFrontend()` so preview frames are not broadcast to every connected user. See [Backend-to-Frontend Communication](frontend-communication.md) for the scoping rules.
+
+`preview` events also include `step`, `totalSteps`, and `nodeId` when those values were supplied with the frame. When a provider sends a preview and status in the same update, the iterator yields a `status` event followed by its `preview` event.
+
+### Choosing the streamed or regular API
+
+Inspect the connection's provider before starting a job. If it does not support preview streaming, use `generate()` as the fallback rather than attempting to create a stream.
+
+```ts
+const connection = await spindle.imageGen.getConnection('image-connection-id')
+if (!connection) throw new Error('Image connection not found')
+
+const providers = await spindle.imageGen.getProviders()
+const provider = providers.find((item) => item.id === connection.provider)
+
+if (provider?.capabilities.websocketPreviewStreaming) {
+  for await (const event of spindle.imageGen.generateStream({
+    connection_id: connection.id,
+    prompt: 'A soft watercolor map of a floating city',
+  })) {
+    if (event.type === 'preview') {
+      spindle.sendToFrontend({ type: 'image-preview', imageDataUrl: event.imageDataUrl })
+    }
+  }
+} else {
+  const result = await spindle.imageGen.generate({
+    connection_id: connection.id,
+    prompt: 'A soft watercolor map of a floating city',
+  })
+  spindle.sendToFrontend({ type: 'image-complete', imageDataUrl: result.imageDataUrl })
+}
+```
+
+### Cancelling a stream
+
+Pass an `AbortSignal` to cancel the upstream generation, including the provider WebSocket. Breaking out of a `for await` loop also requests cancellation automatically.
+
+```ts
+const controller = new AbortController()
+const stream = spindle.imageGen.generateStream({
+  prompt: 'A neon-lit forest path',
+  signal: controller.signal,
+})
+
+setTimeout(() => controller.abort(), 10_000)
+
+try {
+  for await (const event of stream) {
+    if (event.type === 'preview') {
+      spindle.sendToFrontend({ type: 'image-preview', imageDataUrl: event.imageDataUrl })
+    }
+  }
+} catch (err) {
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    spindle.log.info('Image generation cancelled')
+  } else {
+    throw err
+  }
+}
+```
+
+!!! tip "Keep preview handling lightweight"
+
+    Preview frames are base64 data URLs and can be large. Keep only the latest frame, forward it promptly to the frontend, and do not persist every intermediate frame to extension storage.
+
+### Stream event types
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `status` | `step?`, `totalSteps?`, `nodeId?` | A provider progress or workflow-node update. Some providers omit numerical progress. |
+| `preview` | `imageDataUrl`, `step?`, `totalSteps?`, `nodeId?` | A preview image data URL, with status metadata when available. |
+| `done` | `result: ImageGenResultDTO` | The completed, persisted final image result. |
+
+`generateStream()` requires the same `image_gen` permission and accepts all fields from `ImageGenRequestDTO`, plus an optional `signal: AbortSignal`.
 
 ### ImageGenRequestDTO
 
@@ -147,6 +263,7 @@ for (const provider of providers) {
 | `modelListStyle` | `"static" \| "dynamic" \| "google"` | How models are listed: baked-in, live API fetch, or Google model filtering. |
 | `staticModels` | `Array<{ id, label }>` | Baked-in model list (always present for `static` providers). |
 | `defaultUrl` | `string` | Default API endpoint. |
+| `websocketPreviewStreaming` | `{ previews: true, status: true }` | Present when `generateStream()` can receive WebSocket previews and status from this provider. |
 
 ### ImageGenParameterSchemaDTO
 

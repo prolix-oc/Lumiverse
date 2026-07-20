@@ -321,6 +321,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     apiKeyRequired: false,
     modelListStyle: "dynamic",
     defaultUrl: "http://localhost:7801",
+    websocketPreviewStreaming: { previews: true, status: true },
   }
 
   // ── Session management ────────────────────────────────────────────────

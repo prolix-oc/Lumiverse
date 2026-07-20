@@ -29,4 +29,13 @@ export interface ImageProviderCapabilities {
   modelListStyle: "static" | "dynamic" | "google";
   staticModels?: Array<{ id: string; label: string }>;
   defaultUrl: string;
+  /**
+   * The provider can stream both generation status and preview images over a
+   * WebSocket. This opt-in keeps extension streaming limited to providers
+   * whose preview/status protocol is implemented and supported by Lumiverse.
+   */
+  websocketPreviewStreaming?: {
+    previews: true;
+    status: true;
+  };
 }

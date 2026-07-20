@@ -56,17 +56,15 @@ import { resolveInterceptorTimeout } from "../services/spindle-settings.service"
 import { getSidecarSettings } from "../services/sidecar-settings.service";
 import * as promptAssemblySvc from "../services/prompt-assembly.service";
 import * as tokenizerSvc from "../services/tokenizer.service";
-import * as imageGenConnSvc from "../services/image-gen-connections.service";
 import type * as imagesSvc from "../services/images.service";
 import type * as mediaSvc from "../services/media.service";
 import { spawnAsync } from "./spawn-async";
 import { assembleSpindleBlocks, type SpindleAssembleInput } from "./assembly";
-import { getImageProvider, getImageProviderList } from "../image-gen/registry";
-import "../image-gen/index";
 import { WorkerHostStorageApi } from "./worker-host-storage-api";
 import { WorkerHostStateApi } from "./worker-host-state-api";
 import { WorkerHostContentApi } from "./worker-host-content-api";
 import { WorkerHostMemoryApi } from "./worker-host-memory-api";
+import { WorkerHostImageGenApi } from "./worker-host-image-gen-api";
 import { WorkerHostProcessApi } from "./worker-host-process-api";
 import { WorkerHostInteractionApi } from "./worker-host-interaction-api";
 import { WorkerHostPresentationApi } from "./worker-host-presentation-api";
@@ -523,7 +521,9 @@ type RuntimeWorkerToHost =
       tabId?: string;
       viewId?: string;
       userId?: string;
-    };
+    }
+  | { type: "image_gen_generate_stream"; requestId: string; input: Record<string, unknown> }
+  | { type: "image_gen_cancel_stream"; requestId: string };
 
 type RuntimeHostToWorker =
   | HostToWorker
@@ -560,7 +560,16 @@ type RuntimeHostToWorker =
   | { type: "frontend_process_lifecycle"; event: FrontendProcessLifecycleEvent }
   | { type: "frontend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
-  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string };
+  | { type: "backend_process_message"; processId: string; payload: unknown; userId: string }
+  | {
+      type: "image_gen_stream_chunk";
+      requestId: string;
+      event:
+        | { type: "status"; step?: number; totalSteps?: number; nodeId?: string }
+        | { type: "preview"; imageDataUrl: string; step?: number; totalSteps?: number; nodeId?: string }
+        | { type: "done"; result: Record<string, unknown> };
+    }
+  | { type: "image_gen_stream_error"; requestId: string; error: string };
 
 let cachedBackendVersion: string | null = null;
 let cachedFrontendVersion: string | null = null;
@@ -821,6 +830,7 @@ export class WorkerHost {
   private readonly stateApi: WorkerHostStateApi;
   private readonly contentApi: WorkerHostContentApi;
   private readonly memoryApi: WorkerHostMemoryApi;
+  private readonly imageGenApi: WorkerHostImageGenApi;
   private readonly processApi: WorkerHostProcessApi;
   private readonly interactionApi: WorkerHostInteractionApi;
   private readonly presentationApi: WorkerHostPresentationApi;
@@ -863,6 +873,13 @@ export class WorkerHost {
       resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
       enforceScopedUser: (userId) => this.enforceScopedUser(userId),
       postResponse: (message) => this.postToWorker(message),
+    });
+    this.imageGenApi = new WorkerHostImageGenApi({
+      extensionIdentifier: manifest.identifier,
+      hasPermission: (permission) => this.hasPermission(permission),
+      resolveEffectiveUserId: (userId) => this.resolveEffectiveUserId(userId),
+      enforceScopedUser: (userId) => this.enforceScopedUser(userId),
+      post: (message) => this.postToWorker(message as RuntimeHostToWorker),
     });
     this.processApi = new WorkerHostProcessApi({
       extensionId,
@@ -2293,19 +2310,25 @@ export class WorkerHost {
         break;
       // ─── Image Generation (gated: "image_gen") ─────────────────────────
       case "image_gen_generate":
-        this.handleImageGenGenerate(msg.requestId, msg.input);
+        void this.imageGenApi.handleGenerate(msg.requestId, msg.input);
         break;
       case "image_gen_providers":
-        this.handleImageGenProviders(msg.requestId, msg.userId);
+        this.imageGenApi.handleProviders(msg.requestId);
         break;
       case "image_gen_connections_list":
-        this.handleImageGenConnectionsList(msg.requestId, msg.userId);
+        this.imageGenApi.handleConnectionsList(msg.requestId, msg.userId);
         break;
       case "image_gen_connections_get":
-        this.handleImageGenConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
+        this.imageGenApi.handleConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
         break;
       case "image_gen_models":
-        this.handleImageGenModels(msg.requestId, msg.connectionId, msg.userId);
+        void this.imageGenApi.handleModels(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      case "image_gen_generate_stream":
+        void this.imageGenApi.handleGenerateStream(msg.requestId, msg.input);
+        break;
+      case "image_gen_cancel_stream":
+        this.imageGenApi.cancelStream(msg.requestId);
         break;
       // ─── Chat style mode (gated: "app_manipulation") ────────────────────
       case "chat_set_style_mode":
@@ -2929,187 +2952,6 @@ export class WorkerHost {
       });
     } finally {
       this.generationAbortControllers.delete(requestId);
-    }
-  }
-
-  // ─── Image Generation (gated by "image_gen" permission) ────────────
-
-  private async handleImageGenGenerate(requestId: string, input: any): Promise<void> {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(input.userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      // Resolve connection
-      const connectionId = input.connection_id || null;
-      let connection = connectionId
-        ? imageGenConnSvc.getConnection(resolvedUserId, connectionId)
-        : imageGenConnSvc.getDefaultConnection(resolvedUserId);
-      if (!connection) throw new Error(connectionId ? "Image gen connection not found" : "No default image gen connection configured");
-
-      const provider = getImageProvider(connection.provider);
-      if (!provider) throw new Error(`Unknown image gen provider: ${connection.provider}`);
-
-      const { getSecret } = await import("../services/secrets.service");
-      const apiKey = await getSecret(resolvedUserId, imageGenConnSvc.imageGenConnectionSecretKey(connection.id));
-      if (!apiKey && provider.capabilities.apiKeyRequired) {
-        throw new Error(`No API key for image gen connection "${connection.name}"`);
-      }
-
-      // Merge connection defaults with request parameters
-      const mergedParams = { ...connection.default_parameters, ...(input.parameters || {}) };
-
-      const response = await provider.generate(apiKey || "", connection.api_url || "", {
-        prompt: input.prompt || "",
-        negativePrompt: input.negativePrompt,
-        model: input.model || connection.model,
-        parameters: mergedParams,
-      });
-
-      // Persist image to the images table
-      let imageId: string | undefined;
-      let imageUrl: string | undefined;
-      if (response.imageDataUrl) {
-        try {
-          const { saveImageFromDataUrl } = await import("../services/images.service");
-          const image = await saveImageFromDataUrl(
-            resolvedUserId,
-            response.imageDataUrl,
-            `image-gen-${connection.provider}-${Date.now()}.png`,
-            {
-              owner_extension_identifier: this.manifest.identifier,
-              owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
-                ? input.owner_character_id.trim()
-                : undefined,
-              owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
-                ? input.owner_chat_id.trim()
-                : undefined,
-            }
-          );
-          imageId = image.id;
-          imageUrl = `/api/v1/image-gen/results/${image.id}`;
-        } catch {
-          // Persistence failure is non-fatal
-        }
-      }
-
-      this.postToWorker({
-        type: "response",
-        requestId,
-        result: { ...response, imageId, imageUrl },
-      });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenProviders(requestId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    try {
-      const providers = getImageProviderList().map((p) => ({
-        id: p.name,
-        name: p.displayName,
-        capabilities: p.capabilities,
-      }));
-      this.postToWorker({ type: "response", requestId, result: providers });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenConnectionsList(requestId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const result = imageGenConnSvc.listConnections(resolvedUserId, { limit: 100, offset: 0 });
-      this.postToWorker({ type: "response", requestId, result: result.data });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private handleImageGenConnectionsGet(requestId: string, connectionId: string, userId?: string): void {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const conn = imageGenConnSvc.getConnection(resolvedUserId, connectionId);
-      this.postToWorker({ type: "response", requestId, result: conn });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
-    }
-  }
-
-  private async handleImageGenModels(requestId: string, connectionId: string, userId?: string): Promise<void> {
-    if (!this.hasPermission("image_gen")) {
-      this.postToWorker({
-        type: "response",
-        requestId,
-        error: `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
-      });
-      return;
-    }
-
-    const resolvedUserId = this.resolveEffectiveUserId(userId);
-    if (!resolvedUserId) {
-      this.postToWorker({ type: "response", requestId, error: "userId is required for operator-scoped extensions" });
-      return;
-    }
-    this.enforceScopedUser(resolvedUserId);
-
-    try {
-      const result = await imageGenConnSvc.listConnectionModels(resolvedUserId, connectionId);
-      if (result.error) throw new Error(result.error);
-      this.postToWorker({ type: "response", requestId, result: result.models });
-    } catch (err: any) {
-      this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
 
