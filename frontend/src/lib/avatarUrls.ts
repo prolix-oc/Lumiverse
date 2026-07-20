@@ -19,6 +19,9 @@ export interface PersonaAvatarContext {
   version?: string | null
 }
 
+/** Which source image the chat-aware persona resolver should return. */
+export type PersonaAvatarVariant = 'crop' | 'original'
+
 function asImageId(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
@@ -96,7 +99,11 @@ export function getPersonaAvatarUrlById(
   context?: PersonaAvatarContext,
 ) {
   if (personaId && context?.chatId) {
-    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version })
+    return personasApi.avatarUrl(personaId, {
+      chatId: context.chatId,
+      variant: 'original',
+      version: context.version,
+    })
   }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl)
 }
@@ -130,7 +137,12 @@ export function getPersonaAvatarThumbUrlById(
   context?: PersonaAvatarContext,
 ) {
   if (personaId && context?.chatId) {
-    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'sm' })
+    return personasApi.avatarUrl(personaId, {
+      chatId: context.chatId,
+      size: 'sm',
+      variant: 'crop',
+      version: context.version,
+    })
   }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl, 'sm')
 }
@@ -164,7 +176,12 @@ export function getPersonaAvatarLargeUrlById(
   context?: PersonaAvatarContext,
 ) {
   if (personaId && context?.chatId) {
-    return personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'lg' })
+    return personasApi.avatarUrl(personaId, {
+      chatId: context.chatId,
+      size: 'lg',
+      variant: 'crop',
+      version: context.version,
+    })
   }
   return resolveAvatarUrl(personaId, imageId, personasApi.avatarUrl, 'lg')
 }
@@ -210,12 +227,13 @@ export function getPersonaAvatarTiers(
   personaId?: string | null,
   imageId?: string | null,
   context?: PersonaAvatarContext,
+  variant: PersonaAvatarVariant = 'crop',
 ): AvatarTierUrls {
   if (personaId && context?.chatId) {
     return {
-      sm: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'sm' }),
-      lg: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version, size: 'lg' }),
-      full: personasApi.avatarUrl(personaId, { chatId: context.chatId, version: context.version }),
+      sm: personasApi.avatarUrl(personaId, { chatId: context.chatId, size: 'sm', variant, version: context.version }),
+      lg: personasApi.avatarUrl(personaId, { chatId: context.chatId, size: 'lg', variant, version: context.version }),
+      full: personasApi.avatarUrl(personaId, { chatId: context.chatId, variant, version: context.version }),
     }
   }
   return buildTierUrls(personaId, imageId, personasApi.avatarUrl)

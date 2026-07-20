@@ -256,13 +256,13 @@ export function useMessageCard(message: Message, chatId: string) {
   const usesChatAvatar = !!activeChatAvatarId && effectiveCharId === activeCharacterId
 
   const croppedAvatarTiers: AvatarTierUrls = isUser
-    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext)
+    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext, 'crop')
     : usesChatAvatar
       ? getImageTiers(activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterAvatarCropImageId ?? effectiveCharacter?.image_id ?? null)
 
   const originalAvatarTiers: AvatarTierUrls = isUser
-    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext)
+    ? getPersonaAvatarTiers(personaAvatarId, null, personaAvatarContext, 'original')
     : usesChatAvatar
       ? getImageTiers(activeAltAvatar?.original_image_id || activeChatAvatarId)
       : getCharacterAvatarTiers(effectiveCharId, characterOriginalImageId)

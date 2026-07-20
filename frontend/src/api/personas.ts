@@ -87,12 +87,15 @@ export const personasApi = {
   avatarUrl(id: string, options?: {
     chatId?: string | null
     size?: 'sm' | 'lg'
+    /** Prefer either the square avatar crop or the original upload. */
+    variant?: 'crop' | 'original'
     /** Changes whenever a chat add-on toggle changes the resolved avatar. */
     version?: string | null
   }) {
     const params = new URLSearchParams()
     if (options?.chatId) params.set('chat_id', options.chatId)
     if (options?.size) params.set('size', options.size)
+    if (options?.variant) params.set('variant', options.variant)
     if (options?.version) params.set('v', options.version)
     const query = params.toString()
     return `${BASE_URL}/personas/${id}/avatar${query ? `?${query}` : ''}`

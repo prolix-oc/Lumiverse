@@ -178,8 +178,15 @@ app.get("/:id/avatar", async (c) => {
 
   const sizeParam = c.req.query("size") as images.ThumbTier | undefined;
   const tier = sizeParam === "sm" || sizeParam === "lg" ? sizeParam : undefined;
+  // Avatar slots want the square crop, while lightboxes and themes that opt
+  // into full-size artwork need the original upload. Keep crop-first as the
+  // default so existing avatar URLs retain their current framing.
+  const variant = c.req.query("variant") === "original" ? "original" : "crop";
+  const imageIds = variant === "original"
+    ? [info.image_id, info.avatar_crop_image_id]
+    : [info.avatar_crop_image_id, info.image_id];
 
-  for (const imageId of [info.avatar_crop_image_id, info.image_id]) {
+  for (const imageId of imageIds) {
     if (!imageId) continue;
     const filepath = await images.getImageFilePath(userId, imageId, tier);
     if (filepath) {
