@@ -2,10 +2,12 @@ import type {
   SpindleManifest,
   SpindleFrontendContext,
   SpindleFrontendModule,
+  SpindleHostLocale,
   PermissionRequestOptions,
   SpindleMountPoint,
   SpindleTabLocation as TabLocation,
 } from 'lumiverse-spindle-types'
+import { SPINDLE_HOST_CAPABILITIES } from 'lumiverse-spindle-types'
 import type { MacroCatalogResponse } from '@/api/macros'
 import type { SpindleCharacterEditorUI } from './character-editor-types'
 import type { SpindlePresetEditorUI } from './preset-editor-types'
@@ -61,6 +63,7 @@ import { wsClient } from '@/ws/client'
 import { spindleApi } from '@/api/spindle'
 import { charactersApi } from '@/api/characters'
 import { messagesApi } from '@/api/chats'
+import i18n from 'i18next'
 import { useStore } from '@/store'
 import { yieldToBrowser } from './browser-scheduler'
 import {
@@ -73,6 +76,21 @@ import {
   clearLiveRootsForExtension,
   registerLiveRoot,
 } from './live-root-registry'
+
+declare const __APP_VERSION__: string
+
+/** `__APP_VERSION__` is defined by Vite; the fallback keeps isolated tests portable. */
+const LUMIVERSE_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0'
+
+function getHostLocale(): SpindleHostLocale {
+  const language = i18n.resolvedLanguage ?? i18n.language
+  if (language === 'zh-TW' || language.toLowerCase().startsWith('zh-tw')) return 'zh-TW'
+  if (language.startsWith('zh')) return 'zh'
+  if (language.startsWith('ja')) return 'ja'
+  if (language.startsWith('fr')) return 'fr'
+  if (language.startsWith('it')) return 'it'
+  return 'en'
+}
 
 function isMacroCatalogResponse(value: unknown): value is MacroCatalogResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !('categories' in value) || !Array.isArray(value.categories)) {
@@ -933,7 +951,44 @@ async function doLoadFrontendExtension(
       clearExtensionMountPoints(extensionId)
     }
 
+    const host = Object.freeze({
+      descriptorVersion: 1 as const,
+      lumiverseVersion: LUMIVERSE_VERSION,
+      capabilities: SPINDLE_HOST_CAPABILITIES,
+      extensionInstallationId: extensionId,
+    })
+    const locale = {
+      get(): SpindleHostLocale {
+        assertFrontendActive()
+        return getHostLocale()
+      },
+      subscribe(listener: (nextLocale: SpindleHostLocale) => void): () => void {
+        assertFrontendActive()
+        let active = true
+        const notify = () => {
+          if (!active) return
+          try {
+            listener(getHostLocale())
+          } catch (error) {
+            console.error(`[Spindle:${manifest.identifier}] Locale listener error:`, error)
+          }
+        }
+        i18n.on('languageChanged', notify)
+        const unsubscribe = () => {
+          if (!active) return
+          active = false
+          i18n.off('languageChanged', notify)
+          const index = eventUnsubs.indexOf(unsubscribe)
+          if (index !== -1) eventUnsubs.splice(index, 1)
+        }
+        eventUnsubs.push(unsubscribe)
+        return unsubscribe
+      },
+    }
+
     const context: FrontendExtensionContext = {
+      host,
+      locale,
       dom,
       ready() {
         assertFrontendActive()
