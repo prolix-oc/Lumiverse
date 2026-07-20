@@ -85,3 +85,8 @@ scripts/push-staging.sh
 src/macros/macros.test.ts
 vendor/
 scripts/build-lancedb-android.sh
+
+# Desktop tray app build artifacts (desktop/)
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

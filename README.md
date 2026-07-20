@@ -241,6 +241,14 @@ Most operational controls now live in the owner-only `Settings -> Operator Panel
 
 If you start Lumiverse with `--no-runner`, `-NoRunner`, `bun run start`, or `bun run dev`, the Operator Panel still loads but runner-backed controls will be unavailable.
 
+### Desktop tray app
+
+Prefer not to keep a terminal open? [`desktop/`](desktop/) contains an
+optional macOS menu bar / Windows system tray companion (Tauri v2) that
+starts and stops the server, opens the web dashboard, shows serving stats,
+and applies updates via the same runner machinery. See
+[desktop/README.md](desktop/README.md) for build instructions.
+
 ## Configuration
 
 Configuration is managed through `.env` (see `.env.example` for all options). Sensitive credentials are stored securely in the `data/` directory — no plaintext passwords in `.env`:
