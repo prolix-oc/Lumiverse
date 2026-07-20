@@ -28,6 +28,7 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  renameSync,
   statfsSync,
   statSync,
   unlinkSync,
@@ -427,6 +428,7 @@ interface CentralDirEntry {
   name: string;
   flags: number;
   compression: number;        // 0 = store, 8 = deflate
+  crc32: number;
   compressedSize: number;
   uncompressedSize: number;
   localHeaderOffset: number;
@@ -517,6 +519,7 @@ async function* scanCentralDirectory(
 
       const flags = view.getUint16(8, true);
       const compression = view.getUint16(10, true);
+      const crc32 = view.getUint32(16, true);
       let compressedSize = view.getUint32(20, true);
       let uncompressedSize = view.getUint32(24, true);
       const nameLen = view.getUint16(28, true);
@@ -572,7 +575,15 @@ async function* scanCentralDirectory(
       }
 
       entriesRead++;
-      yield { name, flags, compression, compressedSize, uncompressedSize, localHeaderOffset };
+      yield {
+        name,
+        flags,
+        compression,
+        crc32,
+        compressedSize,
+        uncompressedSize,
+        localHeaderOffset,
+      };
       pos += recordSize;
     }
 
@@ -951,6 +962,156 @@ function writeAllSync(fd: number, chunk: Uint8Array): void {
   }
 }
 
+// ZIP uses the IEEE CRC-32 polynomial. Keep the running state inverted so
+// chunks can be fed to it without allocating one concatenated entry buffer.
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < table.length; n++) {
+    let value = n;
+    for (let bit = 0; bit < 8; bit++) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[n] = value >>> 0;
+  }
+  return table;
+})();
+
+function updateCrc32(state: number, bytes: Uint8Array): number {
+  let next = state;
+  for (const byte of bytes) {
+    next = (CRC32_TABLE[(next ^ byte) & 0xff] ^ (next >>> 8)) >>> 0;
+  }
+  return next;
+}
+
+function finishCrc32(state: number): number {
+  return (state ^ 0xffffffff) >>> 0;
+}
+
+const NDJSON_NEWLINE = new Uint8Array([0x0a]);
+
+/**
+ * Repair a narrow, known failure mode in pre-ZIP64 exports.
+ *
+ * The old fflate async writer occasionally duplicated portions of an NDJSON
+ * stream while retaining the size and CRC of the intended stream. Every
+ * affected Lumiverse table is ID-keyed, so retaining the first raw line for
+ * each ID recreates the original byte stream. We only accept the repair when
+ * it reproduces both pieces of ZIP metadata exactly; malformed or unrelated
+ * archives continue through the normal validation failure.
+ */
+async function recoverLegacyDuplicatedNdjson(
+  stagingPath: string,
+  expectedSize: number,
+  expectedCrc32: number,
+  signal: AbortSignal,
+): Promise<number | null> {
+  const repairedPath = `${stagingPath}.recovered`;
+  const readBuffer = new Uint8Array(ARCHIVE_READ_BYTES);
+  const decoder = new TextDecoder();
+  const seenIds = new Set<string>();
+  const fragments: Uint8Array[] = [];
+  let lineBytes = 0;
+  let retainedBytes = 0;
+  let crcState = 0xffffffff;
+  let inputFd: number | null = null;
+  let outputFd: number | null = null;
+  let repaired = false;
+
+  const appendFragment = (fragment: Uint8Array): boolean => {
+    if (fragment.byteLength === 0) return true;
+    if (lineBytes + fragment.byteLength > LEGACY_MAX_NDJSON_LINE_BYTES) return false;
+    // The read buffer is reused, so retain a bounded copy for this line.
+    fragments.push(fragment.slice());
+    lineBytes += fragment.byteLength;
+    return true;
+  };
+
+  const consumeLine = (): boolean => {
+    if (lineBytes === 0) return false;
+    const line = new Uint8Array(lineBytes);
+    let offset = 0;
+    for (const fragment of fragments) {
+      line.set(fragment, offset);
+      offset += fragment.byteLength;
+    }
+    fragments.length = 0;
+    lineBytes = 0;
+
+    let id: unknown;
+    try {
+      id = JSON.parse(decoder.decode(line))?.id;
+    } catch {
+      return false;
+    }
+    if (typeof id !== "string" || id.length === 0) return false;
+    if (seenIds.has(id)) return true;
+    seenIds.add(id);
+    writeAllSync(outputFd!, line);
+    writeAllSync(outputFd!, NDJSON_NEWLINE);
+    crcState = updateCrc32(crcState, line);
+    crcState = updateCrc32(crcState, NDJSON_NEWLINE);
+    retainedBytes += line.byteLength + NDJSON_NEWLINE.byteLength;
+    return true;
+  };
+
+  try {
+    try {
+      unlinkSync(repairedPath);
+    } catch {
+      /* no leftover repair file */
+    }
+    inputFd = openSync(stagingPath, "r");
+    outputFd = openSync(repairedPath, "w");
+    let position = 0;
+    let bytesSinceYield = 0;
+
+    while (true) {
+      if (signal.aborted) throw signal.reason ?? new Error("import cancelled");
+      const read = readSync(inputFd, readBuffer, 0, readBuffer.byteLength, position);
+      if (read <= 0) break;
+      position += read;
+      bytesSinceYield += read;
+
+      let start = 0;
+      for (let i = 0; i < read; i++) {
+        if (readBuffer[i] !== 0x0a) continue;
+        if (!appendFragment(readBuffer.subarray(start, i)) || !consumeLine()) return null;
+        start = i + 1;
+      }
+      if (!appendFragment(readBuffer.subarray(start, read))) return null;
+
+      if (bytesSinceYield >= 4 * 1024 * 1024) {
+        bytesSinceYield = 0;
+        await yieldAndCheck(signal);
+      }
+    }
+
+    // Lumiverse's exporter writes a newline after every NDJSON object. A
+    // trailing partial line is not eligible for the compatibility repair.
+    if (lineBytes !== 0) return null;
+    if (retainedBytes !== expectedSize || finishCrc32(crcState) !== expectedCrc32) return null;
+
+    closeSync(outputFd);
+    outputFd = null;
+    closeSync(inputFd);
+    inputFd = null;
+    renameSync(repairedPath, stagingPath);
+    repaired = true;
+    return retainedBytes;
+  } finally {
+    if (outputFd !== null) closeSync(outputFd);
+    if (inputFd !== null) closeSync(inputFd);
+    if (!repaired) {
+      try {
+        unlinkSync(repairedPath);
+      } catch {
+        /* no repair artifact to remove */
+      }
+    }
+  }
+}
+
 function readExactSync(fd: number, position: number, length: number): Uint8Array {
   const out = new Uint8Array(length);
   let offset = 0;
@@ -1127,6 +1288,12 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
     stagingDir,
   };
 
+  // The legacy recovery path below is intentionally limited to archives
+  // emitted before the fixed-window format marker existed. Reading this
+  // small manifest here also gives direct callers of startImport the same
+  // validation the HTTP upload route performs.
+  const verifiedManifest = await verifyArchiveFast(job.archivePath);
+  const canRecoverLegacyAsyncNdjson = verifiedManifest.ndjsonFormatVersion === undefined;
   const archive = Bun.file(job.archivePath);
   const { size: archiveSize, cdOffset, cdSize, totalEntries } = await locateCentralDirectory(archive);
   let declaredDecompressedBytes = 0;
@@ -1207,6 +1374,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
 
       const dataStart = getLocalDataOffset(archiveFd, archiveSize, centralEntry);
       const stagingFd = openSync(stagingPath, "w");
+      let crcState = 0xffffffff;
       try {
         const onChunk = (chunk: Uint8Array) => {
           if (buf.totalDecompressed + chunk.byteLength > MAX_DECOMPRESSED_BYTES) {
@@ -1216,6 +1384,7 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
             throw new Error(`${centralEntry.name} exceeds ${textLimit} bytes`);
           }
           writeAllSync(stagingFd, chunk);
+          crcState = updateCrc32(crcState, chunk);
           entry.byteSize += chunk.byteLength;
           buf.totalDecompressed += chunk.byteLength;
         };
@@ -1240,11 +1409,44 @@ async function extractArchive(job: ImportJob): Promise<ImportBuffer> {
         closeSync(stagingFd);
       }
 
-      if (entry.byteSize !== centralEntry.uncompressedSize) {
-        throw new ArchiveValidationError(
-          "not_zip",
-          `entry size disagrees with central directory (${centralEntry.name})`,
-        );
+      const actualByteSize = entry.byteSize;
+      const actualCrc32 = finishCrc32(crcState);
+      if (
+        actualByteSize !== centralEntry.uncompressedSize ||
+        actualCrc32 !== centralEntry.crc32
+      ) {
+        let repairedSize: number | null = null;
+        if (
+          canRecoverLegacyAsyncNdjson &&
+          (descriptor.kind === "database" || descriptor.kind === "lancedb")
+        ) {
+          repairedSize = await recoverLegacyDuplicatedNdjson(
+            stagingPath,
+            centralEntry.uncompressedSize,
+            centralEntry.crc32,
+            job.abort.signal,
+          );
+        }
+        if (repairedSize !== null) {
+          // The duplicate bytes were counted against the extraction cap as
+          // they were streamed. Replace that accounting with the verified
+          // original entry size before continuing.
+          buf.totalDecompressed -= actualByteSize - repairedSize;
+          entry.byteSize = repairedSize;
+          console.warn(
+            `[user-data import] recovered duplicated legacy NDJSON entry: ${centralEntry.name}`,
+          );
+        } else if (actualByteSize !== centralEntry.uncompressedSize) {
+          throw new ArchiveValidationError(
+            "not_zip",
+            `entry size disagrees with central directory (${centralEntry.name}; declared ${centralEntry.uncompressedSize}, extracted ${actualByteSize})`,
+          );
+        } else {
+          throw new ArchiveValidationError(
+            "not_zip",
+            `entry CRC32 disagrees with central directory (${centralEntry.name})`,
+          );
+        }
       }
       if (entry.kind === "binary") {
         writeAllSync(journalFd, encoder.encode(`${JSON.stringify(entry)}\n`));

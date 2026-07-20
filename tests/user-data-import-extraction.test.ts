@@ -64,6 +64,41 @@ async function streamToBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8A
   return bytes;
 }
 
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) === 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** Patch only the central-directory metadata, as the old async writer did. */
+function patchCentralDirectoryEntry(
+  archive: Uint8Array,
+  name: string,
+  expectedBytes: Uint8Array,
+): void {
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+  const decoder = new TextDecoder();
+  for (let offset = 0; offset + 46 <= archive.byteLength; offset++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) continue;
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const recordLength = 46 + nameLength + extraLength + commentLength;
+    if (offset + recordLength > archive.byteLength) continue;
+    const entryName = decoder.decode(archive.subarray(offset + 46, offset + 46 + nameLength));
+    if (entryName !== name) continue;
+    view.setUint32(offset + 16, crc32(expectedBytes), true);
+    view.setUint32(offset + 24, expectedBytes.byteLength, true);
+    return;
+  }
+  throw new Error(`central-directory entry not found: ${name}`);
+}
+
 describe("user-data import bounded extraction", () => {
   let workDir: string;
   let originalDataDir: string;
@@ -124,6 +159,92 @@ describe("user-data import bounded extraction", () => {
     const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
     const finished = await waitForTerminal(job.jobId);
     expect(finished.status).toBe("complete");
+  });
+
+  test("recovers a duplicated legacy NDJSON entry when its original ZIP metadata matches", async () => {
+    const archivePath = join(workDir, "legacy-duplicated-ndjson.lvbak");
+    const worldBookId = "11111111-1111-1111-1111-111111111111";
+    const entryDefaults = {
+      world_book_id: worldBookId,
+      key: "[]",
+      keysecondary: "[]",
+      comment: "",
+      position: 0,
+      depth: 4,
+      order_value: 100,
+      selective: 0,
+      constant: 0,
+      disabled: 0,
+      group_name: "",
+      group_override: 0,
+      group_weight: 100,
+      probability: 100,
+      case_sensitive: 0,
+      match_whole_words: 0,
+      extensions: "{}",
+      created_at: 0,
+      updated_at: 0,
+      use_regex: 0,
+      prevent_recursion: 0,
+      exclude_recursion: 0,
+      delay_until_recursion: 0,
+      priority: 10,
+      sticky: 0,
+      cooldown: 0,
+      delay: 0,
+      selective_logic: 0,
+      use_probability: 1,
+      vectorized: 0,
+      vector_index_status: "not_enabled",
+    };
+    const rows = [
+      {
+        ...entryDefaults,
+        id: "22222222-2222-2222-2222-222222222222",
+        uid: "one",
+        content: "first",
+      },
+      {
+        ...entryDefaults,
+        id: "33333333-3333-3333-3333-333333333333",
+        uid: "two",
+        content: "second",
+      },
+    ];
+    const intended = strToU8(rows.map((row) => `${JSON.stringify(row)}\n`).join(""));
+    const archive = zipSync({
+      "manifest.json": strToU8(JSON.stringify(manifest({ modern: false }))),
+      "database/world_books.ndjson": strToU8(
+        `${JSON.stringify({
+          id: worldBookId,
+          name: "Recovered world book",
+          description: "",
+          metadata: "{}",
+          created_at: 0,
+          updated_at: 0,
+          user_id: "source-user",
+          folder: "",
+        })}\n`,
+      ),
+      // The compressed stream contains the old exporter bug: both rows are
+      // present twice. Its central directory, however, still describes the
+      // intended unique stream below.
+      "database/world_book_entries.ndjson": strToU8(
+        new TextDecoder().decode(intended) + new TextDecoder().decode(intended),
+      ),
+    });
+    patchCentralDirectoryEntry(archive, "database/world_book_entries.ndjson", intended);
+    writeFileSync(archivePath, archive);
+
+    const job = startImport({ userId: USER_ID, archivePath, jobId: crypto.randomUUID() });
+    const finished = await waitForTerminal(job.jobId);
+    expect(finished.status).toBe("complete");
+    expect(
+      getDb().query("SELECT id, content FROM world_book_entries ORDER BY id").all(),
+    ).toEqual([
+      { id: "22222222-2222-2222-2222-222222222222", content: "first" },
+      { id: "33333333-3333-3333-3333-333333333333", content: "second" },
+    ]);
   });
 
   test("allows a ticket-waiting import to be cancelled", async () => {
