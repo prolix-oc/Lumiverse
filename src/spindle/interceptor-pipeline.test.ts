@@ -12,6 +12,8 @@ import {
   type InterceptorResult,
 } from "./interceptor-pipeline";
 import { createInterceptorTerminalLease } from "./lifecycle";
+import { createBoundHostContainmentFatal } from "./bound-generation";
+import { brandHostGenerationId } from "./bound-generation-types";
 
 type NormalizeFixture = Omit<
   NormalizeFinalResponseInput,
@@ -415,6 +417,65 @@ describe("interceptor pipeline final-response folding", () => {
       { role: "system", content: "ordinary output" },
     ]);
     expect(result.finalResponseState).toBeUndefined();
+  });
+});
+
+describe("interceptor pipeline containment fatal boundary", () => {
+  test("releases every prior terminal lease before rethrowing the exact host fatal", async () => {
+    const fatal = createBoundHostContainmentFatal({
+      code: "BOUND_WORKER_CONTAINMENT_FAILED",
+      message: "pipeline host containment fatal",
+      hostGeneration: brandHostGenerationId("pipeline-host-generation"),
+      workerId: "pipeline-worker",
+      requestId: "pipeline-request",
+    });
+    let runSettled = false;
+    const prior = trackedTerminalLease("pipeline-prior-lease", () => runSettled);
+    const disposePrior = interceptorPipeline.register({
+      extensionId: "pipeline-prior-lease",
+      extensionName: "Pipeline prior lease",
+      priority: 1,
+      handler: async (messages) => ({
+        messages,
+        terminalLeases: [prior.lease],
+      }),
+    });
+    const disposeFatal = interceptorPipeline.register({
+      extensionId: "pipeline-fatal",
+      extensionName: "Pipeline fatal",
+      priority: 2,
+      handler: async () => {
+        throw fatal;
+      },
+    });
+
+    try {
+      const run = interceptorPipeline.run(
+        [{ role: "user", content: "pipeline fatal input" }],
+        { chatId: "pipeline-fatal-chat" },
+        "user-pipeline-test",
+      ).then(
+        (result) => {
+          runSettled = true;
+          return { kind: "fulfilled" as const, result };
+        },
+        (error) => {
+          runSettled = true;
+          return { kind: "rejected" as const, error };
+        },
+      );
+      const outcome = await run;
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind !== "rejected") throw new Error("pipeline unexpectedly fulfilled");
+      expect(outcome.error).toBe(fatal);
+      expect(prior.releaseCount).toBe(1);
+      expect(prior.releaseObservedBeforeSettlement).toBe(true);
+      expect(prior.lease.isActive()).toBe(false);
+    } finally {
+      disposeFatal();
+      disposePrior();
+      prior.lease.release();
+    }
   });
 });
 

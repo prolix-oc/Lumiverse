@@ -61,6 +61,7 @@ import {
 import {
   runBoundAssembly,
   runBoundQuietTracked,
+  createBoundHostContainmentFatal,
   createParentPrefillAttestation,
   mintParentPrefillChildUse,
   type ParentPrefillChildUse,
@@ -70,7 +71,10 @@ import {
   type HostBoundGenerationCallbacks,
 } from "./bound-generation-host";
 import {
+  BOUND_CONTAINMENT_GRACE_MS,
+  brandHostGenerationId,
   brandInvocationToken,
+  isHostContainmentFatal,
   type BoundInvocationContext,
 } from "./bound-generation-types";
 import { contextHandlerChain } from "./context-handler";
@@ -1031,8 +1035,10 @@ type BoundOperationController = {
   readonly invocationRequestId: string;
   readonly controller: AbortController;
   readonly onInvocationAbort: () => void;
+  teardownRequested: boolean;
 };
 
+const BOUND_CONTAINMENT_WORKER_ABORT_REASON = "Bound interceptor invocation aborted";
 type HostInterceptorInvocation = {
   readonly requestId: string;
   readonly registrationId: string;
@@ -1055,6 +1061,9 @@ type HostInterceptorInvocation = {
   abortSent: boolean;
   resourcesReleased: boolean;
   terminalLease?: InterceptorTerminalLease;
+  boundContainmentFatal?: unknown;
+  boundContainmentTeardownActive: boolean;
+  boundContainmentGraceTimer?: Timer;
 };
 
 export class WorkerHost {
@@ -1547,7 +1556,7 @@ export class WorkerHost {
       this.releaseInterceptorControllerBridge(bridge, hostUnloadError);
     }
     for (const operationRequestId of [...this.boundOperationControllers.keys()]) {
-      this.releaseBoundOperationController(operationRequestId, true, hostUnloadError);
+      this.releaseBoundOperationController(operationRequestId, true, hostUnloadError, true);
     }
     this.interceptorInvocations.clear();
     this.interceptorControllersBySignal.clear();
@@ -3067,6 +3076,7 @@ export class WorkerHost {
             deliveryAttempted: false,
             abortSent: false,
             resourcesReleased: false,
+            boundContainmentTeardownActive: false,
           };
           // The WeakMap-backed private state remains attached to the prepared
           // context; only the temporary signal bridge is consumed here.
@@ -3162,36 +3172,165 @@ export class WorkerHost {
     operationRequestId: string,
     abort: boolean,
     reason?: unknown,
+    force = false,
   ): void {
     const operation = this.boundOperationControllers.get(operationRequestId);
     if (!operation) return;
     const invocation = this.interceptorInvocations.get(operation.invocationRequestId);
     invocation?.controller.signal.removeEventListener("abort", operation.onInvocationAbort);
-    if (abort && !operation.controller.signal.aborted) {
-      operation.controller.abort(reason);
+    if (abort) {
+      operation.teardownRequested = true;
+      if (!operation.controller.signal.aborted) {
+        operation.controller.abort(reason);
+      }
+    }
+    const retainForTeardown =
+      !force
+      && abort
+      && invocation?.boundContainmentTeardownActive === true;
+    if (retainForTeardown) {
+      this.ensureBoundContainmentGrace(invocation!);
+      return;
     }
     this.boundOperationControllers.delete(operationRequestId);
+    if (invocation) {
+      this.finalizeBoundContainmentTeardown(invocation);
+    }
+  }
+  private abortBoundOperationController(
+    operationRequestId: string,
+    reason?: unknown,
+  ): void {
+    const operation = this.boundOperationControllers.get(operationRequestId);
+    if (!operation || operation.teardownRequested) return;
+    operation.teardownRequested = true;
+    if (!operation.controller.signal.aborted) {
+      operation.controller.abort(reason);
+    }
   }
 
   private releaseBoundOperationsForInvocation(
     invocation: HostInterceptorInvocation,
     reason?: unknown,
+    force = false,
   ): void {
     for (const [operationRequestId, operation] of this.boundOperationControllers) {
       if (operation.invocationRequestId !== invocation.requestId) continue;
-      this.releaseBoundOperationController(operationRequestId, true, reason);
+      this.releaseBoundOperationController(operationRequestId, true, reason, force);
     }
   }
+
+  private hasBoundOperationsForInvocation(invocation: HostInterceptorInvocation): boolean {
+    for (const operation of this.boundOperationControllers.values()) {
+      if (operation.invocationRequestId === invocation.requestId) return true;
+    }
+    return false;
+  }
+
+  private ensureBoundContainmentGrace(invocation: HostInterceptorInvocation): void {
+    if (
+      !invocation.boundContainmentTeardownActive
+      || !this.hasBoundOperationsForInvocation(invocation)
+      || invocation.boundContainmentGraceTimer !== undefined
+    ) {
+      return;
+    }
+    invocation.boundContainmentGraceTimer = setTimeout(
+      () => this.handleBoundContainmentGraceExpiry(invocation.requestId),
+      BOUND_CONTAINMENT_GRACE_MS,
+    );
+  }
+
+  private finalizeBoundContainmentTeardown(invocation: HostInterceptorInvocation): void {
+    if (!invocation.boundContainmentTeardownActive) return;
+    if (this.hasBoundOperationsForInvocation(invocation)) {
+      this.ensureBoundContainmentGrace(invocation);
+      return;
+    }
+    if (invocation.boundContainmentGraceTimer !== undefined) {
+      clearTimeout(invocation.boundContainmentGraceTimer);
+      invocation.boundContainmentGraceTimer = undefined;
+    }
+    if (this.interceptorInvocations.get(invocation.requestId) === invocation) {
+      this.interceptorInvocations.delete(invocation.requestId);
+    }
+  }
+
+  private createBoundContainmentFatal(
+    invocation: HostInterceptorInvocation,
+    message: string,
+  ): unknown {
+    return createBoundHostContainmentFatal({
+      code: "BOUND_WORKER_CONTAINMENT_FAILED",
+      message,
+      hostGeneration: invocation.privateState.parentGenerationSnapshot?.hostGeneration
+        ?? brandHostGenerationId(invocation.runtimeGeneration),
+      workerId: invocation.workerId,
+      requestId: invocation.requestId,
+    });
+  }
+
+  private handleBoundContainmentGraceExpiry(requestId: string): void {
+    const invocation = this.interceptorInvocations.get(requestId);
+    if (!invocation) return;
+    invocation.boundContainmentGraceTimer = undefined;
+    if (!this.hasBoundOperationsForInvocation(invocation)) {
+      this.finalizeBoundContainmentTeardown(invocation);
+      return;
+    }
+    invocation.boundContainmentTeardownActive = true;
+    const fatal = invocation.boundContainmentFatal
+      ?? this.createBoundContainmentFatal(
+        invocation,
+        "Bound worker operations did not settle before the containment grace period expired",
+      );
+    invocation.boundContainmentFatal = fatal;
+    if (!invocation.settled || !invocation.resourcesReleased) {
+      this.rejectInterceptorInvocation(
+        invocation,
+        fatal,
+        true,
+        BOUND_CONTAINMENT_WORKER_ABORT_REASON,
+        true,
+      );
+    }
+    for (const [operationRequestId, operation] of this.boundOperationControllers) {
+      if (operation.invocationRequestId !== invocation.requestId) continue;
+      this.releaseBoundOperationController(
+        operationRequestId,
+        true,
+        BOUND_CONTAINMENT_WORKER_ABORT_REASON,
+        true,
+      );
+    }
+    this.finalizeBoundContainmentTeardown(invocation);
+  }
+
 
   private releaseInterceptorInvocationResources(
     invocation: HostInterceptorInvocation,
     reason?: unknown,
+    retainBoundOperations = false,
   ): void {
-    if (invocation.resourcesReleased) return;
+    if (invocation.resourcesReleased) {
+      if (retainBoundOperations) {
+        invocation.boundContainmentTeardownActive = true;
+        this.releaseBoundOperationsForInvocation(invocation, reason);
+        this.ensureBoundContainmentGrace(invocation);
+      } else if (invocation.boundContainmentTeardownActive) {
+        this.releaseBoundOperationsForInvocation(invocation, reason, true);
+        this.finalizeBoundContainmentTeardown(invocation);
+      }
+      return;
+    }
     invocation.resourcesReleased = true;
     if (invocation.timeout) {
       clearTimeout(invocation.timeout);
       invocation.timeout = undefined;
+    }
+    if (!retainBoundOperations && invocation.boundContainmentGraceTimer !== undefined) {
+      clearTimeout(invocation.boundContainmentGraceTimer);
+      invocation.boundContainmentGraceTimer = undefined;
     }
     if (invocation.bridge?.outerSignal && invocation.bridge.outerAbortHandler) {
       invocation.bridge.outerSignal.removeEventListener(
@@ -3208,11 +3347,20 @@ export class WorkerHost {
         invocation.outerAbortHandler,
       );
     }
-    this.releaseBoundOperationsForInvocation(invocation, reason);
+    if (retainBoundOperations) {
+      invocation.boundContainmentTeardownActive = true;
+    }
+    this.releaseBoundOperationsForInvocation(
+      invocation,
+      reason,
+      !retainBoundOperations,
+    );
     if (!invocation.controller.signal.aborted) {
       invocation.controller.abort(reason);
     }
-    if (this.interceptorInvocations.get(invocation.requestId) === invocation) {
+    if (retainBoundOperations) {
+      this.finalizeBoundContainmentTeardown(invocation);
+    } else if (this.interceptorInvocations.get(invocation.requestId) === invocation) {
       this.interceptorInvocations.delete(invocation.requestId);
     }
   }
@@ -3246,27 +3394,61 @@ export class WorkerHost {
     invocation: HostInterceptorInvocation,
     reason: unknown,
     sendAbort: boolean,
+    workerAbortReason?: unknown,
+    retainBoundOperations = false,
   ): void {
     if (invocation.settled) {
       if (!invocation.resourcesReleased) {
         if (!invocation.controller.signal.aborted) {
           invocation.controller.abort(reason);
         }
-        if (invocation.terminalLease) {
+        if (invocation.terminalLease && !retainBoundOperations) {
           invocation.terminalLease.release();
         } else {
-          this.releaseInterceptorInvocationResources(invocation, reason);
+          this.releaseInterceptorInvocationResources(
+            invocation,
+            reason,
+            retainBoundOperations,
+          );
         }
+      } else if (retainBoundOperations) {
+        invocation.boundContainmentTeardownActive = true;
+        this.releaseBoundOperationsForInvocation(invocation, reason);
+        this.ensureBoundContainmentGrace(invocation);
       }
       return;
     }
     invocation.settled = true;
-    if (sendAbort) this.sendInterceptorAbort(invocation, reason);
+    if (sendAbort) {
+      this.sendInterceptorAbort(invocation, workerAbortReason ?? reason);
+    }
     if (!invocation.controller.signal.aborted) {
       invocation.controller.abort(reason);
     }
     invocation.reject?.(reason);
-    this.releaseInterceptorInvocationResources(invocation, reason);
+    this.releaseInterceptorInvocationResources(
+      invocation,
+      reason,
+      retainBoundOperations,
+    );
+  }
+
+  private handleBoundContainmentFatal(
+    invocation: HostInterceptorInvocation,
+    error: unknown,
+  ): boolean {
+    if (!isHostContainmentFatal(error)) return false;
+    const fatal = invocation.boundContainmentFatal ?? error;
+    invocation.boundContainmentFatal = fatal;
+    invocation.boundContainmentTeardownActive = true;
+    this.rejectInterceptorInvocation(
+      invocation,
+      fatal,
+      true,
+      BOUND_CONTAINMENT_WORKER_ABORT_REASON,
+      true,
+    );
+    return true;
   }
 
   private handleInterceptorOuterAbort(requestId: string, reason?: unknown): void {
@@ -3334,6 +3516,14 @@ export class WorkerHost {
     }
     const registration = this.interceptorRegistrations.get(msg.registrationId);
     if (!registration || registration.generation !== invocation.generation) return;
+    if (this.hasBoundOperationsForInvocation(invocation)) {
+      const fatal = this.createBoundContainmentFatal(
+        invocation,
+        "Bound worker returned an interceptor result before bound operations settled",
+      );
+      this.handleBoundContainmentFatal(invocation, fatal);
+      return;
+    }
     const capturedInterceptorGrantId = managerSvc.getPermissionGrantId(
       this.manifest.identifier,
       "interceptor",
@@ -3464,6 +3654,7 @@ export class WorkerHost {
       invocationRequestId: invocation.requestId,
       controller,
       onInvocationAbort,
+      teardownRequested: false,
     });
     const context: BoundInvocationContext = {
       workerId: envelope.workerId,
@@ -3499,7 +3690,13 @@ export class WorkerHost {
       });
       this.postToWorker({ type: "response", requestId: msg.requestId, result });
     } catch (error) {
-      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+      if (!this.handleBoundContainmentFatal(bound.invocation, error)) {
+        this.postToWorker({
+          type: "response",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       this.releaseBoundOperationController(
         msg.__spindle_private_bound?.operationRequestId ?? "",
@@ -3523,7 +3720,13 @@ export class WorkerHost {
       });
       this.postToWorker({ type: "response", requestId: msg.requestId, result });
     } catch (error) {
-      this.postToWorker({ type: "response", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+      if (!this.handleBoundContainmentFatal(bound.invocation, error)) {
+        this.postToWorker({
+          type: "response",
+          requestId: msg.requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       this.releaseBoundOperationController(
         msg.__spindle_private_bound?.operationRequestId ?? "",
@@ -3552,11 +3755,13 @@ export class WorkerHost {
         const result = await bound.callbacks.inspectDispatch(msg.connectionId);
         this.postToWorker({ type: "response", requestId: msg.requestId, result });
       } catch (error) {
-        this.postToWorker({
-          type: "response",
-          requestId: msg.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (!this.handleBoundContainmentFatal(bound.invocation, error)) {
+          this.postToWorker({
+            type: "response",
+            requestId: msg.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } finally {
         this.releaseBoundOperationController(
           msg.__spindle_private_bound.operationRequestId ?? "",
@@ -3770,9 +3975,8 @@ export class WorkerHost {
       ) {
         return;
       }
-      this.releaseBoundOperationController(
+      this.abortBoundOperationController(
         operationRequestId,
-        true,
         new DOMException("Aborted", "AbortError"),
       );
       return;

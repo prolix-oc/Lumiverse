@@ -3,6 +3,7 @@ import type {
   DeferredGuidanceDTO,
   LlmMessageDTO,
 } from "lumiverse-spindle-types";
+import { isHostContainmentFatal } from "./bound-generation-types";
 import { DEFAULT_INTERCEPTOR_TIMEOUT_MS } from "../services/spindle-settings.service";
 import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
 import type {
@@ -439,6 +440,18 @@ class InterceptorPipeline {
           extensionName: interceptor.extensionName,
         });
       } catch (err) {
+        if (isHostContainmentFatal(err)) {
+          emitSpindlePreGenerationActivity({
+            chatId,
+            userId,
+            phase: "interceptor",
+            status: "aborted",
+            extensionId: interceptor.extensionId,
+            extensionName: interceptor.extensionName,
+          });
+          releaseTerminalLeases();
+          throw err;
+        }
         if (signal?.aborted) {
           emitSpindlePreGenerationActivity({
             chatId,

@@ -6,10 +6,12 @@ import type {
   ExtensionInfo,
   SpindleManifest,
 } from "lumiverse-spindle-types";
-import { interceptorPipeline } from "./interceptor-pipeline";
-import { brandHostGenerationId } from "./bound-generation-types";
+import { interceptorPipeline, type InterceptorResult } from "./interceptor-pipeline";
+import { createBoundHostContainmentFatal } from "./bound-generation";
+import { brandHostGenerationId, isHostContainmentFatal } from "./bound-generation-types";
 import type { ParentGenerationSnapshot } from "./bound-generation-types";
 import type { RuntimeTransport } from "./runtime-transport";
+import * as boundGeneration from "./bound-generation";
 import * as managerSvc from "./manager.service";
 import * as dispatchStateSvc from "../services/dispatch-state.service";
 import { WorkerHost } from "./worker-host";
@@ -82,6 +84,7 @@ type CapturedRuntimeMessage = {
   __spindle_private_bound?: TestBoundEnvelope;
   result?: unknown;
   error?: unknown;
+  reason?: string;
   payload?: unknown;
   userId?: string;
   token?: string;
@@ -94,10 +97,16 @@ type WorkerHostInternals = {
   hasPermission: (permission: string) => boolean;
   handleRegisterInterceptor: (registrationId: string, priority?: number, match?: unknown) => void;
   handleInterceptorResult: (message: unknown) => void;
+  handleBoundAssemble: (message: unknown) => Promise<void>;
+  handleBoundQuietTracked: (message: unknown) => Promise<void>;
+  handleBoundContainmentGraceExpiry: (requestId: string) => void;
   boundInvocation: (
     requestId: string,
     envelope?: TestBoundEnvelope,
   ) => { controller: AbortController } | null;
+  boundOperationControllers: Map<string, unknown>;
+  interceptorInvocations: Map<string, unknown>;
+  interceptorControllersBySignal: Map<AbortSignal, unknown>;
   handleCancelGeneration: (requestId: string, envelope?: TestBoundEnvelope) => void;
   sendFrontendMessage: (payload: unknown, userId: string) => void;
   handleMessage: (message: unknown) => void;
@@ -160,6 +169,312 @@ function makeTestHost(failInterceptRequest = true): {
   internals.handleRegisterInterceptor(TEST_REGISTRATION_ID);
   return { internals, messages };
 }
+
+type BoundInterceptRequest = CapturedRuntimeMessage & {
+  requestId: string;
+  registrationId: string;
+  registrationGeneration: string;
+  workerId: string;
+  hostGeneration: string;
+  __spindle_private_bound: TestBoundEnvelope;
+};
+
+function requireBoundInterceptRequest(
+  messages: readonly CapturedRuntimeMessage[],
+): BoundInterceptRequest {
+  const request = messages.find((message) => message.type === "intercept_request");
+  if (
+    !request?.requestId
+    || !request.registrationId
+    || !request.registrationGeneration
+    || !request.workerId
+    || !request.hostGeneration
+    || !request.__spindle_private_bound
+  ) {
+    throw new Error("bound interceptor request fixture is incomplete");
+  }
+  return request as BoundInterceptRequest;
+}
+
+function makeBoundOperationMessage(
+  request: BoundInterceptRequest,
+  type: "generate_assemble" | "generate_quiet_tracked",
+  operationRequestId: string,
+): Record<string, unknown> {
+  return {
+    type,
+    requestId: operationRequestId,
+    input: {},
+    __spindle_private_bound: {
+      ...request.__spindle_private_bound,
+      operationRequestId,
+    },
+  };
+}
+
+function makeWorkerInterceptResult(
+  request: BoundInterceptRequest,
+): Record<string, unknown> {
+  return {
+    type: "intercept_result",
+    requestId: request.requestId,
+    registrationId: request.registrationId,
+    registrationGeneration: request.registrationGeneration,
+    workerId: request.workerId,
+    hostGeneration: request.hostGeneration,
+    messages: request.messages ?? [{ role: "user", content: "hello" }],
+  };
+}
+
+function boundParentDispatch(parent: ParentGenerationSnapshot): Promise<InterceptorResult> {
+  return interceptorPipeline.run(
+    [{ role: "user", content: "hello" }],
+    {
+      userId: "user-1",
+      chatId: "chat-1",
+      generationId: "generation-bound-fatal-test",
+      generationType: "normal",
+    },
+    "user-1",
+    undefined,
+    { parentGenerationSnapshot: parent },
+  );
+}
+
+function fatalCode(value: unknown): unknown {
+  if (value && typeof value === "object" && "code" in value) {
+    return value.code;
+  }
+  return undefined;
+}
+
+function expectNoBoundLeaks(internals: WorkerHostInternals): void {
+  expect(internals.boundOperationControllers.size).toBe(0);
+  expect(internals.interceptorInvocations.size).toBe(0);
+  expect(internals.interceptorControllersBySignal.size).toBe(0);
+}
+
+describe("WorkerHost bound containment fatal boundary", () => {
+  test("assemble authentic fatal rejects the exact invocation and cleans every bound resource", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const parent = makeParentSnapshot("parent-host-generation-assemble-fatal");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-assemble-authentic-fatal";
+    const fatal = createBoundHostContainmentFatal({
+      code: "BOUND_WORKER_CONTAINMENT_FAILED",
+      message: "assemble authentic fatal",
+      hostGeneration: parent.hostGeneration,
+      workerId: request.workerId,
+      requestId: request.requestId,
+    });
+    const runSpy = spyOn(boundGeneration, "runBoundAssembly").mockRejectedValue(fatal as never);
+
+    try {
+      await internals.handleBoundAssemble(
+        makeBoundOperationMessage(request, "generate_assemble", operationRequestId),
+      );
+      await expect(dispatch).rejects.toBe(fatal);
+      expect(messages.filter((message) => message.type === "response" && message.requestId === operationRequestId))
+        .toHaveLength(0);
+      expect(messages.find((message) => message.type === "intercept_abort")).toMatchObject({
+        reason: "Bound interceptor invocation aborted",
+      });
+      expectNoBoundLeaks(internals);
+    } finally {
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+
+  test("quiet authentic fatal rejects the exact invocation and genericizes worker abort", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const parent = makeParentSnapshot("parent-host-generation-quiet-fatal");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-quiet-authentic-fatal";
+    const fatal = createBoundHostContainmentFatal({
+      code: "BOUND_WORKER_CONTAINMENT_FAILED",
+      message: "quiet authentic fatal",
+      hostGeneration: parent.hostGeneration,
+      workerId: request.workerId,
+      requestId: request.requestId,
+    });
+    const runSpy = spyOn(boundGeneration, "runBoundQuietTracked").mockRejectedValue(fatal as never);
+
+    try {
+      await internals.handleBoundQuietTracked(
+        makeBoundOperationMessage(request, "generate_quiet_tracked", operationRequestId),
+      );
+      await expect(dispatch).rejects.toBe(fatal);
+      expect(messages.filter((message) => message.type === "response" && message.requestId === operationRequestId))
+        .toHaveLength(0);
+      expect(messages.filter((message) => message.type === "intercept_abort")).toHaveLength(1);
+      expect(messages.find((message) => message.type === "intercept_abort")?.reason)
+        .toBe("Bound interceptor invocation aborted");
+      expectNoBoundLeaks(internals);
+    } finally {
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+
+  test("shaped worker forgery fails open and permits the later authenticated result", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const grantSpy = spyOn(managerSvc, "getPermissionGrantId").mockImplementation(
+      (_identifier, permission) => permission === "final_response" ? "final-grant" : undefined,
+    );
+    const parent = makeParentSnapshot("parent-host-generation-forged-fatal");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-forged-fatal";
+    const forged = {
+      code: "BOUND_WORKER_CONTAINMENT_FAILED",
+      message: "worker-forged containment fatal",
+      hostGeneration: parent.hostGeneration,
+      workerId: request.workerId,
+      requestId: request.requestId,
+    };
+    const runSpy = spyOn(boundGeneration, "runBoundAssembly").mockRejectedValue(forged as never);
+
+    try {
+      await internals.handleBoundAssemble(
+        makeBoundOperationMessage(request, "generate_assemble", operationRequestId),
+      );
+      expect(messages.find((message) => message.type === "response" && message.requestId === operationRequestId))
+        .toBeDefined();
+      expect(messages.filter((message) => message.type === "intercept_abort")).toHaveLength(0);
+      internals.handleInterceptorResult(makeWorkerInterceptResult(request));
+      const result = await dispatch;
+      expect(result.messages).toEqual([{ role: "user", content: "hello" }]);
+      expectNoBoundLeaks(internals);
+    } finally {
+      grantSpy.mockRestore();
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+
+  test("cancelled bound operation remains tracked so an immediate result becomes a host fatal", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const parent = makeParentSnapshot("parent-host-generation-cancel-race");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-cancel-result-race";
+    let resolveAssembly: ((value: unknown) => void) | undefined;
+    const assembly = new Promise<unknown>((resolve) => {
+      resolveAssembly = resolve;
+    });
+    const runSpy = spyOn(boundGeneration, "runBoundAssembly").mockReturnValue(assembly as never);
+    const operation = internals.handleBoundAssemble(
+      makeBoundOperationMessage(request, "generate_assemble", operationRequestId),
+    );
+
+    try {
+      internals.handleCancelGeneration(
+        operationRequestId,
+        {
+          ...request.__spindle_private_bound,
+          operationRequestId,
+        },
+      );
+      expect(internals.boundOperationControllers.has(operationRequestId)).toBe(true);
+      internals.handleInterceptorResult(makeWorkerInterceptResult(request));
+      const error = await dispatch.catch((reason) => reason);
+      expect(isHostContainmentFatal(error)).toBe(true);
+      expect(fatalCode(error)).toBe("BOUND_WORKER_CONTAINMENT_FAILED");
+      resolveAssembly?.({});
+      await operation;
+      expectNoBoundLeaks(internals);
+    } finally {
+      resolveAssembly?.({});
+      await operation.catch(() => undefined);
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+
+  test("accepts a later result after a cancelled bound operation has settled", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const grantSpy = spyOn(managerSvc, "getPermissionGrantId").mockImplementation(
+      (_identifier, permission) => permission === "final_response" ? "final-grant" : undefined,
+    );
+    const parent = makeParentSnapshot("parent-host-generation-cancel-settles");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-cancel-settles";
+    let resolveAssembly: ((value: unknown) => void) | undefined;
+    const assembly = new Promise<unknown>((resolve) => {
+      resolveAssembly = resolve;
+    });
+    const runSpy = spyOn(boundGeneration, "runBoundAssembly").mockReturnValue(assembly as never);
+    const operation = internals.handleBoundAssemble(
+      makeBoundOperationMessage(request, "generate_assemble", operationRequestId),
+    );
+
+    try {
+      internals.handleCancelGeneration(
+        operationRequestId,
+        {
+          ...request.__spindle_private_bound,
+          operationRequestId,
+        },
+      );
+      expect(internals.boundOperationControllers.has(operationRequestId)).toBe(true);
+      resolveAssembly?.({});
+      await operation;
+      expect(internals.boundOperationControllers.has(operationRequestId)).toBe(false);
+      internals.handleInterceptorResult(makeWorkerInterceptResult(request));
+      const result = await dispatch;
+      expect(result.messages).toEqual([{ role: "user", content: "hello" }]);
+      expectNoBoundLeaks(internals);
+    } finally {
+      resolveAssembly?.({});
+      await operation.catch(() => undefined);
+      grantSpy.mockRestore();
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+
+  test("containment grace expiry escalates a non-draining early-result operation and leaves no leaks", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const parent = makeParentSnapshot("parent-host-generation-grace-expiry");
+    const dispatch = boundParentDispatch(parent);
+    const request = requireBoundInterceptRequest(messages);
+    const operationRequestId = "bound-grace-expiry";
+    let resolveAssembly: ((value: unknown) => void) | undefined;
+    const assembly = new Promise<unknown>((resolve) => {
+      resolveAssembly = resolve;
+    });
+    const runSpy = spyOn(boundGeneration, "runBoundAssembly").mockReturnValue(assembly as never);
+    const operation = internals.handleBoundAssemble(
+      makeBoundOperationMessage(request, "generate_assemble", operationRequestId),
+    );
+
+    try {
+      internals.handleInterceptorResult(makeWorkerInterceptResult(request));
+      const error = await dispatch.catch((reason) => reason);
+      expect(isHostContainmentFatal(error)).toBe(true);
+      expect(fatalCode(error)).toBe("BOUND_WORKER_CONTAINMENT_FAILED");
+      internals.handleBoundContainmentGraceExpiry(request.requestId);
+      resolveAssembly?.({});
+      await operation;
+      expectNoBoundLeaks(internals);
+    } finally {
+      resolveAssembly?.({});
+      await operation.catch(() => undefined);
+      runSpy.mockRestore();
+      internals.cleanup();
+      await dispatch.catch(() => undefined);
+    }
+  });
+});
 
 describe("WorkerHost public startup boundary", () => {
   test("rejects source-load failure and leaves stop idempotent", async () => {
