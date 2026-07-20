@@ -39,6 +39,7 @@ import { uuidv7 } from '@/lib/uuid'
 import useImageCropFlow from '@/hooks/useImageCropFlow'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import ImageCropModal from '@/components/shared/ImageCropModal'
+import ImageLightbox from '@/components/shared/ImageLightbox'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import ConfirmationModal from '@/components/shared/ConfirmationModal'
@@ -97,16 +98,31 @@ interface GalleryGridItemProps {
   item: CharacterGalleryItem
   onRemove: (itemId: string) => void
   onOpenMenu: (item: CharacterGalleryItem, pos: ContextMenuPos) => void
+  onPreview: (item: CharacterGalleryItem) => void
 }
 
-function GalleryGridItem({ item, onRemove, onOpenMenu }: GalleryGridItemProps) {
+function GalleryGridItem({ item, onRemove, onOpenMenu, onPreview }: GalleryGridItemProps) {
   const { t } = useTranslation('panels')
   const longPress = useLongPress({
     onLongPress: (pos) => onOpenMenu(item, pos),
   })
 
   return (
-    <div className={styles.galleryItem} {...longPress}>
+    <div
+      className={styles.galleryItem}
+      role="button"
+      tabIndex={0}
+      aria-label={item.caption || t('characterEditor.galleryImage')}
+      onClick={() => onPreview(item)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onPreview(item)
+        }
+      }}
+      {...longPress}
+    >
       <LazyImage
         src={characterGalleryApi.smallUrl(item.image_id)}
         alt={item.caption || t('characterEditor.galleryImage')}
@@ -116,7 +132,10 @@ function GalleryGridItem({ item, onRemove, onOpenMenu }: GalleryGridItemProps) {
       <button
         type="button"
         className={styles.galleryRemoveBtn}
-        onClick={() => onRemove(item.id)}
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove(item.id)
+        }}
         title={t('characterEditor.removeFromGallery')}
       >
         <X size={12} />
@@ -385,6 +404,7 @@ export default function CharacterEditorPage() {
   const [lorebookResult, setLorebookResult] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [galleryItems, setGalleryItems] = useState<CharacterGalleryItem[]>([])
+  const [galleryLightboxSrc, setGalleryLightboxSrc] = useState<string | null>(null)
   const [worldBooks, setWorldBooks] = useState<Array<Pick<WorldBook, 'id' | 'name' | 'folder' | 'metadata'>>>([])
   const [galleryUploading, setGalleryUploading] = useState(false)
   const [extracting, setExtracting] = useState(false)
@@ -1940,6 +1960,7 @@ export default function CharacterEditorPage() {
                                       item={cell.item}
                                       onRemove={handleGalleryRemove}
                                       onOpenMenu={(menuItem, pos) => setGalleryContextMenu({ item: menuItem, pos })}
+                                      onPreview={(previewItem) => setGalleryLightboxSrc(characterGalleryApi.imageUrl(previewItem.image_id))}
                                     />
                                   )
                                 })}
@@ -2207,6 +2228,7 @@ export default function CharacterEditorPage() {
       items={galleryContextMenuItems}
       onClose={() => setGalleryContextMenu(null)}
     />
+    <ImageLightbox src={galleryLightboxSrc} onClose={() => setGalleryLightboxSrc(null)} />
 
     {showDeleteConfirm && (
       <ConfirmationModal
