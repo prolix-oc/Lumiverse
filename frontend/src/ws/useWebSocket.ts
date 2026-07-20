@@ -23,7 +23,6 @@ import {
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
-import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -371,13 +370,6 @@ export function useWebSocket() {
   const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
-  /**
-   * Set to true when the socket closes after we'd already had a fully healthy
-   * connection — i.e. an actual drop, not the initial connect. The next pong
-   * that completes the recovery will trigger one bundle-update check and clear
-   * the flag, so checks only fire on reconnect-after-drop.
-   */
-  const pendingReconnectCheckRef = useRef(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -455,19 +447,9 @@ export function useWebSocket() {
       }),
       wsClient.on(WS_CLOSE, () => {
         store.getState().setWsConnected(false)
-        // If the user had a working connection before this close, remember to
-        // ask the SW for a fresh bundle once we recover. Initial-load failures
-        // (wsHasEverConnected still false) shouldn't trigger an update check.
-        if (store.getState().wsHasEverConnected) {
-          pendingReconnectCheckRef.current = true
-        }
       }),
       wsClient.on(WS_PONG, () => {
         store.getState().setWsRoundTripVerified(true)
-        if (pendingReconnectCheckRef.current) {
-          pendingReconnectCheckRef.current = false
-          checkForBundleUpdate()
-        }
       }),
       wsClient.on(WS_AUTH_ERROR, () => {
         // Server has explicitly rejected our session — the cookie is invalid

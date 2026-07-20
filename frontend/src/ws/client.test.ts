@@ -75,7 +75,7 @@ class MockWorker {
 ;(globalThis as any).WebSocket = MockWebSocket
 ;(globalThis as any).Worker = MockWorker
 
-const { WebSocketClient, WS_PONG } = await import('./client')
+const { WebSocketClient, WS_PONG, shouldUseDedicatedHeartbeatWorker } = await import('./client')
 
 afterAll(() => {
   if (originalWindow === undefined) delete (globalThis as any).window
@@ -98,6 +98,19 @@ function makeClient() {
 }
 
 describe('WebSocketClient resume watchdog guard', () => {
+  test('does not use a worker-owned heartbeat socket on iOS or iPadOS', () => {
+    expect(shouldUseDedicatedHeartbeatWorker({
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X)',
+      platform: 'iPhone',
+      maxTouchPoints: 5,
+    })).toBe(false)
+    expect(shouldUseDedicatedHeartbeatWorker({
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      platform: 'MacIntel',
+      maxTouchPoints: 5,
+    })).toBe(false)
+  })
+
   test('sends the fast watchdog ping on an unsuppressed hidden-to-visible transition', () => {
     const client = makeClient()
     const pingTimeouts: number[] = []

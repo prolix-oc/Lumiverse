@@ -21,6 +21,26 @@ const PONG_TIMEOUT_MS = 10_000
 const RESUME_PONG_TIMEOUT_MS = 3_000
 const PING_INTERVAL_MS = 30_000
 
+type MobilePlatform = {
+  userAgent: string
+  platform: string
+  maxTouchPoints: number
+}
+
+/**
+ * iOS/iPadOS standalone apps are particularly aggressive about suspending
+ * workers and their sockets. A worker-owned heartbeat connection can therefore
+ * fail while the application socket is still healthy, turning a false-negative
+ * liveness check into a needless reconnect. The regular socket heartbeat is
+ * sufficient while the app is foregrounded, and is the safer path on Apple
+ * mobile WebKit (including iPadOS's desktop-style user agent).
+ */
+export function shouldUseDedicatedHeartbeatWorker(platform: MobilePlatform = navigator): boolean {
+  const isIOS = /iPad|iPhone|iPod/.test(platform.userAgent)
+    || (platform.platform === 'MacIntel' && platform.maxTouchPoints > 1)
+  return typeof Worker !== 'undefined' && !isIOS
+}
+
 type HeartbeatWorkerMessage =
   | { type: 'ping-primary'; generation: number }
   | { type: 'verified'; generation: number }
@@ -213,7 +233,7 @@ export class WebSocketClient {
 
   private ensureHeartbeatWorker(): boolean {
     if (this.heartbeatWorker) return true
-    if (this.heartbeatWorkerUnavailable || typeof Worker === 'undefined') return false
+    if (this.heartbeatWorkerUnavailable || !shouldUseDedicatedHeartbeatWorker()) return false
 
     try {
       const worker = new Worker(new URL('./heartbeat.worker.ts', import.meta.url), {

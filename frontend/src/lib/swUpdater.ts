@@ -2,14 +2,13 @@ import { useStore } from '@/store'
 import { isServiceWorkerReplacement } from './swUpdatePolicy'
 
 /**
- * Module-level handle to the active service worker registration. Held outside
- * React so the connection-lost overlay can ask the SW to check for a new
- * bundle the moment the WebSocket reconnects.
+ * Watches the active service worker outside React so the connection-lost
+ * overlay can report that a real bundle update is being installed.
  *
- * In dev mode (vite dev) or environments where service workers aren't
- * supported, `registration` stays null and all operations no-op gracefully.
+ * Update checks are deliberately not coupled to WebSocket reconnects: a flaky
+ * connection must never turn into a full-page reload. main.tsx performs the
+ * normal launch registration and low-frequency periodic update check.
  */
-let registration: ServiceWorkerRegistration | null = null
 let updateUiTimeout: ReturnType<typeof setTimeout> | null = null
 const UPDATE_UI_TIMEOUT_MS = 45_000
 
@@ -30,7 +29,6 @@ function setBundleUpdatePending(pending: boolean): void {
 /** Called once from main.tsx with the registration returned by vite-plugin-pwa. */
 export function rememberRegistration(reg: ServiceWorkerRegistration | undefined): void {
   if (!reg) return
-  registration = reg
 
   // Watch for a new SW being installed. vite-plugin-pwa's autoUpdate mode will
   // immediately skip-waiting the new worker; we just need to flip the store
@@ -62,22 +60,4 @@ export function rememberRegistration(reg: ServiceWorkerRegistration | undefined)
       }
     })
   })
-}
-
-/**
- * Ask the service worker to check for a new bundle right now (vs. waiting for
- * the hourly poll set up in main.tsx). If a new worker is found, the
- * registration's `updatefound` event will fire and flip `wsUpdatePending`.
- *
- * Returns silently if no registration is available (dev mode, unsupported
- * browser) or if the network request fails — this is best-effort.
- */
-export async function checkForBundleUpdate(): Promise<void> {
-  if (!registration) return
-  try {
-    await registration.update()
-  } catch {
-    // Network glitch checking for the SW update — ignore. The hourly poll and
-    // the next reconnect will both retry.
-  }
 }
