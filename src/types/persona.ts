@@ -4,6 +4,11 @@ export interface PersonaAddon {
   content: string;
   enabled: boolean;
   sort_order: number;
+  /**
+   * Optional named outlet. When set, enabled content is exposed through
+   * `{{persona_outlet::name}}` instead of being appended to `{{persona}}`.
+   */
+  outlet_name?: string | null;
   /** Optional persona-specific avatar selected while this add-on is active. */
   avatar_image_id?: string;
   /** Optional cropped variant of avatar_image_id, preferred for avatar rendering. */

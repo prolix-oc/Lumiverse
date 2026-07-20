@@ -169,6 +169,12 @@ export default function PersonaAddonsModal() {
     persistAddons(next)
   }, [addons, persistAddons])
 
+  const handleOutletNameChange = useCallback((id: string, outlet_name: string) => {
+    const next = addons.map((a) => a.id === id ? { ...a, outlet_name } : a)
+    setAddons(next)
+    persistAddons(next)
+  }, [addons, persistAddons])
+
   // Drag-to-reorder for persona-specific addons. `sort_order` is also re-stamped
   // so the backend MacroEnv resolves them in the visual order.
   const sensors = useSensors(
@@ -267,6 +273,7 @@ export default function PersonaAddonsModal() {
                     onDelete={handleDelete}
                     onLabelChange={handleLabelChange}
                     onContentChange={handleContentChange}
+                    onOutletNameChange={handleOutletNameChange}
                     onUploadAvatar={handleUploadAddonAvatar}
                     onRemoveAvatar={handleRemoveAddonAvatar}
                     avatarBusy={avatarOperationAddonId === addon.id}
@@ -392,6 +399,7 @@ interface SortableAddonRowProps {
   onDelete: (id: string) => void
   onLabelChange: (id: string, label: string) => void
   onContentChange: (id: string, content: string) => void
+  onOutletNameChange: (id: string, outletName: string) => void
   onUploadAvatar: (id: string, file: File) => Promise<void>
   onRemoveAvatar: (id: string) => Promise<void>
   avatarBusy: boolean
@@ -403,6 +411,7 @@ function SortableAddonRow({
   onDelete,
   onLabelChange,
   onContentChange,
+  onOutletNameChange,
   onUploadAvatar,
   onRemoveAvatar,
   avatarBusy,
@@ -474,6 +483,26 @@ function SortableAddonRow({
         placeholder={t('contentPlaceholder')}
         rows={2}
       />
+      <div className={styles.outletRow}>
+        <label className={styles.outletLabel} htmlFor={`persona-addon-outlet-${addon.id}`}>
+          {t('outletLabel')}
+        </label>
+        <input
+          id={`persona-addon-outlet-${addon.id}`}
+          type="text"
+          className={styles.outletInput}
+          value={addon.outlet_name ?? ''}
+          onChange={(e) => onOutletNameChange(addon.id, e.target.value)}
+          placeholder={t('outletPlaceholder')}
+          autoCapitalize="none"
+          spellCheck={false}
+        />
+      </div>
+      {addon.outlet_name?.trim() && (
+        <div className={styles.outletHint}>
+          {t('outletHint', { macro: `{{persona_outlet::${addon.outlet_name.trim()}}}` })}
+        </div>
+      )}
     </div>
   )
 }

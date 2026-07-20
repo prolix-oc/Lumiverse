@@ -117,6 +117,23 @@ export function registerCoreMacros(): void {
 
   registry.registerMacro({
     builtIn: true,
+    name: "persona_outlet",
+    category: "Core",
+    description: "Resolve an enabled persona add-on outlet by name",
+    returnType: "string",
+    args: [{ name: "name", description: "Outlet name configured on a persona add-on" }],
+    aliases: ["personaOutlet"],
+    handler: (ctx) => {
+      const name = (ctx.args[0] || "").trim().toLowerCase();
+      if (!name) return "";
+      const outlets = ctx.env.extra?.personaAddonOutlets as Record<string, unknown> | undefined;
+      const value = outlets?.[name];
+      return typeof value === "string" ? value : "";
+    },
+  });
+
+  registry.registerMacro({
+    builtIn: true,
     name: "wi_marker",
     category: "Core",
     description:

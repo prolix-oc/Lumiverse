@@ -62,9 +62,9 @@ async function processChatGreeting(userId: string, chat: { id: string }) {
 
 const app = new Hono();
 
-/** Matches the `{{outlet::name}}` macro so display resolution can populate
- *  the world-info outlet map only when a message actually references it. */
-const OUTLET_MACRO_RE = /\{\{outlet::/i;
+/** Matches an outlet macro so display resolution can populate Lorebook
+ * outlets when a directly or indirectly referenced persona outlet needs one. */
+const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
 const DISPLAY_PREPROCESS_BATCH_MAX = 100;
 
 interface DisplayPreprocessItem {

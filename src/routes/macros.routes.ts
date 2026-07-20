@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { evaluate, buildEnv, resolveGroupCharacterNames, resolvePersonaPronouns, registry, initMacros, withPromptBlockContext } from "../macros";
+import { evaluate, buildEnv, resolveGroupCharacterNames, registry, initMacros, withPromptBlockContext } from "../macros";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
 import { isTemporaryChatMetadata } from "../types/chat";
 import type { Chat } from "../types/chat";
@@ -270,35 +270,25 @@ async function buildEnvFromIds(userId: string, body: {
     personasSvc.resolvePersonaOrDefault(userId, body.persona_id),
     null,
   );
-  const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.resolveConnection(userId);
-
-  return {
-    commit: true,
-    names: {
-      user: persona?.name || "User", char: "", group: "", groupNotMuted: "", notChar: persona?.name || "User",
-      charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", isNarrator: persona?.is_narrator ? "yes" : "no", groupLastSpeaker: "", groupCardMode: "solo",
-    },
-    character: {
-      name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
-      personaSubjectivePronoun: personaPronouns.subjective,
-      personaObjectivePronoun: personaPronouns.objective,
-      personaPossessivePronoun: personaPronouns.possessive,
-      mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
-      depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
-    },
-    chat: {
-      id: "", messageCount: 0, lastMessage: "", lastMessageName: "", lastUserMessage: "",
-      lastCharMessage: "", lastMessageId: -1, firstIncludedMessageId: -1, lastSwipeId: 0, currentSwipeId: 0, rejectedSwipe: "",
-    },
-    system: {
-      model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
-      lastGenerationType: "normal", isMobile: false,
-    },
-    variables: { local: new Map(), global: new Map(), chat: new Map() },
-    dynamicMacros: body.dynamic_macros || {},
-    extra: { userInput: body.user_input ?? "" },
+  const chat: Chat = {
+    id: "",
+    character_id: null,
+    name: "",
+    metadata: {},
+    created_at: 0,
+    updated_at: 0,
   };
+  return buildEnv({
+    character: makeAssistantCharacter(),
+    persona,
+    chat,
+    messages: [],
+    generationType: "normal",
+    connection,
+    dynamicMacros: body.dynamic_macros,
+    userInput: body.user_input,
+  });
 }
 
 function seedCortexPreviewContext(

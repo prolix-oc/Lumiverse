@@ -80,7 +80,7 @@ async function buildEffectiveDescription(persona: Persona): Promise<string> {
   const states = resolveEffectiveAddonStates(persona, activeChatAddonOverrides(persona.id))
 
   const personaContent = asAddonArray(persona.metadata?.addons)
-    .filter((a) => (states[a.id] ?? a.enabled) && a.content)
+    .filter((a) => (states[a.id] ?? a.enabled) && a.content && !a.outlet_name?.trim())
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
     .map((a) => (a.content || '').trim())
     .filter(Boolean)

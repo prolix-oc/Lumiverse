@@ -73,15 +73,18 @@ Each add-on is a labeled block of text with an on/off toggle:
 - **Label** — A short name (e.g., "Combat Skills," "Secret Backstory," "Romantic Interest")
 - **Content** — The text that gets appended to your persona description when enabled
 - **Enabled** — Whether it's currently active
+- **Outlet** *(optional)* — A named persona-only content slot that exposes this add-on through `{{persona_outlet::name}}` instead of appending it to the persona description
 
-When an add-on is enabled, its content is appended to the `{{persona}}` macro output during prompt assembly.
+When an add-on is enabled with no outlet, its content is appended to the `{{persona}}` macro output during prompt assembly. Give it an outlet name to place it precisely in a preset block, character field, or another macro-aware prompt location with `{{persona_outlet::name}}`.
+
+Add-ons sharing a persona outlet are joined in their add-on order. Persona outlets are separate from Lorebook outlets, even when they use the same name, so each system remains independently manageable.
 
 ### Creating Add-Ons
 
 1. Open the persona editor
 2. Click the **Add-Ons** button
 3. Click **Add New** in the add-ons modal
-4. Fill in the label and content
+4. Fill in the label and content; optionally set an outlet name
 5. Toggle it on or off
 
 ### Quick Toggling

@@ -43,7 +43,7 @@ export type { LoraEntry } from "../image-gen/comfyui-workflow-patch";
 const IMAGE_SETTINGS_KEY = "imageGeneration";
 const RELAY_IMAGE_PREVIEW_MAX_CHARS = 180 * 1024;
 const HAS_MACRO_RE = /\{\{|<(?:user|char|bot)>/i;
-const OUTLET_MACRO_RE = /\{\{outlet::/i;
+const OUTLET_MACRO_RE = /\{\{(?:outlet|persona_outlet|personaoutlet)::/i;
 
 export interface LoraPreset {
   id: string;

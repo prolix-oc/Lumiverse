@@ -407,6 +407,44 @@
   box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
 }
 
+/* -- Outlet placement -- */
+.outletRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.outletLabel {
+  flex: 0 0 auto;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+}
+
+.outletInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--lumiverse-input-bg, rgba(0, 0, 0, 0.2));
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text);
+  outline: none;
+}
+
+.outletInput:focus {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 2px var(--lumiverse-primary-010);
+}
+
+.outletHint {
+  margin-top: -3px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  color: var(--lumiverse-text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 /* -- Attach picker popover -- */
 .attachWrapper {
   position: relative;

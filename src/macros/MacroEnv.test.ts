@@ -160,6 +160,34 @@ describe("buildEnv persona pronouns", () => {
   });
 });
 
+describe("buildEnv persona add-on outlets", () => {
+  test("publishes enabled outlet add-ons without appending them to {{persona}}", () => {
+    const env = buildEnv({
+      character: baseCharacter,
+      persona: {
+        ...basePersona,
+        description: "Base persona",
+        metadata: {
+          addons: [
+            { id: "append", content: "Appended", enabled: true, sort_order: 1 },
+            { id: "outlet-2", content: "Second outlet", enabled: true, sort_order: 2, outlet_name: " Details " },
+            { id: "outlet-1", content: "First outlet", enabled: true, sort_order: 0, outlet_name: "DETAILS" },
+            { id: "disabled", content: "Hidden", enabled: false, sort_order: 3, outlet_name: "details" },
+          ],
+        },
+      },
+      chat: baseChat,
+      messages: [],
+      generationType: "normal",
+      connection: null,
+    });
+
+    expect(env.character.persona).toBe("Base persona\nAppended");
+    expect(env.extra.personaAddonOutlets).toEqual({ details: "First outlet\n\nSecond outlet" });
+    expect(env.extra.worldInfoOutlets).toBeUndefined();
+  });
+});
+
 describe("buildEnv rejected swipe", () => {
   test("defaults rejectedSwipe to empty", () => {
     const env = buildEnv({

@@ -626,6 +626,8 @@ export interface PersonaAddon {
   content: string
   enabled: boolean
   sort_order: number
+  /** When set, content is exposed as {{persona_outlet::name}} instead of {{persona}}. */
+  outlet_name?: string | null
   /** Persona-specific artwork shown while this add-on is active. */
   avatar_image_id?: string
   /** Optional square crop of avatar_image_id, preferred for avatar surfaces. */

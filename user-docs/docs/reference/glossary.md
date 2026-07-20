@@ -116,7 +116,7 @@ Key terms used throughout Lumiverse and these guides.
 : Settings panel for instance-level operations — check for updates, switch git branches, restart the server. Requires the runner to be attached.
 
 **Outlet**
-: A named content slot a world book entry can export — referenced from presets and other entries via `{{outlet::name}}`.
+: A named content slot a world book entry can export — referenced from presets and other entries via `{{outlet::name}}`. Persona add-ons use the separate `{{persona_outlet::name}}` namespace.
 
 ## P
 
@@ -127,7 +127,7 @@ Key terms used throughout Lumiverse and these guides.
 : Your identity in conversations — includes name, pronouns, description, avatar, and optional add-ons.
 
 **Persona Add-On**
-: An optional, toggleable block of content attached to a persona. Lets you extend your persona description dynamically without editing it.
+: An optional, toggleable block of content attached to a persona. It can extend `{{persona}}` directly or be sent to a named persona outlet for precise prompt placement.
 
 **Preset**
 : A saved configuration defining prompt block order, sampler settings, and completion behavior.

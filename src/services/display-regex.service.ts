@@ -1,4 +1,4 @@
-import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames, resolvePersonaPronouns } from "../macros";
+import { buildEnv, initMacros, mergeDynamicMacros, resolveGroupCharacterNames } from "../macros";
 import type { MacroEnv } from "../macros";
 import { messageContentProcessorChain } from "../spindle/message-content-processor";
 import { getEffectiveCharacterName, makeAssistantCharacter } from "../types/character";
@@ -129,68 +129,23 @@ function buildEnvFromContext(userId: string, ctx: DisplayRegexContext): MacroEnv
     personasSvc.resolvePersonaOrDefault(userId, ctx.persona_id),
     null,
   );
-  const personaPronouns = resolvePersonaPronouns(persona);
   const connection = connectionsSvc.resolveConnection(userId);
-  return {
-    commit: true,
-    names: {
-      user: persona?.name || "User",
-      char: "",
-      group: "",
-      groupNotMuted: "",
-      notChar: persona?.name || "User",
-      charGroupFocused: "",
-      groupOthers: "",
-      groupMemberCount: "0",
-      isGroupChat: "no",
-      isNarrator: persona?.is_narrator ? "yes" : "no",
-      groupLastSpeaker: "",
-      groupCardMode: "solo",
-    },
-    character: {
-      name: "",
-      description: "",
-      personality: "",
-      scenario: "",
-      persona: persona?.description || "",
-      personaSubjectivePronoun: personaPronouns.subjective,
-      personaObjectivePronoun: personaPronouns.objective,
-      personaPossessivePronoun: personaPronouns.possessive,
-      mesExamples: "",
-      mesExamplesRaw: "",
-      systemPrompt: "",
-      postHistoryInstructions: "",
-      depthPrompt: "",
-      creatorNotes: "",
-      version: "",
-      creator: "",
-      firstMessage: "",
-    },
-    chat: {
-      id: "",
-      messageCount: 0,
-      lastMessage: "",
-      lastMessageName: "",
-      lastUserMessage: "",
-      lastCharMessage: "",
-      lastMessageId: -1,
-      firstIncludedMessageId: -1,
-      lastSwipeId: 0,
-      currentSwipeId: 0,
-      rejectedSwipe: "",
-    },
-    system: {
-      model: connection?.model || "",
-      maxPrompt: 0,
-      maxContext: 0,
-      maxResponse: 0,
-      lastGenerationType: "normal",
-      isMobile: false,
-    },
-    variables: { local: new Map(), global: new Map(), chat: new Map() },
-    dynamicMacros: {},
-    extra: {},
+  const chat: Chat = {
+    id: "",
+    character_id: null,
+    name: "",
+    metadata: {},
+    created_at: 0,
+    updated_at: 0,
   };
+  return buildEnv({
+    character: makeAssistantCharacter(),
+    persona,
+    chat,
+    messages: [],
+    generationType: "normal",
+    connection,
+  });
 }
 
 export interface ApplyDisplayRegexResult {

@@ -57,6 +57,7 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
   const { character, persona, chat, messages, generationType, connection } = ctx;
   const focusedCharacter = ctx.focusedCharacter ?? character;
   const personaPronouns = resolvePersonaPronouns(persona);
+  const personaAddonOutlets = buildPersonaAddonOutlets(persona);
 
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   const lastUserMsg = findLast(messages, (m) => m.is_user);
@@ -155,6 +156,10 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
         ? lastMsg.send_date * 1000
         : undefined,
       userInput: ctx.userInput ?? "",
+      // Persona outlets are intentionally separate from Lorebook outlets.
+      // `{{persona_outlet::name}}` reads this map; `{{outlet::name}}` reads
+      // worldInfoOutlets, which is populated only by world-info activation.
+      personaAddonOutlets,
     },
   };
 }
@@ -298,7 +303,8 @@ function buildPersonaWithAddons(persona: Persona | null): string {
   const personaAddons = persona.metadata?.addons;
   const enabledPersonaContent = Array.isArray(personaAddons)
     ? personaAddons
-        .filter((a: any) => a.enabled && a.content)
+        .filter((a: any) => a.enabled && a.content && !getAddonOutletName(a))
+        .slice()
         .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
         .map((a: any) => a.content.trim())
         .filter(Boolean)
@@ -308,6 +314,7 @@ function buildPersonaWithAddons(persona: Persona | null): string {
   const globalAddons = persona.metadata?._resolvedGlobalAddons;
   const enabledGlobalContent = Array.isArray(globalAddons)
     ? globalAddons
+        .slice()
         .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
         .map((a: any) => ((a.content as string) || "").trim())
         .filter(Boolean)
@@ -316,6 +323,38 @@ function buildPersonaWithAddons(persona: Persona | null): string {
   const allContent = [...enabledPersonaContent, ...enabledGlobalContent];
   if (allContent.length === 0) return base;
   return base ? `${base}\n${allContent.join("\n")}` : allContent.join("\n");
+}
+
+/**
+ * Persona add-ons can opt out of the normal `{{persona}}` append-only flow
+ * and instead publish their content through the separate `persona_outlet`
+ * macro namespace. The name is normalized for case-insensitive lookup.
+ */
+function buildPersonaAddonOutlets(persona: Persona | null): Record<string, string> {
+  const addons = persona?.metadata?.addons;
+  if (!Array.isArray(addons)) return {};
+
+  const outlets = new Map<string, string>();
+  for (const addon of addons
+    .filter((value: any) => value?.enabled && typeof value.content === "string")
+    .slice()
+    .sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0))) {
+    const outletName = getAddonOutletName(addon);
+    const content = addon.content.trim();
+    if (!outletName || !content) continue;
+
+    const existing = outlets.get(outletName);
+    outlets.set(outletName, existing ? `${existing}\n\n${content}` : content);
+  }
+
+  return Object.fromEntries(outlets);
+}
+
+function getAddonOutletName(addon: any): string | null {
+  const value = addon?.outlet_name ?? addon?.outletName;
+  if (typeof value !== "string") return null;
+  const name = value.trim().toLowerCase();
+  return name || null;
 }
 
 function findLast(messages: Message[], predicate: (m: Message) => boolean): Message | null {

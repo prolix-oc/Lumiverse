@@ -675,7 +675,10 @@
     "avatarRemoveFailed": "Failed to remove alternate persona art",
     "namePlaceholder": "Add-on name...",
     "deleteTitle": "Delete add-on",
-    "contentPlaceholder": "Add-on content (appended to persona description when enabled)..."
+    "contentPlaceholder": "Add-on content (appended to persona description when enabled)...",
+    "outletLabel": "Outlet",
+    "outletPlaceholder": "Optional — e.g. character-details",
+    "outletHint": "Available in prompt blocks as {{macro}}"
   },
   "regexEditor": {
     "title": "Regex Script Editor",

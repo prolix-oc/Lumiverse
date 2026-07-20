@@ -112,6 +112,7 @@ Utility macros for text manipulation and flow control.
 | `{{input}}` | — | The raw text of the last user message |
 | `{{reverse::text}}` | — | Reverses the given text |
 | `{{outlet::name}}` | — | Resolves the content exported by an active world-info entry outlet |
+| `{{persona_outlet::name}}` | `{{personaOutlet::name}}` | Resolves content exported by enabled persona add-ons assigned to that outlet |
 | `{{banned}}` | — | Placeholder for banned token lists |
 
 ### Conditional Logic
@@ -465,7 +466,7 @@ Macros that pull from the character card fields. These respect [alternate field]
 | `{{description}}` | `{{charDescription}}` | Character's description |
 | `{{personality}}` | `{{charPersonality}}` | Character's personality |
 | `{{scenario}}` | `{{charScenario}}` | Character's scenario |
-| `{{persona}}` | `{{userPersona}}` | Your persona's description (includes enabled add-ons) |
+| `{{persona}}` | `{{userPersona}}` | Your persona's description (includes enabled add-ons with no persona outlet) |
 | `{{sub}}` | `{{subjectivePronoun}}`, `{{personaSubjectivePronoun}}` | Your persona's subjective pronoun |
 | `{{obj}}` | `{{objectivePronoun}}`, `{{personaObjectivePronoun}}` | Your persona's objective pronoun |
 | `{{poss}}` | `{{possessivePronoun}}`, `{{personaPossessivePronoun}}` | Your persona's possessive pronoun |

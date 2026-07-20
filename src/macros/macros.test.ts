@@ -18,6 +18,7 @@ function makeEnv(opts: {
   chatCreatedAt?: number;
   lastMessageTime?: number;
   worldInfoOutlets?: Record<string, string>;
+  personaAddonOutlets?: Record<string, string>;
   rejectedSwipe?: string;
   userInput?: string;
   promptBlock?: MacroEnv["promptBlock"];
@@ -104,6 +105,7 @@ function makeEnv(opts: {
       lastMessageTime: opts.lastMessageTime,
       characterTags: opts.characterTags ?? ["fantasy", "warrior", "male"],
       worldInfoOutlets: opts.worldInfoOutlets ?? {},
+      personaAddonOutlets: opts.personaAddonOutlets ?? {},
       userInput: opts.userInput ?? "",
       ...(opts.multiplayer ? { multiplayer: opts.multiplayer } : {}),
     },
@@ -258,6 +260,17 @@ describe("Core primitives", () => {
   test("outlet lookup is case-insensitive", async () => {
     const env = makeEnv({ worldInfoOutlets: { dossier: "Hello {{user}}" } });
     expect(await ev("{{outlet::DOSSIER}}", env)).toBe("Hello Alice");
+  });
+
+  test("persona outlets use their own namespace", async () => {
+    const env = makeEnv({
+      worldInfoOutlets: { dossier: "World info" },
+      personaAddonOutlets: { dossier: "Persona note for {{char}}" },
+    });
+
+    expect(await ev("{{outlet::dossier}}", env)).toBe("World info");
+    expect(await ev("{{persona_outlet::DOSSIER}}", env)).toBe("Persona note for Bob");
+    expect(await ev("{{personaOutlet::dossier}}", env)).toBe("Persona note for Bob");
   });
 });
 

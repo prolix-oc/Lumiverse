@@ -140,7 +140,8 @@ A snapshot of all data is taken and stored in the macro environment. This is the
 
 - `{{char}}`, `{{user}}`, `{{group}}` — Names are frozen here
 - `{{description}}`, `{{personality}}`, `{{scenario}}` — Character fields (with alternates applied)
-- `{{persona}}` — Persona description with enabled add-ons appended
+- `{{persona}}` — Persona description with enabled add-ons that have no persona outlet appended
+- `{{persona_outlet::name}}` — Enabled persona add-ons assigned to that persona-only outlet
 - `{{lastMessage}}`, `{{messageCount}}` — Chat state at this moment
 - `{{rejectedSwipe}}` — On regenerate/swipe, the target response content captured before the new swipe is staged; otherwise empty
 - `{{model}}`, `{{maxContext}}` — Connection/model info

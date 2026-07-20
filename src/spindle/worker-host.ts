@@ -4296,7 +4296,7 @@ export class WorkerHost {
         return;
       }
 
-      const { evaluate, buildEnv, initMacros, registry, resolvePersonaPronouns } = await import("../macros");
+      const { evaluate, buildEnv, initMacros, registry } = await import("../macros");
       initMacros();
 
       const chatsSvc = await import("../services/chats.service");
@@ -4355,36 +4355,31 @@ export class WorkerHost {
       }
 
       if (!env) {
-        // Minimal fallback
-        const persona = personasSvc.getDefaultPersona(resolvedUserId);
-        const personaPronouns = resolvePersonaPronouns(persona);
+        // Minimal fallback. Route through buildEnv so persona add-ons and
+        // outlet-backed add-ons behave the same as other macro contexts.
+        const { makeAssistantCharacter } = await import("../types/character");
+        const persona = personaAddonStatesSvc.resolvePersonaForChatMacros(
+          resolvedUserId,
+          personasSvc.getDefaultPersona(resolvedUserId),
+          null,
+        );
         const connection = connectionsSvc.resolveConnection(resolvedUserId);
-        env = {
-          commit,
-          names: {
-            user: persona?.name || "User", char: "", group: "", groupNotMuted: "", notChar: persona?.name || "User",
-            charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", isNarrator: persona?.is_narrator ? "yes" : "no", groupLastSpeaker: "", groupCardMode: "solo",
-          },
-          character: {
-            name: "", description: "", personality: "", scenario: "", persona: persona?.description || "",
-            personaSubjectivePronoun: personaPronouns.subjective,
-            personaObjectivePronoun: personaPronouns.objective,
-            personaPossessivePronoun: personaPronouns.possessive,
-            mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "",
-            depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "",
-          },
+        env = buildEnv({
+          character: makeAssistantCharacter(),
+          persona,
           chat: {
-            id: "", messageCount: 0, lastMessage: "", lastMessageName: "", lastUserMessage: "",
-            lastCharMessage: "", lastMessageId: -1, firstIncludedMessageId: -1, lastSwipeId: 0, currentSwipeId: 0, rejectedSwipe: "",
+            id: "",
+            character_id: null,
+            name: "",
+            metadata: {},
+            created_at: 0,
+            updated_at: 0,
           },
-          system: {
-            model: connection?.model || "", maxPrompt: 0, maxContext: 0, maxResponse: 0,
-            lastGenerationType: "normal", isMobile: false,
-          },
-          variables: { local: new Map(), global: new Map(), chat: new Map() },
-          dynamicMacros: {},
-          extra: {},
-        };
+          messages: [],
+          generationType: "normal",
+          commit,
+          connection,
+        });
       }
 
       const result = await evaluate(template, env, registry);
