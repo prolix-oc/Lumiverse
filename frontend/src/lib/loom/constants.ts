@@ -135,6 +135,7 @@ export const DEFAULT_ADVANCED_SETTINGS: AdvancedSettings = {
   seed: -1,
   customStopStrings: [],
   collapseMessages: false,
+  trimIncompleteWords: false,
 }
 
 // ============================================================================

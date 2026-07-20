@@ -41,6 +41,8 @@ import {
   type ToolCallResult,
   type LlmThinkingBlock,
 } from "../llm/types";
+import { trimIncompleteTrailingWord } from "../utils/trim-incomplete-word";
+import { healFormattingArtifacts } from "../utils/format-healing";
 import {
   buildInlineToolContinuation,
   type InlineCouncilToolResult,
@@ -223,6 +225,8 @@ interface GenerationLifecycle {
   presetName?: string;
   /** Resolved preset id */
   presetId?: string;
+  /** Trim the final word after a directly word-terminated streamed response. */
+  trimIncompleteWords?: boolean;
   /** Max context from connection parameters (for breakdown display) */
   maxContext?: number;
   /** Council named results (for expression detection and other post-generation hooks) */
@@ -612,6 +616,8 @@ interface PromptPipelineResult {
   macroEnv?: import("../macros/types").MacroEnv;
   /** Snapshot of the macro environment before chat-history evaluation mutates it. */
   macroEnvSeed?: import("../macros/types").MacroEnv;
+  /** Resolved per-preset setting for streamed response finalization. */
+  trimIncompleteWords?: boolean;
 }
 
 /**
@@ -1318,6 +1324,7 @@ async function runPromptPipeline(opts: {
     | { chatId: string; partial: Record<string, any> }
     | undefined;
   let macroEnv: import("../macros/types").MacroEnv | undefined;
+  let trimIncompleteWords = false;
 
   let deliberationHandledByMacro = false;
 
@@ -1390,6 +1397,7 @@ async function runPromptPipeline(opts: {
     deferredWiState = assemblyResult.deferredWiState;
     deliberationHandledByMacro = !!assemblyResult.deliberationHandledByMacro;
     macroEnv = assemblyResult.macroEnv;
+    trimIncompleteWords = assemblyResult.trimIncompleteWords === true;
   }
 
   // Snapshot chat history messages BEFORE interceptors/post-processing can
@@ -1613,6 +1621,7 @@ async function runPromptPipeline(opts: {
     spindleContext,
     deliberationHandledByMacro,
     macroEnv,
+    trimIncompleteWords,
   };
 }
 
@@ -2759,6 +2768,7 @@ export async function startGeneration(
           | undefined;
         lifecycle.councilNamedResults = councilNamedResults;
         lifecycle.contextClipStats = pipeline.contextClipStats;
+        lifecycle.trimIncompleteWords = pipeline.trimIncompleteWords;
 
         // Strip internal-only keys before they reach the provider
         delete mergedParams.max_context_length;
@@ -3218,6 +3228,7 @@ async function runGeneration(
 
   let fullContent = "";
   let fullReasoning = "";
+  const trimIncompleteWords = lifecycle.trimIncompleteWords === true;
 
   let streamUsage:
     | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
@@ -3279,6 +3290,9 @@ async function runGeneration(
   }> {
     flushCotBuffers();
     let closedContent = closeUnterminatedReasoningTags(userId, fullContent);
+    if (useStreaming && trimIncompleteWords) {
+      closedContent = trimIncompleteStreamTail(closedContent);
+    }
 
     const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
       characterId: lifecycle.targetCharacterId,
@@ -3307,6 +3321,7 @@ async function runGeneration(
         );
       }
     }
+    closedContent = healFormattingArtifacts(closedContent);
 
     let messageId: string | undefined;
     if (lifecycle.targetMessageId && lifecycle.targetSwipeIdx != null) {
@@ -3411,6 +3426,13 @@ async function runGeneration(
   if (assistantPrefill) {
     processContentToken(assistantPrefill);
   }
+
+  // Prefill is explicitly authored and complete by definition. Only the
+  // provider-produced tail is eligible for incomplete-word trimming.
+  const assistantPrefillContentLength = fullContent.length;
+  const trimIncompleteStreamTail = (content: string): string =>
+    content.slice(0, assistantPrefillContentLength) +
+    trimIncompleteTrailingWord(content.slice(assistantPrefillContentLength));
 
   // Determine streaming mode from _streaming parameter (defaults to true)
   const useStreaming = parameters._streaming !== false;
@@ -3694,6 +3716,10 @@ async function runGeneration(
         }
       }
 
+      if (useStreaming && trimIncompleteWords) {
+        fullContent = trimIncompleteStreamTail(fullContent);
+      }
+
       // Apply regex scripts (response target) to completed content
       {
         const responseScripts = regexScriptsSvc.getActiveScripts(userId, {
@@ -3724,6 +3750,7 @@ async function runGeneration(
           }
         }
       }
+      fullContent = healFormattingArtifacts(fullContent);
 
       let messageId: string | undefined;
 

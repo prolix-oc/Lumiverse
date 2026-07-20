@@ -22,6 +22,10 @@ function rawPreset(metadata: Record<string, unknown>): Preset {
 }
 
 describe('Loom extension metadata preservation', () => {
+  test('defaults trim-incomplete-words to off for existing presets', () => {
+    expect(unmarshalPreset(rawPreset({})).advancedSettings.trimIncompleteWords).toBe(false)
+  })
+
   test('round-trips unknown namespaced metadata without allowing it to override core fields', () => {
     const loom = unmarshalPreset(rawPreset({
       description: 'Core description',

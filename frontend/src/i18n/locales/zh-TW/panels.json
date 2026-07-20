@@ -3180,6 +3180,8 @@
       "stopHint": "追加到請求的 stop 序列",
       "collapseMessages": "摺疊為單條用戶消息",
       "collapseHint": "將所有提示塊與聊天曆史合併為一條用戶消息。可與「消息中的名稱：置於內容中」配合實現輪次分隔。",
+      "trimIncompleteWords": "移除不完整的詞語",
+      "trimIncompleteWordsHint": "當串流回應在詞語中間結束時，儲存前移除最後一個詞語。",
       "continueNudge": "繼續輕推",
       "continueNudgeHint": "繼續生成響應時注入",
       "emptySendNudge": "空發送輕推",

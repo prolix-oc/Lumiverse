@@ -5,7 +5,13 @@ const FENCED_CODE_RE = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g
 const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(<\/font>)(["“”«»])/gi
 const COLOR_SPAN_QUOTE_EDGE_RE = /(<span\b[^>]*\bstyle\s*=\s*["'][^"']*\bcolor\s*:[^"']*["'][^>]*>)(["“”«»])([\s\S]*?)(<\/span>)(["“”«»])/gi
+const FONT_TAG_RE = /<\/?font\b[^>]*>/gi
 const QUOTE_CHARS = new Set(['"', '“', '”', '«', '»'])
+const MATCHING_QUOTE: Record<string, string> = {
+  '"': '"',
+  '“': '”',
+  '«': '»',
+}
 const STRAIGHT_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(")([^\n]*?)(")(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
 const CURLY_DOUBLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(“)([^\n]*?)(”)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
 const ANGLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(«)([^\n]*?)(»)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g
@@ -43,6 +49,100 @@ function repairQuotedColorTagBoundaries(text: string): string {
   let healed = text.replace(FONT_QUOTE_EDGE_RE, repair)
   healed = healed.replace(COLOR_SPAN_QUOTE_EDGE_RE, repair)
   return healed
+}
+
+/** Repair `<font color="abc>` into a valid opening tag before balancing it. */
+function repairUnterminatedFontColorQuotes(text: string): string {
+  return text.replace(
+    /<font\b([^>]*?\bcolor\s*=\s*)(["'])([^"'>]*)(>)/gi,
+    (_match, before: string, quote: string, value: string) =>
+      `<font${before}${quote}${value}${quote}>`,
+  )
+}
+
+function findUnescapedChar(text: string, target: string, from: number): number {
+  for (let index = from; index < text.length; index++) {
+    if (text[index] !== target) continue
+    let backslashes = 0
+    for (let before = index - 1; before >= 0 && text[before] === '\\'; before--) {
+      backslashes++
+    }
+    if (backslashes % 2 === 0) return index
+  }
+  return -1
+}
+
+/**
+ * Finds the natural end of a dialogue or action wrapped by a font tag. The
+ * fallback is the next font token/end of the message, which contains a broken
+ * tag's color scope instead of allowing it to bleed into later prose.
+ */
+function findFontScopeBoundary(segment: string): number {
+  const leadingWhitespace = segment.match(/^\s*/)?.[0].length ?? 0
+  const opener = segment[leadingWhitespace]
+  const closingQuote = opener ? MATCHING_QUOTE[opener] : undefined
+
+  if (closingQuote) {
+    const closingIndex = findUnescapedChar(
+      segment,
+      closingQuote,
+      leadingWhitespace + 1,
+    )
+    if (closingIndex >= 0) return closingIndex + 1
+  }
+
+  if (opener === '*') {
+    const markerLength = segment.startsWith('***', leadingWhitespace)
+      ? 3
+      : segment.startsWith('**', leadingWhitespace)
+        ? 2
+        : 1
+    const marker = '*'.repeat(markerLength)
+    const closingIndex = segment.indexOf(marker, leadingWhitespace + markerLength)
+    if (closingIndex >= 0) return closingIndex + markerLength
+  }
+
+  return segment.length
+}
+
+/**
+ * Close only font tags that have no matching closing tag. Finished dialogue
+ * and markdown action spans get the tightest possible scope; otherwise the
+ * tag closes before the next font tag or at the message end.
+ */
+function closeUnterminatedFontTags(text: string): string {
+  const tokens = [...text.matchAll(FONT_TAG_RE)].map((match) => ({
+    index: match.index!,
+    end: match.index! + match[0].length,
+    closing: /^<\/font\b/i.test(match[0]),
+  }))
+  if (tokens.length === 0) return text
+
+  const openStack: number[] = []
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index].closing) openStack.pop()
+    else openStack.push(index)
+  }
+  if (openStack.length === 0) return text
+
+  const insertions = new Map<number, number>()
+  for (const openIndex of openStack) {
+    const open = tokens[openIndex]
+    const nextToken = tokens[openIndex + 1]
+    const segmentEnd = nextToken?.index ?? text.length
+    const segment = text.slice(open.end, segmentEnd)
+    const boundary = open.end + findFontScopeBoundary(segment)
+    insertions.set(boundary, (insertions.get(boundary) ?? 0) + 1)
+  }
+
+  let healed = ''
+  let cursor = 0
+  for (const [index, count] of [...insertions.entries()].sort(([a], [b]) => a - b)) {
+    healed += text.slice(cursor, index)
+    healed += '</font>'.repeat(count)
+    cursor = index
+  }
+  return healed + text.slice(cursor)
 }
 
 function trimEdgeWhitespaceInEmphasis(text: string, delimiter: '*' | '_'): string {
@@ -86,7 +186,9 @@ function trimEdgeWhitespaceInQuotes(text: string): string {
 }
 
 function healUnshieldedSegment(text: string): string {
-  let healed = repairQuotedColorTagBoundaries(text)
+  let healed = repairUnterminatedFontColorQuotes(text)
+  healed = closeUnterminatedFontTags(healed)
+  healed = repairQuotedColorTagBoundaries(healed)
   for (let i = 0; i < 2; i++) {
     const next = trimEdgeWhitespaceInQuotes(trimEdgeWhitespaceInEmphasis(trimEdgeWhitespaceInEmphasis(healed, '*'), '_'))
     if (next === healed) break

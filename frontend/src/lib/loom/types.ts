@@ -164,6 +164,7 @@ export interface AdvancedSettings {
   seed: number
   customStopStrings: string[]
   collapseMessages: boolean
+  trimIncompleteWords: boolean
 }
 
 export interface PresetSource {

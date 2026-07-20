@@ -3188,6 +3188,8 @@
       "stopHint": "Aggiunto alle sequenze di arresto della richiesta",
       "collapseMessages": "Comprimi in un singolo messaggio utente",
       "collapseHint": "Unisce tutti i blocchi di istruzione e la cronologia chat in un singolo messaggio utente. Usa con \"Nomi nei messaggi: Nel contenuto\" per la separazione dei turni.",
+      "trimIncompleteWords": "Rimuovi parole incomplete",
+      "trimIncompleteWordsHint": "Quando una risposta in streaming termina a metà parola, rimuove l'ultima parola prima del salvataggio.",
       "continueNudge": "Spinta continua",
       "continueNudgeHint": "Iniettato durante il continuation di una risposta",
       "emptySendNudge": "Spinta invio vuoto",

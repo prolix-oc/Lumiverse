@@ -3180,6 +3180,8 @@
       "stopHint": "要求停止シーケンスに追加",
       "collapseMessages": "単一のユーザー メッセージに折りたたむ",
       "collapseHint": "すべてのプロンプト ブロックとチャット履歴を 1 つのユーザー メッセージに結合します。順番を区切る場合は、「メッセージ内の名前: コンテンツ内」と併用します。",
+      "trimIncompleteWords": "不完全な単語を削除",
+      "trimIncompleteWordsHint": "ストリーミング応答が単語の途中で終わった場合、保存前に最後の単語を削除します。",
       "continueNudge": "ナッジを続ける",
       "continueNudgeHint": "応答を継続するときに挿入される",
       "emptySendNudge": "空の送信ナッジ",

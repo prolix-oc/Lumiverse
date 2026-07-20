@@ -3591,6 +3591,7 @@ export async function assemblePrompt(
     messages: result,
     breakdown,
     parameters,
+    trimIncompleteWords: prompts.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
     activatedWorldInfo:
       activatedWorldInfo.length > 0 ? activatedWorldInfo : undefined,
@@ -6701,6 +6702,7 @@ async function onelinerImpersonation(
     messages: result,
     breakdown,
     parameters,
+    trimIncompleteWords: preset?.prompts?.advancedSettings?.trimIncompleteWords === true,
     assistantPrefill,
     macroEnv,
   };

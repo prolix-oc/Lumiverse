@@ -3413,6 +3413,8 @@
       "stopHint": "Appended to the request stop sequences",
       "collapseMessages": "Collapse into single user message",
       "collapseHint": "Merges all prompt blocks and chat history into one user message. Use with \"Names in Messages: In Content\" for turn separation.",
+      "trimIncompleteWords": "Trim incomplete words",
+      "trimIncompleteWordsHint": "When a streamed response ends mid-word, remove that final word before saving.",
       "continueNudge": "Continue Nudge",
       "continueNudgeHint": "Injected when continuing a response",
       "emptySendNudge": "Empty Send Nudge",

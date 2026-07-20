@@ -1599,9 +1599,10 @@ function AdvancedSettingsPanel({
   const seed = settings.seed ?? defaults.seed
   const stopStrings: string[] = settings.customStopStrings ?? defaults.customStopStrings
   const collapseMessages: boolean = settings.collapseMessages ?? defaults.collapseMessages
+  const trimIncompleteWords: boolean = settings.trimIncompleteWords ?? defaults.trimIncompleteWords
   const namesBehavior = completion.namesBehavior ?? completionDefaults.namesBehavior
 
-  const isActive = seed >= 0 || stopStrings.length > 0 || collapseMessages || namesBehavior !== completionDefaults.namesBehavior
+  const isActive = seed >= 0 || stopStrings.length > 0 || collapseMessages || trimIncompleteWords || namesBehavior !== completionDefaults.namesBehavior
 
   const handleSeedChange = (value: string) => {
     const num = parseInt(value)
@@ -1624,7 +1625,7 @@ function AdvancedSettingsPanel({
       <div className={clsx(s.accordionHeader, isActive && s.accordionHeaderActive)} onClick={() => setIsExpanded(!isExpanded)}>
         <Wrench size={12} style={{ color: isActive ? 'var(--lumiverse-primary)' : 'var(--lumiverse-text-dim)', flexShrink: 0 }} />
         <span className={s.accordionTitle}>{t('settings.advanced')}</span>
-        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0) + (collapseMessages ? 1 : 0) + (namesBehavior !== completionDefaults.namesBehavior ? 1 : 0)}</span>}
+        {isActive && <span className={s.accordionBadge}>{(seed >= 0 ? 1 : 0) + (stopStrings.length > 0 ? 1 : 0) + (collapseMessages ? 1 : 0) + (trimIncompleteWords ? 1 : 0) + (namesBehavior !== completionDefaults.namesBehavior ? 1 : 0)}</span>}
         {isExpanded ? <ChevronDown size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} /> : <ChevronRight size={11} style={{ color: 'var(--lumiverse-text-dim)', flexShrink: 0 }} />}
       </div>
       {isExpanded && (
@@ -1668,6 +1669,9 @@ function AdvancedSettingsPanel({
           </div>
           <div className={s.settingsField}>
             <Toggle.Checkbox checked={collapseMessages} onChange={v => onSave({ collapseMessages: v })} label={t('settings.collapseMessages')} hint={t('settings.collapseHint')} />
+          </div>
+          <div className={s.settingsField}>
+            <Toggle.Checkbox checked={trimIncompleteWords} onChange={v => onSave({ trimIncompleteWords: v })} label={t('settings.trimIncompleteWords')} hint={t('settings.trimIncompleteWordsHint')} />
           </div>
         </div>
       )}

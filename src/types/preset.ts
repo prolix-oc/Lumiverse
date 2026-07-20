@@ -219,6 +219,8 @@ export interface AdvancedSettings {
   seed: number;
   customStopStrings: string[];
   collapseMessages: boolean;
+  /** Drop a trailing word when a streamed response ends directly on it. */
+  trimIncompleteWords?: boolean;
 }
 
 export interface AuthorsNote {

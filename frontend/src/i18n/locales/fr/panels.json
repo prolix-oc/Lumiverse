@@ -3180,6 +3180,8 @@
       "stopHint": "Ajouté aux séquences d'arrêt de la demande",
       "collapseMessages": "Réduire en un seul message utilisateur",
       "collapseHint": "Fusionne tous les blocs d'invite et l'historique des discussions en un seul message utilisateur. À utiliser avec « Noms dans les messages : Dans le contenu » pour la séparation des tours.",
+      "trimIncompleteWords": "Supprimer les mots incomplets",
+      "trimIncompleteWordsHint": "Lorsqu'une réponse diffusée se termine au milieu d'un mot, supprime ce dernier mot avant l'enregistrement.",
       "continueNudge": "Continuer le Nudge",
       "continueNudgeHint": "Injecté lors de la poursuite d'une réponse",
       "emptySendNudge": "Vide Envoyer le Nudge",
