@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { env } from "./env";
 import { getDatabasePath, initDatabase } from "./db/connection";
@@ -10,16 +10,17 @@ import { initIdentity } from "./crypto/init";
 import { initVapidKeys } from "./crypto/vapid";
 import { eventBus } from "./ws/bus";
 import { isTermuxLikeEnvironment } from "./utils/termux";
+import { ensureDataDirectory } from "./utils/data-directory";
 
 // Validate data directory is accessible and writable before any file operations.
 // This catches permission issues early (common on Termux/Android) instead of
 // letting them surface as cryptic failures in identity/credential file creation.
-mkdirSync(env.dataDir, { recursive: true });
+ensureDataDirectory(env.dataDir);
 if (isTermuxLikeEnvironment()) {
   // Keep library temp files on the same filesystem as DATA_DIR so LanceDB's
   // temp/index staging does not hit EXDEV across /tmp, proot, or bind mounts.
   const tempDir = join(env.dataDir, "tmp");
-  mkdirSync(tempDir, { recursive: true });
+  ensureDataDirectory(tempDir);
   process.env.TMPDIR = tempDir;
   process.env.TMP = tempDir;
   process.env.TEMP = tempDir;
