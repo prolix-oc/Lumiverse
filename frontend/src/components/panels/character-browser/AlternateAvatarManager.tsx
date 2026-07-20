@@ -146,12 +146,21 @@ export default function AlternateAvatarManager({
                   </button>
                 </div>
               ) : (
-                <span className={styles.avatarLabel}>{entry.label}</span>
+                <button
+                  type="button"
+                  className={styles.avatarLabelButton}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleStartRename(entry)
+                  }}
+                  title={tc('actions.edit')}
+                  aria-label={`${tc('actions.edit')}: ${entry.label}`}
+                >
+                  <span className={styles.avatarLabel}>{entry.label}</span>
+                  <Pencil className={styles.labelEditIcon} size={10} aria-hidden="true" />
+                </button>
               )}
               <div className={styles.cardActions} onClick={(e) => e.stopPropagation()}>
-                <button type="button" className={styles.iconBtn} onClick={() => handleStartRename(entry)} title={tc('actions.edit')}>
-                  <Pencil size={10} />
-                </button>
                 <button type="button" className={styles.iconBtn} onClick={() => handleDelete(entry.id)} title={tc('actions.delete')}>
                   <X size={10} />
                 </button>
