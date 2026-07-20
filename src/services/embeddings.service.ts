@@ -4281,9 +4281,44 @@ export function mapDatabankSearchHits(
   hits: VectorHit[],
   requestedLimit: number,
 ): Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> {
+  // Databanks are presented to users as documents, but the vector store ranks
+  // chunks. A broad query can therefore put several chunks from one document
+  // ahead of the first chunk from every other relevant document. Keep the
+  // provider's ranked order for each document's best hit, while using the
+  // available slots to cover as many documents as possible before admitting
+  // second and subsequent chunks from one document.
+  //
+  // Metadata written by vectorization always contains documentId. Treat a
+  // legacy/malformed row without it as unique to its source instead of
+  // collapsing every such row into a single synthetic document.
+  const selected: VectorHit[] = [];
+  const overflow: VectorHit[] = [];
+  const selectedDocumentIds = new Set<string>();
+
+  for (const hit of hits) {
+    let documentId: string | null = null;
+    try {
+      const metadata = JSON.parse(hit.metadata_json || "{}");
+      if (typeof metadata?.documentId === "string" && metadata.documentId) {
+        documentId = metadata.documentId;
+      }
+    } catch {
+      // A malformed legacy metadata value still gets a deterministic slot.
+    }
+
+    const documentKey = documentId ?? `source:${String(hit.source_id)}`;
+    if (!selectedDocumentIds.has(documentKey)) {
+      selectedDocumentIds.add(documentKey);
+      selected.push(hit);
+    } else {
+      overflow.push(hit);
+    }
+  }
+
+  const diversifiedHits = [...selected, ...overflow].slice(0, requestedLimit);
   const results: Array<{ chunk_id: string; score: number | null; content: string; metadata: any }> = [];
 
-  for (const hit of hits.slice(0, requestedLimit)) {
+  for (const hit of diversifiedHits) {
     let meta: any = {};
     try { meta = JSON.parse(hit.metadata_json || "{}"); } catch { /* empty */ }
 

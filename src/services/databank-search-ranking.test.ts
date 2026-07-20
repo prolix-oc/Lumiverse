@@ -3,12 +3,12 @@ import { mapDatabankSearchHits } from "./embeddings.service";
 import { databankCacheKey } from "./databank/retrieval.service";
 import type { VectorHit } from "./vector-store/types";
 
-function hit(sourceId: string, similarity: number | null): VectorHit {
+function hit(sourceId: string, similarity: number | null, documentId?: string): VectorHit {
   return {
     id: sourceId,
     source_id: sourceId,
     content: `content:${sourceId}`,
-    metadata_json: JSON.stringify({ sourceId }),
+    metadata_json: JSON.stringify({ sourceId, ...(documentId ? { documentId } : {}) }),
     similarity,
     lexicalScore: similarity == null ? 10 : null,
     vector: null,
@@ -33,6 +33,39 @@ describe("databank search result mapping", () => {
     const [result] = mapDatabankSearchHits([hit("lexical-only", null)], 1);
 
     expect(result.score).toBeNull();
+  });
+
+  it("uses the top result from each document before returning additional chunks", () => {
+    const results = mapDatabankSearchHits([
+      hit("document-a-0", 0.98, "document-a"),
+      hit("document-a-1", 0.97, "document-a"),
+      hit("document-b-0", 0.82, "document-b"),
+      hit("document-a-2", 0.79, "document-a"),
+      hit("document-c-0", 0.71, "document-c"),
+    ], 4);
+
+    expect(results.map((result) => result.chunk_id)).toEqual([
+      "document-a-0",
+      "document-b-0",
+      "document-c-0",
+      "document-a-1",
+    ]);
+  });
+
+  it("falls back to provider order after every available document is represented", () => {
+    const results = mapDatabankSearchHits([
+      hit("document-a-0", 0.98, "document-a"),
+      hit("document-a-1", 0.97, "document-a"),
+      hit("document-b-0", 0.82, "document-b"),
+      hit("document-a-2", 0.79, "document-a"),
+    ], 4);
+
+    expect(results.map((result) => result.chunk_id)).toEqual([
+      "document-a-0",
+      "document-b-0",
+      "document-a-1",
+      "document-a-2",
+    ]);
   });
 });
 
