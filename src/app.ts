@@ -273,10 +273,15 @@ app.use("/api/auth/*", async (c, next) => {
 // frame-src / child-src are enforced via the frontend HTML meta tag as well;
 // these headers complement it by preventing the app from being embedded in
 // external frames and hardening the overall document boundary.
+// Exempt localhost origins so the desktop tray wrapper can iframe the UI.
 app.use("*", async (c, next) => {
   await next();
-  c.res.headers.set("X-Frame-Options", "DENY");
-  c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+  const origin = c.req.header("origin") ?? "";
+  const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  if (!isLocal) {
+    c.res.headers.set("X-Frame-Options", "DENY");
+    c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+  }
 });
 
 // BetterAuth handler — BEFORE auth middleware

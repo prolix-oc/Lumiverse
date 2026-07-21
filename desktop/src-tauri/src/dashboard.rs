@@ -80,7 +80,8 @@ pub fn show_dashboard(
         builder = builder.center();
     }
 
-    builder.build().map_err(|e| e.to_string())?;
+    let window = builder.build().map_err(|e| e.to_string())?;
+    let _ = window.set_skip_taskbar(true);
     Ok(())
 }
 
