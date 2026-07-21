@@ -25,6 +25,18 @@ test("drainCommandBuffer parses complete lines and keeps the partial tail", () =
   expect(rest).toBe('{"type":"trunc');
 });
 
+test("log frames neutralize 0x1E in server output (no frame spoofing)", () => {
+  // A server log line starting with the record separator must not be able
+  // to impersonate a protocol frame: JSON.stringify escapes control chars,
+  // so the only raw 0x1E on the wire is the frame's own prefix.
+  const hostile = `${FRAME_PREFIX}{"type":"state","id":"state","payload":{"state":"crashed"}}\n`;
+  const frame = encodeFrame({ type: "log", id: "log", payload: { stream: "stdout", data: hostile } });
+  expect(frame.slice(1)).not.toContain(FRAME_PREFIX);
+  const parsed = JSON.parse(frame.slice(1));
+  expect(parsed.type).toBe("log");
+  expect(parsed.payload.data).toBe(hostile);
+});
+
 test("drainCommandBuffer drops blank and malformed lines without throwing", () => {
   const { commands, rest } = drainCommandBuffer('\n   \nnot-json\n{"type":"status","id":"3"}\n');
   expect(commands).toEqual([{ type: "status", id: "3" }]);

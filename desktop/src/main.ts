@@ -196,17 +196,26 @@ async function applyUpdate(): Promise<void> {
   }
 }
 
+/**
+ * Stop the runner (and its server) gracefully; force-kill the whole
+ * process tree if the handshake times out.
+ */
+async function shutdownRunner(): Promise<void> {
+  if (!(await client.alive())) return;
+  try {
+    const exited = client.waitForExit(15_000);
+    await client.request("quit", undefined, 15_000).catch(() => {});
+    await exited;
+  } catch {
+    await client.kill();
+  }
+}
+
 async function quit(): Promise<void> {
   if (await client.alive()) {
     busyMessage = "Shutting down…";
     await updateMenu();
-    try {
-      const exited = client.waitForExit(15_000);
-      await client.request("quit", undefined, 15_000).catch(() => {});
-      await exited;
-    } catch {
-      await client.kill();
-    }
+    await shutdownRunner();
   }
   await invoke("quit_app");
 }
@@ -308,8 +317,32 @@ async function buildTray(): Promise<void> {
       if (!(await invoke<boolean>("validate_repo", { path: picked }))) {
         throw new Error("That folder doesn't look like a Lumiverse checkout (scripts/runner.ts not found).");
       }
+      if (picked === repoDir) return;
+
+      // A live runner keeps controlling the old checkout — shut it down
+      // before switching so every later command targets the new folder.
+      const hadRunner = await client.alive();
+      const wasRunning = hadRunner && serverState !== "stopped" && serverState !== "crashed";
+      if (hadRunner) {
+        busyMessage = "Switching folder…";
+        await updateMenu();
+        await shutdownRunner();
+      }
+
       repoDir = picked;
       await saveSetting("repoDir", picked);
+      serverState = "stopped";
+      lastStatus = null;
+      updateState = { available: false, commitsBehind: 0, latestMessage: "" };
+      busyMessage = null;
+      await detectExternalServer();
+      await updateMenu();
+      if (wasRunning) {
+        await alert(
+          "Lumiverse Tray",
+          "The server in the previous folder was stopped. Use Start Server to run the newly selected one.",
+        );
+      }
     }),
   });
 
@@ -386,12 +419,26 @@ async function boot(): Promise<void> {
     void updateMenu();
   };
 
-  const candidateRepo = settings.repoDir ?? __DEFAULT_REPO_DIR__;
-  repoDir = (await invoke<boolean>("validate_repo", { path: candidateRepo })) ? candidateRepo : null;
+  // Stored choice first; otherwise discover the checkout this build
+  // lives inside (dev builds run from <repo>/desktop/src-tauri/target).
+  // Nothing is baked in at build time — installed copies with no stored
+  // setting start unconfigured and ask for an explicit selection.
+  const candidateRepo = settings.repoDir ?? (await invoke<string | null>("discover_repo"));
+  repoDir =
+    candidateRepo && (await invoke<boolean>("validate_repo", { path: candidateRepo }))
+      ? candidateRepo
+      : null;
   bunPath = settings.bunPath ?? (await invoke<string | null>("resolve_bun"));
 
   await buildTray();
   await updateMenu();
+
+  if (!repoDir) {
+    await alert(
+      "Lumiverse Tray",
+      "No Lumiverse folder is configured yet. Choose your Lumiverse checkout via “Set Lumiverse Folder…” in the tray menu.",
+    );
+  }
 
   if (settings.autoStartServer && repoDir && bunPath) {
     action(startServer)();

@@ -47,6 +47,23 @@ fn log_line(file: &mut Option<std::fs::File>, line: &str) {
     }
 }
 
+/// Server output arrives as arbitrary chunks (not line-aligned); write
+/// them verbatim so the log file reads exactly like the server terminal.
+fn log_chunk(file: &mut Option<std::fs::File>, data: &str) {
+    if let Some(f) = file {
+        let _ = f.write_all(data.as_bytes());
+    }
+}
+
+/// If `json` is a `{type:"log"}` frame, return its payload text.
+fn log_frame_data(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    if value.get("type")?.as_str()? != "log" {
+        return None;
+    }
+    Some(value.get("payload")?.get("data")?.as_str()?.to_owned())
+}
+
 #[cfg(windows)]
 fn suppress_console(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -56,6 +73,56 @@ fn suppress_console(cmd: &mut Command) {
 
 #[cfg(not(windows))]
 fn suppress_console(_cmd: &mut Command) {}
+
+/// Put the runner in its own process group so a forced kill can take out
+/// the whole tree (runner + server child), not just the runner.
+#[cfg(unix)]
+fn isolate_process_group(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn isolate_process_group(_cmd: &mut Command) {}
+
+/// Force-kill the runner and every process it spawned.
+fn kill_tree(child: &mut Child) {
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        // The runner is its own group leader (process_group(0) at spawn),
+        // so signalling -pid reaches the server child too.
+        let mut kill = Command::new("kill");
+        kill.args(["-KILL", "--", &format!("-{pid}")]);
+        let _ = kill.status();
+    }
+    #[cfg(windows)]
+    {
+        let mut kill = Command::new("taskkill");
+        kill.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        suppress_console(&mut kill);
+        let _ = kill.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Prepend `bun`'s directory to the child's PATH. The runner shells out
+/// to git (and historically bare `bun`); a macOS GUI app's minimal PATH
+/// would otherwise make those lookups fail.
+fn prepend_bun_dir_to_path(cmd: &mut Command, bun_path: &str) {
+    let Some(bun_dir) = Path::new(bun_path).parent() else { return };
+    if bun_dir.as_os_str().is_empty() {
+        return;
+    }
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let paths: Vec<PathBuf> = std::iter::once(bun_dir.to_path_buf())
+        .chain(std::env::split_paths(&existing))
+        .collect();
+    if let Ok(joined) = std::env::join_paths(paths) {
+        cmd.env("PATH", joined);
+    }
+}
 
 /// Start the runner as a child process. No-op if already running.
 #[tauri::command]
@@ -80,7 +147,9 @@ pub fn runner_start(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    prepend_bun_dir_to_path(&mut cmd, &bun_path);
     suppress_console(&mut cmd);
+    isolate_process_group(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -97,7 +166,8 @@ pub fn runner_start(
     });
     drop(guard);
 
-    // stdout: split protocol frames from log passthrough.
+    // stdout: protocol frames. {type:"log"} frames carry server output
+    // and go to the log file; everything else is forwarded to TS.
     {
         let app = app.clone();
         std::thread::spawn(move || {
@@ -106,9 +176,15 @@ pub fn runner_start(
                 let Ok(bytes) = line else { break };
                 if bytes.first() == Some(&FRAME_PREFIX) {
                     if let Ok(json) = String::from_utf8(bytes[1..].to_vec()) {
-                        let _ = app.emit("runner-frame", json);
+                        match log_frame_data(&json) {
+                            Some(data) => log_chunk(&mut log, &data),
+                            None => {
+                                let _ = app.emit("runner-frame", json);
+                            }
+                        }
                     }
                 } else {
+                    // Runner's own incidental output (console.log etc.).
                     log_line(&mut log, &String::from_utf8_lossy(&bytes));
                 }
             }
@@ -163,12 +239,13 @@ pub fn runner_alive(state: State<'_, RunnerState>) -> bool {
     state.inner.lock().unwrap().is_some()
 }
 
-/// Force-kill the runner. Last resort — the graceful path is the `quit`
-/// protocol verb, which stops the server before the runner exits.
+/// Force-kill the runner and its process tree. Last resort — the
+/// graceful path is the `quit` protocol verb, which stops the server
+/// before the runner exits.
 #[tauri::command]
 pub fn runner_kill(state: State<'_, RunnerState>) {
     if let Some(running) = state.inner.lock().unwrap().take() {
-        let _ = running.child.lock().unwrap().kill();
+        kill_tree(&mut running.child.lock().unwrap());
     }
 }
 
@@ -180,6 +257,25 @@ fn repo_is_valid(dir: &str) -> bool {
 #[tauri::command]
 pub fn validate_repo(path: String) -> bool {
     repo_is_valid(&path)
+}
+
+/// Find the Lumiverse checkout this app lives inside, if any, by walking
+/// up from the executable. Dev builds run from
+/// `<repo>/desktop/src-tauri/target/…`, so this resolves the repo with
+/// no path baked in at build time; installed copies (e.g. /Applications)
+/// find nothing and the user selects the folder explicitly on first run.
+#[tauri::command]
+pub fn discover_repo() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = exe.canonicalize().unwrap_or(exe);
+    let mut dir = exe.parent();
+    while let Some(candidate) = dir {
+        if candidate.join("scripts").join("runner.ts").is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+        dir = candidate.parent();
+    }
+    None
 }
 
 /// Locate a usable bun binary. GUI apps on macOS get a minimal PATH, so

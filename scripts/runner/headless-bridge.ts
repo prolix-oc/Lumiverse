@@ -7,10 +7,11 @@
  *
  *   stdin  — one JSON command per line, the same message shapes the
  *            Operator panel sends over child IPC ({type, id, payload}).
- *   stdout — server log passthrough, with protocol frames interleaved.
- *            A frame is a single line prefixed with ASCII 0x1E (record
- *            separator) so a consumer can split frames from log output
- *            unambiguously: 0x1E + JSON + "\n".
+ *   stdout — protocol frames: 0x1E (record separator) + JSON + "\n".
+ *            Server log output is carried inside {type:"log"} frames
+ *            (JSON-escaped), never written raw — so a server log line
+ *            can't spoof a frame by starting with 0x1E. Unframed lines
+ *            can only originate from the runner's own code.
  *
  * Commands are routed into the existing handleIPCMessage() dispatcher;
  * responses and progress events for stdin-originated requests come back
@@ -20,7 +21,7 @@
  */
 
 import { handleIPCMessage } from "./ipc-handler.js";
-import type { ServerState } from "./server-manager.js";
+import { setOutputSink, type ServerState } from "./server-manager.js";
 
 export const FRAME_PREFIX = "\x1e";
 
@@ -69,6 +70,14 @@ export function attachHeadlessBridge(options: HeadlessBridgeOptions): HeadlessBr
   const writeFrame = (message: unknown): void => {
     process.stdout.write(encodeFrame(message));
   };
+
+  // Wrap server output in frames instead of passing raw bytes through.
+  // Streaming decoders keep multi-byte UTF-8 intact across chunk splits.
+  const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
+  setOutputSink((chunk, stream) => {
+    const data = decoders[stream].decode(chunk, { stream: true });
+    if (data) writeFrame({ type: "log", id: "log", payload: { stream, data } });
+  });
 
   let inputBuffer = "";
   let disconnected = false;

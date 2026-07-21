@@ -42,9 +42,11 @@ bun install
 bun run tauri dev
 ```
 
-By default the app manages the checkout it lives in (`desktop/..`). Use
-"Set Lumiverse Folder…" in the menu, or set `LUMIVERSE_REPO_DIR` at build
-time, to point it elsewhere.
+The app discovers the checkout it lives in at runtime (dev builds run
+from `desktop/src-tauri/target/…`, so the repo above them is found
+automatically — no path is baked into the binary). An installed copy
+outside a checkout starts unconfigured and prompts for the folder; use
+"Set Lumiverse Folder…" in the menu to change it at any time.
 
 Server output is written to `runner.log` in the platform app-log
 directory (macOS: `~/Library/Logs/chat.lumiverse.tray/`).

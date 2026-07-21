@@ -19,6 +19,7 @@ pub fn run() {
             runner::runner_alive,
             runner::runner_kill,
             runner::validate_repo,
+            runner::discover_repo,
             runner::resolve_bun,
             runner::quit_app,
             runner::alert,
