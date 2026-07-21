@@ -52,7 +52,7 @@ let updateState: UpdateState = { available: false, commitsBehind: 0, latestMessa
 
 let statusItem: MenuItem;
 let startStopItem: MenuItem;
-let dashboardItem: MenuItem;
+let dashboardItem: Submenu;
 let statsPortItem: MenuItem;
 let statsPidItem: MenuItem;
 let statsUptimeItem: MenuItem;
@@ -88,6 +88,24 @@ function formatUptime(startedAt: number | null): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+async function updateDashboardMenuText(): Promise<void> {
+  const running = serverState === "running" || externalRunning;
+  const visible = await invoke<boolean>("dashboard_visible").catch(() => false);
+
+  await dashboardItem.setText(visible ? "Close Dashboard" : "Open Dashboard");
+
+  // Enable/disable child items based on server state.
+  const items = await dashboardItem.items();
+  for (const item of items) {
+    if ("setEnabled" in item) {
+      const text = await item.text();
+      if (text === "In App Window" || text === "In Browser") {
+        await item.setEnabled(running);
+      }
+    }
+  }
+}
+
 async function updateMenu(): Promise<void> {
   const running = serverState === "running";
   const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null;
@@ -102,7 +120,7 @@ async function updateMenu(): Promise<void> {
     await startStopItem.setEnabled(!transitioning || serverState === "starting");
   }
 
-  await dashboardItem.setEnabled(running || externalRunning);
+  await updateDashboardMenuText();
 
   await statsPortItem.setText(`Port: ${port}`);
   await statsPidItem.setText(`PID: ${lastStatus?.pid ?? "—"}`);
@@ -262,12 +280,31 @@ async function loadTrayImage(): Promise<Image> {
 async function buildTray(): Promise<void> {
   statusItem = await MenuItem.new({ text: statusText(), enabled: false });
   startStopItem = await MenuItem.new({ text: "Start Server", action: action(toggleServer) });
-  dashboardItem = await MenuItem.new({
-    text: "Open Web Dashboard",
+  const openInWindowItem = await MenuItem.new({
+    text: "In App Window",
+    enabled: false,
+    action: action(async () => {
+      const visible = await invoke<boolean>("dashboard_visible");
+      if (visible) {
+        await invoke("hide_dashboard");
+      } else {
+        await invoke("show_dashboard", { port });
+      }
+      await updateDashboardMenuText();
+    }),
+  });
+
+  const openInBrowserItem = await MenuItem.new({
+    text: "In Browser",
     enabled: false,
     action: action(async () => {
       await openUrl(`http://localhost:${port}`);
     }),
+  });
+
+  dashboardItem = await Submenu.new({
+    text: "Open Dashboard",
+    items: [openInWindowItem, openInBrowserItem],
   });
 
   statsPortItem = await MenuItem.new({ text: "Port: —", enabled: false });
