@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
+import { toOpaqueRgb } from '@/theme/themeColor'
 import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
@@ -112,16 +113,6 @@ function parseColorToken(token: string): Rgba | null {
 function interpolateToken(from: Rgba, to: Rgba, t: number): string {
   const mix = (a: number, b: number) => a + (b - a) * t
   return `rgba(${Math.round(mix(from.r, to.r))}, ${Math.round(mix(from.g, to.g))}, ${Math.round(mix(from.b, to.b))}, ${mix(from.a, to.a).toFixed(3)})`
-}
-
-function toOpaqueRgb(color: string): string | null {
-  const parsed = parseColorToken(color)
-  if (!parsed) return null
-
-  // Native window chrome expects an opaque color. Composite translucent theme
-  // tokens against black, matching the app's deep shell background.
-  const mix = (channel: number) => Math.round(channel * parsed.a)
-  return `rgb(${mix(parsed.r)}, ${mix(parsed.g)}, ${mix(parsed.b)})`
 }
 
 function syncThemeColorMeta(vars: Record<string, string>) {

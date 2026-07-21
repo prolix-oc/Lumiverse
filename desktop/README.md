@@ -1,6 +1,7 @@
 # Lumiverse Tray
 
-A macOS menu bar / Windows system tray companion for the Lumiverse server.
+A macOS menu bar / Windows system tray / Linux StatusNotifier companion for
+the Lumiverse server.
 It sits in the tray and lets you start and stop the server, open the web
 dashboard, watch serving stats (port, PID, uptime, branch, version), and
 check for / apply updates — without keeping a terminal open.
@@ -31,8 +32,47 @@ the server down gracefully.
 
 - [Bun](https://bun.sh) ≥ 1.3.13 (also required by the server itself)
 - [Rust](https://rustup.rs) stable (Tauri v2 builds the native shell)
-- macOS: Xcode Command Line Tools. Windows: WebView2 runtime
-  (preinstalled on Windows 11) and the MSVC build tools.
+
+Platform-specific requirements:
+
+- **macOS:** Xcode Command Line Tools.
+- **Windows:** WebView2 Runtime (preinstalled on Windows 11) and the MSVC
+  build tools.
+- **Linux:** GTK/WebKitGTK development libraries plus an AppIndicator
+  implementation. The helper publishes its tray icon through the
+  StatusNotifierItem/AppIndicator D-Bus protocol.
+
+  Debian/Ubuntu:
+
+  ```bash
+  sudo apt install build-essential curl wget file libssl-dev \
+    libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+    librsvg2-dev libxdo-dev
+  ```
+
+  Fedora:
+
+  ```bash
+  sudo dnf install gcc gcc-c++ make curl wget file openssl-devel \
+    webkit2gtk4.1-devel libappindicator-gtk3-devel \
+    librsvg2-devel libxdo-devel
+  ```
+
+  Arch Linux:
+
+  ```bash
+  sudo pacman -S --needed base-devel curl wget file openssl \
+    webkit2gtk-4.1 libappindicator-gtk3 librsvg libxdo
+  ```
+
+  Package names vary by distribution. `libayatana-appindicator3-dev` may be
+  substituted with the distribution's `libappindicator` development package.
+  These are build dependencies; a machine running an unpackaged Linux binary
+  also needs the matching AppIndicator runtime library.
+
+  KDE Plasma exposes StatusNotifier items natively. GNOME Shell does not show
+  them by default, so install and enable an AppIndicator/KStatusNotifier
+  extension (for example, **AppIndicator and KStatusNotifierItem Support**).
 
 ## Develop
 
@@ -48,8 +88,9 @@ automatically — no path is baked into the binary). An installed copy
 outside a checkout starts unconfigured and prompts for the folder; use
 "Set Lumiverse Folder…" in the menu to change it at any time.
 
-Server output is written to `runner.log` in the platform app-log
-directory (macOS: `~/Library/Logs/chat.lumiverse.tray/`).
+Server output is written to `runner.log` in the platform app-log directory
+(macOS: `~/Library/Logs/chat.lumiverse.tray/`; Linux: the XDG state/log
+directory selected by Tauri).
 
 ## Build
 
@@ -60,5 +101,6 @@ bun run tauri build
 ```
 
 Bundles land in `desktop/src-tauri/target/release/bundle/` (`.app`/`.dmg`
-on macOS, `.msi`/`.exe` installers on Windows). Builds are unsigned;
+on macOS, `.msi`/`.exe` installers on Windows, and Linux packages such as
+`.deb`, `.rpm`, or `.AppImage` when built on Linux). Builds are unsigned;
 signing/notarization is left to release infrastructure.
