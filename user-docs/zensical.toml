@@ -18,6 +18,7 @@ nav = [
   { "Home" = "index.md" },
   { "Getting Started" = [
     { "Installation" = "getting-started/installation.md" },
+    { "Desktop Tray Companion" = "getting-started/desktop-tray.md" },
     { "First Steps" = "getting-started/first-steps.md" },
     { "Interface Overview" = "getting-started/interface-overview.md" },
   ] },

@@ -18,6 +18,9 @@ New to Lumiverse? Start here:
 2. **[First Steps](getting-started/first-steps.md)** — Connect an API, import a character, send your first message
 3. **[Interface Overview](getting-started/interface-overview.md)** — Learn the layout and where to find things
 
+Prefer to manage a local Lumiverse server from your menu bar or notification
+area? See the optional [Desktop Tray Companion](getting-started/desktop-tray.md).
+
 ---
 
 ## Guides by Topic

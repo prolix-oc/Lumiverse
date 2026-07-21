@@ -79,6 +79,11 @@ After the shell opens, continue with the normal startup command below.
 
 The start script handles everything: auto-installs Bun if needed, runs `bun install`, triggers the setup wizard on first launch, and starts the server.
 
+!!! tip "Optional desktop tray"
+    On macOS and Windows, you can build an optional menu bar/system tray
+    companion that manages a local Lumiverse checkout. See [Desktop Tray
+    Companion](desktop-tray.md) for requirements and setup.
+
 ### 4. Open in your browser
 
 Navigate to `http://localhost:7860`. On first launch, the setup wizard guides you through account creation.
