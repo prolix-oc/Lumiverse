@@ -10,6 +10,18 @@ const params = new URLSearchParams(window.location.search);
 const port = params.get("port") ?? "7860";
 const url = `http://127.0.0.1:${port}`;
 
+// Platform detection — Windows gets custom title bar buttons
+const isWindows = navigator.userAgent.includes("Windows");
+if (isWindows) {
+  document.body.classList.add("platform-windows");
+}
+
+// Title bar button handlers
+const win = getCurrentWindow();
+document.getElementById("btn-close")?.addEventListener("click", () => win.close());
+document.getElementById("btn-minimize")?.addEventListener("click", () => win.minimize());
+document.getElementById("btn-maximize")?.addEventListener("click", () => win.toggleMaximize());
+
 const container = document.querySelector(".webview-container")!;
 const loading = document.getElementById("loading")!;
 
@@ -27,7 +39,6 @@ container.appendChild(iframe);
 setTimeout(() => loading.classList.add("hidden"), 5_000);
 
 // Persist bounds on window move/resize.
-const win = getCurrentWindow();
 let boundsTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleSaveBounds() {

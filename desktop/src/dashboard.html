@@ -32,8 +32,67 @@
         left: 12px;
         top: 50%;
         transform: translateY(-50%);
-        width: 68px;
-        height: 14px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        -webkit-app-region: no-drag;
+      }
+
+      /* macOS: hide custom buttons — OS renders native traffic lights */
+      .titlebar-traffic-lights .tl-btn {
+        display: none;
+      }
+
+      .tl-btn {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        color: transparent;
+        transition: opacity 0.15s;
+      }
+
+      .tl-btn:hover {
+        color: rgba(0, 0, 0, 0.5);
+      }
+
+      .tl-close { background: #ff5f57; }
+      .tl-minimize { background: #febc2e; }
+      .tl-maximize { background: #28c840; }
+
+      /* Windows: rectangular buttons on the right side */
+      body.platform-windows .titlebar-traffic-lights {
+        left: auto;
+        right: 0;
+        top: 0;
+        transform: none;
+        height: 100%;
+        gap: 0;
+      }
+
+      body.platform-windows .titlebar-traffic-lights .tl-btn {
+        display: flex;
+        width: 46px;
+        height: 32px;
+        border-radius: 0;
+        background: transparent;
+        color: #999;
+        font-size: 10px;
+      }
+
+      body.platform-windows .titlebar-traffic-lights .tl-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      body.platform-windows .titlebar-traffic-lights .tl-close:hover {
+        background: #e81123;
+        color: white;
       }
 
       .titlebar-drag {
@@ -80,7 +139,11 @@
   </head>
   <body>
     <div class="titlebar">
-      <div class="titlebar-traffic-lights"></div>
+      <div class="titlebar-traffic-lights">
+        <button class="tl-btn tl-close" id="btn-close"></button>
+        <button class="tl-btn tl-minimize" id="btn-minimize"></button>
+        <button class="tl-btn tl-maximize" id="btn-maximize"></button>
+      </div>
       <div class="titlebar-drag"></div>
       <span class="titlebar-title">Lumiverse</span>
     </div>
