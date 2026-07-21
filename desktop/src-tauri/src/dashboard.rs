@@ -23,11 +23,16 @@ fn load_bounds(app: &AppHandle) -> Option<(i32, i32, u32, u32)> {
     let file = bounds_file(app)?;
     let data = std::fs::read_to_string(file).ok()?;
     let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let w = v.get("width")?.as_u64()? as u32;
+    let h = v.get("height")?.as_u64()? as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
     Some((
         v.get("x")?.as_i64()? as i32,
         v.get("y")?.as_i64()? as i32,
-        v.get("width")?.as_u64()? as u32,
-        v.get("height")?.as_u64()? as u32,
+        w,
+        h,
     ))
 }
 
