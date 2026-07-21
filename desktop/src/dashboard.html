@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lumiverse</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #1a1a1a;
+        color: #e0e0e0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        user-select: none;
+      }
+
+      .titlebar {
+        height: 38px;
+        background: #222;
+        display: flex;
+        align-items: center;
+        position: relative;
+        flex-shrink: 0;
+        border-bottom: 1px solid #333;
+      }
+
+      .titlebar-traffic-lights {
+        position: absolute;
+        left: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 68px;
+        height: 14px;
+      }
+
+      .titlebar-drag {
+        position: absolute;
+        inset: 0;
+        -webkit-app-region: drag;
+      }
+
+      .titlebar-title {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 13px;
+        font-weight: 500;
+        color: #999;
+        letter-spacing: 0.3px;
+      }
+
+      .webview-container {
+        flex: 1;
+        position: relative;
+      }
+
+      .webview-container iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+        background: #fff;
+      }
+
+      .loading {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #1a1a1a;
+        color: #666;
+        font-size: 14px;
+      }
+
+      .loading.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="titlebar">
+      <div class="titlebar-traffic-lights"></div>
+      <div class="titlebar-drag"></div>
+      <span class="titlebar-title">Lumiverse</span>
+    </div>
+    <div class="webview-container">
+      <div class="loading" id="loading">Connecting to Lumiverse…</div>
+    </div>
+    <script type="module" src="/src/dashboard.ts"></script>
+  </body>
+</html>
