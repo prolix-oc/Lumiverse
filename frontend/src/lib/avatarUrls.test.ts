@@ -58,6 +58,15 @@ describe('persona avatar URL helpers', () => {
     ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&variant=crop&v=toggle-2')
   })
 
+  test('keeps an upload-derived resolver version in the URL', () => {
+    expect(
+      getPersonaAvatarThumbUrlById('persona-mode', 'base-image', {
+        chatId: 'chat-1',
+        version: 'toggle-2.original-image.crop-image',
+      }),
+    ).toBe('/api/v1/personas/persona-mode/avatar?chat_id=chat-1&size=sm&variant=crop&v=toggle-2.original-image.crop-image')
+  })
+
   test('keeps original and cropped chat-scoped avatar tiers distinct', () => {
     const context = { chatId: 'chat-1', version: 'toggle-2' }
 

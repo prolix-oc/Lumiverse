@@ -208,9 +208,21 @@ export function useMessageCard(message: Message, chatId: string) {
     ? effectiveCharacter.extensions.avatar_crop_image_id
     : null
   const personaAvatarId = userPersonaId ?? activePersona?.id ?? null
-  const personaAvatarVersion = personaAvatarId && typeof activeChatMetadata?.persona_addon_avatar_versions?.[personaAvatarId] === 'string'
+  const chatPersonaAvatarVersion = personaAvatarId && typeof activeChatMetadata?.persona_addon_avatar_versions?.[personaAvatarId] === 'string'
     ? activeChatMetadata.persona_addon_avatar_versions[personaAvatarId]
     : null
+  // Chat-aware persona avatars use a resolver URL so add-on overrides can be
+  // applied server-side. Include the current base image IDs in its version so
+  // an upload changes the <img> URL immediately, rather than waiting for a
+  // browser revalidation of the otherwise-stable resolver URL.
+  const effectivePersona = messagePersona ?? activePersona
+  const personaImageVersion = [
+    effectivePersona?.image_id,
+    effectivePersona?.metadata?.avatar_crop_image_id,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0).join('.')
+  const personaAvatarVersion = [chatPersonaAvatarVersion, personaImageVersion]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join('.') || null
   const personaAvatarContext = !isTemporaryChat && personaAvatarId
     ? { chatId, version: personaAvatarVersion }
     : undefined
