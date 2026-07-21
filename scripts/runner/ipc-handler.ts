@@ -1,5 +1,13 @@
-import { join } from "path";
-import { sendToServer, stopServer, startServer, restartServer } from "./server-manager.js";
+import { join, resolve } from "path";
+import {
+  sendToServer,
+  stopServer,
+  startServer,
+  restartServer,
+  getServerState,
+  getServerPid,
+  getStartedAt,
+} from "./server-manager.js";
 import {
   checkForUpdates,
   applyUpdate,
@@ -9,7 +17,8 @@ import {
   rebuildFrontend,
   runWithServerStopped,
 } from "./git-ops.js";
-import { writeTrustAnyOrigin } from "./env-config.js";
+import { readEnvConfig, writeTrustAnyOrigin } from "./env-config.js";
+import { getCurrentBranch } from "./lib/git.js";
 import {
   PROJECT_ROOT,
   AVAILABLE_BRANCHES,
@@ -39,22 +48,64 @@ export function setLastUpdateState(state: typeof lastUpdateState): void {
   lastUpdateState = state;
 }
 
+/**
+ * Response sink override, keyed by request id. Requests that arrive over
+ * child IPC reply through the server (sendToServer). Requests that arrive
+ * from another transport — e.g. the headless stdio bridge used by the
+ * desktop tray app — register a sink here so responses and progress
+ * events return to their origin instead of the server child (which may
+ * not even be running).
+ */
+type ResponseSink = (message: any) => void;
+const externalSinks = new Map<string, ResponseSink>();
+// Sinks stay registered after the response because long operations keep
+// emitting progress events under the same id. Cap the map so ids from a
+// long-lived supervisor session can't accumulate without bound.
+const MAX_EXTERNAL_SINKS = 100;
+
+function registerExternalSink(id: string, sink: ResponseSink): void {
+  if (externalSinks.size >= MAX_EXTERNAL_SINKS) {
+    const oldest = externalSinks.keys().next().value;
+    if (oldest !== undefined) externalSinks.delete(oldest);
+  }
+  externalSinks.set(id, sink);
+}
+
+function deliver(id: string, message: any): void {
+  const sink = externalSinks.get(id);
+  if (sink) {
+    sink(message);
+    return;
+  }
+  sendToServer(message);
+}
+
 function respond(id: string, success: boolean, data?: any, error?: string): void {
-  sendToServer({ type: "response", id, payload: { success, data, error } });
+  deliver(id, { type: "response", id, payload: { success, data, error } });
 }
 
 function progress(id: string, operation: string, message: string): void {
-  sendToServer({ type: "progress", id, payload: { operation, message } });
+  deliver(id, { type: "progress", id, payload: { operation, message } });
+}
+
+function readRunnerVersion(): string {
+  try {
+    const pkg = require(resolve(import.meta.dir, "../../package.json"));
+    return pkg.version || "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function waitForResponseFlush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, RESPONSE_FLUSH_DELAY_MS));
 }
 
-export async function handleIPCMessage(msg: any): Promise<void> {
+export async function handleIPCMessage(msg: any, sink?: ResponseSink): Promise<void> {
   if (!msg?.type || !msg.id) return;
 
   const { type, id, payload } = msg;
+  if (sink) registerExternalSink(id, sink);
 
   switch (type) {
     case "status": {
@@ -259,6 +310,47 @@ export async function handleIPCMessage(msg: any): Promise<void> {
       } finally {
         operationInProgress = null;
       }
+      break;
+    }
+
+    case "start-server": {
+      if (operationInProgress) {
+        respond(id, false, undefined, `Operation '${operationInProgress}' already in progress`);
+        break;
+      }
+      const state = getServerState();
+      if (state === "running" || state === "starting") {
+        respond(id, true, { state });
+        break;
+      }
+      startServer(isDev);
+      respond(id, true, { state: getServerState() });
+      break;
+    }
+
+    case "stop-server": {
+      if (operationInProgress) {
+        respond(id, false, undefined, `Operation '${operationInProgress}' already in progress`);
+        break;
+      }
+      await stopServer();
+      respond(id, true, { state: getServerState() });
+      break;
+    }
+
+    case "full-status": {
+      const envConfig = readEnvConfig();
+      respond(id, true, {
+        state: getServerState(),
+        pid: getServerPid(),
+        startedAt: getStartedAt(),
+        port: envConfig.port,
+        branch: getCurrentBranch() || "unknown",
+        version: readRunnerVersion(),
+        updateAvailable: lastUpdateState.available,
+        commitsBehind: lastUpdateState.commitsBehind,
+        latestUpdateMessage: lastUpdateState.latestMessage,
+      });
       break;
     }
 

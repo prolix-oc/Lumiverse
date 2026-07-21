@@ -26,6 +26,7 @@ import { readEnvConfig } from "./runner/env-config.js";
 import { getCurrentBranch } from "./runner/lib/git.js";
 import { UPDATE_CHECK_INTERVAL_MS } from "./runner/lib/constants.js";
 import { goodbyeLines } from "./runner/goodbye-lines.js";
+import { attachHeadlessBridge, type HeadlessBridge } from "./runner/headless-bridge.js";
 
 function pickRandomGoodbyeLine(lines: string[]): string {
   if (lines.length === 0) return "Goodbye.";
@@ -50,6 +51,9 @@ function pickRandomGoodbyeLine(lines: string[]): string {
 
 const isDev = process.argv.includes("--dev");
 const autoOpen = process.argv.includes("--auto-open") || process.argv.includes("-a");
+// Headless mode: no banner, no keyboard, no server auto-start. A desktop
+// supervisor (see desktop/) owns this process and drives it over stdio.
+const isHeadless = process.argv.includes("--headless");
 setDevMode(isDev);
 
 // ─── Color helpers ──────────────────────────────────────────────────────────
@@ -138,6 +142,7 @@ function setupKeyboard(): void {
 
 let shuttingDown = false;
 let openedAtStartup = false;
+let bridge: HeadlessBridge | null = null;
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -163,6 +168,7 @@ process.on("SIGINT", () => shutdown());
 // ─── State change handler ───────────────────────────────────────────────────
 
 setStateChangeHandler((state: ServerState) => {
+  bridge?.notifyState(state);
   const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
   switch (state) {
     case "running":
@@ -215,6 +221,12 @@ setTimeout(async () => {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
-printBanner();
-setupKeyboard();
-startServer(isDev);
+if (isHeadless) {
+  // The supervisor decides when to start the server (start-server verb)
+  // and a closed stdin means it is gone — shut down rather than orphan.
+  bridge = attachHeadlessBridge({ onDisconnect: () => shutdown() });
+} else {
+  printBanner();
+  setupKeyboard();
+  startServer(isDev);
+}
