@@ -36,6 +36,13 @@ function getLocalImageUrl(att: MessageAttachment): string {
   return imagesApi.url(att.image_id)
 }
 
+function getLocalImagePreviewUrl(att: MessageAttachment): string {
+  // Inline message art is capped around 240 CSS px. The 700px tier remains
+  // sharp at high device-pixel ratios without decoding an arbitrary-size
+  // original inside every mounted message row.
+  return imagesApi.largeUrl(att.image_id)
+}
+
 function getRelayPreviewUrl(att: MessageAttachment): string | null {
   return typeof att.relay_preview_url === 'string' && att.relay_preview_url.startsWith('data:image/')
     ? att.relay_preview_url
@@ -164,7 +171,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               title={att.original_filename}
             >
               <LazyImage
-                src={getLocalImageUrl(att)}
+                src={getLocalImagePreviewUrl(att)}
                 alt={att.original_filename}
                 style={{ objectFit: 'contain' }}
                 spinnerSize={18}
@@ -195,7 +202,7 @@ export default function MessageAttachments({ attachments, isUser, chatId, messag
               onTouchEnd={canActOnImage ? longPress.onTouchEnd : undefined}
             >
               <LazyImage
-                src={getLocalImageUrl(att)}
+                src={getLocalImagePreviewUrl(att)}
                 alt={att.original_filename}
                 className={styles.inlineImage}
                 style={att.width && att.height

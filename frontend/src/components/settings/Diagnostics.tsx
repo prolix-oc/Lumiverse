@@ -12,6 +12,7 @@ import { chatsApi } from '@/api/chats'
 import { BASE_URL } from '@/api/client'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { getPwaLifecycleDiagnostics } from '@/lib/pwaLifecycleDiagnostics'
 import styles from './Diagnostics.module.css'
 import clsx from 'clsx'
 
@@ -156,6 +157,18 @@ function buildMarkdown(
     }
   } else {
     lines.push(`- ${t('diagnostics.reportNoExtensions')}`)
+  }
+
+  const lifecycle = getPwaLifecycleDiagnostics()
+  if (lifecycle.length > 0) {
+    lines.push('')
+    lines.push('### PWA lifecycle (local-only, most recent 32 events)')
+    for (const entry of lifecycle) {
+      const details = Object.entries(entry.data)
+        .map(([key, value]) => `${key}=${value === null ? 'null' : String(value)}`)
+        .join(', ')
+      lines.push(`- ${entry.at} ${entry.event} [${details}]`)
+    }
   }
 
   return lines.join('\n')

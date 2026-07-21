@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { imagesApi } from '@/api/images'
 import { getPreferredWallpaperVideoCodec } from '@/lib/wallpaperVideoCodec'
-import { primeWallpaperVideo, useWallpaperVideoSource } from '@/lib/wallpaperVideoCache'
 import type { WallpaperRef, WallpaperSettings } from '@/types/store'
 import styles from './WallpaperLayer.module.css'
 
@@ -31,7 +30,6 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
     ? imagesApi.url(wallpaper.image_id, { codec: getPreferredWallpaperVideoCodec() })
     : null
   const wallpaperKey = wallpaper ? `${wallpaper.type}:${wallpaper.image_id}` : 'none'
-  const { src: cachedVideoSrc, fromCache } = useWallpaperVideoSource(rawVideoUrl)
 
   useEffect(() => {
     onVisualReadyRef.current = onVisualReady
@@ -116,23 +114,16 @@ export default function WallpaperLayer({ wallpaper, settings, hidden = false, fi
         ref={activeVideoRef}
         key={wallpaper.image_id}
         className={videoClassName}
-        src={cachedVideoSrc ?? undefined}
+        src={rawVideoUrl ?? undefined}
         crossOrigin="use-credentials"
         autoPlay
         muted
         loop
         playsInline
-        preload="auto"
+        preload="metadata"
         onLoadedData={
           fadeInOnMount
-            ? () => {
-              revealRef.current()
-              if (!fromCache && rawVideoUrl) {
-                window.setTimeout(() => {
-                  void primeWallpaperVideo(rawVideoUrl).catch(() => {})
-                }, 1500)
-              }
-            }
+            ? () => revealRef.current()
             : undefined
         }
         onError={fadeInOnMount ? () => revealRef.current() : undefined}

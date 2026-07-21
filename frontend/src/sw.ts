@@ -189,7 +189,16 @@ self.addEventListener('notificationclick', (event) => {
 })
 
 
-// Take control of clients immediately on activation
+// Manual Blob-backed video wallpaper caching was removed in favor of native
+// HTTP/range caching. Delete the old cache so existing installs recover the
+// potentially large files it retained on disk.
+const OBSOLETE_RUNTIME_CACHES = ['wallpaper-video-cache-v1']
+
+// Take control of clients immediately on activation and clean caches that are
+// no longer managed by a current route.
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(Promise.all([
+    self.clients.claim(),
+    ...OBSOLETE_RUNTIME_CACHES.map((cacheName) => caches.delete(cacheName)),
+  ]).then(() => undefined))
 })

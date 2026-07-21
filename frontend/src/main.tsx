@@ -7,6 +7,7 @@ import { getSafeInAppNavigationUrl } from './lib/navigationSafety'
 import { installWindowOpenGuard } from './lib/windowOpenGuard'
 import { computeViewportKeyboardInset } from './lib/viewportKeyboardInset'
 import { rememberRegistration } from './lib/swUpdater'
+import { installPwaLifecycleDiagnostics } from './lib/pwaLifecycleDiagnostics'
 import { initializeSafeThemeMode } from './lib/safeThemeMode'
 import { router } from './router'
 import ErrorBoundary from './components/shared/ErrorBoundary'
@@ -15,6 +16,7 @@ import './theme/reset.css'
 import './theme/global.css'
 
 installWindowOpenGuard()
+installPwaLifecycleDiagnostics()
 
 let reloading = false
 

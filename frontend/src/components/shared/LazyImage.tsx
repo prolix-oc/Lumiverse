@@ -1,17 +1,6 @@
 import { useState, useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type SyntheticEvent } from 'react'
 import { Spinner } from '@/components/shared/Spinner'
-import { isImageDecoded, onImageDecoded, prefetchImage } from '@/lib/imageDecodeCache'
-
-const MAX_LOADED_IMAGE_SRCS = 500
-const loadedImageSrcs = new Set<string>()
-
-function rememberLoadedSrc(src: string) {
-  loadedImageSrcs.add(src)
-  if (loadedImageSrcs.size > MAX_LOADED_IMAGE_SRCS) {
-    const oldest = loadedImageSrcs.values().next().value as string | undefined
-    if (oldest !== undefined) loadedImageSrcs.delete(oldest)
-  }
-}
+import { isImageDecoded, onImageDecoded, rememberImageDecoded } from '@/lib/imageDecodeCache'
 
 interface LazyImageProps {
   src?: string | null
@@ -37,6 +26,7 @@ export default function LazyImage({
   containerClassName = '',
   containerStyle = {},
   decoding = 'async',
+  loading = 'lazy',
   onLoad,
   onError,
   ...props
@@ -45,7 +35,6 @@ export default function LazyImage({
   // paint within one frame, so showing/hiding a spinner just adds flicker.
   const [isLoading, setIsLoading] = useState(() => {
     if (!src) return false
-    if (loadedImageSrcs.has(src)) return false
     if (isImageDecoded(src)) return false
     return true
   })
@@ -55,30 +44,29 @@ export default function LazyImage({
   useEffect(() => {
     if (src !== prevSrcRef.current) {
       prevSrcRef.current = src
-      const decoded = Boolean(src && (loadedImageSrcs.has(src) || isImageDecoded(src)))
+      const decoded = Boolean(src && isImageDecoded(src))
       setIsLoading(!decoded)
       setHasError(false)
     }
   }, [src])
 
-  // When the image is pending in the decode cache, subscribe to its
-  // completion so we can flip isLoading without waiting for the <img>
-  // onload (which fires after a fresh decode on the new element).
+  // A near-viewport prefetch may finish before this element's load event.
+  // Subscribe to that decode, but do not launch a second detached image here:
+  // the mounted <img> is already doing the required fetch and decode.
   useEffect(() => {
     if (!src || !isLoading) return
-    if (loadedImageSrcs.has(src) || isImageDecoded(src)) {
+    if (isImageDecoded(src)) {
       setIsLoading(false)
       return
     }
-    // Trigger prefetch in case it hasn't been started yet
-    prefetchImage(src)
-    return onImageDecoded(src, () => setIsLoading(false))
+    return onImageDecoded(src, () => {
+      if (isImageDecoded(src)) setIsLoading(false)
+    })
   }, [src, isLoading])
 
   const handleLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
     if (src) {
-      rememberLoadedSrc(src)
-      prefetchImage(src)
+      rememberImageDecoded(src)
     }
     setIsLoading(false)
     onLoad?.(event)
@@ -129,6 +117,7 @@ export default function LazyImage({
         }}
         className={className}
         decoding={decoding}
+        loading={loading}
         onLoad={handleLoad}
         onError={handleError}
         {...props}

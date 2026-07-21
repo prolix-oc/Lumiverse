@@ -9,7 +9,7 @@ import { chatsApi } from '@/api/chats'
 import { imagesApi } from '@/api/images'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
-import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
+import { getCharacterAvatarLargeUrlById, getCharacterAvatarThumbUrlById } from '@/lib/avatarUrls'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
 import { useStore } from '@/store'
 import { useScrollGate } from '@/hooks/useScrollGate'
@@ -61,6 +61,7 @@ const PREFETCH_ROWS = 6
 function getItemAvatarUrls(
   items: GroupedRecentChat[],
   characters: { id: string; image_id?: string | null }[],
+  variant: 'card' | 'compact',
 ): string[] {
   const urls: string[] = []
   for (const item of items) {
@@ -68,12 +69,15 @@ function getItemAvatarUrls(
     if (isGroup) {
       for (const id of item.group_character_ids!.slice(0, 4)) {
         const char = characters.find((c) => c.id === id)
-        const url = getCharacterAvatarLargeUrlById(id, char?.image_id ?? null)
+        // Mosaic cells are small even in card mode; the 300px tier is enough
+        // for a sharp high-DPI render without decoding four 700px bitmaps.
+        const url = getCharacterAvatarThumbUrlById(id, char?.image_id ?? null)
         if (url) urls.push(url)
       }
     } else if (item.character_id) {
       const liveChar = characters.find((c) => c.id === item.character_id)
-      const url = getCharacterAvatarLargeUrlById(
+      const getUrl = variant === 'card' ? getCharacterAvatarLargeUrlById : getCharacterAvatarThumbUrlById
+      const url = getUrl(
         item.character_id,
         liveChar?.image_id ?? item.character_image_id,
       )
@@ -167,8 +171,9 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
   const liveCharacter = item.character_id
     ? characters.find((entry) => entry.id === item.character_id) ?? null
     : null
+  const getAvatarUrl = variant === 'card' ? getCharacterAvatarLargeUrlById : getCharacterAvatarThumbUrlById
   const avatarUrl = item.character_id
-    ? getCharacterAvatarLargeUrlById(
+    ? getAvatarUrl(
         item.character_id,
         liveCharacter?.image_id ?? item.character_image_id
       )
@@ -198,7 +203,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
         <div className={clsx(styles.groupMosaic, mosaicClass)}>
           {mosaicIds.map((id) => {
             const char = characters.find((c) => c.id === id)
-            const url = getCharacterAvatarLargeUrlById(id, char?.image_id ?? null)
+            const url = getCharacterAvatarThumbUrlById(id, char?.image_id ?? null)
             return (
               <div key={id} className={styles.mosaicCell}>
                 <LazyImage
@@ -1184,9 +1189,13 @@ export default function LandingPage() {
     const endRow = Math.min(virtualRowCount - 1, visEnd + PREFETCH_ROWS)
     const startItem = startRow * virtualColumns
     const endItem = Math.min(items.length, (endRow + 1) * virtualColumns)
-    const urls = getItemAvatarUrls(items.slice(startItem, endItem), characters)
+    const urls = getItemAvatarUrls(
+      items.slice(startItem, endItem),
+      characters,
+      virtualLayout === 'compact' ? 'compact' : 'card',
+    )
     if (urls.length > 0) prefetchImages(urls)
-  }, [visStart, visEnd, items, virtualColumns, virtualRowCount, characters])
+  }, [visStart, visEnd, items, virtualColumns, virtualRowCount, characters, virtualLayout])
 
   const setVirtualContainerRef = useCallback((node: HTMLDivElement | null) => {
     virtualContainerRef.current = node
