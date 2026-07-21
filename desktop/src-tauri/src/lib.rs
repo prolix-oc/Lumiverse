@@ -1,3 +1,4 @@
+mod dashboard;
 mod runner;
 
 use tauri_plugin_autostart::MacosLauncher;
@@ -13,6 +14,7 @@ pub fn run() {
             None,
         ))
         .manage(runner::RunnerState::default())
+        .manage(dashboard::DashboardState::default())
         .invoke_handler(tauri::generate_handler![
             runner::runner_start,
             runner::runner_send,
@@ -24,6 +26,10 @@ pub fn run() {
             runner::quit_app,
             runner::alert,
             runner::pick_folder,
+            dashboard::show_dashboard,
+            dashboard::hide_dashboard,
+            dashboard::save_dashboard_bounds,
+            dashboard::dashboard_visible,
         ])
         .setup(|app| {
             // Menu-bar-only app: no Dock icon on macOS.
