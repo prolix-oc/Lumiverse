@@ -10,9 +10,9 @@ const params = new URLSearchParams(window.location.search);
 const port = params.get("port") ?? "7860";
 const url = `http://127.0.0.1:${port}`;
 
-// Platform detection — Windows gets custom title bar buttons
-const isWindows = navigator.userAgent.includes("Windows");
-if (isWindows) {
+// Platform detection — macOS gets native traffic lights; Windows/Linux get custom buttons
+const isMac = navigator.userAgent.includes("Mac");
+if (!isMac) {
   document.body.classList.add("platform-windows");
 }
 
