@@ -12,7 +12,10 @@ export type BaseColorKey =
   | 'speech'
   | 'thoughts'
 
-export type BaseColors = Partial<Record<BaseColorKey, string>>
+export type BaseColors = Partial<Record<BaseColorKey, string>> & {
+  /** Internal deep/root surface override; not exposed as a user-facing base color. */
+  backgroundDeep?: string
+}
 
 export interface CharacterThemeOverlay {
   accent: { h: number; s: number; l: number }
@@ -20,12 +23,14 @@ export interface CharacterThemeOverlay {
     primary?: string
     secondary?: string
     background?: string
+    backgroundDeep?: string
     text?: string
   }
   baseColorsLight: {
     primary?: string
     secondary?: string
     background?: string
+    backgroundDeep?: string
     text?: string
   }
 }

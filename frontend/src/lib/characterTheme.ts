@@ -202,12 +202,14 @@ export function deriveCharacterOverlay(palette: ImagePalette): CharacterThemeOve
       primary: overlay.baseColors.primary,
       secondary: overlay.baseColors.secondary,
       background: overlay.baseColors.background,
+      backgroundDeep: overlay.baseColors.backgroundDeep,
       text: overlay.baseColors.text,
     },
     baseColorsLight: {
       primary: overlay.baseColorsLight.primary,
       secondary: overlay.baseColorsLight.secondary,
       background: overlay.baseColorsLight.background,
+      backgroundDeep: overlay.baseColorsLight.backgroundDeep,
       text: overlay.baseColorsLight.text,
     },
   }

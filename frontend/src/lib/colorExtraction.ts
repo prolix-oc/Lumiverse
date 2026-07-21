@@ -44,12 +44,14 @@ export interface CharacterColorOverlay {
     primary: string
     secondary: string
     background: string
+    backgroundDeep?: string
     text: string
   }
   baseColorsLight: {
     primary: string
     secondary: string
     background: string
+    backgroundDeep?: string
     text: string
   }
 }
@@ -1190,6 +1192,7 @@ export function deriveCharacterOverlayFromPalette(palette: ImagePalette): Charac
   const darkAccent = palette.ui.dark.accent
   const lightAccent = palette.ui.light.accent
   const primaryHsl = rgbToHsl(darkAccent.r, darkAccent.g, darkAccent.b)
+  const lightAccentHsl = rgbToHsl(lightAccent.r, lightAccent.g, lightAccent.b)
 
   const secondarySeed = palette.palette[1] ?? palette.palette[0] ?? darkAccent
   const secondaryDark = deriveSecondaryTone(secondarySeed, palette.ui.dark.surface, 'dark')
@@ -1201,12 +1204,17 @@ export function deriveCharacterOverlayFromPalette(palette: ImagePalette): Charac
       primary: rgbToCss(darkAccent),
       secondary: rgbToCss(secondaryDark),
       background: rgbToCss(palette.ui.dark.surface),
+      // Match the ordinary theme engine's low-chroma 5% deep surface. Keep
+      // character tint on normal/elevated surfaces without creating a visibly
+      // lighter seam beside macOS's native PWA traffic-light backing.
+      backgroundDeep: rgbToCss(hslToRgb(primaryHsl.h, primaryHsl.s * 0.3, 5)),
       text: rgbToCss(palette.ui.dark.text),
     },
     baseColorsLight: {
       primary: rgbToCss(lightAccent),
       secondary: rgbToCss(secondaryLight),
       background: rgbToCss(palette.ui.light.surface),
+      backgroundDeep: rgbToCss(hslToRgb(lightAccentHsl.h, lightAccentHsl.s * 0.15, 90)),
       text: rgbToCss(palette.ui.light.text),
     },
   }
