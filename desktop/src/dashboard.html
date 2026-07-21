@@ -6,6 +6,14 @@
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
 
+      :root {
+        --tb-fallback-bg-deep: #0a0812;
+        --tb-fallback-primary: #8c82ff;
+        --tb-fallback-primary-020: rgba(140, 130, 255, 0.2);
+        --tb-fallback-border: rgba(255, 255, 255, 0.08);
+        --tb-fallback-text-muted: rgba(255, 255, 255, 0.55);
+      }
+
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         background: #1a1a1a;
@@ -19,12 +27,18 @@
 
       .titlebar {
         height: 38px;
-        background: #222;
+        flex-shrink: 0;
         display: flex;
         align-items: center;
         position: relative;
-        flex-shrink: 0;
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid var(--lumiverse-border, var(--tb-fallback-border));
+        background:
+          linear-gradient(90deg, var(--lumiverse-primary-020, var(--tb-fallback-primary-020)), transparent 36%),
+          color-mix(in srgb, var(--lumiverse-bg-deep, var(--tb-fallback-bg-deep)) 92%, transparent);
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+        backdrop-filter: blur(16px) saturate(1.2);
+        -webkit-backdrop-filter: blur(16px) saturate(1.2);
+        user-select: none;
       }
 
       .titlebar-traffic-lights {
@@ -38,10 +52,7 @@
         -webkit-app-region: no-drag;
       }
 
-      /* macOS: hide custom buttons — OS renders native traffic lights */
-      .titlebar-traffic-lights .tl-btn {
-        display: none;
-      }
+      /* macOS: keep custom dots visible — we draw them ourselves on every platform */
 
       .tl-btn {
         width: 12px;
@@ -59,12 +70,34 @@
       }
 
       .tl-btn:hover {
-        color: rgba(0, 0, 0, 0.5);
+        color: var(--lumiverse-text, rgba(0, 0, 0, 0.6));
+        filter: brightness(1.08);
       }
 
-      .tl-close { background: #ff5f57; }
-      .tl-minimize { background: #febc2e; }
-      .tl-maximize { background: #28c840; }
+      .tl-close    { background: var(--lumiverse-danger,  #ff5f57); }
+      .tl-minimize { background: var(--lumiverse-warning, #febc2e); }
+      .tl-maximize { background: var(--lumiverse-success, #28c840); }
+
+      .tl-close:hover { background: var(--lumiverse-danger-hover, #ff7068); }
+
+      .tl-brand-mark {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--lumiverse-primary, var(--tb-fallback-primary));
+        box-shadow: 0 0 12px var(--lumiverse-primary-020, var(--tb-fallback-primary-020));
+        margin-left: 14px;
+        -webkit-app-region: no-drag;
+      }
+
+      /* Bump title bar on macOS to match the PWA WCO 40px rule (OS traffic
+         lights are taller than the generic 32px fallback). Our custom dots
+         don't strictly need it, but matching keeps the iframe content below
+         from being cropped. */
+      body[data-platform="macos"] .titlebar,
+      body.platform-macos .titlebar {
+        height: 40px;
+      }
 
       /* Windows: rectangular buttons on the right side */
       body.platform-windows .titlebar-traffic-lights {
@@ -99,6 +132,11 @@
         position: absolute;
         inset: 0;
         -webkit-app-region: drag;
+      }
+
+      /* macOS: start drag region past the dot cluster + brand mark + padding */
+      body.platform-macos .titlebar-drag {
+        left: 110px;
       }
 
       .titlebar-title {
@@ -140,9 +178,10 @@
   <body>
     <div class="titlebar">
       <div class="titlebar-traffic-lights">
-        <button class="tl-btn tl-close" id="btn-close"></button>
-        <button class="tl-btn tl-minimize" id="btn-minimize"></button>
-        <button class="tl-btn tl-maximize" id="btn-maximize"></button>
+        <button class="tl-btn tl-close" id="btn-close" aria-label="Close"></button>
+        <button class="tl-btn tl-minimize" id="btn-minimize" aria-label="Minimize"></button>
+        <button class="tl-btn tl-maximize" id="btn-maximize" aria-label="Maximize"></button>
+        <span class="tl-brand-mark" aria-hidden="true"></span>
       </div>
       <div class="titlebar-drag"></div>
       <span class="titlebar-title">Lumiverse</span>

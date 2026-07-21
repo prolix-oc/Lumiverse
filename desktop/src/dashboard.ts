@@ -16,6 +16,20 @@ if (!isMac) {
   document.body.classList.add("platform-windows");
 }
 
+// Apply theme variables broadcast from the framed frontend.
+window.addEventListener("message", (e: MessageEvent) => {
+  const data = e.data as { __lumiverseTheme?: boolean; mode?: string; vars?: Record<string, string> } | null;
+  if (!data || data.__lumiverseTheme !== true) return;
+  const root = document.documentElement;
+  if (data.mode) root.setAttribute("data-theme-mode", data.mode);
+  const vars = data.vars ?? {};
+  for (const [key, value] of Object.entries(vars)) {
+    if (typeof value === "string" && value.length > 0) {
+      root.style.setProperty(key, value);
+    }
+  }
+});
+
 // Title bar button handlers
 const win = getCurrentWindow();
 document.getElementById("btn-close")?.addEventListener("click", () => win.close());

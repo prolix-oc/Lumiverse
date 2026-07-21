@@ -22,6 +22,28 @@ function applyVariables(vars: Record<string, string>) {
   }
 }
 
+function broadcastThemeToParent(mode: ResolvedMode, vars: Record<string, string>) {
+  if (window.parent === window) return
+  try {
+    window.parent.postMessage(
+      {
+        __lumiverseTheme: true,
+        mode,
+        vars: {
+          '--lumiverse-bg-deep': vars['--lumiverse-bg-deep'] ?? '',
+          '--lumiverse-primary': vars['--lumiverse-primary'] ?? '',
+          '--lumiverse-primary-020': vars['--lumiverse-primary-020'] ?? '',
+          '--lumiverse-border': vars['--lumiverse-border'] ?? '',
+          '--lumiverse-text-muted': vars['--lumiverse-text-muted'] ?? '',
+        },
+      },
+      '*',
+    )
+  } catch {
+    /* parent unreachable — ignore */
+  }
+}
+
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v))
 }
@@ -362,6 +384,7 @@ export function useThemeApplicator() {
       }
 
       hadOverridesRef.current = hasOverrides
+      broadcastThemeToParent(mode, vars)
       syncThemeColorMeta(vars)
 
       if (!root.hasAttribute('data-pwa')) {
