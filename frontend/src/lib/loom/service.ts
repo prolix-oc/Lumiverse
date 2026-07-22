@@ -1501,7 +1501,12 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     schemaVersion: 1,
     createdAt: now,
     updatedAt: now,
-    blocks,
+    // `createBlock` gives every block a `group: null` default. That is the
+    // right default for a manually-created block, but a null group is explicit
+    // to the category renderer, so it prevents the imported blocks from being
+    // associated with the preceding ST category heading. Preserve ST's
+    // sequential category layout by assigning each prompt to that heading.
+    blocks: assignSTCategoryGroups(blocks),
     source: {
       type: 'st_import',
       slug: null,
@@ -1527,6 +1532,22 @@ export function importFromSTPreset(stPresetData: STPresetData, name: string): Lo
     lastProfileKey: null,
     promptVariables: {},
   }
+}
+
+/**
+ * SillyTavern represents categories solely as ordered heading prompts. Its
+ * child prompts do not carry a category id, so derive one from their position.
+ */
+function assignSTCategoryGroups(blocks: PromptBlock[]): PromptBlock[] {
+  let currentCategoryId: string | null = null
+
+  return blocks.map((block) => {
+    if (block.marker === 'category') {
+      currentCategoryId = block.id
+      return { ...block, group: null }
+    }
+    return { ...block, group: currentCategoryId }
+  })
 }
 
 
