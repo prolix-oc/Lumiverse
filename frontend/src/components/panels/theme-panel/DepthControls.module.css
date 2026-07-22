@@ -46,3 +46,32 @@
   font-variant-numeric: tabular-nums;
 }
 
+.desktopControls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-left: 26px;
+  padding-left: 10px;
+  border-left: 1px solid var(--lumiverse-border);
+}
+
+.colorInput {
+  width: 42px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-fill);
+  cursor: pointer;
+}
+
+.select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  color: var(--lumiverse-text);
+  background: var(--lumiverse-fill);
+}

@@ -1,0 +1,27 @@
+[[permission]]
+identifier = "tray-commands"
+description = "Allows the hidden tray host to manage the Lumiverse runner and frontend window."
+commands.allow = [
+  "runner_start",
+  "runner_send",
+  "runner_alive",
+  "runner_kill",
+  "validate_repo",
+  "discover_repo",
+  "resolve_bun",
+  "quit_app",
+  "alert",
+  "pick_folder",
+  "show_frontend",
+  "hide_frontend",
+  "reload_frontend",
+  "save_frontend_bounds",
+  "frontend_visible",
+  "frontend_exists",
+  "show_frontend_url_settings"
+]
+
+[[permission]]
+identifier = "allow-configure-frontend-appearance"
+description = "Allows the frontend WebView to configure its native translucent appearance."
+commands.allow = ["configure_frontend_appearance"]

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi } from '@/api/chats'
 import { imagesApi } from '@/api/images'
@@ -167,6 +167,14 @@ interface RecentChatAvatarProps {
 function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
   const characters = useStore((s) => s.characters)
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
+  // The landing list is already virtualized, so Tauri only mounts a bounded
+  // set of rows. WKWebView can defer native lazy-image loads for a noticeable
+  // period when a previously unmounted row returns to view; request those
+  // bounded images eagerly without changing the memory-sensitive PWA path.
+  const imageLoading = typeof document !== 'undefined'
+    && document.documentElement.hasAttribute('data-tauri-desktop')
+    ? 'eager'
+    : 'lazy'
 
   const liveCharacter = item.character_id
     ? characters.find((entry) => entry.id === item.character_id) ?? null
@@ -210,6 +218,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
                   src={url}
                   alt=""
                   decoding="async"
+                  loading={imageLoading}
                   fallback={
                     <div className={styles.mosaicFallback}>
                       <Users size={variant === 'card' ? 16 : 14} strokeWidth={1.5} />
@@ -234,7 +243,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
             className={styles.perspectiveLayer}
             src={imagesApi.largeUrl(layer.image_id)}
             alt={index === perspectiveLayers.length - 1 ? item.character_name : ''}
-            loading="lazy"
+            loading={imageLoading}
             decoding="async"
             draggable={false}
             style={{
@@ -254,6 +263,7 @@ function RecentChatAvatar({ item, variant }: RecentChatAvatarProps) {
         src={avatarUrl}
         alt={item.character_name}
         decoding="async"
+        loading={imageLoading}
         fallback={
           <div className={fallbackClassName}>
             {item.character_name?.[0]?.toUpperCase() || '?'}
@@ -429,12 +439,14 @@ const CHAT_NAV_FADE_MS = 220
 interface ChatCardProps {
   item: GroupedRecentChat
   animateEntry?: boolean
+  shiftPressed: boolean
   onClick: (item: GroupedRecentChat) => void
   onDeleteChat: (item: GroupedRecentChat) => void
   onDeleteAllChats: (item: GroupedRecentChat) => void
+  onRemoveFromRecent: (item: GroupedRecentChat) => void
 }
 
-const ChatCard = memo(function ChatCard({ item, animateEntry, onClick, onDeleteChat, onDeleteAllChats }: ChatCardProps) {
+const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent }: ChatCardProps) {
   const handleClick = useCallback(() => onClick(item), [onClick, item])
   const handleDelete = useMemo(() => {
     if (item.is_group && item.chat_count > 1) return undefined
@@ -521,6 +533,12 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, onClick, onDeleteC
   }, [])
 
   const displayName = getRecentChatDisplayName(item, t)
+  const showDeleteButton = handleDelete !== undefined || shiftPressed
+  const deleteTitle = shiftPressed
+    ? t('removeFromRecent')
+    : !item.is_group && item.chat_count > 1
+      ? t('deleteAllChats')
+      : t('deleteChat')
 
   return (
     <div
@@ -534,17 +552,25 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, onClick, onDeleteC
         ref={cardRef}
         className={clsx(styles.card, animateEntry && styles.cardEntry, isGroup && styles.groupCard)}
       >
-        {handleDelete && (
+        {showDeleteButton && (
           <button
             type="button"
-            className={styles.deleteBtn}
+            className={clsx(styles.deleteBtn, shiftPressed && styles.deleteBtnShift)}
             onClick={(e) => {
               e.stopPropagation()
-              handleDelete()
+              if (e.shiftKey) {
+                onRemoveFromRecent(item)
+                return
+              }
+              handleDelete?.()
             }}
-            title={!item.is_group && item.chat_count > 1 ? t('deleteAllChats') : t('deleteChat')}
+            title={deleteTitle}
           >
-            <Trash2 size={14} strokeWidth={1.5} />
+            {shiftPressed ? (
+              <EyeOff size={14} strokeWidth={1.5} />
+            ) : (
+              <Trash2 size={14} strokeWidth={1.5} />
+            )}
           </button>
         )}
         <button type="button" className={styles.cardBtn} onClick={handleClick}>
@@ -577,7 +603,7 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, onClick, onDeleteC
   )
 })
 
-const ChatListItem = memo(function ChatListItem({ item, animateEntry, onClick, onDeleteChat, onDeleteAllChats }: ChatCardProps) {
+const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent }: ChatCardProps) {
   const handleClick = useCallback(() => onClick(item), [onClick, item])
   const handleDelete = useMemo(() => {
     if (item.is_group && item.chat_count > 1) return undefined
@@ -595,20 +621,34 @@ const ChatListItem = memo(function ChatListItem({ item, animateEntry, onClick, o
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
   const displayName = getRecentChatDisplayName(item, t)
   const subtitle = getRecentChatSubtitle(item, t)
+  const showDeleteButton = handleDelete !== undefined || shiftPressed
+  const deleteTitle = shiftPressed
+    ? t('removeFromRecent')
+    : !item.is_group && item.chat_count > 1
+      ? t('deleteAllChats')
+      : t('deleteChat')
 
   return (
     <div className={clsx(styles.listItem, animateEntry && styles.listItemEntry, isGroup && styles.listItemGroup)}>
-      {handleDelete && (
+      {showDeleteButton && (
         <button
           type="button"
-          className={styles.listDeleteBtn}
+          className={clsx(styles.listDeleteBtn, shiftPressed && styles.listDeleteBtnShift)}
           onClick={(e) => {
             e.stopPropagation()
-            handleDelete()
+            if (e.shiftKey) {
+              onRemoveFromRecent(item)
+              return
+            }
+            handleDelete?.()
           }}
-          title={t('deleteChat')}
+          title={deleteTitle}
         >
-          <Trash2 size={14} strokeWidth={1.5} />
+          {shiftPressed ? (
+            <EyeOff size={14} strokeWidth={1.5} />
+          ) : (
+            <Trash2 size={14} strokeWidth={1.5} />
+          )}
         </button>
       )}
 
@@ -656,10 +696,13 @@ interface VirtualRowProps {
   rowItems: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
   initialPageSize: number
+  animateInitialEntries: boolean
+  shiftPressed: boolean
   measureElement: (el: Element | null) => void
   onChatClick: (item: GroupedRecentChat) => void
   onDeleteChat: (item: GroupedRecentChat) => void
   onDeleteAllChats: (item: GroupedRecentChat) => void
+  onRemoveFromRecent: (item: GroupedRecentChat) => void
 }
 
 function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
@@ -669,10 +712,13 @@ function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boo
   if (prev.virtualGap !== next.virtualGap) return false
   if (prev.layoutMode !== next.layoutMode) return false
   if (prev.initialPageSize !== next.initialPageSize) return false
+  if (prev.animateInitialEntries !== next.animateInitialEntries) return false
+  if (prev.shiftPressed !== next.shiftPressed) return false
   if (prev.measureElement !== next.measureElement) return false
   if (prev.onChatClick !== next.onChatClick) return false
   if (prev.onDeleteChat !== next.onDeleteChat) return false
   if (prev.onDeleteAllChats !== next.onDeleteAllChats) return false
+  if (prev.onRemoveFromRecent !== next.onRemoveFromRecent) return false
   if (prev.rowItems.length !== next.rowItems.length) return false
   for (let i = 0; i < prev.rowItems.length; i += 1) {
     if (prev.rowItems[i] !== next.rowItems[i]) return false
@@ -687,12 +733,16 @@ const VirtualRow = memo(function VirtualRow({
   rowItems,
   layoutMode,
   initialPageSize,
+  animateInitialEntries,
+  shiftPressed,
   measureElement,
   onChatClick,
   onDeleteChat,
   onDeleteAllChats,
+  onRemoveFromRecent,
 }: VirtualRowProps) {
-  const animateEntry = virtualRow.index * virtualColumns < initialPageSize
+  const animateEntry = animateInitialEntries
+    && virtualRow.index * virtualColumns < initialPageSize
   return (
     <div
       ref={measureElement}
@@ -711,18 +761,22 @@ const VirtualRow = memo(function VirtualRow({
             key={getRecentChatKey(item)}
             item={item}
             animateEntry={animateEntry}
+            shiftPressed={shiftPressed}
             onClick={onChatClick}
             onDeleteChat={onDeleteChat}
             onDeleteAllChats={onDeleteAllChats}
+            onRemoveFromRecent={onRemoveFromRecent}
           />
         ) : (
           <ChatCard
             key={getRecentChatKey(item)}
             item={item}
             animateEntry={animateEntry}
+            shiftPressed={shiftPressed}
             onClick={onChatClick}
             onDeleteChat={onDeleteChat}
             onDeleteAllChats={onDeleteAllChats}
+            onRemoveFromRecent={onRemoveFromRecent}
           />
         ),
       )}
@@ -751,6 +805,8 @@ export default function LandingPage() {
   const [creatingTempChat, setCreatingTempChat] = useState(false)
   const [tempChatMenuOpen, setTempChatMenuOpen] = useState(false)
   const [navigatingToChat, setNavigatingToChat] = useState(false)
+  const [animateInitialEntries, setAnimateInitialEntries] = useState(true)
+  const [shiftPressed, setShiftPressed] = useState(false)
   const [mobileMotionPermission, setMobileMotionPermission] = useState<DeviceRotationPermissionState>('unknown')
   const [showMobileMotionEnable, setShowMobileMotionEnable] = useState(false)
   const tempChatMenuRef = useRef<HTMLDivElement>(null)
@@ -778,6 +834,26 @@ export default function LandingPage() {
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [tempChatMenuOpen])
+
+  // Track Shift key for desktop users who want to remove a chat from the
+  // landing-page recent list without deleting it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setShiftPressed(true)
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setShiftPressed(false)
+    }
+    const onBlur = () => setShiftPressed(false)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
 
   // Temporary chats are disposable by contract: landing on the home page
   // sweeps any the user left behind (closed tab, back navigation, etc.).
@@ -810,6 +886,15 @@ export default function LandingPage() {
       }
     }
   }, [])
+
+  // Entry animation belongs to the initial reveal, not to virtual-row mounts.
+  // Without expiring it, scrolling far enough to unmount the first rows makes
+  // them replay opacity-from-zero when the user returns to the top.
+  useEffect(() => {
+    if (loading || items.length === 0 || !animateInitialEntries) return
+    const timer = window.setTimeout(() => setAnimateInitialEntries(false), 450)
+    return () => window.clearTimeout(timer)
+  }, [animateInitialEntries, items.length, loading])
 
   // Skeleton shape/count for the pre-settings window and the fetch window.
   // Before settings arrive the store only has defaults, so fall back to the
@@ -1108,6 +1193,23 @@ export default function LandingPage() {
     [openModal, t, tc]
   )
 
+  const handleRemoveFromRecent = useCallback(
+    async (item: GroupedRecentChat) => {
+      // Optimistically hide the card so the UI feels instant; reconcile with
+      // the server afterward because filtering may surface the next-most-recent
+      // chat for the same character/group.
+      setItems((prev) => prev.filter((i) => i.latest_chat_id !== item.latest_chat_id))
+      setTotal((prev) => Math.max(0, prev - 1))
+      try {
+        await chatsApi.patchMetadata(item.latest_chat_id, { hidden_from_recent: true })
+        await fetchChats()
+      } catch (err: any) {
+        console.error('[Lumiverse] Error removing chat from recent:', err)
+      }
+    },
+    [fetchChats]
+  )
+
   const handleNewChat = useCallback(() => {
     navigate('/characters')
   }, [navigate])
@@ -1361,10 +1463,13 @@ export default function LandingPage() {
                       rowItems={items.slice(start, start + virtualColumns)}
                       layoutMode={landingPageLayoutMode}
                       initialPageSize={landingPageChatsDisplayed}
+                      animateInitialEntries={animateInitialEntries}
+                      shiftPressed={shiftPressed}
                       measureElement={chatVirtualizer.measureElement}
                       onChatClick={handleChatClick}
                       onDeleteChat={handleDeleteChat}
                       onDeleteAllChats={handleDeleteAllChats}
+                      onRemoveFromRecent={handleRemoveFromRecent}
                     />
                   )
                 })}

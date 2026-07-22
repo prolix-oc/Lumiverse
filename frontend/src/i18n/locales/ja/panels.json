@@ -2559,6 +2559,17 @@
     "fontScale": "フォントスケール",
     "uiScale": "UIスケール",
     "glassEffects": "ガラス効果",
+    "desktopBackground": {
+      "enable": "半透明のデスクトップ背景を使用",
+      "hint": "Lumiverse デスクトップアプリでのみ利用できます。",
+      "tint": "色合い",
+      "opacity": "不透明度",
+      "blur": "背景をぼかす",
+      "blurIntensity": "ぼかしの強さ",
+      "blurIntensitySubtle": "弱め",
+      "blurIntensityBalanced": "標準",
+      "blurIntensityStrong": "強め"
+    },
     "useFullAvatar": "フルサイズのアバターを使用",
     "extensionThemesTitle": "拡張テーマ",
     "overridesApplied_one": "{{count}} オーバーライド適用",

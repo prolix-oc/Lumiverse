@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "frontend-titlebar",
+  "description": "Allows the frontend's custom title bar to control its own native window.",
+  "local": false,
+  "windows": ["frontend"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*",
+      "http://localhost:*",
+      "http://*",
+      "https://*"
+    ]
+  },
+  "permissions": [
+    "allow-configure-frontend-appearance",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

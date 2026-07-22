@@ -30,6 +30,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tabler/icons-react": "^3.41.0",
     "@tanstack/react-virtual": "^3.14.3",
+    "@tauri-apps/api": "^2",
     "better-auth": "^1.5.3",
     "clsx": "^2.1.1",
     "dompurify": "^3.2.4",

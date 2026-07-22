@@ -77,6 +77,19 @@ import type {
   VaultDTO,
   VaultReindexResultDTO,
   VaultWithContentsDTO,
+  BoundAssembleRequestDTO,
+  BoundAssemblyOutcomeDTO,
+  ConnectionDispatchDescriptorDTO,
+  ImageGenStreamEventDTO,
+  ImageGenStreamRequestDTO,
+  InterceptorContextDTO,
+  InterceptorDisposer,
+  InterceptorHandler,
+  InterceptorRegistrationMatchOptions,
+  InterceptorRegistrationOptions,
+  QuietTrackedRequestDTO,
+  QuietTrackedResultDTO,
+  SpindleHostDescriptorV1,
 } from "lumiverse-spindle-types";
 import type {
   MediaConvertAudioRequestDTO,
@@ -531,28 +544,8 @@ type RuntimeHostToWorker =
   | { type: "image_gen_stream_chunk"; requestId: string; event: ImageGenStreamEvent }
   | { type: "image_gen_stream_error"; requestId: string; error: string };
 
-type ImageGenStreamEvent =
-  | {
-      type: "status";
-      step?: number;
-      totalSteps?: number;
-      nodeId?: string;
-    }
-  | {
-      type: "preview";
-      imageDataUrl: string;
-      step?: number;
-      totalSteps?: number;
-      nodeId?: string;
-    }
-  | {
-      type: "done";
-      result: Record<string, unknown>;
-    };
-
-type ImageGenStreamInput = Parameters<SpindleAPI["imageGen"]["generate"]>[0] & {
-  signal?: AbortSignal;
-};
+type ImageGenStreamEvent = ImageGenStreamEventDTO;
+type ImageGenStreamInput = ImageGenStreamRequestDTO;
 
 // `presets` is replaced wholesale (not intersected) because the local
 // PromptBlock type also carries host-only sealed-block provenance. Keeping the
@@ -820,6 +813,7 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen"> & {
 
 let manifest: SpindleManifest;
 let storagePath: string;
+let hostDescriptor: SpindleHostDescriptorV1 | null = null;
 
 const eventHandlers = new Map<string, Set<(payload: unknown, userId?: string) => void>>();
 const pendingResponses = new Map<
@@ -834,12 +828,11 @@ const streamingImageGenerations = new Map<
   string,
   { push: (event: ImageGenStreamEvent) => void; fail: (reason: unknown) => void }
 >();
+const interceptorAbortControllers = new Map<string, AbortController>();
 let interceptHandler:
-  | ((
-      messages: LlmMessageDTO[],
-      context: unknown
-    ) => Promise<LlmMessageDTO[] | InterceptorResultDTO>)
+  | InterceptorHandler
   | null = null;
+let interceptRegistrationId: string | null = null;
 let contextHandlerFn: ((context: unknown) => Promise<unknown>) | null = null;
 let messageContentProcessorFn:
   | ((ctx: unknown) => Promise<unknown>)
@@ -1066,6 +1059,37 @@ function requestAssembly(input: AssembleRequest, userId?: string): Promise<Assem
   });
 }
 
+/** Issue an RPC whose authority is bound to the currently active interceptor. */
+function requestBoundGeneration<T>(
+  type: "generate_assemble" | "generate_quiet_tracked",
+  input: BoundAssembleRequestDTO | QuietTrackedRequestDTO,
+): Promise<T> {
+  const signal = input.signal;
+  const { signal: _omit, ...payload } = input;
+  void _omit;
+
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError((signal.reason as Error | undefined)?.message));
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => post({ type: "cancel_generation", requestId });
+    pendingResponses.set(requestId, {
+      resolve: (value) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(value as T);
+      },
+      reject: (reason) => {
+        signal?.removeEventListener("abort", onAbort);
+        reject(reason);
+      },
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    post({ type, requestId, input: payload } as RuntimeWorkerToHost);
+  });
+}
+
 /**
  * Issue a `request_generation_stream` RPC and return an `AsyncGenerator`
  * that yields `StreamChunkDTO` values as the host forwards them. The
@@ -1232,6 +1256,11 @@ function requestImageGenStream(input: ImageGenStreamInput): AsyncGenerator<Image
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
 
 const spindleApi: RuntimeSpindleAPI = {
+  get host(): SpindleHostDescriptorV1 {
+    if (!hostDescriptor) throw new Error("Spindle host descriptor is not initialized");
+    return hostDescriptor;
+  },
+
   on(event: string, handler: (payload: any) => void): () => void {
     if (!eventHandlers.has(event)) {
       eventHandlers.set(event, new Set());
@@ -1298,10 +1327,28 @@ const spindleApi: RuntimeSpindleAPI = {
     post({ type: "update_macro_value", name, value: String(value ?? "") });
   },
 
-  registerInterceptor(handler, priority?): void {
+  registerInterceptor(
+    handler: InterceptorHandler,
+    priorityOrOptions?: number | InterceptorRegistrationOptions,
+    options?: InterceptorRegistrationMatchOptions,
+  ): InterceptorDisposer {
     assertMutationAllowed("spindle.registerInterceptor()");
+    const registrationId = crypto.randomUUID();
+    const priority = typeof priorityOrOptions === "number"
+      ? priorityOrOptions
+      : priorityOrOptions?.priority;
+    const match = typeof priorityOrOptions === "number"
+      ? options?.match
+      : priorityOrOptions?.match;
     interceptHandler = handler;
-    post({ type: "register_interceptor", priority });
+    interceptRegistrationId = registrationId;
+    post({ type: "register_interceptor", registrationId, priority, ...(match ? { match } : {}) });
+    return () => {
+      if (interceptRegistrationId !== registrationId) return;
+      interceptHandler = null;
+      interceptRegistrationId = null;
+      post({ type: "unregister_interceptor", registrationId });
+    };
   },
 
   assemble(input, userId?: string) {
@@ -1319,6 +1366,12 @@ const spindleApi: RuntimeSpindleAPI = {
   },
 
   generate: {
+    assemble(input: BoundAssembleRequestDTO): Promise<BoundAssemblyOutcomeDTO> {
+      return requestBoundGeneration<BoundAssemblyOutcomeDTO>("generate_assemble", input);
+    },
+    quietTracked(input: QuietTrackedRequestDTO): Promise<QuietTrackedResultDTO> {
+      return requestBoundGeneration<QuietTrackedResultDTO>("generate_quiet_tracked", input);
+    },
     async raw(input) {
       return requestGeneration({ ...input, type: "raw" });
     },
@@ -1933,6 +1986,11 @@ const spindleApi: RuntimeSpindleAPI = {
       const requestId = crypto.randomUUID();
       const result = await request({ type: "connections_get", requestId, connectionId, userId });
       return result as ConnectionProfileDTO | null;
+    },
+    async resolveDispatch(connectionId: string): Promise<ConnectionDispatchDescriptorDTO | null> {
+      const requestId = crypto.randomUUID();
+      const result = await request({ type: "connections_resolve_dispatch", requestId, connectionId });
+      return result as ConnectionDispatchDescriptorDTO | null;
     },
   },
 
@@ -3859,6 +3917,7 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     case "init": {
       manifest = msg.manifest;
       storagePath = msg.storagePath;
+      hostDescriptor = msg.host;
 
       // Expose the API globally
       (globalThis as any).spindle = spindleApi;
@@ -3959,9 +4018,14 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
     }
 
     case "intercept_request": {
-      if (interceptHandler) {
+      if (interceptHandler && interceptRegistrationId === msg.registrationId) {
+        const abortController = new AbortController();
+        interceptorAbortControllers.set(msg.requestId, abortController);
         try {
-          const result = await interceptHandler(msg.messages, msg.context);
+          const result = await interceptHandler(msg.messages, {
+            ...msg.context,
+            signal: abortController.signal,
+          });
           // Normalize: handler may return LlmMessageDTO[] or { messages, parameters? }
           const normalized: InterceptorResultDTO = Array.isArray(result)
             ? { messages: result }
@@ -3969,9 +4033,12 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           post({
             type: "intercept_result",
             requestId: msg.requestId,
+            registrationId: msg.registrationId,
             messages: normalized.messages,
             ...(normalized.parameters ? { parameters: normalized.parameters } : {}),
             ...(normalized.breakdown ? { breakdown: normalized.breakdown } : {}),
+            ...(normalized.deferredGuidance ? { deferredGuidance: normalized.deferredGuidance } : {}),
+            ...(normalized.finalResponse ? { finalResponse: normalized.finalResponse } : {}),
           });
         } catch (err: any) {
           post({
@@ -3983,9 +4050,19 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
           post({
             type: "intercept_result",
             requestId: msg.requestId,
+            registrationId: msg.registrationId,
             messages: msg.messages,
           });
+        } finally {
+          interceptorAbortControllers.delete(msg.requestId);
         }
+      }
+      break;
+    }
+
+    case "intercept_abort": {
+      if (interceptRegistrationId === msg.registrationId) {
+        interceptorAbortControllers.get(msg.requestId)?.abort(msg.reason);
       }
       break;
     }

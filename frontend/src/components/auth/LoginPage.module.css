@@ -107,6 +107,12 @@
   mask-image: radial-gradient(ellipse at center, black 20%, transparent 65%);
 }
 
+/* The native desktop surface is the backdrop when translucent mode is enabled;
+   keep the browser-style grid out of that material. */
+:global(html[data-tauri-desktop][data-desktop-background]) .grid {
+  display: none;
+}
+
 /* ─── Content wrapper ────────────────────────────────────────────────── */
 
 .content {

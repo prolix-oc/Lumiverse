@@ -2567,6 +2567,17 @@
     "fontScale": "Scala font",
     "uiScale": "Scala UI",
     "glassEffects": "Effetti vetro",
+    "desktopBackground": {
+      "enable": "Usa sfondo desktop traslucido",
+      "hint": "Disponibile solo nell’app desktop Lumiverse.",
+      "tint": "Tinta",
+      "opacity": "Opacità",
+      "blur": "Sfoca lo sfondo",
+      "blurIntensity": "Intensità della sfocatura",
+      "blurIntensitySubtle": "Leggera",
+      "blurIntensityBalanced": "Bilanciata",
+      "blurIntensityStrong": "Intensa"
+    },
     "useFullAvatar": "Usa avatar a dimensione piena",
     "extensionThemesTitle": "Temi estensioni",
     "overridesApplied_one": "{{count}} override applicato",

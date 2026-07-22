@@ -8,6 +8,8 @@ import type {
   ExtensionInfo,
   ConnectionProfileDTO,
   ConnectionReasoningBindingsDTO,
+  InterceptorContextDTO,
+  InterceptorMatchDTO,
   ReasoningSettingsDTO,
   ReasoningEffortDTO,
   ThinkingDisplayDTO,
@@ -17,8 +19,11 @@ import type {
   SpindleCommandContextDTO,
   CouncilMemberContext,
   ImageUploadDTO,
+  BoundAssembleRequestDTO,
+  QuietTrackedRequestDTO,
+  ConnectionDispatchDescriptorDTO,
 } from "lumiverse-spindle-types";
-import { PERMISSION_DENIED_PREFIX } from "lumiverse-spindle-types";
+import { PERMISSION_DENIED_PREFIX, SPINDLE_HOST_CAPABILITIES } from "lumiverse-spindle-types";
 import { safeFetch, SSRFError } from "../utils/safe-fetch";
 import { createOAuthState } from "./oauth-state";
 import * as spindleUploads from "./uploads";
@@ -78,7 +83,7 @@ import {
   type SharedRpcEndpointPolicy,
 } from "./shared-rpc-pool.service";
 import { getTextContent, type LlmMessage } from "../llm/types";
-import type { CreatePresetInput, UpdatePresetInput } from "../types/preset";
+import type { CreatePresetInput, PromptBlock, UpdatePresetInput } from "../types/preset";
 import { getDb } from "../db/connection";
 import {
   getMessages as getChatMessages,
@@ -810,6 +815,8 @@ export class WorkerHost {
    */
   private generationAbortControllers = new Map<string, AbortController>();
   private interceptorUnregister: (() => void) | null = null;
+  private interceptorRegistrationId: string | null = null;
+  private activeInterceptorContexts = new Map<string, Omit<InterceptorContextDTO, "signal">>();
   private contextHandlerUnregister: (() => void) | null = null;
   private messageContentProcessorUnregister: (() => void) | null = null;
   private macroInterceptorUnregister: (() => void) | null = null;
@@ -1118,6 +1125,12 @@ export class WorkerHost {
       type: "init",
       manifest: { ...this.manifest, entry_backend: entryPath },
       storagePath,
+      host: {
+        descriptorVersion: 1,
+        lumiverseVersion: await getBackendVersion(),
+        capabilities: SPINDLE_HOST_CAPABILITIES,
+        extensionInstallationId: this.extensionId,
+      },
     });
 
     await readyPromise;
@@ -1223,6 +1236,8 @@ export class WorkerHost {
     // Unregister interceptor
     this.interceptorUnregister?.();
     this.interceptorUnregister = null;
+    this.interceptorRegistrationId = null;
+    this.activeInterceptorContexts.clear();
 
     // Unregister context handler
     this.contextHandlerUnregister?.();
@@ -1574,9 +1589,16 @@ export class WorkerHost {
         this.handleUpdateMacroValue(msg.name, msg.value);
         break;
       case "register_interceptor":
-        this.handleRegisterInterceptor(msg.priority);
+        this.handleRegisterInterceptor(msg.registrationId, msg.priority, msg.match);
+        break;
+      case "unregister_interceptor":
+        this.handleUnregisterInterceptor(msg.registrationId);
         break;
       case "intercept_result": {
+        if (msg.registrationId !== this.interceptorRegistrationId) {
+          console.warn(`[Spindle:${this.manifest.identifier}] Ignoring interceptor result for an inactive registration`);
+          break;
+        }
         // Strip parameters if the extension lacks the generation_parameters permission
         let interceptParams = msg.parameters;
         if (interceptParams && Object.keys(interceptParams).length > 0) {
@@ -1621,6 +1643,12 @@ export class WorkerHost {
       case "assemble_prompt":
         this.handleAssemblePrompt(msg.requestId, msg.input, msg.userId);
         break;
+      case "generate_assemble":
+        void this.handleBoundAssembly(msg.requestId, msg.input);
+        break;
+      case "generate_quiet_tracked":
+        void this.handleBoundQuietGeneration(msg.requestId, msg.input);
+        break;
       case "permissions_get_granted":
         this.handlePermissionsGetGranted(msg.requestId);
         break;
@@ -1648,6 +1676,9 @@ export class WorkerHost {
         break;
       case "connections_get":
         this.handleConnectionsGet(msg.requestId, msg.connectionId, msg.userId);
+        break;
+      case "connections_resolve_dispatch":
+        this.handleConnectionsResolveDispatch(msg.requestId, msg.connectionId);
         break;
       case "chat_get_messages":
         this.handleChatGetMessages(msg.requestId, msg.chatId);
@@ -2594,7 +2625,11 @@ export class WorkerHost {
 
   // ─── Interceptor registration ────────────────────────────────────────
 
-  private handleRegisterInterceptor(priority?: number): void {
+  private handleRegisterInterceptor(
+    registrationId: string,
+    priority?: number,
+    match?: InterceptorMatchDTO,
+  ): void {
     if (!this.hasPermission("interceptor")) {
       console.warn(
         `[Spindle:${this.manifest.identifier}] Interceptor permission not granted`
@@ -2618,11 +2653,13 @@ export class WorkerHost {
       );
 
     this.interceptorUnregister?.();
+    this.interceptorRegistrationId = registrationId;
     this.interceptorUnregister = interceptorPipeline.register({
       extensionId: this.extensionId,
       extensionName: this.manifest.name || this.manifest.identifier,
       userId: scopedUserId,
       priority: priority ?? 100,
+      match,
       resolveTimeoutMs,
       handler: async (messages, context) => {
         const requestId = crypto.randomUUID();
@@ -2648,11 +2685,14 @@ export class WorkerHost {
           };
         });
 
+        const interceptorContext = context as Omit<InterceptorContextDTO, "signal">;
+        this.activeInterceptorContexts.set(registrationId, interceptorContext);
         this.postToWorker({
           type: "intercept_request",
           requestId,
+          registrationId,
           messages: messagesWithSourceFlags,
-          context,
+          context: interceptorContext,
         });
 
         return new Promise<InterceptorResult>((resolve, reject) => {
@@ -2678,9 +2718,21 @@ export class WorkerHost {
               reject(err);
             },
           });
+        }).finally(() => {
+          if (this.activeInterceptorContexts.get(registrationId) === interceptorContext) {
+            this.activeInterceptorContexts.delete(registrationId);
+          }
         });
       },
     });
+  }
+
+  private handleUnregisterInterceptor(registrationId: string): void {
+    if (registrationId !== this.interceptorRegistrationId) return;
+    this.interceptorUnregister?.();
+    this.interceptorUnregister = null;
+    this.interceptorRegistrationId = null;
+    this.activeInterceptorContexts.delete(registrationId);
   }
 
   private normalizeInterceptorBreakdownEntry(
@@ -3063,6 +3115,211 @@ export class WorkerHost {
       this.postToWorker({ type: "response", requestId, result: profile });
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
+    }
+  }
+
+  private getConnectionDispatchDescriptor(
+    userId: string,
+    connectionId: string,
+  ): ConnectionDispatchDescriptorDTO | null {
+    const connection = connectionsSvc.getConnection(userId, connectionId);
+    if (!connection) return null;
+    let endpointOrigin = connection.api_url;
+    try {
+      endpointOrigin = new URL(connection.api_url).origin;
+    } catch {
+      // Preserve a non-standard endpoint verbatim; the descriptor is
+      // informational and must never expose credentials.
+    }
+    return {
+      connectionId: connection.id,
+      connectionName: connection.name,
+      provider: connection.provider,
+      model: connection.model,
+      endpointOrigin,
+      dispatchKind: "concrete",
+      connectionDispatchRevision: `${connection.id}:${connection.updated_at}`,
+    };
+  }
+
+  private getActiveInterceptorContext(): Omit<InterceptorContextDTO, "signal"> {
+    const registrationId = this.interceptorRegistrationId;
+    const context = registrationId ? this.activeInterceptorContexts.get(registrationId) : undefined;
+    if (!context) throw new Error("This operation is only available during an active interceptor callback");
+    return context;
+  }
+
+  private resolveBoundDispatch(
+    context: Omit<InterceptorContextDTO, "signal">,
+    dispatch: BoundAssembleRequestDTO["dispatch"],
+  ): ConnectionDispatchDescriptorDTO {
+    const descriptor = dispatch.source === "main"
+      ? context.mainDispatch.descriptor
+      : this.getConnectionDispatchDescriptor(context.userId, dispatch.connectionId);
+    if (!descriptor || descriptor.dispatchKind !== "concrete") {
+      throw new Error("The requested connection dispatch is not available");
+    }
+    if (descriptor.connectionDispatchRevision !== dispatch.expectedConnectionDispatchRevision) {
+      throw new Error("The requested connection dispatch changed before it could be used");
+    }
+    return descriptor;
+  }
+
+  private handleConnectionsResolveDispatch(requestId: string, connectionId: string): void {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Connection dispatch access requires the generation permission`);
+      }
+      const context = this.getActiveInterceptorContext();
+      const descriptor = this.getConnectionDispatchDescriptor(context.userId, connectionId);
+      this.postToWorker({ type: "response", requestId, result: descriptor });
+    } catch (err: any) {
+      this.postToWorker({ type: "response", requestId, error: err?.message ?? String(err) });
+    }
+  }
+
+  private async handleBoundAssembly(
+    requestId: string,
+    input: Omit<BoundAssembleRequestDTO, "signal">,
+  ): Promise<void> {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      if (!Number.isFinite(input.deadlineAt) || input.deadlineAt <= Date.now()) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: { ok: false, error: { kind: "precondition", code: "INTERCEPTOR_DEADLINE_EXPIRED", message: "The interceptor deadline has expired" } },
+        });
+        return;
+      }
+      const context = this.getActiveInterceptorContext();
+      const dispatch = this.resolveBoundDispatch(context, input.dispatch);
+      const controller = new AbortController();
+      this.generationAbortControllers.set(requestId, controller);
+      try {
+        const result = await assembleSpindleBlocks(
+          context.userId,
+          this.manifest.identifier,
+          {
+            blocks: input.blocks as PromptBlock[],
+            chatId: context.chatId,
+            connectionId: dispatch.connectionId,
+            generationType: context.generationType,
+            promptVariables: input.promptVariableValues,
+          },
+          controller.signal,
+        );
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: true,
+            result: {
+              ...result,
+              resolved: {
+                source: input.dispatch.source === "main" ? "main" : "slot",
+                connectionId: input.dispatch.source === "main" ? null : dispatch.connectionId,
+                connectionDispatchRevision: dispatch.connectionDispatchRevision!,
+                dispatchKind: "concrete",
+              },
+            },
+          },
+        });
+      } finally {
+        this.generationAbortControllers.delete(requestId);
+      }
+    } catch (err: any) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          ok: false,
+          error: {
+            kind: err?.name === "AbortError" ? "abort" : "precondition",
+            code: err?.name === "AbortError" ? "ASSEMBLY_ABORTED" : "BOUND_ASSEMBLY_FAILED",
+            ...(err?.name === "AbortError" ? { name: "AbortError" } : {}),
+            message: err?.message ?? String(err),
+          },
+        },
+      });
+    }
+  }
+
+  private async handleBoundQuietGeneration(
+    requestId: string,
+    input: Omit<QuietTrackedRequestDTO, "signal">,
+  ): Promise<void> {
+    try {
+      if (!this.hasPermission("generation")) {
+        throw new Error(`${PERMISSION_DENIED_PREFIX} generation — Generation permission not granted`);
+      }
+      if (!Number.isFinite(input.deadlineAt) || input.deadlineAt <= Date.now()) {
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: false,
+            phase: "preflight",
+            providerInvoked: false,
+            receipt: null,
+            error: { kind: "precondition", code: "INTERCEPTOR_DEADLINE_EXPIRED", name: "Error", message: "The interceptor deadline has expired" },
+          },
+        });
+        return;
+      }
+      if (input.continuation) {
+        throw new Error("Tracked quiet generation with a parent prefill is not available for this host runtime");
+      }
+      const context = this.getActiveInterceptorContext();
+      const dispatch = this.resolveBoundDispatch(context, input.dispatch);
+      const controller = new AbortController();
+      this.generationAbortControllers.set(requestId, controller);
+      try {
+        const response = await generateSvc.quietGenerate(context.userId, {
+          messages: input.messages as any,
+          connection_id: dispatch.connectionId,
+          parameters: input.parameters as any,
+          reasoning: input.reasoning as any,
+          tools: input.tools as any,
+          signal: controller.signal,
+        });
+        this.postToWorker({
+          type: "response",
+          requestId,
+          result: {
+            ok: true,
+            response,
+            receipt: {
+              providerInvoked: true,
+              terminalResponse: true,
+              source: input.dispatch.source === "main" ? "main" : "slot",
+              connectionId: input.dispatch.source === "main" ? null : dispatch.connectionId,
+              connectionDispatchRevision: dispatch.connectionDispatchRevision!,
+              ...(response.usage ? { usage: response.usage } : {}),
+            },
+          },
+        });
+      } finally {
+        this.generationAbortControllers.delete(requestId);
+      }
+    } catch (err: any) {
+      this.postToWorker({
+        type: "response",
+        requestId,
+        result: {
+          ok: false,
+          phase: "resolved",
+          receipt: null,
+          error: {
+            kind: err?.name === "AbortError" ? "abort" : "precondition",
+            code: err?.name === "AbortError" ? "QUIET_TRACKED_ABORTED" : "QUIET_TRACKED_FAILED",
+            name: err?.name ?? "Error",
+            message: err?.message ?? String(err),
+          },
+        },
+      });
     }
   }
 

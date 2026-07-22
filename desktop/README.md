@@ -1,9 +1,9 @@
-# Lumiverse Tray
+# Lumiverse
 
 A macOS menu bar / Windows system tray / Linux StatusNotifier companion for
 the Lumiverse server.
 It sits in the tray and lets you start and stop the server, open the web
-dashboard, watch serving stats (port, PID, uptime, branch, version), and
+frontend, watch serving stats (port, PID, uptime, branch, version), and
 check for / apply updates — without keeping a terminal open.
 
 Under the hood it spawns the existing runner in a headless mode
@@ -18,7 +18,7 @@ the server down gracefully.
   "running (external)" when a server started from a terminal is detected
   on the configured port.
 - **Start Server / Stop Server**
-- **Open Web Dashboard** — opens `http://localhost:<port>` (port comes
+- **Open Web Frontend** — opens `http://localhost:<port>` (port comes
   from your `.env`, default 7860).
 - **Serving Stats** — port, PID, uptime, branch, version.
 - **Check for Updates / Apply Update** — the runner's existing git-based
@@ -27,6 +27,24 @@ the server down gracefully.
   tray app opens (on by default).
 - **Launch at Login** — register the tray app as a login item.
 - **Set Lumiverse Folder…** — point the app at a different checkout.
+
+## Translucent frontend themes
+
+The Tauri frontend window is transparent, so a theme can tint the document
+with an alpha color and optionally request the native material behind it:
+
+```json
+{
+  "desktopBackground": {
+    "color": "rgb(16 12 28 / 72%)",
+    "blur": true
+  }
+}
+```
+
+`blur` uses macOS vibrancy and Windows DWM blur. On other platforms, or when
+native material is unavailable, the theme keeps its regular translucent CSS
+surface. Browser and PWA rendering ignore this desktop-only setting.
 
 ## Prerequisites
 

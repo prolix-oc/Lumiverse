@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import { join } from "path";
 import { PROJECT_ROOT, ENTRY, STOP_SIGTERM_GRACE_MS } from "./lib/constants.js";
 
@@ -77,6 +78,19 @@ function smolEnabled(): boolean {
   return !(v === "false" || v === "0" || v === "off" || v === "no");
 }
 
+/**
+ * The shell launchers export FRONTEND_DIR before starting the runner, but the
+ * desktop tray starts it directly. Fall back to the checkout's existing
+ * production bundle so opening the local server has a document to serve.
+ */
+function frontendDir(): string | undefined {
+  const configured = process.env.FRONTEND_DIR?.trim();
+  if (configured) return configured;
+
+  const bundled = join(PROJECT_ROOT, "frontend", "dist");
+  return existsSync(join(bundled, "index.html")) ? bundled : undefined;
+}
+
 export function startServer(isDev: boolean): void {
   if (instance?.proc) return;
 
@@ -89,6 +103,7 @@ export function startServer(isDev: boolean): void {
     : [bunBin, ...smol, ENTRY];
 
   const restartCount = instance ? instance.restartCount : 0;
+  const frontend = isDev ? "" : frontendDir() ?? "";
 
   const proc = Bun.spawn(args, {
     cwd: PROJECT_ROOT,
@@ -98,6 +113,7 @@ export function startServer(isDev: boolean): void {
       ...process.env,
       FORCE_COLOR: "1",
       LUMIVERSE_RUNNER_IPC: "1",
+      FRONTEND_DIR: frontend,
       ...("BUN_RUNTIME_TRANSPILER_CACHE_PATH" in process.env
         ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
         : { BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(PROJECT_ROOT, "data", ".bun-transpiler-cache") }),

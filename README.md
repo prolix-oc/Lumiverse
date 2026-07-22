@@ -246,7 +246,7 @@ If you start Lumiverse with `--no-runner`, `-NoRunner`, `bun run start`, or `bun
 Prefer not to keep a terminal open? [`desktop/`](desktop/) contains an
 optional macOS menu bar / Windows system tray / Linux StatusNotifier companion
 (Tauri v2) that
-starts and stops the server, opens the web dashboard, shows serving stats,
+starts and stops the server, opens the web frontend, shows serving stats,
 and applies updates via the same runner machinery. See
 [desktop/README.md](desktop/README.md) for build instructions.
 

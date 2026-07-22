@@ -26,6 +26,7 @@ export default function ThemePanel() {
   // Normalize so a malformed persisted theme (e.g. missing accent) can't throw
   // when the panel reads current.accent.* — falls back to DEFAULT_THEME.
   const current = normalizeTheme(theme) ?? DEFAULT_THEME
+  const isTauriDesktop = '__TAURI_INTERNALS__' in window
 
   // Always read the latest theme from the store to avoid stale closures
   // (e.g. useCharacterTheme may async-update accent/baseColors after render)
@@ -57,11 +58,18 @@ export default function ThemePanel() {
 
   const handlePresetSelect = useCallback(
     (preset: ThemeConfig) => {
-      // Preserve the user's current mode when selecting any preset
+      // Preserve wrapper-owned appearance when applying legacy presets. A
+      // theme that explicitly includes desktopBackground still takes control.
+      // Without this fallback, every older preset clears the field and turns
+      // the Tauri blur off simply because it predates the desktop setting.
       const latest = getLatest()
       // Clear extension theme overrides so the preset takes full control
       clearAllExtensionThemeOverrides()
-      setTheme({ ...preset, mode: latest.mode })
+      setTheme({
+        ...preset,
+        mode: latest.mode,
+        desktopBackground: preset.desktopBackground ?? latest.desktopBackground,
+      })
     },
     [setTheme, getLatest, clearAllExtensionThemeOverrides]
   )
@@ -88,6 +96,11 @@ export default function ThemePanel() {
 
   const handleUiScaleChange = useCallback(
     (uiScale: number) => update({ uiScale }),
+    [update]
+  )
+
+  const handleDesktopBackgroundChange = useCallback(
+    (desktopBackground?: ThemeConfig['desktopBackground']) => update({ desktopBackground }),
     [update]
   )
 
@@ -138,15 +151,19 @@ export default function ThemePanel() {
           typeof parsed.accent === 'object' && parsed.accent !== null
         ) {
           const importedTheme = { ...parsed, id: 'custom' } as ThemeConfig
+          const appliedTheme = {
+            ...importedTheme,
+            desktopBackground: importedTheme.desktopBackground ?? getLatest().desktopBackground,
+          }
           const baseName = file.name.replace(/\.json$/i, '').replace(/^lumiverse-theme-/i, '')
           const name = parsed.name || baseName || t('themePanel.importedTheme')
           addSavedTheme({ kind: 'config', name, theme: { ...importedTheme, name } })
-          setTheme(importedTheme)
+          setTheme(appliedTheme)
         }
       } catch { /* ignore invalid files */ }
     }
     input.click()
-  }, [setTheme, addSavedTheme, t])
+  }, [setTheme, addSavedTheme, getLatest, t])
 
   return (
     <div className={styles.panel}>
@@ -193,6 +210,9 @@ export default function ThemePanel() {
           onGlassToggle={handleGlassToggle}
           onFontScaleChange={handleFontScaleChange}
           onUiScaleChange={handleUiScaleChange}
+          showDesktopBackgroundControls={isTauriDesktop}
+          desktopBackground={current.desktopBackground}
+          onDesktopBackgroundChange={handleDesktopBackgroundChange}
         />
       </section>
 

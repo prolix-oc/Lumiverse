@@ -1,8 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Hidden main window hosting the tray logic",
-  "windows": ["main", "frontend", "frontend-url-settings"],
+  "identifier": "tray-dev",
+  "description": "Allows the Vite-served hidden tray host to use its native tray and runner commands during development.",
+  "local": false,
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": [
     "core:default",
     "core:tray:default",
@@ -20,7 +24,6 @@
     "core:window:allow-set-focus",
     "core:webview:default",
     "tray-commands",
-    "allow-configure-frontend-appearance",
     "store:default",
     "autostart:allow-enable",
     "autostart:allow-disable",

@@ -30,6 +30,13 @@
   padding-left: var(--spindle-dock-left, 0px);
 }
 
+/* The tint is rendered by the document; blur, when enabled, is rendered by
+   the native window material. Keeping these separate avoids a full-window
+   WebKit backdrop-filter on every repaint. */
+:global(html[data-tauri-desktop][data-desktop-background]) .app {
+  background: var(--lumiverse-desktop-background);
+}
+
 /* On iOS PWA, remove bottom safe-area padding from the shell so views can
    extend into the home indicator zone (like the chat input bar filling to
    the screen edge). Individual views handle their own safe-area clearance.

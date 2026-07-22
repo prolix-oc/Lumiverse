@@ -1,4 +1,4 @@
-import type { LlmMessageDTO } from "lumiverse-spindle-types";
+import type { InterceptorMatchDTO, LlmMessageDTO } from "lumiverse-spindle-types";
 import { DEFAULT_INTERCEPTOR_TIMEOUT_MS } from "../services/spindle-settings.service";
 import { emitSpindlePreGenerationActivity } from "./pre-generation-activity";
 
@@ -22,6 +22,8 @@ export interface Interceptor {
   extensionName?: string;
   userId?: string | null;
   priority: number; // lower = runs first
+  /** Optional host-side filter supplied when the interceptor was registered. */
+  match?: InterceptorMatchDTO;
   /**
    * Called immediately before each invocation to determine the wall-clock
    * budget for this interceptor. Resolving per-run (instead of at
@@ -40,6 +42,34 @@ function getChatId(context: unknown): string | null {
   if (!context || typeof context !== "object") return null;
   const chatId = (context as { chatId?: unknown }).chatId;
   return typeof chatId === "string" && chatId ? chatId : null;
+}
+
+function matchesInterceptorContext(match: InterceptorMatchDTO | undefined, context: unknown): boolean {
+  if (!match) return true;
+  if (!context || typeof context !== "object") return false;
+  const value = context as Record<string, unknown>;
+
+  if (match.generationTypes?.length) {
+    if (typeof value.generationType !== "string" || !match.generationTypes.includes(value.generationType as never)) {
+      return false;
+    }
+  }
+  if (match.isDryRun !== undefined && value.isDryRun !== match.isDryRun) return false;
+
+  const presetField = match.presetField;
+  if (!presetField) return true;
+  let field: unknown = value.presetMetadata;
+  for (const key of presetField.path) {
+    if (!field || typeof field !== "object" || Array.isArray(field)) {
+      field = undefined;
+      break;
+    }
+    field = (field as Record<string, unknown>)[key];
+  }
+  if (presetField.exists !== undefined && (field !== undefined) !== presetField.exists) return false;
+  if (presetField.oneOf && !presetField.oneOf.some((candidate) => Object.is(candidate, field))) return false;
+  if (presetField.notIn?.some((candidate) => Object.is(candidate, field))) return false;
+  return true;
 }
 
 class InterceptorPipeline {
@@ -74,6 +104,9 @@ class InterceptorPipeline {
 
     for (const interceptor of this.interceptors) {
       if (interceptor.userId && interceptor.userId !== userId) {
+        continue;
+      }
+      if (!matchesInterceptorContext(interceptor.match, context)) {
         continue;
       }
       if (signal?.aborted) {

@@ -103,11 +103,23 @@ export function normalizeTheme(input: unknown): ThemeConfig | null {
   const a = t.accent as { h?: unknown; s?: unknown; l?: unknown } | undefined
   const accentValid =
     !!a && typeof a.h === 'number' && typeof a.s === 'number' && typeof a.l === 'number'
+  const desktopBackground = t.desktopBackground
+  const blurIntensity = desktopBackground?.blurIntensity
+
   return {
     ...DEFAULT_THEME,
     ...t,
     accent: accentValid ? (t.accent as ThemeConfig['accent']) : DEFAULT_THEME.accent,
     radiusScale: typeof t.radiusScale === 'number' ? t.radiusScale : DEFAULT_THEME.radiusScale,
     fontScale: typeof t.fontScale === 'number' ? t.fontScale : DEFAULT_THEME.fontScale,
+    desktopBackground: desktopBackground && typeof desktopBackground.color === 'string'
+      ? {
+          color: desktopBackground.color,
+          ...(typeof desktopBackground.blur === 'boolean' ? { blur: desktopBackground.blur } : {}),
+          ...(blurIntensity === 'subtle' || blurIntensity === 'balanced' || blurIntensity === 'strong'
+            ? { blurIntensity }
+            : {}),
+        }
+      : undefined,
   }
 }

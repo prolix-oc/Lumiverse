@@ -36,6 +36,7 @@
   "deleteAllChats": "Delete all chats",
   "deleteAllChatsTitle": "Delete All Chats",
   "deleteAllChatsConfirm": "This will permanently delete all {{count}} chats with {{name}}. This action cannot be undone.",
+  "removeFromRecent": "Remove from recent chats",
   "untitled": "Untitled",
   "logOut": {
     "title": "Log out",

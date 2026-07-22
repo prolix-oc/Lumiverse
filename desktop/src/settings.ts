@@ -11,20 +11,23 @@ export interface TraySettings {
   bunPath: string | null;
   /** Start the Lumiverse server as soon as the tray app launches. */
   autoStartServer: boolean;
-  /** Last dashboard window position/size; null = center 1200x800. */
-  dashboardBounds: {
+  /** Last frontend window position/size; null = center 1200x800. */
+  frontendBounds: {
     x: number;
     y: number;
     width: number;
     height: number;
   } | null;
+  /** Optional cloud/self-hosted frontend URL; null uses the local runner. */
+  customFrontendUrl: string | null;
 }
 
 const DEFAULTS: TraySettings = {
   repoDir: null,
   bunPath: null,
   autoStartServer: true,
-  dashboardBounds: null,
+  frontendBounds: null,
+  customFrontendUrl: null,
 };
 
 export async function loadSettings(): Promise<TraySettings> {
