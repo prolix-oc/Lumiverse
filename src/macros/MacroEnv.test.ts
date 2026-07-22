@@ -19,6 +19,7 @@ const baseCharacter: Character = {
   creator_notes: "",
   system_prompt: "",
   post_history_instructions: "",
+  folder: "",
   tags: [],
   alternate_greetings: [],
   extensions: {},
