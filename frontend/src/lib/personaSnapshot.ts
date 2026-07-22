@@ -125,6 +125,8 @@ export async function buildActivePersonaSnapshot(): Promise<PersonaSnapshot | nu
       subjective: persona.subjective_pronoun,
       objective: persona.objective_pronoun,
       possessive: persona.possessive_pronoun,
+      reflexive: persona.reflexive_pronoun,
+      possessiveStandalone: persona.possessive_pronoun_standalone,
     },
     avatarUrl: null,
   }

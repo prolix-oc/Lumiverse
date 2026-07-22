@@ -925,9 +925,13 @@
       "subjective": "Subjective",
       "objective": "Objective",
       "possessive": "Possessive",
+      "reflexive": "Reflexive",
+      "possessiveStandalone": "Possessive Pronoun",
       "subjectivePlaceholder": "she",
       "objectivePlaceholder": "her",
-      "possessivePlaceholder": "her"
+      "possessivePlaceholder": "her",
+      "reflexivePlaceholder": "herself",
+      "possessiveStandalonePlaceholder": "hers"
     },
     "position": {
       "inPrompt": "In Prompt",

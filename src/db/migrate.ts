@@ -77,6 +77,7 @@ const BASELINE_MIGRATIONS: readonly string[] = [
   "065_regex_script_character_id.sql",
   "091_images_byte_size.sql",
   "094_regex_actions.sql",
+  "097_persona_extended_pronouns.sql",
 ];
 
 const BASELINE_SET = new Set(BASELINE_MIGRATIONS);

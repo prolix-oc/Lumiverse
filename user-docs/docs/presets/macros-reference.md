@@ -469,7 +469,9 @@ Macros that pull from the character card fields. These respect [alternate field]
 | `{{persona}}` | `{{userPersona}}` | Your persona's description (includes enabled add-ons with no persona outlet) |
 | `{{sub}}` | `{{subjectivePronoun}}`, `{{personaSubjectivePronoun}}` | Your persona's subjective pronoun |
 | `{{obj}}` | `{{objectivePronoun}}`, `{{personaObjectivePronoun}}` | Your persona's objective pronoun |
-| `{{poss}}` | `{{possessivePronoun}}`, `{{personaPossessivePronoun}}` | Your persona's possessive pronoun |
+| `{{poss}}` | `{{possessivePronoun}}`, `{{personaPossessivePronoun}}` | Your persona's possessive determiner (e.g. `their`) |
+| `{{ref}}` | `{{reflexivePronoun}}`, `{{personaReflexivePronoun}}` | Your persona's reflexive pronoun |
+| `{{poss_p}}` | `{{possessivePronounStandalone}}`, `{{personaPossessivePronounStandalone}}` | Your persona's standalone possessive pronoun |
 | `{{mesExamples}}` | `{{mes_examples}}`, `{{exampleMessages}}` | Character's example dialogue |
 | `{{mesExamplesRaw}}` | — | Raw example dialogue (unprocessed) |
 | `{{system}}` | `{{charPrompt}}`, `{{charSystem}}` | Character's system prompt |

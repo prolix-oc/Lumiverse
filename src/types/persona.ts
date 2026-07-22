@@ -34,7 +34,11 @@ export interface Persona {
   description: string;
   subjective_pronoun: string;
   objective_pronoun: string;
+  /** Possessive determiner, e.g. "their" in "their book". */
   possessive_pronoun: string;
+  reflexive_pronoun: string;
+  /** Standalone possessive pronoun, e.g. "theirs" in "the book is theirs". */
+  possessive_pronoun_standalone: string;
   avatar_path: string | null;
   image_id: string | null;
   attached_world_book_id: string | null;
@@ -53,6 +57,8 @@ export interface CreatePersonaInput {
   subjective_pronoun?: string;
   objective_pronoun?: string;
   possessive_pronoun?: string;
+  reflexive_pronoun?: string;
+  possessive_pronoun_standalone?: string;
   folder?: string;
   is_default?: boolean;
   is_narrator?: boolean;

@@ -9,7 +9,7 @@ export type RoomConnStatus = 'idle' | 'connecting' | 'connected' | 'closed'
 export interface PersonaSnapshot {
   name: string
   description?: string
-  pronouns?: { subjective?: string; objective?: string; possessive?: string }
+  pronouns?: { subjective?: string; objective?: string; possessive?: string; reflexive?: string; possessiveStandalone?: string }
   /** Server-owned URL of the broadcast WebP avatar (never a raw peer URL). */
   avatarUrl?: string | null
 }

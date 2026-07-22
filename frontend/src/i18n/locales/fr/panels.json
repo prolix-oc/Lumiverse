@@ -793,9 +793,13 @@
       "subjective": "Subjectif",
       "objective": "Objectif",
       "possessive": "Possessif",
+      "reflexive": "Réfléchi",
+      "possessiveStandalone": "Pronom possessif",
       "subjectivePlaceholder": "elle",
       "objectivePlaceholder": "son",
-      "possessivePlaceholder": "son"
+      "possessivePlaceholder": "son",
+      "reflexivePlaceholder": "elle-même",
+      "possessiveStandalonePlaceholder": "le sien"
     },
     "position": {
       "inPrompt": "À l'invite",

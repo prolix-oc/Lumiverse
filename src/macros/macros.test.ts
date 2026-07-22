@@ -55,6 +55,8 @@ function makeEnv(opts: {
       personaSubjectivePronoun: "she",
       personaObjectivePronoun: "her",
       personaPossessivePronoun: "her",
+      personaReflexivePronoun: "herself",
+      personaPossessivePronounStandalone: "hers",
       mesExamples: "<START>\n{{user}}: Hi\n{{char}}: Hello!",
       mesExamplesRaw: "<START>\n{{user}}: Hi\n{{char}}: Hello!",
       systemPrompt: "You are Bob.",
@@ -276,11 +278,12 @@ describe("Core primitives", () => {
 
 describe("Persona pronoun macros", () => {
   test("JanitorAI persona pronouns resolve", async () => {
-    expect(await ev("{{sub}}/{{obj}}/{{poss}}")).toBe("she/her/her");
+    expect(await ev("{{sub}}/{{obj}}/{{poss}}/{{ref}}/{{poss_p}}")).toBe("she/her/her/herself/hers");
   });
 
   test("explicit persona pronoun aliases resolve", async () => {
     expect(await ev("{{subjectivePronoun}} {{objectivePronoun}} {{possessivePronoun}}")).toBe("she her her");
+    expect(await ev("{{reflexivePronoun}} {{possessivePronounStandalone}}")).toBe("herself hers");
   });
 });
 

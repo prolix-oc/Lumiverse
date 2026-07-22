@@ -43,6 +43,8 @@ const basePersona: Persona = {
   subjective_pronoun: "",
   objective_pronoun: "",
   possessive_pronoun: "",
+  reflexive_pronoun: "",
+  possessive_pronoun_standalone: "",
   folder: "",
   avatar_path: null,
   image_id: null,
@@ -137,6 +139,8 @@ describe("buildEnv persona pronouns", () => {
     expect(env.character.personaSubjectivePronoun).toBe("they");
     expect(env.character.personaObjectivePronoun).toBe("them");
     expect(env.character.personaPossessivePronoun).toBe("their");
+    expect(env.character.personaReflexivePronoun).toBe("themselves");
+    expect(env.character.personaPossessivePronounStandalone).toBe("theirs");
   });
 
   test("uses configured persona pronouns when present", () => {
@@ -147,6 +151,8 @@ describe("buildEnv persona pronouns", () => {
         subjective_pronoun: " she ",
         objective_pronoun: " her ",
         possessive_pronoun: " her ",
+        reflexive_pronoun: " herself ",
+        possessive_pronoun_standalone: " hers ",
       },
       chat: baseChat,
       messages: [],
@@ -157,6 +163,8 @@ describe("buildEnv persona pronouns", () => {
     expect(env.character.personaSubjectivePronoun).toBe("she");
     expect(env.character.personaObjectivePronoun).toBe("her");
     expect(env.character.personaPossessivePronoun).toBe("her");
+    expect(env.character.personaReflexivePronoun).toBe("herself");
+    expect(env.character.personaPossessivePronounStandalone).toBe("hers");
   });
 });
 

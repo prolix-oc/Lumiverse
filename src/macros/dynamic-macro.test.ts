@@ -10,7 +10,7 @@ function makeEnv(dynamicMacros?: Record<string, string>): MacroEnv {
   return {
     commit: true,
     names: { user: "Alice", char: "Bob", group: "", groupNotMuted: "", notChar: "Alice", charGroupFocused: "", groupOthers: "", groupMemberCount: "0", isGroupChat: "no", isNarrator: "no", groupLastSpeaker: "", groupCardMode: "solo" },
-    character: { name: "Bob", description: "", personality: "", scenario: "", persona: "", personaSubjectivePronoun: "", personaObjectivePronoun: "", personaPossessivePronoun: "", mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "", depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "" },
+    character: { name: "Bob", description: "", personality: "", scenario: "", persona: "", personaSubjectivePronoun: "", personaObjectivePronoun: "", personaPossessivePronoun: "", personaReflexivePronoun: "", personaPossessivePronounStandalone: "", mesExamples: "", mesExamplesRaw: "", systemPrompt: "", postHistoryInstructions: "", depthPrompt: "", creatorNotes: "", version: "", creator: "", firstMessage: "" },
     chat: { id: "c1", messageCount: 0, lastMessage: "", lastMessageName: "", lastUserMessage: "", lastCharMessage: "", lastMessageId: 0, firstIncludedMessageId: 0, lastSwipeId: 0, currentSwipeId: 0, rejectedSwipe: "" },
     system: { model: "", maxPrompt: 0, maxContext: 0, maxResponse: 0, lastGenerationType: "normal", isMobile: false },
     variables: { local: new Map(), global: new Map(), chat: new Map() },

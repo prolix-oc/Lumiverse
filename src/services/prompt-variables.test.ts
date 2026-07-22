@@ -26,7 +26,7 @@ function makeEnv(overrides: {
     character: {
       name: "", description: "", personality: "", scenario: "", persona: "",
       personaSubjectivePronoun: "", personaObjectivePronoun: "",
-      personaPossessivePronoun: "", mesExamples: "", mesExamplesRaw: "",
+      personaPossessivePronoun: "", personaReflexivePronoun: "", personaPossessivePronounStandalone: "", mesExamples: "", mesExamplesRaw: "",
       systemPrompt: "", postHistoryInstructions: "", depthPrompt: "",
       creatorNotes: "", version: "", creator: "", firstMessage: "",
     },

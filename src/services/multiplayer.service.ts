@@ -303,6 +303,8 @@ function sanitizePersonaSnapshot(raw: unknown): PersonaSnapshot | null {
       subjective: sanitizeDisplayName(p.subjective, 24) || undefined,
       objective: sanitizeDisplayName(p.objective, 24) || undefined,
       possessive: sanitizeDisplayName(p.possessive, 24) || undefined,
+      reflexive: sanitizeDisplayName(p.reflexive, 24) || undefined,
+      possessiveStandalone: sanitizeDisplayName(p.possessiveStandalone, 24) || undefined,
     };
   }
   const avatarUrl = sanitizeAvatarUrl(obj.avatarUrl);

@@ -31,17 +31,19 @@ import type { Persona, TagCount, WorldBook } from '@/types/api'
 import styles from './PersonaEditor.module.css'
 import clsx from 'clsx'
 
-type PronounField = 'subjective_pronoun' | 'objective_pronoun' | 'possessive_pronoun'
+type PronounField = 'subjective_pronoun' | 'objective_pronoun' | 'possessive_pronoun' | 'reflexive_pronoun' | 'possessive_pronoun_standalone'
 
 const PRONOUN_FIELDS: Array<{
   key: PronounField
   labelKey: string
-  macro: '{{sub}}' | '{{obj}}' | '{{poss}}'
+  macro: '{{sub}}' | '{{obj}}' | '{{poss}}' | '{{ref}}' | '{{poss_p}}'
   placeholderKey: string
 }> = [
   { key: 'subjective_pronoun', labelKey: 'personaEditor.pronouns.subjective', macro: '{{sub}}', placeholderKey: 'personaEditor.pronouns.subjectivePlaceholder' },
   { key: 'objective_pronoun', labelKey: 'personaEditor.pronouns.objective', macro: '{{obj}}', placeholderKey: 'personaEditor.pronouns.objectivePlaceholder' },
   { key: 'possessive_pronoun', labelKey: 'personaEditor.pronouns.possessive', macro: '{{poss}}', placeholderKey: 'personaEditor.pronouns.possessivePlaceholder' },
+  { key: 'reflexive_pronoun', labelKey: 'personaEditor.pronouns.reflexive', macro: '{{ref}}', placeholderKey: 'personaEditor.pronouns.reflexivePlaceholder' },
+  { key: 'possessive_pronoun_standalone', labelKey: 'personaEditor.pronouns.possessiveStandalone', macro: '{{poss_p}}', placeholderKey: 'personaEditor.pronouns.possessiveStandalonePlaceholder' },
 ]
 
 const POSITION_OPTIONS = [
@@ -90,6 +92,8 @@ export default function PersonaEditor({
   const [subjectivePronoun, setSubjectivePronoun] = useState(persona.subjective_pronoun || '')
   const [objectivePronoun, setObjectivePronoun] = useState(persona.objective_pronoun || '')
   const [possessivePronoun, setPossessivePronoun] = useState(persona.possessive_pronoun || '')
+  const [reflexivePronoun, setReflexivePronoun] = useState(persona.reflexive_pronoun || '')
+  const [possessivePronounStandalone, setPossessivePronounStandalone] = useState(persona.possessive_pronoun_standalone || '')
   const [folder, setFolder] = useState(persona.folder || '')
   const [descPosition, setDescPosition] = useState<number>(persona.metadata?.description_position ?? 0)
   const [descDepth, setDescDepth] = useState<number>(persona.metadata?.description_depth ?? 4)
@@ -133,6 +137,8 @@ export default function PersonaEditor({
     setSubjectivePronoun(persona.subjective_pronoun || '')
     setObjectivePronoun(persona.objective_pronoun || '')
     setPossessivePronoun(persona.possessive_pronoun || '')
+    setReflexivePronoun(persona.reflexive_pronoun || '')
+    setPossessivePronounStandalone(persona.possessive_pronoun_standalone || '')
     setFolder(persona.folder || '')
     setDescPosition(persona.metadata?.description_position ?? 0)
     setDescDepth(persona.metadata?.description_depth ?? 4)
@@ -192,6 +198,8 @@ export default function PersonaEditor({
       if (field === 'subjective_pronoun') setSubjectivePronoun(value)
       if (field === 'objective_pronoun') setObjectivePronoun(value)
       if (field === 'possessive_pronoun') setPossessivePronoun(value)
+      if (field === 'reflexive_pronoun') setReflexivePronoun(value)
+      if (field === 'possessive_pronoun_standalone') setPossessivePronounStandalone(value)
 
       clearTimeout(pronounTimers.current[field])
       pronounTimers.current[field] = setTimeout(() => {
@@ -545,7 +553,11 @@ export default function PersonaEditor({
                 ? subjectivePronoun
                 : field.key === 'objective_pronoun'
                   ? objectivePronoun
-                  : possessivePronoun
+                  : field.key === 'possessive_pronoun'
+                    ? possessivePronoun
+                    : field.key === 'reflexive_pronoun'
+                      ? reflexivePronoun
+                      : possessivePronounStandalone
 
             return (
               <label key={field.key} className={styles.pronounField}>

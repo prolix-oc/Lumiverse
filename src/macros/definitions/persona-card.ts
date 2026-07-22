@@ -97,10 +97,30 @@ export function registerCharacterMacros(): void {
     builtIn: true,
     name: "poss",
     category: "Character",
-    description: "Persona possessive pronoun",
+    description: "Persona possessive determiner",
     returnType: "string",
     aliases: ["possessivePronoun", "personaPossessivePronoun"],
     handler: (ctx) => ctx.env.character.personaPossessivePronoun,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "ref",
+    category: "Character",
+    description: "Persona reflexive pronoun",
+    returnType: "string",
+    aliases: ["reflexivePronoun", "personaReflexivePronoun"],
+    handler: (ctx) => ctx.env.character.personaReflexivePronoun,
+  });
+
+  registry.registerMacro({
+    builtIn: true,
+    name: "poss_p",
+    category: "Character",
+    description: "Persona standalone possessive pronoun",
+    returnType: "string",
+    aliases: ["possessivePronounStandalone", "personaPossessivePronounStandalone"],
+    handler: (ctx) => ctx.env.character.personaPossessivePronounStandalone,
   });
 
   registry.registerMacro({

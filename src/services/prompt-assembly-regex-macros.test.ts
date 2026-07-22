@@ -33,6 +33,8 @@ function makeEnv(): MacroEnv {
       personaSubjectivePronoun: "",
       personaObjectivePronoun: "",
       personaPossessivePronoun: "",
+      personaReflexivePronoun: "",
+      personaPossessivePronounStandalone: "",
       mesExamples: "",
       mesExamplesRaw: "",
       systemPrompt: "",

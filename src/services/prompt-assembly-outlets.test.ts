@@ -30,6 +30,8 @@ function makeMinimalEnv(): MacroEnv {
       personaSubjectivePronoun: "",
       personaObjectivePronoun: "",
       personaPossessivePronoun: "",
+      personaReflexivePronoun: "",
+      personaPossessivePronounStandalone: "",
       mesExamples: "",
       mesExamplesRaw: "",
       systemPrompt: "",

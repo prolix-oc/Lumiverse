@@ -793,9 +793,13 @@
       "subjective": "Soggetto",
       "objective": "Complemento",
       "possessive": "Posesso",
+      "reflexive": "Riflessivo",
+      "possessiveStandalone": "Pronome possessivo",
       "subjectivePlaceholder": "lei",
       "objectivePlaceholder": "lei",
-      "possessivePlaceholder": "sua"
+      "possessivePlaceholder": "sua",
+      "reflexivePlaceholder": "se stessa",
+      "possessiveStandalonePlaceholder": "sua"
     },
     "position": {
       "inPrompt": "Nel prompt",

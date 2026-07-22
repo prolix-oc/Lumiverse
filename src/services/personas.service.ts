@@ -19,6 +19,8 @@ function rowToPersona(row: any): Persona {
     subjective_pronoun: row.subjective_pronoun || '',
     objective_pronoun: row.objective_pronoun || '',
     possessive_pronoun: row.possessive_pronoun || '',
+    reflexive_pronoun: row.reflexive_pronoun || '',
+    possessive_pronoun_standalone: row.possessive_pronoun_standalone || '',
     folder: row.folder || '',
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
@@ -72,10 +74,10 @@ export function createPersona(userId: string, input: CreatePersonaInput): Person
       .query(
         `INSERT INTO personas (
            id, user_id, name, title, description,
-           subjective_pronoun, objective_pronoun, possessive_pronoun,
+           subjective_pronoun, objective_pronoun, possessive_pronoun, reflexive_pronoun, possessive_pronoun_standalone,
            folder, is_default, is_narrator, attached_world_book_id, metadata, created_at, updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -86,6 +88,8 @@ export function createPersona(userId: string, input: CreatePersonaInput): Person
         input.subjective_pronoun || "",
         input.objective_pronoun || "",
         input.possessive_pronoun || "",
+        input.reflexive_pronoun || "",
+        input.possessive_pronoun_standalone || "",
         input.folder || "",
         input.is_default ? 1 : 0,
         input.is_narrator ? 1 : 0,
@@ -116,6 +120,8 @@ export function updatePersona(userId: string, id: string, input: UpdatePersonaIn
   if (input.subjective_pronoun !== undefined) { fields.push("subjective_pronoun = ?"); values.push(input.subjective_pronoun); }
   if (input.objective_pronoun !== undefined) { fields.push("objective_pronoun = ?"); values.push(input.objective_pronoun); }
   if (input.possessive_pronoun !== undefined) { fields.push("possessive_pronoun = ?"); values.push(input.possessive_pronoun); }
+  if (input.reflexive_pronoun !== undefined) { fields.push("reflexive_pronoun = ?"); values.push(input.reflexive_pronoun); }
+  if (input.possessive_pronoun_standalone !== undefined) { fields.push("possessive_pronoun_standalone = ?"); values.push(input.possessive_pronoun_standalone); }
   if (input.folder !== undefined) { fields.push("folder = ?"); values.push(input.folder); }
   if (input.is_default !== undefined) { fields.push("is_default = ?"); values.push(input.is_default ? 1 : 0); }
   if (input.is_narrator !== undefined) { fields.push("is_narrator = ?"); values.push(input.is_narrator ? 1 : 0); }
@@ -291,10 +297,10 @@ export function duplicatePersona(userId: string, id: string): Persona | null {
     .query(
       `INSERT INTO personas (
          id, user_id, name, title, description,
-         subjective_pronoun, objective_pronoun, possessive_pronoun,
+         subjective_pronoun, objective_pronoun, possessive_pronoun, reflexive_pronoun, possessive_pronoun_standalone,
          folder, avatar_path, image_id, is_default, is_narrator, attached_world_book_id, metadata, created_at, updated_at
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
@@ -305,6 +311,8 @@ export function duplicatePersona(userId: string, id: string): Persona | null {
       existing.subjective_pronoun,
       existing.objective_pronoun,
       existing.possessive_pronoun,
+      existing.reflexive_pronoun,
+      existing.possessive_pronoun_standalone,
       existing.folder,
       existing.avatar_path,
       existing.image_id,

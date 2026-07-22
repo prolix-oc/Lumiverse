@@ -793,9 +793,13 @@
       "subjective": "主格",
       "objective": "賓格",
       "possessive": "所有格",
+      "reflexive": "反身代名詞",
+      "possessiveStandalone": "所有代名詞",
       "subjectivePlaceholder": "她",
       "objectivePlaceholder": "她",
-      "possessivePlaceholder": "她的"
+      "possessivePlaceholder": "她的",
+      "reflexivePlaceholder": "她自己",
+      "possessiveStandalonePlaceholder": "她的"
     },
     "position": {
       "inPrompt": "在 Prompt 中",

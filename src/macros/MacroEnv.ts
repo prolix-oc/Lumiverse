@@ -45,11 +45,15 @@ export function resolvePersonaPronouns(persona: Persona | null): {
   subjective: string;
   objective: string;
   possessive: string;
+  reflexive: string;
+  possessiveStandalone: string;
 } {
   return {
     subjective: persona?.subjective_pronoun?.trim() || "they",
     objective: persona?.objective_pronoun?.trim() || "them",
     possessive: persona?.possessive_pronoun?.trim() || "their",
+    reflexive: persona?.reflexive_pronoun?.trim() || "themselves",
+    possessiveStandalone: persona?.possessive_pronoun_standalone?.trim() || "theirs",
   };
 }
 
@@ -106,6 +110,8 @@ export function buildEnv(ctx: BuildEnvContext): MacroEnv {
       personaSubjectivePronoun: personaPronouns.subjective,
       personaObjectivePronoun: personaPronouns.objective,
       personaPossessivePronoun: personaPronouns.possessive,
+      personaReflexivePronoun: personaPronouns.reflexive,
+      personaPossessivePronounStandalone: personaPronouns.possessiveStandalone,
       mesExamples: character.mes_example || "",
       mesExamplesRaw: character.mes_example || "",
       systemPrompt: character.system_prompt || "",

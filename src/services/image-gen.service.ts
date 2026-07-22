@@ -1524,8 +1524,8 @@ export async function buildContextMessages(userId: string, chatId: string, setti
       persona.name && `Name: ${persona.name}`,
       title && `Title: ${title}`,
       description && `Description: ${description}`,
-      (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun) &&
-        `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun].filter(Boolean).join("/")}`,
+      (persona.subjective_pronoun || persona.objective_pronoun || persona.possessive_pronoun || persona.reflexive_pronoun || persona.possessive_pronoun_standalone) &&
+        `Pronouns: ${[persona.subjective_pronoun, persona.objective_pronoun, persona.possessive_pronoun, persona.reflexive_pronoun, persona.possessive_pronoun_standalone].filter(Boolean).join("/")}`,
     ]
       .filter(Boolean)
       .join("\n");

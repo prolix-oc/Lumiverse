@@ -793,9 +793,13 @@
       "subjective": "主観",
       "objective": "目的",
       "possessive": "所有",
+      "reflexive": "再帰",
+      "possessiveStandalone": "所有代名詞",
       "subjectivePlaceholder": "彼女",
       "objectivePlaceholder": "彼女",
-      "possessivePlaceholder": "彼女"
+      "possessivePlaceholder": "彼女",
+      "reflexivePlaceholder": "彼女自身",
+      "possessiveStandalonePlaceholder": "彼女のもの"
     },
     "position": {
       "inPrompt": "プロンプト",

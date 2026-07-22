@@ -25,6 +25,8 @@ export interface PersonaPronouns {
   subjective?: string;
   objective?: string;
   possessive?: string;
+  reflexive?: string;
+  possessiveStandalone?: string;
 }
 
 /**
