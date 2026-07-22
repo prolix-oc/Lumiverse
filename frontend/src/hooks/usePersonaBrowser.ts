@@ -13,6 +13,11 @@ import {
 } from '@/lib/chatPersonaSelection'
 import { toast } from '@/lib/toast'
 import type { Persona, CreatePersonaInput, UpdatePersonaInput } from '@/types/api'
+import {
+  buildApproximatePersonaTokenCounts,
+  comparePersonasByTokenCount,
+  PersonaTokenCountRequestGuard,
+} from '@/lib/personaTokenSort'
 
 const SEARCH_DEBOUNCE_MS = 150
 
@@ -21,6 +26,8 @@ export function usePersonaBrowser() {
   const [currentPage, setCurrentPage] = useState(1)
   const personasPerPage = useStore((s) => s.personasPerPage)
   const setSetting = useStore((s) => s.setSetting)
+  const profiles = useStore((s) => s.profiles)
+  const activeProfileId = useStore((s) => s.activeProfileId)
 
   // Store state
   const personas = useStore((s) => s.personas)
@@ -54,6 +61,14 @@ export function usePersonaBrowser() {
   // Local state
   const [loading, setLoading] = useState(false)
   const [debouncedQuery, setDebouncedQuery] = useState(searchQuery)
+  const [personaTokenCounts, setPersonaTokenCounts] = useState<Record<string, number>>({})
+  const tokenCountRequestGuard = useRef(new PersonaTokenCountRequestGuard())
+  const tokenSortModel = useMemo(
+    () => profiles.find((profile) => profile.id === activeProfileId)?.model
+      || profiles.find((profile) => profile.is_default)?.model
+      || '',
+    [activeProfileId, profiles],
+  )
   const isChatScoped = !!activeChatId && activeChatMetadata?.temporary !== true
   const persistedChatPersonaId = useMemo(
     () => getPersistedChatPersonaId(activeChatMetadata),
@@ -83,6 +98,30 @@ export function usePersonaBrowser() {
     if (personas.length > 0) return
     loadPersonas()
   }, [personas.length, loadPersonas])
+
+  useEffect(() => {
+    const requestGuard = tokenCountRequestGuard.current
+    if (sortField !== 'tokens') {
+      requestGuard.invalidate()
+      return
+    }
+
+    const requestGeneration = requestGuard.begin()
+    setPersonaTokenCounts(buildApproximatePersonaTokenCounts(personas))
+    if (!tokenSortModel) return
+
+    personasApi.tokenCounts(tokenSortModel).then((result) => {
+      if (requestGuard.isCurrent(requestGeneration)) {
+        setPersonaTokenCounts(result.counts)
+      }
+    }).catch((err) => {
+      if (requestGuard.isCurrent(requestGeneration)) {
+        console.warn('[PersonaBrowser] Exact token sorting unavailable; using approximate counts:', err)
+      }
+    })
+
+    return () => requestGuard.invalidate()
+  }, [personas, sortField, tokenSortModel])
 
   // Fuse.js instance
   //
@@ -135,12 +174,14 @@ export function usePersonaBrowser() {
         case 'updated_at':
           cmp = (a.updated_at || 0) - (b.updated_at || 0)
           break
+        case 'tokens':
+          return comparePersonasByTokenCount(a, b, personaTokenCounts, sortDirection)
       }
       return sortDirection === 'desc' ? -cmp : cmp
     })
 
     return result
-  }, [personas, filterType, debouncedQuery, fuse, sortField, sortDirection])
+  }, [personas, filterType, debouncedQuery, fuse, sortField, sortDirection, personaTokenCounts])
 
   const recentPersonas = useMemo(() => {
     const filteredById = new Map(filteredPersonas.map((persona) => [persona.id, persona]))

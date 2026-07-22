@@ -548,6 +548,8 @@
       "name": "名稱",
       "recent": "最近",
       "created": "創建時間",
+      "author": "作者",
+      "tokens": "Token 數量",
       "shuffle": "隨機"
     },
     "reshuffle": "重新隨機",
@@ -2670,7 +2672,8 @@
     "sortBy": "按{{field}}排序",
     "sort": {
       "name": "名稱",
-      "created": "創建時間"
+      "created": "創建時間",
+      "tokens": "Token 數量"
     },
     "ascending": "升序",
     "descending": "降序",

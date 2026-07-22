@@ -130,6 +130,20 @@ app.post("/bulk-delete", async (c) => {
   return c.json({ deleted, count: deleted.length });
 });
 
+app.post("/token-counts", async (c) => {
+  const userId = c.get("userId");
+  let body: { model_id?: unknown } = {};
+  try {
+    body = await c.req.json<{ model_id?: unknown }>();
+  } catch {
+    // An empty body is equivalent to omitting the optional model id.
+  }
+  if (body.model_id !== undefined && typeof body.model_id !== "string") {
+    return c.json({ error: "model_id must be a string when provided" }, 400);
+  }
+  return c.json(await svc.getPersonaTokenCounts(userId, body.model_id || ""));
+});
+
 app.get("/:id", (c) => {
   const userId = c.get("userId");
   const persona = svc.getPersona(userId, c.req.param("id"));

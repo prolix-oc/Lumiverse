@@ -47,6 +47,14 @@ export function useCharacterBrowser() {
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const charactersPerPage = useStore((s) => s.charactersPerPage)
   const setSetting = useStore((s) => s.setSetting)
+  const profiles = useStore((s) => s.profiles)
+  const activeProfileId = useStore((s) => s.activeProfileId)
+  const tokenSortModel = useMemo(
+    () => profiles.find((profile) => profile.id === activeProfileId)?.model
+      || profiles.find((profile) => profile.is_default)?.model
+      || '',
+    [activeProfileId, profiles],
+  )
 
   // Store state (still used for background population for other components)
   const characters = useStore((s) => s.characters)
@@ -212,6 +220,7 @@ export function useCharacterBrowser() {
       } else {
         params.sort = sortField
         params.direction = sortDirection
+        if (sortField === 'tokens' && tokenSortModel) params.model_id = tokenSortModel
       }
 
       if (debouncedQuery.trim()) {
@@ -235,7 +244,7 @@ export function useCharacterBrowser() {
 
       return params
     },
-    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab]
+    [charactersPerPage, currentPage, sortField, sortDirection, shuffleSeed, debouncedQuery, selectedTags, excludedTags, filterTab, tokenSortModel]
   )
 
   const loadAllCharacters = useCallback(async () => {

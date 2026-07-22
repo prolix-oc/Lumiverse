@@ -548,6 +548,8 @@
       "name": "Nome",
       "recent": "Recente",
       "created": "Creato",
+      "author": "Autore",
+      "tokens": "Conteggio token",
       "shuffle": "Mescola"
     },
     "reshuffle": "Rimescola",
@@ -2678,7 +2680,8 @@
     "sortBy": "Ordina per {{field}}",
     "sort": {
       "name": "Nome",
-      "created": "Creato"
+      "created": "Creato",
+      "tokens": "Conteggio token"
     },
     "ascending": "Ascendente",
     "descending": "Discendente",

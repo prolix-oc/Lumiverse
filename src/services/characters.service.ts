@@ -8,6 +8,7 @@ import * as filesSvc from "./files.service";
 import * as imagesSvc from "./images.service";
 import { deleteRegexScriptsByCharacterId } from "./regex-scripts.service";
 import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
+import { resolveCounter } from "./tokenizer.service";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
@@ -78,6 +79,76 @@ export interface SummaryQueryOptions {
   favoriteIds?: string[];
   filterMode?: "all" | "favorites" | "non-favorites";
   seed?: number;
+}
+
+interface SummaryQueryParts {
+  fromClause: string;
+  whereStr: string;
+  whereParams: any[];
+}
+
+function buildSummaryQueryParts(userId: string, options: SummaryQueryOptions): SummaryQueryParts {
+  const { search, tags, excludeTags, favoriteIds, filterMode = "all" } = options;
+  const whereClauses: string[] = ["c.user_id = ?", "c.deleting = 0"];
+  const whereParams: any[] = [userId];
+
+  // FTS5 (trigram) search — falls back to LIKE for 1–2 char queries that
+  // trigram cannot match (common for 2-char CJK names like 魔王).
+  let fromClause = "characters c";
+  if (search) {
+    const ftsQuery = sanitizeFtsQuery(search);
+    if (ftsQuery) {
+      fromClause = "characters c JOIN characters_fts fts ON fts.rowid = c.rowid";
+      whereClauses.push("characters_fts MATCH ?");
+      whereParams.push(ftsQuery);
+    } else {
+      const trimmed = search.trim();
+      if (trimmed) {
+        const like = `%${escapeLike(trimmed)}%`;
+        whereClauses.push(
+          "(c.name LIKE ? ESCAPE '\\' OR c.creator LIKE ? ESCAPE '\\' OR c.tags LIKE ? ESCAPE '\\')"
+        );
+        whereParams.push(like, like, like);
+      }
+    }
+  }
+
+  if (tags && tags.length > 0) {
+    for (const tag of tags) {
+      whereClauses.push("EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  if (excludeTags && excludeTags.length > 0) {
+    for (const tag of excludeTags) {
+      whereClauses.push("NOT EXISTS (SELECT 1 FROM json_each(c.tags) WHERE value = ?)");
+      whereParams.push(tag);
+    }
+  }
+
+  if (filterMode === "favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  } else if (filterMode === "non-favorites" && favoriteIds && favoriteIds.length > 0) {
+    whereClauses.push(`c.id NOT IN (${favoriteIds.map(() => "?").join(",")})`);
+    whereParams.push(...favoriteIds);
+  }
+
+  return {
+    fromClause,
+    whereStr: whereClauses.join(" AND "),
+    whereParams,
+  };
+}
+
+function emptyCharacterSummaryPage(pagination: PaginationParams): PaginatedResult<CharacterSummary> {
+  return {
+    data: [],
+    total: 0,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
 }
 
 const UUID_HEX_SQL = "LOWER(REPLACE(c.id, '-', ''))";
@@ -239,6 +310,11 @@ export function listCharacterSummaries(
       case "created":
         orderBy = `ORDER BY c.created_at ${dir}, c.id ASC`;
         break;
+      case "author":
+        orderBy = `ORDER BY (TRIM(c.creator) = '') ASC,
+          (CASE WHEN TRIM(c.creator) = '' THEN NULL ELSE c.creator END) COLLATE NOCASE ${dir},
+          c.name COLLATE NOCASE ASC, c.id ASC`;
+        break;
       case "recent":
       default:
         orderBy = `ORDER BY c.updated_at ${dir}, c.id ASC`;
@@ -253,6 +329,54 @@ export function listCharacterSummaries(
     pagination,
     rowToSummary
   );
+}
+
+/**
+ * Token sorting is an opt-in summary path because the selected model's
+ * tokenizer must run before pagination. The resolved counter and each field's
+ * result are memoized by tokenizer.service, so subsequent pages and revisits
+ * avoid repeating the expensive encoding work.
+ */
+export async function listCharacterSummariesByTokens(
+  userId: string,
+  pagination: PaginationParams,
+  options: SummaryQueryOptions = {},
+  modelId = "",
+): Promise<PaginatedResult<CharacterSummary>> {
+  const { favoriteIds, filterMode = "all", direction = "desc" } = options;
+  if (filterMode === "favorites" && (!favoriteIds || favoriteIds.length === 0)) {
+    return emptyCharacterSummaryPage(pagination);
+  }
+
+  const { fromClause, whereStr, whereParams } = buildSummaryQueryParts(userId, options);
+  const rows = getDb()
+    .query(`SELECT ${SUMMARY_COLUMNS}, c.description, c.personality, c.scenario FROM ${fromClause} WHERE ${whereStr}`)
+    .all(...whereParams) as any[];
+  const { count } = await resolveCounter(modelId);
+  const sign = direction === "asc" ? 1 : -1;
+
+  const scored = rows.map((row) => ({
+    row,
+    // Match the three individual Count Tokens buttons instead of tokenizing a
+    // concatenated synthetic string whose boundary tokens could differ.
+    tokens: count(row.description || "") + count(row.personality || "") + count(row.scenario || ""),
+  }));
+  scored.sort((a, b) => {
+    const tokenOrder = sign * (a.tokens - b.tokens);
+    if (tokenOrder !== 0) return tokenOrder;
+    const nameOrder = String(a.row.name || "").localeCompare(String(b.row.name || ""), undefined, { sensitivity: "base" });
+    if (nameOrder !== 0) return nameOrder;
+    return String(a.row.id).localeCompare(String(b.row.id));
+  });
+
+  return {
+    data: scored
+      .slice(pagination.offset, pagination.offset + pagination.limit)
+      .map(({ row }) => rowToSummary(row)),
+    total: scored.length,
+    limit: pagination.limit,
+    offset: pagination.offset,
+  };
 }
 
 function listCharacterSummariesDiscover(

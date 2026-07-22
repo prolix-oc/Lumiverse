@@ -46,6 +46,7 @@ const SORT_OPTION_KEYS: { value: PersonaSortField; labelKey: string }[] = [
   { value: 'name', labelKey: 'sort.name' },
   { value: 'created', labelKey: 'sort.created' },
   { value: 'updated_at', labelKey: 'sort.updatedAt' },
+  { value: 'tokens', labelKey: 'sort.tokens' },
 ]
 
 export default function PersonaToolbar({

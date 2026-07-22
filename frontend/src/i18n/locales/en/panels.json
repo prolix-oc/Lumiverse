@@ -659,6 +659,8 @@
       "name": "Name",
       "recent": "Recent",
       "created": "Created",
+      "author": "Author",
+      "tokens": "Token Count",
       "shuffle": "Shuffle"
     },
     "reshuffle": "Reshuffle",
@@ -2890,7 +2892,8 @@
     "sort": {
       "name": "Name",
       "created": "Created",
-      "updatedAt": "Last edited"
+      "updatedAt": "Last edited",
+      "tokens": "Token Count"
     },
     "ascending": "Ascending",
     "descending": "Descending",
