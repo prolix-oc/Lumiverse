@@ -17,6 +17,7 @@ const baseCharacter: Character = {
   mes_example: "",
   creator: "",
   creator_notes: "",
+  folder: "",
   system_prompt: "",
   post_history_instructions: "",
   tags: [],

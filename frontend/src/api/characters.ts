@@ -27,6 +27,7 @@ export interface SummaryParams {
   filter?: string
   favorite_ids?: string
   seed?: number
+  model_id?: string
 }
 
 export type CharacterPerspectiveLayerKind = 'background' | 'framing' | 'subject'

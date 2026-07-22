@@ -93,7 +93,7 @@ interface ProviderSummaryEntry {
 interface StartupSettings {
   favorites?: string[];
   filterTab?: "characters" | "favorites" | "groups";
-  sortField?: "name" | "recent" | "created" | "shuffle";
+  sortField?: "name" | "recent" | "created" | "author" | "tokens" | "shuffle";
   sortDirection?: "asc" | "desc";
   viewMode?: "grid" | "single" | "list";
   charactersPerPage?: number;
@@ -198,7 +198,7 @@ function getStartupSettings(userId: string): StartupSettings {
   }
 
   const sortField = rows.get("sortField");
-  if (sortField === "name" || sortField === "recent" || sortField === "created" || sortField === "shuffle") {
+  if (sortField === "name" || sortField === "recent" || sortField === "created" || sortField === "author" || sortField === "tokens" || sortField === "shuffle") {
     startupSettings.sortField = sortField;
   }
 

@@ -548,6 +548,8 @@
       "name": "名前",
       "recent": "最近",
       "created": "作成",
+      "author": "作者",
+      "tokens": "トークン数",
       "shuffle": "シャッフル"
     },
     "reshuffle": "再シャッフル",
@@ -2659,7 +2661,8 @@
     "sortBy": "並べ替え {{field}}",
     "sort": {
       "name": "名前",
-      "created": "作成"
+      "created": "作成",
+      "tokens": "トークン数"
     },
     "ascending": "昇順",
     "descending": "降順",

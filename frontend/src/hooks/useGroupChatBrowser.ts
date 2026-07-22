@@ -4,22 +4,10 @@ import { useStore } from '@/store'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import type { GroupedRecentChat } from '@/types/api'
-import type { CharacterSortField, CharacterSortDirection } from '@/types/store'
+import { resolveGroupCharacterSort, resolveGroupCharacterSortDirection } from '@/lib/characterSort'
 
 const SEARCH_DEBOUNCE_MS = 150
 const GROUP_CHATS_FETCH_LIMIT = 500
-
-function resolveSort(sortField: CharacterSortField): 'name' | 'recent' | 'created' {
-  return sortField === 'shuffle' ? 'recent' : sortField
-}
-
-function resolveDirection(
-  sortField: CharacterSortField,
-  sortDirection: CharacterSortDirection,
-): 'asc' | 'desc' {
-  // shuffle has no direction; coerce so newest groups stay at the top.
-  return sortField === 'shuffle' ? 'desc' : sortDirection
-}
 
 export function useGroupChatBrowser() {
   const searchQuery = useStore((s) => s.searchQuery)
@@ -44,8 +32,8 @@ export function useGroupChatBrowser() {
     const params: Parameters<typeof chatsApi.listRecentGrouped>[0] = {
       limit: GROUP_CHATS_FETCH_LIMIT,
       offset: 0,
-      sort: resolveSort(sortField),
-      direction: resolveDirection(sortField, sortDirection),
+      sort: resolveGroupCharacterSort(sortField),
+      direction: resolveGroupCharacterSortDirection(sortField, sortDirection),
     }
     const trimmed = debouncedQuery.trim()
     if (trimmed) params.search = trimmed

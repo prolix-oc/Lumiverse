@@ -548,6 +548,8 @@
       "name": "Nom",
       "recent": "Récent",
       "created": "Créé",
+      "author": "Auteur",
+      "tokens": "Nombre de jetons",
       "shuffle": "Mélanger"
     },
     "reshuffle": "Remaniement",
@@ -2659,7 +2661,8 @@
     "sortBy": "Trier par {{field}}",
     "sort": {
       "name": "Nom",
-      "created": "Créé"
+      "created": "Créé",
+      "tokens": "Nombre de jetons"
     },
     "ascending": "Ascendant",
     "descending": "Descendant",

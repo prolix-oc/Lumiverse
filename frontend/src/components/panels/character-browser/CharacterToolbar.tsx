@@ -17,6 +17,7 @@ import styles from './CharacterToolbar.module.css'
 import clsx from 'clsx'
 import { clearSearchOnEscape } from '@/lib/clearableSearch'
 import { SortControl } from '@/components/shared/SortControl'
+import { isGroupCharacterSortField } from '@/lib/characterSort'
 
 interface CharacterToolbarProps {
   searchQuery: string
@@ -45,6 +46,8 @@ const SORT_OPTIONS: { value: CharacterSortField; label: string }[] = [
   { value: 'name', label: 'name' },
   { value: 'recent', label: 'recent' },
   { value: 'created', label: 'created' },
+  { value: 'author', label: 'author' },
+  { value: 'tokens', label: 'tokens' },
   { value: 'shuffle', label: 'shuffle' },
 ]
 
@@ -72,12 +75,12 @@ export default function CharacterToolbar({
 }: CharacterToolbarProps) {
   const { t } = useTranslation('panels')
   const isGroupsTab = filterTab === 'groups'
-  // shuffle is meaningless for group chats; the hook coerces it to 'recent'
-  // for fetching — mirror that visually so the active item highlights correctly.
+  // Character-only fields are meaningless for group chats; the hook coerces
+  // them to 'recent' for fetching — mirror that visually here.
   const effectiveSortField: CharacterSortField =
-    isGroupsTab && sortField === 'shuffle' ? 'recent' : sortField
+    isGroupsTab && !isGroupCharacterSortField(sortField) ? 'recent' : sortField
   const visibleSortOptions = isGroupsTab
-    ? SORT_OPTIONS.filter((opt) => opt.value !== 'shuffle')
+    ? SORT_OPTIONS.filter((opt) => isGroupCharacterSortField(opt.value))
     : SORT_OPTIONS
 
   return (

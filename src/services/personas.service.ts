@@ -11,6 +11,7 @@ import {
   type PersonaAddonToggleOrder,
   type PersonaAvatarInfo,
 } from "./persona-addon-states";
+import { resolveCounter } from "./tokenizer.service";
 
 function rowToPersona(row: any): Persona {
   return {
@@ -37,6 +38,21 @@ export function listPersonas(userId: string, pagination: PaginationParams): Pagi
     pagination,
     rowToPersona
   );
+}
+
+export async function getPersonaTokenCounts(
+  userId: string,
+  modelId = "",
+): Promise<{ counts: Record<string, number>; tokenizer_name: string; approximate: boolean }> {
+  const rows = getDb()
+    .query("SELECT id, description FROM personas WHERE user_id = ?")
+    .all(userId) as Array<{ id: string; description: string }>;
+  const { count, name } = await resolveCounter(modelId);
+  return {
+    counts: Object.fromEntries(rows.map((row) => [row.id, count(row.description || "")])),
+    tokenizer_name: name,
+    approximate: name === "approximate",
+  };
 }
 
 export function getPersona(userId: string, id: string): Persona | null {

@@ -103,7 +103,7 @@ export interface ChatSlice {
 
 // ---- Characters Slice ----
 export type CharacterFilterTab = 'characters' | 'favorites' | 'groups'
-export type CharacterSortField = 'name' | 'recent' | 'created' | 'shuffle'
+export type CharacterSortField = 'name' | 'recent' | 'created' | 'author' | 'tokens' | 'shuffle'
 export type CharacterSortDirection = 'asc' | 'desc'
 export type CharacterViewMode = 'grid' | 'single' | 'list'
 
@@ -171,7 +171,7 @@ export interface CharactersSlice {
 
 // ---- Personas Slice ----
 export type PersonaFilterType = 'all' | 'default' | 'connected'
-export type PersonaSortField = 'name' | 'created' | 'updated_at'
+export type PersonaSortField = 'name' | 'created' | 'updated_at' | 'tokens'
 export type PersonaSortDirection = 'asc' | 'desc'
 export type PersonaViewMode = 'grid' | 'list'
 export type PersonaTagBindingMode = 'any' | 'all'

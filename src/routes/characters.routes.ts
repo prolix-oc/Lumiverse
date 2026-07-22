@@ -455,7 +455,7 @@ app.get("/", (c) => {
 });
 
 // ─── Lightweight summary endpoint for character browser ───────────────────
-app.get("/summary", (c) => {
+app.get("/summary", async (c) => {
   const userId = c.get("userId");
   const pagination = parsePagination(c.req.query("limit"), c.req.query("offset"));
   const search = c.req.query("search") || undefined;
@@ -470,18 +470,25 @@ app.get("/summary", (c) => {
   const seed = rawSeed ? parseInt(rawSeed, 10) : undefined;
   const rawFavorites = c.req.query("favorite_ids");
   const favoriteIds = rawFavorites ? rawFavorites.split(",").filter(Boolean) : undefined;
+  const modelId = c.req.query("model_id") || "";
+
+  const options = {
+    search,
+    tags,
+    excludeTags,
+    sort,
+    direction,
+    favoriteIds,
+    filterMode,
+    seed: isNaN(seed as number) ? undefined : seed,
+  };
+
+  if (sort === "tokens") {
+    return c.json(await svc.listCharacterSummariesByTokens(userId, pagination, options, modelId));
+  }
 
   return c.json(
-    svc.listCharacterSummaries(userId, pagination, {
-      search,
-      tags,
-      excludeTags,
-      sort,
-      direction,
-      favoriteIds,
-      filterMode,
-      seed: isNaN(seed as number) ? undefined : seed,
-    })
+    svc.listCharacterSummaries(userId, pagination, options)
   );
 });
 

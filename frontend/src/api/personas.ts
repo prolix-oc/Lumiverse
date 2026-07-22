@@ -23,6 +23,14 @@ export const personasApi = {
     return data
   },
 
+  tokenCounts(modelId?: string) {
+    return post<{
+      counts: Record<string, number>
+      tokenizer_name: string
+      approximate: boolean
+    }>('/personas/token-counts', modelId ? { model_id: modelId } : {})
+  },
+
   get(id: string) {
     return get<Persona>(`/personas/${id}`)
   },
