@@ -36,6 +36,13 @@ describe("healFormattingArtifacts", () => {
     expect(healFormattingArtifacts("```\n* softly*\n```\n\n* softly*" )).toBe("```\n* softly*\n```\n\n*softly*");
   });
 
+  test("preserves fenced content without temporary healing markers", () => {
+    const input = 'Use this exactly:\n```json\n{ "example": "* softly*", "tag": "<font color=#abc>" }\n```\n\nThen * softly*.';
+    expect(healFormattingArtifacts(input)).toBe(
+      'Use this exactly:\n```json\n{ "example": "* softly*", "tag": "<font color=#abc>" }\n```\n\nThen *softly*.',
+    );
+  });
+
   test("leaves nested emphasis patterns alone", () => {
     expect(healFormattingArtifacts("*outer *inner**")).toBe("*outer *inner**");
   });

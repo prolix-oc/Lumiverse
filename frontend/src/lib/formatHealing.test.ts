@@ -13,4 +13,11 @@ describe('healFormattingArtifacts', () => {
     const input = '<font color=#abc>"Hello."</font> <font color=#def>*She smiled.*</font>'
     expect(healFormattingArtifacts(input)).toBe(input)
   })
+
+  test('preserves fenced code while healing surrounding prose', () => {
+    const input = 'Use this exactly:\n```json\n{ "example": "* softly*" }\n```\n\nThen * softly*.'
+    expect(healFormattingArtifacts(input)).toBe(
+      'Use this exactly:\n```json\n{ "example": "* softly*" }\n```\n\nThen *softly*.',
+    )
+  })
 })

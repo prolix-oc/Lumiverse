@@ -1,6 +1,3 @@
-const HEAL_TOKEN_PREFIX = "\u0000LUMI_HEAL_";
-const HEAL_TOKEN_SUFFIX = "_\u0000";
-
 const FENCED_CODE_RE = /(^|\n)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g;
 const INLINE_CODE_RE = /(`+)([\s\S]*?)\1/g;
 const FONT_QUOTE_EDGE_RE = /(<font\b[^>]*>)(["“”«»])([\s\S]*?)(<\/font>)(["“”«»])/gi;
@@ -15,21 +12,6 @@ const MATCHING_QUOTE: Record<string, string> = {
 const STRAIGHT_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(")([^\n]*?)(")(?=$|[\s)\]},.!?:;"'”’»<—–-])/g;
 const CURLY_DOUBLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(“)([^\n]*?)(”)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g;
 const ANGLE_QUOTE_RE = /(^|[\s([{"'“‘«>—–-])(«)([^\n]*?)(»)(?=$|[\s)\]},.!?:;"'”’»<—–-])/g;
-
-function shieldMatches(text: string, pattern: RegExp, bucket: string[]): string {
-  return text.replace(pattern, (match) => {
-    const token = `${HEAL_TOKEN_PREFIX}${bucket.length}${HEAL_TOKEN_SUFFIX}`;
-    bucket.push(match);
-    return token;
-  });
-}
-
-function unshieldMatches(text: string, bucket: string[]): string {
-  return text.replace(/\u0000LUMI_HEAL_(\d+)_\u0000/g, (match, rawIndex: string) => {
-    const value = bucket[Number(rawIndex)];
-    return value ?? match;
-  });
-}
 
 function repairQuotedColorTagBoundaries(text: string): string {
   const repair = (
@@ -197,12 +179,37 @@ function healUnshieldedSegment(text: string): string {
   return healed;
 }
 
+/**
+ * Applies formatting healing only to prose between protected markdown spans.
+ * Keeping protected content out of the working string avoids temporary marker
+ * tokens leaking into user content when an intermediate string is normalized.
+ */
+function healAroundMatches(text: string, pattern: RegExp): string {
+  let healed = "";
+  let cursor = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index!;
+    healed += healUnshieldedSegment(text.slice(cursor, index));
+    healed += match[0];
+    cursor = index + match[0].length;
+  }
+
+  return healed + healUnshieldedSegment(text.slice(cursor));
+}
+
 export function healFormattingArtifacts(text: string): string {
   if (!text) return text;
 
-  const shielded: string[] = [];
-  let working = shieldMatches(text, FENCED_CODE_RE, shielded);
-  working = shieldMatches(working, INLINE_CODE_RE, shielded);
-  working = healUnshieldedSegment(working);
-  return unshieldMatches(working, shielded);
+  // Process fenced blocks first so inline-code matching cannot see their
+  // backticks. Inline spans are then protected in each prose segment.
+  let healed = "";
+  let cursor = 0;
+  for (const match of text.matchAll(FENCED_CODE_RE)) {
+    const index = match.index!;
+    healed += healAroundMatches(text.slice(cursor, index), INLINE_CODE_RE);
+    healed += match[0];
+    cursor = index + match[0].length;
+  }
+  return healed + healAroundMatches(text.slice(cursor), INLINE_CODE_RE);
 }
