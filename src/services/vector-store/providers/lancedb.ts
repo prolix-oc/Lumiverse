@@ -150,6 +150,10 @@ const CROSS_PROCESS_WRITE_LOCK_STALE_MS = 5 * 60_000;
 const CROSS_PROCESS_WRITE_LOCK_ENABLED = shouldUseCrossProcessWriteLock();
 const RETRYABLE_LANCE_WRITE_CONFLICT_MAX_ATTEMPTS = 4;
 const RETRYABLE_LANCE_WRITE_CONFLICT_BASE_BACKOFF_MS = 100;
+// A container restart commonly reuses PID 1. Keep this separately from the
+// lock's PID so a lock left by the previous container instance cannot appear
+// live merely because the replacement process has the same PID.
+const PROCESS_STARTED_AT = Date.now() - Math.floor(process.uptime() * 1_000);
 const _writeLockQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 let _writeLockHeld = false;
 
@@ -195,10 +199,25 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+export function isCrossProcessLockFromPriorProcessInstance(
+  info: { pid?: number; acquiredAt?: number } | null,
+  processId: number = process.pid,
+  processStartedAt: number = PROCESS_STARTED_AT,
+): boolean {
+  // PID liveness alone is not an identity check: Docker (and other process
+  // namespaces) can reuse PID 1 after a restart. If this process has the
+  // lock owner's PID but the lock predates this process, it necessarily came
+  // from an earlier process instance.
+  return info?.pid === processId
+    && typeof info.acquiredAt === "number"
+    && info.acquiredAt < processStartedAt;
+}
+
 function shouldBreakStaleCrossProcessLock(): boolean {
   if (!existsSync(CROSS_PROCESS_WRITE_LOCK_DIR)) return false;
 
   const info = readCrossProcessLockInfo();
+  if (isCrossProcessLockFromPriorProcessInstance(info)) return true;
   const fallbackAcquiredAt = (() => {
     try {
       return statSync(CROSS_PROCESS_WRITE_LOCK_DIR).mtimeMs;

@@ -17,6 +17,11 @@ services:
       - TRUST_ANY_ORIGIN=true
       # - TRUSTED_ORIGINS=https://lumiverse.example.com
 
+      # LanceDB serializes writes between the server and its vectorization
+      # subprocess. Leave this enabled unless temporarily working around a
+      # stale lock in an older image.
+      # - LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK=false
+
       # Emergency theme recovery (suppresses saved CSS/overrides without deleting them)
       # - LUMIVERSE_SAFE_THEME=true
 

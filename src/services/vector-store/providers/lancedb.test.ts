@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  isCrossProcessLockFromPriorProcessInstance,
   isRetryableLanceWriteConflict,
   shouldUseCrossProcessWriteLock,
 } from "./lancedb";
@@ -16,6 +17,22 @@ describe("lancedb write conflict handling", () => {
     expect(shouldUseCrossProcessWriteLock({
       LUMIVERSE_LANCEDB_CROSS_PROCESS_LOCK: "false",
     })).toBe(false);
+  });
+
+  test("recognizes a stale lock when a restarted container reuses its PID", () => {
+    expect(isCrossProcessLockFromPriorProcessInstance(
+      { pid: 1, acquiredAt: 1_000 },
+      1,
+      2_000,
+    )).toBe(true);
+  });
+
+  test("keeps a lock acquired by the current process instance", () => {
+    expect(isCrossProcessLockFromPriorProcessInstance(
+      { pid: 1, acquiredAt: 2_000 },
+      1,
+      1_000,
+    )).toBe(false);
   });
 
   test("detects Lance retryable commit conflicts from Windows warning text", () => {
