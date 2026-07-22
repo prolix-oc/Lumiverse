@@ -1746,7 +1746,15 @@ export async function assembleBoundParentPrompt(
   try {
     const assembled = await assemblePrompt(context);
     return {
-      messages: assembled.messages as readonly BoundMessageDTO[],
+      messages: assembled.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        ...(message.name === undefined ? {} : { name: message.name }),
+        ...(message.cache_control === undefined ? {} : { cache_control: message.cache_control }),
+        ...(message.reasoning_content === undefined ? {} : { reasoning_content: message.reasoning_content }),
+        ...(message.thinking_blocks === undefined ? {} : { thinking_blocks: message.thinking_blocks }),
+        ...(message.reasoning_details === undefined ? {} : { reasoning_details: message.reasoning_details }),
+      })),
       breakdown: assembled.breakdown,
     };
   } finally {

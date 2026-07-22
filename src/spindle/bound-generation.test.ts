@@ -1,14 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type {
   BoundDispatchProvider,
   BoundDispatchResolution,
   BoundInvocationContext,
+  ConnectionDispatchDescriptorDTO,
   MainDispatchSnapshotInput,
+  ParentGenerationSnapshot,
   ParentGenerationSnapshotInput,
   ParentRetrievalSnapshotInput,
   QuietTrackedRequestDTO,
   ReadOnlyEffectLeaseContext,
 } from "./bound-generation-types";
+import type { LlmProvider } from "../llm/provider";
+import { registerProvider } from "../llm/registry";
+import { closeDatabase, getDb, initDatabase } from "../db/connection";
+import { runMigrations } from "../db/migrate";
+import {
+  resolveDispatchDescriptor,
+  resolveMainDispatchSnapshot,
+  type ResolvedDispatchDescriptor,
+} from "../services/dispatch-state.service";
 import {
   brandHostGenerationId,
   brandInvocationToken,
@@ -27,6 +38,10 @@ import {
   mintParentPrefillChildUse,
   runBoundAssembly,
 } from "./bound-generation";
+import {
+  createHostBoundGenerationCallbacks,
+  type HostBoundGenerationCallbacks,
+} from "./bound-generation-host";
 
 const HOST_GENERATION = brandHostGenerationId("host-generation-1");
 const REVISION = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -39,6 +54,22 @@ const DESCRIPTOR = {
   dispatchKind: "concrete" as const,
   connectionDispatchRevision: REVISION,
 };
+
+const HOST_DISPATCH_USER = "user-1";
+const HOST_DEFAULT_CONNECTION = "default-connection";
+const HOST_MAIN_CONNECTION = "main-connection";
+const HOST_SLOT_CONNECTION = "slot-connection";
+const HOST_DEFAULT_PRESET = "default-preset";
+const HOST_MAIN_PRESET = "main-preset";
+const HOST_SLOT_PRESET = "slot-preset";
+const HOST_SLOT_ALT_PRESET = "slot-alt-preset";
+const HOST_PROVIDER_NAME = "bound-generation-test-provider";
+const HOST_MAIN_CONTEXT = {
+  connectionId: HOST_MAIN_CONNECTION,
+  presetId: HOST_MAIN_PRESET,
+  reasoning: { apiReasoning: true, reasoningEffort: "high" },
+  settings: { locale: "fr", dispatchMode: "main" },
+} as const;
 
 const BLOCKS = [{
   id: "block-1",
@@ -154,6 +185,142 @@ const provider: BoundDispatchProvider = async ({ resolution, parentPrefill }) =>
   terminalResponse: true,
   usage: { prompt_tokens: 2, completion_tokens: parentPrefill ? 4 : 3, total_tokens: parentPrefill ? 6 : 5, provider_raw: { request_id: "safe-id" } },
 });
+
+const hostProviderCalls: Array<{ readonly apiKey: string; readonly apiUrl: string; readonly model: string }> = [];
+
+registerProvider({
+  name: HOST_PROVIDER_NAME,
+  displayName: "Bound generation test provider",
+  defaultUrl: "http://bound-generation.invalid/v1",
+  capabilities: {
+    parameters: {},
+    requiresMaxTokens: false,
+    supportsSystemRole: true,
+    supportsStreaming: true,
+    apiKeyRequired: false,
+    modelListStyle: "none",
+  },
+  async generate(apiKey, apiUrl, request) {
+    hostProviderCalls.push({ apiKey, apiUrl, model: request.model });
+    return { content: "bound-provider-response", finish_reason: "stop" };
+  },
+  async *generateStream() {
+    yield { token: "bound-provider-stream", finish_reason: "stop" };
+  },
+  async validateKey() {
+    return true;
+  },
+  async listModels() {
+    return [];
+  },
+} satisfies LlmProvider);
+
+interface HostFixture {
+  readonly callbacks: HostBoundGenerationCallbacks;
+  readonly parentSnapshot: ParentGenerationSnapshot;
+  readonly mainResolution: ResolvedDispatchDescriptor;
+}
+
+interface HostSlotFixture {
+  readonly descriptor: ConnectionDispatchDescriptorDTO;
+  readonly resolution: BoundDispatchResolution;
+}
+
+async function resetHostDispatchDb(): Promise<void> {
+  closeDatabase();
+  initDatabase(":memory:");
+  await runMigrations(getDb());
+  const db = getDb();
+  db.run('INSERT INTO "user" (id, name, email) VALUES (?, ?, ?)', [
+    HOST_DISPATCH_USER,
+    "Bound generation user",
+    "bound-generation@example.test",
+  ]);
+  for (const [id, name, parameters] of [
+    [HOST_DEFAULT_PRESET, "Default preset", '{"temperature":0.1}'],
+    [HOST_MAIN_PRESET, "Main preset", '{"temperature":0.2}'],
+    [HOST_SLOT_PRESET, "Slot preset", '{"temperature":0.3}'],
+    [HOST_SLOT_ALT_PRESET, "Slot alternate preset", '{"temperature":0.4}'],
+  ] as const) {
+    db.run(
+      `INSERT INTO presets
+        (id, name, provider, parameters, prompt_order, metadata, created_at, updated_at, prompts, user_id, engine)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, name, HOST_PROVIDER_NAME, parameters, "[]", "{}", 10, 10, "{}", HOST_DISPATCH_USER, "classic"],
+    );
+  }
+  for (const [id, name, model, presetId, isDefault] of [
+    [HOST_DEFAULT_CONNECTION, "Default connection", "default-model", HOST_DEFAULT_PRESET, 1],
+    [HOST_MAIN_CONNECTION, "Main connection", "main-model", HOST_MAIN_PRESET, 0],
+    [HOST_SLOT_CONNECTION, "Slot connection", "slot-model", HOST_SLOT_PRESET, 0],
+  ] as const) {
+    db.run(
+      `INSERT INTO connection_profiles
+        (id, name, provider, api_url, model, preset_id, is_default, metadata, created_at, updated_at, has_api_key, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        name,
+        HOST_PROVIDER_NAME,
+        "http://bound-generation.invalid/v1",
+        model,
+        presetId,
+        isDefault,
+        "{}",
+        10,
+        10,
+        0,
+        HOST_DISPATCH_USER,
+      ],
+    );
+  }
+}
+
+function createHostFixture(): HostFixture {
+  const mainResolution = resolveMainDispatchSnapshot(HOST_DISPATCH_USER, HOST_MAIN_CONTEXT);
+  const parentSnapshot = parent({
+    main: captureMainDispatchSnapshot(mainInput({
+      descriptor: mainResolution.descriptor,
+      reasoning: HOST_MAIN_CONTEXT.reasoning,
+      authoritativeContext: HOST_MAIN_CONTEXT,
+    })),
+  });
+  const callbacks = createHostBoundGenerationCallbacks({
+    parent: parentSnapshot,
+    extensionIdentifier: "bound-generation-test",
+    signal: new AbortController().signal,
+    mainApiKey: "main-api-key",
+  });
+  return { callbacks, parentSnapshot, mainResolution };
+}
+
+async function resolveHostSlot(fixture: HostFixture): Promise<HostSlotFixture> {
+  const descriptor = await fixture.callbacks.inspectDispatch(HOST_SLOT_CONNECTION);
+  if (!descriptor) throw new Error("Expected the test slot descriptor");
+  const revision = descriptor.connectionDispatchRevision;
+  if (typeof revision !== "string" || revision.trim().length === 0) throw new Error("Expected the test slot revision");
+  const resolution = await fixture.callbacks.resolveDispatch({
+    source: {
+      source: "slot",
+      connectionId: HOST_SLOT_CONNECTION,
+      expectedConnectionDispatchRevision: revision,
+    },
+    parent: fixture.parentSnapshot,
+  });
+  if (!resolution) throw new Error("Expected the test slot resolution");
+  return { descriptor, resolution };
+}
+
+function hostProviderInput(resolution: BoundDispatchResolution) {
+  return {
+    resolution,
+    messages: [{ role: "user" as const, content: "slot request" }],
+    parameters: { temperature: 0.3 },
+    reasoning: {},
+    tools: [],
+    signal: new AbortController().signal,
+  };
+}
 
 describe("Immutable parent snapshots", () => {
   test("deep-clones and freezes effective Main and retrieval inputs", () => {
@@ -320,6 +487,132 @@ describe("Bound assembly and tracked dispatch", () => {
     expect(cancelled).toMatchObject({ ok: false, phase: "resolved", error: { code: "BOUND_ABORTED" } });
     expect(survivor).toMatchObject({ ok: true, response: { content: "survivor" } });
     expect(calls).toBe(2);
+  });
+});
+
+describe("Host-bound dispatch resolution", () => {
+  beforeEach(async () => {
+    hostProviderCalls.length = 0;
+    await resetHostDispatchDb();
+  });
+
+  afterEach(() => {
+    closeDatabase();
+  });
+
+  test("resolves an inspected slot without parent Main context through provider", async () => {
+    const fixture = createHostFixture();
+    const slot = await resolveHostSlot(fixture);
+    const contextualSlot = resolveDispatchDescriptor(HOST_DISPATCH_USER, {
+      source: "slot",
+      connectionId: HOST_SLOT_CONNECTION,
+      presetId: HOST_MAIN_CONTEXT.presetId,
+      reasoning: HOST_MAIN_CONTEXT.reasoning,
+      settings: HOST_MAIN_CONTEXT.settings,
+    });
+
+    expect(fixture.parentSnapshot.main.authoritativeContext).toEqual(HOST_MAIN_CONTEXT);
+    expect(slot.descriptor.connectionDispatchRevision).toBe(slot.resolution.dispatchRevision);
+    expect(slot.descriptor.connectionDispatchRevision).not.toBe(contextualSlot.dispatchRevision);
+    expect(slot.resolution.connectionId).toBe(HOST_SLOT_CONNECTION);
+    expect(slot.resolution.descriptor.model).toBe("slot-model");
+
+    const result = await fixture.callbacks.provider(hostProviderInput(slot.resolution));
+
+    expect(result.response.content).toBe("bound-provider-response");
+    expect(hostProviderCalls).toEqual([{
+      apiKey: "",
+      apiUrl: "http://bound-generation.invalid/v1",
+      model: "slot-model",
+    }]);
+  });
+
+  test("rejects a slot revision after its selected preset changes before provider", async () => {
+    const fixture = createHostFixture();
+    const slot = await resolveHostSlot(fixture);
+    getDb()
+      .query("UPDATE connection_profiles SET preset_id = ? WHERE id = ? AND user_id = ?")
+      .run(HOST_SLOT_ALT_PRESET, HOST_SLOT_CONNECTION, HOST_DISPATCH_USER);
+
+    await expect(fixture.callbacks.provider(hostProviderInput(slot.resolution))).rejects.toMatchObject({
+      name: "BoundProviderPreflightError",
+    });
+    expect(hostProviderCalls).toHaveLength(0);
+  });
+
+  test("rejects a slot revision after its selected preset row changes before provider", async () => {
+    const fixture = createHostFixture();
+    const slot = await resolveHostSlot(fixture);
+    getDb()
+      .query("UPDATE presets SET parameters = ? WHERE id = ? AND user_id = ?")
+      .run('{"temperature":0.95}', HOST_SLOT_PRESET, HOST_DISPATCH_USER);
+
+    await expect(fixture.callbacks.provider(hostProviderInput(slot.resolution))).rejects.toMatchObject({
+      name: "BoundProviderPreflightError",
+    });
+    expect(hostProviderCalls).toHaveLength(0);
+  });
+
+  test("replays absent authoritative Main reasoning without normalized provider defaults", async () => {
+    const authoritativeContext = {
+      connectionId: HOST_MAIN_CONNECTION,
+      presetId: HOST_MAIN_PRESET,
+      settings: HOST_MAIN_CONTEXT.settings,
+    };
+    const mainResolution = resolveMainDispatchSnapshot(HOST_DISPATCH_USER, authoritativeContext);
+    const parentSnapshot = parent({
+      main: captureMainDispatchSnapshot(mainInput({
+        descriptor: mainResolution.descriptor,
+        reasoning: {},
+        authoritativeContext,
+      })),
+    });
+    const callbacks = createHostBoundGenerationCallbacks({
+      parent: parentSnapshot,
+      extensionIdentifier: "bound-generation-test",
+      signal: new AbortController().signal,
+      mainApiKey: "main-api-key",
+    });
+
+    await expect(callbacks.resolveDispatch({
+      source: {
+        source: "main",
+        expectedConnectionDispatchRevision: mainResolution.dispatchRevision,
+      },
+      parent: parentSnapshot,
+    })).resolves.toMatchObject({
+      source: "main",
+      connectionId: HOST_MAIN_CONNECTION,
+      descriptor: { model: "main-model" },
+    });
+  });
+
+  test("keeps a nondefault Main route parent-bound and rejects its stale revision", async () => {
+    const fixture = createHostFixture();
+    const resolved = await fixture.callbacks.resolveDispatch({
+      source: {
+        source: "main",
+        expectedConnectionDispatchRevision: fixture.mainResolution.dispatchRevision,
+      },
+      parent: fixture.parentSnapshot,
+    });
+
+    expect(resolved).toMatchObject({
+      source: "main",
+      connectionId: HOST_MAIN_CONNECTION,
+      descriptor: { model: "main-model" },
+    });
+    getDb()
+      .query("UPDATE connection_profiles SET model = ? WHERE id = ? AND user_id = ?")
+      .run("main-model-stale", HOST_MAIN_CONNECTION, HOST_DISPATCH_USER);
+
+    await expect(fixture.callbacks.resolveDispatch({
+      source: {
+        source: "main",
+        expectedConnectionDispatchRevision: fixture.mainResolution.dispatchRevision,
+      },
+      parent: fixture.parentSnapshot,
+    })).rejects.toThrow("Bound Main dispatch changed before work");
   });
 });
 

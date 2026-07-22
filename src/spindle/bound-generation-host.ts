@@ -129,7 +129,7 @@ function parentDispatchContext(parent: ParentGenerationSnapshot): EffectiveDispa
   return {
     ...(connectionId === undefined ? {} : { connectionId }),
     ...(presetId === undefined ? {} : { presetId }),
-    reasoning: parent.main.reasoning,
+    reasoning: context.reasoning,
     settings: context.settings,
   };
 }
@@ -215,7 +215,7 @@ function makeDispatchResolver(parent: ParentGenerationSnapshot, hostSignal: Abor
     if (source.source !== "slot") throw new Error("Bound dispatch source is invalid");
     requireText(source.connectionId, "connectionId");
     requireText(source.expectedConnectionDispatchRevision, "connectionDispatchRevision");
-    const current = resolveSlotDispatch(parent.userId, source.connectionId, source.expectedConnectionDispatchRevision, context);
+    const current = resolveSlotDispatch(parent.userId, source.connectionId, source.expectedConnectionDispatchRevision);
     throwIfAborted(hostSignal);
     return mapResolution(current);
   };
@@ -281,14 +281,14 @@ export function createHostBoundGenerationCallbacks(input: HostBoundGenerationCal
             expectedConnectionDispatchRevision: checked.dispatchRevision,
             ...context,
           })
-        : resolveSlotDispatch(parent.userId, checked.connectionId, checked.dispatchRevision, context);
+        : resolveSlotDispatch(parent.userId, checked.connectionId, checked.dispatchRevision);
       if (current.source !== checked.source || current.connectionId !== checked.connectionId || current.dispatchRevision !== checked.dispatchRevision || !sameDescriptor(current.descriptor, checked.descriptor)) throw new Error("Bound dispatch changed before provider invocation");
       throwIfAborted(leased.signal);
       let apiKey = mainApiKey;
       if (checked.source === "slot") {
         apiKey = (await getSecret(parent.userId, connectionSecretKey(checked.connectionId))) ?? "";
         throwIfAborted(leased.signal);
-        current = resolveSlotDispatch(parent.userId, checked.connectionId, checked.dispatchRevision, context);
+        current = resolveSlotDispatch(parent.userId, checked.connectionId, checked.dispatchRevision);
         if (current.source !== "slot" || current.connectionId !== checked.connectionId || current.dispatchRevision !== checked.dispatchRevision || !sameDescriptor(current.descriptor, checked.descriptor)) throw new Error("Bound slot dispatch changed before provider invocation");
       }
       const adapter = getProvider(checked.descriptor.provider);

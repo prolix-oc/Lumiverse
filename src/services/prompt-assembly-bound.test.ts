@@ -291,6 +291,17 @@ describe("assembleBoundParentPrompt", () => {
       expect(output).toContain("Frozen system block");
       expect(output).toContain("Frozen parent message");
       expect(result.breakdown.length).toBeGreaterThan(0);
+      expect(result.messages.every((message) =>
+        Object.keys(message).every((key) => [
+          "role",
+          "content",
+          "name",
+          "cache_control",
+          "reasoning_content",
+          "thinking_blocks",
+          "reasoning_details",
+        ].includes(key))
+      )).toBe(true);
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
       expect(() =>
         Object.defineProperty(snapshot.retrieval.results.chat, "name", {
