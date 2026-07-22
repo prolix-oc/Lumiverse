@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { settingsApi } from '@/api/settings'
 
-type FolderSettingsKey = 'personaFolders' | 'regexScriptFolders' | 'worldBookFolders'
+type FolderSettingsKey = 'characterFolders' | 'personaFolders' | 'regexScriptFolders' | 'worldBookFolders'
+const FOLDERS_UPDATED_EVENT = 'lumiverse:folders-updated'
+
+interface FoldersUpdatedDetail {
+  settingsKey: FolderSettingsKey
+  folders: string[]
+}
 
 /**
  * Manages folder names backed by a settings key, merged with folders
@@ -27,6 +33,22 @@ export function useFolders(
       })
   }, [settingsKey])
 
+  useEffect(() => {
+    const handleFoldersUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<FoldersUpdatedDetail>).detail
+      if (detail?.settingsKey === settingsKey) setStoredFolders(detail.folders)
+    }
+    window.addEventListener(FOLDERS_UPDATED_EVENT, handleFoldersUpdated)
+    return () => window.removeEventListener(FOLDERS_UPDATED_EVENT, handleFoldersUpdated)
+  }, [settingsKey])
+
+  const persistFolders = useCallback((next: string[]) => {
+    settingsApi.put(settingsKey, next).catch(() => {})
+    window.dispatchEvent(new CustomEvent<FoldersUpdatedDetail>(FOLDERS_UPDATED_EVENT, {
+      detail: { settingsKey, folders: next },
+    }))
+  }, [settingsKey])
+
   // Discover folders from items and merge with stored
   const folders = useMemo(() => {
     const set = new Set<string>(storedFolders)
@@ -41,11 +63,11 @@ export function useFolders(
       setStoredFolders((prev) => {
         if (prev.includes(name)) return prev
         const next = [...prev, name]
-        settingsApi.put(settingsKey, next).catch(() => {})
+        queueMicrotask(() => persistFolders(next))
         return next
       })
     },
-    [settingsKey]
+    [persistFolders]
   )
 
   const renameFolder = useCallback(
@@ -57,22 +79,22 @@ export function useFolders(
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== source)
         if (!next.includes(target)) next.push(target)
-        settingsApi.put(settingsKey, next).catch(() => {})
+        queueMicrotask(() => persistFolders(next))
         return next
       })
     },
-    [settingsKey]
+    [persistFolders]
   )
 
   const deleteFolder = useCallback(
     (name: string) => {
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== name)
-        settingsApi.put(settingsKey, next).catch(() => {})
+        queueMicrotask(() => persistFolders(next))
         return next
       })
     },
-    [settingsKey]
+    [persistFolders]
   )
 
   return { folders, createFolder, renameFolder, deleteFolder }

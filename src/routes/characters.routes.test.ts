@@ -26,6 +26,7 @@ function initCharactersTestDb(): void {
     creator_notes TEXT NOT NULL DEFAULT '',
     system_prompt TEXT NOT NULL DEFAULT '',
     post_history_instructions TEXT NOT NULL DEFAULT '',
+    folder TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '[]',
     alternate_greetings TEXT NOT NULL DEFAULT '[]',
     extensions TEXT NOT NULL DEFAULT '{}',
@@ -148,5 +149,70 @@ describe("POST /:id/replace-card", () => {
     expect(character.avatar_path).toBe("avatar.png");
     expect(character.image_id).toBe("avatar-image");
     expect(character.personality).toBe("PNG replacement personality");
+  });
+});
+
+describe("character folder routes", () => {
+  test("renames and deletes a folder", async () => {
+    getDb().query("UPDATE characters SET folder = 'Drafts' WHERE id = ?").run(CHARACTER_ID);
+
+    const renameResponse = await app.request("http://localhost/folders/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_name: "Drafts", new_name: "Published" }),
+    });
+    expect(renameResponse.status).toBe(200);
+    expect(await renameResponse.json()).toMatchObject({ count: 1 });
+    expect(getDb().query("SELECT folder FROM characters WHERE id = ?").get(CHARACTER_ID)).toEqual({ folder: "Published" });
+
+    const deleteResponse = await app.request("http://localhost/folders/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Published" }),
+    });
+    expect(deleteResponse.status).toBe(200);
+    expect(await deleteResponse.json()).toMatchObject({ count: 1 });
+    expect(getDb().query("SELECT folder FROM characters WHERE id = ?").get(CHARACTER_ID)).toEqual({ folder: "" });
+  });
+
+  test("bulk moves characters and validates inputs", async () => {
+    const response = await app.request("http://localhost/bulk-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [CHARACTER_ID, "missing"], folder: " Cast " }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ count: 1 });
+    expect(getDb().query("SELECT folder FROM characters WHERE id = ?").get(CHARACTER_ID)).toEqual({ folder: "Cast" });
+
+    const emptyIds = await app.request("http://localhost/bulk-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [], folder: "Cast" }),
+    });
+    expect(emptyIds.status).toBe(400);
+
+    const missingFolder = await app.request("http://localhost/bulk-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [CHARACTER_ID] }),
+    });
+    expect(missingFolder.status).toBe(400);
+  });
+
+  test("rejects invalid rename input and reports an unknown source folder", async () => {
+    const invalid = await app.request("http://localhost/folders/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_name: "", new_name: "Published" }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const missing = await app.request("http://localhost/folders/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_name: "Missing", new_name: "Published" }),
+    });
+    expect(missing.status).toBe(404);
   });
 });

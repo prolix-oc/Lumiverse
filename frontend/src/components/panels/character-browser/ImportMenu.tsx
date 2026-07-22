@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, FileUp, Link, UserPlus, Tags } from 'lucide-react'
+import { Plus, FileUp, Link, UserPlus, Tags, FolderPlus, Check, X } from 'lucide-react'
 import styles from './ImportMenu.module.css'
 
 interface ImportMenuProps {
@@ -8,6 +8,7 @@ interface ImportMenuProps {
   onImportTagLibrary: (file: File) => void
   onImportUrl: () => void
   onCreateNew: () => void
+  onCreateFolder: (name: string) => void
   importLoading: boolean
   tagLibraryImporting?: boolean
 }
@@ -19,14 +20,18 @@ export default function ImportMenu({
   onImportTagLibrary,
   onImportUrl,
   onCreateNew,
+  onCreateFolder,
   importLoading,
   tagLibraryImporting = false,
 }: ImportMenuProps) {
   const { t } = useTranslation('panels')
   const [open, setOpen] = useState(false)
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [folderName, setFolderName] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const tagLibraryInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
 
   // Close on outside click — pointerdown + guard required on Android
   useEffect(() => {
@@ -36,11 +41,26 @@ export default function ImportMenu({
       if (e.timeStamp < openedAt + 100) return
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false)
+        setCreatingFolder(false)
+        setFolderName('')
       }
     }
     document.addEventListener('pointerdown', handler)
     return () => document.removeEventListener('pointerdown', handler)
   }, [open])
+
+  useEffect(() => {
+    if (creatingFolder) folderInputRef.current?.focus()
+  }, [creatingFolder])
+
+  const handleCreateFolder = () => {
+    const name = folderName.trim()
+    if (!name) return
+    onCreateFolder(name)
+    setFolderName('')
+    setCreatingFolder(false)
+    setOpen(false)
+  }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
@@ -77,6 +97,39 @@ export default function ImportMenu({
       </button>
       {open && (
         <div className={styles.dropdown}>
+          {creatingFolder ? (
+            <div className={styles.folderCreateRow}>
+              <input
+                ref={folderInputRef}
+                className={styles.folderInput}
+                value={folderName}
+                onChange={(event) => setFolderName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') handleCreateFolder()
+                  if (event.key === 'Escape') {
+                    setCreatingFolder(false)
+                    setFolderName('')
+                  }
+                }}
+                placeholder={t('characterBrowser.folderName')}
+                maxLength={64}
+              />
+              <button type="button" className={styles.folderAction} onClick={handleCreateFolder} disabled={!folderName.trim()}>
+                <Check size={12} />
+              </button>
+              <button
+                type="button"
+                className={styles.folderAction}
+                onClick={() => {
+                  setCreatingFolder(false)
+                  setFolderName('')
+                }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ) : (
+            <>
           <button
             type="button"
             className={styles.item}
@@ -87,6 +140,10 @@ export default function ImportMenu({
           >
             <UserPlus size={14} />
             <span>{t('characterBrowser.createNew')}</span>
+          </button>
+          <button type="button" className={styles.item} onClick={() => setCreatingFolder(true)}>
+            <FolderPlus size={14} />
+            <span>{t('characterBrowser.newFolder')}</span>
           </button>
           <button
             type="button"
@@ -117,6 +174,8 @@ export default function ImportMenu({
             <Link size={14} />
             <span>{t('characterBrowser.importUrl')}</span>
           </button>
+            </>
+          )}
         </div>
       )}
       <input

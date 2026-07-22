@@ -13,6 +13,7 @@ import type {
   BatchDeleteResult,
   BulkTagResult,
   TagLibraryImportResult,
+  CharacterFolderMutationResponse,
 } from '@/types/api'
 
 export interface SummaryParams {
@@ -159,6 +160,21 @@ export const charactersApi = {
 
   bulkUpdateTags(ids: string[], operation: 'add' | 'remove' | 'replace', tags: string[]) {
     return post<BulkTagResult>('/characters/bulk-tags', { ids, operation, tags })
+  },
+
+  renameFolder(oldName: string, newName: string) {
+    return post<CharacterFolderMutationResponse>('/characters/folders/rename', {
+      old_name: oldName,
+      new_name: newName,
+    })
+  },
+
+  deleteFolder(name: string) {
+    return post<CharacterFolderMutationResponse>('/characters/folders/delete', { name })
+  },
+
+  bulkUpdateFolder(ids: string[], folder: string) {
+    return post<CharacterFolderMutationResponse>('/characters/bulk-update', { ids, folder })
   },
 
   async exportCharacter(id: string, format: 'json' | 'png' | 'charx', characterName?: string) {

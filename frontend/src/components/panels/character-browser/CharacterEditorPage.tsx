@@ -53,11 +53,13 @@ import { Button } from '@/components/shared/FormComponents'
 import { RangeSlider } from '@/components/shared/RangeSlider'
 import SearchableSelect from '@/components/shared/SearchableSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
+import FolderDropdown from '@/components/shared/FolderDropdown'
 import SpindleCharacterEditorTabContent from '@/components/spindle/SpindleCharacterEditorTabContent'
 import { ttsConnectionsApi } from '@/api/tts-connections'
 import type { VoiceRef } from '@/types/api'
 import { filterWorldBooksForChatContextAttachment } from '@/lib/worldBookIndexPrompt'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
+import { useFolders } from '@/hooks/useFolders'
 import { setCharacterEditorController, syncCharacterEditorState } from '@/lib/spindle/character-editor-helper'
 import styles from './CharacterEditorPage.module.css'
 import clsx from 'clsx'
@@ -379,6 +381,7 @@ export default function CharacterEditorPage() {
   const loadRegexScripts = useStore((s) => s.loadRegexScripts)
   const updateRegexScript = useStore((s) => s.updateRegexScript)
   const browser = useCharacterBrowser()
+  const { folders: characterFolders, createFolder: createCharacterFolder } = useFolders('characterFolders', allCharacters)
 
   const character = allCharacters.find((c) => c.id === editingCharacterId) ?? null
   const isOpen = !!editingCharacterId
@@ -391,6 +394,7 @@ export default function CharacterEditorPage() {
 
   const [activeTab, setActiveTab] = useState<TabId>('core')
   const [name, setName] = useState('')
+  const [folder, setFolder] = useState('')
   const [fields, setFields] = useState<Record<string, string>>({})
   const [tags, setTags] = useState<string[]>([])
   const [newTag, setNewTag] = useState('')
@@ -470,6 +474,7 @@ export default function CharacterEditorPage() {
     if (lastSyncedId.current === character.id) return
     lastSyncedId.current = character.id
     setName(character.name)
+    setFolder(character.folder || '')
     setFields({
       description: character.description || '',
       personality: character.personality || '',
@@ -497,6 +502,19 @@ export default function CharacterEditorPage() {
     clearTimeout(savingTimer.current)
     savingTimer.current = setTimeout(() => setSaving(false), 1000)
   }, [])
+
+  const handleFolderChange = useCallback(async (value: string) => {
+    if (!character) return
+    const previous = folder
+    setFolder(value)
+    showSaving()
+    try {
+      await browser.updateCharacter(character.id, { folder: value })
+    } catch (err: any) {
+      setFolder(previous)
+      toast.error(err?.body?.error || err?.message || t('characterEditor.folderSaveFailed'))
+    }
+  }, [browser, character, folder, showSaving, t])
 
   // Gallery
   const fetchGallery = useCallback(() => {
@@ -1757,6 +1775,16 @@ export default function CharacterEditorPage() {
 
                   {activeTab === 'identity' && (
                     <>
+                      <div className={styles.fieldGroup}>
+                        <span className={styles.fieldLabel}>{t('characterEditor.folder')}</span>
+                        <span className={styles.fieldHelper}>{t('characterEditor.folderHelper')}</span>
+                        <FolderDropdown
+                          folders={characterFolders}
+                          selectedFolder={folder}
+                          onSelect={(value) => void handleFolderChange(value)}
+                          onCreateFolder={createCharacterFolder}
+                        />
+                      </div>
                       <Field
                         label={t('characterEditor.alternateName')}
                         helper={t('characterEditor.alternateNameHelper')}

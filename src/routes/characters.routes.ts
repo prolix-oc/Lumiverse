@@ -508,6 +508,43 @@ app.post("/bulk-tags", async (c) => {
   }
 });
 
+app.post("/folders/rename", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ old_name?: string; new_name?: string }>();
+  const oldName = body.old_name?.trim() || "";
+  const newName = body.new_name?.trim() || "";
+  if (!oldName) return c.json({ error: "old_name is required" }, 400);
+  if (!newName) return c.json({ error: "new_name is required" }, 400);
+
+  const updated = svc.renameCharacterFolder(userId, oldName, newName);
+  if (updated.length === 0) return c.json({ error: "Folder not found" }, 404);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/folders/delete", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ name?: string }>();
+  const name = body.name?.trim() || "";
+  if (!name) return c.json({ error: "name is required" }, 400);
+
+  const updated = svc.deleteCharacterFolder(userId, name);
+  return c.json({ updated, count: updated.length });
+});
+
+app.post("/bulk-update", async (c) => {
+  const userId = c.get("userId");
+  const body = await c.req.json<{ ids?: unknown; folder?: unknown }>();
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 1000) {
+    return c.json({ error: "ids must be a non-empty array with at most 1000 items" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) return c.json({ error: "ids must contain character ids" }, 400);
+  if (typeof body.folder !== "string") return c.json({ error: "folder must be a string" }, 400);
+
+  const updated = svc.bulkUpdateCharacterFolders(userId, ids, body.folder);
+  return c.json({ updated, count: updated.length });
+});
+
 app.post("/", async (c) => {
   const userId = c.get("userId");
   const body = await c.req.json();
