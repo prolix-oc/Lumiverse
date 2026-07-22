@@ -56,6 +56,11 @@ export default function ImportMenu({
   const handleCreateFolder = () => {
     const name = folderName.trim()
     if (!name) return
+    const normalizedName = name.toLocaleLowerCase()
+    if (
+      normalizedName === 'uncategorized'
+      || normalizedName === t('characterBrowser.uncategorized').trim().toLocaleLowerCase()
+    ) return
     onCreateFolder(name)
     setFolderName('')
     setCreatingFolder(false)
@@ -114,7 +119,16 @@ export default function ImportMenu({
                 placeholder={t('characterBrowser.folderName')}
                 maxLength={64}
               />
-              <button type="button" className={styles.folderAction} onClick={handleCreateFolder} disabled={!folderName.trim()}>
+              <button
+                type="button"
+                className={styles.folderAction}
+                onClick={handleCreateFolder}
+                disabled={
+                  !folderName.trim()
+                  || folderName.trim().toLocaleLowerCase() === 'uncategorized'
+                  || folderName.trim().toLocaleLowerCase() === t('characterBrowser.uncategorized').trim().toLocaleLowerCase()
+                }
+              >
                 <Check size={12} />
               </button>
               <button

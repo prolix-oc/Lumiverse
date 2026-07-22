@@ -121,6 +121,11 @@ export default function CharacterBrowser() {
     const oldName = renamingFolder.trim()
     const newName = renamingValue.trim()
     if (!newName) return
+    const normalizedNewName = newName.toLocaleLowerCase()
+    if (
+      normalizedNewName === 'uncategorized'
+      || normalizedNewName === t('characterBrowser.uncategorized').trim().toLocaleLowerCase()
+    ) return
     if (oldName === newName) {
       setRenamingFolder(null)
       setRenamingValue('')
@@ -440,14 +445,12 @@ export default function CharacterBrowser() {
             <div className={styles.folderGroups}>
               {browser.groupedCharacters.map((group) => {
                 const folderKey = group.folder || '__uncategorized'
-                const showHeader = folders.length > 0 || !!group.folder
                 const isCollapsed = collapsedFolders.has(folderKey)
                 const isRenaming = !!group.folder && renamingFolder === group.folder
 
                 return (
                   <div key={folderKey} className={styles.folderGroup}>
-                    {showHeader && (
-                      <div className={styles.folderHeaderRow}>
+                    <div className={styles.folderHeaderRow}>
                         {isRenaming ? (
                           <div className={styles.folderRenameRow}>
                             <input
@@ -465,7 +468,17 @@ export default function CharacterBrowser() {
                               disabled={renameBusy}
                               placeholder={t('characterBrowser.folderName')}
                             />
-                            <button type="button" className={styles.folderActionBtn} onClick={() => void handleRenameFolder()} disabled={renameBusy || !renamingValue.trim()}>
+                            <button
+                              type="button"
+                              className={styles.folderActionBtn}
+                              onClick={() => void handleRenameFolder()}
+                              disabled={
+                                renameBusy
+                                || !renamingValue.trim()
+                                || renamingValue.trim().toLocaleLowerCase() === 'uncategorized'
+                                || renamingValue.trim().toLocaleLowerCase() === t('characterBrowser.uncategorized').trim().toLocaleLowerCase()
+                              }
+                            >
                               <Check size={12} />
                             </button>
                             <button
@@ -514,8 +527,7 @@ export default function CharacterBrowser() {
                             )}
                           </>
                         )}
-                      </div>
-                    )}
+                    </div>
                     {!isCollapsed && renderCharacterCards(group.characters)}
                   </div>
                 )
