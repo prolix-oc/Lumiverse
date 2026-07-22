@@ -12,6 +12,7 @@ export interface Character {
   creator_notes: string;
   system_prompt: string;
   post_history_instructions: string;
+  folder: string;
   tags: string[];
   alternate_greetings: string[];
   extensions: Record<string, any>;
@@ -30,6 +31,7 @@ export interface CreateCharacterInput {
   creator_notes?: string;
   system_prompt?: string;
   post_history_instructions?: string;
+  folder?: string;
   tags?: string[];
   alternate_greetings?: string[];
   extensions?: Record<string, any>;
@@ -62,6 +64,7 @@ export function makeAssistantCharacter(): Character {
     creator_notes: "",
     system_prompt: "",
     post_history_instructions: "",
+    folder: "",
     tags: [],
     alternate_greetings: [],
     extensions: {},
@@ -82,6 +85,7 @@ export interface CharacterSummary {
   id: string;
   name: string;
   creator: string;
+  folder: string;
   tags: string[];
   image_id: string | null;
   created_at: number;

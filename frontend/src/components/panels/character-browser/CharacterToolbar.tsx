@@ -35,6 +35,7 @@ interface CharacterToolbarProps {
   onImportTagLibrary: (file: File) => void
   onImportUrl: () => void
   onCreateNew: () => void
+  onCreateFolder: (name: string) => void
   importLoading: boolean
   tagLibraryImporting?: boolean
   onGroupChat?: () => void
@@ -64,6 +65,7 @@ export default function CharacterToolbar({
   onImportTagLibrary,
   onImportUrl,
   onCreateNew,
+  onCreateFolder,
   importLoading,
   tagLibraryImporting = false,
   onGroupChat,
@@ -101,6 +103,7 @@ export default function CharacterToolbar({
           onImportTagLibrary={onImportTagLibrary}
           onImportUrl={onImportUrl}
           onCreateNew={onCreateNew}
+          onCreateFolder={onCreateFolder}
           importLoading={importLoading}
           tagLibraryImporting={tagLibraryImporting}
         />

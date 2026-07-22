@@ -14,6 +14,126 @@
   color: var(--lumiverse-text-muted);
 }
 
+.folderGroups,
+.folderGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folderGroups {
+  gap: 12px;
+}
+
+.folderHeaderRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.folderHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.folderHeader:hover {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+}
+
+.folderChevron {
+  color: var(--lumiverse-text-dim);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.folderChevronOpen {
+  transform: rotate(90deg);
+}
+
+.folderName {
+  overflow: hidden;
+  color: var(--lumiverse-text-muted);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.folderCount {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(10px * var(--lumiverse-font-scale, 1));
+  line-height: 1.6;
+}
+
+.folderActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.folderActionBtn:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-text);
+}
+
+.folderDeleteBtn:hover:not(:disabled) {
+  color: var(--lumiverse-danger, #ff5c7a);
+}
+
+.folderActionBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.folderRenameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+}
+
+.folderRenameInput {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--lumiverse-bg-elevated, rgba(255, 255, 255, 0.04));
+  color: var(--lumiverse-text);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.folderRenameInput:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
 /* Skeleton loading */
 .skeletonGrid {
   display: grid;

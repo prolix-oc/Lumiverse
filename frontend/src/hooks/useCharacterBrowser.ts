@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from '@/lib/toast'
 import { charactersApi } from '@/api/characters'
@@ -158,6 +158,28 @@ export function useCharacterBrowser() {
   const [favoriteCharacters, setFavoriteCharacters] = useState<CharacterSummary[]>([])
   const favoriteMutationSeqRef = useRef(0)
   const favoritesRef = useRef(favorites)
+
+  const groupedCharacters = useMemo(() => {
+    const groups: Array<{ folder: string; characters: CharacterSummary[] }> = []
+    const folderMap = new Map<string, CharacterSummary[]>()
+    for (const character of browserItems) {
+      const key = character.folder || ''
+      if (!folderMap.has(key)) {
+        folderMap.set(key, [])
+        groups.push({ folder: key, characters: folderMap.get(key)! })
+      }
+      folderMap.get(key)!.push(character)
+    }
+    return groups
+  }, [browserItems])
+
+  const allFolders = useMemo(() => {
+    const folders = new Set<string>()
+    for (const character of characters) {
+      if (character.folder) folders.add(character.folder)
+    }
+    return Array.from(folders).sort((a, b) => a.localeCompare(b))
+  }, [characters])
 
   // Debounced search
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -575,6 +597,38 @@ export function useCharacterBrowser() {
     [removeCharacters]
   )
 
+  const applyFolderUpdates = useCallback((updated: Character[]) => {
+    if (updated.length === 0) return
+    const updatedById = new Map(updated.map((character) => [character.id, character]))
+    const currentCharacters = useStore.getState().characters
+    setCharacters(currentCharacters.map((character) => updatedById.get(character.id) ?? character))
+    setBrowserItems((items) => items.map((item) => {
+      const character = updatedById.get(item.id)
+      return character ? { ...item, folder: character.folder, updated_at: character.updated_at } : item
+    }))
+  }, [setCharacters])
+
+  const renameFolder = useCallback(async (oldName: string, newName: string) => {
+    const result = await charactersApi.renameFolder(oldName, newName)
+    applyFolderUpdates(result.updated)
+    setFetchVersion((version) => version + 1)
+    return result
+  }, [applyFolderUpdates])
+
+  const deleteFolder = useCallback(async (name: string) => {
+    const result = await charactersApi.deleteFolder(name)
+    applyFolderUpdates(result.updated)
+    setFetchVersion((version) => version + 1)
+    return result
+  }, [applyFolderUpdates])
+
+  const bulkUpdateFolder = useCallback(async (ids: string[], folder: string) => {
+    const result = await charactersApi.bulkUpdateFolder(ids, folder)
+    applyFolderUpdates(result.updated)
+    setFetchVersion((version) => version + 1)
+    return result
+  }, [applyFolderUpdates])
+
   const openModal = useStore((s) => s.openModal)
   const showChatCreationToast = useCallback(
     () => toast.info(i18n.t('chat.toast.creatingChatCortex'), {
@@ -773,7 +827,9 @@ export function useCharacterBrowser() {
   return {
     // State — browser items come from server-side pagination
     characters: browserItems,
+    groupedCharacters,
     allCharacters: characters,
+    allFolders,
     totalFiltered: browserTotal,
     favoriteCharacters,
     loading: loading || !settingsLoaded,
@@ -827,6 +883,9 @@ export function useCharacterBrowser() {
     duplicateCharacter,
     uploadAvatar,
     deleteCharacter,
+    renameFolder,
+    deleteFolder,
+    bulkUpdateFolder,
     importFile,
     importFiles,
     importUrl,

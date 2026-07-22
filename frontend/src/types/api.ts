@@ -13,6 +13,7 @@ export interface Character {
   creator_notes: string;
   system_prompt: string;
   post_history_instructions: string;
+  folder: string;
   tags: string[];
   alternate_greetings: string[];
   talkativeness: number; // 0.0–1.0, default 0.5
@@ -39,6 +40,7 @@ export interface CreateCharacterInput {
   creator_notes?: string;
   system_prompt?: string;
   post_history_instructions?: string;
+  folder?: string;
   tags?: string[];
   alternate_greetings?: string[];
   talkativeness?: number;
@@ -51,11 +53,17 @@ export interface CharacterSummary {
   id: string;
   name: string;
   creator: string;
+  folder: string;
   tags: string[];
   image_id: string | null;
   created_at: number;
   updated_at: number;
   has_alternate_greetings: boolean;
+}
+
+export interface CharacterFolderMutationResponse {
+  updated: Character[];
+  count: number;
 }
 
 export interface TagCount {

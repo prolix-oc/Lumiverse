@@ -12,6 +12,7 @@ function initCharactersTestDb(): void {
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
     creator TEXT NOT NULL DEFAULT '',
+    folder TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '[]',
     image_id TEXT,
     alternate_greetings TEXT NOT NULL DEFAULT '[]',

@@ -11,7 +11,7 @@ import { deleteAutoManagedCharacterWorldBooks } from "./world-books.service";
 
 // ─── Summary queries (lightweight, for character browser) ─────────────────
 
-const SUMMARY_COLUMNS = `c.id, c.name, c.creator, c.tags, c.image_id, c.created_at, c.updated_at,
+const SUMMARY_COLUMNS = `c.id, c.name, c.creator, c.folder, c.tags, c.image_id, c.created_at, c.updated_at,
   (json_array_length(c.alternate_greetings) > 0) as has_alternate_greetings`;
 
 function rowToSummary(row: any): CharacterSummary {
@@ -19,6 +19,7 @@ function rowToSummary(row: any): CharacterSummary {
     id: row.id,
     name: row.name,
     creator: row.creator,
+    folder: row.folder || "",
     tags: JSON.parse(row.tags),
     image_id: row.image_id || null,
     created_at: row.created_at,
@@ -550,6 +551,7 @@ function rowToCharacter(row: any): Character {
     ...rest,
     avatar_path: row.avatar_path || null,
     image_id: row.image_id || null,
+    folder: row.folder || "",
     tags: JSON.parse(row.tags),
     alternate_greetings: JSON.parse(row.alternate_greetings),
     extensions: JSON.parse(row.extensions),
@@ -744,6 +746,10 @@ export function createCharacter(userId: string, input: CreateCharacterInput): Ch
       now
     );
 
+  if (input.folder?.trim()) {
+    getDb().query("UPDATE characters SET folder = ? WHERE id = ? AND user_id = ?").run(input.folder.trim(), id, userId);
+  }
+
   const character = getCharacter(userId, id)!;
   eventBus.emit(EventType.CHARACTER_CREATED, { id, character }, userId);
   return character;
@@ -770,6 +776,11 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
     }
   }
 
+  if (input.folder !== undefined) {
+    fields.push("folder = ?");
+    values.push(input.folder.trim());
+  }
+
   const jsonFields = ["tags", "alternate_greetings", "extensions"] as const;
   for (const field of jsonFields) {
     if (input[field] !== undefined) {
@@ -793,6 +804,62 @@ export function updateCharacter(userId: string, id: string, input: UpdateCharact
     cleanupUnreferencedImageIds(userId, removedImageIds);
   }
   eventBus.emit(EventType.CHARACTER_EDITED, { id, character: updated }, userId);
+  return updated;
+}
+
+export function renameCharacterFolder(userId: string, oldName: string, newName: string): Character[] {
+  const source = oldName.trim();
+  const target = newName.trim();
+  if (!source || !target) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM characters WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .all(userId, source) as any[];
+  if (rows.length === 0) return [];
+  if (source === target) return rows.map(rowToCharacter);
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE characters SET folder = ?, updated_at = ? WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .run(target, now, userId, source);
+
+  const updated = rows.map((row) => rowToCharacter({ ...row, folder: target, updated_at: now }));
+  for (const character of updated) {
+    eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
+  }
+  return updated;
+}
+
+export function deleteCharacterFolder(userId: string, name: string): Character[] {
+  const folder = name.trim();
+  if (!folder) return [];
+
+  const rows = getDb()
+    .query("SELECT * FROM characters WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .all(userId, folder) as any[];
+  if (rows.length === 0) return [];
+
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .query("UPDATE characters SET folder = '', updated_at = ? WHERE user_id = ? AND folder = ? AND deleting = 0")
+    .run(now, userId, folder);
+
+  const updated = rows.map((row) => rowToCharacter({ ...row, folder: "", updated_at: now }));
+  for (const character of updated) {
+    eventBus.emit(EventType.CHARACTER_EDITED, { id: character.id, character }, userId);
+  }
+  return updated;
+}
+
+export function bulkUpdateCharacterFolders(userId: string, ids: string[], folder: string): Character[] {
+  const target = folder.trim();
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const updated: Character[] = [];
+
+  for (const id of uniqueIds) {
+    const character = updateCharacter(userId, id, { folder: target });
+    if (character) updated.push(character);
+  }
   return updated;
 }
 
@@ -996,8 +1063,8 @@ export function duplicateCharacter(userId: string, id: string): Character | null
 
   getDb()
     .query(
-      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO characters (id, user_id, name, description, personality, scenario, first_mes, mes_example, creator, creator_notes, system_prompt, post_history_instructions, folder, avatar_path, image_id, tags, alternate_greetings, extensions, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       newId,
@@ -1012,6 +1079,7 @@ export function duplicateCharacter(userId: string, id: string): Character | null
       existing.creator_notes,
       existing.system_prompt,
       existing.post_history_instructions,
+      existing.folder,
       existing.avatar_path,
       existing.image_id,
       JSON.stringify(existing.tags),

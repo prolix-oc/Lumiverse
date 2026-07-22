@@ -60,3 +60,50 @@
 .item:hover {
   background: var(--lumiverse-fill-subtle);
 }
+
+.folderCreateRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.folderInput {
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 6px;
+  background: var(--lumiverse-bg);
+  color: var(--lumiverse-text);
+  font-size: calc(11px * var(--lumiverse-font-scale, 1));
+}
+
+.folderInput:focus {
+  outline: none;
+  border-color: var(--lumiverse-primary);
+}
+
+.folderAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+}
+
+.folderAction:hover:not(:disabled) {
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text);
+}
+
+.folderAction:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
