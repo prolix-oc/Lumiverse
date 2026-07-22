@@ -19,7 +19,7 @@ New to Lumiverse? Start here:
 3. **[Interface Overview](getting-started/interface-overview.md)** — Learn the layout and where to find things
 
 Prefer to manage a local Lumiverse server from your menu bar or notification
-area? See the optional [Desktop Tray Companion](getting-started/desktop-tray.md).
+area? See the optional [Experimental Lumiverse Desktop](getting-started/desktop-tray.md).
 
 ---
 

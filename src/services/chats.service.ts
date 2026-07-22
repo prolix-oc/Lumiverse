@@ -40,6 +40,12 @@ function parseMetadataObject(value: unknown): Record<string, any> {
   }
 }
 
+const HIDDEN_FROM_RECENT_KEY = "hidden_from_recent";
+
+function isHiddenFromRecent(metadata: Record<string, any>): boolean {
+  return metadata[HIDDEN_FROM_RECENT_KEY] === true;
+}
+
 function isGroupMetadata(metadata: Record<string, any>): boolean {
   return metadata.group === true || metadata.group === 1;
 }
@@ -690,14 +696,22 @@ export function listRecentChatsGrouped(
         `).all(userId) as any[]
   );
 
-  const soloCounts = new Map<string, number>();
-  const groupCounts = new Map<string, number>();
-  const parsedRows = rows.map((row) => {
+  // Parse metadata first, then filter out chats the user has explicitly
+  // hidden from the landing-page recent list. Build the lineage lookup from
+  // the full set so forking/grouping resolution stays correct even when a
+  // hidden chat sits in a group's ancestry.
+  const allParsedRows = rows.map((row) => {
     const metadata = parseMetadataObject(row.metadata);
     const isGroup = isGroupMetadata(metadata);
-    if (!isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
     return { ...row, metadata, isGroup, groupKey: null as string | null };
   });
+  const parsedRows = allParsedRows.filter((row) => !isHiddenFromRecent(row.metadata));
+
+  const soloCounts = new Map<string, number>();
+  const groupCounts = new Map<string, number>();
+  for (const row of parsedRows) {
+    if (!row.isGroup) soloCounts.set(row.character_id, (soloCounts.get(row.character_id) ?? 0) + 1);
+  }
 
   // Build a metadata lookup so we can resolve each group chat's lineage root.
   // Branches inherit the root's member-set key — without this, mutating the
@@ -705,7 +719,7 @@ export function listRecentChatsGrouped(
   // a separate landing-page entry, which users perceive as "new group chats
   // spawning on every fork."
   const metadataById = new Map<string, Record<string, any>>();
-  for (const row of parsedRows) metadataById.set(row.id, row.metadata);
+  for (const row of allParsedRows) metadataById.set(row.id, row.metadata);
 
   const resolveGroupDedupKey = (rowId: string, metadata: Record<string, any>): string | null => {
     const visited = new Set<string>([rowId]);

@@ -1,10 +1,13 @@
-# Lumiverse Tray
+# Lumiverse Desktop (Experimental)
 
-A macOS menu bar / Windows system tray / Linux StatusNotifier companion for
-the Lumiverse server.
-It sits in the tray and lets you start and stop the server, open the web
-dashboard, watch serving stats (port, PID, uptime, branch, version), and
-check for / apply updates — without keeping a terminal open.
+An experimental Tauri-powered Lumiverse desktop app for macOS, Windows, and
+Linux. It opens Lumiverse in an integrated native WebView and keeps a tray
+icon available for server controls, status, and updates.
+
+The integrated browser is the primary experience: when Lumiverse Desktop starts
+its local server, it opens the native Lumiverse window. The tray menu can hide,
+reopen, or reload that window, and can still open the same address in your
+default browser when needed.
 
 Under the hood it spawns the existing runner in a headless mode
 (`bun scripts/runner.ts --headless`) and drives it over stdio with the same
@@ -18,8 +21,8 @@ the server down gracefully.
   "running (external)" when a server started from a terminal is detected
   on the configured port.
 - **Start Server / Stop Server**
-- **Open Web Dashboard** — opens `http://localhost:<port>` (port comes
-  from your `.env`, default 7860).
+- **Open Lumiverse** — opens or closes the integrated Tauri browser. Its
+  submenu also reloads it or opens the current address in your default browser.
 - **Serving Stats** — port, PID, uptime, branch, version.
 - **Check for Updates / Apply Update** — the runner's existing git-based
   update flow.
@@ -27,6 +30,24 @@ the server down gracefully.
   tray app opens (on by default).
 - **Launch at Login** — register the tray app as a login item.
 - **Set Lumiverse Folder…** — point the app at a different checkout.
+
+## Translucent frontend themes
+
+The Tauri frontend window is transparent, so a theme can tint the document
+with an alpha color and optionally request the native material behind it:
+
+```json
+{
+  "desktopBackground": {
+    "color": "rgb(16 12 28 / 72%)",
+    "blur": true
+  }
+}
+```
+
+`blur` uses macOS vibrancy and Windows DWM blur. On other platforms, or when
+native material is unavailable, the theme keeps its regular translucent CSS
+surface. Browser and PWA rendering ignore this desktop-only setting.
 
 ## Prerequisites
 

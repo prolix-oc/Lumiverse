@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Frontend URL</title>
+  </head>
+  <body>
+    <main>
+      <h1>Frontend URL</h1>
+      <p>Use a cloud or self-hosted Lumiverse URL. Leave this blank to use the local server.</p>
+      <form id="frontend-url-form">
+        <label for="frontend-url">URL</label>
+        <input id="frontend-url" name="frontend-url" type="url" placeholder="https://lumiverse.example.com" autocomplete="url" spellcheck="false" />
+        <p id="error" role="alert" hidden></p>
+        <div class="actions">
+          <button id="use-local" type="button">Use Local Server</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </main>
+    <script type="module" src="/src/custom-url.ts"></script>
+  </body>
+</html>

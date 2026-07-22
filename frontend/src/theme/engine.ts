@@ -416,6 +416,13 @@ export function generateThemeVariables(
       vars['--lumiverse-bg-hover'] = adjustHex(bg, 0.06)
       vars['--lumiverse-bg-deep'] = adjustHex(bg, -0.05)
     }
+    // Some dynamic themes use a comfortably visible tinted surface for the
+    // app but need a separately controlled near-black root surface. This is
+    // particularly important for desktop PWAs, whose native titlebar backing
+    // cannot reliably follow a later palette update.
+    if (bc.backgroundDeep) {
+      vars['--lumiverse-bg-deep'] = constrainSurface(bc.backgroundDeep, isDark)
+    }
     if (bc.text) {
       const text = ensureReadable(bc.text, isDark)
       vars['--lumiverse-text'] = text

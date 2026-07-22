@@ -30,6 +30,20 @@
   padding-left: var(--spindle-dock-left, 0px);
 }
 
+/* The tint is rendered by the document; blur, when enabled, is rendered by
+   the native window material. Keeping these separate avoids a full-window
+   WebKit backdrop-filter on every repaint. */
+:global(html[data-tauri-desktop][data-desktop-background]) .app {
+  background: var(--lumiverse-desktop-background);
+}
+
+/* Fixed-position descendants can escape a root-element overflow clip in
+   WebKit. Clip the actual full-window app compositor layer as well. */
+:global(html[data-tauri-desktop]) .app {
+  border-radius: var(--desktop-window-corner-radius);
+  clip-path: inset(0 round var(--desktop-window-corner-radius));
+}
+
 /* On iOS PWA, remove bottom safe-area padding from the shell so views can
    extend into the home indicator zone (like the chat input bar filling to
    the screen edge). Individual views handle their own safe-area clearance.

@@ -18,7 +18,6 @@ import ToastContainer from '@/components/shared/ToastContainer'
 import ConnectionLostOverlay from '@/components/shared/ConnectionLostOverlay'
 import ChatHeads from '@/components/chat-heads/ChatHeads'
 import WallpaperLayer from '@/components/shared/WallpaperLayer'
-import DesktopPwaTitlebar from '@/components/shared/DesktopPwaTitlebar'
 import useIsMobile from '@/hooks/useIsMobile'
 import { useBadging } from '@/hooks/useBadging'
 import { useTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
@@ -160,42 +159,43 @@ export default function App() {
   }, [modalWidthMode, modalMaxWidth])
 
   return (
-    <AuthGuard>
-      <LazyMotion features={domAnimation} strict={false}>
-        <MotionConfig reducedMotion="user">
-          <div
-            className={styles.app}
-            data-app-root=""
-            style={{
-              '--spindle-dock-left': `${dockInsets.left}px`,
-              '--spindle-dock-right': `${dockInsets.right}px`,
-              '--spindle-dock-top': `${dockInsets.top}px`,
-              '--spindle-dock-bottom': `${dockInsets.bottom}px`,
-            } as React.CSSProperties}
-          >
-            <DesktopPwaTitlebar />
-            {safeTheme.active && (
-              <div className={styles.safeThemeBanner} role="status">
-                {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
-              </div>
-            )}
-            <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
-            <ErrorBoundary label="App">
-              {/* Mirrors react-router context out to detached drawer-tab roots */}
-              <RouterContextExporter />
-              <main className={styles.main}>
-                <Outlet />
-              </main>
-              <ViewportDrawer />
-              <ModalContainer />
-              <SpindleUIManager />
-              <ToastContainer />
-              <ChatHeads />
-              <ConnectionLostOverlay />
-            </ErrorBoundary>
-          </div>
-        </MotionConfig>
-      </LazyMotion>
-    </AuthGuard>
+    <>
+      <AuthGuard>
+        <LazyMotion features={domAnimation} strict={false}>
+          <MotionConfig reducedMotion="user">
+            <div
+              className={styles.app}
+              data-app-root=""
+              style={{
+                '--spindle-dock-left': `${dockInsets.left}px`,
+                '--spindle-dock-right': `${dockInsets.right}px`,
+                '--spindle-dock-top': `${dockInsets.top}px`,
+                '--spindle-dock-bottom': `${dockInsets.bottom}px`,
+              } as React.CSSProperties}
+            >
+              {safeTheme.active && (
+                <div className={styles.safeThemeBanner} role="status">
+                  {t(`safeTheme.${safeTheme.source ?? 'url'}`)}
+                </div>
+              )}
+              <WallpaperLayer wallpaper={wallpaper.global} settings={wallpaper} hidden={globalWallpaperHidden} fixed fadeInOnMount />
+              <ErrorBoundary label="App">
+                {/* Mirrors react-router context out to detached drawer-tab roots */}
+                <RouterContextExporter />
+                <main className={styles.main}>
+                  <Outlet />
+                </main>
+                <ViewportDrawer />
+                <ModalContainer />
+                <SpindleUIManager />
+                <ToastContainer />
+                <ChatHeads />
+                <ConnectionLostOverlay />
+              </ErrorBoundary>
+            </div>
+          </MotionConfig>
+        </LazyMotion>
+      </AuthGuard>
+    </>
   )
 }

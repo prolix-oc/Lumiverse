@@ -2738,6 +2738,17 @@
     "fontScale": "Font Scale",
     "uiScale": "UI Scale",
     "glassEffects": "Glass effects",
+    "desktopBackground": {
+      "enable": "Use translucent desktop background",
+      "hint": "Only available in the Lumiverse desktop app.",
+      "tint": "Tint",
+      "opacity": "Opacity",
+      "blur": "Blur background",
+      "blurIntensity": "Blur intensity",
+      "blurIntensitySubtle": "Subtle",
+      "blurIntensityBalanced": "Balanced",
+      "blurIntensityStrong": "Strong"
+    },
     "useFullAvatar": "Use full-size avatars",
     "extensionThemesTitle": "Extension Themes",
     "overridesApplied_one": "{{count}} override applied",

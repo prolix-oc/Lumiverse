@@ -20,6 +20,7 @@ export function useContextualTitle(): string | null {
 
   const activeChatId = useStore((s) => s.activeChatId)
   const activeChatName = useStore((s) => s.activeChatName)
+  const activeChatMetadata = useStore((s) => s.activeChatMetadata)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const landingRecentChats = useStore((s) => s.landingRecentChats)
   const characterName = useStore((s) =>
@@ -33,19 +34,24 @@ export function useContextualTitle(): string | null {
   let nextContext: string | null = null
 
   if (routeChatId) {
+    const recent = landingRecentChats?.data.find(
+      (group) => group.latest_chat_id === routeChatId
+    )
+
     // Store state can still belong to the previous chat while this one loads.
     if (activeChatId === routeChatId) {
-      // Character-less (temporary) chats have no character name — fall back
-      // to the chat's own name.
+      // A branch's generated chat-row name can arrive before its character
+      // does. Do not expose that implementation label in the window title.
+      // The chat name is only authoritative for groups and explicitly
+      // character-less temporary chats.
       nextContext = isGroupChat
         ? activeChatName || t('landing:groupChat')
-        : characterName || activeChatName
+        : characterName
+          || recent?.character_name
+          || (activeChatMetadata?.temporary === true ? activeChatName : null)
     } else {
       // Try to resolve the name immediately from the landing-page recent chats
       // so the titlebar/tab doesn't flash the bare app name during navigation.
-      const recent = landingRecentChats?.data.find(
-        (g) => g.latest_chat_id === routeChatId
-      )
       if (recent) {
         nextContext = recent.is_group
           ? recent.group_name || t('landing:groupChat')

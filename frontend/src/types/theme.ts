@@ -12,7 +12,10 @@ export type BaseColorKey =
   | 'speech'
   | 'thoughts'
 
-export type BaseColors = Partial<Record<BaseColorKey, string>>
+export type BaseColors = Partial<Record<BaseColorKey, string>> & {
+  /** Internal deep/root surface override; not exposed as a user-facing base color. */
+  backgroundDeep?: string
+}
 
 export interface CharacterThemeOverlay {
   accent: { h: number; s: number; l: number }
@@ -20,14 +23,26 @@ export interface CharacterThemeOverlay {
     primary?: string
     secondary?: string
     background?: string
+    backgroundDeep?: string
     text?: string
   }
   baseColorsLight: {
     primary?: string
     secondary?: string
     background?: string
+    backgroundDeep?: string
     text?: string
   }
+}
+
+/** Native-wrapper-only surface for a translucent document background. */
+export interface DesktopBackground {
+  /** Any valid CSS color, typically with an alpha channel (for example `rgb(16 12 28 / 72%)`). */
+  color: string
+  /** Request native material blur where the platform supports it. */
+  blur?: boolean
+  /** Semantic native material level. Native APIs do not expose a pixel blur radius. */
+  blurIntensity?: 'subtle' | 'balanced' | 'strong'
 }
 
 export interface ThemeConfig {
@@ -47,4 +62,6 @@ export interface ThemeConfig {
   uiScale?: number
   /** When true, accent and primary colors are dynamically derived from the active character's avatar. */
   characterAware?: boolean
+  /** Optional tint for the Tauri frontend body; ignored in browsers and PWAs. */
+  desktopBackground?: DesktopBackground
 }

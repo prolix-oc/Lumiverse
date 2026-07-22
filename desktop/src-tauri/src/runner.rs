@@ -249,6 +249,17 @@ pub fn runner_kill(state: State<'_, RunnerState>) {
     }
 }
 
+/// Stop a runner before a native application-menu quit. The tray's normal
+/// Quit action performs a graceful protocol shutdown first; this is the safe
+/// fallback for Cmd-Q and the macOS application menu.
+pub fn force_stop<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let state: State<'_, RunnerState> = app.state();
+    let running = state.inner.lock().unwrap().take();
+    if let Some(running) = running {
+        kill_tree(&mut running.child.lock().unwrap());
+    }
+}
+
 fn repo_is_valid(dir: &str) -> bool {
     Path::new(dir).join("scripts").join("runner.ts").is_file()
 }

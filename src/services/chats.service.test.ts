@@ -259,6 +259,18 @@ describe("recent chats", () => {
     expect(result.data[0].chat_count).toBe(2);
   });
 
+  test("hides chats marked hidden_from_recent and surfaces the next recent chat", () => {
+    seedChat("c1-old", "c1", "Alpha old", "{}", 100);
+    seedChat("c1-new", "c1", "Alpha new", JSON.stringify({ hidden_from_recent: true }), 200);
+    seedChat("c2-only", "c2", "Beta only", "{}", 150);
+
+    const result = listRecentChatsGrouped("u1", { limit: 10, offset: 0 });
+
+    expect(result.total).toBe(2);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["c2-only", "c1-old"]);
+    expect(result.data[1].chat_count).toBe(1);
+  });
+
   test("keeps reasoning scoped to the swipe it belongs to", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {

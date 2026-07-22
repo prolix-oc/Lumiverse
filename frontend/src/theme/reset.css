@@ -42,6 +42,21 @@
   }
 }
 
+/* The Tauri desktop shell draws its own title bar outside the browser PWA
+   display-mode media query. Reserve its 36px surface on every platform. */
+html[data-tauri-desktop] {
+  --app-window-controls-overlay-top: 36px;
+  --app-interactive-safe-top: 36px;
+  /* The Tauri frontend window is intentionally frameless and transparent.
+     Keep its document canvas transparent; concrete app/titlebar surfaces own
+     their rounded clipping below. WKWebView must not clip the root element —
+     doing so can discard the entire promoted document canvas. */
+  --desktop-window-corner-radius: 12px;
+  background: transparent;
+  border-radius: var(--desktop-window-corner-radius);
+  overflow: hidden;
+}
+
 html {
   height: 100%;
   /* `overflow: clip` (vs `hidden`) is strictly non-scrollable — it cannot be
@@ -78,6 +93,28 @@ body {
      pan-x pan-y (instead of manipulation) explicitly excludes pinch-zoom
      on real touchscreens, complementing the JS gesture/wheel handlers. */
   touch-action: pan-x pan-y;
+}
+
+/* The native frontend host is transparent. A theme can opt into a translucent
+   document surface without changing browser/PWA rendering. */
+html[data-tauri-desktop][data-desktop-background]:not([data-desktop-background-blur]) body {
+  background: transparent;
+}
+
+/* Keep the document transparent so the native window material can show through
+   the translucent app shell. */
+html[data-tauri-desktop][data-desktop-background][data-desktop-background-blur] body {
+  background: transparent;
+}
+
+/* A body background is otherwise promoted to the WebView canvas by WebKit,
+   which defeats the transparent host above. The app shell supplies the actual
+   theme surface, while these bounds clip every web-rendered layer to it. */
+html[data-tauri-desktop] body,
+html[data-tauri-desktop] #root {
+  background: transparent;
+  border-radius: inherit;
+  overflow: hidden;
 }
 
 img,

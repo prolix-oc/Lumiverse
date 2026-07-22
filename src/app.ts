@@ -273,10 +273,22 @@ app.use("/api/auth/*", async (c, next) => {
 // frame-src / child-src are enforced via the frontend HTML meta tag as well;
 // these headers complement it by preventing the app from being embedded in
 // external frames and hardening the overall document boundary.
+// Exempt localhost resources so the desktop tray wrapper can iframe the UI.
+//
+// Use the Host header (set on every HTTP request, including top-level
+// navigations and same-origin fetches) rather than Origin, which browsers
+// omit for same-origin requests — the Tauri wrapper's iframe to
+// http://127.0.0.1:<port> arrives here with no Origin header, so the prior
+// Origin-based check incorrectly applied DENY and Chromium showed the
+// "Reload" error page in the iframe.
 app.use("*", async (c, next) => {
   await next();
-  c.res.headers.set("X-Frame-Options", "DENY");
-  c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+  const host = c.req.header("host") ?? "";
+  const isLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
+  if (!isLocal) {
+    c.res.headers.set("X-Frame-Options", "DENY");
+    c.res.headers.set("Content-Security-Policy", "frame-ancestors 'none';");
+  }
 });
 
 // BetterAuth handler — BEFORE auth middleware

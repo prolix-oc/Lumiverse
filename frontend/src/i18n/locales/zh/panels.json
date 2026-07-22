@@ -2561,6 +2561,17 @@
     "fontScale": "字体缩放",
     "uiScale": "界面缩放",
     "glassEffects": "玻璃效果",
+    "desktopBackground": {
+      "enable": "使用半透明桌面背景",
+      "hint": "仅在 Lumiverse 桌面应用中可用。",
+      "tint": "色调",
+      "opacity": "不透明度",
+      "blur": "模糊背景",
+      "blurIntensity": "模糊强度",
+      "blurIntensitySubtle": "轻微",
+      "blurIntensityBalanced": "均衡",
+      "blurIntensityStrong": "强烈"
+    },
     "useFullAvatar": "使用全尺寸头像",
     "extensionThemesTitle": "扩展主题",
     "overridesApplied_one": "已应用 {{count}} 项覆盖",

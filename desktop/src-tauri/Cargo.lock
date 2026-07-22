@@ -1977,6 +1977,10 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "lumiverse-tray"
 version = "0.1.0"
 dependencies = [
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-web-kit",
  "serde",
  "serde_json",
  "tauri",
@@ -1985,6 +1989,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-store",
+ "window-vibrancy",
 ]
 
 [[package]]

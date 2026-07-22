@@ -713,8 +713,15 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     // its accent can't crash the app on the next load.
     const packTheme = normalizeTheme(pack.theme)
     if (packTheme) {
-      patch.theme = packTheme
-      persistKey('theme', packTheme)
+      // Desktop translucency was added after existing theme packs. Treat an
+      // omitted field as “leave the native-wrapper preference unchanged”; an
+      // explicit field in the pack remains authoritative.
+      const theme = {
+        ...packTheme,
+        desktopBackground: packTheme.desktopBackground ?? get().theme?.desktopBackground,
+      }
+      patch.theme = theme
+      persistKey('theme', theme)
     }
 
     // Layer 2: Global CSS
@@ -786,7 +793,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     const entry = get().savedThemes.find((e) => e.id === id)
     if (!entry) return
     if (entry.kind === 'config') {
-      get().setTheme(entry.theme)
+      const theme = {
+        ...entry.theme,
+        desktopBackground: entry.theme.desktopBackground ?? get().theme?.desktopBackground,
+      }
+      get().setTheme(theme)
     } else {
       get().applyThemePack(entry.pack)
     }

@@ -2561,6 +2561,17 @@
     "fontScale": "Échelle de police",
     "uiScale": "Échelle UI",
     "glassEffects": "Effets de verre",
+    "desktopBackground": {
+      "enable": "Utiliser un arrière-plan de bureau translucide",
+      "hint": "Disponible uniquement dans l’application de bureau Lumiverse.",
+      "tint": "Teinte",
+      "opacity": "Opacité",
+      "blur": "Flouter l’arrière-plan",
+      "blurIntensity": "Intensité du flou",
+      "blurIntensitySubtle": "Subtil",
+      "blurIntensityBalanced": "Équilibré",
+      "blurIntensityStrong": "Intense"
+    },
     "useFullAvatar": "Utiliser des avatars pleine taille",
     "extensionThemesTitle": "Thèmes d'extension",
     "overridesApplied_one": "{{count}} remplacement appliqué",

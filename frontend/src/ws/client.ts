@@ -29,21 +29,17 @@ type MobilePlatform = {
 
 /**
  * iOS/iPadOS standalone apps are particularly aggressive about suspending
- * workers and their sockets. A worker-owned heartbeat connection can therefore
- * fail while the application socket is still healthy, turning a false-negative
- * liveness check into a needless reconnect. The regular socket heartbeat is
- * sufficient while the app is foregrounded, and is the safer path on Apple
- * mobile WebKit (including iPadOS's desktop-style user agent).
+ * workers. Keep heartbeat scheduling on the main thread there; desktop and
+ * Android browsers can safely use the worker timer.
  */
-export function shouldUseDedicatedHeartbeatWorker(platform: MobilePlatform = navigator): boolean {
+export function shouldUseHeartbeatWorker(platform: MobilePlatform = navigator): boolean {
   const isIOS = /iPad|iPhone|iPod/.test(platform.userAgent)
     || (platform.platform === 'MacIntel' && platform.maxTouchPoints > 1)
   return typeof Worker !== 'undefined' && !isIOS
 }
 
 type HeartbeatWorkerMessage =
-  | { type: 'ping-primary'; generation: number }
-  | { type: 'verified'; generation: number }
+  | { type: 'ping'; generation: number; timeoutMs: number }
   | { type: 'timeout'; generation: number }
 
 export class WebSocketClient {
@@ -189,7 +185,6 @@ export class WebSocketClient {
       this.heartbeatWorker!.postMessage({
         type: 'start',
         generation,
-        url: this.url,
         intervalMs: PING_INTERVAL_MS,
         timeoutMs: PONG_TIMEOUT_MS,
       })
@@ -233,7 +228,7 @@ export class WebSocketClient {
 
   private ensureHeartbeatWorker(): boolean {
     if (this.heartbeatWorker) return true
-    if (this.heartbeatWorkerUnavailable || !shouldUseDedicatedHeartbeatWorker()) return false
+    if (this.heartbeatWorkerUnavailable || !shouldUseHeartbeatWorker()) return false
 
     try {
       const worker = new Worker(new URL('./heartbeat.worker.ts', import.meta.url), {
@@ -243,10 +238,14 @@ export class WebSocketClient {
       worker.onmessage = (event: MessageEvent<HeartbeatWorkerMessage>) => {
         const message = event.data
         if (message.generation !== this.heartbeatGeneration) return
-        if (message.type === 'ping-primary') {
-          this.sendPingFrame()
-        } else if (message.type === 'verified') {
-          this.emit(WS_PONG, {})
+        if (message.type === 'ping') {
+          if (this.sendPingFrame()) {
+            worker.postMessage({
+              type: 'arm',
+              generation: message.generation,
+              timeoutMs: message.timeoutMs,
+            })
+          }
         } else if (message.type === 'timeout') {
           this.handleHeartbeatTimeout(message.generation)
         }
@@ -294,6 +293,10 @@ export class WebSocketClient {
 
   private ackHeartbeat(): void {
     this.clearFallbackPongWatchdog()
+    this.heartbeatWorker?.postMessage({
+      type: 'ack',
+      generation: this.heartbeatGeneration,
+    })
   }
 
   private handleHeartbeatTimeout(generation: number): void {

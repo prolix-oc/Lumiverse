@@ -152,8 +152,16 @@ function syncViewportVars() {
 let viewportSyncFrame = 0
 
 function scheduleViewportSync() {
-  cancelAnimationFrame(viewportSyncFrame)
-  viewportSyncFrame = window.requestAnimationFrame(syncViewportVars)
+  // Coalesce multiple resize notifications into one update per paint rather
+  // than debouncing them. macOS emits a rapid stream while its native zoom
+  // animation runs; cancelling the pending frame on every notification left
+  // our viewport-dependent layouts at their old dimensions until the zoom
+  // completed.
+  if (viewportSyncFrame) return
+  viewportSyncFrame = window.requestAnimationFrame(() => {
+    viewportSyncFrame = 0
+    syncViewportVars()
+  })
 }
 
 scheduleViewportSync()
@@ -260,6 +268,13 @@ const isStandalone =
 
 if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
   document.documentElement.setAttribute('data-platform', 'macos')
+}
+
+// Mark the native dashboard WebView for desktop-specific behavior. Its macOS
+// title bar is native; the HTML title-bar component is only used by browser
+// PWAs running in window-controls-overlay mode.
+if ('__TAURI_INTERNALS__' in window) {
+  document.documentElement.setAttribute('data-tauri-desktop', '')
 }
 
 if (isStandalone) {

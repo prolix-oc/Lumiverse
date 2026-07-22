@@ -1,7 +1,7 @@
 [package]
 name = "lumiverse-tray"
 version = "0.1.0"
-description = "Menu bar / system tray companion for the Lumiverse server"
+description = "Experimental Tauri-powered Lumiverse integrated browser and tray"
 edition = "2021"
 license = "AGPL-3.0"
 
@@ -20,6 +20,13 @@ tauri-plugin-opener = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+window-vibrancy = "0.6"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSString", "std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSImage"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKPreferences", "WKWebViewConfiguration", "std"] }
 
 [profile.release]
 strip = true

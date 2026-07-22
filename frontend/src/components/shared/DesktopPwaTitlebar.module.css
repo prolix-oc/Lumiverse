@@ -1,24 +1,119 @@
 .titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(titlebar-area-height, 32px);
+  z-index: 90;
   display: none;
+  /* The visual bar must not claim the native window controls that sit above
+     it. Only the explicit drag region below receives pointer input. */
+  pointer-events: none;
+  cursor: default;
+  /* Keep the chrome quiet: the active scene and app surfaces should carry
+     the visual identity, while this reads as one restrained native layer. */
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 86%, transparent);
+  border-bottom: 1px solid var(--lumiverse-border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lumiverse-text) 4%, transparent);
+  backdrop-filter: blur(20px) saturate(1.08);
+  -webkit-backdrop-filter: blur(20px) saturate(1.08);
+}
+
+/* The Tauri shell is frameless; the frontend supplies its complete title bar. */
+:global(html[data-tauri-desktop]) .titlebar {
+  display: block;
+  height: 36px;
+  border-top-left-radius: var(--desktop-window-corner-radius);
+  border-top-right-radius: var(--desktop-window-corner-radius);
+  overflow: hidden;
+}
+
+:global(html[data-tauri-desktop]) .dragRegion {
+  position: absolute;
+  /* Keep the native resize target unclaimed. The drag-region handler starts
+     a window move on mouse-down, so covering even the top edge would steal
+     its 1px resize hit area. */
+  /* The equal side insets reserve the caption controls on the right and an
+     invisible matching gutter on the left, keeping the title truly centered. */
+  inset: 4px 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  color: var(--lumiverse-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+:global(html[data-tauri-desktop]) .brandMark {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lumiverse-primary) 72%, var(--lumiverse-text));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lumiverse-primary) 10%, transparent);
+}
+
+:global(html[data-tauri-desktop]) .title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.78;
+}
+
+.windowControls {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  height: 28px;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.windowControl {
+  width: 28px;
+  border: 0;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--lumiverse-text-muted);
+  background: transparent;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.windowControl:hover {
+  color: color-mix(in srgb, var(--lumiverse-text) 90%, var(--lumiverse-primary));
+  background: color-mix(in srgb, var(--lumiverse-text) 7%, transparent);
+}
+
+.windowControl:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: -2px;
+}
+
+.closeControl:hover {
+  color: color-mix(in srgb, #f7c7c4 84%, var(--lumiverse-text));
+  background: color-mix(in srgb, #d95d5d 17%, transparent);
 }
 
 @media (display-mode: window-controls-overlay) {
   .titlebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: env(titlebar-area-height, 32px);
-    z-index: 90;
     display: block;
-    pointer-events: none;
-    background:
-      linear-gradient(90deg, var(--lumiverse-primary-020), transparent 36%),
-      color-mix(in srgb, var(--lumiverse-bg-deep) 92%, transparent);
-    border-bottom: 1px solid var(--lumiverse-border);
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), var(--lumiverse-shadow-sm);
-    backdrop-filter: blur(16px) saturate(1.2);
-    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  }
+
+  /* Browser PWAs keep their host-provided window-control buttons. */
+  .windowControls {
+    display: none;
   }
 
   /* macOS: the OS draws traffic lights in the top-left of the overlay.
@@ -28,11 +123,11 @@
      darker patch, and nudge the drag region past the light cluster. */
   :global(html[data-platform="macos"]) .titlebar {
     height: max(env(titlebar-area-height, 40px), 40px);
-    background: color-mix(in srgb, var(--lumiverse-bg-deep) 92%, transparent);
+    background: color-mix(in srgb, var(--lumiverse-bg-deep) 86%, transparent);
   }
 
   :global(html[data-platform="macos"]) .dragRegion {
-    top: env(titlebar-area-y, 0px);
+    top: max(env(titlebar-area-y, 0px), 6px);
     left: max(env(titlebar-area-x, 78px), 78px);
     width: calc(100% - max(env(titlebar-area-x, 78px), 78px));
     height: max(env(titlebar-area-height, 40px), 40px);
@@ -57,8 +152,7 @@
     user-select: none;
     -webkit-user-select: none;
     pointer-events: auto;
-    -webkit-app-region: drag;
-    app-region: drag;
+    cursor: grab;
   }
 
   .brandMark {

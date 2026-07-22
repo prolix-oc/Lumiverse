@@ -1,11 +1,12 @@
 type HeartbeatCommand =
-  | { type: 'start'; generation: number; url: string; intervalMs: number; timeoutMs: number }
+  | { type: 'start'; generation: number; intervalMs: number; timeoutMs: number }
   | { type: 'stop'; generation: number }
   | { type: 'ping-now'; generation: number; timeoutMs: number }
+  | { type: 'arm'; generation: number; timeoutMs: number }
+  | { type: 'ack'; generation: number }
 
 let activeGeneration = 0
 let defaultTimeoutMs = 10_000
-let heartbeatSocket: WebSocket | null = null
 let pingTimer: ReturnType<typeof setInterval> | null = null
 let pongTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -24,18 +25,13 @@ function stopTimers(): void {
   clearPongTimer()
 }
 
-function stopSocket(): void {
+function stop(): void {
   stopTimers()
-  const socket = heartbeatSocket
-  heartbeatSocket = null
-  if (socket) {
-    try { socket.close() } catch { /* already closed */ }
-  }
 }
 
 function reportFailure(generation: number): void {
   if (generation !== activeGeneration) return
-  stopSocket()
+  stop()
   self.postMessage({ type: 'timeout', generation })
 }
 
@@ -49,84 +45,41 @@ function armWatchdog(generation: number, timeoutMs: number): void {
 
 function requestPing(generation: number, timeoutMs: number): void {
   if (generation !== activeGeneration) return
-  const socket = heartbeatSocket
-  if (!socket || socket.readyState !== WebSocket.OPEN) return
-
-  try {
-    socket.send(JSON.stringify({ type: 'ping' }))
-    // Keep the primary application socket warm too. This message may be
-    // delayed by main-thread work, but it is deliberately not part of the
-    // worker's liveness decision.
-    self.postMessage({ type: 'ping-primary', generation })
-    armWatchdog(generation, timeoutMs)
-  } catch {
-    reportFailure(generation)
-  }
+  // The client sends this on the real event socket, then replies with `arm`.
+  // Waiting to arm until after send avoids false timeouts when the page's main
+  // thread is temporarily busy and worker messages are queued.
+  self.postMessage({ type: 'ping', generation, timeoutMs })
 }
 
-function startSocket(command: Extract<HeartbeatCommand, { type: 'start' }>): void {
-  stopSocket()
+function start(command: Extract<HeartbeatCommand, { type: 'start' }>): void {
+  stop()
   activeGeneration = command.generation
   defaultTimeoutMs = command.timeoutMs
-
-  const url = new URL(command.url)
-  url.searchParams.set('heartbeat', '1')
-  const socket = new WebSocket(url)
-  heartbeatSocket = socket
-
-  socket.onopen = () => {
-    if (heartbeatSocket !== socket || command.generation !== activeGeneration) return
-    // Bound authentication/setup too. The backend sends heartbeat_ready only
-    // after the cookie session has been accepted.
-    armWatchdog(command.generation, command.timeoutMs)
-  }
-
-  socket.onmessage = (event) => {
-    if (heartbeatSocket !== socket || command.generation !== activeGeneration) return
-    try {
-      const data = JSON.parse(String(event.data))
-      if (data.type === 'heartbeat_ready') {
-        clearPongTimer()
-        requestPing(command.generation, command.timeoutMs)
-        if (pingTimer) clearInterval(pingTimer)
-        pingTimer = setInterval(() => {
-          requestPing(command.generation, defaultTimeoutMs)
-        }, command.intervalMs)
-      } else if (data.type === 'pong') {
-        clearPongTimer()
-        self.postMessage({ type: 'verified', generation: command.generation })
-      } else if (data.event === 'AUTH_ERROR') {
-        reportFailure(command.generation)
-      }
-    } catch {
-      // Ignore unrelated/malformed frames on the heartbeat-only connection.
-    }
-  }
-
-  socket.onclose = () => {
-    if (heartbeatSocket !== socket || command.generation !== activeGeneration) return
-    reportFailure(command.generation)
-  }
-
-  socket.onerror = () => {
-    if (heartbeatSocket === socket && command.generation === activeGeneration) {
-      try { socket.close() } catch { /* onclose/report timeout handles it */ }
-    }
-  }
+  pingTimer = setInterval(() => {
+    requestPing(command.generation, defaultTimeoutMs)
+  }, command.intervalMs)
 }
 
 self.onmessage = (event: MessageEvent<HeartbeatCommand>) => {
   const command = event.data
   switch (command.type) {
     case 'start':
-      startSocket(command)
+      start(command)
       break
     case 'stop':
       activeGeneration = command.generation
-      stopSocket()
+      stop()
       break
     case 'ping-now':
       requestPing(command.generation, command.timeoutMs)
+      break
+    case 'arm':
+      if (command.generation === activeGeneration) {
+        armWatchdog(command.generation, command.timeoutMs)
+      }
+      break
+    case 'ack':
+      if (command.generation === activeGeneration) clearPongTimer()
       break
   }
 }

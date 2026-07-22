@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Lumiverse Tray",
+  "productName": "Lumiverse Desktop",
   "version": "0.1.0",
   "identifier": "chat.lumiverse.tray",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Lumiverse Tray",
+        "title": "Lumiverse",
         "width": 1,
         "height": 1,
         "x": 0,
@@ -36,7 +36,7 @@
     "active": true,
     "targets": "all",
     "category": "Utility",
-    "shortDescription": "Menu bar / system tray companion for the Lumiverse server",
+    "shortDescription": "Experimental Lumiverse integrated browser and tray",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

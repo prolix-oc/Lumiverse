@@ -92,6 +92,11 @@
   opacity: 0.4;
 }
 
+/* Let the desktop backdrop be the visual texture in translucent mode. */
+:global(html[data-tauri-desktop][data-desktop-background]) .grid {
+  display: none;
+}
+
 /* Content */
 .content {
   position: relative;
@@ -751,6 +756,21 @@
   border-color: var(--lumiverse-danger-020);
 }
 
+/* Shift mode: make the remove-from-recent button visible and use a
+   non-destructive color cue so the user knows this is not a delete. */
+.deleteBtnShift,
+.card:hover .deleteBtnShift {
+  opacity: 1;
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-030);
+  background: rgba(10, 10, 14, 0.85);
+}
+
+.deleteBtnShift:hover {
+  color: var(--lumiverse-primary-hover);
+  border-color: var(--lumiverse-primary-050);
+}
+
 /* ---- Group Chat Card ---- */
 .groupCard {
   border-color: var(--lumiverse-primary-020);
@@ -1010,6 +1030,20 @@
 .listDeleteBtn:hover {
   color: var(--lumiverse-danger);
   border-color: var(--lumiverse-danger-020);
+}
+
+.listDeleteBtnShift,
+.listItem:hover .listDeleteBtnShift,
+.listItem:focus-within .listDeleteBtnShift {
+  opacity: 1;
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-030);
+  background: color-mix(in srgb, var(--lumiverse-bg-deep) 92%, transparent);
+}
+
+.listDeleteBtnShift:hover {
+  color: var(--lumiverse-primary-hover);
+  border-color: var(--lumiverse-primary-050);
 }
 
 .listSkeleton {

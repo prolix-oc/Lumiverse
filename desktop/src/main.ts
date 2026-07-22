@@ -1,10 +1,9 @@
 /**
- * Lumiverse Tray — macOS menu bar / Windows system tray companion.
+ * Lumiverse Desktop — experimental Tauri-powered integrated browser and tray.
  *
- * Owns a headless Lumiverse runner (scripts/runner.ts --headless) through
- * the Rust process host and presents its state as a native tray menu:
- * status, start/stop, serving stats, dashboard shortcut, updates, and
- * launch-at-login / auto-start toggles.
+ * Owns a headless Lumiverse runner (scripts/runner.ts --headless), presents
+ * Lumiverse in its native WebView, and keeps server controls available from
+ * the tray: status, start/stop, serving stats, updates, and launch options.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -17,6 +16,7 @@ import {
   Submenu,
 } from "@tauri-apps/api/menu";
 import { TrayIcon } from "@tauri-apps/api/tray";
+import { listen } from "@tauri-apps/api/event";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { RunnerClient, type FullStatus, type ServerState, type UpdateState } from "./runner-client";
@@ -47,12 +47,14 @@ let busyMessage: string | null = null;
 let port = 7860;
 let lastStatus: FullStatus | null = null;
 let updateState: UpdateState = { available: false, commitsBehind: 0, latestMessage: "" };
+let customFrontendUrl: string | null = null;
+let openIntegratedBrowserWhenReady = false;
 
 // ─── Menu items (created once, text/enabled updated in place) ───────────────
 
 let statusItem: MenuItem;
 let startStopItem: MenuItem;
-let dashboardItem: MenuItem;
+let frontendItem: Submenu;
 let statsPortItem: MenuItem;
 let statsPidItem: MenuItem;
 let statsUptimeItem: MenuItem;
@@ -62,6 +64,9 @@ let checkUpdatesItem: MenuItem;
 let applyUpdateItem: MenuItem;
 let autoStartItem: CheckMenuItem;
 let loginItem: CheckMenuItem;
+let openIntegratedBrowserItem: MenuItem;
+let openDefaultBrowserItem: MenuItem;
+let reloadIntegratedBrowserItem: MenuItem;
 
 function statusText(): string {
   if (busyMessage) return busyMessage;
@@ -88,6 +93,23 @@ function formatUptime(startedAt: number | null): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+async function updateFrontendMenuText(): Promise<void> {
+  const running = serverState === "running" || externalRunning;
+  const frontendAvailable = running || customFrontendUrl !== null;
+  const visible = await invoke<boolean>("frontend_visible").catch(() => false);
+  const exists = await invoke<boolean>("frontend_exists").catch(() => false);
+
+  await frontendItem.setText(visible ? "Close Lumiverse" : "Open Lumiverse");
+
+  await openIntegratedBrowserItem.setEnabled(frontendAvailable);
+  await openDefaultBrowserItem.setEnabled(frontendAvailable);
+  await reloadIntegratedBrowserItem.setEnabled(frontendAvailable && exists);
+}
+
+function frontendUrl(): string {
+  return customFrontendUrl ?? `http://127.0.0.1:${port}`;
+}
+
 async function updateMenu(): Promise<void> {
   const running = serverState === "running";
   const transitioning = serverState === "starting" || serverState === "stopping" || busyMessage !== null;
@@ -102,7 +124,7 @@ async function updateMenu(): Promise<void> {
     await startStopItem.setEnabled(!transitioning || serverState === "starting");
   }
 
-  await dashboardItem.setEnabled(running || externalRunning);
+  await updateFrontendMenuText();
 
   await statsPortItem.setText(`Port: ${port}`);
   await statsPidItem.setText(`PID: ${lastStatus?.pid ?? "—"}`);
@@ -151,10 +173,17 @@ async function refreshStatus(): Promise<void> {
 
 async function startServer(): Promise<void> {
   await ensureRunner();
+  // The runner acknowledges this request while the server is still starting.
+  // Defer opening the native WebView until its `running` state notification.
+  openIntegratedBrowserWhenReady = true;
   serverState = "starting";
   await updateMenu();
   await client.request("start-server");
   await refreshStatus();
+  if (openIntegratedBrowserWhenReady && lastStatus?.state === "running") {
+    openIntegratedBrowserWhenReady = false;
+    await invoke("show_frontend", { port, customUrl: customFrontendUrl });
+  }
   await updateMenu();
 }
 
@@ -246,7 +275,7 @@ function action(fn: () => Promise<void>): () => void {
     fn().catch(async (err) => {
       busyMessage = null;
       await updateMenu();
-      await alert("Lumiverse Tray", err instanceof Error ? err.message : String(err), true);
+      await alert("Lumiverse", err instanceof Error ? err.message : String(err), true);
     });
   };
 }
@@ -262,12 +291,47 @@ async function loadTrayImage(): Promise<Image> {
 async function buildTray(): Promise<void> {
   statusItem = await MenuItem.new({ text: statusText(), enabled: false });
   startStopItem = await MenuItem.new({ text: "Start Server", action: action(toggleServer) });
-  dashboardItem = await MenuItem.new({
-    text: "Open Web Dashboard",
+  openIntegratedBrowserItem = await MenuItem.new({
+    text: "Open Integrated Browser",
     enabled: false,
     action: action(async () => {
-      await openUrl(`http://localhost:${port}`);
+      const visible = await invoke<boolean>("frontend_visible");
+      if (visible) {
+        await invoke("hide_frontend");
+      } else {
+        await invoke("show_frontend", { port, customUrl: customFrontendUrl });
+      }
+      await updateFrontendMenuText();
     }),
+  });
+
+  openDefaultBrowserItem = await MenuItem.new({
+    text: "Open in Default Browser",
+    enabled: false,
+    action: action(async () => {
+      await openUrl(frontendUrl());
+    }),
+  });
+
+  reloadIntegratedBrowserItem = await MenuItem.new({
+    text: "Reload Integrated Browser",
+    enabled: false,
+    action: action(async () => {
+      await invoke("reload_frontend");
+      await updateFrontendMenuText();
+    }),
+  });
+
+  const setFrontendUrlItem = await MenuItem.new({
+    text: "Frontend URL…",
+    action: action(async () => {
+      await invoke("show_frontend_url_settings");
+    }),
+  });
+
+  frontendItem = await Submenu.new({
+    text: "Open Lumiverse",
+    items: [openIntegratedBrowserItem, reloadIntegratedBrowserItem, openDefaultBrowserItem, await PredefinedMenuItem.new({ item: "Separator" }), setFrontendUrlItem],
   });
 
   statsPortItem = await MenuItem.new({ text: "Port: —", enabled: false });
@@ -339,14 +403,14 @@ async function buildTray(): Promise<void> {
       await updateMenu();
       if (wasRunning) {
         await alert(
-          "Lumiverse Tray",
+          "Lumiverse",
           "The server in the previous folder was stopped. Use Start Server to run the newly selected one.",
         );
       }
     }),
   });
 
-  const quitItem = await MenuItem.new({ text: "Quit Lumiverse Tray", action: action(quit) });
+  const quitItem = await MenuItem.new({ text: "Quit Lumiverse", action: action(quit) });
   const separator = () => PredefinedMenuItem.new({ item: "Separator" });
 
   const menu = await Menu.new({
@@ -354,7 +418,7 @@ async function buildTray(): Promise<void> {
       statusItem,
       await separator(),
       startStopItem,
-      dashboardItem,
+      frontendItem,
       statsSubmenu,
       await separator(),
       checkUpdatesItem,
@@ -399,10 +463,26 @@ async function tick(): Promise<void> {
 
 async function boot(): Promise<void> {
   settings = await loadSettings();
+  customFrontendUrl = settings.customFrontendUrl;
+
+  await listen<{ url: string | null }>("frontend-url-changed", async ({ payload }) => {
+    customFrontendUrl = payload.url;
+    settings.customFrontendUrl = payload.url;
+    await saveSetting("customFrontendUrl", payload.url);
+    await updateMenu();
+  });
 
   await client.init();
   client.onState = (state) => {
     serverState = state;
+    if (state === "running" && openIntegratedBrowserWhenReady) {
+      openIntegratedBrowserWhenReady = false;
+      void refreshStatus()
+        .then(() => invoke("show_frontend", { port, customUrl: customFrontendUrl }))
+        .catch((err) => alert("Lumiverse", err instanceof Error ? err.message : String(err), true));
+    } else if (state === "stopped" || state === "crashed") {
+      openIntegratedBrowserWhenReady = false;
+    }
     if (state === "running" || state === "stopped" || state === "crashed") {
       busyMessage = null;
     }
@@ -433,9 +513,9 @@ async function boot(): Promise<void> {
   await buildTray();
   await updateMenu();
 
-  if (!repoDir) {
+  if (!repoDir && !customFrontendUrl) {
     await alert(
-      "Lumiverse Tray",
+      "Lumiverse",
       "No Lumiverse folder is configured yet. Choose your Lumiverse checkout via “Set Lumiverse Folder…” in the tray menu.",
     );
   }

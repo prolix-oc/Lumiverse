@@ -2,19 +2,32 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Hidden main window hosting the tray logic",
-  "windows": ["main"],
+  "windows": ["main", "frontend", "frontend-url-settings"],
   "permissions": [
     "core:default",
     "core:tray:default",
     "core:menu:default",
     "core:image:default",
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-inner-position",
+    "core:window:allow-inner-size",
+    "core:window:allow-is-visible",
+    "core:window:allow-set-focus",
+    "core:webview:default",
+    "tray-commands",
+    "allow-configure-frontend-appearance",
     "store:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "http://localhost:*" }, { "url": "http://127.0.0.1:*" }]
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
     }
   ]
 }

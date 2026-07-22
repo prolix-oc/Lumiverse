@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
@@ -7,6 +8,65 @@ import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/t
 
 const THEME_TRANSITION_MS = 280
 const COLOR_TOKEN_RE = /#[\da-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g
+const DESKTOP_APPEARANCE_DEBUG_KEY = 'lumiverse.desktopAppearanceDebug'
+const DESKTOP_APPEARANCE_DEBUG_HISTORY_KEY = '__lumiverseDesktopAppearanceDebug'
+
+// Changing an accent or extension palette re-applies the complete CSS theme,
+// but it must not recreate the native vibrancy/Mica effect. Recreating that
+// effect forces WebKit to rebuild its backing surface and can briefly drop the
+// desktop backdrop. Keep the last requested native appearance separate from
+// the document tint, which is safe to update on every theme application.
+let requestedNativeAppearance: string | null = null
+let nativeAppearanceQueue: Promise<void> = Promise.resolve()
+
+/**
+ * Opt-in trace for diagnosing desktop material failures. Enable it from the
+ * web inspector with `localStorage.setItem('lumiverse.desktopAppearanceDebug',
+ * '1')`, then reload. The snapshots let us tell a theme state reset apart
+ * from WKWebView losing an otherwise-correct backdrop compositing layer.
+ */
+function debugDesktopAppearance(event: string, details: Record<string, unknown> = {}) {
+  try {
+    if (localStorage.getItem(DESKTOP_APPEARANCE_DEBUG_KEY) !== '1') return
+
+    window.requestAnimationFrame(() => {
+      const root = document.documentElement
+      const app = document.querySelector<HTMLElement>('[data-app-root]')
+      const titlebar = document.querySelector<HTMLElement>('[data-lumiverse-titlebar]')
+      const appStyle = app ? getComputedStyle(app) : null
+      const titlebarStyle = titlebar ? getComputedStyle(titlebar.parentElement as Element) : null
+      const entry = {
+        event,
+        at: new Date().toISOString(),
+        requestedNativeAppearance,
+        desktopBackground: root.getAttribute('data-desktop-background'),
+        desktopBlur: root.getAttribute('data-desktop-background-blur'),
+        tint: root.style.getPropertyValue('--lumiverse-desktop-background'),
+        bodyBackground: getComputedStyle(document.body).backgroundColor,
+        appBackground: appStyle?.backgroundColor ?? null,
+        appBackdropFilter: appStyle?.backdropFilter ?? null,
+        titlebarPresent: Boolean(titlebar),
+        titlebarDisplay: titlebarStyle?.display ?? null,
+        titlebarVisibility: titlebarStyle?.visibility ?? null,
+        titlebarOpacity: titlebarStyle?.opacity ?? null,
+        titlebarZIndex: titlebarStyle?.zIndex ?? null,
+        webGlass: root.hasAttribute('data-glass'),
+        ...details,
+      }
+      const debugWindow = window as Window & {
+        [DESKTOP_APPEARANCE_DEBUG_HISTORY_KEY]?: typeof entry[]
+      }
+      const history = debugWindow[DESKTOP_APPEARANCE_DEBUG_HISTORY_KEY] ?? []
+      history.push(entry)
+      if (history.length > 100) history.shift()
+      debugWindow[DESKTOP_APPEARANCE_DEBUG_HISTORY_KEY] = history
+
+      console.info('[desktop-appearance]', entry)
+    })
+  } catch {
+    // Diagnostics must never interfere with rendering or theme application.
+  }
+}
 
 type Rgba = { r: number; g: number; b: number; a: number }
 
@@ -19,6 +79,28 @@ function applyVariables(vars: Record<string, string>) {
   const root = document.documentElement
   for (const [key, value] of Object.entries(vars)) {
     root.style.setProperty(key, value)
+  }
+}
+
+function broadcastThemeToParent(mode: ResolvedMode, vars: Record<string, string>) {
+  if (window.parent === window) return
+  try {
+    window.parent.postMessage(
+      {
+        __lumiverseTheme: true,
+        mode,
+        vars: {
+          '--lumiverse-bg-deep': vars['--lumiverse-bg-deep'] ?? '',
+          '--lumiverse-primary': vars['--lumiverse-primary'] ?? '',
+          '--lumiverse-primary-020': vars['--lumiverse-primary-020'] ?? '',
+          '--lumiverse-border': vars['--lumiverse-border'] ?? '',
+          '--lumiverse-text-muted': vars['--lumiverse-text-muted'] ?? '',
+        },
+      },
+      '*',
+    )
+  } catch {
+    /* parent unreachable — ignore */
   }
 }
 
@@ -128,6 +210,65 @@ function syncThemeColorMeta(vars: Record<string, string>) {
     document.head.appendChild(meta)
   }
   meta.content = color
+}
+
+function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode) {
+  const root = document.documentElement
+  const background = config.desktopBackground
+
+  if (!('__TAURI_INTERNALS__' in window)) {
+    root.removeAttribute('data-desktop-background')
+    root.removeAttribute('data-desktop-background-blur')
+    root.style.removeProperty('--lumiverse-desktop-background')
+    requestedNativeAppearance = null
+    debugDesktopAppearance('browser-surface-cleared')
+    return
+  }
+
+  if (background?.color) {
+    root.setAttribute('data-desktop-background', '')
+    root.style.setProperty('--lumiverse-desktop-background', background.color)
+  } else {
+    root.removeAttribute('data-desktop-background')
+    root.style.removeProperty('--lumiverse-desktop-background')
+  }
+
+  if (background?.color && background.blur) {
+    root.setAttribute('data-desktop-background-blur', '')
+  } else {
+    root.removeAttribute('data-desktop-background-blur')
+  }
+
+  const blur = Boolean(background?.color && background.blur)
+  const dark = mode === 'dark'
+  const blurIntensity = background?.blurIntensity ?? 'balanced'
+  const appearance = `${blur}:${dark}:${blurIntensity}`
+
+  if (appearance === requestedNativeAppearance) {
+    debugDesktopAppearance('native-effect-unchanged', { blur, dark })
+    return
+  }
+  requestedNativeAppearance = appearance
+  debugDesktopAppearance('native-effect-requested', { blur, dark, blurIntensity })
+
+  // Tauri IPC completion is asynchronous. Queue requests so a slow "enable"
+  // response can never apply its material after a later "disable" request.
+  nativeAppearanceQueue = nativeAppearanceQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (requestedNativeAppearance !== appearance) return
+
+      try {
+        await invoke('configure_frontend_appearance', { blur, dark, blurIntensity })
+        debugDesktopAppearance('native-effect-applied', { blur, dark, blurIntensity })
+      } catch (error) {
+        // Permit the next theme application to retry if the native window was
+        // not ready yet or its effects could not be updated.
+        if (requestedNativeAppearance === appearance) requestedNativeAppearance = null
+        debugDesktopAppearance('native-effect-failed', { blur, dark, blurIntensity, error: String(error) })
+        console.warn('Unable to configure native frontend appearance', error)
+      }
+    })
 }
 
 function buildColorInterpolator(from: string, to: string): ((t: number) => string) | null {
@@ -362,7 +503,9 @@ export function useThemeApplicator() {
       }
 
       hadOverridesRef.current = hasOverrides
+      broadcastThemeToParent(mode, vars)
       syncThemeColorMeta(vars)
+      syncDesktopBackground(config, mode)
 
       if (!root.hasAttribute('data-pwa')) {
         const us = parseFloat(vars['--lumiverse-ui-scale'] ?? '1') || 1
