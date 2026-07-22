@@ -48,9 +48,9 @@ html[data-tauri-desktop] {
   --app-window-controls-overlay-top: 36px;
   --app-interactive-safe-top: 36px;
   /* The Tauri frontend window is intentionally frameless and transparent.
-     Clip the document itself so that transparency reaches the host in the
-     four corners instead of leaving the WebView's rectangular canvas visible.
-     This also clips direct-to-body portals such as modal backdrops. */
+     Keep its document canvas transparent; concrete app/titlebar surfaces own
+     their rounded clipping below. WKWebView must not clip the root element —
+     doing so can discard the entire promoted document canvas. */
   --desktop-window-corner-radius: 12px;
   background: transparent;
   border-radius: var(--desktop-window-corner-radius);

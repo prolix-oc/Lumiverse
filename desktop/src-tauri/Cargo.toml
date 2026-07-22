@@ -1,7 +1,7 @@
 [package]
 name = "lumiverse-tray"
 version = "0.1.0"
-description = "Menu bar / system tray companion for the Lumiverse server"
+description = "Experimental Tauri-powered Lumiverse integrated browser and tray"
 edition = "2021"
 license = "AGPL-3.0"
 

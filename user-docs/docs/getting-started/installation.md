@@ -83,7 +83,7 @@ The start script handles everything: auto-installs Bun if needed, runs `bun inst
     On macOS, Windows, and Linux, you can build an optional menu bar/system
     tray companion that manages a local Lumiverse checkout. The Linux icon
     requires a desktop environment with StatusNotifier/AppIndicator support.
-    See [Desktop Tray Companion](desktop-tray.md) for requirements and setup.
+    See [Experimental Lumiverse Desktop](desktop-tray.md) for requirements and setup.
 
 ### 4. Open in your browser
 

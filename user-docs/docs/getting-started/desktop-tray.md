@@ -1,16 +1,22 @@
 ---
-title: Desktop Tray Companion
+title: Experimental Lumiverse Desktop
 ---
 
-# Desktop Tray Companion
+# Experimental Lumiverse Desktop
 
-Lumiverse Tray is an optional macOS menu bar, Windows system tray, and Linux
-StatusNotifier (AppIndicator) app for running a local Lumiverse checkout
-without leaving a terminal open. It can start and stop the server, open the
-web dashboard, show basic serving details, and check for updates.
+Lumiverse Desktop is an experimental Tauri-powered integrated browser with a
+macOS menu bar, Windows system tray, and Linux StatusNotifier (AppIndicator)
+icon. It runs a local Lumiverse checkout without leaving a terminal open and
+opens Lumiverse in its native desktop window. The tray keeps server controls,
+status, and update actions within reach.
 
 It is intended for people running Lumiverse from a local clone. It does not
 support Termux, Docker, or a remote Lumiverse server.
+
+!!! warning "Experimental desktop app"
+    Lumiverse Desktop is experimental. Use the normal browser experience if
+    you need the most established path while the integrated Tauri browser
+    continues to evolve.
 
 !!! note "Optional companion"
     The standard `./start.sh` and `./start.ps1` launchers remain the normal
@@ -74,7 +80,7 @@ KStatusNotifierItem Support**, before the icon will appear.
 
 ---
 
-## Build the tray app
+## Build Lumiverse Desktop
 
 From the root of your Lumiverse checkout, run:
 
@@ -93,13 +99,13 @@ The finished app and installer files are placed under
 
 === "Windows"
 
-    Run the generated `.msi` or `.exe` installer, then open **Lumiverse Tray**
+    Run the generated `.msi` or `.exe` installer, then open **Lumiverse Desktop**
     from the Start menu.
 
 === "Linux"
 
     Install the generated package for your distribution (`.deb` or `.rpm`) or
-    run the generated `.AppImage`, then open **Lumiverse Tray** from your
+    run the generated `.AppImage`, then open **Lumiverse Desktop** from your
     desktop's application launcher.
 
 !!! tip "Building from a checkout"
@@ -109,9 +115,9 @@ The finished app and installer files are placed under
 
 ---
 
-## Connect the tray to Lumiverse
+## Connect Lumiverse Desktop to Lumiverse
 
-1. Open **Lumiverse Tray**. Its icon appears in the macOS menu bar, Windows
+1. Open **Lumiverse Desktop**. Its icon appears in the macOS menu bar, Windows
    notification area, or Linux desktop's status area. On GNOME, first enable
    an AppIndicator/KStatusNotifier extension as described above.
 2. Open the tray menu and choose **Set Lumiverse Folder…**.
@@ -119,8 +125,8 @@ The finished app and installer files are placed under
    `start.sh`, `start.ps1`, and `scripts/`.
 4. The tray finds Bun automatically. If it cannot, install or update Bun with
    the normal Lumiverse launcher, then reopen the tray app.
-5. Choose **Start Server**. The dashboard action becomes available once the
-   server is running.
+5. Choose **Start Server**. Lumiverse opens in the experimental integrated
+   browser when the local server is ready.
 
 The **Start Server at Launch** option is enabled by default. Disable it if you
 want the tray icon to open without starting Lumiverse. You can also enable
@@ -128,12 +134,13 @@ want the tray icon to open without starting Lumiverse. You can also enable
 
 ---
 
-## Using the tray app
+## Using Lumiverse Desktop
 
 The menu provides:
 
 - **Start Server / Stop Server** — controls the Lumiverse process owned by the tray app.
-- **Open Web Dashboard** — opens your configured local Lumiverse address.
+- **Open Lumiverse** — opens or closes the integrated browser. Its submenu
+  can reload that browser or open the same address in your default browser.
 - **Serving Stats** — shows the port, process ID, uptime, branch, and version.
 - **Check for Updates / Apply Update** — uses Lumiverse's normal Git-based update flow.
 
@@ -149,7 +156,7 @@ Lumiverse is self-contained: the folder you cloned **is** the install. The
 server never writes configuration, databases, or services anywhere else on
 your system, so removing it is mostly a matter of deleting that one folder.
 
-This page covers the server, the optional Desktop Tray Companion, and the
+This page covers the server, the optional Experimental Lumiverse Desktop, and the
 shared tools that Lumiverse installs but does not own.
 
 !!! warning "Your data lives in the folder"
@@ -187,10 +194,10 @@ folder.
 
 ---
 
-### Uninstall the Desktop Tray Companion
+### Uninstall Lumiverse Desktop
 
 Skip this section if you never built or installed
-[Lumiverse Tray](desktop-tray.md).
+[Lumiverse Desktop](desktop-tray.md).
 
 #### 1. Turn off Launch at Login, then quit
 
@@ -202,13 +209,13 @@ also stops any server the tray started).
 
 === "macOS"
 
-    Delete **Lumiverse Tray.app** from `/Applications` (or wherever you put
+    Delete **Lumiverse Desktop.app** from `/Applications` (or wherever you put
     it). Builds you never installed live inside the Lumiverse folder under
     `desktop/src-tauri/target/` and are removed along with it.
 
 === "Windows"
 
-    Uninstall **Lumiverse Tray** from **Settings → Apps**. If you ran the
+    Uninstall **Lumiverse Desktop** from **Settings → Apps**. If you ran the
     portable `.exe` instead of an installer, just delete it.
 
 #### 3. Remove the tray app's data
@@ -253,7 +260,7 @@ Only present if **Launch at Login** was enabled and step 1 was skipped:
     The login item is a per-user registry value (no admin rights involved):
 
     ```powershell
-    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Lumiverse Tray" /f
+    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Lumiverse Desktop" /f
     ```
 
 Nothing tray-related is ever installed system-wide: no `/Library/LaunchDaemons`
@@ -303,7 +310,7 @@ Run the normal launcher from the Lumiverse root once:
     ./start.sh
     ```
 
-Then quit and reopen Lumiverse Tray.
+Then quit and reopen Lumiverse Desktop.
 
 ### The build fails
 

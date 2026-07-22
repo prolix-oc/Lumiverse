@@ -23,6 +23,9 @@
 :global(html[data-tauri-desktop]) .titlebar {
   display: block;
   height: 36px;
+  border-top-left-radius: var(--desktop-window-corner-radius);
+  border-top-right-radius: var(--desktop-window-corner-radius);
+  overflow: hidden;
 }
 
 :global(html[data-tauri-desktop]) .dragRegion {

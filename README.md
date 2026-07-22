@@ -241,13 +241,13 @@ Most operational controls now live in the owner-only `Settings -> Operator Panel
 
 If you start Lumiverse with `--no-runner`, `-NoRunner`, `bun run start`, or `bun run dev`, the Operator Panel still loads but runner-backed controls will be unavailable.
 
-### Desktop tray app
+### Experimental Lumiverse Desktop
 
-Prefer not to keep a terminal open? [`desktop/`](desktop/) contains an
-optional macOS menu bar / Windows system tray / Linux StatusNotifier companion
-(Tauri v2) that
-starts and stops the server, opens the web frontend, shows serving stats,
-and applies updates via the same runner machinery. See
+[`desktop/`](desktop/) contains an optional experimental Tauri v2 desktop app
+with Lumiverse's integrated browser as its primary interface and a macOS menu
+bar / Windows system tray / Linux StatusNotifier icon for controls. It starts
+and stops a local server, shows serving stats, opens the same address in your
+default browser on request, and applies updates through the runner. See
 [desktop/README.md](desktop/README.md) for build instructions.
 
 ## Configuration

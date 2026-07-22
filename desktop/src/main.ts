@@ -1,10 +1,9 @@
 /**
- * Lumiverse — macOS menu bar / Windows system tray companion.
+ * Lumiverse Desktop — experimental Tauri-powered integrated browser and tray.
  *
- * Owns a headless Lumiverse runner (scripts/runner.ts --headless) through
- * the Rust process host and presents its state as a native tray menu:
- * status, start/stop, serving stats, frontend shortcut, updates, and
- * launch-at-login / auto-start toggles.
+ * Owns a headless Lumiverse runner (scripts/runner.ts --headless), presents
+ * Lumiverse in its native WebView, and keeps server controls available from
+ * the tray: status, start/stop, serving stats, updates, and launch options.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -49,6 +48,7 @@ let port = 7860;
 let lastStatus: FullStatus | null = null;
 let updateState: UpdateState = { available: false, commitsBehind: 0, latestMessage: "" };
 let customFrontendUrl: string | null = null;
+let openIntegratedBrowserWhenReady = false;
 
 // ─── Menu items (created once, text/enabled updated in place) ───────────────
 
@@ -64,6 +64,9 @@ let checkUpdatesItem: MenuItem;
 let applyUpdateItem: MenuItem;
 let autoStartItem: CheckMenuItem;
 let loginItem: CheckMenuItem;
+let openIntegratedBrowserItem: MenuItem;
+let openDefaultBrowserItem: MenuItem;
+let reloadIntegratedBrowserItem: MenuItem;
 
 function statusText(): string {
   if (busyMessage) return busyMessage;
@@ -96,20 +99,11 @@ async function updateFrontendMenuText(): Promise<void> {
   const visible = await invoke<boolean>("frontend_visible").catch(() => false);
   const exists = await invoke<boolean>("frontend_exists").catch(() => false);
 
-  await frontendItem.setText(visible ? "Close Frontend" : "Open Frontend");
+  await frontendItem.setText(visible ? "Close Lumiverse" : "Open Lumiverse");
 
-  // Enable/disable child items based on server state.
-  const items = await frontendItem.items();
-  for (const item of items) {
-    if ("setEnabled" in item) {
-      const text = await item.text();
-      if (text === "Reload Frontend") {
-        await item.setEnabled(frontendAvailable && exists);
-      } else if (text === "In App Window" || text === "In Browser") {
-        await item.setEnabled(frontendAvailable);
-      }
-    }
-  }
+  await openIntegratedBrowserItem.setEnabled(frontendAvailable);
+  await openDefaultBrowserItem.setEnabled(frontendAvailable);
+  await reloadIntegratedBrowserItem.setEnabled(frontendAvailable && exists);
 }
 
 function frontendUrl(): string {
@@ -179,10 +173,17 @@ async function refreshStatus(): Promise<void> {
 
 async function startServer(): Promise<void> {
   await ensureRunner();
+  // The runner acknowledges this request while the server is still starting.
+  // Defer opening the native WebView until its `running` state notification.
+  openIntegratedBrowserWhenReady = true;
   serverState = "starting";
   await updateMenu();
   await client.request("start-server");
   await refreshStatus();
+  if (openIntegratedBrowserWhenReady && lastStatus?.state === "running") {
+    openIntegratedBrowserWhenReady = false;
+    await invoke("show_frontend", { port, customUrl: customFrontendUrl });
+  }
   await updateMenu();
 }
 
@@ -290,8 +291,8 @@ async function loadTrayImage(): Promise<Image> {
 async function buildTray(): Promise<void> {
   statusItem = await MenuItem.new({ text: statusText(), enabled: false });
   startStopItem = await MenuItem.new({ text: "Start Server", action: action(toggleServer) });
-  const openInWindowItem = await MenuItem.new({
-    text: "In App Window",
+  openIntegratedBrowserItem = await MenuItem.new({
+    text: "Open Integrated Browser",
     enabled: false,
     action: action(async () => {
       const visible = await invoke<boolean>("frontend_visible");
@@ -304,16 +305,16 @@ async function buildTray(): Promise<void> {
     }),
   });
 
-  const openInBrowserItem = await MenuItem.new({
-    text: "In Browser",
+  openDefaultBrowserItem = await MenuItem.new({
+    text: "Open in Default Browser",
     enabled: false,
     action: action(async () => {
       await openUrl(frontendUrl());
     }),
   });
 
-  const reloadFrontendItem = await MenuItem.new({
-    text: "Reload Frontend",
+  reloadIntegratedBrowserItem = await MenuItem.new({
+    text: "Reload Integrated Browser",
     enabled: false,
     action: action(async () => {
       await invoke("reload_frontend");
@@ -329,8 +330,8 @@ async function buildTray(): Promise<void> {
   });
 
   frontendItem = await Submenu.new({
-    text: "Open Frontend",
-    items: [openInWindowItem, reloadFrontendItem, openInBrowserItem, await PredefinedMenuItem.new({ item: "Separator" }), setFrontendUrlItem],
+    text: "Open Lumiverse",
+    items: [openIntegratedBrowserItem, reloadIntegratedBrowserItem, openDefaultBrowserItem, await PredefinedMenuItem.new({ item: "Separator" }), setFrontendUrlItem],
   });
 
   statsPortItem = await MenuItem.new({ text: "Port: —", enabled: false });
@@ -474,6 +475,14 @@ async function boot(): Promise<void> {
   await client.init();
   client.onState = (state) => {
     serverState = state;
+    if (state === "running" && openIntegratedBrowserWhenReady) {
+      openIntegratedBrowserWhenReady = false;
+      void refreshStatus()
+        .then(() => invoke("show_frontend", { port, customUrl: customFrontendUrl }))
+        .catch((err) => alert("Lumiverse", err instanceof Error ? err.message : String(err), true));
+    } else if (state === "stopped" || state === "crashed") {
+      openIntegratedBrowserWhenReady = false;
+    }
     if (state === "running" || state === "stopped" || state === "crashed") {
       busyMessage = null;
     }

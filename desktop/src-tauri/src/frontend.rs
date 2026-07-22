@@ -233,6 +233,10 @@ pub fn show_frontend(
         // The frontend renders the title bar and window controls so it can
         // inherit the active Lumiverse theme on every desktop platform.
         .decorations(false)
+        // Frameless windows do not receive a platform shadow by default on
+        // every backend. Enabling it here lets the compositor derive the
+        // window outline from the transparent, CSS-clipped document surface.
+        .shadow(true)
         // The tray host starts without a Dock/taskbar entry. Enable the
         // frontend's entry immediately before its first show below.
         .skip_taskbar(true)
@@ -270,6 +274,7 @@ pub fn show_frontend(
     // window. A full desktop-process restart is still required to replace an
     // already-created native window.
     window.set_decorations(false).map_err(|e| e.to_string())?;
+    window.set_shadow(true).map_err(|e| e.to_string())?;
     // Keep the frontend available from the tray after the user clicks the
     // native close button.
     let close_window = window.clone();
