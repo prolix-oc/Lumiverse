@@ -4,7 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical, ExternalLink } from 'lucide-react'
+import { X, Upload, Trash2, Copy, MessageSquare, User, UserPlus, Plus, ImagePlus, Download, Code2, GripVertical, ExternalLink, Hash } from 'lucide-react'
 import {
   DndContext,
   closestCenter,
@@ -73,6 +73,7 @@ import CharacterLoraTab from './CharacterLoraTab'
 import AlternateFieldEditor from './AlternateFieldEditor'
 import AlternateAvatarManager from './AlternateAvatarManager'
 import type { AlternateAvatarEntry } from './AlternateAvatarManager'
+import CharacterTokenReportModal, { type CharacterTokenReportItem } from './CharacterTokenReportModal'
 
 const DEBOUNCE_MS = 2000
 const MAX_PERSPECTIVE_LAYERS = 5
@@ -403,6 +404,7 @@ export default function CharacterEditorPage() {
   const [extensionsJson, setExtensionsJson] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showTokenReport, setShowTokenReport] = useState(false)
   const [avatarKey, setAvatarKey] = useState(0)
   const [lorebookImporting, setLorebookImporting] = useState(false)
   const [lorebookResult, setLorebookResult] = useState<string | null>(null)
@@ -459,6 +461,7 @@ export default function CharacterEditorPage() {
     if (editingCharacterId) {
       setActiveTab('core')
     }
+    setShowTokenReport(false)
   }, [editingCharacterId])
 
   useEffect(() => {
@@ -766,6 +769,59 @@ export default function CharacterEditorPage() {
 
     return pendingExtensionsRef.current ?? character?.extensions ?? {}
   }, [extensionsJson, character?.extensions])
+
+  // This report intentionally uses the editor's local draft state rather than
+  // the saved card, so it remains useful while the user is still typing.
+  const tokenReportItems = useMemo<CharacterTokenReportItem[]>(() => {
+    const baseFields = [
+      ['description', t('characterEditor.description')],
+      ['personality', t('characterEditor.personality')],
+      ['scenario', t('characterEditor.scenario')],
+      ['system_prompt', t('characterEditor.systemPrompt')],
+      ['post_history_instructions', t('characterEditor.postHistory')],
+      ['mes_example', t('characterEditor.messageExamples')],
+    ] as const
+    const items: CharacterTokenReportItem[] = baseFields.map(([field, label]) => ({
+      id: `base:${field}`,
+      label,
+      text: fields[field] || '',
+      group: 'base',
+    }))
+
+    const alternateFields = isRecord(workingExtensions.alternate_fields) ? workingExtensions.alternate_fields : {}
+    for (const [field, baseLabel] of baseFields.slice(0, 3)) {
+      const variants = Array.isArray(alternateFields[field]) ? alternateFields[field] : []
+      variants.forEach((variant: unknown, index: number) => {
+        if (!isRecord(variant)) return
+        const label = typeof variant.label === 'string' && variant.label.trim()
+          ? variant.label
+          : `${t('characterEditor.alternateField.default')} ${index + 1}`
+        items.push({
+          id: `variant:${field}:${typeof variant.id === 'string' ? variant.id : index}`,
+          label: `${baseLabel} — ${label}`,
+          text: typeof variant.content === 'string' ? variant.content : '',
+          group: 'variant',
+        })
+      })
+    }
+
+    items.push({
+      id: 'greeting:first',
+      label: t('characterEditor.firstMessage'),
+      text: fields.first_mes || '',
+      group: 'greeting',
+    })
+    alternateGreetings.forEach((greeting, index) => {
+      items.push({
+        id: `greeting:${index}`,
+        label: t('characterEditor.greetingNumber', { n: index + 1 }),
+        text: greeting,
+        group: 'greeting',
+      })
+    })
+
+    return items
+  }, [alternateGreetings, fields, t, workingExtensions])
 
 
   const flushExtensionsSave = useCallback(async () => {
@@ -1589,6 +1645,14 @@ export default function CharacterEditorPage() {
                   {saving && <span className={styles.savingIndicator}>{t('characterEditor.saving')}</span>}
 
                   <div className={styles.headerActions}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setShowTokenReport(true)}
+                      title={t('characterEditor.tokenReportTitle')}
+                    >
+                      <Hash size={14} />
+                    </Button>
                     <Button size="icon" variant="ghost" onClick={handleOpenChat} title={t('characterEditor.openChat')}>
                       <MessageSquare size={14} />
                     </Button>
@@ -2257,6 +2321,15 @@ export default function CharacterEditorPage() {
       onClose={() => setGalleryContextMenu(null)}
     />
     <ImageLightbox src={galleryLightboxSrc} onClose={() => setGalleryLightboxSrc(null)} />
+
+    {character && (
+      <CharacterTokenReportModal
+        isOpen={showTokenReport}
+        onClose={() => setShowTokenReport(false)}
+        characterName={name || character.name}
+        items={tokenReportItems}
+      />
+    )}
 
     {showDeleteConfirm && (
       <ConfirmationModal
