@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProper
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
-import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
+import { useVirtualizer, type VirtualItem, type Virtualizer } from '@tanstack/react-virtual'
 import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff, Star, Pencil, Copy, GitBranch } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
 import { chatsApi, messagesApi } from '@/api/chats'
@@ -16,7 +16,7 @@ import { useStore } from '@/store'
 import { useScrollGate } from '@/hooks/useScrollGate'
 import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import { prefetchImages } from '@/lib/imageDecodeCache'
-import { renderedPxToLayoutPx } from '@/lib/uiScale'
+import { measureLayoutHeight, renderedPxToLayoutPx } from '@/lib/uiScale'
 import LazyImage from '@/components/shared/LazyImage'
 import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
 import SearchField from '@/components/shared/SearchField'
@@ -724,7 +724,6 @@ interface VirtualRowProps {
   virtualRow: VirtualItem
   virtualColumns: number
   virtualGap: number
-  virtualScrollMargin: number
   rowItems: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
   initialPageSize: number
@@ -743,7 +742,6 @@ function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boo
   if (prev.virtualRow.index !== next.virtualRow.index) return false
   if (prev.virtualColumns !== next.virtualColumns) return false
   if (prev.virtualGap !== next.virtualGap) return false
-  if (prev.virtualScrollMargin !== next.virtualScrollMargin) return false
   if (prev.layoutMode !== next.layoutMode) return false
   if (prev.initialPageSize !== next.initialPageSize) return false
   if (prev.animateInitialEntries !== next.animateInitialEntries) return false
@@ -765,7 +763,6 @@ const VirtualRow = memo(function VirtualRow({
   virtualRow,
   virtualColumns,
   virtualGap,
-  virtualScrollMargin,
   rowItems,
   layoutMode,
   initialPageSize,
@@ -790,12 +787,6 @@ const VirtualRow = memo(function VirtualRow({
         gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
         gap: virtualGap,
         paddingBottom: virtualGap,
-        // directDomUpdates normally writes this after refs mount. Safari's
-        // standalone PWA can defer that first write until a scroll event,
-        // briefly leaving every absolutely positioned row at the origin.
-        // Render the known position as a synchronous fallback; subsequent
-        // virtualizer writes use the same transform.
-        transform: `translate3d(0, ${virtualRow.start - virtualScrollMargin}px, 0)`,
       }}
     >
       {rowItems.map((item) =>
@@ -875,6 +866,24 @@ function VirtualizedChatRows({
 }: VirtualizedChatRowsProps) {
   const virtualRowCount = Math.ceil(items.length / virtualColumns)
   const characters = useStore((state) => state.characters)
+  const compactRowHeightsRef = useRef(new Map<string | number | bigint, number>())
+  const measureCompactRow = useCallback((
+    element: Element,
+    _entry: ResizeObserverEntry | undefined,
+    instance: Virtualizer<HTMLDivElement, Element>,
+  ) => {
+    const index = instance.indexFromElement(element)
+    const key = instance.options.getItemKey(index)
+    const cachedHeight = compactRowHeightsRef.current.get(key)
+    if (cachedHeight !== undefined) return cachedHeight
+
+    // Compact list rows do not reflow after they mount. Preserve their first
+    // layout height so later ResizeObserver deliveries cannot reposition an
+    // already-rendered row.
+    const height = measureLayoutHeight(element) || virtualRowEstimate
+    compactRowHeightsRef.current.set(key, height)
+    return height
+  }, [virtualRowEstimate])
   const chatVirtualizer = useVirtualizer({
     count: virtualRowCount,
     getScrollElement: () => scrollRef.current,
@@ -882,6 +891,7 @@ function VirtualizedChatRows({
     overscan: VIRTUAL_OVERSCAN,
     anchorTo: 'start',
     scrollMargin: virtualScrollMargin,
+    ...(layoutMode === 'compact' ? { measureElement: measureCompactRow } : {}),
     directDomUpdates: true,
     useFlushSync: false,
     getItemKey: (index) => {
@@ -891,8 +901,10 @@ function VirtualizedChatRows({
   })
 
   useEffect(() => {
-    chatVirtualizer.measure()
-  }, [chatVirtualizer, items, virtualRowEstimate])
+    // Card rows depend on their responsive column width. Compact rows keep
+    // their initial measured height and must not be reset to an estimate.
+    if (layoutMode === 'cards') chatVirtualizer.measure()
+  }, [chatVirtualizer, items, layoutMode, virtualRowEstimate])
 
   const virtualItems = chatVirtualizer.getVirtualItems()
   const visibleStart = virtualItems.length > 0 ? virtualItems[0].index : -1
@@ -934,7 +946,6 @@ function VirtualizedChatRows({
             virtualRow={virtualRow}
             virtualColumns={virtualColumns}
             virtualGap={virtualGap}
-            virtualScrollMargin={virtualScrollMargin}
             rowItems={items.slice(start, start + virtualColumns)}
             layoutMode={layoutMode}
             initialPageSize={initialPageSize}
