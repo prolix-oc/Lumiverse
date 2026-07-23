@@ -84,6 +84,7 @@ import * as worldBooksSvc from "./world-books.service";
 import * as settingsSvc from "./settings.service";
 import * as packsSvc from "./packs.service";
 import * as embeddingsSvc from "./embeddings.service";
+import type { PerChatMemoryOverrides } from "./embeddings.service";
 import {
   loadWorldBookVectorSettings,
   type WorldBookVectorSettings,
@@ -621,11 +622,25 @@ function joinCardFields(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n\n");
 }
 
+function capturedGroupCharacter(
+  groupCharacters: Map<string, Character> | undefined,
+  characterId: string,
+): Character | undefined {
+  const candidate = groupCharacters?.get(characterId);
+  return candidate &&
+    typeof candidate === "object" &&
+    !Array.isArray(candidate) &&
+    candidate.id === characterId
+    ? candidate
+    : undefined;
+}
+
 function buildGroupMergedCharacter(
   baseCharacter: Character,
   chat: Chat,
   userId: string,
   groupCharacters?: Map<string, Character>,
+  allowLiveLookup = true,
 ): Character {
   if (chat.metadata?.group !== true) return baseCharacter;
 
@@ -642,7 +657,10 @@ function buildGroupMergedCharacter(
     : undefined;
   const members = characterIds
     .filter((id) => !mutedIds?.has(id))
-    .map((id) => groupCharacters?.get(id) ?? charactersSvc.getCharacter(userId, id))
+    .map((id) =>
+      capturedGroupCharacter(groupCharacters, id) ??
+      (allowLiveLookup ? charactersSvc.getCharacter(userId, id) : undefined)
+    )
     .filter((character): character is Character => !!character)
     .map((character) => resolveCharacterWithAlternateFields(character, chat));
 
@@ -738,11 +756,38 @@ interface GroupScenarioOverride {
   member_character_id?: string;
   content?: string;
 }
+function assertBoundGroupCharacterFacts(
+  chat: Chat,
+  groupCharacters: Map<string, Character> | undefined,
+): void {
+  if (chat.metadata?.group !== true) return;
+  const override = chat.metadata.group_scenario_override as GroupScenarioOverride | undefined;
+  if (
+    override?.mode === "member" &&
+    override.member_character_id &&
+    !capturedGroupCharacter(groupCharacters, override.member_character_id)
+  ) {
+    throw new Error("Bound parent retrieval snapshot is missing the group scenario character");
+  }
+  if (getGroupCardMode(chat) === "swap") return;
+  const mutedIds = getGroupCardMode(chat) === "merge_ignore_muted"
+    ? new Set(chatsSvc.getGroupMutedIds(chat))
+    : undefined;
+  const characterIds = Array.isArray(chat.metadata.character_ids)
+    ? (chat.metadata.character_ids as string[])
+    : [];
+  if (characterIds.some((id) => !mutedIds?.has(id) && !capturedGroupCharacter(groupCharacters, id))) {
+    throw new Error("Bound parent retrieval snapshot is missing group card characters");
+  }
+}
+
 
 function resolveGroupScenarioOverride(
   character: Character,
   chat: Chat,
   userId: string,
+  groupCharacters?: Map<string, Character>,
+  allowLiveLookup = true,
 ): Character {
   const override = chat.metadata?.group_scenario_override as
     | GroupScenarioOverride
@@ -750,10 +795,11 @@ function resolveGroupScenarioOverride(
   if (!override || override.mode === "individual") return character;
 
   if (override.mode === "member" && override.member_character_id) {
-    const memberChar = charactersSvc.getCharacter(
-      userId,
-      override.member_character_id,
-    );
+    const memberChar =
+      capturedGroupCharacter(groupCharacters, override.member_character_id) ??
+      (allowLiveLookup
+        ? charactersSvc.getCharacter(userId, override.member_character_id)
+        : undefined);
     if (memberChar) {
       return { ...character, scenario: memberChar.scenario || "" };
     }
@@ -1923,6 +1969,93 @@ export async function assemblePrompt(
     if (boundParent) {
       throw new Error("Bound assembly requires explicit prompt blocks");
     }
+    let legacyMemoryResult: MemoryRetrievalResult | undefined;
+    if (getParentRetrievalCapture(ctx)) {
+      legacyMemoryResult = await safeCollectChatVectorMemory(
+        ctx.userId,
+        ctx.chatId,
+        messages,
+      );
+      const captureSettings = pf?.allSettings ?? new Map<string, unknown>();
+      const captureWorldInfoSources = pf?.worldInfoSources ?? {
+        entries: [],
+        worldBookIds: [],
+        bookSourceMap: new Map<string, BookSource>(),
+        bookNameMap: new Map<string, string>(),
+      };
+      const captureCortexConfig =
+        pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
+      const captureEmbeddingConfig =
+        pf?.embeddingConfig ?? (await embeddingsSvc.getEmbeddingConfig(ctx.userId));
+      captureParentRetrievalAtBoundary(ctx, {
+        messages,
+        chat,
+        character,
+        persona,
+        connection,
+        preset,
+        settings: captureSettings,
+        wiEntries: captureWorldInfoSources.entries,
+        wiSources: captureWorldInfoSources,
+        worldInfoSettings:
+          captureSettings.get("worldInfoSettings") ?? {},
+        vectorQueryPreview: "",
+        vectorActivated: [],
+        wiCache: {
+          before: [],
+          after: [],
+          anBefore: [],
+          anAfter: [],
+          depth: [],
+          emBefore: [],
+          emAfter: [],
+          atMarker: [],
+          pinnedMarkers: [],
+        },
+        vectorRetrievalDetails: null,
+        activatedWorldInfo: [],
+        worldInfoStats: {
+          totalCandidates: captureWorldInfoSources.entries.length,
+          activatedBeforeBudget: 0,
+          activatedAfterBudget: 0,
+          evictedByBudget: 0,
+          evictedByMinPriority: 0,
+          estimatedTokens: 0,
+          recursionPassesUsed: 0,
+          keywordActivated: 0,
+          vectorActivated: 0,
+          totalActivated: 0,
+          deduplicated: 0,
+          queryPreview: "",
+        },
+        wiState: (chat.metadata?.wi_state as WiState) ?? {},
+        cortexConfig: captureCortexConfig,
+        cortexResult: null,
+        linkedCortexResult: null,
+        chatMemSettings: captureSettings.has("chatMemorySettings")
+          ? embeddingsSvc.normalizeChatMemorySettings(
+              captureSettings.get("chatMemorySettings"),
+            )
+          : null,
+        perChatOverrides:
+          (chat.metadata?.memory_settings as PerChatMemoryOverrides | undefined) ??
+          null,
+        memoryResult: legacyMemoryResult,
+        linkedMemoryText: "",
+        activeDatabankIds: [],
+        databankQueryPreview: "",
+        databankSettings:
+          captureSettings.get("databankSettings") ?? null,
+        databankEmbeddingConfig: captureEmbeddingConfig,
+        databankRetrievalState: "skipped_no_active_banks",
+        databankResult: { chunks: [], formatted: "", count: 0 },
+        databankMentionAppendix: "",
+        groupCharacters: pf?.groupCharacters,
+        multiplayerMacroContext:
+          multiplayerMacroContextProvider?.(ctx.chatId) ?? null,
+        multiplayerPersona: multiplayerPersonaProvider?.(ctx.chatId) ?? null,
+      });
+    }
     return await legacyAssembly(
       messages,
       ctx.generationType,
@@ -1933,6 +2066,7 @@ export async function assemblePrompt(
       ctx.userId,
       ctx.userInput,
       ctx.signal,
+      legacyMemoryResult,
     );
   }
 
@@ -2448,18 +2582,20 @@ export async function assemblePrompt(
         )
       : undefined;
   const focusedCharacter = resolveCharacterWithAlternateFields(character, chat);
-  const effectiveCharacter = boundParent
-    ? focusedCharacter
-    : resolveGroupScenarioOverride(
-        buildGroupMergedCharacter(
-          focusedCharacter,
-          chat,
-          ctx.userId,
-          groupCharsMap,
-        ),
-        chat,
-        ctx.userId,
-      );
+  if (boundParent) assertBoundGroupCharacterFacts(chat, groupCharsMap);
+  const effectiveCharacter = resolveGroupScenarioOverride(
+    buildGroupMergedCharacter(
+      focusedCharacter,
+      chat,
+      ctx.userId,
+      groupCharsMap,
+      !boundParent,
+    ),
+    chat,
+    ctx.userId,
+    groupCharsMap,
+    !boundParent,
+  );
 
   const macroEnv: MacroEnv = buildEnv({
     character: effectiveCharacter,
@@ -7346,6 +7482,7 @@ async function legacyAssembly(
   userId?: string,
   userInput?: string,
   signal?: AbortSignal,
+  precollectedMemoryResult?: MemoryRetrievalResult,
 ): Promise<AssemblyResult> {
   const llmMessages: LlmMessage[] = [];
   const breakdown: AssemblyBreakdownEntry[] = [];
@@ -7493,11 +7630,13 @@ async function legacyAssembly(
   }
 
   if (userId && chat) {
-    const legacyMemoryResult = await safeCollectChatVectorMemory(
-      userId,
-      chat.id,
-      messages,
-    );
+    const legacyMemoryResult =
+      precollectedMemoryResult ??
+      (await safeCollectChatVectorMemory(
+        userId,
+        chat.id,
+        messages,
+      ));
     if (legacyMemoryResult.count > 0) {
       const memoryContent = legacyMemoryResult.formatted;
       llmMessages.push({ role: "system", content: memoryContent });
