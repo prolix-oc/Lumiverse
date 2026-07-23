@@ -117,8 +117,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 0;
-  margin-bottom: 24px;
+  padding: 16px 0 12px;
+  margin-bottom: 16px;
 }
 
 .landingToolbar {
@@ -1224,6 +1224,11 @@
 }
 
 @media (max-width: 600px) {
+  .header {
+    padding-bottom: 4px;
+    margin-bottom: 8px;
+  }
+
   .landingToolbar {
     margin-bottom: 14px;
   }
