@@ -17,7 +17,7 @@ import type {
   SpindlePresetEditorState,
 } from './preset-editor-types'
 
-function sealedBlock(): PromptBlockDTO & Record<string, unknown> {
+function sealedBlock(): PromptBlockDTO {
   return {
     id: 'sealed-block',
     name: 'Sealed',
@@ -46,7 +46,7 @@ function sealedBlock(): PromptBlockDTO & Record<string, unknown> {
     sealedOriginPresetId: 'preset-1',
     sealedOriginVersion: '1',
     sealedSha256: 'hash',
-  }
+  } as unknown as PromptBlockDTO
 }
 
 

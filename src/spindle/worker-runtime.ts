@@ -55,6 +55,8 @@ import type {
   LumiaItemDTO,
   StreamChunkDTO,
   ImageDTO,
+  ImageGenStreamEventDTO,
+  ImageGenStreamRequestDTO,
   ImageGetOptionsDTO,
   ImageListOptionsDTO,
   ImageUploadDTO,
@@ -914,6 +916,10 @@ const streamingGenerations = new Map<
   string,
   { push: (chunk: StreamChunkDTO) => void; fail: (reason: unknown) => void }
 >();
+const streamingImageGenerations = new Map<
+  string,
+  { push: (event: ImageGenStreamEventDTO) => void; fail: (reason: unknown) => void }
+>();
 let interceptHandler:
   | ((
       messages: LlmMessageDTO[],
@@ -1476,6 +1482,171 @@ function requestGenerationStream(input: any): AsyncGenerator<StreamChunkDTO, voi
       }
     }
   })();
+}
+
+/**
+ * Issue an `image_gen_generate_stream` RPC and project host events into an
+ * `AsyncGenerator<ImageGenStreamEventDTO>`. AbortSignal is worker-local and is
+ * replaced by the explicit image stream cancellation message.
+ */
+function requestImageGenerationStream(
+  input: ImageGenStreamRequestDTO,
+): AsyncGenerator<ImageGenStreamEventDTO, void, void> {
+  const { signal, ...payload } = input;
+  const abortMessage = signal?.reason instanceof Error
+    ? signal.reason.message
+    : typeof signal?.reason === "string"
+      ? signal.reason
+      : undefined;
+  if (signal?.aborted) {
+    const err = makeAbortError(abortMessage);
+    return (async function* (): AsyncGenerator<ImageGenStreamEventDTO, void, void> {
+      throw err;
+    })();
+  }
+
+  const requestId = crypto.randomUUID();
+  type QueueItem =
+    | { kind: "event"; event: ImageGenStreamEventDTO }
+    | { kind: "error"; error: unknown };
+  type NextResolve = (result: IteratorResult<ImageGenStreamEventDTO, void>) => void;
+  type PendingNext = { resolve: NextResolve; reject: (reason: unknown) => void };
+
+  const queue: QueueItem[] = [];
+  const pendingNext: PendingNext[] = [];
+  let terminated = false;
+  let cleanupDone = false;
+  let cancelSent = false;
+
+  const cancel = (): void => {
+    if (cancelSent) return;
+    cancelSent = true;
+    try {
+      post({ type: "image_gen_cancel_stream", requestId });
+    } catch {
+      // The host may already be tearing down the worker.
+    }
+  };
+
+  const cleanup = (shouldCancel: boolean, clearQueue: boolean): void => {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    if (shouldCancel) cancel();
+    streamingImageGenerations.delete(requestId);
+    signal?.removeEventListener("abort", onAbort);
+    if (clearQueue) queue.length = 0;
+  };
+
+  const fail = (error: unknown): void => {
+    if (terminated) return;
+    terminated = true;
+    const pending = pendingNext.splice(0);
+    if (pending.length > 0) {
+      cleanup(false, true);
+      for (const waiter of pending) waiter.reject(error);
+      return;
+    }
+    queue.push({ kind: "error", error });
+    cleanup(false, false);
+  };
+
+  const push = (event: ImageGenStreamEventDTO): void => {
+    if (terminated || cleanupDone) return;
+    if (event.type === "done") terminated = true;
+    const item: QueueItem = { kind: "event", event };
+    const pending = pendingNext.shift();
+    if (!pending) {
+      queue.push(item);
+      if (event.type === "done") cleanup(false, false);
+      return;
+    }
+
+    pending.resolve({ done: false, value: event });
+    if (event.type === "done") {
+      const remaining = pendingNext.splice(0);
+      cleanup(false, false);
+      for (const waiter of remaining) {
+        waiter.resolve({ done: true, value: undefined });
+      }
+    }
+  };
+
+  const onAbort = (): void => {
+    if (terminated) return;
+    cancel();
+    queue.length = 0;
+    fail(makeAbortError(
+      signal?.reason instanceof Error
+        ? signal.reason.message
+        : typeof signal?.reason === "string"
+          ? signal.reason
+          : undefined,
+    ));
+  };
+
+  streamingImageGenerations.set(requestId, { push, fail });
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  if (signal?.aborted) {
+    onAbort();
+  } else {
+    try {
+      post({ type: "image_gen_generate_stream", requestId, input: payload });
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  const consume = (item: QueueItem): Promise<IteratorResult<ImageGenStreamEventDTO, void>> => {
+    if (item.kind === "error") {
+      cleanup(false, true);
+      return Promise.reject(item.error);
+    }
+    if (item.event.type === "done") {
+      cleanup(false, true);
+    }
+    return Promise.resolve({ done: false, value: item.event });
+  };
+
+  const iterator: AsyncGenerator<ImageGenStreamEventDTO, void, void> = {
+    next(): Promise<IteratorResult<ImageGenStreamEventDTO, void>> {
+      if (queue.length > 0) return consume(queue.shift()!);
+      if (terminated) {
+        cleanup(false, true);
+        return Promise.resolve({ done: true, value: undefined });
+      }
+      return new Promise<IteratorResult<ImageGenStreamEventDTO, void>>((resolve, reject) => {
+        pendingNext.push({ resolve, reject });
+      });
+    },
+    return(value?: void): Promise<IteratorResult<ImageGenStreamEventDTO, void>> {
+      const shouldCancel = !terminated && !cancelSent;
+      terminated = true;
+      const pending = pendingNext.splice(0);
+      cleanup(shouldCancel, true);
+      for (const waiter of pending) {
+        waiter.resolve({ done: true, value });
+      }
+      return Promise.resolve({ done: true, value });
+    },
+    throw(error?: unknown): Promise<IteratorResult<ImageGenStreamEventDTO, void>> {
+      const shouldCancel = !terminated && !cancelSent;
+      terminated = true;
+      const pending = pendingNext.splice(0);
+      cleanup(shouldCancel, true);
+      for (const waiter of pending) {
+        waiter.reject(error);
+      }
+      return Promise.reject(error);
+    },
+    [Symbol.asyncIterator](): AsyncGenerator<ImageGenStreamEventDTO, void, void> {
+      return this;
+    },
+    async [Symbol.asyncDispose](): Promise<void> {
+      await this.return();
+    },
+  };
+  return iterator;
 }
 
 // ─── Spindle API (exposed to extensions as globalThis.spindle) ───────────
@@ -2296,6 +2467,9 @@ const spindleApi: RuntimeSpindleAPI = {
     async generate(input: any): Promise<any> {
       const requestId = crypto.randomUUID();
       return request({ type: "image_gen_generate", requestId, input });
+    },
+    generateStream(input: ImageGenStreamRequestDTO): AsyncGenerator<ImageGenStreamEventDTO, void, void> {
+      return requestImageGenerationStream(input);
     },
     async getProviders(userId?: string): Promise<any[]> {
       const requestId = crypto.randomUUID();
@@ -4520,6 +4694,24 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
 
     case "generation_stream_error": {
       const stream = streamingGenerations.get(msg.requestId);
+      if (stream) {
+        if (msg.error.startsWith("AbortError:")) {
+          stream.fail(makeAbortError(msg.error.slice("AbortError:".length).trim()));
+        } else {
+          stream.fail(new Error(msg.error));
+        }
+      }
+      break;
+    }
+
+    case "image_gen_stream_chunk": {
+      const stream = streamingImageGenerations.get(msg.requestId);
+      if (stream) stream.push(msg.event);
+      break;
+    }
+
+    case "image_gen_stream_error": {
+      const stream = streamingImageGenerations.get(msg.requestId);
       if (stream) {
         if (msg.error.startsWith("AbortError:")) {
           stream.fail(makeAbortError(msg.error.slice("AbortError:".length).trim()));

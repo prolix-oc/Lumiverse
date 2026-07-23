@@ -114,6 +114,7 @@ import type * as mediaSvc from "../services/media.service";
 import { spawnAsync } from "./spawn-async";
 import { assembleSpindleBlocks, type SpindleAssembleInput } from "./assembly";
 import { getImageProvider, getImageProviderList } from "../image-gen/registry";
+import type { ImageGenResponse } from "../image-gen/types";
 import "../image-gen/index";
 import { WorkerHostStorageApi } from "./worker-host-storage-api";
 import { WorkerHostStateApi } from "./worker-host-state-api";
@@ -1081,6 +1082,8 @@ export class WorkerHost {
    * `controller.abort()` to tear down the upstream LLM request.
    */
   private generationAbortControllers = new Map<string, AbortController>();
+  /** AbortControllers for in-flight image generation preview streams. */
+  private imageGenerationAbortControllers = new Map<string, AbortController>();
   private interceptorUnregister: (() => void) | null = null;
   private readonly interceptorRegistrations = new Map<string, HostInterceptorRegistration>();
   private readonly interceptorInvocations = new Map<string, HostInterceptorInvocation>();
@@ -1616,6 +1619,10 @@ export class WorkerHost {
       controller.abort();
     }
     this.generationAbortControllers.clear();
+    for (const controller of this.imageGenerationAbortControllers.values()) {
+      controller.abort();
+    }
+    this.imageGenerationAbortControllers.clear();
 
     this.runtimeToken = null;
     this.runtime = null;
@@ -2670,6 +2677,12 @@ export class WorkerHost {
       // ─── Image Generation (gated: "image_gen") ─────────────────────────
       case "image_gen_generate":
         this.handleImageGenGenerate(msg.requestId, msg.input);
+        break;
+      case "image_gen_generate_stream":
+        void this.handleImageGenGenerateStream(msg.requestId, msg.input);
+        break;
+      case "image_gen_cancel_stream":
+        this.handleImageGenCancelStream(msg.requestId);
         break;
       case "image_gen_providers":
         this.handleImageGenProviders(msg.requestId, msg.userId);
@@ -4123,6 +4136,51 @@ export class WorkerHost {
   }
 
   // ─── Image Generation (gated by "image_gen" permission) ────────────
+  private async persistImageGenResponse(
+    resolvedUserId: string,
+    input: { owner_character_id?: unknown; owner_chat_id?: unknown },
+    providerName: string,
+    response: ImageGenResponse,
+  ): Promise<ImageGenResponse & { imageId?: string; imageUrl?: string }> {
+    let imageId: string | undefined;
+    let imageUrl: string | undefined;
+    if (response.imageDataUrl) {
+      try {
+        const { saveImageFromDataUrl } = await import("../services/images.service");
+        const image = await saveImageFromDataUrl(
+          resolvedUserId,
+          response.imageDataUrl,
+          `image-gen-${providerName}-${Date.now()}.png`,
+          {
+            owner_extension_identifier: this.manifest.identifier,
+            owner_character_id: typeof input.owner_character_id === "string" && input.owner_character_id.trim()
+              ? input.owner_character_id.trim()
+              : undefined,
+            owner_chat_id: typeof input.owner_chat_id === "string" && input.owner_chat_id.trim()
+              ? input.owner_chat_id.trim()
+              : undefined,
+          },
+        );
+        imageId = image.id;
+        imageUrl = `/api/v1/image-gen/results/${image.id}`;
+      } catch {
+        // Persistence failure is non-fatal, matching generate().
+      }
+    }
+    return { ...response, imageId, imageUrl };
+  }
+
+  private async rollbackImageGenResponse(
+    resolvedUserId: string,
+    result: { imageId?: string },
+  ): Promise<void> {
+    if (!result.imageId) return;
+    const { deleteImage } = await import("../services/images.service");
+    if (!deleteImage(resolvedUserId, result.imageId)) {
+      throw new Error(`Failed to roll back persisted image "${result.imageId}"`);
+    }
+  }
+
 
   private async handleImageGenGenerate(requestId: string, input: any): Promise<void> {
     if (!this.hasPermission("image_gen")) {
@@ -4168,42 +4226,192 @@ export class WorkerHost {
         parameters: mergedParams,
       });
 
-      // Persist image to the images table
-      let imageId: string | undefined;
-      let imageUrl: string | undefined;
-      if (response.imageDataUrl) {
-        try {
-          const { saveImageFromDataUrl } = await import("../services/images.service");
-          const image = await saveImageFromDataUrl(
-            resolvedUserId,
-            response.imageDataUrl,
-            `image-gen-${connection.provider}-${Date.now()}.png`,
-            {
-              owner_extension_identifier: this.manifest.identifier,
-              owner_character_id: typeof input?.owner_character_id === "string" && input.owner_character_id.trim()
-                ? input.owner_character_id.trim()
-                : undefined,
-              owner_chat_id: typeof input?.owner_chat_id === "string" && input.owner_chat_id.trim()
-                ? input.owner_chat_id.trim()
-                : undefined,
-            }
-          );
-          imageId = image.id;
-          imageUrl = `/api/v1/image-gen/results/${image.id}`;
-        } catch {
-          // Persistence failure is non-fatal
-        }
-      }
+      const result = await this.persistImageGenResponse(
+        resolvedUserId,
+        input,
+        connection.provider,
+        response,
+      );
 
       this.postToWorker({
         type: "response",
         requestId,
-        result: { ...response, imageId, imageUrl },
+        result,
       });
+
     } catch (err: any) {
       this.postToWorker({ type: "response", requestId, error: err.message });
     }
   }
+  private async handleImageGenGenerateStream(
+    requestId: string,
+    input: {
+      connection_id?: string;
+      prompt: string;
+      negativePrompt?: string;
+      model?: string;
+      parameters?: Record<string, unknown>;
+      owner_character_id?: string;
+      owner_chat_id?: string;
+      userId?: string;
+    },
+  ): Promise<void> {
+    const abortController = new AbortController();
+    this.imageGenerationAbortControllers.set(requestId, abortController);
+    const runtimeToken = this.runtimeToken;
+    const isActive = (): boolean =>
+      this.imageGenerationAbortControllers.get(requestId) === abortController
+      && !abortController.signal.aborted
+      && (runtimeToken === null || this.runtimeToken === runtimeToken);
+
+    let stream: AsyncGenerator<
+      { step?: number; totalSteps?: number; preview?: string; nodeId?: string },
+      ImageGenResponse,
+      unknown
+    > | undefined;
+
+    try {
+      if (!this.hasPermission("image_gen")) {
+        throw new Error(
+          `${PERMISSION_DENIED_PREFIX} image_gen — Image generation permission not granted`,
+        );
+      }
+
+      const resolvedUserId = this.resolveEffectiveUserId(input.userId);
+      if (!resolvedUserId) {
+        throw new Error("userId is required for operator-scoped extensions");
+      }
+      this.enforceScopedUser(resolvedUserId);
+      if (!isActive()) throw new DOMException("Aborted", "AbortError");
+
+      const connectionId = input.connection_id || null;
+      const connection = connectionId
+        ? imageGenConnSvc.getConnection(resolvedUserId, connectionId)
+        : imageGenConnSvc.getDefaultConnection(resolvedUserId);
+      if (!connection) {
+        throw new Error(
+          connectionId
+            ? "Image gen connection not found"
+            : "No default image gen connection configured",
+        );
+      }
+
+      const provider = getImageProvider(connection.provider);
+      if (!provider) throw new Error(`Unknown image gen provider: ${connection.provider}`);
+
+      const streamingCapabilities = provider.capabilities.websocketPreviewStreaming;
+      if (streamingCapabilities?.previews !== true || streamingCapabilities.status !== true) {
+        throw new Error(
+          `Image gen provider "${connection.provider}" does not support preview streaming`,
+        );
+      }
+      const generateStream = provider.generateStream;
+      if (typeof generateStream !== "function") {
+        throw new Error(
+          `Image gen provider "${connection.provider}" does not implement preview streaming`,
+        );
+      }
+
+      const { getSecret } = await import("../services/secrets.service");
+      if (!isActive()) throw new DOMException("Aborted", "AbortError");
+      const apiKey = await getSecret(
+        resolvedUserId,
+        imageGenConnSvc.imageGenConnectionSecretKey(connection.id),
+      );
+      if (!isActive()) throw new DOMException("Aborted", "AbortError");
+      if (!apiKey && provider.capabilities.apiKeyRequired) {
+        throw new Error(`No API key for image gen connection "${connection.name}"`);
+      }
+
+      const mergedParams = {
+        ...connection.default_parameters,
+        ...(input.parameters || {}),
+      };
+      if (!isActive()) throw new DOMException("Aborted", "AbortError");
+      stream = generateStream.call(provider, apiKey || "", connection.api_url || "", {
+        prompt: input.prompt || "",
+        negativePrompt: input.negativePrompt,
+        model: input.model || connection.model,
+        parameters: mergedParams,
+        signal: abortController.signal,
+      });
+
+      while (true) {
+        const next = await stream.next();
+        if (!isActive()) throw new DOMException("Aborted", "AbortError");
+        if (next.done) {
+          const result = await this.persistImageGenResponse(
+            resolvedUserId,
+            input,
+            connection.provider,
+            next.value,
+          );
+          if (!isActive()) {
+            await this.rollbackImageGenResponse(resolvedUserId, result);
+            throw new DOMException("Aborted", "AbortError");
+          }
+          this.postToWorker({
+            type: "image_gen_stream_chunk",
+            requestId,
+            event: { type: "done", result },
+          });
+          break;
+        }
+
+        const event = next.value;
+        if (
+          event.step !== undefined
+          || event.totalSteps !== undefined
+          || event.nodeId !== undefined
+        ) {
+          this.postToWorker({
+            type: "image_gen_stream_chunk",
+            requestId,
+            event: {
+              type: "status",
+              ...(event.step === undefined ? {} : { step: event.step }),
+              ...(event.totalSteps === undefined ? {} : { totalSteps: event.totalSteps }),
+              ...(event.nodeId === undefined ? {} : { nodeId: event.nodeId }),
+            },
+          });
+        }
+        if (typeof event.preview === "string") {
+          this.postToWorker({
+            type: "image_gen_stream_chunk",
+            requestId,
+            event: {
+              type: "preview",
+              imageDataUrl: event.preview,
+              ...(event.step === undefined ? {} : { step: event.step }),
+              ...(event.totalSteps === undefined ? {} : { totalSteps: event.totalSteps }),
+              ...(event.nodeId === undefined ? {} : { nodeId: event.nodeId }),
+            },
+          });
+        }
+      }
+    } catch (error) {
+      const aborted = abortController.signal.aborted
+        || (error instanceof Error && error.name === "AbortError");
+      this.postToWorker({
+        type: "image_gen_stream_error",
+        requestId,
+        error: aborted
+          ? "AbortError: Image generation aborted"
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    } finally {
+      if (this.imageGenerationAbortControllers.get(requestId) === abortController) {
+        this.imageGenerationAbortControllers.delete(requestId);
+      }
+    }
+  }
+
+  private handleImageGenCancelStream(requestId: string): void {
+    this.imageGenerationAbortControllers.get(requestId)?.abort();
+  }
+
 
   private handleImageGenProviders(requestId: string, userId?: string): void {
     if (!this.hasPermission("image_gen")) {

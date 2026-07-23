@@ -29,4 +29,9 @@ export interface ImageProviderCapabilities {
   modelListStyle: "static" | "dynamic" | "google";
   staticModels?: Array<{ id: string; label: string }>;
   defaultUrl: string;
+  /** Present only when the provider supports preview/status WebSocket streaming. */
+  websocketPreviewStreaming?: {
+    previews: true;
+    status: true;
+  };
 }

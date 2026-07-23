@@ -10,7 +10,7 @@ import type {
   GenerationResponseDTO as WorkerGenerationResponseDTO,
   GenerationUsageDTO as WorkerGenerationUsageDTO,
   LlmMessageDTO,
-  PromptBlockDTO,
+  PromptBlockSnapshotDTO,
   PromptVariableValuesDTO,
   QuietDispatchReceiptDTO as WorkerQuietDispatchReceiptDTO,
   QuietTrackedRequestDTO as WorkerQuietTrackedRequestDTO,
@@ -53,7 +53,7 @@ export type PrefillChildUse = string & {
 };
 
 export type BoundMessageDTO = LlmMessageDTO;
-export type BoundPromptBlockDTO = PromptBlockDTO;
+export type BoundPromptBlockDTO = PromptBlockSnapshotDTO;
 export type BoundPromptVariableValuesDTO = PromptVariableValuesDTO;
 export type BoundToolDefinitionDTO = ToolSchemaDTO;
 export type BoundAssembleRequestDTO = WorkerBoundAssembleRequestDTO;

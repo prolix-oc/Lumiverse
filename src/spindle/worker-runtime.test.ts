@@ -10,6 +10,8 @@ type RuntimeMessage = {
   result?: unknown;
   messages?: Array<{ role: string; content: string }>;
   __spindle_private_bound?: Record<string, unknown>;
+  input?: unknown;
+  event?: unknown;
   token?: string;
   __spindle_private_frontend?: Record<string, unknown>;
 };
@@ -656,4 +658,317 @@ describe("Worker interceptor lifecycle", () => {
       await stopRuntime(runtime);
     }
   }, { timeout: 30_000 });
+});
+
+describe("Worker image generation stream projection", () => {
+  test("strips AbortSignal, preserves event order, and emits only the first terminal done", async () => {
+    const runtime = await startRuntime(
+      `
+        (async () => {
+          const events = [];
+          for await (const event of spindle.imageGen.generateStream({
+            prompt: "stream test",
+            signal: new AbortController().signal,
+          })) {
+            events.push(event);
+          }
+          spindle.log.info("image-events:" + JSON.stringify(events));
+        })();
+      `,
+      ["image_gen"],
+    );
+    try {
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_generate_stream",
+      );
+      expect(
+        request.input
+          && typeof request.input === "object"
+          && "signal" in request.input
+          ? request.input.signal
+          : undefined,
+      ).toBeUndefined();
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: { type: "status", step: 1, totalSteps: 3 },
+      });
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: { type: "preview", imageDataUrl: "data:image/png;base64,cHJldmlldw==" },
+      });
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: { type: "status", nodeId: "decode" },
+      });
+      const terminal = {
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+          },
+        },
+      };
+      runtime.worker.postMessage(terminal);
+      runtime.worker.postMessage(terminal);
+
+      const result = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message?.startsWith("image-events:") === true,
+      );
+      expect(JSON.parse(result.message!.slice("image-events:".length))).toEqual([
+        { type: "status", step: 1, totalSteps: 3 },
+        { type: "preview", imageDataUrl: "data:image/png;base64,cHJldmlldw==" },
+        { type: "status", nodeId: "decode" },
+        {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+          },
+        },
+      ]);
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+
+  test("converts host aborts and cancels upstream exactly once", async () => {
+    const runtime = await startRuntime(
+      `
+        const controller = new AbortController();
+        spindle.on("IMAGE_STREAM_TEST_ABORT", () => controller.abort("test abort"));
+        (async () => {
+          try {
+            for await (const _event of spindle.imageGen.generateStream({
+              prompt: "abort test",
+              signal: controller.signal,
+            })) {
+              // Host controls the stream in this test.
+            }
+          } catch (error) {
+            spindle.log.info("image-abort:" + error.name);
+          }
+        })();
+      `,
+      ["image_gen"],
+    );
+    try {
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_generate_stream",
+      );
+      runtime.worker.postMessage({
+        type: "event",
+        event: "IMAGE_STREAM_TEST_ABORT",
+        payload: {},
+      });
+      const cancel = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_cancel_stream" && message.requestId === request.requestId,
+      );
+      expect(cancel.requestId).toBe(request.requestId);
+      runtime.worker.postMessage({
+        type: "image_gen_stream_error",
+        requestId: request.requestId,
+        error: "AbortError: Image generation aborted",
+      });
+      await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message === "image-abort:AbortError",
+      );
+      expect(runtime.messages.some(
+        (message) => message.type === "image_gen_cancel_stream" && message.requestId === request.requestId,
+      )).toBe(false);
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+
+  test("cancels the host stream when the consumer breaks before done", async () => {
+    const runtime = await startRuntime(
+      `
+        (async () => {
+          for await (const _event of spindle.imageGen.generateStream({ prompt: "break test" })) {
+            break;
+          }
+          spindle.log.info("image-break:done");
+        })();
+      `,
+      ["image_gen"],
+    );
+    try {
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_generate_stream",
+      );
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: { type: "status", step: 1 },
+      });
+      const cancel = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_cancel_stream" && message.requestId === request.requestId,
+      );
+      expect(cancel.requestId).toBe(request.requestId);
+      await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message === "image-break:done",
+      );
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+  test("queues concurrent next calls FIFO and cleans routing after pending terminal delivery", async () => {
+    const runtime = await startRuntime(
+      `
+        (async () => {
+          const stream = spindle.imageGen.generateStream({ prompt: "fifo test" });
+          const first = stream.next();
+          const second = stream.next();
+          const values = await Promise.all([first, second]);
+          const end = await stream.next();
+          spindle.log.info("image-fifo:" + JSON.stringify({ values, end }));
+        })();
+      `,
+      ["image_gen"],
+    );
+    try {
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_generate_stream",
+      );
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: { type: "status", step: 1 },
+      });
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+          },
+        },
+      });
+      const result = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message?.startsWith("image-fifo:") === true,
+      );
+      expect(JSON.parse(result.message!.slice("image-fifo:".length))).toEqual({
+        values: [
+          { done: false, value: { type: "status", step: 1 } },
+          {
+            done: false,
+            value: {
+              type: "done",
+              result: {
+                imageDataUrl: "data:image/png;base64,ZmluYWw=",
+                model: "test-model",
+                provider: "comfyui",
+              },
+            },
+          },
+        ],
+        end: { done: true },
+      });
+      expect(runtime.messages.some(
+        (message) => message.type === "image_gen_cancel_stream" && message.requestId === request.requestId,
+      )).toBe(false);
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+
+  test("cleans routing immediately for a queued terminal event", async () => {
+    const runtime = await startRuntime(
+      `
+        (async () => {
+          const stream = spindle.imageGen.generateStream({ prompt: "queued done" });
+          const release = new Promise<void>((resolve) => {
+            spindle.on("IMAGE_QUEUED_RELEASE", () => resolve());
+          });
+          spindle.log.info("image-queued-ready");
+          await release;
+          const event = await stream.next();
+          spindle.log.info("image-queued:" + JSON.stringify(event));
+        })();
+      `,
+      ["image_gen"],
+    );
+    try {
+      const request = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "image_gen_generate_stream",
+      );
+      await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message === "image-queued-ready",
+      );
+      runtime.worker.postMessage({
+        type: "image_gen_stream_chunk",
+        requestId: request.requestId,
+        event: {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+          },
+        },
+      });
+      runtime.worker.postMessage({
+        type: "event",
+        event: "IMAGE_QUEUED_RELEASE",
+        payload: {},
+      });
+      const result = await waitForMessage(
+        runtime.messages,
+        runtime.waiters,
+        (message) => message.type === "log" && message.message?.startsWith("image-queued:") === true,
+      );
+      expect(JSON.parse(result.message!.slice("image-queued:".length))).toEqual({
+        done: false,
+        value: {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+          },
+        },
+      });
+      expect(runtime.messages.some(
+        (message) => message.type === "image_gen_cancel_stream" && message.requestId === request.requestId,
+      )).toBe(false);
+    } finally {
+      await stopRuntime(runtime);
+    }
+  }, { timeout: 30_000 });
+
 });

@@ -15,6 +15,10 @@ import * as boundGeneration from "./bound-generation";
 import * as managerSvc from "./manager.service";
 import * as dispatchStateSvc from "../services/dispatch-state.service";
 import { WorkerHost } from "./worker-host";
+import * as imageGenConnSvc from "../services/image-gen-connections.service";
+import * as imageRegistry from "../image-gen/registry";
+import * as secretsSvc from "../services/secrets.service";
+import * as imagesSvc from "../services/images.service";
 
 function makeManifest(identifier: string): SpindleManifest {
   return {
@@ -81,6 +85,7 @@ type CapturedRuntimeMessage = {
   messages?: Array<{ role: string; content: string }>;
   context?: Record<string, unknown>;
   finalResponse?: unknown;
+  event?: unknown;
   __spindle_private_bound?: TestBoundEnvelope;
   result?: unknown;
   error?: unknown;
@@ -108,6 +113,9 @@ type WorkerHostInternals = {
   interceptorInvocations: Map<string, unknown>;
   interceptorControllersBySignal: Map<AbortSignal, unknown>;
   handleCancelGeneration: (requestId: string, envelope?: TestBoundEnvelope) => void;
+  handleImageGenGenerateStream: (requestId: string, input: unknown) => Promise<void>;
+  handleImageGenCancelStream: (requestId: string) => void;
+  imageGenerationAbortControllers: Map<string, AbortController>;
   sendFrontendMessage: (payload: unknown, userId: string) => void;
   handleMessage: (message: unknown) => void;
   handleDispatchResolution: (message: {
@@ -780,4 +788,270 @@ describe("WorkerHost interceptor transport boundary", () => {
       await dispatchB;
     }
   }, { timeout: 1_000 });
+});
+
+describe("WorkerHost image generation stream bridge", () => {
+  function imageConnection() {
+    return {
+      id: "image-connection-1",
+      name: "Test image connection",
+      provider: "comfyui",
+      api_url: "http://image.test",
+      model: "test-model",
+      default_parameters: { steps: 12, width: 512 },
+    };
+  }
+
+  test("enforces permission and provider preview-stream capability", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const connectionSpy = spyOn(imageGenConnSvc, "getConnection").mockReturnValue(imageConnection() as never);
+    const providerSpy = spyOn(imageRegistry, "getImageProvider").mockReturnValue({
+      name: "sdapi",
+      capabilities: {
+        parameters: {},
+        apiKeyRequired: false,
+        modelListStyle: "dynamic",
+        defaultUrl: "",
+      },
+      generateStream: (async function* () {
+        return {
+          imageDataUrl: "data:image/png;base64,ZmFpbA==",
+          model: "test-model",
+          provider: "sdapi",
+        };
+      }) as never,
+    } as never);
+    try {
+      internals.hasPermission = () => false;
+      await internals.handleImageGenGenerateStream("image-permission-denied", {
+        prompt: "test",
+        connection_id: "image-connection-1",
+        userId: "user-1",
+      });
+      const permissionError = messages.find(
+        (message) => message.requestId === "image-permission-denied",
+      );
+      expect(permissionError?.type).toBe("image_gen_stream_error");
+      expect(permissionError?.error).toContain("image_gen");
+
+      internals.hasPermission = () => true;
+      await internals.handleImageGenGenerateStream("image-capability-denied", {
+        prompt: "test",
+        connection_id: "image-connection-1",
+        userId: "user-1",
+      });
+      const capabilityError = messages.find(
+        (message) => message.requestId === "image-capability-denied",
+      );
+      expect(capabilityError?.type).toBe("image_gen_stream_error");
+      expect(capabilityError?.error).toContain("preview streaming");
+    } finally {
+      providerSpy.mockRestore();
+      connectionSpy.mockRestore();
+      internals.cleanup();
+    }
+  });
+
+  test("forwards ordered status/preview events and persists the terminal result", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const connectionSpy = spyOn(imageGenConnSvc, "getConnection").mockReturnValue(imageConnection() as never);
+    const secretSpy = spyOn(secretsSvc, "getSecret").mockResolvedValue("secret");
+    let providerRequest: {
+      parameters: Record<string, unknown>;
+      signal?: AbortSignal;
+    } | undefined;
+    const provider = {
+      name: "comfyui",
+      capabilities: {
+        parameters: {},
+        apiKeyRequired: true,
+        modelListStyle: "dynamic",
+        defaultUrl: "",
+        websocketPreviewStreaming: { previews: true, status: true },
+      },
+      generateStream: (
+        _apiKey: string,
+        _apiUrl: string,
+        request: { parameters: Record<string, unknown>; signal?: AbortSignal },
+      ) => (async function* () {
+        providerRequest = request;
+        yield { step: 1, totalSteps: 2 };
+        yield { preview: "data:image/png;base64,cHJldmlldw==", step: 1, totalSteps: 2 };
+        return {
+          imageDataUrl: "data:image/png;base64,ZmluYWw=",
+          model: "test-model",
+          provider: "comfyui",
+        };
+      })(),
+    };
+    const providerSpy = spyOn(imageRegistry, "getImageProvider").mockReturnValue(provider as never);
+    const saveSpy = spyOn(imagesSvc, "saveImageFromDataUrl").mockResolvedValue({ id: "image-1" } as never);
+    try {
+      await internals.handleImageGenGenerateStream("image-stream-success", {
+        prompt: "test",
+        connection_id: "image-connection-1",
+        parameters: { width: 768 },
+        owner_character_id: "character-1",
+        owner_chat_id: "chat-1",
+        userId: "user-1",
+      });
+
+      expect(providerRequest?.parameters).toEqual({ steps: 12, width: 768 });
+      expect(providerRequest?.signal?.aborted ?? false).toBe(false);
+      expect(saveSpy).toHaveBeenCalledTimes(1);
+      expect(saveSpy.mock.calls[0]?.[2]).toMatch(/^image-gen-comfyui-\d+\.png$/);
+      expect(saveSpy.mock.calls[0]?.[3]).toEqual({
+        owner_extension_identifier: expect.any(String),
+        owner_character_id: "character-1",
+        owner_chat_id: "chat-1",
+      });
+
+      const streamEvents = messages
+        .filter((message) => message.requestId === "image-stream-success")
+        .map((message) => message.event);
+      expect(streamEvents).toEqual([
+        { type: "status", step: 1, totalSteps: 2 },
+        { type: "status", step: 1, totalSteps: 2 },
+        {
+          type: "preview",
+          imageDataUrl: "data:image/png;base64,cHJldmlldw==",
+          step: 1,
+          totalSteps: 2,
+        },
+        {
+          type: "done",
+          result: {
+            imageDataUrl: "data:image/png;base64,ZmluYWw=",
+            model: "test-model",
+            provider: "comfyui",
+            imageId: "image-1",
+            imageUrl: "/api/v1/image-gen/results/image-1",
+          },
+        },
+      ]);
+      expect(internals.imageGenerationAbortControllers.size).toBe(0);
+    } finally {
+      saveSpy.mockRestore();
+      providerSpy.mockRestore();
+      secretSpy.mockRestore();
+      connectionSpy.mockRestore();
+      internals.cleanup();
+    }
+  });
+
+  test("aborts the provider stream and emits one terminal error on consumer cancellation", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const connectionSpy = spyOn(imageGenConnSvc, "getConnection").mockReturnValue(imageConnection() as never);
+    const secretSpy = spyOn(secretsSvc, "getSecret").mockResolvedValue("");
+    const started = Promise.withResolvers<void>();
+    let providerSignal: AbortSignal | undefined;
+    const provider = {
+      name: "comfyui",
+      capabilities: {
+        parameters: {},
+        apiKeyRequired: false,
+        modelListStyle: "dynamic",
+        defaultUrl: "",
+        websocketPreviewStreaming: { previews: true, status: true },
+      },
+      generateStream: (
+        _apiKey: string,
+        _apiUrl: string,
+        request: { signal?: AbortSignal },
+      ) => (async function* () {
+        providerSignal = request.signal;
+        started.resolve();
+        yield { step: 1 };
+        await new Promise<void>((resolve) => {
+          request.signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        throw new DOMException("Aborted", "AbortError");
+      })(),
+    };
+    const providerSpy = spyOn(imageRegistry, "getImageProvider").mockReturnValue(provider as never);
+    try {
+      const operation = internals.handleImageGenGenerateStream("image-stream-cancel", {
+        prompt: "test",
+        connection_id: "image-connection-1",
+        userId: "user-1",
+      });
+      await started.promise;
+      internals.handleImageGenCancelStream("image-stream-cancel");
+      await operation;
+
+      expect(providerSignal?.aborted ?? false).toBe(true);
+      expect(internals.imageGenerationAbortControllers.size).toBe(0);
+      const terminalEvents = messages.filter(
+        (message) => message.requestId === "image-stream-cancel",
+      );
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0]?.type).toBe("image_gen_stream_error");
+      expect(terminalEvents.filter((message) => message.type === "image_gen_stream_error")).toHaveLength(1);
+    } finally {
+      providerSpy.mockRestore();
+      secretSpy.mockRestore();
+      connectionSpy.mockRestore();
+      internals.cleanup();
+    }
+  });
+  test("rolls back a just-persisted image when cancellation races terminal persistence", async () => {
+    const { internals, messages } = makeTestHost(false);
+    const connectionSpy = spyOn(imageGenConnSvc, "getConnection").mockReturnValue(imageConnection() as never);
+    const secretSpy = spyOn(secretsSvc, "getSecret").mockResolvedValue("");
+    const saveStarted = Promise.withResolvers<void>();
+    const releaseSave = Promise.withResolvers<void>();
+    const provider = {
+      name: "comfyui",
+      capabilities: {
+        parameters: {},
+        apiKeyRequired: false,
+        modelListStyle: "dynamic",
+        defaultUrl: "",
+        websocketPreviewStreaming: { previews: true, status: true },
+      },
+      generateStream: () => (async function* () {
+        return {
+          imageDataUrl: "data:image/png;base64,ZmluYWw=",
+          model: "test-model",
+          provider: "comfyui",
+        };
+      })(),
+    };
+    const providerSpy = spyOn(imageRegistry, "getImageProvider").mockReturnValue(provider as never);
+    const saveSpy = spyOn(imagesSvc, "saveImageFromDataUrl").mockImplementation(async () => {
+      saveStarted.resolve();
+      await releaseSave.promise;
+      return { id: "image-cancelled" } as never;
+    });
+    const deleteSpy = spyOn(imagesSvc, "deleteImage").mockReturnValue(true);
+    try {
+      const operation = internals.handleImageGenGenerateStream("image-persist-cancel", {
+        prompt: "test",
+        connection_id: "image-connection-1",
+        userId: "user-1",
+      });
+      await saveStarted.promise;
+      internals.handleImageGenCancelStream("image-persist-cancel");
+      releaseSave.resolve();
+      await operation;
+
+      expect(deleteSpy).toHaveBeenCalledWith("user-1", "image-cancelled");
+      expect(messages.filter(
+        (message) => message.requestId === "image-persist-cancel"
+          && message.type === "image_gen_stream_chunk"
+          && (message.event as { type?: string } | undefined)?.type === "done",
+      )).toHaveLength(0);
+      expect(messages.filter(
+        (message) => message.requestId === "image-persist-cancel"
+          && message.type === "image_gen_stream_error",
+      )).toHaveLength(1);
+    } finally {
+      deleteSpy.mockRestore();
+      saveSpy.mockRestore();
+      providerSpy.mockRestore();
+      secretSpy.mockRestore();
+      connectionSpy.mockRestore();
+      internals.cleanup();
+    }
+  });
 });

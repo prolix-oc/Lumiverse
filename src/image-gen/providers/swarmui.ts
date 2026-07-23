@@ -6,6 +6,10 @@ import { parseProviderErrorBody, ProviderRequestError, readBoundedText, throwPro
 import { openWebSocket } from "./ws-helpers"
 import { executeComfyWorkflow, executeComfyWorkflowStream } from "./comfy-runner"
 
+function createAbortError(): DOMException {
+  return new DOMException("Aborted", "AbortError")
+}
+
 const PARAMETERS: ImageParameterSchemaMap = {
   width: {
     type: "integer",
@@ -321,6 +325,7 @@ export class SwarmUIImageProvider implements ImageProvider {
     apiKeyRequired: false,
     modelListStyle: "dynamic",
     defaultUrl: "http://localhost:7801",
+    websocketPreviewStreaming: { previews: true, status: true },
   }
 
   // ── Session management ────────────────────────────────────────────────
@@ -713,36 +718,46 @@ export class SwarmUIImageProvider implements ImageProvider {
         request.signal,
         { label: "SwarmUI/ComfyBackendDirect", cookie: token ? `swarm_token=${token}` : undefined, wsTimeoutMs: 15_000 },
       )
-      while (true) {
-        const next = await stream.next()
-        if (next.done) {
-          return {
-            imageDataUrl: next.value.imageDataUrl,
-            model: this.resolvedModel(request) || "comfyui-workflow",
-            provider: this.name,
+      try {
+        while (true) {
+          const next = await stream.next()
+          if (next.done) {
+            return {
+              imageDataUrl: next.value.imageDataUrl,
+              model: this.resolvedModel(request) || "comfyui-workflow",
+              provider: this.name,
+            }
+          }
+          const event = next.value
+          if (event.type === "progress") {
+            yield { step: event.step, totalSteps: event.totalSteps }
+          } else if (event.type === "executing") {
+            yield { nodeId: event.nodeId }
+          } else if (event.type === "preview") {
+            yield { preview: event.imageBase64 }
           }
         }
-        const event = next.value
-        if (event.type === "progress") {
-          yield { step: event.step, totalSteps: event.totalSteps }
-        } else if (event.type === "executing") {
-          yield { nodeId: event.nodeId }
-        } else if (event.type === "preview") {
-          yield { preview: event.imageBase64 }
-        }
+      } finally {
+        await stream.return({ imageDataUrl: "" })
       }
     }
 
     const sessionId = await this.getSession(base, token, request.signal)
-
-    const wsUrl = base.replace(/^http/, "ws") + "/API/GenerateText2ImageWS"
-    const ws = await openWebSocket(wsUrl, { label: "SwarmUI", timeoutMs: 15_000 })
-
-    // Send the generation parameters as the initial message
     const body = this.buildBody(sessionId, request)
-    ws.send(JSON.stringify(body))
+    const wsUrl = base.replace(/^http/, "ws") + "/API/GenerateText2ImageWS"
+    const ws = await openWebSocket(wsUrl, {
+      label: "SwarmUI",
+      timeoutMs: 15_000,
+      headers: this.buildHeaders(token),
+      signal: request.signal,
+    })
 
-    const abortHandler = () => {
+    let started = false
+    let terminal = false
+    let interruptSent = false
+    const interrupt = (): void => {
+      if (!started || interruptSent) return
+      interruptSent = true
       fetch(`${base}/API/InterruptAll`, {
         method: "POST",
         headers: this.buildHeaders(token),
@@ -750,11 +765,22 @@ export class SwarmUIImageProvider implements ImageProvider {
         signal: AbortSignal.timeout(5000),
       }).catch(() => {})
     }
+    const abortHandler = (): void => {
+      if (terminal) return
+      interrupt()
+    }
     request.signal?.addEventListener("abort", abortHandler, { once: true })
-
     let imagePath: string | null = null
 
     try {
+      if (request.signal?.aborted) throw createAbortError()
+      ws.send(JSON.stringify(body))
+      started = true
+      if (request.signal?.aborted) {
+        abortHandler()
+        throw createAbortError()
+      }
+
       for await (const event of this.wsEvents(ws, request.signal)) {
         if (event.type === "progress") {
           yield {
@@ -765,13 +791,21 @@ export class SwarmUIImageProvider implements ImageProvider {
         } else if (event.type === "image") {
           imagePath = event.path
         } else if (event.type === "error") {
+          terminal = true
           throw event.error
         } else if (event.type === "complete") {
+          terminal = true
           break
         }
       }
+    } catch (error) {
+      if (request.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw createAbortError()
+      }
+      throw error
     } finally {
       request.signal?.removeEventListener("abort", abortHandler)
+      if (!terminal) interrupt()
       ws.close()
     }
 
@@ -892,19 +926,21 @@ export class SwarmUIImageProvider implements ImageProvider {
     | { type: "complete" }
     | { type: "error"; error: ProviderRequestError }
   > {
-    const queue: Array<any> = []
+    type SwarmEvent =
+      | { type: "progress"; step: number; totalSteps: number; preview?: string }
+      | { type: "image"; path: string }
+      | { type: "complete" }
+      | { type: "error"; error: ProviderRequestError }
+    const queue: SwarmEvent[] = []
     let resolve: (() => void) | null = null
     let done = false
 
-    const enqueue = (event: any) => {
+    const enqueue = (event: SwarmEvent): void => {
       queue.push(event)
-      if (resolve) {
-        resolve()
-        resolve = null
-      }
+      resolve?.()
+      resolve = null
     }
-
-    ws.addEventListener("message", (evt) => {
+    const onMessage = (evt: MessageEvent): void => {
       if (typeof evt.data !== "string") return
       try {
         const msg = JSON.parse(evt.data) as Record<string, any>
@@ -944,37 +980,46 @@ export class SwarmUIImageProvider implements ImageProvider {
       } catch {
         // Ignore malformed JSON
       }
-    })
-
-    ws.addEventListener("close", () => {
+    }
+    const onClose = (): void => {
       done = true
-      if (resolve) {
-        resolve()
-        resolve = null
-      }
-    })
-
-    signal?.addEventListener("abort", () => {
+      resolve?.()
+      resolve = null
+    }
+    const onAbort = (): void => {
       done = true
-      if (resolve) {
-        resolve()
-        resolve = null
-      }
-    })
+      queue.length = 0
+      resolve?.()
+      resolve = null
+    }
 
-    while (!done) {
-      if (queue.length === 0) {
-        await new Promise<void>((r) => {
-          resolve = r
-        })
-      }
-      while (queue.length > 0) {
-        const event = queue.shift()!
-        yield event
-        if (event.type === "complete" || event.type === "error") {
-          return
+    ws.addEventListener("message", onMessage)
+    ws.addEventListener("close", onClose)
+    signal?.addEventListener("abort", onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+    try {
+      while (!done || queue.length > 0) {
+        if (queue.length === 0) {
+          if (done) break
+          await new Promise<void>((r) => {
+            resolve = r
+          })
+        }
+        while (queue.length > 0) {
+          const event = queue.shift()!
+          yield event
+          if (event.type === "complete" || event.type === "error") {
+            return
+          }
         }
       }
+      if (signal?.aborted) throw createAbortError()
+    } finally {
+      ws.removeEventListener("message", onMessage)
+      ws.removeEventListener("close", onClose)
+      signal?.removeEventListener("abort", onAbort)
+      queue.length = 0
+      resolve = null
     }
   }
 }

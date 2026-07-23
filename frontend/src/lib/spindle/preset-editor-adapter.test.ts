@@ -102,7 +102,7 @@ describe('preset editor draft adapter', () => {
       ...forgedSealedFields,
       id: 'new-block',
       name: 'Shared',
-    }
+    } as unknown as typeof firstDraftBlock
     draft.blocks = [forgedNewBlock, secondDraftBlock, firstDraftBlock]
     const next = applyPresetEditorDraft(current, draft)
 

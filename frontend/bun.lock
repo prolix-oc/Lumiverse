@@ -29,7 +29,7 @@
         "i18next": "^26.2.0",
         "i18next-browser-languagedetector": "^8.2.1",
         "lucide-react": "^0.468.0",
-        "lumiverse-spindle-types": "0.6.6",
+        "lumiverse-spindle-types": "git+https://github.com/TheLiquorPriest/lumiverse-spindle-types.git#dcc7acbc0f3bf9d17ff5b8229b5731397d469dc3",
         "marked": "^15.0.4",
         "motion": "^12.0.0",
         "react": "^19.2.6",
@@ -916,7 +916,7 @@
 
     "lucide-react": ["lucide-react@0.468.0", "", { "peerDependencies": { "react": "^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0-rc" } }, "sha512-6koYRhnM2N0GGZIdXzSeiNwguv1gt/FAjZOiPl76roBi3xKEXa4WmfpxgQwTTL4KipXjefrnf3oV4IsYhi4JFA=="],
 
-    "lumiverse-spindle-types": ["lumiverse-spindle-types@0.6.6", "", {}, "sha512-ttZd84XsVGXvEhsuN7K44qGOhn5LR1x5i2YEjvgwuRGge8EoPBFxAGzy7L0qz/oPoShyghY9+ComPYypucJEKQ=="],
+    "lumiverse-spindle-types": ["lumiverse-spindle-types@github:TheLiquorPriest/lumiverse-spindle-types#dcc7acb", {}, "TheLiquorPriest-lumiverse-spindle-types-dcc7acb", "sha512-NJcea9fO4z7euf1pxzb7l7aaDJvI4Dq/9e5RQjSpuQvtit8uda+25n0tHo2BwoHUylFiHfLWmzXV7Q39+HiGKg=="],
 
     "magic-string": ["magic-string@0.30.21", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ=="],
 

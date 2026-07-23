@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { SwarmUIImageProvider } from "./swarmui";
+import { ComfyUIImageProvider } from "./comfyui";
+import { openWebSocket } from "./ws-helpers";
 import { ProviderRequestError } from "../../utils/provider-errors";
 import type { ImageGenRequest } from "../types";
 
@@ -127,6 +129,111 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+type TestWebSocketListener = (event: Event | MessageEvent) => void;
+
+class TestWebSocket {
+  static autoOpen = true;
+  static instances: TestWebSocket[] = [];
+
+  readonly url: string;
+  readonly headers: Record<string, string> | undefined;
+  readonly sent: string[] = [];
+  readyState = 0;
+  private readonly listeners = new Map<string, Set<TestWebSocketListener>>();
+
+  constructor(url: string, options?: { headers?: Record<string, string> }) {
+    this.url = url;
+    this.headers = options?.headers;
+    TestWebSocket.instances.push(this);
+    if (TestWebSocket.autoOpen) queueMicrotask(() => this.open());
+  }
+
+  addEventListener(type: string, listener: TestWebSocketListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<TestWebSocketListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: TestWebSocketListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this.emit("close", new Event("close"));
+  }
+
+  open(): void {
+    if (this.readyState !== 0) return;
+    this.readyState = 1;
+    this.emit("open", new Event("open"));
+  }
+
+  emitMessage(data: unknown): void {
+    this.emit("message", { data } as MessageEvent);
+  }
+
+  listenerCount(): number {
+    return [...this.listeners.values()].reduce((count, listeners) => count + listeners.size, 0);
+  }
+
+  private emit(type: string, event: Event | MessageEvent): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function trackAbortListeners(signal: AbortSignal): {
+  active: Set<EventListenerOrEventListenerObject>;
+  restore(): void;
+} {
+  const active = new Set<EventListenerOrEventListenerObject>();
+  const originalAdd = signal.addEventListener;
+  const originalRemove = signal.removeEventListener;
+  signal.addEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    if (type === "abort" && listener) {
+      active.add(listener as EventListenerOrEventListenerObject);
+    }
+    originalAdd.call(signal, type, listener as EventListenerOrEventListenerObject, options);
+  }) as typeof signal.addEventListener;
+  signal.removeEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    if (type === "abort" && listener) {
+      active.delete(listener as EventListenerOrEventListenerObject);
+    }
+    originalRemove.call(signal, type, listener as EventListenerOrEventListenerObject, options);
+  }) as typeof signal.removeEventListener;
+  return {
+    active,
+    restore() {
+      signal.addEventListener = originalAdd;
+      signal.removeEventListener = originalRemove;
+    },
+  };
 }
 
 
@@ -961,6 +1068,549 @@ describe("SwarmUIImageProvider — model discovery", () => {
       expect(listRequests).toBe(promotionStart + 130);
     } finally {
       Date.now = originalNow;
+    }
+  });
+});
+
+describe("Image provider preview streaming capabilities", () => {
+  test("advertises preview/status streaming only for WebSocket-capable providers", () => {
+    expect(new ComfyUIImageProvider().capabilities.websocketPreviewStreaming).toEqual({
+      previews: true,
+      status: true,
+    });
+    expect(new SwarmUIImageProvider().capabilities.websocketPreviewStreaming).toEqual({
+      previews: true,
+      status: true,
+    });
+  });
+});
+
+describe("Image provider streaming lifecycle", () => {
+  let fetchStub: InstalledFetch;
+
+  afterEach(() => fetchStub?.restore());
+  test("aborts a pending WebSocket handshake and removes every listener", async () => {
+    const originalWebSocket = globalThis.WebSocket;
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = false;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+    try {
+      const controller = new AbortController();
+      const pending = openWebSocket("ws://stream-test.invalid/ws", {
+        label: "stream-test",
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      expect(ws?.listenerCount()).toBe(3);
+
+      controller.abort("test abort");
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(ws?.readyState).toBe(3);
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.autoOpen = true;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("sends Swarm auth headers and interrupts exactly once when a consumer breaks", async () => {
+    const base = uniqueBase();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) {
+        return Response.json({ session_id: "session-stream" });
+      }
+      if (call.url === `${base}/API/InterruptAll`) {
+        return Response.json({});
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new SwarmUIImageProvider().generateStream("secret-token", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: {},
+      });
+      const first = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      await flushMicrotasks();
+      expect(ws?.headers).toEqual({
+        "Content-Type": "application/json",
+        Cookie: "swarm_token=secret-token",
+      });
+      expect(ws?.sent).toHaveLength(1);
+
+      ws?.emitMessage(JSON.stringify({ gen_progress: { overall_percent: 0.25 } }));
+      await expect(first).resolves.toEqual({
+        done: false,
+        value: { step: 25, totalSteps: 100 },
+      });
+
+      await stream.return({ imageDataUrl: "", model: "sd_xl", provider: "swarmui" });
+      const interrupts = fetchStub.calls.filter((call) => call.url === `${base}/API/InterruptAll`);
+      expect(interrupts).toHaveLength(1);
+      expect(interrupts[0]?.body).toEqual({ session_id: "session-stream" });
+      expect(ws?.readyState).toBe(3);
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("preserves Comfy encoded preview MIME and ignores unsupported binary frames", async () => {
+    const base = uniqueBase();
+    const prompt = deferred<Response>();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/prompt`) {
+        return prompt.promise;
+      }
+      if (call.url === `${base}/history/prompt-1`) {
+        return Response.json({
+          "prompt-1": {
+            outputs: {
+              "node-1": {
+                images: [{ filename: "result.jpg", subfolder: "", type: "output" }],
+              },
+            },
+          },
+        });
+      }
+      if (call.url.includes("/view?")) {
+        return new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: { "Content-Type": "image/jpeg" },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new ComfyUIImageProvider().generateStream("", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: { workflow: { "node-1": {} } },
+      });
+      const first = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      expect(ws).toBeDefined();
+      prompt.resolve(Response.json({ prompt_id: "prompt-1" }));
+      await flushMicrotasks();
+
+      const previewBytes = new Uint8Array(10);
+      new DataView(previewBytes.buffer).setUint32(0, 1);
+      new DataView(previewBytes.buffer).setUint32(4, 1);
+      previewBytes.set([1, 2], 8);
+      ws?.emitMessage(previewBytes.buffer);
+      await expect(first).resolves.toEqual({
+        done: false,
+        value: { preview: "data:image/jpeg;base64,AQI=" },
+      });
+      const unsupported = new Uint8Array(10);
+      new DataView(unsupported.buffer).setUint32(0, 1);
+      new DataView(unsupported.buffer).setUint32(4, 3);
+      ws?.emitMessage(unsupported.buffer);
+      ws?.emitMessage(JSON.stringify({
+        type: "executing",
+        data: { prompt_id: "prompt-1", node: null },
+      }));
+      const result = await stream.next();
+      expect(result.done).toBe(true);
+      if (!result.done) throw new Error("Expected Comfy stream to complete");
+      expect(result.value.imageDataUrl).toBe("data:image/jpeg;base64,CQgH");
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+  test("does not interrupt Comfy after terminal completion during result fetch", async () => {
+    const base = uniqueBase();
+    const prompt = deferred<Response>();
+    const history = deferred<Response>();
+    const image = deferred<Response>();
+    const controller = new AbortController();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/prompt`) return prompt.promise;
+      if (call.url === `${base}/history/prompt-terminal`) return history.promise;
+      if (call.url.includes("/view?")) return image.promise;
+      if (call.url.endsWith("/interrupt")) return Response.json({});
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new ComfyUIImageProvider().generateStream("", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        signal: controller.signal,
+        parameters: { workflow: { "node-1": {} } },
+      });
+      const pending = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      prompt.resolve(Response.json({ prompt_id: "prompt-terminal" }));
+      await flushMicrotasks();
+      ws?.emitMessage(JSON.stringify({
+        type: "executing",
+        data: { prompt_id: "prompt-terminal", node: null },
+      }));
+      await flushMicrotasks();
+      expect(fetchStub.calls.some((call) => call.url === `${base}/history/prompt-terminal`)).toBe(true);
+
+      controller.abort("late abort");
+      expect(fetchStub.calls.filter((call) => call.url.endsWith("/interrupt"))).toHaveLength(0);
+      history.resolve(Response.json({
+        "prompt-terminal": {
+          outputs: {
+            "node-1": {
+              images: [{ filename: "result.png", subfolder: "", type: "output" }],
+            },
+          },
+        },
+      }));
+      image.resolve(new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }));
+      const result = await pending;
+      expect(result.done).toBe(true);
+      if (!result.done) throw new Error("Expected Comfy stream to complete");
+      expect(result.value.imageDataUrl).toBe("data:image/png;base64,AQID");
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("does not interrupt Swarm after terminal completion during image fetch", async () => {
+    const base = uniqueBase();
+    const session = deferred<Response>();
+    const image = deferred<Response>();
+    const controller = new AbortController();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) return session.promise;
+      if (call.url === `${base}/out.png`) return image.promise;
+      if (call.url === `${base}/API/InterruptAll`) return Response.json({});
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new SwarmUIImageProvider().generateStream("secret-token", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        signal: controller.signal,
+        parameters: {},
+      });
+      const pending = stream.next();
+      await flushMicrotasks();
+      session.resolve(Response.json({ session_id: "session-terminal" }));
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      ws?.emitMessage(JSON.stringify({ image: "out.png" }));
+      ws?.emitMessage(JSON.stringify({ discard_indices: [] }));
+      await flushMicrotasks();
+      expect(fetchStub.calls.some((call) => call.url === `${base}/out.png`)).toBe(true);
+
+      controller.abort("late abort");
+      expect(fetchStub.calls.filter((call) => call.url === `${base}/API/InterruptAll`)).toHaveLength(0);
+      image.resolve(new Response(new Uint8Array([4, 5, 6]), {
+        status: 200,
+        headers: { "Content-Type": "image/png" },
+      }));
+      const result = await pending;
+      expect(result.done).toBe(true);
+      if (!result.done) throw new Error("Expected Swarm stream to complete");
+      expect(result.value.imageDataUrl).toBe("data:image/png;base64,BAUG");
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("drains a queued Comfy terminal event after the socket closes", async () => {
+    const base = uniqueBase();
+    const prompt = deferred<Response>();
+    const controller = new AbortController();
+    const abortListeners = trackAbortListeners(controller.signal);
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/prompt`) return prompt.promise;
+      if (call.url === `${base}/history/prompt-paused`) {
+        return Response.json({
+          "prompt-paused": {
+            outputs: {
+              "node-1": {
+                images: [{ filename: "result.png", subfolder: "", type: "output" }],
+              },
+            },
+          },
+        });
+      }
+      if (call.url.includes("/view?")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+      if (call.url.endsWith("/interrupt")) return Response.json({});
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new ComfyUIImageProvider().generateStream("", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        signal: controller.signal,
+        parameters: { workflow: { "node-1": {} } },
+      });
+      const first = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      prompt.resolve(Response.json({ prompt_id: "prompt-paused" }));
+      await flushMicrotasks();
+      ws?.emitMessage(JSON.stringify({
+        type: "progress",
+        data: { prompt_id: "prompt-paused", value: 1, max: 2 },
+      }));
+      await expect(first).resolves.toEqual({
+        done: false,
+        value: { step: 1, totalSteps: 2 },
+      });
+
+      ws?.emitMessage(JSON.stringify({
+        type: "executing",
+        data: { prompt_id: "prompt-paused", node: null },
+      }));
+      ws?.close();
+      const result = await stream.next();
+      expect(result.done).toBe(true);
+      if (!result.done) throw new Error("Expected Comfy stream to complete");
+      expect(result.value.imageDataUrl).toBe("data:image/png;base64,AQID");
+      expect(fetchStub.calls.filter((call) => call.url.endsWith("/interrupt"))).toHaveLength(0);
+      expect(ws?.listenerCount()).toBe(0);
+      expect(abortListeners.active.size).toBe(0);
+    } finally {
+      abortListeners.restore();
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("drains queued Swarm completion after the socket closes", async () => {
+    const base = uniqueBase();
+    const controller = new AbortController();
+    const abortListeners = trackAbortListeners(controller.signal);
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) {
+        return Response.json({ session_id: "session-paused" });
+      }
+      if (call.url === `${base}/out.png`) {
+        return new Response(new Uint8Array([4, 5, 6]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        });
+      }
+      if (call.url === `${base}/API/InterruptAll`) return Response.json({});
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new SwarmUIImageProvider().generateStream("secret-token", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        signal: controller.signal,
+        parameters: {},
+      });
+      const first = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      ws?.emitMessage(JSON.stringify({ gen_progress: { overall_percent: 0.25 } }));
+      await expect(first).resolves.toEqual({
+        done: false,
+        value: { step: 25, totalSteps: 100 },
+      });
+
+      ws?.emitMessage(JSON.stringify({ image: "out.png" }));
+      ws?.emitMessage(JSON.stringify({ discard_indices: [] }));
+      ws?.close();
+      const result = await stream.next();
+      expect(result.done).toBe(true);
+      if (!result.done) throw new Error("Expected Swarm stream to complete");
+      expect(result.value.imageDataUrl).toBe("data:image/png;base64,BAUG");
+      expect(fetchStub.calls.filter((call) => call.url === `${base}/API/InterruptAll`)).toHaveLength(0);
+      expect(ws?.listenerCount()).toBe(0);
+      expect(abortListeners.active.size).toBe(0);
+    } finally {
+      abortListeners.restore();
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("builds the Swarm request before opening its WebSocket", async () => {
+    const base = uniqueBase();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) {
+        return Response.json({ session_id: "session-preflight" });
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = false;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new SwarmUIImageProvider().generateStream("secret-token", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: { rawRequestOverride: "{not valid json" },
+      });
+      await expect(stream.next()).rejects.toThrow(/not valid JSON/);
+      expect(TestWebSocket.instances).toHaveLength(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.autoOpen = true;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("does not globally interrupt Comfy on terminal execution errors", async () => {
+    const base = uniqueBase();
+    const prompt = deferred<Response>();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/prompt`) return prompt.promise;
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new ComfyUIImageProvider().generateStream("", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: { workflow: { "node-1": {} } },
+      });
+      const pending = stream.next();
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      prompt.resolve(Response.json({ prompt_id: "prompt-error" }));
+      await flushMicrotasks();
+      ws?.emitMessage(JSON.stringify({
+        type: "execution_error",
+        data: { prompt_id: "prompt-error", exception_message: "node failed" },
+      }));
+      await expect(pending).rejects.toThrow(/execution error: node failed/);
+      expect(fetchStub.calls.filter((call) => call.url.endsWith("/interrupt"))).toHaveLength(0);
+      expect(ws?.readyState).toBe(3);
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+  test("does not interrupt a shared Swarm session on terminal generation errors", async () => {
+    const base = uniqueBase();
+    const session = deferred<Response>();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/API/GetNewSession`) {
+        return session.promise;
+      }
+      if (call.url === `${base}/API/InterruptAll`) {
+        return Response.json({});
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new SwarmUIImageProvider().generateStream("secret-token", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: {},
+      });
+      const pending = stream.next();
+      await flushMicrotasks();
+      session.resolve(Response.json({ session_id: "session-error" }));
+      await flushMicrotasks();
+      const ws = TestWebSocket.instances[0];
+      await flushMicrotasks();
+      ws?.emitMessage(JSON.stringify({ error: "generation failed" }));
+      await expect(pending).rejects.toThrow(/generation failed/);
+      expect(fetchStub.calls.filter((call) => call.url === `${base}/API/InterruptAll`)).toHaveLength(0);
+      expect(ws?.readyState).toBe(3);
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
+    }
+  });
+
+
+  test("closes the Comfy socket when prompt setup fails", async () => {
+    const base = uniqueBase();
+    const originalWebSocket = globalThis.WebSocket;
+    fetchStub = installFetch((call) => {
+      if (call.url === `${base}/prompt`) {
+        return Promise.resolve(new Response("bad workflow", { status: 400 }));
+      }
+      throw new Error(`Unexpected fetch: ${call.url}`);
+    });
+    TestWebSocket.instances = [];
+    TestWebSocket.autoOpen = true;
+    globalThis.WebSocket = TestWebSocket as unknown as typeof WebSocket;
+
+    try {
+      const stream = new ComfyUIImageProvider().generateStream("", base, {
+        prompt: "a fox",
+        model: "sd_xl",
+        parameters: { workflow: { "node-1": {} } },
+      });
+      await expect(stream.next()).rejects.toThrow(/rejected workflow/);
+      const ws = TestWebSocket.instances[0];
+      expect(ws?.readyState).toBe(3);
+      expect(ws?.listenerCount()).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+      TestWebSocket.instances = [];
     }
   });
 });
