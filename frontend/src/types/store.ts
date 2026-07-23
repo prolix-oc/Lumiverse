@@ -548,7 +548,8 @@ export interface SettingsSlice {
   renameSavedTheme: (id: string, name: string) => void
   deleteSavedTheme: (id: string) => Promise<void>
   applySavedTheme: (id: string) => void
-  updateSavedTheme: (id: string) => void
+  /** Replace a saved theme with the complete current theme snapshot and persist it. */
+  updateSavedTheme: (id: string) => Promise<void>
   loadSettings: () => Promise<void>
 }
 

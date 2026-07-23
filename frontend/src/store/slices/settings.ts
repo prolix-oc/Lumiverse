@@ -810,20 +810,43 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
   },
 
-  updateSavedTheme: (id) => {
-    const currentTheme = get().theme ?? DEFAULT_THEME
-    const savedThemes = get().savedThemes.map((entry) => {
+  updateSavedTheme: async (id) => {
+    const state = get()
+    const currentTheme = state.theme ?? DEFAULT_THEME
+    const savedThemes = state.savedThemes.map((entry) => {
       if (entry.id !== id) return entry
       if (entry.kind === 'config') {
         return { ...entry, theme: currentTheme } as typeof entry
       }
+
+      // A pack owns all three theme layers. Saving only its ThemeConfig made
+      // re-applying it restore its previous global CSS and component overrides,
+      // discarding the user's current edits.
+      const components = Object.fromEntries(
+        Object.entries(state.componentOverrides)
+          .filter(([, override]) => override.css?.trim() || override.tsx?.trim())
+          .map(([name, override]) => [name, {
+            css: override.css || '',
+            tsx: override.tsx || '',
+            enabled: override.enabled,
+          }]),
+      )
       return {
         ...entry,
-        pack: { ...entry.pack, theme: currentTheme },
+        pack: {
+          ...entry.pack,
+          theme: currentTheme,
+          globalCSS: state.customCSS.css || '',
+          components,
+        },
       } as typeof entry
     })
     set({ savedThemes })
     persistKey('savedThemes', savedThemes)
+    // This action is explicitly destructive to the previous snapshot, so do
+    // not leave its replacement vulnerable to a reload or navigation during
+    // the normal settings debounce window.
+    await flushSettingsNow()
   },
 
   loadSettings: async () => {

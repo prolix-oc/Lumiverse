@@ -205,7 +205,9 @@ export default function SavedThemes() {
       variant: 'danger',
       confirmText: 'Update',
       onConfirm: () => {
-        updateSavedTheme(entry.id)
+        // The store retains and retries a failed write; consume the immediate
+        // commit rejection here so a temporary network error is not unhandled.
+        void updateSavedTheme(entry.id).catch(() => {})
       },
     })
   }

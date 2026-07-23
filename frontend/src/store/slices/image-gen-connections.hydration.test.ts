@@ -107,6 +107,54 @@ afterEach(() => {
 })
 
 describe('image connection hydration', () => {
+  test('updates every saved theme-pack layer and commits it immediately', async () => {
+    installLocalStorage()
+    const store = createStore()
+    const writes: Write[] = []
+    mockSettings(store.imageGeneration, writes)
+    const originalTheme = { ...store.theme!, id: 'original', name: 'Original' }
+    const currentTheme = { ...store.theme!, id: 'custom', name: 'Current', radiusScale: 1.5 }
+    store.savedThemes = [{
+      kind: 'pack',
+      id: 'saved-pack',
+      name: 'Saved pack',
+      createdAt: 1,
+      pack: {
+        format: 2,
+        name: 'Saved pack',
+        author: '',
+        description: '',
+        createdAt: 1,
+        bundleId: 'bundle-1',
+        theme: originalTheme,
+        globalCSS: '.old { color: red; }',
+        components: { Old: { css: '.old {}', tsx: '', enabled: true } },
+        assets: [],
+      },
+    }]
+    store.theme = currentTheme
+    store.customCSS = { ...store.customCSS, css: '.current { color: blue; }' }
+    store.componentOverrides = {
+      Message: { css: '.message {}', tsx: '', enabled: true },
+      Empty: { css: '', tsx: '', enabled: true },
+    }
+
+    await store.updateSavedTheme('saved-pack')
+
+    const saved = store.savedThemes[0]
+    expect(saved.kind).toBe('pack')
+    if (saved.kind !== 'pack') throw new Error('Expected a saved theme pack')
+    expect(saved.pack.theme).toEqual(currentTheme)
+    expect(saved.pack.globalCSS).toBe('.current { color: blue; }')
+    expect(saved.pack.components).toEqual({
+      Message: { css: '.message {}', tsx: '', enabled: true },
+    })
+    expect(writes).toEqual([{
+      kind: 'putMany',
+      value: { savedThemes: store.savedThemes },
+    }])
+  })
+
   test('defers a bridged image setting until the profile list is authoritative', async () => {
     const storage = installLocalStorage()
     const store = createStore()
