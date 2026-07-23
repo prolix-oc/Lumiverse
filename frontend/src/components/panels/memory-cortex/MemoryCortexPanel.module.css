@@ -713,13 +713,76 @@
 
 /* ── Stats grid ─────────────────────────────────────────────── */
 
+.statsScroll {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.chatCortexToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+}
+
+.chatCortexToggleTitle {
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  color: var(--lumiverse-text);
+}
+
+.chatCortexToggleHint {
+  margin-top: 2px;
+  font-size: calc(10.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.35;
+  color: var(--lumiverse-text-dim);
+}
+
+.toggleSwitch {
+  width: 34px;
+  height: 20px;
+  padding: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lumiverse-border);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.toggleSwitchOn {
+  background: var(--lumiverse-primary);
+}
+
+.toggleSwitch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.toggleThumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
+  transition: transform 0.15s ease;
+}
+
+.toggleSwitchOn .toggleThumb {
+  transform: translateX(14px);
+}
+
 .statsGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 12px 10px;
-  overflow-y: auto;
-  flex: 1;
   align-content: start;
 }
 

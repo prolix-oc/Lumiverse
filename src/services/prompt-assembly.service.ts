@@ -1480,6 +1480,10 @@ export async function assemblePrompt(
   // immediately so cortex never blocks generation or dry-run rendering.
   const cortexConfig =
     pf?.cortexConfig ?? memoryCortex.getCortexConfig(ctx.userId);
+  const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(
+    cortexConfig,
+    chat.metadata,
+  );
   let cortexChatMemSettings:
     | import("./embeddings.service").ChatMemorySettings
     | null = null;
@@ -1492,7 +1496,7 @@ export async function assemblePrompt(
   // would otherwise spawn a nested cortex worker from in here. Cortex warming
   // runs only on the in-process assembly path (where it reaches the real cache),
   // matching prior behavior — the per-call worker killed this task anyway.
-  if (cortexConfig.enabled && !runningInAssemblyWorker()) {
+  if (cortexEnabledForChat && !runningInAssemblyWorker()) {
     const cmRaw =
       pf?.allSettings.get("chatMemorySettings") ??
       settingsSvc.getSetting(ctx.userId, "chatMemorySettings")?.value ??
@@ -2105,7 +2109,7 @@ export async function assemblePrompt(
 
   let memoryResult: Awaited<ReturnType<typeof collectChatVectorMemory>>;
 
-  if (cortexConfig.enabled) {
+  if (cortexEnabledForChat) {
     // Fast path: warm cache from a previous generation (synchronous, no I/O).
     // Require the cached entry to have excluded the current live-context tail
     // (and regen target, if any), otherwise it may re-inject recent messages as
@@ -2166,9 +2170,9 @@ export async function assemblePrompt(
   }
 
   // Merge linked cortex data (vaults + interlinks) if available
-  const linkedCortexResult = memoryCortex.getCachedLinkedCortexResult(
-    ctx.chatId,
-  );
+  const linkedCortexResult = cortexEnabledForChat
+    ? memoryCortex.getCachedLinkedCortexResult(ctx.chatId)
+    : null;
   let linkedMemoryText = "";
   if (
     linkedCortexResult &&

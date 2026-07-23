@@ -2492,6 +2492,15 @@
     },
     "stats": {
       "loading": "Loading stats...",
+      "chatToggle": {
+        "label": "Memory Cortex for this chat",
+        "enabledHint": "Cortex retrieval and processing are active for this chat.",
+        "disabledHint": "Cortex retrieval and processing are disabled for this chat. Existing data is kept.",
+        "globalDisabled": "Turn on Memory Cortex in Settings before enabling it for this chat.",
+        "enabledToast": "Memory Cortex enabled for this chat",
+        "disabledToast": "Memory Cortex disabled for this chat",
+        "failed": "Could not update Memory Cortex: {{error}}"
+      },
       "backToStats": "Back to stats",
       "addRelation": "Add relation",
       "loadingRecords": "Loading records...",

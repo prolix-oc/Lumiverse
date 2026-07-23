@@ -176,6 +176,13 @@ export class WorkerHostMemoryApi {
         this.enforceScopedUser(resolvedUserId);
         const chat = chatsSvc.getChat(resolvedUserId, query.chatId);
         if (!chat) throw new Error("Chat not found");
+        if (!memoryCortexSvc.isCortexEnabledForChat(
+          memoryCortexSvc.getCortexConfig(resolvedUserId),
+          chat.metadata,
+        )) {
+          this.postToWorker({ type: "response", requestId, result: null });
+          return;
+        }
 
         const result = await memoryCortexSvc.queryCortex({
           chatId: query.chatId,
@@ -206,6 +213,14 @@ export class WorkerHostMemoryApi {
     (async () => {
       try {
         const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
+        const chat = chatsSvc.getChat(resolvedUserId, chatId);
+        if (!memoryCortexSvc.isCortexEnabledForChat(
+          memoryCortexSvc.getCortexConfig(resolvedUserId),
+          chat?.metadata,
+        )) {
+          this.postToWorker({ type: "response", requestId, result: null });
+          return;
+        }
         const result = await memoryCortexSvc.queryLinkedCortex(chatId, resolvedUserId, undefined, queryText);
         this.postToWorker({ type: "response", requestId, result });
       } catch (err: any) {
@@ -560,6 +575,10 @@ export class WorkerHostMemoryApi {
       try {
         const resolvedUserId = this.resolveMemoriesChatContext(chatId, userId);
         const cortexConfig = memoryCortexSvc.getCortexConfig(resolvedUserId);
+        const chat = chatsSvc.getChat(resolvedUserId, chatId);
+        if (!memoryCortexSvc.isCortexEnabledForChat(cortexConfig, chat?.metadata)) {
+          throw new Error("Memory Cortex is disabled for this chat");
+        }
         if (!cortexConfig.consolidation?.enabled) {
           throw new Error("Consolidation is disabled in cortex config");
         }

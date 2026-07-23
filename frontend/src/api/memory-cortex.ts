@@ -77,6 +77,13 @@ export interface CortexConfig {
   >;
 }
 
+export interface CortexChatSettings {
+  /** Effective state after applying global config and this chat's override. */
+  enabled: boolean;
+  globalEnabled: boolean;
+  disabledByChat: boolean;
+}
+
 export interface SalienceBreakdown {
   mentionComponent: number;
   arcComponent: number;
@@ -458,6 +465,9 @@ export const memoryCortexApi = {
 
   // Stats
   getStats: (chatId: string) => get<CortexUsageStats>(`${BASE}/chats/${chatId}/cortex-stats`),
+  getChatSettings: (chatId: string) => get<CortexChatSettings>(`${BASE}/chats/${chatId}/settings`),
+  updateChatSettings: (chatId: string, enabled: boolean) =>
+    put<CortexChatSettings>(`${BASE}/chats/${chatId}/settings`, { enabled }),
 
   // Rebuild
   rebuild: (chatId: string) =>

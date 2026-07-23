@@ -297,7 +297,8 @@ function seedCortexPreviewContext(
   env: MacroEnv,
 ): void {
   const config = memoryCortex.getCortexConfig(userId);
-  if (!config.enabled) return;
+  const chat = chatsSvc.getChat(userId, chatId);
+  if (!memoryCortex.isCortexEnabledForChat(config, chat?.metadata)) return;
 
   const cached = memoryCortex.getCachedCortexResult(chatId);
   const colorMap = memoryCortex.formatColorMapForPrompt(chatId);

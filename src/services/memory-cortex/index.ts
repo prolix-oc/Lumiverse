@@ -18,6 +18,7 @@
 import { getDb } from "../../db/connection";
 import {
   getCortexConfig,
+  isCortexEnabledForChat,
   putCortexConfig,
   shouldUseCortexSidecar,
   shouldUseCortexSidecarForChunkAnalysis,
@@ -62,7 +63,7 @@ import type {
 } from "./types";
 
 // Re-export public types and config
-export { getCortexConfig, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
+export { getCortexConfig, isCortexEnabledForChat, putCortexConfig, applyCortexPreset, shouldUseCortexSidecar, shouldUseCortexSidecarForChunkAnalysis } from "./config";
 export type { MemoryCortexConfig, CortexPresetMode, FactManagementConfig } from "./config";
 export { createCortexSidecarGenerateRawAdapter } from "./sidecar-adapter";
 export { formatShadowPrompt, formatContextSections, formatLinkedCortexSection } from "./shadow-formatter";
@@ -88,6 +89,23 @@ export type {
 export { buildEmotionalContext } from "./emotional-context";
 export { formatEntitySnapshots, formatRelationships } from "./entity-context";
 export { extractNPsFromChunk } from "./np-chunker";
+
+/** Read the chat-scoped Cortex opt-out without importing chats.service (which
+ * already depends on this module). */
+function isCortexEnabledForStoredChat(
+  userId: string,
+  chatId: string,
+  config: Pick<MemoryCortexConfig, "enabled">,
+): boolean {
+  const row = getDb()
+    .query("SELECT metadata FROM chats WHERE id = ? AND user_id = ?")
+    .get(chatId, userId) as { metadata?: string } | null;
+  if (!row) return false;
+
+  let metadata: unknown = null;
+  try { metadata = row.metadata ? JSON.parse(row.metadata) : null; } catch { /* inherit global setting */ }
+  return isCortexEnabledForChat(config, metadata);
+}
 
 /**
  * Return the tag name for a configured HTML thought delimiter pair.
@@ -1027,7 +1045,9 @@ export function scheduleProcessChunk(
     revision: queuedRevision,
     preflight: () => {
       const cfg = getCortexConfig(data.userId);
-      if (!cfg.enabled) return { action: "skip", reason: "cortex_disabled" } as const;
+      if (!isCortexEnabledForStoredChat(data.userId, data.chatId, cfg)) {
+        return { action: "skip", reason: "cortex_disabled" } as const;
+      }
 
       const row = db
         .query(
@@ -1077,7 +1097,7 @@ export async function processChunk(
   precomputedHeuristic?: import("./heuristic-runtime").HeuristicAnalysisOutput,
 ): Promise<void> {
   const config = getCortexConfig(data.userId);
-  if (!config.enabled) return;
+  if (!isCortexEnabledForStoredChat(data.userId, data.chatId, config)) return;
   const sidecarActive = shouldUseCortexSidecarForChunkAnalysis(config) && !!generateRawFn && !!sidecarConnectionId;
   const warmupSignature = getCortexStructuralSignature(config);
 
@@ -1881,7 +1901,7 @@ export async function rebuildCortex(
   options: CortexRebuildOptions = {},
 ): Promise<{ chunksProcessed: number; entitiesFound: number; relationsFound: number }> {
   const config = getCortexConfig(userId);
-  if (!config.enabled) {
+  if (!isCortexEnabledForStoredChat(userId, chatId, config)) {
     return { chunksProcessed: 0, entitiesFound: 0, relationsFound: 0 };
   }
   const resumable = options.resumable === true;

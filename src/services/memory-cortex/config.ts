@@ -382,6 +382,25 @@ export function getCortexConfig(userId: string): MemoryCortexConfig {
 }
 
 /**
+ * Whether Memory Cortex is available for an individual chat. A chat may opt
+ * out without changing the user's global Cortex configuration.
+ *
+ * Keep the override deliberately narrow: only an explicit `false` disables
+ * Cortex, so old chats and malformed/imported metadata continue to inherit the
+ * global setting.
+ */
+export function isCortexEnabledForChat(
+  config: Pick<MemoryCortexConfig, "enabled">,
+  metadata: unknown,
+): boolean {
+  if (!config.enabled) return false;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return true;
+  const settings = (metadata as Record<string, unknown>).cortex_settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return true;
+  return (settings as Record<string, unknown>).enabled !== false;
+}
+
+/**
  * Save cortex configuration. Merges with defaults for missing fields.
  */
 export function putCortexConfig(

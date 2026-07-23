@@ -3397,7 +3397,7 @@ async function updateChatChunks(userId: string, chatId: string, newMessage: Mess
     const chunk = getDb().query("SELECT * FROM chat_chunks WHERE id = ?").get(chunkId) as any;
     if (chunk) {
       const cortexConfig = memoryCortex.getCortexConfig(userId);
-      if (!cortexConfig.enabled) return;
+      if (!memoryCortex.isCortexEnabledForChat(cortexConfig, chat?.metadata)) return;
 
       const characterNames: string[] = [];
       const aliasMaps: Map<string, string>[] = [];

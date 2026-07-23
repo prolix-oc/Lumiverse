@@ -508,7 +508,8 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
 
   const embeddings = await embeddingsSvc.getEmbeddingConfig(userId);
   const config = memoryCortex.getCortexConfig(userId);
-  const allowPassiveChunkRebuild = !config.enabled || config.autoWarmup;
+  const cortexEnabledForChat = memoryCortex.isCortexEnabledForChat(config, chat.metadata);
+  const allowPassiveChunkRebuild = !cortexEnabledForChat || config.autoWarmup;
 
   // Compute the LTCM config hash once and thread it through downstream helpers.
   // Previously this was awaited 2-3× per warmup (warmLongTermChatMemory,
@@ -544,7 +545,7 @@ async function performChatWarmup(userId: string, chatId: string, force: boolean)
   const chatMemoryFresh = !!currentChatMemoryHash && storedChatMemoryHash === currentChatMemoryHash;
 
   let cortex: WarmupComponentResult;
-  if (!config.enabled) {
+  if (!memoryCortex.isCortexEnabledForChat(config, freshChat.metadata)) {
     cortex = { status: "skipped", reason: "cortex_disabled" };
   } else if (!force && !config.autoWarmup) {
     cortex = { status: "skipped", reason: "cortex_auto_warmup_disabled" };
@@ -1752,6 +1753,63 @@ app.get("/chats/:chatId/cortex-stats", (c) => {
   return c.json({ ...stats, ingestionTelemetry: telemetry, scheduler: getChatPipelineStatus(chatId) });
 });
 
+/** GET /chats/:chatId/settings — Get the Cortex state for one chat. */
+app.get("/chats/:chatId/settings", (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const chat = getChat(owned.userId, chatId)!;
+  const config = memoryCortex.getCortexConfig(owned.userId);
+  const chatSettings = isRecord(chat.metadata?.cortex_settings)
+    ? chat.metadata.cortex_settings
+    : null;
+  return c.json({
+    enabled: memoryCortex.isCortexEnabledForChat(config, chat.metadata),
+    globalEnabled: config.enabled,
+    disabledByChat: chatSettings?.enabled === false,
+  });
+});
+
+/** PUT /chats/:chatId/settings — Enable or disable Cortex for one chat. */
+app.put("/chats/:chatId/settings", async (c) => {
+  const chatId = c.req.param("chatId");
+  const owned = ensureChatOwnership(c, chatId);
+  if (!owned.ok) return owned.response;
+  const body = await c.req.json<{ enabled?: unknown }>();
+  if (typeof body.enabled !== "boolean") {
+    return c.json({ error: "enabled must be a boolean" }, 400);
+  }
+
+  const chat = getChat(owned.userId, chatId)!;
+  const existingSettings = isRecord(chat.metadata?.cortex_settings)
+    ? { ...chat.metadata.cortex_settings }
+    : {};
+  if (body.enabled) delete existingSettings.enabled;
+  else existingSettings.enabled = false;
+
+  const updated = chatsSvc.mergeChatMetadata(
+    owned.userId,
+    chatId,
+    { cortex_settings: Object.keys(existingSettings).length ? existingSettings : undefined },
+  );
+  if (!updated) return c.json({ error: "Chat not found" }, 404);
+
+  // Do not delete derived data: re-enabling should preserve the chat's graph.
+  // Dropping warm results makes the opt-out take effect immediately.
+  memoryCortex.invalidateCortexCache(chatId);
+  memoryCortex.invalidateLinkedCortexCache(chatId);
+
+  const config = memoryCortex.getCortexConfig(owned.userId);
+  const updatedSettings = isRecord(updated.metadata?.cortex_settings)
+    ? updated.metadata.cortex_settings
+    : null;
+  return c.json({
+    enabled: memoryCortex.isCortexEnabledForChat(config, updated.metadata),
+    globalEnabled: config.enabled,
+    disabledByChat: updatedSettings?.enabled === false,
+  });
+});
+
 app.get("/chats/:chatId/ingestion-status", (c) => {
   const chatId = c.req.param("chatId");
   const owned = ensureChatOwnership(c, chatId);
@@ -1798,7 +1856,7 @@ app.post("/chats/:chatId/rebuild", async (c) => {
   if (!chat) return c.json({ error: "Chat not found" }, 404);
 
   const cortexConfig = memoryCortex.getCortexConfig(userId);
-  if (!cortexConfig.enabled) {
+  if (!memoryCortex.isCortexEnabledForChat(cortexConfig, chat.metadata)) {
     return c.json({ status: "skipped", reason: "cortex_disabled", chatId });
   }
 

@@ -10,7 +10,7 @@ import {
   Edit2, CheckCircle2, Plus,
 } from "lucide-react";
 import { useStore } from "@/store";
-import { memoryCortexApi, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
+import { memoryCortexApi, type CortexChatSettings, type CortexEntity, type CortexFontColor, type CortexRelation, type CortexUsageStats } from "@/api/memory-cortex";
 import ConfirmationModal from "@/components/shared/ConfirmationModal";
 import CortexLinksTab from "./CortexLinksTab";
 import { EntityEditorModal, RelationEditorModal, RelationCreatorModal, ColorEditorModal } from "./MemoryCortexEditors";
@@ -800,6 +800,36 @@ function StatsView({
   const [editingRelation, setEditingRelation] = useState<CortexRelation | null>(null);
   const [creatingRelation, setCreatingRelation] = useState(false);
   const [deleteRelationId, setDeleteRelationId] = useState<string | null>(null);
+  const [chatSettings, setChatSettings] = useState<CortexChatSettings | null>(null);
+  const [updatingChatSettings, setUpdatingChatSettings] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChatSettings(null);
+    void memoryCortexApi.getChatSettings(chatId)
+      .then((settings) => { if (!cancelled) setChatSettings(settings); })
+      .catch(() => { if (!cancelled) setChatSettings(null); });
+    return () => { cancelled = true; };
+  }, [chatId]);
+
+  const toggleChatCortex = async () => {
+    if (!chatSettings || updatingChatSettings || !chatSettings.globalEnabled) return;
+    setUpdatingChatSettings(true);
+    try {
+      const updated = await memoryCortexApi.updateChatSettings(chatId, !chatSettings.enabled);
+      setChatSettings(updated);
+      addToast({
+        type: "success",
+        message: updated.enabled
+          ? t('memoryCortexPanel.stats.chatToggle.enabledToast')
+          : t('memoryCortexPanel.stats.chatToggle.disabledToast'),
+      });
+    } catch (err: any) {
+      addToast({ type: "error", message: t('memoryCortexPanel.stats.chatToggle.failed', { error: err?.message || "" }) });
+    } finally {
+      setUpdatingChatSettings(false);
+    }
+  };
 
   const reloadDrill = useCallback(async () => {
     if (!drill) return;
@@ -997,13 +1027,38 @@ function StatsView({
 
   // Stats overview
   return (
-    <div className={styles.statsGrid}>
-      <StatCard icon={Brain} label={t('memoryCortexPanel.stats.cards.chunks')} value={stats.chunkCount} sub={t('memoryCortexPanel.stats.cards.chunksSub', { count: stats.vectorizedChunkCount })} desc={t('memoryCortexPanel.stats.cards.chunksDesc')} onClick={() => openDrill("chunks")} />
-      <StatCard icon={Users} label={t('memoryCortexPanel.stats.cards.entities')} value={stats.activeEntityCount} sub={t('memoryCortexPanel.stats.cards.entitiesSub', { count: stats.entityCount - stats.activeEntityCount })} desc={t('memoryCortexPanel.stats.cards.entitiesDesc')} onClick={() => openDrill("entities")} />
-      <StatCard icon={Network} label={t('memoryCortexPanel.stats.cards.relations')} value={stats.relationCount} desc={t('memoryCortexPanel.stats.cards.relationsDesc')} onClick={() => openDrill("relations")} />
-      <StatCard icon={BookOpen} label={t('memoryCortexPanel.stats.cards.consolidations')} value={stats.consolidationCount} desc={t('memoryCortexPanel.stats.cards.consolidationsDesc')} onClick={() => openDrill("consolidations")} />
-      <StatCard icon={Zap} label={t('memoryCortexPanel.stats.cards.embeddingCalls')} value={stats.estimatedEmbeddingCalls} sub={t('memoryCortexPanel.stats.cards.embeddingSub')} desc={t('memoryCortexPanel.stats.cards.embeddingDesc')} />
-      <StatCard icon={Heart} label={t('memoryCortexPanel.stats.cards.salienceRecords')} value={stats.salienceRecordCount} desc={t('memoryCortexPanel.stats.cards.salienceDesc')} onClick={() => openDrill("salience")} />
+    <div className={styles.statsScroll}>
+      <div className={styles.chatCortexToggle}>
+        <div>
+          <div className={styles.chatCortexToggleTitle}>{t('memoryCortexPanel.stats.chatToggle.label')}</div>
+          <div className={styles.chatCortexToggleHint}>
+            {!chatSettings?.globalEnabled
+              ? t('memoryCortexPanel.stats.chatToggle.globalDisabled')
+              : chatSettings?.enabled
+                ? t('memoryCortexPanel.stats.chatToggle.enabledHint')
+                : t('memoryCortexPanel.stats.chatToggle.disabledHint')}
+          </div>
+        </div>
+        <button
+          type="button"
+          className={`${styles.toggleSwitch} ${chatSettings?.enabled ? styles.toggleSwitchOn : ""}`}
+          role="switch"
+          aria-checked={chatSettings?.enabled ?? false}
+          aria-label={t('memoryCortexPanel.stats.chatToggle.label')}
+          disabled={!chatSettings || !chatSettings.globalEnabled || updatingChatSettings}
+          onClick={() => { void toggleChatCortex(); }}
+        >
+          <span className={styles.toggleThumb} />
+        </button>
+      </div>
+      <div className={styles.statsGrid}>
+        <StatCard icon={Brain} label={t('memoryCortexPanel.stats.cards.chunks')} value={stats.chunkCount} sub={t('memoryCortexPanel.stats.cards.chunksSub', { count: stats.vectorizedChunkCount })} desc={t('memoryCortexPanel.stats.cards.chunksDesc')} onClick={() => openDrill("chunks")} />
+        <StatCard icon={Users} label={t('memoryCortexPanel.stats.cards.entities')} value={stats.activeEntityCount} sub={t('memoryCortexPanel.stats.cards.entitiesSub', { count: stats.entityCount - stats.activeEntityCount })} desc={t('memoryCortexPanel.stats.cards.entitiesDesc')} onClick={() => openDrill("entities")} />
+        <StatCard icon={Network} label={t('memoryCortexPanel.stats.cards.relations')} value={stats.relationCount} desc={t('memoryCortexPanel.stats.cards.relationsDesc')} onClick={() => openDrill("relations")} />
+        <StatCard icon={BookOpen} label={t('memoryCortexPanel.stats.cards.consolidations')} value={stats.consolidationCount} desc={t('memoryCortexPanel.stats.cards.consolidationsDesc')} onClick={() => openDrill("consolidations")} />
+        <StatCard icon={Zap} label={t('memoryCortexPanel.stats.cards.embeddingCalls')} value={stats.estimatedEmbeddingCalls} sub={t('memoryCortexPanel.stats.cards.embeddingSub')} desc={t('memoryCortexPanel.stats.cards.embeddingDesc')} />
+        <StatCard icon={Heart} label={t('memoryCortexPanel.stats.cards.salienceRecords')} value={stats.salienceRecordCount} desc={t('memoryCortexPanel.stats.cards.salienceDesc')} onClick={() => openDrill("salience")} />
+      </div>
     </div>
   );
 }
