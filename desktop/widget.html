@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Floating Widget</title>
+    <link rel="stylesheet" href="/src/widget.css" />
+  </head>
+  <body>
+    <main class="widget" aria-label="Floating widget proof of concept">
+      <header id="drag-handle" class="titlebar">
+        <span class="grab" aria-hidden="true">⠿</span>
+        <span>Extension widget</span>
+        <button id="close" class="close" type="button" aria-label="Hide widget">×</button>
+      </header>
+      <section class="content">
+        <p class="eyebrow">TAURI FLOATING WINDOW</p>
+        <h1>Ready to detach</h1>
+        <p>Drag the header. Resize from any edge or corner.</p>
+        <button id="click-through" class="click-through" type="button">Pass clicks through</button>
+        <p class="hint">Restore input from the tray’s Floating Widget POC menu.</p>
+      </section>
+      <button class="resize north" data-direction="North" aria-label="Resize from top"></button>
+      <button class="resize east" data-direction="East" aria-label="Resize from right"></button>
+      <button class="resize south" data-direction="South" aria-label="Resize from bottom"></button>
+      <button class="resize west" data-direction="West" aria-label="Resize from left"></button>
+      <button class="resize north-east" data-direction="NorthEast" aria-label="Resize from top right"></button>
+      <button class="resize south-east" data-direction="SouthEast" aria-label="Resize from bottom right"></button>
+      <button class="resize south-west" data-direction="SouthWest" aria-label="Resize from bottom left"></button>
+      <button class="resize north-west" data-direction="NorthWest" aria-label="Resize from top left"></button>
+    </main>
+    <script type="module" src="/src/widget.ts"></script>
+  </body>
+</html>

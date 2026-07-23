@@ -1,0 +1,24 @@
+:root { color: #f7f6ff; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: transparent; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 100vw; min-height: 100vh; overflow: hidden; }
+.widget { position: relative; width: 100vw; min-width: 100%; min-height: 100vh; overflow: hidden; border: 1px solid rgb(184 165 255 / 58%); border-radius: 16px; background: linear-gradient(145deg, rgb(35 26 64 / 96%), rgb(14 13 29 / 95%)); box-shadow: 0 14px 40px rgb(0 0 0 / 36%); }
+.titlebar { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border-bottom: 1px solid rgb(255 255 255 / 10%); background: rgb(255 255 255 / 6%); color: rgb(242 239 255 / 88%); cursor: grab; font-size: 12px; font-weight: 650; user-select: none; }
+.titlebar:active { cursor: grabbing; }
+.grab { color: #a98cff; font-size: 17px; line-height: 1; }
+.close { margin-left: auto; }
+.content { padding: 16px 18px 18px; }
+.eyebrow { margin: 0 0 5px; color: #b9a5ff; font-size: 10px; font-weight: 750; letter-spacing: .1em; }
+h1 { margin: 0; font-size: 21px; letter-spacing: -.03em; }
+.content > p:not(.eyebrow) { margin: 7px 0 14px; color: rgb(238 235 255 / 70%); font-size: 12px; line-height: 1.45; }
+button { border: 0; color: inherit; font: inherit; cursor: pointer; }
+.close { width: 22px; height: 22px; border-radius: 6px; background: transparent; color: rgb(255 255 255 / 68%); font-size: 19px; line-height: 1; }
+.close:hover { background: rgb(255 255 255 / 13%); color: white; }
+.click-through { width: 100%; padding: 9px 12px; border-radius: 9px; background: #8b6df2; color: white; font-size: 12px; font-weight: 700; }
+.click-through:hover { background: #9b80fa; }
+.hint { margin: 10px 0 0 !important; color: rgb(238 235 255 / 47%) !important; font-size: 10px !important; }
+.resize { position: absolute; z-index: 2; padding: 0; background: transparent; }
+.north, .south { left: 12px; right: 12px; height: 8px; }
+.east, .west { top: 12px; bottom: 12px; width: 8px; }
+.north { top: -4px; cursor: n-resize; }.east { right: -4px; cursor: e-resize; }.south { bottom: -4px; cursor: s-resize; }.west { left: -4px; cursor: w-resize; }
+.north-east, .north-west, .south-east, .south-west { width: 14px; height: 14px; }
+.north-east { top: -4px; right: -4px; cursor: ne-resize; }.north-west { top: -4px; left: -4px; cursor: nw-resize; }.south-east { right: -4px; bottom: -4px; cursor: se-resize; }.south-west { bottom: -4px; left: -4px; cursor: sw-resize; }

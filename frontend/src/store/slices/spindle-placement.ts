@@ -73,6 +73,8 @@ export interface FloatWidgetState {
   snapToEdge: boolean
   tooltip?: string
   chromeless?: boolean
+  /** Rendered in a dedicated desktop WebView instead of the page-level host. */
+  desktopPoppedOut?: boolean
   fullscreen?: boolean
   /** Saved x/y/w/h from before entering fullscreen. */
   preFullscreen?: { x: number; y: number; width: number; height: number }
@@ -298,7 +300,7 @@ export const createSpindlePlacementSlice: StateCreator<SpindlePlacementSlice> = 
     }))
   },
 
-  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'fullscreen' | 'preFullscreen'>>) => {
+  updateFloatWidget: (widgetId: string, updates: Partial<Pick<FloatWidgetState, 'x' | 'y' | 'width' | 'height' | 'visible' | 'desktopPoppedOut' | 'fullscreen' | 'preFullscreen'>>) => {
     set((state) => ({
       floatWidgets: state.floatWidgets.map((w) =>
         w.id === widgetId ? { ...w, ...updates } : w

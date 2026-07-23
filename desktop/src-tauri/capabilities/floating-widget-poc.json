@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "floating-widget-poc",
+  "description": "Minimal native-window controls for local and extension-backed floating widgets.",
+  "local": false,
+  "windows": ["widget-*"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*", "http://*", "https://*"]
+  },
+  "permissions": [
+    "widget-poc-commands",
+    "desktop-widget-size-sync",
+    "core:window:allow-start-dragging",
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-set-ignore-cursor-events",
+    "core:window:allow-hide",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

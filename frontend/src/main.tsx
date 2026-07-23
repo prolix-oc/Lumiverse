@@ -275,6 +275,9 @@ if (/^Mac/.test(navigator.platform) && navigator.maxTouchPoints === 0) {
 // PWAs running in window-controls-overlay mode.
 if ('__TAURI_INTERNALS__' in window) {
   document.documentElement.setAttribute('data-tauri-desktop', '')
+  if (new URLSearchParams(window.location.search).has('desktopWidgetExtension')) {
+    document.documentElement.setAttribute('data-tauri-floating-widget', '')
+  }
 }
 
 if (isStandalone) {

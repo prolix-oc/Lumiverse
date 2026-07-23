@@ -279,6 +279,9 @@ widget.root.innerHTML = '<button>Click</button>'
 // Move programmatically
 widget.moveTo(200, 200)
 
+// Update the placement bounds when the widget's own layout changes
+widget.setSize(320, 500)
+
 // Read current position
 const pos = widget.getPosition() // { x: number, y: number }
 
@@ -305,6 +308,52 @@ widget.destroy()
 | `snapToEdge` | `boolean` | — | Snap to the nearest screen edge after drag |
 | `tooltip` | `string` | — | Hover tooltip text |
 | `chromeless` | `boolean` | `false` | Strip the default container chrome (border, background, shadow, border-radius). The extension fully owns the visual presentation. |
+
+### Dynamic sizing and desktop pop-outs
+
+Use `widget.setSize(width, height)` whenever the extension changes the
+widget's intrinsic layout. This updates the normal browser placement state and
+is also how Lumiverse Desktop learns the requested bounds for a native pop-out
+window. Do not call desktop-only events or native APIs from an extension.
+
+```ts
+function setExpanded(expanded: boolean) {
+  root.dataset.expanded = String(expanded)
+  const size = expanded
+    ? { width: 320, height: 500 }
+    : { width: 128, height: 128 }
+
+  if (expanded) {
+    // Grow the native window at the same time as the visual expansion.
+    widget.setSize(size.width, size.height)
+  } else {
+    // Let the CSS collapse finish before shrinking a native pop-out.
+    window.setTimeout(() => widget.setSize(size.width, size.height), 420)
+  }
+}
+```
+
+The delay should match the widget's CSS width/height transition. Calling
+`setSize` too early on collapse makes a native window shrink around the
+content before its visual animation has finished. Clear any pending timer when
+the widget changes state again or the extension unloads.
+
+When users send a registered widget to a Lumiverse Desktop pop-out, the native
+host owns the window bounds but the extension still uses the same standard
+`setSize` call. Browser and PWA clients simply retain their existing CSS and
+placement behavior.
+
+### Restoring a desktop pop-out
+
+Returning a widget to the page remounts its page-level root. Extensions with
+backend-backed live state should refresh that state when it returns. Lumiverse
+Desktop currently emits the private `spindle:desktop-widget-returned` browser
+event with `{ widgetId, extensionId }` for this purpose; scope a listener to
+your own manifest identifier, request fresh backend state, and remove the
+listener during teardown.
+
+This event is an implementation detail of Lumiverse Desktop, not part of the
+published Spindle API. Extensions must remain functional when it is absent.
 
 ## Tab Mobility (requires one of `app_manipulation` or `ui_panels`, depending on the operation)
 

@@ -103,12 +103,18 @@ function parseThemeColor(token: string): Rgba | null {
 }
 
 /** Convert a CSS RGB(A) value to the opaque color needed by native PWA chrome. */
-export function toOpaqueRgb(color: string): string | null {
+export function toOpaqueRgbChannels(color: string): [number, number, number] | null {
   const parsed = parseThemeColor(color)
   if (!parsed) return null
 
   // Native window chrome expects an opaque color. Composite translucent theme
   // tokens against black, matching the app's deep shell background.
   const mix = (channel: number) => Math.round(channel * parsed.a)
-  return `rgb(${mix(parsed.r)}, ${mix(parsed.g)}, ${mix(parsed.b)})`
+  return [mix(parsed.r), mix(parsed.g), mix(parsed.b)]
+}
+
+/** Convert a CSS RGB(A) value to the opaque color needed by native PWA chrome. */
+export function toOpaqueRgb(color: string): string | null {
+  const channels = toOpaqueRgbChannels(color)
+  return channels ? `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})` : null
 }

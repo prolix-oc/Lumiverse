@@ -23,6 +23,10 @@ the server down gracefully.
 - **Start Server / Stop Server**
 - **Open Lumiverse** — opens or closes the integrated Tauri browser. Its
   submenu also reloads it or opens the current address in your default browser.
+- **Floating Widgets** — lists live extension widgets registered by Lumiverse
+  (for example, SpotifyControls). Selecting one starts that extension in a
+  widget-only native window. The menu also retains the native POC,
+  including its click-through test.
 - **Serving Stats** — port, PID, uptime, branch, version.
 - **Check for Updates / Apply Update** — the runner's existing git-based
   update flow.

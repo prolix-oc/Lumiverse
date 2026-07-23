@@ -7,11 +7,12 @@ import CharacterProfile from './components/panels/CharacterProfile'
 import LoginPage from './components/auth/LoginPage'
 import SsoCompletePage from './components/auth/SsoCompletePage'
 import DesktopPwaTitlebar from './components/shared/DesktopPwaTitlebar'
+import { isDesktopFloatingWidgetWindow } from './lib/desktop-floating-widget'
 
 function WindowShell() {
   return (
     <>
-      <DesktopPwaTitlebar />
+      {!isDesktopFloatingWidgetWindow() && <DesktopPwaTitlebar />}
       <Outlet />
     </>
   )

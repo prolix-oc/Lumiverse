@@ -63,7 +63,10 @@ export default function SpindleUIManager() {
   return (
     <>
       {floatWidgets
-        .filter((w) => w.visible && !hiddenPlacements.includes(w.id))
+        // A desktop pop-out owns its own extension DOM. Do not leave the
+        // page-level host mounted behind it; restoring the widget simply
+        // clears this flag and mounts the existing root back in the page.
+        .filter((w) => w.visible && !w.desktopPoppedOut && !hiddenPlacements.includes(w.id))
         .map((w) => (
           <SpindleFloatWidget key={w.id} widget={w} />
         ))}

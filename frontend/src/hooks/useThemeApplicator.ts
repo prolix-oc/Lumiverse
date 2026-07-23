@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useStore } from '@/store'
 import { generateThemeVariables } from '@/theme/engine'
 import { DEFAULT_THEME, PRESETS } from '@/theme/presets'
-import { toOpaqueRgb } from '@/theme/themeColor'
+import { toOpaqueRgb, toOpaqueRgbChannels } from '@/theme/themeColor'
 import type { CharacterThemeOverlay, ResolvedMode, ThemeConfig } from '@/types/theme'
 
 const THEME_TRANSITION_MS = 280
@@ -18,6 +18,7 @@ const DESKTOP_APPEARANCE_DEBUG_HISTORY_KEY = '__lumiverseDesktopAppearanceDebug'
 // the document tint, which is safe to update on every theme application.
 let requestedNativeAppearance: string | null = null
 let nativeAppearanceQueue: Promise<void> = Promise.resolve()
+let cachedStartupAppearance: string | null = null
 
 /**
  * Opt-in trace for diagnosing desktop material failures. Enable it from the
@@ -212,7 +213,32 @@ function syncThemeColorMeta(vars: Record<string, string>) {
   meta.content = color
 }
 
-function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode) {
+function cacheDesktopStartupAppearance(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
+  if (!('__TAURI_INTERNALS__' in window) || new URLSearchParams(window.location.search).has('desktopWidgetExtension')) return
+
+  const background = config.desktopBackground?.color || vars['--lumiverse-bg-deep'] || '#0a0812'
+  const nativeColor = toOpaqueRgbChannels(background) ?? [10, 8, 18]
+  const snapshot = {
+    background,
+    border: vars['--lumiverse-border'] || 'rgba(255, 255, 255, 0.08)',
+    textMuted: vars['--lumiverse-text-muted'] || 'rgba(255, 255, 255, 0.64)',
+    primary: vars['--lumiverse-primary'] || '#9370db',
+    blur: Boolean(config.desktopBackground?.color && config.desktopBackground.blur),
+    dark: mode === 'dark',
+    blurIntensity: config.desktopBackground?.blurIntensity ?? 'balanced',
+    nativeColor,
+  }
+  const serialized = JSON.stringify(snapshot)
+  if (serialized === cachedStartupAppearance) return
+  cachedStartupAppearance = serialized
+  void invoke('cache_frontend_startup_appearance', { appearance: snapshot }).catch((error) => {
+    // Browser/PWA clients and a frontend that is closing have no native host.
+    cachedStartupAppearance = null
+    console.warn('Unable to cache desktop startup appearance', error)
+  })
+}
+
+function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode, vars: Record<string, string>) {
   const root = document.documentElement
   const background = config.desktopBackground
 
@@ -224,6 +250,8 @@ function syncDesktopBackground(config: ThemeConfig, mode: ResolvedMode) {
     debugDesktopAppearance('browser-surface-cleared')
     return
   }
+
+  cacheDesktopStartupAppearance(config, mode, vars)
 
   if (background?.color) {
     root.setAttribute('data-desktop-background', '')
@@ -505,7 +533,7 @@ export function useThemeApplicator() {
       hadOverridesRef.current = hasOverrides
       broadcastThemeToParent(mode, vars)
       syncThemeColorMeta(vars)
-      syncDesktopBackground(config, mode)
+      syncDesktopBackground(config, mode, vars)
 
       if (!root.hasAttribute('data-pwa')) {
         const us = parseFloat(vars['--lumiverse-ui-scale'] ?? '1') || 1

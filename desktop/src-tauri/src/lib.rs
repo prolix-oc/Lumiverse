@@ -79,22 +79,13 @@ fn macos_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tau
         Submenu::with_items(app, "Frontend", true, &[&reload, &hide_frontend, &inspect])?
     };
     #[cfg(not(debug_assertions))]
-    let frontend_menu = Submenu::with_items(
-        app,
-        "Frontend",
-        true,
-        &[&reload, &hide_frontend],
-    )?;
+    let frontend_menu = Submenu::with_items(app, "Frontend", true, &[&reload, &hide_frontend])?;
 
     let minimize = PredefinedMenuItem::minimize(app, None)?;
     let maximize = PredefinedMenuItem::maximize(app, None)?;
     let fullscreen = PredefinedMenuItem::fullscreen(app, None)?;
-    let window_menu = Submenu::with_items(
-        app,
-        "Window",
-        true,
-        &[&minimize, &maximize, &fullscreen],
-    )?;
+    let window_menu =
+        Submenu::with_items(app, "Window", true, &[&minimize, &maximize, &fullscreen])?;
 
     Menu::with_items(app, &[&app_menu, &frontend_menu, &window_menu])
 }
@@ -144,6 +135,8 @@ pub fn run() {
         ))
         .manage(runner::RunnerState::default())
         .manage(frontend::FrontendState::default())
+        .manage(frontend::WidgetPocState::default())
+        .manage(frontend::DesktopWidgetCatalogState::default())
         .invoke_handler(tauri::generate_handler![
             runner::runner_start,
             runner::runner_send,
@@ -162,11 +155,24 @@ pub fn run() {
             frontend::frontend_visible,
             frontend::frontend_exists,
             frontend::configure_frontend_appearance,
+            frontend::cache_frontend_startup_appearance,
             frontend::show_frontend_url_settings,
+            frontend::show_widget_poc,
+            frontend::hide_widget_poc,
+            frontend::set_widget_poc_click_through,
+            frontend::toggle_widget_poc_click_through,
+            frontend::set_desktop_widget_catalog,
+            frontend::sync_desktop_widget_size,
+            frontend::resize_extension_widget,
+            frontend::show_extension_widget,
+            frontend::return_extension_widget,
+            frontend::return_extension_widget_from_tray,
         ]);
 
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(macos_menu).on_menu_event(handle_macos_menu_event);
+    let builder = builder
+        .menu(macos_menu)
+        .on_menu_event(handle_macos_menu_event);
 
     builder
         .setup(|app| {

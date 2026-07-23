@@ -111,7 +111,9 @@ fn kill_tree(child: &mut Child) {
 /// to git (and historically bare `bun`); a macOS GUI app's minimal PATH
 /// would otherwise make those lookups fail.
 fn prepend_bun_dir_to_path(cmd: &mut Command, bun_path: &str) {
-    let Some(bun_dir) = Path::new(bun_path).parent() else { return };
+    let Some(bun_dir) = Path::new(bun_path).parent() else {
+        return;
+    };
     if bun_dir.as_os_str().is_empty() {
         return;
     }
@@ -231,7 +233,9 @@ pub fn runner_send(state: State<'_, RunnerState>, line: String) -> Result<(), St
     let running = guard.as_ref().ok_or("Runner is not running")?;
     let mut stdin = running.stdin.lock().unwrap();
     writeln!(stdin, "{line}").map_err(|e| format!("Runner stdin write failed: {e}"))?;
-    stdin.flush().map_err(|e| format!("Runner stdin flush failed: {e}"))
+    stdin
+        .flush()
+        .map_err(|e| format!("Runner stdin flush failed: {e}"))
 }
 
 #[tauri::command]
@@ -309,7 +313,10 @@ pub fn resolve_bun() -> Option<String> {
     }
     // Fall back to PATH resolution; verify it actually launches.
     let mut probe = Command::new(bun_name());
-    probe.arg("--version").stdout(Stdio::null()).stderr(Stdio::null());
+    probe
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     suppress_console(&mut probe);
     match probe.status() {
         Ok(status) if status.success() => Some(bun_name().to_string()),
@@ -349,7 +356,11 @@ pub fn alert(app: AppHandle, title: String, message: String, error: bool) {
     app.dialog()
         .message(message)
         .title(title)
-        .kind(if error { MessageDialogKind::Error } else { MessageDialogKind::Info })
+        .kind(if error {
+            MessageDialogKind::Error
+        } else {
+            MessageDialogKind::Info
+        })
         .show(move |_| rehide_host_window(&app_for_rehide));
 }
 

@@ -67,6 +67,18 @@ let loginItem: CheckMenuItem;
 let openIntegratedBrowserItem: MenuItem;
 let openDefaultBrowserItem: MenuItem;
 let reloadIntegratedBrowserItem: MenuItem;
+let floatingWidgetPocItem: Submenu;
+
+interface DesktopWidgetCatalogEntry {
+  id: string;
+  extensionId: string;
+  index: number;
+  title: string;
+  width: number;
+  height: number;
+}
+
+let desktopWidgetCatalog: DesktopWidgetCatalogEntry[] = [];
 
 function statusText(): string {
   if (busyMessage) return busyMessage;
@@ -140,6 +152,53 @@ async function updateMenu(): Promise<void> {
     await applyUpdateItem.setText("Apply Update");
     await applyUpdateItem.setEnabled(false);
   }
+}
+
+async function updateFloatingWidgetMenu(): Promise<void> {
+  if (!floatingWidgetPocItem) return;
+
+  const existingItems = await floatingWidgetPocItem.items();
+  for (const item of existingItems) {
+    await floatingWidgetPocItem.remove(item);
+  }
+
+  if (desktopWidgetCatalog.length === 0) {
+    await floatingWidgetPocItem.append(await MenuItem.new({
+      text: "No registered extension widgets",
+      enabled: false,
+    }));
+  } else {
+    for (const widget of desktopWidgetCatalog) {
+      await floatingWidgetPocItem.append(await MenuItem.new({
+        text: `Pop Out ${widget.title}`,
+        action: action(async () => {
+          await invoke("show_extension_widget", { widgetId: widget.id });
+        }),
+      }));
+      await floatingWidgetPocItem.append(await MenuItem.new({
+        text: `Return ${widget.title} to Page`,
+        action: action(async () => {
+          // This command is invoked by the trusted tray rather than a remote
+          // frontend, so it does not need a child-window ownership check.
+          await invoke("return_extension_widget_from_tray", { widgetId: widget.id });
+        }),
+      }));
+    }
+  }
+
+  await floatingWidgetPocItem.append(await PredefinedMenuItem.new({ item: "Separator" }));
+  await floatingWidgetPocItem.append(await MenuItem.new({
+    text: "Show Native Widget POC",
+    action: action(async () => {
+      await invoke("show_widget_poc");
+    }),
+  }));
+  await floatingWidgetPocItem.append(await MenuItem.new({
+    text: "Toggle POC Click-Through",
+    action: action(async () => {
+      await invoke("toggle_widget_poc_click_through");
+    }),
+  }));
 }
 
 // ─── Runner orchestration ───────────────────────────────────────────────────
@@ -329,9 +388,22 @@ async function buildTray(): Promise<void> {
     }),
   });
 
+  floatingWidgetPocItem = await Submenu.new({
+    text: "Floating Widgets",
+    items: [],
+  });
+  await updateFloatingWidgetMenu();
+
   frontendItem = await Submenu.new({
     text: "Open Lumiverse",
-    items: [openIntegratedBrowserItem, reloadIntegratedBrowserItem, openDefaultBrowserItem, await PredefinedMenuItem.new({ item: "Separator" }), setFrontendUrlItem],
+    items: [
+      openIntegratedBrowserItem,
+      reloadIntegratedBrowserItem,
+      openDefaultBrowserItem,
+      await PredefinedMenuItem.new({ item: "Separator" }),
+      floatingWidgetPocItem,
+      setFrontendUrlItem,
+    ],
   });
 
   statsPortItem = await MenuItem.new({ text: "Port: —", enabled: false });
@@ -470,6 +542,12 @@ async function boot(): Promise<void> {
     settings.customFrontendUrl = payload.url;
     await saveSetting("customFrontendUrl", payload.url);
     await updateMenu();
+  });
+  await listen<DesktopWidgetCatalogEntry[]>("desktop-widget-catalog", ({ payload }) => {
+    desktopWidgetCatalog = Array.isArray(payload) ? payload : [];
+    void updateFloatingWidgetMenu().catch((error) => {
+      console.warn("Unable to update floating-widget menu", error);
+    });
   });
 
   await client.init();

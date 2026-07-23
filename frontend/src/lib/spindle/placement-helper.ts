@@ -653,6 +653,13 @@ export function createFloatWidgetHandle(
         x: pos.x,
         y: pos.y,
       })
+      // The desktop host consumes this internal event immediately, instead of
+      // waiting for the serialized tray catalog to catch up with the live
+      // extension placement state.
+      window.dispatchEvent(new CustomEvent('spindle:float-size-request', {
+        detail: { widgetId, width, height },
+      }))
+      console.info('[spindle:float-size-request]', { widgetId, width, height })
     },
     setVisible(visible: boolean) {
       assertPlacementUsable(destroyed)

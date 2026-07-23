@@ -18,10 +18,34 @@ commands.allow = [
   "save_frontend_bounds",
   "frontend_visible",
   "frontend_exists",
-  "show_frontend_url_settings"
+  "show_frontend_url_settings",
+  "show_widget_poc",
+  "toggle_widget_poc_click_through",
+  "show_extension_widget",
+  "return_extension_widget_from_tray"
 ]
 
 [[permission]]
 identifier = "allow-configure-frontend-appearance"
 description = "Allows the frontend WebView to configure its native translucent appearance."
 commands.allow = ["configure_frontend_appearance"]
+
+[[permission]]
+identifier = "desktop-startup-appearance"
+description = "Allows the frontend to cache a safe startup titlebar and native appearance snapshot."
+commands.allow = ["cache_frontend_startup_appearance"]
+
+[[permission]]
+identifier = "widget-poc-commands"
+description = "Allows the local floating-widget proof of concept to hide itself and enter click-through mode."
+commands.allow = ["hide_widget_poc", "set_widget_poc_click_through"]
+
+[[permission]]
+identifier = "desktop-widget-catalog"
+description = "Allows the Lumiverse frontend to publish its registered floating widgets to the desktop tray."
+commands.allow = ["set_desktop_widget_catalog", "resize_extension_widget", "return_extension_widget"]
+
+[[permission]]
+identifier = "desktop-widget-size-sync"
+description = "Allows a native floating widget window to synchronize only its own size."
+commands.allow = ["sync_desktop_widget_size"]
