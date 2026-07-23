@@ -47,6 +47,17 @@
   font-weight: 600;
   background: rgba(255, 183, 77, 0.15);
   color: #ffb74d;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.updateBadge:hover {
+  background: rgba(255, 183, 77, 0.24);
+}
+
+.updateBadge:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 
 .ipcBadge {

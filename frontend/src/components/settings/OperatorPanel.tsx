@@ -76,6 +76,7 @@ const OPERATOR_OPERATION_LABELS: Record<string, string> = {
 
 /** Operations that cause the server to restart and require reconnection handling. */
 const RESTART_OPERATIONS = new Set(['updating', 'switching branch', 'restarting', 'toggling remote', 'rebuilding frontend'])
+const LUMIVERSE_COMMITS_URL = 'https://github.com/prolix-oc/Lumiverse/commits'
 
 function normalizeOperatorOperation(operation: string | null | undefined): string | null {
   if (!operation) return null
@@ -1331,6 +1332,7 @@ export default function OperatorPanel() {
 
   const currentBranch = status?.branch ?? 'unknown'
   const otherBranch = currentBranch === 'main' ? 'staging' : 'main'
+  const latestCommitsUrl = `${LUMIVERSE_COMMITS_URL}/${encodeURIComponent(currentBranch)}`
   const mmapSupported = dbStatus?.effectiveTuning.mmapSource !== 'disabled'
   const dbStats = dbStatus?.stats
   const effectiveTuning = dbStatus?.effectiveTuning
@@ -1377,11 +1379,16 @@ export default function OperatorPanel() {
 
       {/* Update badge */}
       {status?.updateAvailable && (
-        <div className={styles.updateBadge}>
+        <a
+          className={styles.updateBadge}
+          href={latestCommitsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
           <Download size={12} />
           {t('operator.updatesAvailable', { count: status.commitsBehind ?? 0 })}
           {status.latestUpdateMessage ? ` — ${status.latestUpdateMessage}` : ''}
-        </div>
+        </a>
       )}
 
       {/* Reconnecting banner */}
