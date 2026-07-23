@@ -154,6 +154,14 @@ app.get("/recent-grouped", (c) => {
   const search = c.req.query("search");
   const sortParam = c.req.query("sort");
   const directionParam = c.req.query("direction");
+  const favoriteCharacterIds = c.req.query("favorite_ids")
+    ?.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  const hiddenCharacterIds = c.req.query("hidden_character_ids")
+    ?.split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
   const sort: svc.GroupedRecentChatSort | undefined =
     sortParam === "name" || sortParam === "recent" || sortParam === "created" ? sortParam : undefined;
   const direction: "asc" | "desc" | undefined =
@@ -162,6 +170,8 @@ app.get("/recent-grouped", (c) => {
     ...(search ? { search } : {}),
     ...(sort ? { sort } : {}),
     ...(direction ? { direction } : {}),
+    ...(favoriteCharacterIds?.length ? { favoriteCharacterIds } : {}),
+    ...(hiddenCharacterIds?.length ? { hiddenCharacterIds } : {}),
   }));
 });
 

@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type CSSProperties, type MouseEvent as ReactMouseEvent, type RefObject } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { motion, AnimatePresence, type Variants } from 'motion/react'
 import { useVirtualizer, type VirtualItem } from '@tanstack/react-virtual'
-import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff } from 'lucide-react'
+import { MessageSquarePlus, MessageSquare, Trash2, Users, LogOut, FlaskConical, Gamepad2, Compass, EyeOff, Star, Pencil, Copy, GitBranch } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
-import { chatsApi } from '@/api/chats'
+import { chatsApi, messagesApi } from '@/api/chats'
+import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
@@ -17,6 +18,11 @@ import { warmCharacterPalette } from '@/hooks/useCharacterTheme'
 import { prefetchImages } from '@/lib/imageDecodeCache'
 import { renderedPxToLayoutPx } from '@/lib/uiScale'
 import LazyImage from '@/components/shared/LazyImage'
+import ContextMenu, { type ContextMenuEntry, type ContextMenuPos } from '@/components/shared/ContextMenu'
+import SearchField from '@/components/shared/SearchField'
+import { SortControl } from '@/components/shared/SortControl'
+import { useLongPress } from '@/hooks/useLongPress'
+import { toast } from '@/lib/toast'
 import {
   doesDeviceRotationNeedPermission,
   isDeviceRotationSupported,
@@ -29,6 +35,8 @@ import type { CharacterPerspectiveLayer, GroupedRecentChat } from '@/types/api'
 import styles from './LandingPage.module.css'
 import clsx from 'clsx'
 import type { TFunction } from 'i18next'
+
+type LandingSortField = 'name' | 'recent' | 'created'
 
 function getRecentChatDisplayName(item: GroupedRecentChat, t: TFunction<'landing'>): string {
   return item.is_group
@@ -405,7 +413,7 @@ function clearMobilePerspectiveParallax(root: HTMLElement): void {
   }
 }
 
-function EmptyState() {
+function EmptyState({ filtered = false }: { filtered?: boolean }) {
   const { t } = useTranslation('landing')
   return (
     <motion.div
@@ -416,8 +424,8 @@ function EmptyState() {
       <div className={styles.emptyIcon}>
         <MessageSquarePlus size={48} strokeWidth={1} />
       </div>
-      <h3>{t('empty.title')}</h3>
-      <p>{t('empty.description')}</p>
+      <h3>{t(filtered ? 'empty.noMatchesTitle' : 'empty.title')}</h3>
+      <p>{t(filtered ? 'empty.noMatchesDescription' : 'empty.description')}</p>
     </motion.div>
   )
 }
@@ -444,9 +452,10 @@ interface ChatCardProps {
   onDeleteChat: (item: GroupedRecentChat) => void
   onDeleteAllChats: (item: GroupedRecentChat) => void
   onRemoveFromRecent: (item: GroupedRecentChat) => void
+  onOpenContextMenu: (item: GroupedRecentChat, position: ContextMenuPos) => void
 }
 
-const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent }: ChatCardProps) {
+const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent, onOpenContextMenu }: ChatCardProps) {
   const handleClick = useCallback(() => onClick(item), [onClick, item])
   const handleDelete = useMemo(() => {
     if (item.is_group && item.chat_count > 1) return undefined
@@ -468,6 +477,12 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onCl
   const parallaxPointerRef = useRef<{ clientX: number; clientY: number } | null>(null)
 
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
+  const isFavorite = useStore((state) => !item.is_group && state.favorites.includes(item.character_id))
+  const handleOpenContextMenu = useCallback(
+    (position: ContextMenuPos) => onOpenContextMenu(item, position),
+    [item, onOpenContextMenu],
+  )
+  const longPress = useLongPress({ onLongPress: handleOpenContextMenu })
 
   const applyParallax = useCallback((clientX: number, clientY: number) => {
     const tilt = tiltRef.current
@@ -547,10 +562,11 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onCl
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
+      {...longPress}
     >
       <div
         ref={cardRef}
-        className={clsx(styles.card, animateEntry && styles.cardEntry, isGroup && styles.groupCard)}
+        className={clsx(styles.card, animateEntry && styles.cardEntry, isGroup && styles.groupCard, isFavorite && styles.favoriteCard)}
       >
         {showDeleteButton && (
           <button
@@ -576,7 +592,10 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onCl
         <button type="button" className={styles.cardBtn} onClick={handleClick}>
           <RecentChatAvatar item={item} variant="card" />
           <div className={styles.cardContent}>
-            <h3 className={styles.cardName}>{displayName}</h3>
+            <h3 className={styles.cardName}>
+              {isFavorite && <Star size={11} fill="currentColor" aria-hidden />}
+              <span>{displayName}</span>
+            </h3>
             <div className={styles.cardMeta}>
               {isGroup ? (
                 <span className={styles.groupBadge}>
@@ -603,7 +622,7 @@ const ChatCard = memo(function ChatCard({ item, animateEntry, shiftPressed, onCl
   )
 })
 
-const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent }: ChatCardProps) {
+const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPressed, onClick, onDeleteChat, onDeleteAllChats, onRemoveFromRecent, onOpenContextMenu }: ChatCardProps) {
   const handleClick = useCallback(() => onClick(item), [onClick, item])
   const handleDelete = useMemo(() => {
     if (item.is_group && item.chat_count > 1) return undefined
@@ -619,6 +638,12 @@ const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPress
   }, [item, onDeleteChat, onDeleteAllChats])
   const { t } = useTranslation('landing')
   const isGroup = item.is_group && item.group_character_ids && item.group_character_ids.length > 0
+  const isFavorite = useStore((state) => !item.is_group && state.favorites.includes(item.character_id))
+  const handleOpenContextMenu = useCallback(
+    (position: ContextMenuPos) => onOpenContextMenu(item, position),
+    [item, onOpenContextMenu],
+  )
+  const longPress = useLongPress({ onLongPress: handleOpenContextMenu })
   const displayName = getRecentChatDisplayName(item, t)
   const subtitle = getRecentChatSubtitle(item, t)
   const showDeleteButton = handleDelete !== undefined || shiftPressed
@@ -629,7 +654,10 @@ const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPress
       : t('deleteChat')
 
   return (
-    <div className={clsx(styles.listItem, animateEntry && styles.listItemEntry, isGroup && styles.listItemGroup)}>
+    <div
+      className={clsx(styles.listItem, animateEntry && styles.listItemEntry, isGroup && styles.listItemGroup, isFavorite && styles.favoriteListItem)}
+      {...longPress}
+    >
       {showDeleteButton && (
         <button
           type="button"
@@ -656,7 +684,10 @@ const ChatListItem = memo(function ChatListItem({ item, animateEntry, shiftPress
         <RecentChatAvatar item={item} variant="compact" />
         <div className={styles.listBody}>
           <div className={styles.listTopRow}>
-            <h3 className={styles.listName}>{displayName}</h3>
+            <h3 className={styles.listName}>
+              {isFavorite && <Star size={11} fill="currentColor" aria-hidden />}
+              <span>{displayName}</span>
+            </h3>
             <span className={styles.listTime}>{formatRelativeTime(item.updated_at)}</span>
           </div>
 
@@ -703,6 +734,7 @@ interface VirtualRowProps {
   onDeleteChat: (item: GroupedRecentChat) => void
   onDeleteAllChats: (item: GroupedRecentChat) => void
   onRemoveFromRecent: (item: GroupedRecentChat) => void
+  onOpenContextMenu: (item: GroupedRecentChat, position: ContextMenuPos) => void
 }
 
 function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boolean {
@@ -719,6 +751,7 @@ function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boo
   if (prev.onDeleteChat !== next.onDeleteChat) return false
   if (prev.onDeleteAllChats !== next.onDeleteAllChats) return false
   if (prev.onRemoveFromRecent !== next.onRemoveFromRecent) return false
+  if (prev.onOpenContextMenu !== next.onOpenContextMenu) return false
   if (prev.rowItems.length !== next.rowItems.length) return false
   for (let i = 0; i < prev.rowItems.length; i += 1) {
     if (prev.rowItems[i] !== next.rowItems[i]) return false
@@ -740,6 +773,7 @@ const VirtualRow = memo(function VirtualRow({
   onDeleteChat,
   onDeleteAllChats,
   onRemoveFromRecent,
+  onOpenContextMenu,
 }: VirtualRowProps) {
   const animateEntry = animateInitialEntries
     && virtualRow.index * virtualColumns < initialPageSize
@@ -766,6 +800,7 @@ const VirtualRow = memo(function VirtualRow({
             onDeleteChat={onDeleteChat}
             onDeleteAllChats={onDeleteAllChats}
             onRemoveFromRecent={onRemoveFromRecent}
+            onOpenContextMenu={onOpenContextMenu}
           />
         ) : (
           <ChatCard
@@ -777,6 +812,7 @@ const VirtualRow = memo(function VirtualRow({
             onDeleteChat={onDeleteChat}
             onDeleteAllChats={onDeleteAllChats}
             onRemoveFromRecent={onRemoveFromRecent}
+            onOpenContextMenu={onOpenContextMenu}
           />
         ),
       )}
@@ -784,14 +820,142 @@ const VirtualRow = memo(function VirtualRow({
   )
 }, virtualRowPropsEqual)
 
+interface VirtualizedChatRowsProps {
+  items: GroupedRecentChat[]
+  layoutMode: 'cards' | 'compact'
+  virtualColumns: number
+  virtualGap: number
+  virtualRowEstimate: number
+  virtualScrollMargin: number
+  scrollRef: RefObject<HTMLDivElement | null>
+  initialPageSize: number
+  animateInitialEntries: boolean
+  navigatingToChat: boolean
+  shiftPressed: boolean
+  onContainerChange: (node: HTMLDivElement | null) => void
+  onChatClick: (item: GroupedRecentChat) => void
+  onDeleteChat: (item: GroupedRecentChat) => void
+  onDeleteAllChats: (item: GroupedRecentChat) => void
+  onRemoveFromRecent: (item: GroupedRecentChat) => void
+  onOpenContextMenu: (item: GroupedRecentChat, position: ContextMenuPos) => void
+}
+
+/**
+ * Owns one virtualizer lifecycle for a single row topology. The parent keys
+ * this component by layout + column count so card/list switches cannot reuse
+ * direct-DOM range and measurement caches from an incompatible arrangement.
+ */
+function VirtualizedChatRows({
+  items,
+  layoutMode,
+  virtualColumns,
+  virtualGap,
+  virtualRowEstimate,
+  virtualScrollMargin,
+  scrollRef,
+  initialPageSize,
+  animateInitialEntries,
+  navigatingToChat,
+  shiftPressed,
+  onContainerChange,
+  onChatClick,
+  onDeleteChat,
+  onDeleteAllChats,
+  onRemoveFromRecent,
+  onOpenContextMenu,
+}: VirtualizedChatRowsProps) {
+  const virtualRowCount = Math.ceil(items.length / virtualColumns)
+  const characters = useStore((state) => state.characters)
+  const chatVirtualizer = useVirtualizer({
+    count: virtualRowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => virtualRowEstimate,
+    overscan: VIRTUAL_OVERSCAN,
+    anchorTo: 'start',
+    scrollMargin: virtualScrollMargin,
+    directDomUpdates: true,
+    useFlushSync: false,
+    getItemKey: (index) => {
+      const start = index * virtualColumns
+      return items.slice(start, start + virtualColumns).map(getRecentChatKey).join('|') || index
+    },
+  })
+
+  useEffect(() => {
+    chatVirtualizer.measure()
+  }, [chatVirtualizer, items, virtualRowEstimate])
+
+  const virtualItems = chatVirtualizer.getVirtualItems()
+  const visibleStart = virtualItems.length > 0 ? virtualItems[0].index : -1
+  const visibleEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
+
+  useEffect(() => {
+    if (visibleStart < 0 || visibleEnd < 0 || items.length === 0) return
+    const startRow = Math.max(0, visibleStart - PREFETCH_ROWS)
+    const endRow = Math.min(virtualRowCount - 1, visibleEnd + PREFETCH_ROWS)
+    const startItem = startRow * virtualColumns
+    const endItem = Math.min(items.length, (endRow + 1) * virtualColumns)
+    const urls = getItemAvatarUrls(
+      items.slice(startItem, endItem),
+      characters,
+      layoutMode === 'compact' ? 'compact' : 'card',
+    )
+    if (urls.length > 0) prefetchImages(urls)
+  }, [characters, items, layoutMode, visibleEnd, visibleStart, virtualColumns, virtualRowCount])
+
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    chatVirtualizer.containerRef(node)
+    onContainerChange(node)
+  }, [chatVirtualizer, onContainerChange])
+
+  return (
+    <motion.div
+      className={clsx(styles.virtualChats, navigatingToChat && styles.chatsLeaving)}
+      ref={setContainerRef}
+      variants={containerVariants}
+      initial="hidden"
+      animate={navigatingToChat ? 'leaving' : 'visible'}
+      exit="exit"
+    >
+      {virtualItems.map((virtualRow) => {
+        const start = virtualRow.index * virtualColumns
+        return (
+          <VirtualRow
+            key={virtualRow.key}
+            virtualRow={virtualRow}
+            virtualColumns={virtualColumns}
+            virtualGap={virtualGap}
+            rowItems={items.slice(start, start + virtualColumns)}
+            layoutMode={layoutMode}
+            initialPageSize={initialPageSize}
+            animateInitialEntries={animateInitialEntries}
+            shiftPressed={shiftPressed}
+            measureElement={chatVirtualizer.measureElement}
+            onChatClick={onChatClick}
+            onDeleteChat={onDeleteChat}
+            onDeleteAllChats={onDeleteAllChats}
+            onRemoveFromRecent={onRemoveFromRecent}
+            onOpenContextMenu={onOpenContextMenu}
+          />
+        )
+      })}
+    </motion.div>
+  )
+}
+
 export default function LandingPage() {
   const { t } = useTranslation('landing')
   const { t: tc } = useTranslation('common')
   const navigate = useNavigate()
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
+  const favorites = useStore((s) => s.favorites)
+  const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const openModal = useStore((s) => s.openModal)
+  const toggleFavorite = useStore((s) => s.toggleFavorite)
+  const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
+  const setSetting = useStore((s) => s.setSetting)
   const logout = useStore((s) => s.logout)
   const authUser = useStore((s) => s.user)
   const hasGlobalWallpaper = useStore((s) => Boolean(s.wallpaper.global?.image_id))
@@ -807,11 +971,17 @@ export default function LandingPage() {
   const [navigatingToChat, setNavigatingToChat] = useState(false)
   const [animateInitialEntries, setAnimateInitialEntries] = useState(true)
   const [shiftPressed, setShiftPressed] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
+  const [sortField, setSortField] = useState<LandingSortField>('recent')
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [contextMenu, setContextMenu] = useState<{ item: GroupedRecentChat; position: ContextMenuPos } | null>(null)
   const [mobileMotionPermission, setMobileMotionPermission] = useState<DeviceRotationPermissionState>('unknown')
   const [showMobileMotionEnable, setShowMobileMotionEnable] = useState(false)
   const tempChatMenuRef = useRef<HTMLDivElement>(null)
   const tempChatMenuOpenedAt = useRef(0)
   const chatNavigationTimerRef = useRef<number | null>(null)
+  const fetchSequenceRef = useRef(0)
 
   const profiles = useStore((s) => s.profiles)
   const activeProfileId = useStore((s) => s.activeProfileId)
@@ -822,6 +992,21 @@ export default function LandingPage() {
     [profiles, activeProfileId]
   )
   const activePresetName = activeLoomPresetId ? loomRegistry[activeLoomPresetId]?.name ?? null : null
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 150)
+    return () => window.clearTimeout(timer)
+  }, [searchQuery])
+
+  const recentChatQuery = useMemo(() => ({
+    ...(debouncedSearchQuery ? { search: debouncedSearchQuery } : {}),
+    sort: sortField,
+    direction: sortDirection,
+    ...(favorites.length > 0 ? { favorite_ids: favorites.join(',') } : {}),
+    ...(landingHiddenCharacterIds.length > 0
+      ? { hidden_character_ids: landingHiddenCharacterIds.join(',') }
+      : {}),
+  }), [debouncedSearchQuery, favorites, landingHiddenCharacterIds, sortDirection, sortField])
 
   // pointerdown + openedAt guard per the project's Android outside-click rule
   useEffect(() => {
@@ -1025,12 +1210,14 @@ export default function LandingPage() {
 
   const fetchChats = useCallback(async () => {
     if (!settingsLoaded) return
+    const requestSequence = ++fetchSequenceRef.current
 
     // Bootstrap delivers the first recent-chats page alongside settings —
     // consume it once instead of issuing another round trip. Later runs
     // (WS chat-deleted, limit changes, revisits) find it cleared and fetch.
     const preload = useStore.getState().landingRecentChats
-    if (preload) {
+    const canUsePreload = !debouncedSearchQuery && sortField === 'recent' && sortDirection === 'desc'
+    if (preload && canUsePreload) {
       useStore.getState().setLandingRecentChats(null)
       setItems(preload.data)
       setTotal(preload.total)
@@ -1038,29 +1225,38 @@ export default function LandingPage() {
       setLoading(false)
       return
     }
+    if (preload) useStore.getState().setLandingRecentChats(null)
 
     setLoading(true)
     setError(null)
     try {
-      const result = await chatsApi.listRecentGrouped({ limit: landingPageChatsDisplayed })
+      const result = await chatsApi.listRecentGrouped({
+        limit: landingPageChatsDisplayed,
+        ...recentChatQuery,
+      })
+      if (requestSequence !== fetchSequenceRef.current) return
       setItems(result.data)
       setTotal(result.total)
     } catch (err: any) {
+      if (requestSequence !== fetchSequenceRef.current) return
       console.error('[Lumiverse] Error fetching chats:', err)
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (requestSequence === fetchSequenceRef.current) setLoading(false)
     }
-  }, [landingPageChatsDisplayed, settingsLoaded])
+  }, [debouncedSearchQuery, landingPageChatsDisplayed, recentChatQuery, settingsLoaded, sortDirection, sortField])
 
   const loadMore = useCallback(async () => {
     if (loadingMore || items.length >= total) return
+    const requestSequence = fetchSequenceRef.current
     setLoadingMore(true)
     try {
       const result = await chatsApi.listRecentGrouped({
         limit: landingPageChatsDisplayed,
         offset: items.length,
+        ...recentChatQuery,
       })
+      if (requestSequence !== fetchSequenceRef.current) return
       setItems((prev) => [...prev, ...result.data])
       setTotal(result.total)
     } catch (err: any) {
@@ -1068,7 +1264,7 @@ export default function LandingPage() {
     } finally {
       setLoadingMore(false)
     }
-  }, [loadingMore, items.length, total, landingPageChatsDisplayed])
+  }, [loadingMore, items.length, total, landingPageChatsDisplayed, recentChatQuery])
 
   useEffect(() => {
     fetchChats()
@@ -1210,6 +1406,124 @@ export default function LandingPage() {
     [fetchChats]
   )
 
+  const handleOpenContextMenu = useCallback((item: GroupedRecentChat, position: ContextMenuPos) => {
+    setContextMenu({ item, position })
+  }, [])
+
+  const handleEditCharacter = useCallback(async (item: GroupedRecentChat) => {
+    if (item.is_group) return
+    try {
+      const state = useStore.getState()
+      if (!state.characters.some((character) => character.id === item.character_id)) {
+        const character = await charactersApi.get(item.character_id)
+        useStore.getState().updateCharacter(character.id, character)
+      }
+      setEditingCharacterId(item.character_id)
+    } catch (err) {
+      console.error('[Lumiverse] Error loading character for editing:', err)
+      toast.error(t('editFailed'))
+    }
+  }, [setEditingCharacterId, t])
+
+  const handleDuplicateCharacter = useCallback(async (item: GroupedRecentChat) => {
+    if (item.is_group) return
+    try {
+      const duplicate = await charactersApi.duplicate(item.character_id)
+      useStore.getState().addCharacter(duplicate)
+      toast.success(t('duplicateSuccess', { name: duplicate.name }))
+    } catch (err) {
+      console.error('[Lumiverse] Error duplicating character:', err)
+      toast.error(t('duplicateFailed'))
+    }
+  }, [t])
+
+  const handleHideCharacter = useCallback((item: GroupedRecentChat) => {
+    if (item.is_group || landingHiddenCharacterIds.includes(item.character_id)) return
+    setItems((current) => current.filter((entry) => entry.is_group || entry.character_id !== item.character_id))
+    setTotal((current) => Math.max(0, current - 1))
+    setSetting('landingHiddenCharacterIds', [...landingHiddenCharacterIds, item.character_id])
+    toast.success(t('hiddenCharacter', { name: item.character_name }))
+  }, [landingHiddenCharacterIds, setSetting, t])
+
+  const handleBranchLatest = useCallback((item: GroupedRecentChat) => {
+    openModal('confirm', {
+      title: tc('fork.title'),
+      message: tc('fork.message'),
+      confirmText: tc('fork.confirm'),
+      inputLabel: tc('fork.nameLabel'),
+      inputPlaceholder: tc('fork.namePlaceholder'),
+      onConfirm: async (name: string) => {
+        try {
+          const page = await messagesApi.list(item.latest_chat_id, { limit: 1, tail: true })
+          const latestMessage = page.data.at(-1)
+          if (!latestMessage) {
+            toast.info(t('branchEmptyChat'))
+            return
+          }
+          const newChat = await chatsApi.branch(item.latest_chat_id, latestMessage.id, name)
+          navigateToChat(newChat.id)
+        } catch (err) {
+          console.error('[Lumiverse] Error branching recent chat:', err)
+          toast.error(t('branchFailed'))
+        }
+      },
+    })
+  }, [navigateToChat, openModal, t, tc])
+
+  const contextMenuItems = useMemo<ContextMenuEntry[]>(() => {
+    if (!contextMenu) return []
+    const { item } = contextMenu
+    const closeThen = (action: () => void | Promise<void>) => () => {
+      setContextMenu(null)
+      void action()
+    }
+    const entries: ContextMenuEntry[] = []
+
+    if (!item.is_group) {
+      const isFavorite = favorites.includes(item.character_id)
+      entries.push(
+        {
+          key: 'favorite',
+          label: isFavorite ? t('removeFavorite') : t('addFavorite'),
+          icon: <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />,
+          active: isFavorite,
+          onClick: closeThen(() => toggleFavorite(item.character_id)),
+        },
+        {
+          key: 'edit',
+          label: t('editCharacter'),
+          icon: <Pencil size={14} />,
+          onClick: closeThen(() => handleEditCharacter(item)),
+        },
+        {
+          key: 'duplicate',
+          label: t('duplicateCharacter'),
+          icon: <Copy size={14} />,
+          onClick: closeThen(() => handleDuplicateCharacter(item)),
+        },
+        { key: 'character-chat-divider', type: 'divider' },
+      )
+    }
+
+    entries.push({
+      key: 'branch-latest',
+      label: t('branchLatest'),
+      icon: <GitBranch size={14} />,
+      onClick: closeThen(() => handleBranchLatest(item)),
+    })
+
+    if (!item.is_group) {
+      entries.push({
+        key: 'hide-character',
+        label: t('hideCharacter'),
+        icon: <EyeOff size={14} />,
+        onClick: closeThen(() => handleHideCharacter(item)),
+      })
+    }
+
+    return entries
+  }, [contextMenu, favorites, handleBranchLatest, handleDuplicateCharacter, handleEditCharacter, handleHideCharacter, t, toggleFavorite])
+
   const handleNewChat = useCallback(() => {
     navigate('/characters')
   }, [navigate])
@@ -1249,61 +1563,24 @@ export default function LandingPage() {
     })
   }, [openModal, logout, t])
 
+  const handleSortFieldChange = useCallback((next: LandingSortField) => {
+    setSortField(next)
+    setSortDirection(next === 'name' ? 'asc' : 'desc')
+  }, [])
+
   const hasMore = items.length < total
   const virtualLayout = landingPageLayoutMode === 'compact' ? 'compact' : 'cards'
   const virtualGap = getColumnGap(mainWidth, virtualLayout)
   const virtualColumns = getColumnCount(mainWidth, virtualLayout)
-  const virtualRowCount = Math.ceil(items.length / virtualColumns)
   const virtualColumnWidth = Math.max(1, (mainWidth - virtualGap * (virtualColumns - 1)) / virtualColumns)
   const virtualRowEstimate = virtualLayout === 'compact'
     ? COMPACT_ROW_ESTIMATE + virtualGap
     : Math.ceil(virtualColumnWidth * (4 / 3)) + virtualGap
 
-  const chatVirtualizer = useVirtualizer({
-    count: virtualRowCount,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => virtualRowEstimate,
-    overscan: VIRTUAL_OVERSCAN,
-    anchorTo: 'start',
-    scrollMargin: virtualScrollMargin,
-    directDomUpdates: true,
-    useFlushSync: false,
-    getItemKey: (index) => {
-      const start = index * virtualColumns
-      return items.slice(start, start + virtualColumns).map(getRecentChatKey).join('|') || index
-    },
-  })
-
-  useEffect(() => {
-    chatVirtualizer.measure()
-    updateVirtualScrollMargin()
-  }, [chatVirtualizer, updateVirtualScrollMargin, virtualColumns, virtualRowEstimate, virtualLayout])
-
-  // Prefetch avatar images for rows near the visible viewport so they're
-  // already decoded when the virtualizer scrolls them into view.
-  const characters = useStore((s) => s.characters)
-  const virtualItems = chatVirtualizer.getVirtualItems()
-  const visStart = virtualItems.length > 0 ? virtualItems[0].index : -1
-  const visEnd = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1
-  useEffect(() => {
-    if (visStart < 0 || visEnd < 0 || items.length === 0) return
-    const startRow = Math.max(0, visStart - PREFETCH_ROWS)
-    const endRow = Math.min(virtualRowCount - 1, visEnd + PREFETCH_ROWS)
-    const startItem = startRow * virtualColumns
-    const endItem = Math.min(items.length, (endRow + 1) * virtualColumns)
-    const urls = getItemAvatarUrls(
-      items.slice(startItem, endItem),
-      characters,
-      virtualLayout === 'compact' ? 'compact' : 'card',
-    )
-    if (urls.length > 0) prefetchImages(urls)
-  }, [visStart, visEnd, items, virtualColumns, virtualRowCount, characters, virtualLayout])
-
-  const setVirtualContainerRef = useCallback((node: HTMLDivElement | null) => {
+  const handleVirtualContainerChange = useCallback((node: HTMLDivElement | null) => {
     virtualContainerRef.current = node
-    chatVirtualizer.containerRef(node)
     updateVirtualScrollMargin()
-  }, [chatVirtualizer, updateVirtualScrollMargin])
+  }, [updateVirtualScrollMargin])
 
   return (
     <div className={styles.page}>
@@ -1416,6 +1693,31 @@ export default function LandingPage() {
           </div>
         </header>
 
+        <div className={styles.landingToolbar}>
+          <SearchField
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder={t('searchPlaceholder')}
+            clearLabel={tc('actions.clear')}
+            className={styles.landingSearch}
+          />
+          <SortControl
+            options={[
+              { value: 'recent', label: t('sort.recent') },
+              { value: 'name', label: t('sort.name') },
+              { value: 'created', label: t('sort.created') },
+            ]}
+            value={sortField}
+            onChange={handleSortFieldChange}
+            direction={sortDirection}
+            onToggleDirection={() => setSortDirection((direction) => direction === 'asc' ? 'desc' : 'asc')}
+            title={t('sort.title')}
+            ascendingTitle={t('sort.ascending')}
+            descendingTitle={t('sort.descending')}
+            dropdownAlign="end"
+          />
+        </div>
+
         <main className={styles.main} ref={mainRef}>
           <AnimatePresence mode="wait">
             {!settingsLoaded || (loading && items.length === 0) ? (
@@ -1438,42 +1740,28 @@ export default function LandingPage() {
                 <button onClick={fetchChats} className={styles.primaryBtn} type="button">{t('tryAgain')}</button>
               </motion.div>
             ) : items.length === 0 ? (
-              <EmptyState key="empty" />
+              <EmptyState key="empty" filtered={Boolean(debouncedSearchQuery)} />
             ) : (
-              <motion.div
-                key={`chats-${landingPageLayoutMode}`}
-                className={clsx(
-                  styles.virtualChats,
-                  navigatingToChat && styles.chatsLeaving
-                )}
-                ref={setVirtualContainerRef}
-                variants={containerVariants}
-                initial="hidden"
-                animate={navigatingToChat ? 'leaving' : 'visible'}
-                exit="exit"
-              >
-                {chatVirtualizer.getVirtualItems().map((virtualRow) => {
-                  const start = virtualRow.index * virtualColumns
-                  return (
-                    <VirtualRow
-                      key={virtualRow.key}
-                      virtualRow={virtualRow}
-                      virtualColumns={virtualColumns}
-                      virtualGap={virtualGap}
-                      rowItems={items.slice(start, start + virtualColumns)}
-                      layoutMode={landingPageLayoutMode}
-                      initialPageSize={landingPageChatsDisplayed}
-                      animateInitialEntries={animateInitialEntries}
-                      shiftPressed={shiftPressed}
-                      measureElement={chatVirtualizer.measureElement}
-                      onChatClick={handleChatClick}
-                      onDeleteChat={handleDeleteChat}
-                      onDeleteAllChats={handleDeleteAllChats}
-                      onRemoveFromRecent={handleRemoveFromRecent}
-                    />
-                  )
-                })}
-              </motion.div>
+              <VirtualizedChatRows
+                key={`${virtualLayout}-${virtualColumns}`}
+                items={items}
+                layoutMode={virtualLayout}
+                virtualColumns={virtualColumns}
+                virtualGap={virtualGap}
+                virtualRowEstimate={virtualRowEstimate}
+                virtualScrollMargin={virtualScrollMargin}
+                scrollRef={scrollRef}
+                initialPageSize={landingPageChatsDisplayed}
+                animateInitialEntries={animateInitialEntries}
+                navigatingToChat={navigatingToChat}
+                shiftPressed={shiftPressed}
+                onContainerChange={handleVirtualContainerChange}
+                onChatClick={handleChatClick}
+                onDeleteChat={handleDeleteChat}
+                onDeleteAllChats={handleDeleteAllChats}
+                onRemoveFromRecent={handleRemoveFromRecent}
+                onOpenContextMenu={handleOpenContextMenu}
+              />
             )}
           </AnimatePresence>
 
@@ -1490,6 +1778,11 @@ export default function LandingPage() {
         </main>
       </motion.div>
     </div>
+    <ContextMenu
+      position={contextMenu?.position ?? null}
+      items={contextMenuItems}
+      onClose={() => setContextMenu(null)}
+    />
   </div>
 )
 }

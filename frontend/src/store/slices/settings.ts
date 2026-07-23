@@ -28,6 +28,7 @@ export const REASONING_DEFAULTS: ReasoningSettings = {
 const DATA_KEYS: ReadonlySet<string> = new Set([
   'landingPageChatsDisplayed',
   'landingPageLayoutMode',
+  'landingHiddenCharacterIds',
   'charactersPerPage',
   'personasPerPage',
   'messagesPerPage',
@@ -452,6 +453,7 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
   fullSettingsLoaded: false,
   landingPageChatsDisplayed: 12,
   landingPageLayoutMode: 'cards',
+  landingHiddenCharacterIds: [],
   charactersPerPage: 50,
   personasPerPage: 24,
   messagesPerPage: 50,
@@ -575,6 +577,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     const patch: Record<string, any> = { settingsLoaded: true }
 
     if (Array.isArray(settings.favorites)) patch.favorites = settings.favorites
+    if (Array.isArray(settings.landingHiddenCharacterIds)) {
+      patch.landingHiddenCharacterIds = settings.landingHiddenCharacterIds.filter(
+        (id): id is string => typeof id === 'string' && id.length > 0,
+      )
+    }
     if (settings.filterTab) patch.filterTab = settings.filterTab
     if (settings.sortField) patch.sortField = settings.sortField
     if (settings.sortDirection) patch.sortDirection = settings.sortDirection

@@ -608,6 +608,8 @@ export interface GroupedRecentChatOptions {
   search?: string;
   sort?: GroupedRecentChatSort;
   direction?: 'asc' | 'desc';
+  favoriteCharacterIds?: string[];
+  hiddenCharacterIds?: string[];
 }
 
 interface RecentChatCharacterInfo {
@@ -665,7 +667,12 @@ export function listRecentChatsGrouped(
   const searchTerm = options.search?.trim().toLowerCase() ?? '';
   const sort: GroupedRecentChatSort = options.sort ?? 'recent';
   const direction = options.direction ?? (sort === 'name' ? 'asc' : 'desc');
-  const isDefaultRecentSort = !searchTerm && sort === 'recent' && direction === 'desc';
+  const favoriteCharacterIds = new Set(options.favoriteCharacterIds ?? []);
+  const hiddenCharacterIds = new Set(options.hiddenCharacterIds ?? []);
+  const isDefaultRecentSort = !searchTerm
+    && favoriteCharacterIds.size === 0
+    && sort === 'recent'
+    && direction === 'desc';
 
   // Parse metadata in JS so a single malformed row cannot make SQLite abort
   // the landing-page recent-chat query while evaluating json_extract().
@@ -705,7 +712,12 @@ export function listRecentChatsGrouped(
     const isGroup = isGroupMetadata(metadata);
     return { ...row, metadata, isGroup, groupKey: null as string | null };
   });
-  const parsedRows = allParsedRows.filter((row) => !isHiddenFromRecent(row.metadata));
+  const parsedRows = allParsedRows.filter((row) => {
+    if (isHiddenFromRecent(row.metadata)) return false;
+    // Character visibility applies only to solo cards. Group chats remain
+    // chat-scoped entities even when one of their members is hidden from home.
+    return row.isGroup || !hiddenCharacterIds.has(row.character_id);
+  });
 
   const soloCounts = new Map<string, number>();
   const groupCounts = new Map<string, number>();
@@ -773,6 +785,9 @@ export function listRecentChatsGrouped(
 
   const sign = direction === 'asc' ? 1 : -1;
   const sortedRows = isDefaultRecentSort ? filteredRows : [...filteredRows].sort((a, b) => {
+    const aFavorite = !a.isGroup && favoriteCharacterIds.has(a.character_id) ? 1 : 0;
+    const bFavorite = !b.isGroup && favoriteCharacterIds.has(b.character_id) ? 1 : 0;
+    if (aFavorite !== bFavorite) return bFavorite - aFavorite;
     if (sort === 'name') {
       return sign * displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base' });
     }

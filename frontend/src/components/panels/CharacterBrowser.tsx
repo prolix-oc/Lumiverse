@@ -14,7 +14,6 @@ import BatchBar from './character-browser/BatchBar'
 import FavoritesSlider from './character-browser/FavoritesSlider'
 import CharacterGrid from './character-browser/CharacterGrid'
 import CharacterList from './character-browser/CharacterList'
-import CharacterEditorPage from './character-browser/CharacterEditorPage'
 import ImportUrlModal from './character-browser/ImportUrlModal'
 import BulkTagsModal from './character-browser/BulkTagsModal'
 import DragDropOverlay from './character-browser/DragDropOverlay'
@@ -614,7 +613,6 @@ export default function CharacterBrowser() {
         onClose={browser.closeAltFieldsSummary}
       />
 
-      <CharacterEditorPage />
     </div>
   )
 }

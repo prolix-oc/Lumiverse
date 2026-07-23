@@ -26,6 +26,8 @@ export const chatsApi = {
     search?: string
     sort?: 'name' | 'recent' | 'created'
     direction?: 'asc' | 'desc'
+    favorite_ids?: string
+    hidden_character_ids?: string
   }) {
     return get<PaginatedResult<GroupedRecentChat>>('/chats/recent-grouped', params)
   },

@@ -201,7 +201,10 @@
       "cards": "Cards",
       "compactList": "Compact List",
       "layoutHelper": "Switch the landing page between the current card gallery and a denser adaptive list of recent chats.",
-      "batchSize": "LANDING PAGE CHATS PER BATCH"
+      "batchSize": "LANDING PAGE CHATS PER BATCH",
+      "hiddenCharacters": "HIDDEN FROM HOME ({{count}})",
+      "showHiddenCharacters": "Show all hidden characters",
+      "hiddenCharactersHelper": "Restores character cards hidden from the landing page. Group chats are unaffected."
     }
   },
   "notifications": {

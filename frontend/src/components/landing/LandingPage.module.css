@@ -121,6 +121,17 @@
   margin-bottom: 24px;
 }
 
+.landingToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.landingSearch {
+  flex: 1;
+}
+
 .logo {
   display: flex;
   align-items: center;
@@ -672,6 +683,9 @@
 }
 
 .cardName {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: calc(14px * var(--lumiverse-font-scale, 1));
   font-weight: 600;
   color: var(--lumiverse-text);
@@ -679,6 +693,25 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   margin: 0;
+}
+
+.cardName svg,
+.listName svg {
+  flex-shrink: 0;
+  color: var(--lumiverse-primary-muted);
+}
+
+.cardName span,
+.listName span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.favoriteCard,
+.favoriteListItem {
+  border-color: var(--lumiverse-primary-030);
 }
 
 .cardMeta {
@@ -951,6 +984,9 @@
 }
 
 .listName {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   margin: 0;
   min-width: 0;
   overflow: hidden;
@@ -1188,6 +1224,10 @@
 }
 
 @media (max-width: 600px) {
+  .landingToolbar {
+    margin-bottom: 14px;
+  }
+
   .content {
     padding: 16px;
   }

@@ -23,6 +23,7 @@ import {
 } from '@/hooks/useDisplayRegex'
 import { triggerTTSAutoPlay } from '@/hooks/useTTSAutoPlay'
 import { recoverPooledGeneration, requestStreamGapRecovery } from '@/lib/generation-recovery'
+import { checkForBundleUpdate } from '@/lib/swUpdater'
 import type {
   StreamTokenPayload,
   GenerationStartedPayload,
@@ -370,6 +371,10 @@ export function useWebSocket() {
   const activeChatId = useStore((s) => s.activeChatId)
   const lastExtensionSyncAtRef = useRef(0)
   const lastOperatorUpdateToastKeyRef = useRef<string | null>(null)
+  // Set only after a confirmed healthy session drops. The following verified
+  // reconnect then gets one prompt service-worker update check, which catches
+  // bundles rebuilt while the server was unavailable.
+  const pendingReconnectBundleCheckRef = useRef(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -447,9 +452,16 @@ export function useWebSocket() {
       }),
       wsClient.on(WS_CLOSE, () => {
         store.getState().setWsConnected(false)
+        if (store.getState().wsHasEverConnected) {
+          pendingReconnectBundleCheckRef.current = true
+        }
       }),
       wsClient.on(WS_PONG, () => {
         store.getState().setWsRoundTripVerified(true)
+        if (pendingReconnectBundleCheckRef.current) {
+          pendingReconnectBundleCheckRef.current = false
+          void checkForBundleUpdate()
+        }
       }),
       wsClient.on(WS_AUTH_ERROR, () => {
         // Server has explicitly rejected our session — the cookie is invalid

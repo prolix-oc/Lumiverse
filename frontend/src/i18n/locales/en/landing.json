@@ -10,8 +10,31 @@
   },
   "empty": {
     "title": "No recent chats",
-    "description": "Start a conversation with a character to begin"
+    "description": "Start a conversation with a character to begin",
+    "noMatchesTitle": "No matching chats",
+    "noMatchesDescription": "Try a different character or chat name"
   },
+  "searchPlaceholder": "Search recent chats",
+  "sort": {
+    "title": "Sort recent chats",
+    "name": "Name",
+    "recent": "Recent activity",
+    "created": "Date created",
+    "ascending": "Ascending",
+    "descending": "Descending"
+  },
+  "addFavorite": "Add to favorites",
+  "removeFavorite": "Remove from favorites",
+  "editCharacter": "Edit character",
+  "editFailed": "Failed to load character editor",
+  "duplicateCharacter": "Duplicate character",
+  "duplicateSuccess": "Created {{name}}",
+  "duplicateFailed": "Failed to duplicate character",
+  "hideCharacter": "Hide character from home",
+  "hiddenCharacter": "{{name}} is hidden from home",
+  "branchLatest": "Branch from latest message",
+  "branchEmptyChat": "This chat has no messages to branch from",
+  "branchFailed": "Failed to branch chat",
   "tagline": "Continue your story",
   "tempChat": "Temporary chat",
   "tempChatWithProfile": "Temporary chat · {{name}}",

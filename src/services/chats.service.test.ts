@@ -271,6 +271,38 @@ describe("recent chats", () => {
     expect(result.data[1].chat_count).toBe(1);
   });
 
+  test("pins favorite solo characters before pagination without moving groups", () => {
+    seedChat("favorite-old", "c1", "Favorite", "{}", 100);
+    seedChat("recent", "c2", "Recent", "{}", 300);
+    seedChat("group", "c2", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 200);
+
+    const result = listRecentChatsGrouped(
+      "u1",
+      { limit: 2, offset: 0 },
+      { favoriteCharacterIds: ["c1"] },
+    );
+
+    expect(result.total).toBe(3);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["favorite-old", "recent"]);
+  });
+
+  test("hides solo character cards before grouping and pagination but keeps groups", () => {
+    seedChat("c1-old", "c1", "Alpha old", "{}", 100);
+    seedChat("c1-new", "c1", "Alpha new", "{}", 300);
+    seedChat("c2-only", "c2", "Beta only", "{}", 200);
+    seedChat("group", "c1", "Group", JSON.stringify({ group: true, character_ids: ["c1", "c2"] }), 250);
+
+    const result = listRecentChatsGrouped(
+      "u1",
+      { limit: 10, offset: 0 },
+      { hiddenCharacterIds: ["c1"] },
+    );
+
+    expect(result.total).toBe(2);
+    expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["group", "c2-only"]);
+    expect(result.data[0].is_group).toBe(true);
+  });
+
   test("keeps reasoning scoped to the swipe it belongs to", () => {
     seedChat("chat-1", "c1", "Swipe chat", "{}", 100);
     seedMessage("msg-1", "chat-1", "first swipe", {

@@ -274,6 +274,7 @@ function DisplaySettings() {
   const modalMaxWidth = useStore((s) => s.modalMaxWidth)
   const landingPageChatsDisplayed = useStore((s) => s.landingPageChatsDisplayed)
   const landingPageLayoutMode = useStore((s) => s.landingPageLayoutMode)
+  const landingHiddenCharacterIds = useStore((s) => s.landingHiddenCharacterIds)
   const toastPosition = useStore((s) => s.toastPosition)
   const chatHeadsEnabled = useStore((s) => s.chatHeadsEnabled)
   const chatHeadsSize = useStore((s) => s.chatHeadsSize)
@@ -571,6 +572,22 @@ function DisplaySettings() {
           onChange={(value) => setSetting('landingPageChatsDisplayed', value ?? 12)}
         />
       </div>
+
+      {landingHiddenCharacterIds.length > 0 && (
+        <div className={styles.field}>
+          <label className={styles.fieldLabel}>
+            {t('display.landing.hiddenCharacters', { count: landingHiddenCharacterIds.length })}
+          </label>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSetting('landingHiddenCharacterIds', [])}
+          >
+            {t('display.landing.showHiddenCharacters')}
+          </Button>
+          <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
+        </div>
+      )}
 
     </div>
   )

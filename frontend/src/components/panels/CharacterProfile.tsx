@@ -59,7 +59,6 @@ export default function CharacterProfile() {
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const characters = useStore((s) => s.characters)
   const setEditingCharacterId = useStore((s) => s.setEditingCharacterId)
-  const setDrawerTab = useStore((s) => s.setDrawerTab)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const groupCharacterIds = useStore((s) => s.groupCharacterIds)
   const openModal = useStore((s) => s.openModal)
@@ -72,7 +71,6 @@ export default function CharacterProfile() {
         characters={characters}
         chatId={activeChatId}
         setEditingCharacterId={setEditingCharacterId}
-        setDrawerTab={setDrawerTab}
         openModal={openModal}
       />
     )
@@ -84,7 +82,6 @@ export default function CharacterProfile() {
       activeCharacterId={activeCharacterId}
       characters={characters}
       setEditingCharacterId={setEditingCharacterId}
-      setDrawerTab={setDrawerTab}
     />
   )
 }
@@ -96,13 +93,11 @@ function SingleCharacterProfile({
   activeCharacterId,
   characters,
   setEditingCharacterId,
-  setDrawerTab,
 }: {
   paramId?: string
   activeCharacterId: string | null
   characters: Character[]
   setEditingCharacterId: (id: string | null) => void
-  setDrawerTab: (tab: string) => void
 }) {
   const { t } = useTranslation('panels')
   const activePersonaId = useStore((s) => s.activePersonaId)
@@ -120,8 +115,7 @@ function SingleCharacterProfile({
   const handleEditCharacter = useCallback(() => {
     if (!charId) return
     setEditingCharacterId(charId)
-    setDrawerTab('characters')
-  }, [charId, setEditingCharacterId, setDrawerTab])
+  }, [charId, setEditingCharacterId])
 
   useEffect(() => {
     if (storedCharacter) setCharacter(storedCharacter)
@@ -412,14 +406,12 @@ function GroupProfile({
   characters,
   chatId,
   setEditingCharacterId,
-  setDrawerTab,
   openModal,
 }: {
   characterIds: string[]
   characters: Character[]
   chatId: string | null
   setEditingCharacterId: (id: string | null) => void
-  setDrawerTab: (tab: string) => void
   openModal: (modal: string, props?: any) => void
 }) {
   const { t } = useTranslation('panels')
@@ -462,8 +454,7 @@ function GroupProfile({
 
   const handleEditMember = useCallback((charId: string) => {
     setEditingCharacterId(charId)
-    setDrawerTab('characters')
-  }, [setEditingCharacterId, setDrawerTab])
+  }, [setEditingCharacterId])
 
   return (
     <PanelFadeIn>

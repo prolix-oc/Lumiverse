@@ -12,6 +12,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import ErrorBoundary from '@/components/shared/ErrorBoundary'
 import AuthGuard from '@/components/auth/AuthGuard'
 import ViewportDrawer from '@/components/panels/ViewportDrawer'
+import CharacterEditorPage from '@/components/panels/character-browser/CharacterEditorPage'
 import ModalContainer from '@/components/modals/ModalContainer'
 import SpindleUIManager from '@/components/spindle/SpindleUIManager'
 import ToastContainer from '@/components/shared/ToastContainer'
@@ -55,6 +56,7 @@ export default function App() {
   const activeChatWallpaper = useStore((s) => s.activeChatWallpaper)
   const sceneBackground = useStore((s) => s.sceneBackground)
   const globalWallpaperHidden = !!activeChatWallpaper?.image_id || !!sceneBackground
+  const editingCharacterId = useStore((s) => s.editingCharacterId)
 
   const dockInsets = useMemo(() => {
     let left = 0, right = 0, top = 0, bottom = 0
@@ -186,6 +188,7 @@ export default function App() {
                   <Outlet />
                 </main>
                 <ViewportDrawer />
+                {editingCharacterId && <CharacterEditorPage />}
                 <ModalContainer />
                 <SpindleUIManager />
                 <ToastContainer />

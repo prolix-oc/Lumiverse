@@ -109,6 +109,7 @@ export type CharacterViewMode = 'grid' | 'single' | 'list'
 
 export interface StartupSettings {
   favorites?: string[]
+  landingHiddenCharacterIds?: string[]
   filterTab?: CharacterFilterTab
   sortField?: CharacterSortField
   sortDirection?: CharacterSortDirection
@@ -460,6 +461,7 @@ export interface SettingsSlice {
   fullSettingsLoaded: boolean
   landingPageChatsDisplayed: number
   landingPageLayoutMode: 'cards' | 'compact'
+  landingHiddenCharacterIds: string[]
   charactersPerPage: number
   personasPerPage: number
   messagesPerPage: number
