@@ -163,7 +163,36 @@ export const createChatSlice: StateCreator<ChatSlice> = (set, get) => {
     setActiveChatName: (name) => set({ activeChatName: name }),
 
     setMessages: (messages, total?) =>
-      set({ messages: sortMessagesByPosition(messages), totalChatLength: total ?? messages.length }),
+      set((state) => {
+        let nextMessages = messages
+
+        // A list request can begin just before a swipe is staged and resolve
+        // just after its MESSAGE_SWIPED event. Do not let that older snapshot
+        // erase the streaming target; the final reconciliation will replace it
+        // once the server response contains that swipe slot.
+        if (
+          state.isStreaming &&
+          state.streamingGenerationType === 'swipe' &&
+          state.regeneratingMessageId &&
+          state.streamingSwipeId != null
+        ) {
+          const current = state.messages.find((message) => message.id === state.regeneratingMessageId)
+          const incomingIndex = nextMessages.findIndex((message) => message.id === state.regeneratingMessageId)
+          if (
+            current &&
+            incomingIndex >= 0 &&
+            nextMessages[incomingIndex].swipes.length <= state.streamingSwipeId
+          ) {
+            nextMessages = [...nextMessages]
+            nextMessages[incomingIndex] = current
+          }
+        }
+
+        return {
+          messages: sortMessagesByPosition(nextMessages),
+          totalChatLength: total ?? nextMessages.length,
+        }
+      }),
 
     prependMessages: (olderMessages) =>
       set((state) => {

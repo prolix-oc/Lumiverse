@@ -1707,15 +1707,6 @@ export async function startGeneration(
     activeChatGenerations.delete(chatKey);
   }
 
-  // Tear down any fire-and-forget background work (cortex cache warming,
-  // databank retrieval) left over from prior generations on this chat.
-  // Successful completions don't abort their own controllers, so without
-  // this, slow embedding APIs can accumulate orphan tasks across sends.
-  // Await teardown so background fetch reader.cancel() completes before
-  // the new generation starts its own fetches — overlapping cancel+start
-  // on Bun's HTTPThread triggers a null-callback segfault.
-  await abortChatBackground(input.userId, input.chat_id);
-
   // Register this generation early (before council) so it can be tracked and aborted.
   // The completion promise is created up-front (deferred) so a replacement
   // generation can always await teardown — even if it arrives during the setup
@@ -1747,8 +1738,36 @@ export async function startGeneration(
 
   // Hoisted so the catch block can clean up the staged message on abort
   let stagedMessageId: string | undefined;
+  // Swipes are staged before the slower preflight work below. Keep both the
+  // original snapshot and the staged result: the former is the response being
+  // replaced, while the latter carries the new swipe index and active state.
+  let stagedSwipeOriginal: Message | null = null;
+  let stagedSwipe: Message | null = null;
+  let stagedSwipeId: number | undefined;
 
   try {
+    // Stage a swipe before cancelling background work, resolving secrets, or
+    // validating the preset. This is the user-visible part of the action, and
+    // it must not wait behind cache-warming HTTP teardown (which is bounded at
+    // two seconds) or any later prompt-assembly preflight.
+    if (genType === "regenerate" || genType === "swipe") {
+      const target = input.message_id
+        ? chatsSvc.getMessage(input.userId, input.message_id)
+        : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
+      if (target && !target.is_user) {
+        stagedSwipeOriginal = target;
+        stagedSwipe = chatsSvc.addSwipe(input.userId, target.id, "");
+        stagedSwipeId = stagedSwipe?.swipe_id;
+      }
+    }
+
+    // Tear down any fire-and-forget background work (cortex cache warming,
+    // databank retrieval) left over from prior generations on this chat. The
+    // user-visible swipe above is deliberately staged first; only the later
+    // provider/prompt work needs to wait for this bounded HTTP teardown.
+    await abortChatBackground(input.userId, input.chat_id);
+    checkAborted();
+
     const connection = resolveConnection(input.userId, input.connection_id);
     input.connection_id = connection.id;
     // Loaded before preset resolution: no-preset temp chats bypass the preset
@@ -1801,9 +1820,11 @@ export async function startGeneration(
         : [];
     let targetAssistantMessage: Message | null = null;
     if (genType === "regenerate" || genType === "swipe") {
-      targetAssistantMessage = input.message_id
+      // Reuse the pre-staging snapshot. Re-reading here would see the blank
+      // active swipe and lose the original content for rejected-swipe macros.
+      targetAssistantMessage = stagedSwipeOriginal ?? (input.message_id
         ? chatsSvc.getMessage(input.userId, input.message_id)
-        : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
+        : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id));
     } else if (genType === "continue") {
       targetAssistantMessage = input.message_id
         ? chatsSvc.getMessage(input.userId, input.message_id)
@@ -1921,13 +1942,13 @@ export async function startGeneration(
         rejectedSwipe = targetMsg.content;
         // Add a blank swipe immediately so the frontend shows cleared content
         // before council/assembly begins (MESSAGE_SWIPED event fires now).
-        const withBlank = chatsSvc.addSwipe(input.userId, targetMsg.id, "");
+        const withBlank = stagedSwipe ?? chatsSvc.addSwipe(input.userId, targetMsg.id, "");
         lifecycle.targetSwipeIdx = withBlank ? withBlank.swipe_id : 0;
         targetSwipeId = lifecycle.targetSwipeIdx;
         // Clear stale generation metrics from the previous swipe so the pill
         // doesn't display outdated values while the new generation runs.
         // Uses patchMessageExtra to avoid triggering chunk rebuilds / WS events.
-        const prevExtra = targetMsg.extra;
+        const prevExtra = withBlank?.extra ?? targetMsg.extra;
         if (
           prevExtra &&
           (prevExtra.tokenCount != null ||
@@ -2921,8 +2942,23 @@ export async function startGeneration(
         /* best-effort cleanup */
       }
     }
+    // A failure before GENERATION_STARTED has no terminal event for the
+    // frontend to reconcile. Remove the early blank swipe ourselves, but only
+    // when its slot is still the empty value we staged.
+    if (stagedSwipeOriginal && stagedSwipeId != null) {
+      try {
+        const current = chatsSvc.getMessage(input.userId, stagedSwipeOriginal.id);
+        if (current?.swipes[stagedSwipeId] === "") {
+          chatsSvc.deleteSwipe(input.userId, stagedSwipeOriginal.id, stagedSwipeId);
+        }
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
     activeGenerations.delete(generationId);
-    activeChatGenerations.delete(chatKey);
+    if (activeChatGenerations.get(chatKey) === generationId) {
+      activeChatGenerations.delete(chatKey);
+    }
     resolveCompletion();
     pool.errorPool(generationId, errorMessage(err));
     throw err;
