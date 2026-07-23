@@ -27,12 +27,20 @@
      receive a real viewport on the full-screen /characters route. */
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
   gap: 12px;
 }
 
 .folderGroup {
   flex: 1;
   min-height: 0;
+}
+
+/* A collapsed folder only renders its header. It must not participate in
+   sharing the gallery's remaining height, otherwise each collapsed folder
+   shrinks the visible area of every open gallery. */
+.folderGroupCollapsed {
+  flex: 0 0 auto;
 }
 
 .folderHeaderRow {

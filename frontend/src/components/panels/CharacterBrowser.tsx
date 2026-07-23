@@ -448,7 +448,10 @@ export default function CharacterBrowser() {
                 const isRenaming = !!group.folder && renamingFolder === group.folder
 
                 return (
-                  <div key={folderKey} className={styles.folderGroup}>
+                  <div
+                    key={folderKey}
+                    className={`${styles.folderGroup} ${isCollapsed ? styles.folderGroupCollapsed : ''}`}
+                  >
                     <div className={styles.folderHeaderRow}>
                         {isRenaming ? (
                           <div className={styles.folderRenameRow}>
