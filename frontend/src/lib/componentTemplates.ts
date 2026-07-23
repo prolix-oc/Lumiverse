@@ -43,7 +43,7 @@ const BUBBLE_MESSAGE: ComponentTemplate = {
         { name: 'original', type: '{ sm, lg, full }', description: 'Uploaded native aspect ratio — sm ~300px, lg ~700px, full = original res' },
       ]},
       { name: 'isHidden', type: 'boolean', description: 'Hidden from AI context' },
-      { name: 'isContextAnchor', type: 'boolean', description: 'Protects this message and all newer history from context trimming' },
+      { name: 'isContextAnchor', type: 'boolean', description: 'Starts model history at this message; earlier chat history is excluded' },
       { name: 'isStreaming', type: 'boolean', description: 'Currently streaming tokens' },
       { name: 'isLastMessage', type: 'boolean', description: 'Last message in chat' },
       { name: 'tokenCount', type: 'number | null', description: 'Token count for this message' },

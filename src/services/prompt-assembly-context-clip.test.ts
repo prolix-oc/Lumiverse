@@ -49,7 +49,26 @@ describe("clipToContextBudget", () => {
     expect(messages.every((message) => (message as any).__contextAnchorProtected)).toBe(true);
   });
 
-  test("does not trim a protected context anchor tail that cannot fit", async () => {
+  test("always excludes history before a context anchor, even when it fits", async () => {
+    const messages: LlmMessage[] = [
+      { role: "user", content: "before anchor" },
+      { role: "assistant", content: "anchor" },
+      { role: "user", content: "after anchor" },
+    ];
+
+    for (const message of messages) (message as any).__chatHistorySource = true;
+    (messages[1] as any).__contextAnchorProtected = true;
+    (messages[2] as any).__contextAnchorProtected = true;
+
+    const stats = await clipToContextBudget(messages, null, 16_000, 200);
+
+    expect(stats.anchorActive).toBe(true);
+    expect(stats.anchorOverflow).not.toBe(true);
+    expect(stats.messagesDropped).toBe(1);
+    expect(messages.map((message) => message.content)).toEqual(["anchor", "after anchor"]);
+  });
+
+  test("drops pre-anchor history without trimming an anchor tail that cannot fit", async () => {
     const messages: LlmMessage[] = [
       { role: "user", content: "A ".repeat(1_000) },
       { role: "assistant", content: "B ".repeat(2_000) },
@@ -64,7 +83,27 @@ describe("clipToContextBudget", () => {
 
     expect(stats.anchorActive).toBe(true);
     expect(stats.anchorOverflow).toBe(true);
-    expect(stats.messagesDropped).toBe(0);
-    expect(messages).toHaveLength(3);
+    expect(stats.messagesDropped).toBe(1);
+    expect(messages).toHaveLength(2);
+    expect(messages.every((message) => (message as any).__contextAnchorProtected)).toBe(true);
+  });
+
+  test("applies a context anchor when automatic context clipping is disabled", async () => {
+    const messages: LlmMessage[] = [
+      { role: "user", content: "before anchor" },
+      { role: "assistant", content: "anchor" },
+      { role: "user", content: "after anchor" },
+    ];
+
+    for (const message of messages) (message as any).__chatHistorySource = true;
+    (messages[1] as any).__contextAnchorProtected = true;
+    (messages[2] as any).__contextAnchorProtected = true;
+
+    const stats = await clipToContextBudget(messages, null, null, null);
+
+    expect(stats.enabled).toBe(false);
+    expect(stats.anchorActive).toBe(true);
+    expect(stats.messagesDropped).toBe(1);
+    expect(messages.map((message) => message.content)).toEqual(["anchor", "after anchor"]);
   });
 });
