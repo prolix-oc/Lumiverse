@@ -8,6 +8,7 @@ import {
   cycleSwipe,
   getMessage,
   getMessages,
+  listHiddenRecentChats,
   listRecentChats,
   listRecentChatsGrouped,
   patchMessageExtra,
@@ -269,6 +270,21 @@ describe("recent chats", () => {
     expect(result.total).toBe(2);
     expect(result.data.map((chat) => chat.latest_chat_id)).toEqual(["c2-only", "c1-old"]);
     expect(result.data[1].chat_count).toBe(1);
+  });
+
+  test("lists explicitly hidden chats for the landing-page restore manager", () => {
+    seedChat("visible", "c1", "Visible chat", "{}", 100);
+    seedChat("hidden-solo", "c1", "Hidden chat", JSON.stringify({ hidden_from_recent: true }), 200);
+    seedChat("hidden-group", "c2", "Hidden group", JSON.stringify({
+      hidden_from_recent: true,
+      group: true,
+      character_ids: ["c1", "c2"],
+    }), 300);
+
+    expect(listHiddenRecentChats("u1")).toEqual([
+      expect.objectContaining({ id: "hidden-group", name: "Hidden group", character_name: "Beta", is_group: true }),
+      expect.objectContaining({ id: "hidden-solo", name: "Hidden chat", character_name: "Alpha", is_group: false }),
+    ]);
   });
 
   test("pins favorite solo characters before pagination without moving groups", () => {

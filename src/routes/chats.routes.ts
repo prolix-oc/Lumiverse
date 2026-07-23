@@ -175,6 +175,11 @@ app.get("/recent-grouped", (c) => {
   }));
 });
 
+app.get("/hidden-from-recent", (c) => {
+  const userId = c.get("userId");
+  return c.json(svc.listHiddenRecentChats(userId));
+});
+
 app.get("/character-chats/:characterId", (c) => {
   const userId = c.get("userId");
   const characterId = c.req.param("characterId");

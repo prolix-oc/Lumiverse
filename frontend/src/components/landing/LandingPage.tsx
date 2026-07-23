@@ -1398,12 +1398,29 @@ export default function LandingPage() {
       setTotal((prev) => Math.max(0, prev - 1))
       try {
         await chatsApi.patchMetadata(item.latest_chat_id, { hidden_from_recent: true })
+        toast.success(t('hiddenChat'), {
+          duration: 7000,
+          action: {
+            label: tc('actions.undo'),
+            onClick: async () => {
+              try {
+                await chatsApi.patchMetadata(item.latest_chat_id, { hidden_from_recent: false })
+                await fetchChats()
+              } catch (err) {
+                console.error('[Lumiverse] Error restoring hidden chat:', err)
+                toast.error(t('hiddenFromHome.restoreFailed'))
+              }
+            },
+          },
+        })
         await fetchChats()
       } catch (err: any) {
         console.error('[Lumiverse] Error removing chat from recent:', err)
+        toast.error(t('hideChatFailed'))
+        await fetchChats()
       }
     },
-    [fetchChats]
+    [fetchChats, t, tc]
   )
 
   const handleOpenContextMenu = useCallback((item: GroupedRecentChat, position: ContextMenuPos) => {
@@ -1442,8 +1459,14 @@ export default function LandingPage() {
     setItems((current) => current.filter((entry) => entry.is_group || entry.character_id !== item.character_id))
     setTotal((current) => Math.max(0, current - 1))
     setSetting('landingHiddenCharacterIds', [...landingHiddenCharacterIds, item.character_id])
-    toast.success(t('hiddenCharacter', { name: item.character_name }))
-  }, [landingHiddenCharacterIds, setSetting, t])
+    toast.success(t('hiddenCharacter', { name: item.character_name }), {
+      duration: 7000,
+      action: {
+        label: tc('actions.undo'),
+        onClick: () => setSetting('landingHiddenCharacterIds', landingHiddenCharacterIds.filter((id) => id !== item.character_id)),
+      },
+    })
+  }, [landingHiddenCharacterIds, setSetting, t, tc])
 
   const handleBranchLatest = useCallback((item: GroupedRecentChat) => {
     openModal('confirm', {
@@ -1716,6 +1739,15 @@ export default function LandingPage() {
             descendingTitle={t('sort.descending')}
             dropdownAlign="end"
           />
+          <button
+            type="button"
+            className={styles.hiddenManagerBtn}
+            onClick={() => openModal('hiddenFromHome')}
+            title={t('hiddenFromHome.title')}
+            aria-label={t('hiddenFromHome.title')}
+          >
+            <EyeOff size={15} strokeWidth={1.5} />
+          </button>
         </div>
 
         <main className={styles.main} ref={mainRef}>

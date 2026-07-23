@@ -132,6 +132,30 @@
   flex: 1;
 }
 
+.hiddenManagerBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--lumiverse-btn-icon, 34px);
+  height: var(--lumiverse-btn-icon, 34px);
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: 8px;
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+  cursor: pointer;
+  transition: color var(--lumiverse-transition-fast), background var(--lumiverse-transition-fast), border-color var(--lumiverse-transition-fast);
+}
+
+.hiddenManagerBtn:hover,
+.hiddenManagerBtn:focus-visible {
+  color: var(--lumiverse-primary);
+  border-color: var(--lumiverse-primary-050);
+  background: var(--lumiverse-primary-010);
+  outline: none;
+}
+
 .logo {
   display: flex;
   align-items: center;

@@ -28,6 +28,7 @@ import ConfigureDrawerTabsModal from './ConfigureDrawerTabsModal'
 import ImagePromptPreviewModal from './ImagePromptPreviewModal'
 import ImageCaptionModal from './ImageCaptionModal'
 import QwenCustomVoiceModal from './QwenCustomVoiceModal'
+import HiddenFromHomeModal from './HiddenFromHomeModal'
 import { WeaverStudio } from '@/components/weaver/WeaverStudio'
 
 const CustomCSSModal = lazy(() => import('./CustomCSSModal'))
@@ -106,6 +107,7 @@ export default function ModalContainer() {
       {activeModal === 'addGroupMember' && modalProps.chatId && <AddGroupMemberModal />}
       {activeModal === 'memberVoice' && modalProps.chatId && modalProps.characterId && <MemberVoiceModal />}
       {activeModal === 'manageChats' && <ManageChatsModal />}
+      {activeModal === 'hiddenFromHome' && <HiddenFromHomeModal />}
       {activeModal === 'chatPicker' && modalProps.characterId && modalProps.characterName && (
         <ChatPickerModal
           characterId={modalProps.characterId}

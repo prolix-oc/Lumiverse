@@ -2,7 +2,7 @@ import { get, post, put, patch, del, upload, type RequestOptions } from './clien
 import type {
   Chat, CreateChatInput, CreateGroupChatInput, RecentChat, Message,
   CreateMessageInput, UpdateMessageInput, PaginatedResult,
-  GroupedRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
+  GroupedRecentChat, HiddenRecentChat, ChatSummary, ChatTreeNode, ChatMessageSearchResult
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
@@ -30,6 +30,10 @@ export const chatsApi = {
     hidden_character_ids?: string
   }) {
     return get<PaginatedResult<GroupedRecentChat>>('/chats/recent-grouped', params)
+  },
+
+  listHiddenFromRecent() {
+    return get<HiddenRecentChat[]>('/chats/hidden-from-recent')
   },
 
   listCharacterChats(characterId: string) {

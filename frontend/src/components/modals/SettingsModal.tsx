@@ -284,6 +284,7 @@ function DisplaySettings() {
   const chatHeadsCustomCompletionSound = useStore((s) => s.chatHeadsCustomCompletionSound)
   const setSetting = useStore((s) => s.setSetting)
   const addToast = useStore((s) => s.addToast)
+  const openModal = useStore((s) => s.openModal)
 
   const updateDrawer = (patch: Partial<DrawerSettings>) => {
     setSetting('drawerSettings', { ...drawerSettings, ...patch })
@@ -573,21 +574,15 @@ function DisplaySettings() {
         />
       </div>
 
-      {landingHiddenCharacterIds.length > 0 && (
-        <div className={styles.field}>
-          <label className={styles.fieldLabel}>
-            {t('display.landing.hiddenCharacters', { count: landingHiddenCharacterIds.length })}
-          </label>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSetting('landingHiddenCharacterIds', [])}
-          >
-            {t('display.landing.showHiddenCharacters')}
-          </Button>
-          <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
-        </div>
-      )}
+      <div className={styles.field}>
+        <label className={styles.fieldLabel}>
+          {t('display.landing.hiddenCharacters', { count: landingHiddenCharacterIds.length })}
+        </label>
+        <Button variant="ghost" size="sm" onClick={() => openModal('hiddenFromHome')}>
+          {t('display.landing.manageHiddenCharacters')}
+        </Button>
+        <p className={styles.helperText}>{t('display.landing.hiddenCharactersHelper')}</p>
+      </div>
 
     </div>
   )

@@ -118,6 +118,17 @@ export interface GroupedRecentChat {
   multiplayer?: boolean;
 }
 
+export interface HiddenRecentChat {
+  id: string;
+  character_id: string;
+  name: string;
+  character_name: string;
+  character_avatar_path: string | null;
+  character_image_id: string | null;
+  updated_at: number;
+  is_group: boolean;
+}
+
 export interface ChatSummary {
   id: string;
   name: string;

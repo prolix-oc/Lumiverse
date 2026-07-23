@@ -5,6 +5,7 @@ interface ToastOptions {
   title?: string
   duration?: number
   dismissible?: boolean
+  action?: { label: string; onClick: () => void }
 }
 
 function fire(type: ToastType, message: string, options?: ToastOptions): string {
@@ -14,6 +15,7 @@ function fire(type: ToastType, message: string, options?: ToastOptions): string 
     title: options?.title,
     duration: options?.duration,
     dismissible: options?.dismissible,
+    action: options?.action,
   })
 }
 

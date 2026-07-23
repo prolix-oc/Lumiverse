@@ -29,6 +29,7 @@
     "done": "Done",
     "apply": "Apply",
     "reset": "Reset",
+    "undo": "Undo",
     "restoreDefault": "Restore server default",
     "enabled": "Enabled",
     "disabled": "Disabled"

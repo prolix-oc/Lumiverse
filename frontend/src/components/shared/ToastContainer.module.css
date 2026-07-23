@@ -156,6 +156,21 @@
   white-space: pre-line;
 }
 
+.actionBtn {
+  margin-top: 7px;
+  padding: 3px 7px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.actionBtn:hover { background: var(--lumiverse-fill-hover); }
+
 /* ── Close button ──────────────────────────────────── */
 .closeBtn {
   flex-shrink: 0;

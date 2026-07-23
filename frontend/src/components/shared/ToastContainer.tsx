@@ -59,6 +59,10 @@ function ToastItem({ toast, position }: { toast: Toast; position: ToastPosition 
   }
 
   const slide = getSlideDirection(position)
+  const handleAction = () => {
+    toast.action?.onClick()
+    dismiss()
+  }
 
   return (
     <motion.div
@@ -78,6 +82,11 @@ function ToastItem({ toast, position }: { toast: Toast; position: ToastPosition 
       <div className={styles.body}>
         {toast.title && <div className={styles.title}>{toast.title}</div>}
         <div className={styles.message}>{toast.message}</div>
+        {toast.action && (
+          <button type="button" className={styles.actionBtn} onClick={handleAction}>
+            {toast.action.label}
+          </button>
+        )}
       </div>
       {toast.dismissible !== false && (
         <button type="button" className={styles.closeBtn} onClick={dismiss} aria-label={t('dismiss')}>

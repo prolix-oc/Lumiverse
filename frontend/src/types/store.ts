@@ -235,6 +235,7 @@ export interface Toast {
   message: string
   duration?: number
   dismissible?: boolean
+  action?: { label: string; onClick: () => void }
 }
 
 // ---- UI Slice ----

@@ -612,6 +612,18 @@ export interface GroupedRecentChatOptions {
   hiddenCharacterIds?: string[];
 }
 
+/** A chat explicitly removed from the landing-page recent list. */
+export interface HiddenRecentChat {
+  id: string;
+  character_id: string;
+  name: string;
+  character_name: string;
+  character_avatar_path: string | null;
+  character_image_id: string | null;
+  updated_at: number;
+  is_group: boolean;
+}
+
 interface RecentChatCharacterInfo {
   name: string;
   avatar_path: string | null;
@@ -825,6 +837,44 @@ export function listRecentChatsGrouped(
     limit: pagination.limit,
     offset: pagination.offset,
   };
+}
+
+/**
+ * Return only chats explicitly hidden from the landing-page recent list.
+ * This intentionally does not consider `landingHiddenCharacterIds`: that
+ * preference is client-owned and is managed separately from per-chat hides.
+ */
+export function listHiddenRecentChats(userId: string): HiddenRecentChat[] {
+  const rows = getDb().query(`
+    SELECT
+      c.id,
+      c.character_id,
+      c.name,
+      c.metadata,
+      c.updated_at,
+      ch.name AS character_name,
+      ch.avatar_path AS character_avatar_path,
+      ch.image_id AS character_image_id
+    FROM chats c
+    LEFT JOIN characters ch ON ch.id = c.character_id
+    WHERE c.user_id = ? AND c.character_id IS NOT NULL
+    ORDER BY c.updated_at DESC
+  `).all(userId) as any[];
+
+  return rows.flatMap((row): HiddenRecentChat[] => {
+    const metadata = parseMetadataObject(row.metadata);
+    if (!isHiddenFromRecent(metadata)) return [];
+    return [{
+      id: row.id,
+      character_id: row.character_id,
+      name: row.name || '',
+      character_name: row.character_name || '',
+      character_avatar_path: row.character_avatar_path || null,
+      character_image_id: row.character_image_id || null,
+      updated_at: row.updated_at,
+      is_group: isGroupMetadata(metadata),
+    }];
+  });
 }
 
 export function listChatSummaries(userId: string, characterId: string): ChatSummary[] {
