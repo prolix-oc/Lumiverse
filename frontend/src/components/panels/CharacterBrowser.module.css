@@ -22,7 +22,17 @@
 }
 
 .folderGroups {
+  /* CharacterGrid/List own their scrolling. Keep the grouping wrapper within
+     the browser's available height so those virtualized scroll containers
+     receive a real viewport on the full-screen /characters route. */
+  flex: 1;
+  min-height: 0;
   gap: 12px;
+}
+
+.folderGroup {
+  flex: 1;
+  min-height: 0;
 }
 
 .folderHeaderRow {
