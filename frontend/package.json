@@ -1,7 +1,7 @@
 {
   "name": "lumiverse-frontend",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.2",
   "type": "module",
   "scripts": {
     "dev": "bun run extract-props && bun run extract-css-vars && vite",
