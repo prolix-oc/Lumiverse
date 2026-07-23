@@ -724,6 +724,7 @@ interface VirtualRowProps {
   virtualRow: VirtualItem
   virtualColumns: number
   virtualGap: number
+  virtualScrollMargin: number
   rowItems: GroupedRecentChat[]
   layoutMode: 'cards' | 'compact'
   initialPageSize: number
@@ -742,6 +743,7 @@ function virtualRowPropsEqual(prev: VirtualRowProps, next: VirtualRowProps): boo
   if (prev.virtualRow.index !== next.virtualRow.index) return false
   if (prev.virtualColumns !== next.virtualColumns) return false
   if (prev.virtualGap !== next.virtualGap) return false
+  if (prev.virtualScrollMargin !== next.virtualScrollMargin) return false
   if (prev.layoutMode !== next.layoutMode) return false
   if (prev.initialPageSize !== next.initialPageSize) return false
   if (prev.animateInitialEntries !== next.animateInitialEntries) return false
@@ -763,6 +765,7 @@ const VirtualRow = memo(function VirtualRow({
   virtualRow,
   virtualColumns,
   virtualGap,
+  virtualScrollMargin,
   rowItems,
   layoutMode,
   initialPageSize,
@@ -787,6 +790,12 @@ const VirtualRow = memo(function VirtualRow({
         gridTemplateColumns: `repeat(${virtualColumns}, minmax(0, 1fr))`,
         gap: virtualGap,
         paddingBottom: virtualGap,
+        // directDomUpdates normally writes this after refs mount. Safari's
+        // standalone PWA can defer that first write until a scroll event,
+        // briefly leaving every absolutely positioned row at the origin.
+        // Render the known position as a synchronous fallback; subsequent
+        // virtualizer writes use the same transform.
+        transform: `translate3d(0, ${virtualRow.start - virtualScrollMargin}px, 0)`,
       }}
     >
       {rowItems.map((item) =>
@@ -925,6 +934,7 @@ function VirtualizedChatRows({
             virtualRow={virtualRow}
             virtualColumns={virtualColumns}
             virtualGap={virtualGap}
+            virtualScrollMargin={virtualScrollMargin}
             rowItems={items.slice(start, start + virtualColumns)}
             layoutMode={layoutMode}
             initialPageSize={initialPageSize}
