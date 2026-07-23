@@ -114,8 +114,11 @@ outside a checkout starts unconfigured and prompts for the folder; use
 "Set Lumiverse Folder…" in the menu to change it at any time.
 
 Server output is written to `runner.log` in the platform app-log directory
-(macOS: `~/Library/Logs/chat.lumiverse.tray/`; Linux: the XDG state/log
-directory selected by Tauri).
+(macOS: `~/Library/Logs/chat.lumiverse.tray/`; Windows:
+`%LOCALAPPDATA%\\chat.lumiverse.tray\\logs\\runner.log`; Linux: the XDG
+state/log directory selected by Tauri). In a development build,
+`bun run tauri dev` also mirrors that output to its terminal, including server
+startup failures.
 
 ## Build
 

@@ -55,6 +55,18 @@ fn log_chunk(file: &mut Option<std::fs::File>, data: &str) {
     }
 }
 
+/// In `tauri dev`, the native application has a console. Mirror the runner's
+/// captured output there so a failed backend start is diagnosable without
+/// locating the app-data log file. Release builds remain tray-only and write
+/// exclusively to `runner.log`.
+#[cfg(debug_assertions)]
+fn mirror_to_dev_console(source: &str, data: &str) {
+    eprint!("[lumiverse {source}] {data}");
+}
+
+#[cfg(not(debug_assertions))]
+fn mirror_to_dev_console(_source: &str, _data: &str) {}
+
 /// If `json` is a `{type:"log"}` frame, return its payload text.
 fn log_frame_data(json: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
@@ -179,7 +191,10 @@ pub fn runner_start(
                 if bytes.first() == Some(&FRAME_PREFIX) {
                     if let Ok(json) = String::from_utf8(bytes[1..].to_vec()) {
                         match log_frame_data(&json) {
-                            Some(data) => log_chunk(&mut log, &data),
+                            Some(data) => {
+                                log_chunk(&mut log, &data);
+                                mirror_to_dev_console("server", &data);
+                            }
                             None => {
                                 let _ = app.emit("runner-frame", json);
                             }
@@ -187,7 +202,9 @@ pub fn runner_start(
                     }
                 } else {
                     // Runner's own incidental output (console.log etc.).
-                    log_line(&mut log, &String::from_utf8_lossy(&bytes));
+                    let line = String::from_utf8_lossy(&bytes);
+                    log_line(&mut log, &line);
+                    mirror_to_dev_console("runner", &format!("{line}\n"));
                 }
             }
         });
@@ -201,6 +218,7 @@ pub fn runner_start(
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else { break };
                 log_line(&mut log, &line);
+                mirror_to_dev_console("runner stderr", &format!("{line}\n"));
             }
         });
     }
