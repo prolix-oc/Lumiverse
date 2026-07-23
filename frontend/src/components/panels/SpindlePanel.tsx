@@ -68,7 +68,11 @@ export default function SpindlePanel() {
         .filter((ext) => hasExtensionMountPoint(ext.id, 'settings_extensions'))
         .map((ext) => ext.id)
     ),
-    [extensions]
+    // `mount()` registration happens asynchronously while frontend
+    // extensions hydrate. Recompute when that registration changes so the
+    // settings action appears regardless of whether the panel or extension
+    // loaded first.
+    [extensions, extensionMountPointsVersion]
   )
 
   const [togglingPerm, setTogglingPerm] = useState<string | null>(null)

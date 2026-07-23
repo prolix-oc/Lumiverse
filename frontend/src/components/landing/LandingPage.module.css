@@ -129,7 +129,11 @@
 }
 
 .landingSearch {
-  flex: 1;
+  /* Allow the search field to yield space to the fixed-width toolbar actions
+     at high UI scales and narrow viewports. Without this, its intrinsic
+     minimum width can push the hidden-items button off screen. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .hiddenManagerBtn {
