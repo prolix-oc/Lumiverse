@@ -1,4 +1,5 @@
 import { getProvider } from "../llm/registry";
+import { resolveEffectiveApiUrl } from "../llm/resolve-api-url";
 import { OpenRouterProvider, type OpenRouterCreditsInfo, type OpenRouterModelInfo, type OpenRouterProviderEntry } from "../llm/providers/openrouter";
 import type { ConnectionProfile } from "../types/connection-profile";
 import * as connSvc from "./connections.service";
@@ -185,7 +186,7 @@ export async function fetchCredits(userId: string, connectionId: string): Promis
   if (!apiKey) return null;
 
   const provider = getOpenRouterProvider();
-  return provider.fetchCredits(apiKey, connSvc.resolveEffectiveApiUrl(conn));
+  return provider.fetchCredits(apiKey, resolveEffectiveApiUrl(conn));
 }
 
 // ── Model Metadata ───────────────────────────────────────────────────────────
@@ -198,7 +199,7 @@ export async function fetchModelsWithMetadata(userId: string, connectionId: stri
   if (!apiKey) return null;
 
   const provider = getOpenRouterProvider();
-  return provider.fetchModelsWithMetadata(apiKey, connSvc.resolveEffectiveApiUrl(conn));
+  return provider.fetchModelsWithMetadata(apiKey, resolveEffectiveApiUrl(conn));
 }
 
 // ── Generation Stats ─────────────────────────────────────────────────────────
@@ -211,7 +212,7 @@ export async function fetchGenerationStats(userId: string, connectionId: string,
   if (!apiKey) return null;
 
   const provider = getOpenRouterProvider();
-  return provider.fetchGenerationStats(apiKey, connSvc.resolveEffectiveApiUrl(conn), generationId);
+  return provider.fetchGenerationStats(apiKey, resolveEffectiveApiUrl(conn), generationId);
 }
 
 // ── Provider List ────────────────────────────────────────────────────────────
@@ -224,5 +225,5 @@ export async function fetchProviderList(userId: string, connectionId: string): P
   if (!apiKey) return null;
 
   const provider = getOpenRouterProvider();
-  return provider.fetchProviderList(apiKey, connSvc.resolveEffectiveApiUrl(conn));
+  return provider.fetchProviderList(apiKey, resolveEffectiveApiUrl(conn));
 }

@@ -12,6 +12,11 @@ import {
   isValidCapability,
 } from "lumiverse-spindle-types";
 import {
+  assertManifestCompatibility,
+  assertManifestCompatibilitySync,
+  SpindleCompatibilityError,
+} from "./host-compatibility";
+import {
   existsSync,
   mkdirSync,
   rmSync,
@@ -20,6 +25,7 @@ import {
   statSync,
   copyFileSync,
   cpSync,
+  readFileSync,
 } from "fs";
 import { join, resolve, dirname, sep } from "path";
 import { getUserExtensionPath } from "../auth/provision";
@@ -705,6 +711,7 @@ async function readManifest(identifier: string): Promise<SpindleManifest> {
   manifest.github = normalizeSpindleHttpsUrl(manifest.github, "github");
   manifest.homepage = normalizeSpindleHttpsUrl(manifest.homepage, "homepage");
 
+  await assertManifestCompatibility(manifest);
   return manifest;
 }
 
@@ -732,6 +739,24 @@ async function readManifestFromPath(
   });
   manifest.homepage = normalizeSpindleHttpsUrl(manifest.homepage, "homepage");
 
+  await assertManifestCompatibility(manifest);
+  return manifest;
+}
+
+function readManifestForEnable(identifier: string): SpindleManifest {
+  const repo = repoDir(identifier);
+  const candidates = [
+    join(repo, "spindle.json"),
+    join(repo, "spindlefile"),
+    join(repo, "spindlefile.json"),
+  ];
+  const manifestPath = candidates.find((candidate) => existsSync(candidate));
+  if (!manifestPath) {
+    throw new Error(`spindle manifest not found in ${repo}`);
+  }
+
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as SpindleManifest;
+  assertManifestCompatibilitySync(manifest);
   return manifest;
 }
 
@@ -822,6 +847,7 @@ export const PRIVILEGED_PERMISSIONS = new Set([
   "images",
   "web_search",
   "unsafe_eval",
+  "final_response",
 ]);
 
 function grantRequestedPermissionsByDefault(
@@ -886,7 +912,8 @@ export async function syncManifestToDb(identifier: string): Promise<void> {
   let manifest: SpindleManifest;
   try {
     manifest = await readManifest(identifier);
-  } catch {
+  } catch (error) {
+    if (error instanceof SpindleCompatibilityError) throw error;
     // If manifest can't be read (e.g. repo missing), skip sync silently
     return;
   }
@@ -1251,19 +1278,25 @@ export async function install(
     throw new Error("No spindle.json found in repository");
   }
 
-  const raw = await Bun.file(manifestPath).text();
-  const manifest: SpindleManifest = JSON.parse(raw);
+  let manifest: SpindleManifest;
+  try {
+    const raw = await Bun.file(manifestPath).text();
+    manifest = JSON.parse(raw) as SpindleManifest;
 
-  if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
+    if (!manifest.identifier || !validateIdentifier(manifest.identifier)) {
+      throw new Error(
+        `Invalid identifier "${manifest.identifier}". Must match /^[a-z][a-z0-9_]*$/`,
+      );
+    }
+    manifest.github = normalizeSpindleHttpsUrl(manifest.github || githubUrl, "github", {
+      required: true,
+    });
+    manifest.homepage = normalizeSpindleHttpsUrl(manifest.homepage, "homepage");
+    await assertManifestCompatibility(manifest);
+  } catch (error) {
     rmSync(tempDir, { recursive: true, force: true });
-    throw new Error(
-      `Invalid identifier "${manifest.identifier}". Must match /^[a-z][a-z0-9_]*$/`
-    );
+    throw error;
   }
-  manifest.github = normalizeSpindleHttpsUrl(manifest.github || githubUrl, "github", {
-    required: true,
-  });
-  manifest.homepage = normalizeSpindleHttpsUrl(manifest.homepage, "homepage");
 
   // Check if already installed
   const db = getDb();
@@ -1465,6 +1498,7 @@ export function remove(identifier: string): void {
 // ─── Enable / Disable ────────────────────────────────────────────────────
 
 export function enable(identifier: string): void {
+  readManifestForEnable(identifier);
   const db = getDb();
   const result = db.run(
     "UPDATE extensions SET enabled = 1, updated_at = unixepoch() WHERE identifier = ?",
@@ -1542,6 +1576,30 @@ export function getGrantedPermissions(identifier: string): SpindlePermission[] {
 
   return rows.map((r) => r.permission as SpindlePermission);
 }
+/**
+ * Return the concrete grant-row identity for a permission.
+ *
+ * A permission boolean is insufficient for in-flight callback authority:
+ * revoking and granting the same permission creates a new row identity, so
+ * work captured under the old grant must not become live again.
+ */
+export function getPermissionGrantId(
+  identifier: string,
+  permission: SpindlePermission,
+): string | undefined {
+  const db = getDb();
+  const row = db
+    .query(
+      `SELECT eg.id
+       FROM extension_grants eg
+       JOIN extensions e ON e.id = eg.extension_id
+       WHERE e.identifier = ? AND eg.permission = ?
+       LIMIT 1`,
+    )
+    .get(identifier, permission) as { id: string } | null;
+  return row?.id;
+}
+
 
 export function hasPermission(
   identifier: string,

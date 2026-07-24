@@ -131,6 +131,8 @@ interface SpindleLoomBlockEditorOptions {
 
 `value` is required. `readOnly` defaults to `false`; `compact` defaults to `true` (matching the native preset editor's space-efficient layout in extension panels). `readOnly` disables user edits while still allowing a programmatic `update()`. Unknown own keys in the value, a block, or the options are rejected. The six host-owned sealed/provenance fields — `sealed`, `sealedKey`, `sealedSource`, `sealedOriginPresetId`, `sealedOriginVersion`, and `sealedSha256` — are intentionally not part of the public `PromptBlockDTO` boundary and must not be supplied by an extension. Main keeps those fields in its trusted projection and merges accepted public edits back without exposing or replacing them.
 
+On hosts advertising `ctx.host.capabilities['loom-block-management-v1'] === 1`, an editable mount also provides the native Loom controls for adding prompts, categories, and markers; enabling or disabling blocks; deleting unlocked blocks; and category-aware drag reordering. These controls update only the extension-owned `value` and emit the complete next value through `onChange`; they never persist or mutate a host preset. Deleting a category moves its children back to the root before the next value is emitted. `readOnly: true` removes every mutating control.
+
 Mounting validates and deep-clones the complete value before rendering. `onChange` receives a detached clone, and `getValue()` returns a detached clone, so mutating either snapshot cannot mutate host state. `update({ value })` validates and deep-clones the replacement before committing it; an invalid value or option patch is rejected atomically rather than partially applied.
 
 ### Loom value limits
@@ -140,11 +142,11 @@ The host applies these limits before cloning or rendering:
 | Limit | Maximum |
 |---|---:|
 | Object/array nesting depth | 16 |
-| Visited values/nodes | 16,384 |
+| Visited values/nodes | 65,536 |
 | Aggregate object properties and array entries | 65,536 |
-| One string | 65,536 JavaScript string units |
-| All strings combined | 4 MiB after UTF-8 encoding |
-| Blocks | 512 |
+| One string | 2,097,152 JavaScript string units |
+| All strings combined | 8 MiB after UTF-8 encoding |
+| Blocks | 2,048 |
 | Prompt variables per block | 512 |
 | Options per select or multiselect variable | 256 |
 | Prompt-variable block buckets | 512 |

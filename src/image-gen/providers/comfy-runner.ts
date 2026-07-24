@@ -1,6 +1,10 @@
 import { openWebSocket } from "./ws-helpers"
 import { parseProviderErrorBody, readBoundedText } from "../../utils/provider-errors"
 
+
+function createAbortError(): DOMException {
+  return new DOMException("Aborted", "AbortError")
+}
 export interface ComfyRunnerOptions {
   label: string
   // Sent as Cookie header on every HTTP + WS call. Used for SwarmUI's
@@ -134,42 +138,58 @@ export async function* executeComfyWorkflowStream(
     label,
     timeoutMs: opts.wsTimeoutMs ?? 15_000,
     headers: cookie ? { Cookie: cookie } : undefined,
+    signal,
   })
   console.debug("[%s] WS connected (clientId=%s)", label, clientId)
 
-  const queueRes = await fetch(`${baseUrl}/prompt`, {
-    method: "POST",
-    headers: buildHeaders(cookie, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ prompt: workflow, client_id: clientId }),
-    signal,
-  })
-
-  if (!queueRes.ok) {
-    ws.close()
-    const rawBody = await readBoundedText(queueRes)
-    const parsed = parseProviderErrorBody(rawBody)
-    const detail = parsed.detail || parsed.code || String(queueRes.status)
-    throw new Error(`${label} rejected workflow: ${detail}`)
-  }
-
-  const queueData = (await queueRes.json()) as { prompt_id: string }
-  const promptId = queueData.prompt_id
-  console.debug("[%s] Prompt queued (promptId=%s, clientId=%s)", label, promptId, clientId)
-
-  const abortHandler = () => {
+  let promptId = ""
+  let terminal = false
+  let interruptSent = false
+  const interrupt = (): void => {
+    if (interruptSent || !promptId) return
+    interruptSent = true
     fetch(`${baseUrl}/interrupt`, {
       method: "POST",
       headers: buildHeaders(cookie),
       signal: AbortSignal.timeout(5000),
     }).catch(() => {})
   }
-  signal?.addEventListener("abort", abortHandler, { once: true })
+  const abortHandler = (): void => {
+    if (terminal) return
+    interrupt()
+  }
 
   try {
+    if (signal?.aborted) throw createAbortError()
+    const queueRes = await fetch(`${baseUrl}/prompt`, {
+      method: "POST",
+      headers: buildHeaders(cookie, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ prompt: workflow, client_id: clientId }),
+      signal,
+    })
+
+    if (!queueRes.ok) {
+      const rawBody = await readBoundedText(queueRes)
+      const parsed = parseProviderErrorBody(rawBody)
+      const detail = parsed.detail || parsed.code || String(queueRes.status)
+      throw new Error(`${label} rejected workflow: ${detail}`)
+    }
+
+    const queueData = (await queueRes.json()) as { prompt_id: string }
+    promptId = queueData.prompt_id
+    console.debug("[%s] Prompt queued (promptId=%s, clientId=%s)", label, promptId, clientId)
+    signal?.addEventListener("abort", abortHandler, { once: true })
+    if (signal?.aborted) {
+      abortHandler()
+      throw createAbortError()
+    }
+
     for await (const event of wsEventStream(ws, promptId, signal)) {
       if (event.type === "complete") {
+        terminal = true
         break
       } else if (event.type === "error") {
+        terminal = true
         throw new Error(`${label} execution error: ${event.message}`)
       } else if (event.type === "progress") {
         yield { type: "progress", step: event.value, totalSteps: event.max }
@@ -179,8 +199,14 @@ export async function* executeComfyWorkflowStream(
         yield { type: "preview", imageBase64: event.imageBase64 }
       }
     }
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw createAbortError()
+    }
+    throw error
   } finally {
     signal?.removeEventListener("abort", abortHandler)
+    if (!terminal) interrupt()
     ws.close()
   }
 
@@ -239,6 +265,30 @@ type WsEvent =
   | { type: "complete" }
   | { type: "error"; message: string }
 
+function decodeComfyPreview(data: unknown): string | null {
+  let buffer: Buffer
+  if (data instanceof ArrayBuffer) {
+    buffer = Buffer.from(data)
+  } else if (ArrayBuffer.isView(data)) {
+    buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+  } else {
+    return null
+  }
+  if (buffer.length < 8) return null
+
+  const header = new DataView(buffer.buffer, buffer.byteOffset, 8)
+  if (header.getUint32(0) !== 1) return null
+  const imageType = header.getUint32(4)
+  const mimeType = imageType === 1
+    ? "image/jpeg"
+    : imageType === 2
+      ? "image/png"
+      : null
+  if (!mimeType) return null
+
+  return `data:${mimeType};base64,${buffer.subarray(8).toString("base64")}`
+}
+
 async function* wsEventStream(
   ws: WebSocket,
   promptId: string,
@@ -248,15 +298,14 @@ async function* wsEventStream(
   let resolve: (() => void) | null = null
   let done = false
 
-  const enqueue = (event: WsEvent) => {
+  const enqueue = (event: WsEvent): void => {
     queue.push(event)
     if (resolve) {
       resolve()
       resolve = null
     }
   }
-
-  ws.addEventListener("message", (evt) => {
+  const onMessage = (evt: MessageEvent): void => {
     if (typeof evt.data === "string") {
       try {
         const msg = JSON.parse(evt.data)
@@ -276,42 +325,47 @@ async function* wsEventStream(
       } catch {
         // malformed JSON — ignore
       }
-    } else {
-      // Binary preview frame. ComfyUI prefixes with an 8-byte header
-      // describing the image format/encoding; we strip it and surface PNG.
-      const buffer = Buffer.from(evt.data as ArrayBuffer)
-      const imageData = buffer.subarray(8)
-      const base64 = imageData.toString("base64")
-      enqueue({ type: "preview", imageBase64: `data:image/png;base64,${base64}` })
+      return
     }
-  })
 
-  ws.addEventListener("close", () => {
+    const imageDataUrl = decodeComfyPreview(evt.data)
+    if (imageDataUrl) enqueue({ type: "preview", imageBase64: imageDataUrl })
+  }
+  const onClose = (): void => {
     done = true
-    if (resolve) {
-      resolve()
-      resolve = null
-    }
-  })
-
-  signal?.addEventListener("abort", () => {
+    resolve?.()
+    resolve = null
+  }
+  const onAbort = (): void => {
     done = true
-    if (resolve) {
-      resolve()
-      resolve = null
-    }
-  })
+    queue.length = 0
+    resolve?.()
+    resolve = null
+  }
 
-  while (!done) {
-    if (queue.length === 0) {
-      await new Promise<void>((r) => { resolve = r })
-    }
-    while (queue.length > 0) {
-      const event = queue.shift()!
-      yield event
-      if (event.type === "complete" || event.type === "error") {
-        return
+  ws.addEventListener("message", onMessage)
+  ws.addEventListener("close", onClose)
+  signal?.addEventListener("abort", onAbort, { once: true })
+  try {
+    while (!done || queue.length > 0) {
+      if (queue.length === 0) {
+        if (done) break
+        await new Promise<void>((r) => { resolve = r })
+      }
+      while (queue.length > 0) {
+        const event = queue.shift()!
+        yield event
+        if (event.type === "complete" || event.type === "error") {
+          return
+        }
       }
     }
+    if (signal?.aborted) throw createAbortError()
+  } finally {
+    ws.removeEventListener("message", onMessage)
+    ws.removeEventListener("close", onClose)
+    signal?.removeEventListener("abort", onAbort)
+    queue.length = 0
+    resolve = null
   }
 }

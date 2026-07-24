@@ -41,6 +41,36 @@ function initDefaultPresetTestDb(): void {
     updated_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (key, user_id)
   )`);
+  db.run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    preset_id TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    has_api_key INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`);
+
+  db.run(`CREATE TABLE dispatch_state (
+    user_id TEXT PRIMARY KEY NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    base_token TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 0),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    descriptor_digest TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    CHECK (length(base_token) >= 32)
+  )`);
+
+  db.run(`CREATE UNIQUE INDEX idx_dispatch_state_base_token
+    ON dispatch_state(base_token)`);
+  db.run(`CREATE INDEX idx_dispatch_state_updated
+    ON dispatch_state(updated_at DESC)`);
 }
 
 function insertUser(id: string, createdAt: number, username = id): void {

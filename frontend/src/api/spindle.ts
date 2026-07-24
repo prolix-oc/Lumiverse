@@ -1,8 +1,18 @@
 import { get, post, del, put } from './client'
-import type { ExtensionInfo, SpindleManifest, ToolRegistration } from 'lumiverse-spindle-types'
+import type {
+  ExtensionInfo,
+  SpindleHostDescriptorV1,
+  SpindleManifest,
+  ToolRegistration,
+} from 'lumiverse-spindle-types'
 
 const manifestCache = new Map<string, SpindleManifest>()
 const manifestInFlight = new Map<string, Promise<SpindleManifest>>()
+export interface SpindleCompatibilityHandshakeResponse {
+  nonce: string
+  descriptor: SpindleHostDescriptorV1
+  digest: string
+}
 
 export interface EphemeralPoolConfig {
   globalMaxBytes: number
@@ -107,6 +117,13 @@ export const spindleApi = {
 
   getPermissions(id: string) {
     return get<{ requested: string[]; granted: string[] }>(`/spindle/${id}/permissions`)
+  },
+  compatibilityHandshake(id: string, nonce: string) {
+    return post<SpindleCompatibilityHandshakeResponse>(
+      `/spindle/${id}/compatibility-handshake`,
+      { nonce },
+      { timeout: 5_000 },
+    )
   },
 
   setPermissions(id: string, grants: { grant?: string[]; revoke?: string[] }) {

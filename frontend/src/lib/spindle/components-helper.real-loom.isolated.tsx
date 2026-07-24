@@ -99,6 +99,35 @@ const MockCheckbox = ({
   }),
   label,
 )
+mock.module('@dnd-kit/core', () => ({
+  DndContext: ({ children }: { children?: ReactNode }) => children ?? null,
+  closestCenter: () => null,
+  MouseSensor: () => null,
+  TouchSensor: () => null,
+  KeyboardSensor: () => null,
+  useDroppable: () => ({ setNodeRef: () => {}, isOver: false }),
+  useSensor: () => ({}),
+  useSensors: () => [],
+}))
+mock.module('@dnd-kit/sortable', () => ({
+  arrayMove: <T,>(items: T[], oldIndex: number, newIndex: number): T[] => {
+    const next = [...items]
+    const [moved] = next.splice(oldIndex, 1)
+    if (moved !== undefined) next.splice(newIndex, 0, moved)
+    return next
+  },
+  SortableContext: ({ children }: { children?: ReactNode }) => children ?? null,
+  sortableKeyboardCoordinates: () => undefined,
+  verticalListSortingStrategy: {},
+  useSortable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: () => {},
+    transform: null,
+    transition: undefined,
+    isDragging: false,
+  }),
+}))
 
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: translation, i18n: { language: 'en' } }),

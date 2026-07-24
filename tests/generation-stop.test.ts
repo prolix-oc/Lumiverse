@@ -89,6 +89,12 @@ beforeAll(async () => {
     } catch { /* baseline already includes this change */ }
   }
 
+  db.run('INSERT INTO "user" (id, name, email) VALUES (?, ?, ?)', [
+    USER_ID,
+    "Generation Stop User",
+    "generation-stop-user@example.test",
+  ]);
+
   presetId = presetsSvc.createPreset(USER_ID, {
     name: "stop-test-preset",
     provider: "custom",

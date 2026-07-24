@@ -30,6 +30,7 @@ These are always available:
 | `"cors_proxy"` | Make HTTP requests through the Lumiverse server (bypass CORS) |
 | `"context_handler"` | Register middleware that enriches the generation context before prompt assembly |
 | `"generation_parameters"` | Inject provider-specific parameters (e.g. `response_format`, sampling overrides) into in-flight generations via interceptors. Requires `interceptor` to be useful |
+| `"final_response"` | Return a validated authoritative assistant response from an interceptor on eligible Main generation routes while retaining the native fallback. Privileged, never auto-granted, and useful only with `"interceptor"` |
 | `"ephemeral_storage"` | Use temporary storage with TTL, memory pooling, and per-extension quotas |
 | `"characters"` | Full CRUD on character cards (list, get, create, update, delete) |
 | `"chats"` | CRUD on chat sessions (list, get, update, delete) + get active chat |
@@ -50,6 +51,8 @@ These are always available:
 | `"web_search"` | Run searches against the user's configured web search provider (currently SearXNG) and read the safe view of their web search settings. The host enforces all upstream limits — extensions cannot supply their own endpoint or API key |
 
 Users grant permissions individually from the Extensions panel. Your extension should degrade gracefully if a permission isn't granted.
+
+Declaring `final_response` in `spindle.json` never grants it automatically. The user must approve this privileged permission explicitly. The host checks the grant when an interceptor result arrives and again at terminal selection; if it is absent or revoked, the extension response is not selected and the validated native fallback is restored. See [Interceptors → Authoritative final response](../backend-api/interceptors.md#authoritative-final-response).
 
 ## Live Permission Updates
 

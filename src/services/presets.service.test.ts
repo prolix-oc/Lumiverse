@@ -20,6 +20,43 @@ function initPresetsTestDb(): void {
     engine TEXT NOT NULL DEFAULT 'classic',
     cache_revision INTEGER NOT NULL DEFAULT 0
   )`);
+  getDb().run(`CREATE TABLE "user" (id TEXT PRIMARY KEY)`);
+  getDb().run(`INSERT INTO "user" (id) VALUES ('u1'), ('u2')`);
+  getDb().run(`CREATE TABLE settings (
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (key, user_id)
+  )`);
+  getDb().run(`CREATE TABLE connection_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    preset_id TEXT,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    has_api_key INTEGER NOT NULL DEFAULT 0,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`);
+  getDb().run(`CREATE TABLE dispatch_state (
+    user_id TEXT PRIMARY KEY NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    base_token TEXT NOT NULL,
+    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 0),
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    descriptor_digest TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    CHECK (length(base_token) >= 32)
+  )`);
+  getDb().run(`CREATE UNIQUE INDEX idx_dispatch_state_base_token
+    ON dispatch_state(base_token)`);
+  getDb().run(`CREATE INDEX idx_dispatch_state_updated
+    ON dispatch_state(updated_at DESC)`);
 }
 
 function insertPreset(o: {

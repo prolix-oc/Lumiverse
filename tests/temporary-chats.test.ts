@@ -49,6 +49,11 @@ describe("temporary character-less chats", () => {
     closeDatabase();
     initDatabase(":memory:");
     await applyBaseline();
+    getDb().run('INSERT INTO "user" (id, name, email) VALUES (?, ?, ?)', [
+      USER_ID,
+      "Temporary Chat User",
+      "temporary-chat-user@example.test",
+    ]);
   });
 
   test("createChat accepts a null character_id and skips the greeting", () => {

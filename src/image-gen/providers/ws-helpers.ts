@@ -19,41 +19,82 @@ export function formatWsError(e: unknown): string {
 // Bun's WebSocket constructor extension (WHATWG WebSocket can't set headers).
 export async function openWebSocket(
   url: string,
-  opts: { label: string; timeoutMs?: number; headers?: Record<string, string> },
+  opts: {
+    label: string;
+    timeoutMs?: number;
+    headers?: Record<string, string>;
+    signal?: AbortSignal;
+  },
 ): Promise<WebSocket> {
-  const timeoutMs = opts.timeoutMs ?? 10_000
-  const ws = opts.headers
-    ? new WebSocket(url, { headers: opts.headers } as any)
-    : new WebSocket(url)
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const abortError = (): DOMException => new DOMException("Aborted", "AbortError");
+  if (opts.signal?.aborted) throw abortError();
+
+  let ws: WebSocket;
+  try {
+    ws = opts.headers
+      ? new WebSocket(url, { headers: opts.headers } as any)
+      : new WebSocket(url);
+  } catch (error) {
+    if (opts.signal?.aborted) throw abortError();
+    throw error;
+  }
+
   await new Promise<void>((resolve, reject) => {
-    let settled = false
-    const cleanup = () => {
-      clearTimeout(timer)
-      ws.removeEventListener("open", onOpen)
-      ws.removeEventListener("error", onError)
-    }
-    const onOpen = () => {
-      if (settled) return
-      settled = true
-      cleanup()
-      resolve()
-    }
-    const onError = (e: Event) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      try { ws.close() } catch {}
-      reject(new Error(`${opts.label} WebSocket error: ${formatWsError(e)} (url=${url})`))
-    }
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      cleanup()
-      try { ws.close() } catch {}
-      reject(new Error(`${opts.label} WebSocket connection timeout after ${timeoutMs}ms (url=${url})`))
-    }, timeoutMs)
-    ws.addEventListener("open", onOpen)
-    ws.addEventListener("error", onError)
-  })
-  return ws
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer);
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("error", onError);
+      ws.removeEventListener("close", onClose);
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+    const closeSocket = (): void => {
+      try {
+        ws.close();
+      } catch {
+        // The socket may already be closed.
+      }
+    };
+    const onOpen = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onError = (event: Event): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      closeSocket();
+      reject(new Error(`${opts.label} WebSocket error: ${formatWsError(event)} (url=${url})`));
+    };
+    const onClose = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`${opts.label} WebSocket closed before opening (url=${url})`));
+    };
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      closeSocket();
+      reject(abortError());
+    };
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      closeSocket();
+      reject(new Error(`${opts.label} WebSocket connection timeout after ${timeoutMs}ms (url=${url})`));
+    }, timeoutMs);
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("error", onError);
+    ws.addEventListener("close", onClose);
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    if (opts.signal?.aborted) onAbort();
+  });
+  return ws;
 }

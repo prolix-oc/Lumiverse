@@ -311,6 +311,10 @@ describe("PRIVILEGED_PERMISSIONS", () => {
   test("requires explicit approval for app manipulation", () => {
     expect(PRIVILEGED_PERMISSIONS.has("app_manipulation")).toBe(true);
   });
+
+  test("keeps final_response privileged and outside default grants", () => {
+    expect(PRIVILEGED_PERMISSIONS.has("final_response")).toBe(true);
+  });
 });
 
 describe("bunInstallCmd", () => {

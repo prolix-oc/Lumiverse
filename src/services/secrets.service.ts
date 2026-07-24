@@ -2,11 +2,16 @@ import { getDb } from "../db/connection";
 import { getEncryptionKeyBytes } from "../crypto/init";
 
 interface SecretRow {
-  key: string;
   encrypted_value: string;
   iv: string;
   tag: string;
   updated_at: number;
+}
+
+export interface PreparedSecret {
+  readonly encrypted: string;
+  readonly iv: string;
+  readonly tag: string;
 }
 
 let _cachedKey: CryptoKey | null = null;
@@ -19,14 +24,12 @@ async function getEncryptionKey(): Promise<CryptoKey> {
   return _cachedKey;
 }
 
-async function encrypt(plaintext: string): Promise<{ encrypted: string; iv: string; tag: string }> {
+async function encrypt(plaintext: string): Promise<PreparedSecret> {
   const key = await getEncryptionKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
 
   const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
-
-  // AES-GCM appends the 16-byte auth tag to the ciphertext
   const ciphertextBytes = new Uint8Array(ciphertext);
   const encryptedData = ciphertextBytes.slice(0, -16);
   const tag = ciphertextBytes.slice(-16);
@@ -58,8 +61,11 @@ export function listSecretKeys(userId: string): string[] {
   return rows.map((r) => r.key);
 }
 
-export async function putSecret(userId: string, key: string, value: string): Promise<void> {
-  const { encrypted, iv, tag } = await encrypt(value);
+export async function prepareSecret(value: string): Promise<PreparedSecret> {
+  return encrypt(value);
+}
+
+export function putPreparedSecret(userId: string, key: string, prepared: PreparedSecret): void {
   const now = Math.floor(Date.now() / 1000);
 
   getDb()
@@ -67,7 +73,11 @@ export async function putSecret(userId: string, key: string, value: string): Pro
       `INSERT INTO secrets (key, encrypted_value, iv, tag, user_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(key, user_id) DO UPDATE SET encrypted_value = excluded.encrypted_value, iv = excluded.iv, tag = excluded.tag, updated_at = excluded.updated_at`
     )
-    .run(key, encrypted, iv, tag, userId, now);
+    .run(key, prepared.encrypted, prepared.iv, prepared.tag, userId, now);
+}
+
+export async function putSecret(userId: string, key: string, value: string): Promise<void> {
+  putPreparedSecret(userId, key, await prepareSecret(value));
 }
 
 export async function getSecret(userId: string, key: string): Promise<string | null> {

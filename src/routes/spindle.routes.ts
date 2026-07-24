@@ -7,6 +7,12 @@ import * as managerSvc from "../spindle/manager.service";
 import { PRIVILEGED_PERMISSIONS } from "../spindle/manager.service";
 import * as bulkUpdateSvc from "../spindle/bulk-update.service";
 import type { ExtensionInfo } from "lumiverse-spindle-types";
+import { SPINDLE_COMPATIBILITY_ERROR_CODE } from "lumiverse-spindle-types";
+import {
+  createSpindleHostDescriptor,
+  digestSpindleHostDescriptor,
+  SpindleCompatibilityError,
+} from "../spindle/host-compatibility";
 import * as lifecycle from "../spindle/lifecycle";
 import { toolRegistry } from "../spindle/tool-registry";
 import {
@@ -17,6 +23,23 @@ import {
 import { eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import { ifNoneMatchSatisfies } from "../utils/http-cache";
+
+const COMPATIBILITY_NONCE_CHAR = /^[A-Za-z0-9_-]$/u;
+
+function isCompatibilityError(error: unknown): boolean {
+  if (error instanceof SpindleCompatibilityError) return true;
+  if (error === null || typeof error !== "object" || !("code" in error)) return false;
+  return error.code === SPINDLE_COMPATIBILITY_ERROR_CODE;
+}
+function spindleErrorBody(error: unknown): { error: string; code?: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  return isCompatibilityError(error)
+    ? { error: message, code: SPINDLE_COMPATIBILITY_ERROR_CODE }
+    : { error: message };
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 const app = new Hono();
 
@@ -157,7 +180,7 @@ app.post("/branches", requireOwner, async (c) => {
     const branches = managerSvc.listRemoteBranches(body.github_url);
     return c.json({ branches });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -203,7 +226,7 @@ app.post("/install", requireOwner, async (c) => {
 
     return c.json(ext, 201);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -213,7 +236,7 @@ app.post("/import-local", requireOwner, async (c) => {
     const result = await managerSvc.importLocalExtensions();
     return c.json(result);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -279,7 +302,7 @@ app.post("/:id/update", async (c) => {
 
     return c.json(result);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -311,7 +334,7 @@ app.delete("/:id", async (c) => {
 
     return c.json({ success: true });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -339,7 +362,7 @@ app.post("/:id/enable", requireOwner, async (c) => {
 
     return c.json({ success: true });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -369,7 +392,7 @@ app.post("/:id/disable", async (c) => {
 
     return c.json({ success: true });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -398,7 +421,7 @@ app.post("/:id/restart", async (c) => {
 
     return c.json({ success: true });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -463,7 +486,49 @@ app.post("/:id/permissions", async (c) => {
       granted: allGranted,
     });
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
+  }
+});
+
+// POST /api/v1/spindle/:id/compatibility-handshake — generic host readiness
+app.post("/:id/compatibility-handshake", async (c) => {
+  try {
+    const ext = await getVisibleExtension(c, c.req.param("id"));
+    if (!ext) return c.json({ error: "Not found" }, 404);
+
+    const body: unknown = await c.req.json();
+    const objectBody = isRecord(body) ? body : null;
+    const keys = objectBody ? Object.keys(objectBody) : [];
+    const nonce =
+      objectBody && Object.prototype.hasOwnProperty.call(objectBody, "nonce")
+        ? objectBody.nonce
+        : undefined;
+    if (
+      keys.length !== 1 ||
+      typeof nonce !== "string" ||
+      nonce.length < 22 ||
+      nonce.length > 86 ||
+      [...nonce].some((character) => !COMPATIBILITY_NONCE_CHAR.test(character))
+    ) {
+      return c.json(
+        {
+          error: "Request body must contain only a 22-86 character base64url nonce",
+          code: SPINDLE_COMPATIBILITY_ERROR_CODE,
+        },
+        400,
+      );
+    }
+
+    await managerSvc.getManifest(ext.identifier);
+    const descriptor = await createSpindleHostDescriptor(ext.id);
+    const digest = await digestSpindleHostDescriptor(descriptor);
+    return c.json({ nonce, descriptor, digest });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Compatibility handshake failed";
+    if (isCompatibilityError(error)) {
+      return c.json({ error: message, code: SPINDLE_COMPATIBILITY_ERROR_CODE }, 400);
+    }
+    return c.json({ error: message }, 400);
   }
 });
 
@@ -477,7 +542,7 @@ app.get("/:id/manifest", async (c) => {
     const frontendCacheKey = await managerSvc.getFrontendBundleCacheKey(ext.identifier);
     return c.json(frontendCacheKey ? { ...manifest, frontend_cache_key: frontendCacheKey } : manifest);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -490,7 +555,7 @@ app.get("/:id/branches", async (c) => {
     const result = managerSvc.getBranches(ext.identifier);
     return c.json(result);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 
@@ -526,7 +591,7 @@ app.post("/:id/switch-branch", async (c) => {
 
     return c.json(result);
   } catch (err: any) {
-    return c.json({ error: err.message }, 400);
+    return c.json(spindleErrorBody(err), 400);
   }
 });
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { settingsApi } from '@/api/settings'
+import { scheduleMicrotask } from '@/lib/schedule-microtask'
 
 type FolderSettingsKey = 'characterFolders' | 'personaFolders' | 'regexScriptFolders' | 'worldBookFolders'
 const FOLDERS_UPDATED_EVENT = 'lumiverse:folders-updated'
@@ -63,7 +64,7 @@ export function useFolders(
       setStoredFolders((prev) => {
         if (prev.includes(name)) return prev
         const next = [...prev, name]
-        queueMicrotask(() => persistFolders(next))
+        scheduleMicrotask(() => persistFolders(next))
         return next
       })
     },
@@ -79,7 +80,7 @@ export function useFolders(
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== source)
         if (!next.includes(target)) next.push(target)
-        queueMicrotask(() => persistFolders(next))
+        scheduleMicrotask(() => persistFolders(next))
         return next
       })
     },
@@ -90,7 +91,7 @@ export function useFolders(
     (name: string) => {
       setStoredFolders((prev) => {
         const next = prev.filter((f) => f !== name)
-        queueMicrotask(() => persistFolders(next))
+        scheduleMicrotask(() => persistFolders(next))
         return next
       })
     },

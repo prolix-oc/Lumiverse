@@ -299,6 +299,84 @@ export interface AssemblyContext {
    *  an AbortError so the caller can unwind cleanly. */
   signal?: AbortSignal;
 }
+/**
+ * Host-private parent retrieval capture metadata.  The binding is kept in a
+ * WeakMap rather than on AssemblyContext so it cannot cross the prompt
+ * assembly worker's structured-clone boundary.
+ */
+export interface ParentRetrievalCaptureMeta {
+  readonly hostGeneration: string;
+  readonly generationId: string;
+  readonly userId: string;
+  readonly chatId: string;
+  readonly capturedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface ParentRetrievalCaptureBinding {
+  readonly meta: ParentRetrievalCaptureMeta;
+  readonly onParentRetrievalReady: (input: unknown) => void;
+}
+
+const parentRetrievalCaptureBindings = new WeakMap<
+  object,
+  ParentRetrievalCaptureBinding
+>();
+const boundAssemblyContexts = new WeakSet<object>();
+
+/** @internal Attach the host-only native parent capture callback. */
+export function attachParentRetrievalCapture(
+  context: AssemblyContext,
+  binding: ParentRetrievalCaptureBinding,
+): void {
+  if (
+    !context ||
+    typeof context !== "object" ||
+    !binding ||
+    typeof binding.onParentRetrievalReady !== "function"
+  ) {
+    throw new TypeError("Invalid parent retrieval capture binding");
+  }
+  const meta = binding.meta;
+  if (
+    !meta ||
+    typeof meta.hostGeneration !== "string" ||
+    typeof meta.generationId !== "string" ||
+    typeof meta.userId !== "string" ||
+    typeof meta.chatId !== "string" ||
+    !Number.isFinite(meta.capturedAt) ||
+    !Number.isFinite(meta.expiresAt) ||
+    meta.expiresAt <= meta.capturedAt
+  ) {
+    throw new TypeError("Invalid parent retrieval capture metadata");
+  }
+  parentRetrievalCaptureBindings.set(context, {
+    meta: Object.freeze({ ...meta }),
+    onParentRetrievalReady: binding.onParentRetrievalReady,
+  });
+}
+
+/** @internal Remove a host-only native parent capture callback. */
+export function detachParentRetrievalCapture(context: AssemblyContext): void {
+  parentRetrievalCaptureBindings.delete(context);
+}
+
+/** @internal Read the host-only native parent capture callback. */
+export function getParentRetrievalCapture(
+  context: AssemblyContext,
+): ParentRetrievalCaptureBinding | undefined {
+  return parentRetrievalCaptureBindings.get(context);
+}
+
+/** @internal Mark an invocation-local context as bound/snapshot-only. */
+export function markAssemblyContextBound(context: AssemblyContext): void {
+  boundAssemblyContexts.add(context);
+}
+
+/** @internal Test whether an invocation-local context is bound/snapshot-only. */
+export function isAssemblyContextBound(context: AssemblyContext): boolean {
+  return boundAssemblyContexts.has(context);
+}
 
 /**
  * Batch-prefetched data for the assembly pipeline. Every field here replaces

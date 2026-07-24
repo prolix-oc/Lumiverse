@@ -4,6 +4,7 @@ import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import type { PromptBlock, PromptVariableDef, PromptVariableValues } from '@/lib/loom/types'
+import { LOOM_DTO_LIMITS } from '@/lib/spindle/loom-dto'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'http://localhost/',
@@ -61,6 +62,27 @@ const MockToggle = Object.assign(NullComponent, {
   Checkbox: ({ label }: { label?: ReactNode }) => createElement('label', null, label),
 })
 
+type TestDragEvent = {
+  active: { id: string }
+  over: { id: string } | null
+}
+
+function dragId(blockId: string): string {
+  return `loom-block:${blockId}`
+}
+
+let latestDragEnd: ((event: TestDragEvent) => void) | null = null
+const droppableIds: string[] = []
+const sortableIds: string[] = []
+
+function moveItems<T>(items: T[], oldIndex: number, newIndex: number): T[] {
+  const next = [...items]
+  const [moved] = next.splice(oldIndex, 1)
+  if (moved === undefined) return next
+  next.splice(newIndex, 0, moved)
+  return next
+}
+
 
 const mainLoomState: Record<string, unknown> = {}
 const mainStoreState = {
@@ -81,6 +103,45 @@ const mockedStore = Object.assign(
   (selector: (state: typeof mainStoreState) => unknown) => selector(mainStoreState),
   { getState: () => mainStoreState },
 )
+mock.module('@dnd-kit/core', () => ({
+  DndContext: ({
+    children,
+    onDragEnd,
+  }: {
+    children?: ReactNode
+    onDragEnd?: (event: TestDragEvent) => void
+  }) => {
+    latestDragEnd = onDragEnd ?? null
+    return children ?? null
+  },
+  closestCenter: () => null,
+  MouseSensor: () => null,
+  TouchSensor: () => null,
+  KeyboardSensor: () => null,
+  useDroppable: ({ id }: { id: string }) => {
+    droppableIds.push(id)
+    return { setNodeRef: () => {}, isOver: false }
+  },
+  useSensor: () => ({}),
+  useSensors: () => [],
+}))
+mock.module('@dnd-kit/sortable', () => ({
+  arrayMove: moveItems,
+  SortableContext: ({ children }: { children?: ReactNode }) => children ?? null,
+  sortableKeyboardCoordinates: () => undefined,
+  verticalListSortingStrategy: {},
+  useSortable: ({ id }: { id: string }) => {
+    sortableIds.push(id)
+    return {
+      attributes: {},
+      listeners: {},
+      setNodeRef: () => {},
+      transform: null,
+      transition: undefined,
+      isDragging: false,
+    }
+  },
+}))
 mock.module('react-i18next', () => ({
   useTranslation: () => ({ t: translation, i18n: { language: 'en' } }),
   Trans: ({ i18nKey }: { i18nKey?: string }) => createElement('span', null, i18nKey),
@@ -132,9 +193,9 @@ mock.module('@/lib/i18n/loomOptionLabels', () => ({
   useLoomOptionLabels: () => ({
     injectionTriggerTypes: [],
     injectionTriggerLabel: () => '',
-    addableMarkers: [],
-    markerLabel: () => '',
-    markerSectionLabel: () => '',
+    addableMarkers: [{ section: 'Structural' }, 'chat_history'],
+    markerLabel: (marker: string) => `marker.${marker}`,
+    markerSectionLabel: (section: string) => `markerSection.${section}`,
   }),
 }))
 mock.module('@/components/shared/ExpandedTextEditor', () => ({
@@ -172,7 +233,35 @@ const MockVariablesEditor = ({
   }),
 )
 mock.module('./PromptVariablesEditor', () => ({ VariablesEditor: MockVariablesEditor }))
-mock.module('@/components/shared/ConfirmationModal', () => ({ default: NullComponent }))
+mock.module('@/components/shared/ConfirmationModal', () => ({
+  default: ({
+    isOpen,
+    onConfirm,
+    onCancel,
+    title,
+    confirmText,
+  }: {
+    isOpen: boolean
+    onConfirm: (inputValue: string, checkboxChecked: boolean) => void
+    onCancel: () => void
+    title?: ReactNode
+    confirmText?: ReactNode
+  }) => isOpen ? createElement(
+    'div',
+    { role: 'dialog' },
+    createElement('span', null, title),
+    createElement(
+      'button',
+      { type: 'button', 'data-testid': 'confirm-delete', onClick: () => onConfirm('', false) },
+      confirmText,
+    ),
+    createElement(
+      'button',
+      { type: 'button', 'data-testid': 'cancel-delete', onClick: onCancel },
+      'cancel',
+    ),
+  ) : null,
+}))
 mock.module('@/components/shared/NumberStepper', () => ({ default: NullComponent }))
 mock.module('@/components/shared/PanelFadeIn', () => ({
   default: ({ children }: { children?: ReactNode }) => children ?? null,
@@ -311,8 +400,9 @@ function renderBlockEditor(
 }
 function renderControlled(
   blocks: PromptBlock[],
-  onChange: (next: PromptBlock[]) => void,
+  onChange: (next: PromptBlock[]) => boolean | void | Promise<unknown>,
   trustedHostFeatures?: boolean,
+  readOnly = false,
 ): { container: HTMLDivElement; root: Root } {
   const container = document.createElement('div')
   document.body.append(container)
@@ -324,6 +414,7 @@ function renderControlled(
       onChange,
       availableMacros: [],
       compact: true,
+      readOnly,
       ...(trustedHostFeatures === undefined ? {} : { trustedHostFeatures }),
     }))
   })
@@ -336,6 +427,13 @@ function labeledSelect(container: HTMLDivElement, labelText: string): HTMLSelect
   const select = label?.parentElement?.querySelector<HTMLSelectElement>('select')
   expect(select).not.toBeNull()
   return select!
+}
+
+function buttonWithText(container: HTMLDivElement, text: string): HTMLButtonElement {
+  const button = [...container.querySelectorAll<HTMLButtonElement>('button')]
+    .find((entry) => entry.textContent?.replace(/\s+/g, ' ').trim() === text)
+  expect(button).toBeDefined()
+  return button!
 }
 
 function editRole(container: HTMLDivElement, role: PromptBlock['role']): void {
@@ -392,6 +490,9 @@ afterEach(() => {
   document.body.replaceChildren()
   resolverCalls = 0
   resolverRequests.length = 0
+  latestDragEnd = null
+  droppableIds.length = 0
+  sortableIds.length = 0
 })
 afterAll(async () => {
   await act(async () => {})
@@ -731,6 +832,302 @@ describe('controlled Loom editor trust boundary', () => {
     expect(current).toEqual(beforeCallback)
     expect(container.querySelector('button[title="actions.edit"]')).not.toBeNull()
     expect(container.querySelector('[role="alert"]')).toBeNull()
+    unmountRoot(root)
+  })
+
+  test('shows native managed controls and creates prompts, categories, and host markers', () => {
+    const current = [block()]
+    const emissions: PromptBlock[][] = []
+    const { container, root } = renderControlled(current, (next) => {
+      emissions.push(next)
+    })
+
+    expect(container.textContent).toContain('actions.addPrompt')
+    expect(container.textContent).toContain('actions.addCategory')
+    expect(container.textContent).toContain('actions.addMarker')
+
+    flushSync(() => buttonWithText(container, 'actions.addPrompt').click())
+    expect(container.textContent).toContain('Blank Prompt')
+    flushSync(() => buttonWithText(container, 'Blank Prompt').click())
+    expect(emissions[0]).toHaveLength(2)
+    expect(emissions[0]?.[1]).toMatchObject({
+      name: 'Blank Prompt',
+      content: '',
+      role: 'system',
+      marker: null,
+      group: null,
+    })
+    expect(typeof emissions[0]?.[1]?.id).toBe('string')
+
+    flushSync(() => buttonWithText(container, 'actions.addCategory').click())
+    expect(emissions[1]?.[1]).toMatchObject({
+      name: 'actions.newCategory',
+      marker: 'category',
+      isLocked: false,
+      group: null,
+      categoryMode: null,
+    })
+
+    flushSync(() => buttonWithText(container, 'actions.addMarker').click())
+    expect(container.textContent).toContain('marker.chat_history')
+    flushSync(() => buttonWithText(container, 'marker.chat_history').click())
+    expect(emissions[2]?.[1]).toMatchObject({
+      marker: 'chat_history',
+      isLocked: true,
+      group: null,
+    })
+    expect(current).toEqual([block()])
+    unmountRoot(root)
+  })
+
+  test('applies radio category toggle rules through the controlled callback', () => {
+    const category = block({
+      id: 'category',
+      name: 'Modes',
+      marker: 'category',
+      categoryMode: 'radio',
+    })
+    const first = block({ id: 'first', name: 'First', group: category.id, enabled: true })
+    const second = block({ id: 'second', name: 'Second', group: category.id, enabled: false })
+    let emitted: PromptBlock[] | undefined
+    const { container, root } = renderControlled([category, first, second], (next) => {
+      emitted = next
+    })
+
+    const enableSecond = container.querySelector<HTMLButtonElement>('button[title="block.enable"]')
+    expect(enableSecond).not.toBeNull()
+    flushSync(() => enableSecond!.click())
+
+    expect(emitted?.find((entry) => entry.id === first.id)?.enabled).toBe(false)
+    expect(emitted?.find((entry) => entry.id === second.id)?.enabled).toBe(true)
+    unmountRoot(root)
+  })
+
+  test('confirms category deletion and detaches every child from the removed category', () => {
+    const category = block({ id: 'category', name: 'Modes', marker: 'category', isLocked: true })
+    const child = block({
+      id: 'child',
+      name: 'Child',
+      group: category.id,
+      injectionTrigger: ['onPrompt'],
+    })
+    const current = [category, child]
+    let receivedBeforeConsumerMutation: PromptBlock[] | undefined
+    const { container, root } = renderControlled(current, (next) => {
+      receivedBeforeConsumerMutation = structuredClone(next)
+      next[0]!.name = 'consumer mutation'
+      next[0]!.injectionTrigger.push('consumer-trigger')
+    })
+
+    const deleteCategory = container.querySelector<HTMLButtonElement>('button[title="category.deleteCategory"]')
+    expect(deleteCategory).not.toBeNull()
+    flushSync(() => deleteCategory!.click())
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    flushSync(() => container.querySelector<HTMLButtonElement>('[data-testid="confirm-delete"]')!.click())
+
+    expect(receivedBeforeConsumerMutation).toEqual([{ ...child, group: null, categoryMode: null }])
+    expect(current).toEqual([category, child])
+    unmountRoot(root)
+  })
+
+  test('keeps locked marker deletion absent while structural categories remain deletable', () => {
+    const lockedCategory = block({
+      id: 'locked-category',
+      name: 'Locked category',
+      marker: 'category',
+      isLocked: true,
+    })
+    const lockedMarker = block({
+      id: 'locked-marker',
+      name: 'Chat History',
+      marker: 'chat_history',
+      isLocked: true,
+      group: null,
+    })
+    const { container, root } = renderControlled([lockedCategory, lockedMarker], () => {})
+
+    expect(container.querySelector('button[title="category.deleteCategory"]')).not.toBeNull()
+    expect(container.querySelector('button[title="actions.delete"]')).toBeNull()
+    expect(container.querySelectorAll('button[title="actions.edit"]')).toHaveLength(1)
+    expect(container.querySelector('button[title="category.rename"]')).not.toBeNull()
+    unmountRoot(root)
+  })
+
+  test('reorders a hostile root-drop block ID through the private sortable namespace', () => {
+    const category = block({ id: 'category', name: 'Modes', marker: 'category' })
+    const child = block({ id: 'child', name: 'Child', group: category.id })
+    const rootBlock = block({ id: 'root-drop:0', name: 'Root block', group: null })
+    let emitted: PromptBlock[] | undefined
+    const { root } = renderControlled([category, child, rootBlock], (next) => {
+      emitted = next
+    })
+    expect(droppableIds).toContain(rootBlock.id)
+    expect(sortableIds).toContain(dragId(rootBlock.id))
+    expect(sortableIds).not.toContain(rootBlock.id)
+    const dragEnd = latestDragEnd
+    expect(dragEnd).not.toBeNull()
+
+    flushSync(() => dragEnd!({
+      active: { id: dragId(rootBlock.id) },
+      over: { id: dragId(child.id) },
+    }))
+
+    expect(emitted?.map((entry) => entry.id)).toEqual([category.id, rootBlock.id, child.id])
+    expect(emitted?.find((entry) => entry.id === rootBlock.id)?.group).toBe(category.id)
+    unmountRoot(root)
+  })
+
+  test('moves a category and its children as one ordered group', () => {
+    const firstCategory = block({ id: 'first-category', name: 'First', marker: 'category' })
+    const firstChild = block({ id: 'first-child', name: 'First child', group: firstCategory.id })
+    const secondCategory = block({ id: 'second-category', name: 'Second', marker: 'category' })
+    const secondChild = block({ id: 'second-child', name: 'Second child', group: secondCategory.id })
+    let emitted: PromptBlock[] | undefined
+    const { root } = renderControlled(
+      [firstCategory, firstChild, secondCategory, secondChild],
+      (next) => {
+        emitted = next
+      },
+    )
+    const dragEnd = latestDragEnd
+    expect(dragEnd).not.toBeNull()
+
+    flushSync(() => dragEnd!({
+      active: { id: dragId(firstCategory.id) },
+      over: { id: 'root-drop:4:category:second-category' },
+    }))
+
+    expect(emitted?.map((entry) => entry.id)).toEqual([
+      secondCategory.id,
+      secondChild.id,
+      firstCategory.id,
+      firstChild.id,
+    ])
+    expect(emitted?.find((entry) => entry.id === firstChild.id)?.group).toBe(firstCategory.id)
+    unmountRoot(root)
+  })
+
+  test('does not split a destination category when another category is dropped over its child', () => {
+    const firstCategory = block({ id: 'first-category', name: 'First', marker: 'category' })
+    const firstChild = block({ id: 'first-child', name: 'First child', group: firstCategory.id })
+    const secondCategory = block({ id: 'second-category', name: 'Second', marker: 'category' })
+    const secondChild = block({ id: 'second-child', name: 'Second child', group: secondCategory.id })
+    let emitted: PromptBlock[] | undefined
+    const { root } = renderControlled(
+      [firstCategory, firstChild, secondCategory, secondChild],
+      (next) => {
+        emitted = next
+      },
+    )
+    const dragEnd = latestDragEnd
+    expect(dragEnd).not.toBeNull()
+
+    flushSync(() => dragEnd!({
+      active: { id: dragId(secondCategory.id) },
+      over: { id: dragId(firstChild.id) },
+    }))
+
+    expect(emitted?.map((entry) => entry.id)).toEqual([
+      secondCategory.id,
+      secondChild.id,
+      firstCategory.id,
+      firstChild.id,
+    ])
+    expect(emitted?.find((entry) => entry.id === firstChild.id)?.group).toBe(firstCategory.id)
+    expect(emitted?.find((entry) => entry.id === secondChild.id)?.group).toBe(secondCategory.id)
+    unmountRoot(root)
+  })
+
+  test('closes open add menus and keeps every add action inert at the public block limit', () => {
+    const belowLimit = Array.from(
+      { length: LOOM_DTO_LIMITS.maxBlocks - 1 },
+      (_, index) => block({ id: `limit-${index}`, name: `Limit block ${index}` }),
+    )
+    const atLimit = [
+      ...belowLimit,
+      block({ id: 'limit-final', name: 'Final limit block' }),
+    ]
+    const emissions: PromptBlock[][] = []
+    const onChange = (next: PromptBlock[]) => {
+      emissions.push(next)
+    }
+    const { container, root } = renderControlled(belowLimit, onChange)
+    const renderAt = (nextBlocks: PromptBlock[]) => {
+      flushSync(() => {
+        root.render(createElement(ControlledLoomBlockEditor, {
+          blocks: nextBlocks,
+          promptVariables,
+          onChange,
+          availableMacros: [],
+          compact: true,
+        }))
+      })
+    }
+
+    flushSync(() => buttonWithText(container, 'actions.addPrompt').click())
+    expect(container.textContent).toContain('Blank Prompt')
+    renderAt(atLimit)
+
+    const addPrompt = buttonWithText(container, 'actions.addPrompt')
+    const addCategory = buttonWithText(container, 'actions.addCategory')
+    const addMarker = buttonWithText(container, 'actions.addMarker')
+    expect(addPrompt.disabled).toBe(true)
+    expect(addCategory.disabled).toBe(true)
+    expect(addMarker.disabled).toBe(true)
+    expect(container.textContent).not.toContain('Blank Prompt')
+    flushSync(() => {
+      addPrompt.click()
+      addCategory.click()
+      addMarker.click()
+    })
+    expect(emissions).toHaveLength(0)
+
+    renderAt(belowLimit)
+    expect(container.textContent).not.toContain('Blank Prompt')
+    flushSync(() => buttonWithText(container, 'actions.addMarker').click())
+    expect(container.textContent).toContain('marker.chat_history')
+    renderAt(atLimit)
+
+    expect(buttonWithText(container, 'actions.addPrompt').disabled).toBe(true)
+    expect(buttonWithText(container, 'actions.addCategory').disabled).toBe(true)
+    expect(buttonWithText(container, 'actions.addMarker').disabled).toBe(true)
+    expect(container.textContent).not.toContain('marker.chat_history')
+    expect(emissions).toHaveLength(0)
+    unmountRoot(root)
+  })
+
+  test('renders read-only blocks without any mutating controls', () => {
+    let callbacks = 0
+    const { container, root } = renderControlled([block()], () => {
+      callbacks += 1
+    }, undefined, true)
+
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+    expect(container.textContent).not.toContain('actions.addPrompt')
+    expect(container.textContent).not.toContain('actions.addCategory')
+    expect(container.textContent).not.toContain('actions.addMarker')
+    expect(callbacks).toBe(0)
+    unmountRoot(root)
+  })
+
+  test('does not optimistically mutate managed UI when a synchronous callback rejects', () => {
+    const current = block()
+    const emissions: PromptBlock[][] = []
+    const { container, root } = renderControlled([current], (next) => {
+      emissions.push(next)
+      return false
+    })
+
+    flushSync(() => container.querySelector<HTMLButtonElement>('button[title="block.disable"]')!.click())
+    expect(emissions[0]?.[0]?.enabled).toBe(false)
+    expect(emissions[0]?.[0]).not.toBe(current)
+    expect(container.querySelector('button[title="block.disable"]')).not.toBeNull()
+    expect(current.enabled).toBe(true)
+
+    flushSync(() => buttonWithText(container, 'actions.addPrompt').click())
+    flushSync(() => buttonWithText(container, 'Blank Prompt').click())
+    expect(container.textContent).toContain('Blank Prompt')
+    expect(emissions).toHaveLength(2)
     unmountRoot(root)
   })
 })
