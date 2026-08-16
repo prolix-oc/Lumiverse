@@ -126,6 +126,12 @@ export function createFrontendGeometryAPI(): SpindleGeometryAPI {
 export interface FrontendContextAdditions {
   ui: {
     geometry: SpindleGeometryAPI
+    registerComponentOverride?: (options: {
+      host: string
+      mode: 'wrap' | 'replace'
+      component: unknown
+      priority?: number
+    }) => { destroy(): void }
   }
   state: StateSelectors
   connections: FrontendConnectionsAPI

@@ -135,7 +135,71 @@ const loaderWsClient = {
   },
 }
 let mockedGrantedPermissions = ['ui_panels', 'presets']
-mock.module('@/ws/client', () => ({ wsClient: loaderWsClient }))
+mock.module('@/ws/client', () => ({
+  wsClient: loaderWsClient,
+  WS_OPEN: '__ws_open',
+  WS_CLOSE: '__ws_close',
+  WS_PONG: '__ws_pong',
+  WS_AUTH_ERROR: '__ws_auth_error',
+}))
+mock.module('./host-surfaces', () => ({
+  createHostSurfaceAPI: () => ({
+    list: () => [],
+    subscribe: () => () => {},
+    invoke() {},
+    registerDeepLinkTarget: () => () => {},
+  }),
+}))
+mock.module('./character-host-surface-renderers', () => ({}))
+mock.module('./world-book-host-surface-renderers', () => ({}))
+mock.module('./productivity-host-surface-renderers', () => ({}))
+mock.module('./settings-bridge', () => ({
+  createSettingsBridge: () => ({
+    get: async () => undefined,
+    set: async () => {},
+    remove: async () => {},
+    watch: () => () => {},
+    core: {
+      get: () => undefined,
+      watch: () => () => {},
+      list: () => [],
+      isReady: () => true,
+    },
+    dispose() {},
+  }),
+}))
+mock.module('./frontend-domain-api', () => ({
+  createFrontendDomainApi: () => ({
+    connections: {
+      list: () => [],
+      getActive: () => ({ activeProfileId: null, provider: null, model: null }),
+      subscribe: () => () => {},
+      models: async () => ({ models: [] }),
+      setActive() {},
+      setActiveAcknowledged: async () => {},
+      update: async () => ({}),
+    },
+    chats: {
+      listForCharacter: async () => [],
+      getMessages: async () => ({ items: [], total: 0 }),
+    },
+    worldBooks: {
+      list: async () => [],
+      entries: async () => [],
+    },
+    messages: {
+      getContent: () => null,
+      getRecent: () => [],
+    },
+    tokens: {
+      countText: async () => ({}),
+      countMessages: async () => ({}),
+      countChat: async () => ({}),
+      countTextBatch: async () => ({}),
+    },
+    dispose() {},
+  }),
+}))
 mock.module('@/api/spindle', () => ({
   spindleApi: {
     getPermissions: async () => {
@@ -174,7 +238,11 @@ mock.module('./display-resolver-registry', () => ({
   },
   unregisterDisplayResolver() {},
 }))
-mock.module('@/hooks/useDisplayRegex', () => ({ invalidateDisplayRegexCache() {}, invalidateDisplayRegexCacheForVars() {} }))
+mock.module('@/hooks/useDisplayRegex', () => ({
+  invalidateDisplayRegexCache() {},
+  invalidateDisplayRegexCacheForMessage() {},
+  invalidateDisplayRegexCacheForVars() {},
+}))
 mock.module('./message-widgets', () => ({
   removeMessageWidgetsByExtension() {},
   upsertMessageWidget: () => {
