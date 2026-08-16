@@ -46,6 +46,7 @@ import MultiplayerPanel from '@/components/panels/multiplayer/MultiplayerPanel'
 
 import type { GuideDefinition } from '@/lib/guides/types'
 import { adaptSpindleGuide } from './guides/adapt-spindle-guide'
+import { createDynamicExtensionIcon } from '@/components/icons/DynamicExtensionIcon'
 
 export interface DrawerTabEntry {
   id: string
@@ -481,7 +482,7 @@ export function adaptExtensionTabs(tabs: DrawerTabState[]): DrawerTabEntry[] {
     tabDescription:
       dt.description ??
       `Open ${dt.title} extension tab`,
-    tabIcon: Puzzle,
+    tabIcon: createDynamicExtensionIcon({ iconSvg: dt.iconSvg, iconUrl: dt.iconUrl }),
     tabHeaderTitle: dt.headerTitle,
     guide: adaptSpindleGuide(dt.guide),
     keywords: [
@@ -554,7 +555,7 @@ export function extensionTabsToCommands(tabs: DrawerTabState[]): Command[] {
     id: `ext-tab-${tab.id}`,
     label: tab.title,
     description: tab.description ?? `Open ${tab.title} extension tab`,
-    icon: Puzzle,
+    icon: createDynamicExtensionIcon({ iconSvg: tab.iconSvg, iconUrl: tab.iconUrl }),
     keywords: ['extension', 'spindle', tab.extensionId, ...(tab.keywords ?? [])],
     group: 'extensions',
     run: () => useStore.getState().openDrawer(tab.id),
