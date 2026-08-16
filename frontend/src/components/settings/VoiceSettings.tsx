@@ -4,6 +4,13 @@ import { Volume2, Mic, Play, ExternalLink } from 'lucide-react'
 import { useStore } from '@/store'
 import { sttConnectionsApi } from '@/api/stt-connections'
 import { ttsConnectionsApi } from '@/api/tts-connections'
+import { listVoiceProviders, subscribeVoiceProviders, type VoiceProviderOption } from '@/api/voice'
+import type {
+  SttProviderCapabilities,
+  SttProviderInfo,
+  TtsProviderCapabilities,
+  TtsProviderInfo,
+} from '@/types/api'
 import { Toggle } from '@/components/shared/Toggle'
 import ConnectionSelect from '@/components/shared/ConnectionSelect'
 import VoicePicker from '@/components/shared/VoicePicker'
@@ -26,16 +33,74 @@ export default function VoiceSettings() {
   const openDrawer = useStore((s) => s.openDrawer)
 
   const [testing, setTesting] = useState(false)
+  const [registryVoiceProviders, setRegistryVoiceProviders] = useState(() => listVoiceProviders())
 
   // Connection lists come from the store; only the provider registries need a
-  // refresh here.
+  // refresh here. Registry engines update live without a page reload.
   useEffect(() => {
+    let cancelled = false
+    const sttCapabilities: SttProviderCapabilities = {
+      apiKeyRequired: false,
+      defaultUrl: '',
+      modelListStyle: 'static',
+      staticModels: [],
+    }
+    const ttsCapabilities: TtsProviderCapabilities = {
+      parameters: {},
+      apiKeyRequired: false,
+      voiceListStyle: 'static',
+      staticVoices: [],
+      modelListStyle: 'static',
+      staticModels: [],
+      supportsStreaming: false,
+      supportedFormats: ['mp3'],
+      defaultUrl: '',
+      defaultFormat: 'mp3',
+    }
+
+    const mergeRegistry = <T extends SttProviderInfo | TtsProviderInfo>(
+      kind: 'tts' | 'stt',
+      httpProviders: T[],
+      live: VoiceProviderOption[],
+    ): T[] => {
+      const seen = new Set(httpProviders.map((provider) => provider.id))
+      const extras = live
+        .filter((provider) => provider.kind === kind && !seen.has(provider.id))
+        .map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          capabilities: kind === 'stt' ? sttCapabilities : ttsCapabilities,
+        })) as T[]
+      return [...httpProviders, ...extras]
+    }
+
+    const refresh = (httpStt?: SttProviderInfo[], httpTts?: TtsProviderInfo[]) => {
+      if (cancelled) return
+      const live = listVoiceProviders()
+      setRegistryVoiceProviders(live)
+      if (httpStt) setSttProviders(mergeRegistry('stt', httpStt, live.stt))
+      if (httpTts) setTtsProviders(mergeRegistry('tts', httpTts, live.tts))
+    }
+
+    let latestStt: SttProviderInfo[] | undefined
+    let latestTts: TtsProviderInfo[] | undefined
     sttConnectionsApi.providers().then((res) => {
-      setSttProviders(res.providers || [])
+      latestStt = res.providers || []
+      refresh(latestStt, latestTts)
     }).catch(() => {})
     ttsConnectionsApi.providers().then((res) => {
-      setTtsProviders(res.providers || [])
+      latestTts = res.providers || []
+      refresh(latestStt, latestTts)
     }).catch(() => {})
+
+    const unsubscribe = subscribeVoiceProviders(() => {
+      refresh(latestStt ?? [], latestTts ?? [])
+    })
+    refresh()
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [setSttProviders, setTtsProviders])
 
   const activeSttConnection = useMemo(
@@ -158,6 +223,27 @@ export default function VoiceSettings() {
             {t('voice.provider')}: <strong>{activeConnection.provider}</strong>
             {activeConnection.model && <> &middot; {t('voice.model')}: <strong>{activeConnection.model}</strong></>}
             {activeVoiceLabel && <> &middot; {t('voice.voiceLabel')}: <strong>{activeVoiceLabel}</strong></>}
+          </div>
+        )}
+
+        {registryVoiceProviders.tts.length > 0 && (
+          <div className={styles.infoBox} data-voice-registry-kind="tts">
+            {registryVoiceProviders.tts.map((provider) => (
+              <div
+                key={provider.id}
+                data-registry-provider={provider.id}
+                data-registry-kind="tts"
+                data-provider-status={provider.status}
+              >
+                {provider.name}
+                {provider.status === 'unavailable' && (
+                  <span data-provider-fallback="unavailable"> unavailable</span>
+                )}
+                {provider.status === 'timeout' && (
+                  <span data-provider-fallback="timeout"> timeout</span>
+                )}
+              </div>
+            ))}
           </div>
         )}
 
@@ -432,6 +518,27 @@ export default function VoiceSettings() {
             hint={t('voice.sttMicButtonHint')}
           />
         </div>
+
+        {registryVoiceProviders.stt.length > 0 && (
+          <div className={styles.infoBox} data-voice-registry-kind="stt">
+            {registryVoiceProviders.stt.map((provider) => (
+              <div
+                key={provider.id}
+                data-registry-provider={provider.id}
+                data-registry-kind="stt"
+                data-provider-status={provider.status}
+              >
+                {provider.name}
+                {provider.status === 'unavailable' && (
+                  <span data-provider-fallback="unavailable"> unavailable</span>
+                )}
+                {provider.status === 'timeout' && (
+                  <span data-provider-fallback="timeout"> timeout</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {voiceSettings.sttProvider === 'webspeech' && !isWebSpeechAvailable() && (
           <div className={styles.infoBox}>

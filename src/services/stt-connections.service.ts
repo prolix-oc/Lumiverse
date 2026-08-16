@@ -1,7 +1,13 @@
 import { getDb } from "../db/connection";
-import { eventBus } from "../ws/bus";
+import { emitProviderRegistryChanged, eventBus } from "../ws/bus";
 import { EventType } from "../ws/events";
 import * as secretsSvc from "./secrets.service";
+import {
+  providerRegistry,
+  type HostScopeContext,
+  type ProviderDescriptor,
+  type RegisteredProvider,
+} from "../spindle/provider-registry";
 import type {
   SttConnectionProfile,
   CreateSttConnectionInput,
@@ -59,12 +65,137 @@ function rowToProfile(row: any): SttConnectionProfile {
   };
 }
 
-export function listProviders(): SttProviderInfo[] {
-  return STT_PROVIDERS;
+const CONSUMER_PROVIDER_SCOPE = "frontend";
+const sttConsumerRevisions = new Map<string, number>();
+
+function sttDisplayName(record: RegisteredProvider): string {
+  const description = record.descriptor.description;
+  if (description && typeof description === "object" && !Array.isArray(description)) {
+    const name = (description as Record<string, unknown>).name;
+    if (typeof name === "string" && name.trim()) return name.trim();
+  }
+  return record.key.id;
+}
+
+function sttDenied(record: RegisteredProvider): boolean {
+  const description = record.descriptor.description;
+  if (!description || typeof description !== "object" || Array.isArray(description)) return false;
+  const rec = description as Record<string, unknown>;
+  return rec.denied === true || rec.visible === false || rec.status === "denied";
+}
+
+function registrySttProvider(record: RegisteredProvider): SttProviderInfo {
+  const description = record.descriptor.description;
+  const defaultUrl = description && typeof description === "object" && !Array.isArray(description)
+    && typeof (description as Record<string, unknown>).defaultUrl === "string"
+    ? String((description as Record<string, unknown>).defaultUrl)
+    : "";
+  return {
+    id: record.key.id,
+    name: sttDisplayName(record),
+    capabilities: {
+      apiKeyRequired: false,
+      defaultUrl,
+      modelListStyle: "static",
+      staticModels: [],
+    },
+  };
+}
+
+function visibleSttRecords(userId?: string): RegisteredProvider[] {
+  const scopes = userId ? [`user:${userId}` as const, "system" as const] : undefined;
+  const records = scopes ? providerRegistry.listVisible([...scopes]) : providerRegistry.getProviders();
+  const extra: RegisteredProvider[] = [];
+  for (const record of records) {
+    try {
+      if (record.key.kind !== "stt") continue;
+      if (sttDenied(record)) continue;
+      extra.push(record);
+    } catch {
+      // Isolated: one bad STT descriptor cannot hide the built-ins.
+    }
+  }
+  return extra;
+}
+
+export function listProviders(userId?: string): SttProviderInfo[] {
+  const extras: SttProviderInfo[] = [];
+  try {
+    for (const record of visibleSttRecords(userId)) {
+      try {
+        extras.push(registrySttProvider(record));
+      } catch {
+        // Isolated adapter mapping.
+      }
+    }
+  } catch {
+    return STT_PROVIDERS;
+  }
+  return [...STT_PROVIDERS, ...extras];
 }
 
 export function getProvider(providerId: string): SttProviderInfo | null {
-  return STT_PROVIDERS.find((provider) => provider.id === providerId) || null;
+  const builtin = STT_PROVIDERS.find((provider) => provider.id === providerId);
+  if (builtin) return builtin;
+  const record = visibleSttRecords().find((entry) => entry.key.id === providerId);
+  return record ? registrySttProvider(record) : null;
+}
+
+function nextSttRevision(userId: string): { generation: number; revision: number } {
+  const revision = (sttConsumerRevisions.get(userId) ?? 0) + 1;
+  sttConsumerRevisions.set(userId, revision);
+  return { generation: 1, revision };
+}
+
+export function publishSttProviderRegistryChanged(args: {
+  userId: string;
+  action: "add" | "remove" | "change";
+  payload: unknown;
+}): void {
+  const clock = nextSttRevision(args.userId);
+  emitProviderRegistryChanged({
+    userId: args.userId,
+    scope: CONSUMER_PROVIDER_SCOPE,
+    action: args.action,
+    generation: clock.generation,
+    revision: clock.revision,
+    payload: args.payload,
+  });
+}
+
+export function commitSttRegistryProvider(
+  descriptor: ProviderDescriptor,
+  host: HostScopeContext & { installationId: string },
+  userId: string,
+): RegisteredProvider {
+  const record = providerRegistry.register(descriptor, host);
+  publishSttProviderRegistryChanged({
+    userId,
+    action: "add",
+    payload: {
+      id: record.key.id,
+      kind: record.key.kind,
+      name: sttDisplayName(record),
+      installationId: record.key.installationId,
+    },
+  });
+  return record;
+}
+
+export function revokeSttRegistryProvider(
+  ref: { kind: string; id: string },
+  host: HostScopeContext & { installationId: string },
+  userId: string,
+): boolean {
+  const removed = providerRegistry.unregister(ref, host);
+  if (removed) {
+    publishSttProviderRegistryChanged({
+      userId,
+      action: "remove",
+      payload: { id: ref.id, kind: ref.kind },
+    });
+  }
+  return removed;
 }
 
 export function resolveSttApiUrl(profile: { provider: string; api_url?: string | null }): string {

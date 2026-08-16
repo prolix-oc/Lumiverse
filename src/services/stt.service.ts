@@ -1,6 +1,10 @@
 import * as secretsSvc from "./secrets.service";
 import * as sttConnectionsSvc from "./stt-connections.service";
 
+export function listSttProviders(userId?: string) {
+  return sttConnectionsSvc.listProviders(userId);
+}
+
 /** Secret key pattern for LLM connections (matches connections.service.ts) */
 function connectionSecretKey(id: string): string {
   return sttConnectionsSvc.sttConnectionSecretKey(id);
