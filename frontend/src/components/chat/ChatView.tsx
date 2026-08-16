@@ -35,6 +35,8 @@ import CouncilPill from './CouncilPill'
 import PortraitPanel from './PortraitPanel'
 import ExpressionDisplay from './expressions/ExpressionDisplay'
 import FloatingAvatarViewer from './FloatingAvatarViewer'
+import { QuickToolbar } from '../quick-toolbar/QuickToolbar'
+import { readQuickToolbarPlacement } from '../quick-toolbar/quickToolbarDock'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import type { SpindlePreGenerationActivityPayload } from '@/types/ws-events'
@@ -219,6 +221,8 @@ export default function ChatView() {
   const togglePortraitPanel = useStore((s) => s.togglePortraitPanel)
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const [portraitSurfaceOccupied, setPortraitSurfaceOccupied] = useState(false)
+  const quickToolbarSettings = useStore((s) => s.quickToolbarSettings)
+  const dockQuickToolbar = readQuickToolbarPlacement(quickToolbarSettings) === 'chat_top_dock'
   useEffect(() => {
     const readOccupied = () => {
       // The extension root can survive a ChatView transition while its new mount
@@ -1037,6 +1041,7 @@ export default function ChatView() {
       />
       <div className={clsx(styles.wallpaperTransitionLayer, wallpaperTransitioning && !sceneBackground && styles.wallpaperTransitionLayerActive)} />
       <div className={styles.body} {...(chatWidthMode !== 'full' ? { 'data-chat-constrained': '' } : {})}>
+        <div data-spindle-mount="chat_sidebar_left" data-spindle-scope={`chat:${chatId}:sidebar-left`} style={{ display: 'contents' }} />
         {!portraitSurfaceOccupied && portraitPanelSide !== 'none' && portraitPanelSide === 'left' && (
           <div className={clsx(styles.portraitSide, styles.portraitSideLeft, portraitPanelOpen && styles.portraitSideOpen)}>
             {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="left" />}
@@ -1092,7 +1097,10 @@ export default function ChatView() {
             data-chat-chrome-leaving={(wallpaperTransitioning || chatChromeLeaving) || undefined}
           >
             <div ref={chatColumnTopRef} data-spindle-mount="chat_column_top" />
-            <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-dock-request="floating">
+            <div data-spindle-mount="chat_header_left" data-spindle-scope={`chat:${chatId}:header-left`} style={{ display: 'contents' }} />
+            <div data-spindle-mount="chat_header_center" data-spindle-scope={`chat:${chatId}:header-center`} style={{ display: 'contents' }} />
+            <div data-spindle-mount="chat_header_right" data-spindle-scope={`chat:${chatId}:header-right`} style={{ display: 'contents' }} />
+            <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-spindle-scope={`chat:${chatId}:top-dock`} data-dock-request="floating">
               <button
                 type="button"
                 className={clsx(styles.toolbarBtn, messageSelectMode && styles.toolbarBtnActive)}
@@ -1101,6 +1109,7 @@ export default function ChatView() {
               >
                 <ListChecks size={14} />
               </button>
+              {dockQuickToolbar && <QuickToolbar />}
             </div>
             <ChatFindBar
               chatId={chatId}
@@ -1121,7 +1130,7 @@ export default function ChatView() {
             <ScrollToBottom />
             <CouncilPill />
             {messageSelectMode && <MessageSelectBar chatId={chatId} />}
-            <div data-spindle-mount="chat_bottom_dock" data-dock-request="strip" />
+            <div data-spindle-mount="chat_bottom_dock" data-spindle-scope={`chat:${chatId}:bottom-dock`} data-dock-request="strip" />
             <InputArea chatId={chatId} onNavigateHome={handleNavigateHome} onOpenChatFind={openChatFind} />
           </div>
         </div>
@@ -1139,8 +1148,9 @@ export default function ChatView() {
             {!isMobile && !portraitSurfaceOccupied && <PortraitPanel side="right" />}
           </div>
         )}
-        <div data-spindle-mount="lorebook_half_workspace" />
-        <div data-spindle-mount="chat_surface_side" />
+        <div data-spindle-mount="chat_sidebar_right" data-spindle-scope={`chat:${chatId}:sidebar-right`} style={{ display: 'contents' }} />
+        <div data-spindle-mount="lorebook_half_workspace" data-spindle-scope={`chat:${chatId}:lorebook-half-workspace`} />
+        <div data-spindle-mount="chat_surface_side" data-spindle-scope={`chat:${chatId}:surface-side`} />
       </div>
       {isMobile && !portraitSurfaceOccupied && portraitPanelSide !== 'none' && (
         <PortraitPanel
