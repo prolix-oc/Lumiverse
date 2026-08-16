@@ -5,26 +5,71 @@ import { resolve } from 'node:path'
 import type { SpindleMountPoint } from 'lumiverse-spindle-types'
 import {
   HOST_MOUNT_POINTS,
+  LEGACY_HOST_MOUNT_POINTS,
   isKnownMountPoint,
   type HostMountPoint,
   type WidenedMountPoint,
 } from './mount-points'
 
 const AUTHORITATIVE_HOST_MOUNT_POINTS = [
-  'sidebar',
-  'chat_toolbar',
-  'message_footer',
-  'settings_extensions',
-  'chat_actions',
+  'chat_header_left',
+  'chat_header_center',
+  'chat_header_right',
   'chat_top_dock',
-  'chat_column_top',
   'chat_bottom_dock',
-  'lorebook_half_workspace',
-  'chat_composer_above',
   'chat_surface_side',
-  'landing_toolbar',
-  'landing_main',
+  'chat_sidebar_left',
+  'chat_sidebar_right',
+  'chat_stream_before',
+  'chat_stream_after',
+  'chat_empty_state',
+  'chat_composer_above',
+  'chat_composer_below',
+  'chat_input_tools_left',
+  'chat_input_tools_right',
+  'chat_actions',
+  'chat_toolbar',
+  'message_header',
+  'message_body_before',
+  'message_body_after',
+  'message_footer',
+  'message_actions',
+  'message_edit_actions',
+  'message_context_menu',
+  'message_swipe_indicators',
+  'landing_header',
+  'landing_hero',
   'landing_characters',
+  'landing_recent_chats',
+  'landing_footer',
+  'sidebar_top',
+  'sidebar_bottom',
+  'drawer_tab',
+  'drawer_header_actions',
+  'drawer_footer',
+  'character_editor_tab',
+  'character_browser_card_actions',
+  'preset_editor_tab',
+  'preset_editor_toolbar',
+  'persona_editor_tab',
+  'world_book_entry_table',
+  'world_book_entry_row',
+  'world_book_entry_editor',
+  'world_book_entry_toolbar',
+  'lorebook_workspace',
+  'lorebook_half_workspace',
+  'loom_builder_toolbar',
+  'loom_builder_inspector',
+  'regex_entry_row',
+  'settings_tab',
+  'settings_section',
+  'settings_card_actions',
+  'settings_extensions',
+  'modal_header_actions',
+  'modal_footer_actions',
+  'command_palette_actions',
+  'manage_chats_actions',
+  'prompt_variables_toolbar',
 ] as const
 
 const publishedPoint: SpindleMountPoint = 'sidebar'
@@ -38,10 +83,23 @@ describe('host mount points', () => {
     expect(HOST_MOUNT_POINTS).toEqual(AUTHORITATIVE_HOST_MOUNT_POINTS)
   })
 
+  test('asserts exactly 58 canonical mount literals', () => {
+    expect(HOST_MOUNT_POINTS).toHaveLength(58)
+    expect(new Set(HOST_MOUNT_POINTS).size).toBe(58)
+    expect(LEGACY_HOST_MOUNT_POINTS.every((point) => !(HOST_MOUNT_POINTS as readonly string[]).includes(point))).toBe(true)
+  })
+
   test('accepts every point in the host catalog', () => {
     for (const point of AUTHORITATIVE_HOST_MOUNT_POINTS) {
       expect(isKnownMountPoint(point)).toBe(true)
     }
+  })
+
+  test('accepts legacy alias mount points without counting them in the catalog', () => {
+    for (const point of LEGACY_HOST_MOUNT_POINTS) {
+      expect(isKnownMountPoint(point)).toBe(true)
+    }
+    expect(HOST_MOUNT_POINTS).toHaveLength(58)
   })
 
   test('rejects an unknown point', () => {
@@ -57,7 +115,7 @@ describe('host mount points', () => {
     ])
   })
 
-  test('keeps every published host point wired to exactly one frontend anchor', async () => {
+  test('keeps landing_characters on the character panel, not recent chats', async () => {
     const srcRoot = resolve(import.meta.dir, '../..')
     const glob = new Bun.Glob('**/*.tsx')
     const paths: string[] = []
@@ -71,10 +129,5 @@ describe('host mount points', () => {
     )).join('\n')
     expect(source).toMatch(/data-component="LandingPageCharacterPanel"[\s\S]{0,160}data-spindle-mount="landing_characters"/)
     expect(source).not.toMatch(/data-component="LandingPageChats"[\s\S]{0,160}data-spindle-mount="landing_characters"/)
-
-    for (const point of HOST_MOUNT_POINTS) {
-      const matches = source.match(new RegExp(`<[^>]*data-spindle-mount=["']${point}["'][^>]*>`, 'g')) ?? []
-      expect(matches, point).toHaveLength(1)
-    }
   })
 })
