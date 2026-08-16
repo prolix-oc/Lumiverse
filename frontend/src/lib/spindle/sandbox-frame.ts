@@ -1,6 +1,7 @@
 import type { SpindleSandboxFrameHandle, SpindleSandboxFrameOptions } from 'lumiverse-spindle-types'
 import { uuidv7 } from '@/lib/uuid'
 import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
+import { stampExtensionRoot } from './extension-root-stamp'
 
 interface SandboxFrameRecord {
   iframe: HTMLIFrameElement
@@ -117,7 +118,7 @@ export function createSandboxFrame(
   const initialHeight = clampDimension(options.initialHeight ?? minHeight, minHeight, maxHeight)
 
   const iframe = document.createElement('iframe')
-  iframe.setAttribute('data-spindle-ext', extensionId)
+  stampExtensionRoot(iframe, extensionId, 'data-spindle-ext')
   iframe.setAttribute('data-spindle-sandbox-frame', token)
   iframe.setAttribute('sandbox', 'allow-scripts')
   iframe.setAttribute(

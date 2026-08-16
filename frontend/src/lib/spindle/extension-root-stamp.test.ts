@@ -3,11 +3,23 @@
 import { describe, expect, test } from 'bun:test'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import {
+import { JSDOM } from 'jsdom'
+
+const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+  url: 'http://localhost/',
+})
+Object.assign(globalThis, {
+  window: dom.window,
+  document: dom.window.document,
+  Element: dom.window.Element,
+  HTMLElement: dom.window.HTMLElement,
+})
+
+const {
   forgetExtensionIdentity,
   registerExtensionIdentity,
   stampExtensionRoot,
-} from './extension-root-stamp'
+} = await import('./extension-root-stamp')
 
 const extensionId = '00000000-0000-0000-0000-000000000001'
 

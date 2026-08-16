@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore, type ReactElement } from 'react'
 import { createSandboxFrame } from './sandbox-frame'
 import { scheduleSpindleDomTask } from './browser-scheduler'
+import { stampExtensionRoot } from './extension-root-stamp'
 import { dispatchMessageContentLayout } from '@/lib/message-content-layout'
 
 export interface SpindleMessageWidgetRenderOptions {
@@ -117,7 +118,7 @@ function MessageWidgetFrame({ widget }: { widget: MessageWidgetRecord }): ReactE
         ...(cachedHeight ? { initialHeight: cachedHeight } : {}),
       }, widget.corsProxy)
       frame.element.setAttribute('data-spindle-message-widget', widget.widgetId)
-      frame.element.setAttribute('data-spindle-extension-id', widget.extensionId)
+      stampExtensionRoot(frame.element, widget.extensionId, 'data-spindle-extension-id')
       frame.element.style.margin = '12px 0'
       const unsubscribe = frame.onMessage((payload) => widget.onMessage?.(payload))
       const resizeObserver = new ResizeObserver(() => {
