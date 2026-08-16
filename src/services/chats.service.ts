@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getDatabasePath, getDb } from "../db/connection";
 import { healCorruptDatabase } from "../db/maintenance";
 import { eventBus } from "../ws/bus";
@@ -1981,6 +1982,18 @@ function getMsgStmts() {
   return { all: _stmtMsgAll, count: _stmtMsgCount, tail: _stmtMsgTail, byId: _stmtMsgById, rolesBefore: _stmtMsgRolesBefore };
 }
 
+let _msgRevisionCol: boolean | null = null;
+let _msgRevisionGen = -1;
+
+export function messagesHaveRevisionColumn(): boolean {
+  const gen = require("../db/connection").getDbGeneration() as number;
+  if (_msgRevisionCol !== null && _msgRevisionGen === gen) return _msgRevisionCol;
+  const columns = getDb().query("PRAGMA table_info('messages')").all() as Array<{ name: string }>;
+  _msgRevisionCol = columns.some((column) => column.name === "revision");
+  _msgRevisionGen = gen;
+  return _msgRevisionCol;
+}
+
 export function getMessages(userId: string, chatId: string): Message[] {
   const rows = getMsgStmts().all.all(chatId, userId) as any[];
   return rows.map(rowToMessage);
@@ -2718,6 +2731,7 @@ export function updateMessage(userId: string, id: string, input: UpdateMessageIn
   if (normalizedExtra !== undefined) { fields.push("extra = ?"); values.push(JSON.stringify(normalizedExtra)); }
 
   if (fields.length === 0) return existing;
+  if (messagesHaveRevisionColumn()) fields.push("revision = revision + 1");
   values.push(id);
   values.push(existing.chat_id);
 
@@ -3141,6 +3155,7 @@ interface CreatedChatBranch {
   branchId: string;
   atMessageId: string;
   atMessageIndex: number;
+  idMap: Map<string, string>;
 }
 
 /** Insert a branch while participating in the caller's current transaction. */
@@ -3227,6 +3242,7 @@ function createChatBranchRows(userId: string, chat: Chat, msg: Message, requeste
     branchId,
     atMessageId: msg.id,
     atMessageIndex: msg.index_in_chat,
+    idMap,
   };
 }
 
@@ -3263,6 +3279,250 @@ export function branchChat(userId: string, chatId: string, atMessageId: string, 
     return null;
   }
   return emitCreatedChatBranch(userId, created);
+}
+
+export type EditAndSendMode = "normal" | "swipe";
+
+export interface EditAndSendInput {
+  messageId: string;
+  content: string;
+  expectedVersion: number;
+  requestId: string;
+}
+
+export interface EditAndSendGenerationCursor {
+  generationId: string;
+  chatId: string;
+  requestId: string;
+  mode: EditAndSendMode;
+}
+
+export interface EditAndSendSuccess {
+  branchChatId: string;
+  editedMessageId: string;
+  immediateAssistantId: string | null;
+  generationCursor: EditAndSendGenerationCursor;
+}
+
+export type EditAndSendResult =
+  | { status: "ok"; replayed: boolean; payload: EditAndSendSuccess }
+  | { status: "not_found"; error: string }
+  | { status: "conflict"; error: string }
+  | { status: "bad_request"; error: string };
+
+function editAndSendFingerprint(input: EditAndSendInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      messageId: input.messageId,
+      content: input.content,
+      expectedVersion: input.expectedVersion,
+    }))
+    .digest("hex");
+}
+
+function parseStoredEditAndSendPayload(raw: string): EditAndSendSuccess | null {
+  try {
+    const parsed = JSON.parse(raw) as EditAndSendSuccess;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (typeof parsed.branchChatId !== "string" || typeof parsed.editedMessageId !== "string") return null;
+    if (!parsed.generationCursor || typeof parsed.generationCursor.generationId !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function withImmediateTransaction<T>(fn: () => T): T {
+  const db = getDb();
+  const txn = db.transaction(fn) as (() => T) & { immediate?: () => T };
+  if (typeof txn.immediate === "function") return txn.immediate();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (err) {
+    try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+    throw err;
+  }
+}
+
+function messageRevision(row: { revision?: unknown }): number {
+  return typeof row.revision === "number" && Number.isInteger(row.revision) ? row.revision : 1;
+}
+
+export function editAndSend(
+  userId: string,
+  chatId: string,
+  input: EditAndSendInput,
+): EditAndSendResult {
+  if (typeof input.requestId !== "string" || input.requestId.trim().length === 0) {
+    return { status: "bad_request", error: "requestId is required" };
+  }
+  if (typeof input.messageId !== "string" || input.messageId.trim().length === 0) {
+    return { status: "bad_request", error: "messageId is required" };
+  }
+  if (typeof input.content !== "string") {
+    return { status: "bad_request", error: "content is required" };
+  }
+  if (input.content.trim().length === 0) {
+    return { status: "bad_request", error: "content must not be empty" };
+  }
+  if (!Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) {
+    return { status: "bad_request", error: "expectedVersion must be a positive integer" };
+  }
+
+  const fingerprint = editAndSendFingerprint(input);
+  const now = Date.now();
+  let created: CreatedChatBranch | null = null;
+  let editedCopy: Message | null = null;
+
+  const outcome = withImmediateTransaction((): EditAndSendResult => {
+    const db = getDb();
+    const existingRequest = db.query(
+      `SELECT request_fingerprint, response FROM edit_and_send_requests
+       WHERE user_id = ? AND chat_id = ? AND request_id = ?`,
+    ).get(userId, chatId, input.requestId) as { request_fingerprint: string; response: string } | null;
+    if (existingRequest) {
+      if (existingRequest.request_fingerprint !== fingerprint) {
+        return { status: "conflict", error: "requestId already used with a different payload" };
+      }
+      const payload = parseStoredEditAndSendPayload(existingRequest.response);
+      if (!payload) return { status: "conflict", error: "stored edit-and-send response is unreadable" };
+      return { status: "ok", replayed: true, payload };
+    }
+
+    const chat = getChat(userId, chatId);
+    if (!chat) return { status: "not_found", error: "Chat not found" };
+    const source = getMessage(userId, input.messageId);
+    if (!source || source.chat_id !== chatId) return { status: "not_found", error: "Message not found" };
+    if (!source.is_user) return { status: "bad_request", error: "Only user messages can be edited and sent" };
+
+    const hasRevision = messagesHaveRevisionColumn();
+    if (hasRevision && messageRevision(source as Message & { revision?: number }) !== input.expectedVersion) {
+      return { status: "conflict", error: "Message revision mismatch" };
+    }
+
+    const subsequent = db.query(
+      `SELECT * FROM messages WHERE chat_id = ? AND index_in_chat = ?`,
+    ).get(chatId, source.index_in_chat + 1) as any;
+    const subsequentAssistant = subsequent && !subsequent.is_user ? rowToMessage(subsequent) : null;
+    const branchAt = subsequentAssistant ?? source;
+    const mode: EditAndSendMode = subsequentAssistant ? "swipe" : "normal";
+
+    created = createChatBranchRows(userId, chat, branchAt);
+    const editedMessageId = created.idMap.get(source.id);
+    if (!editedMessageId) return { status: "not_found", error: "Failed to copy edited message" };
+    const targetMessageId = subsequentAssistant
+      ? created.idMap.get(subsequentAssistant.id) ?? null
+      : null;
+    const targetSwipeIndex = subsequentAssistant ? subsequentAssistant.swipes.length : null;
+
+    const copied = getMessage(userId, editedMessageId);
+    if (!copied) return { status: "not_found", error: "Copied message not found" };
+    const nextSwipes = [...copied.swipes];
+    const swipeSlot =
+      Number.isInteger(copied.swipe_id) && copied.swipe_id >= 0 && copied.swipe_id < nextSwipes.length
+        ? copied.swipe_id
+        : 0;
+    nextSwipes[swipeSlot] = input.content;
+    const nextDates = [...copied.swipe_dates];
+    if (nextDates.length !== nextSwipes.length) {
+      const stamp = Math.floor(now / 1000);
+      while (nextDates.length < nextSwipes.length) nextDates.push(stamp);
+      if (nextDates.length > nextSwipes.length) nextDates.length = nextSwipes.length;
+    }
+    const revisionSql = hasRevision ? ", revision = revision + 1" : "";
+    db.query(
+      `UPDATE messages SET content = ?, swipes = ?, swipe_id = ?, swipe_dates = ?${revisionSql}
+       WHERE id = ? AND chat_id = ?`,
+    ).run(
+      input.content,
+      JSON.stringify(nextSwipes),
+      swipeSlot,
+      JSON.stringify(nextDates),
+      editedMessageId,
+      created.newChatId,
+    );
+    if (hasRevision) {
+      db.query(
+        `UPDATE messages SET revision = revision + 1 WHERE id = ? AND chat_id = ? AND revision = ?`,
+      ).run(source.id, chatId, input.expectedVersion);
+    }
+
+    editedCopy = getMessage(userId, editedMessageId);
+    const generationId = crypto.randomUUID();
+    const payload: EditAndSendSuccess = {
+      branchChatId: created.newChatId,
+      editedMessageId,
+      immediateAssistantId: targetMessageId,
+      generationCursor: {
+        generationId,
+        chatId: created.newChatId,
+        requestId: input.requestId,
+        mode,
+      },
+    };
+    const requestRowId = crypto.randomUUID();
+    const cursorJson = JSON.stringify(payload.generationCursor);
+    const responseJson = JSON.stringify(payload);
+
+    db.query(
+      `INSERT INTO edit_and_send_requests (
+        id, user_id, chat_id, request_id, request_fingerprint, branch_chat_id,
+        edited_message_id, target_message_id, target_swipe_index, generation_id,
+        response, cursor, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      requestRowId,
+      userId,
+      chatId,
+      input.requestId,
+      fingerprint,
+      created.newChatId,
+      editedMessageId,
+      targetMessageId,
+      targetSwipeIndex,
+      generationId,
+      responseJson,
+      cursorJson,
+      now,
+      now,
+    );
+    db.query(
+      `INSERT INTO generation_outbox (
+        id, request_id, user_id, chat_id, branch_chat_id, edited_message_id,
+        target_message_id, target_swipe_index, expected_version, generation_id,
+        mode, status, attempt_count, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+    ).run(
+      crypto.randomUUID(),
+      input.requestId,
+      userId,
+      chatId,
+      created.newChatId,
+      editedMessageId,
+      targetMessageId,
+      targetSwipeIndex,
+      input.expectedVersion,
+      generationId,
+      mode,
+      now,
+      now,
+    );
+
+    return { status: "ok", replayed: false, payload };
+  });
+
+  if (outcome.status === "ok" && !outcome.replayed && created) {
+    emitCreatedChatBranch(userId, created);
+    if (editedCopy) {
+      eventBus.emit(EventType.MESSAGE_EDITED, { chatId: created.newChatId, message: editedCopy }, userId);
+      try { invalidateChatMemoryCache(created.newChatId); } catch { /* optional in tests */ }
+    }
+  }
+
+  return outcome;
 }
 
 // Branch tree
