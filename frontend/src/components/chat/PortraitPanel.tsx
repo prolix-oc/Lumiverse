@@ -18,6 +18,7 @@ import type { WallpaperRef } from '@/types/store'
 import styles from './PortraitPanel.module.css'
 import clsx from 'clsx'
 import { requestHostIntent } from '@/lib/hostIntents'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 
 interface PortraitPanelProps {
   side?: 'left' | 'right'
@@ -53,7 +54,7 @@ function GalleryMosaicCell({ item, className, onOpen, onPreview }: GalleryMosaic
   )
 }
 
-export default function PortraitPanel({ side = 'right', mobileDrawer = false, open = false }: PortraitPanelProps) {
+function PortraitPanelNative({ side = 'right', mobileDrawer = false, open = false }: PortraitPanelProps) {
   const { t } = useTranslation('chat')
   const activeCharacterId = useStore((s) => s.activeCharacterId)
   const activeChatId = useStore((s) => s.activeChatId)
@@ -258,4 +259,8 @@ export default function PortraitPanel({ side = 'right', mobileDrawer = false, op
       />
     </div>
   )
+}
+
+export default function PortraitPanel(props: PortraitPanelProps) {
+  return useSpindleComponentOverride('PortraitPanel', PortraitPanelNative, props)
 }
