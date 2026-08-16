@@ -31,6 +31,7 @@ import {
   assertOwnGitRepositoryPath,
   resetGitRepositoryToRemoteHead,
 } from "./git-repository";
+import { deriveEffectiveScope } from "./provider-registry";
 
 export type InstallScope = "operator" | "user";
 export interface ExtensionUpdateCandidate {
@@ -1552,19 +1553,90 @@ export function disable(identifier: string): void {
 
 // ─── Permissions ─────────────────────────────────────────────────────────
 
+type ExtensionGrantTarget = {
+  id: string;
+  scope: string;
+};
+
+function extensionGrantsHaveScopeColumn(): boolean {
+  try {
+    return (getDb().query("PRAGMA table_info('extension_grants')").all() as Array<{ name: string }>)
+      .some((column) => column.name === "scope");
+  } catch {
+    return false;
+  }
+}
+
+function hostDerivedGrantScope(ext: {
+  install_scope?: string | null;
+  installed_by_user_id?: string | null;
+}): string {
+  const installScope =
+    ext.install_scope === "user" || ext.install_scope === "operator" || ext.install_scope === "system"
+      ? ext.install_scope
+      : "system";
+  try {
+    return deriveEffectiveScope({
+      installScope,
+      installedByUserId: ext.installed_by_user_id,
+      authenticatedSubject: ext.installed_by_user_id,
+    });
+  } catch {
+    return "system";
+  }
+}
+
+function loadExtensionGrantTarget(identifier: string): ExtensionGrantTarget | null {
+  const db = getDb();
+  try {
+    const ext = db
+      .query("SELECT id, install_scope, installed_by_user_id FROM extensions WHERE identifier = ?")
+      .get(identifier) as {
+        id: string;
+        install_scope?: string | null;
+        installed_by_user_id?: string | null;
+      } | null;
+    if (!ext) return null;
+    return { id: ext.id, scope: hostDerivedGrantScope(ext) };
+  } catch {
+    const ext = db
+      .query("SELECT id FROM extensions WHERE identifier = ?")
+      .get(identifier) as { id: string } | null;
+    if (!ext) return null;
+    return { id: ext.id, scope: "system" };
+  }
+}
+
+function resolveGrantScope(target: ExtensionGrantTarget, scope?: string): string {
+  const requested = typeof scope === "string" ? scope.trim() : "";
+  return requested || target.scope;
+}
+
 export function grantPermission(
   identifier: string,
-  permission: string
+  permission: string,
+  scope?: string,
 ): void {
   if (!isManagedPermission(permission)) {
     throw new Error(`Invalid permission: ${permission}`);
   }
 
-  const db = getDb();
-  const ext = db
-    .query("SELECT id FROM extensions WHERE identifier = ?")
-    .get(identifier) as { id: string } | null;
+  const ext = loadExtensionGrantTarget(identifier);
   if (!ext) throw new Error(`Extension not found: ${identifier}`);
+
+  const db = getDb();
+  const grantScope = resolveGrantScope(ext, scope);
+  // PATCH leftover: UNIQUE(extension_id, permission) still blocks operator+user
+  // grants of the same permission. A later migration should replace it with
+  // UNIQUE(extension_id, permission, scope). Until then persist scope when the
+  // column exists and never UPDATE an existing row so scopes do not clobber.
+  if (extensionGrantsHaveScopeColumn()) {
+    db.run(
+      `INSERT OR IGNORE INTO extension_grants (id, extension_id, permission, scope) VALUES (?, ?, ?, ?)`,
+      [crypto.randomUUID(), ext.id, permission, grantScope],
+    );
+    return;
+  }
 
   db.run(
     `INSERT OR IGNORE INTO extension_grants (id, extension_id, permission) VALUES (?, ?, ?)`,
@@ -1574,13 +1646,21 @@ export function grantPermission(
 
 export function revokePermission(
   identifier: string,
-  permission: string
+  permission: string,
+  scope?: string,
 ): void {
-  const db = getDb();
-  const ext = db
-    .query("SELECT id FROM extensions WHERE identifier = ?")
-    .get(identifier) as { id: string } | null;
+  const ext = loadExtensionGrantTarget(identifier);
   if (!ext) throw new Error(`Extension not found: ${identifier}`);
+
+  const db = getDb();
+  const grantScope = resolveGrantScope(ext, scope);
+  if (extensionGrantsHaveScopeColumn()) {
+    db.run(
+      "DELETE FROM extension_grants WHERE extension_id = ? AND permission = ? AND scope = ?",
+      [ext.id, permission, grantScope],
+    );
+    return;
+  }
 
   db.run(
     "DELETE FROM extension_grants WHERE extension_id = ? AND permission = ?",
@@ -1588,25 +1668,32 @@ export function revokePermission(
   );
 }
 
-export function getGrantedPermissions(identifier: string): SpindlePermission[] {
-  const db = getDb();
-  const ext = db
-    .query("SELECT id FROM extensions WHERE identifier = ?")
-    .get(identifier) as { id: string } | null;
+export function getGrantedPermissions(
+  identifier: string,
+  scope?: string,
+): SpindlePermission[] {
+  const ext = loadExtensionGrantTarget(identifier);
   if (!ext) return [];
 
-  const rows = db
-    .query("SELECT permission FROM extension_grants WHERE extension_id = ?")
-    .all(ext.id) as { permission: string }[];
+  const db = getDb();
+  const grantScope = resolveGrantScope(ext, scope);
+  const rows = extensionGrantsHaveScopeColumn()
+    ? db
+        .query("SELECT permission FROM extension_grants WHERE extension_id = ? AND scope = ?")
+        .all(ext.id, grantScope) as { permission: string }[]
+    : db
+        .query("SELECT permission FROM extension_grants WHERE extension_id = ?")
+        .all(ext.id) as { permission: string }[];
 
   return rows.map((r) => r.permission as SpindlePermission);
 }
 
 export function hasPermission(
   identifier: string,
-  permission: SpindlePermission
+  permission: SpindlePermission,
+  scope?: string,
 ): boolean {
-  return getGrantedPermissions(identifier).includes(permission);
+  return getGrantedPermissions(identifier, scope).includes(permission);
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────
