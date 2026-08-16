@@ -23,7 +23,13 @@ import {
 import { Toggle } from "@/components/shared/Toggle";
 import NumericInput from "@/components/shared/NumericInput";
 import { useStore } from "@/store";
-import { memoryCortexApi, type CortexConfig, type CortexUsageStats } from "@/api/memory-cortex";
+import {
+  memoryCortexApi,
+  resolveCortexSidecarVisibility,
+  type CortexConfig,
+  type CortexModelFallbackPair,
+  type CortexUsageStats,
+} from "@/api/memory-cortex";
 import { fetchConnectionModels } from "@/api/connectionModels";
 import ModelCombobox from "@/components/panels/connection-manager/ModelCombobox";
 import ConnectionSelect from "@/components/shared/ConnectionSelect";
@@ -135,6 +141,10 @@ export default function MemoryCortexSettings() {
   const [sidecarModels, setSidecarModels] = useState<string[]>([]);
   const [sidecarModelLabels, setSidecarModelLabels] = useState<Record<string, string>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [secondaryModels, setSecondaryModels] = useState<Record<string, string[]>>({});
+  const [secondaryModelLabels, setSecondaryModelLabels] = useState<Record<string, Record<string, string>>>({});
+  const [secondaryModelsLoading, setSecondaryModelsLoading] = useState<Record<string, boolean>>({});
+  const [sidecarVisibility, setSidecarVisibility] = useState<"ok" | "unavailable" | "timeout" | null>(null);
 
   // Active chat for stats (if available)
   const activeChatId = useStore((s) => s.activeChatId);
@@ -144,6 +154,14 @@ export default function MemoryCortexSettings() {
   );
   const selectedSidecarProfile = profiles.find((p) => p.id === config?.sidecar?.connectionProfileId) || null;
   const sidecarReasoningBinding = selectedSidecarProfile?.metadata?.reasoningBindings?.settings;
+  const queryGeneration = config?.queryGeneration ?? {
+    primary: { connectionProfileId: config?.sidecar?.connectionProfileId ?? null, model: config?.sidecar?.model ?? null },
+    secondary: null,
+  };
+  const memorySummarization = config?.memorySummarization ?? {
+    primary: { connectionProfileId: config?.sidecar?.connectionProfileId ?? null, model: config?.sidecar?.model ?? null },
+    secondary: null,
+  };
 
   const handleOpenDiagnostics = useCallback(() => {
     openModal("memoryCortexDiagnostics", { chatId: activeChatId || null });
@@ -166,6 +184,21 @@ export default function MemoryCortexSettings() {
       setSidecarModelLabels({});
     } finally {
       setModelsLoading(false);
+    }
+  }, []);
+
+  const fetchSecondaryModels = useCallback(async (connectionId: string | null) => {
+    if (!connectionId) return;
+    setSecondaryModelsLoading((prev) => ({ ...prev, [connectionId]: true }));
+    try {
+      const result = await fetchConnectionModels("llm", connectionId);
+      setSecondaryModels((prev) => ({ ...prev, [connectionId]: result.models }));
+      setSecondaryModelLabels((prev) => ({ ...prev, [connectionId]: result.labels }));
+    } catch {
+      setSecondaryModels((prev) => ({ ...prev, [connectionId]: [] }));
+      setSecondaryModelLabels((prev) => ({ ...prev, [connectionId]: {} }));
+    } finally {
+      setSecondaryModelsLoading((prev) => ({ ...prev, [connectionId]: false }));
     }
   }, []);
 
@@ -256,6 +289,45 @@ export default function MemoryCortexSettings() {
       fetchModels(config.sidecar.connectionProfileId);
     }
   }, [config?.sidecar?.connectionProfileId, fetchModels]);
+  useEffect(() => {
+    const ids = [
+      config?.queryGeneration?.secondary?.connectionProfileId,
+      config?.memorySummarization?.secondary?.connectionProfileId,
+    ].filter((id): id is string => !!id);
+    for (const id of ids) void fetchSecondaryModels(id);
+  }, [
+    config?.queryGeneration?.secondary?.connectionProfileId,
+    config?.memorySummarization?.secondary?.connectionProfileId,
+    fetchSecondaryModels,
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+    const profileId = config?.sidecar?.connectionProfileId
+      || config?.queryGeneration?.primary?.connectionProfileId
+      || null;
+    const profileMissing = !!profileId && !profiles.some((profile) => profile.id === profileId);
+    const apply = (
+      health: Parameters<typeof resolveCortexSidecarVisibility>[0]["health"],
+      ingestion: Parameters<typeof resolveCortexSidecarVisibility>[0]["ingestion"],
+    ) => {
+      if (cancelled) return;
+      setSidecarVisibility(resolveCortexSidecarVisibility({ health, ingestion, profileMissing }));
+    };
+    apply(null, null);
+    void (async () => {
+      const [health, ingestion] = await Promise.all([
+        memoryCortexApi.getHealth({ probeConnectivity: false }).catch(() => null),
+        activeChatId ? memoryCortexApi.getIngestionStatus(activeChatId).catch(() => null) : Promise.resolve(null),
+      ]);
+      apply(health?.sidecar ?? null, ingestion);
+    })();
+    return () => { cancelled = true; };
+  }, [
+    activeChatId,
+    config?.sidecar?.connectionProfileId,
+    config?.queryGeneration?.primary?.connectionProfileId,
+    profiles,
+  ]);
 
   const updateConfig = useCallback(async (patch: Partial<CortexConfig>) => {
     if (!config) return;
@@ -269,6 +341,33 @@ export default function MemoryCortexSettings() {
       addToast({ type: "error", message: t("memoryCortex.saveFailed") });
     }
   }, [config, addToast, t]);
+
+  const withPrimaryEndpoint = (
+    connectionProfileId: string | null,
+    model: string | null,
+  ): Partial<CortexConfig> => {
+    const primary = { connectionProfileId, model };
+    const nextQuery: CortexModelFallbackPair = {
+      primary,
+      secondary: config?.queryGeneration?.secondary ?? null,
+    };
+    const nextSummary: CortexModelFallbackPair = {
+      primary,
+      secondary: config?.memorySummarization?.secondary ?? null,
+    };
+    return {
+      sidecar: { ...config!.sidecar, connectionProfileId, model },
+      queryGeneration: nextQuery,
+      memorySummarization: nextSummary,
+    };
+  };
+
+  const updateEndpointPair = (
+    key: "queryGeneration" | "memorySummarization",
+    pair: CortexModelFallbackPair,
+  ) => {
+    updateConfig({ [key]: pair });
+  };
 
   const updateThoughtMarkers = useCallback((patch: Partial<CortexConfig["thoughtMarkers"]>) => {
     if (!config) return;
@@ -527,6 +626,16 @@ export default function MemoryCortexSettings() {
             <div className={styles.hintText}>
               {t("memoryCortex.sidecarHint")}
             </div>
+            {sidecarVisibility === "unavailable" && (
+              <div className={styles.hintText} data-cortex-sidecar-state="unavailable" role="status">
+                {t("memoryCortex.sidecarUnavailable", { defaultValue: "Sidecar unavailable. Check the connection profile and API key." })}
+              </div>
+            )}
+            {sidecarVisibility === "timeout" && (
+              <div className={styles.hintText} data-cortex-sidecar-state="timeout" role="status">
+                {t("memoryCortex.sidecarTimeoutState", { defaultValue: "Sidecar timed out. Primary will retry, then secondary, then the configured fallback." })}
+              </div>
+            )}
             {config.sidecar.connectionProfileId && (
               <div className={styles.hintText}>
                 {sidecarReasoningBinding
@@ -542,7 +651,7 @@ export default function MemoryCortexSettings() {
                 onChange={(value) => {
                   const id = value || null;
                   updateConfig({
-                    sidecar: { ...config.sidecar, connectionProfileId: id, model: null },
+                    ...withPrimaryEndpoint(id, null),
                     entityExtractionMode: id ? "sidecar" : "heuristic",
                     salienceScoringMode: id ? "sidecar" : "heuristic",
                     consolidation: { ...config.consolidation, useSidecar: !!id },
@@ -562,7 +671,7 @@ export default function MemoryCortexSettings() {
                   <div className={styles.modelPicker}>
                     <ModelCombobox
                       value={config.sidecar.model || ""}
-                      onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, model: value || null } })}
+                      onChange={(value) => updateConfig(withPrimaryEndpoint(config.sidecar.connectionProfileId, value || null))}
                       models={sidecarModels}
                       modelLabels={sidecarModelLabels}
                       loading={modelsLoading}
@@ -575,6 +684,96 @@ export default function MemoryCortexSettings() {
                     />
                   </div>
                 </div>
+                <div className={styles.infoRow} data-testid="cortex-query-secondary-connection">
+                  <span className={styles.infoLabel}>{t("memoryCortex.querySecondaryConnection", { defaultValue: "Extraction secondary" })}</span>
+                  <ConnectionSelect
+                    kind="llm"
+                    value={queryGeneration.secondary?.connectionProfileId || ""}
+                    onChange={(value) => {
+                      const id = value || null;
+                      updateEndpointPair("queryGeneration", {
+                        primary: queryGeneration.primary,
+                        secondary: id ? { connectionProfileId: id, model: null } : null,
+                      });
+                      fetchSecondaryModels(id);
+                    }}
+                    clearable
+                    clearLabel={t("memoryCortex.connectionNone")}
+                    placeholder={t("memoryCortex.connectionNone")}
+                    ariaLabel={t("memoryCortex.querySecondaryConnection", { defaultValue: "Extraction secondary" })}
+                  />
+                </div>
+                {queryGeneration.secondary?.connectionProfileId && (
+                  <div className={styles.infoRow} data-testid="cortex-query-secondary-model">
+                    <span className={styles.infoLabel}>{t("memoryCortex.querySecondaryModel", { defaultValue: "Extraction secondary model" })}</span>
+                    <div className={styles.modelPicker}>
+                      <ModelCombobox
+                        value={queryGeneration.secondary.model || ""}
+                        onChange={(value) => updateEndpointPair("queryGeneration", {
+                          primary: queryGeneration.primary,
+                          secondary: {
+                            connectionProfileId: queryGeneration.secondary!.connectionProfileId,
+                            model: value || null,
+                          },
+                        })}
+                        models={secondaryModels[queryGeneration.secondary.connectionProfileId] ?? []}
+                        modelLabels={secondaryModelLabels[queryGeneration.secondary.connectionProfileId] ?? {}}
+                        loading={!!secondaryModelsLoading[queryGeneration.secondary.connectionProfileId]}
+                        onRefresh={() => fetchSecondaryModels(queryGeneration.secondary!.connectionProfileId)}
+                        autoRefreshOnFocus
+                        refreshKey={queryGeneration.secondary.connectionProfileId}
+                        placeholder={t("memoryCortex.modelPlaceholder")}
+                        emptyMessage={t("memoryCortex.noModels")}
+                        browseHint={t("memoryCortex.modelBrowseHint")}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className={styles.infoRow} data-testid="cortex-summary-secondary-connection">
+                  <span className={styles.infoLabel}>{t("memoryCortex.summarySecondaryConnection", { defaultValue: "Summary secondary" })}</span>
+                  <ConnectionSelect
+                    kind="llm"
+                    value={memorySummarization.secondary?.connectionProfileId || ""}
+                    onChange={(value) => {
+                      const id = value || null;
+                      updateEndpointPair("memorySummarization", {
+                        primary: memorySummarization.primary,
+                        secondary: id ? { connectionProfileId: id, model: null } : null,
+                      });
+                      fetchSecondaryModels(id);
+                    }}
+                    clearable
+                    clearLabel={t("memoryCortex.connectionNone")}
+                    placeholder={t("memoryCortex.connectionNone")}
+                    ariaLabel={t("memoryCortex.summarySecondaryConnection", { defaultValue: "Summary secondary" })}
+                  />
+                </div>
+                {memorySummarization.secondary?.connectionProfileId && (
+                  <div className={styles.infoRow} data-testid="cortex-summary-secondary-model">
+                    <span className={styles.infoLabel}>{t("memoryCortex.summarySecondaryModel", { defaultValue: "Summary secondary model" })}</span>
+                    <div className={styles.modelPicker}>
+                      <ModelCombobox
+                        value={memorySummarization.secondary.model || ""}
+                        onChange={(value) => updateEndpointPair("memorySummarization", {
+                          primary: memorySummarization.primary,
+                          secondary: {
+                            connectionProfileId: memorySummarization.secondary!.connectionProfileId,
+                            model: value || null,
+                          },
+                        })}
+                        models={secondaryModels[memorySummarization.secondary.connectionProfileId] ?? []}
+                        modelLabels={secondaryModelLabels[memorySummarization.secondary.connectionProfileId] ?? {}}
+                        loading={!!secondaryModelsLoading[memorySummarization.secondary.connectionProfileId]}
+                        onRefresh={() => fetchSecondaryModels(memorySummarization.secondary!.connectionProfileId)}
+                        autoRefreshOnFocus
+                        refreshKey={memorySummarization.secondary.connectionProfileId}
+                        placeholder={t("memoryCortex.modelPlaceholder")}
+                        emptyMessage={t("memoryCortex.noModels")}
+                        browseHint={t("memoryCortex.modelBrowseHint")}
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>{t("memoryCortex.temperature")}</span>
                   <NumericInput className={styles.numberInput} value={config.sidecar.temperature} min={0} max={2} step={0.05} onChange={(value) => updateConfig({ sidecar: { ...config.sidecar, temperature: value ?? 0.1 } })} />
