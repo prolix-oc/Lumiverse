@@ -18,7 +18,7 @@ import type { SuiteHostContext } from './suite'
 export async function setup(
   ctx: SuiteHostContext,
 ): Promise<() => Promise<void>> {
-  const disposeThemeBridge = installThemeBridge(document)
+  const disposeThemeBridge = installThemeBridge(css => ctx.dom.addStyle(css), ctx)
   const suite = createSuite(ctx, [
     { module: createQuickToolbarModule(ctx), enabled: true },
     { module: createLoreIndicatorModule(ctx), enabled: true },

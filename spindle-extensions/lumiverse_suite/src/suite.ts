@@ -17,7 +17,9 @@ import {
 } from './shared/styles'
 
 export interface SuiteWorldBooksAPI {
-  entries(bookId: string): Promise<readonly unknown[]>
+  readonly entries: {
+    list(bookId: string): Promise<{ readonly data: readonly unknown[]; readonly total: number }>
+  }
 }
 
 export interface SuiteTokenCountOptions {
@@ -27,23 +29,59 @@ export interface SuiteTokenCountOptions {
 
 export interface SuiteTokensAPI {
   countText(text: string, options?: SuiteTokenCountOptions): Promise<unknown>
-  countTextBatch(texts: readonly string[], options?: SuiteTokenCountOptions): Promise<unknown>
 }
 
-declare module 'lumiverse-spindle-types' {
-  interface SpindleFrontendContext {
-    readonly worldBooks: SuiteWorldBooksAPI
-    readonly tokens: SuiteTokensAPI
-  }
-}
-
-/** Runtime roots composed by the frontend host before extension setup. */
-export type SuiteHostContext = SpindleFrontendContext & {
+/** Public 0.6.16 registration surfaces that 0.6.12's published types do not yet name. */
+export interface SuitePublicHostSurfaces {
   readonly settings?: SuiteSettingsAPI
   readonly dom?: SuiteDOMAPI
   readonly onTeardown?: (handler: () => void) => () => void
-  readonly worldBooks: SuiteWorldBooksAPI
-  readonly tokens: SuiteTokensAPI
+  readonly worldBooks?: SuiteWorldBooksAPI
+  readonly tokens?: SuiteTokensAPI
+  /** Flattened descriptor field accepted by suite test doubles. */
+  readonly extensionInstallationId?: string
+  registerDomDecorator?(options: {
+    readonly target: string
+    decorate(element: HTMLElement): void | (() => void)
+  }): { destroy(): void }
+  registerComponentOverride?(options: {
+    readonly componentId: string
+    render?(target: HTMLElement, props: Record<string, unknown>): void | (() => void)
+  }): { destroy(): void }
+  registerMessageAction?(options: {
+    readonly id: string
+    readonly label: string
+    onClick(messageId: string): void
+  }): { destroy(): void }
+}
+
+export type SuiteHostContext = SpindleFrontendContext & SuitePublicHostSurfaces & {
+  readonly ui: SpindleFrontendContext['ui'] & {
+    registerSettingsTab?(options: { readonly id: string; readonly title: string }): {
+      readonly id: string
+      readonly root: HTMLElement
+      update?(options?: { readonly id?: string; readonly title?: string }): void
+      destroy(): void
+    }
+    geometry?: {
+      layoutElementRect(element: Element): DOMRect | { readonly height: number }
+      createResizeController?(
+        element: HTMLElement,
+        options: unknown,
+      ): { destroy(): void } | (() => void)
+    }
+  }
+  readonly components: SpindleFrontendContext['components'] & {
+    mountHostSurface(
+      target: Element,
+      surfaceId: string,
+      props?: Record<string, unknown>,
+    ): {
+      update?(props: Record<string, unknown>): void
+      destroy(): void
+      on?(event: string, listener: (payload: unknown) => void): () => void
+    }
+  }
 }
 
 export const MODULE_IDS = [
@@ -100,54 +138,18 @@ export interface LumiverseSuite {
   getDiagnostics(): readonly SuiteModuleDiagnostic[]
 }
 
-type ProductivitySettingsRegistration = {
-  readonly root: HTMLElement
-  readonly registrationId: string
-  readonly tabId: string
-  activate(): void
-  onActivate(callback: () => void): () => void
-  destroy(): void
-}
-
-type ProductivitySettingsRenderer = {
-  update(props: Record<string, unknown>): void
-  destroy(): void
-}
-
-type ProductivitySettingsHost = SuiteHostContext & {
-  readonly ui?: {
-    registerSettingsTab(options: Record<string, unknown>): ProductivitySettingsRegistration
-  }
-  readonly components?: {
-    mountHostSurface(target: HTMLElement, surfaceId: string, props: Record<string, unknown>): ProductivitySettingsRenderer
-  }
+const PRODUCTIVITY_TAB = {
+  id: 'productivity',
+  title: 'UI Productivity',
 }
 
 function createProductivitySettingsLifecycle(ctx: SuiteHostContext, generation: number): () => void {
-  const host = ctx as ProductivitySettingsHost
-  const register = host.ui?.registerSettingsTab
-  const mount = host.components?.mountHostSurface
-  // The suite host owns this contribution when the host exposes both lifecycles.
-  // Minimal hosts can still run feature modules without a Productivity renderer.
-  if (!register || !mount) return () => undefined
+  const register = ctx.ui?.registerSettingsTab
+  const mount = ctx.components?.mountHostSurface
+  if (typeof register !== 'function' || typeof mount !== 'function') return () => undefined
 
-  let acceptingActivation = true
   let destroyed = false
-  const registration = register({
-    id: 'productivity',
-    title: 'UI Productivity',
-    shortName: 'Productivity',
-    description: 'Customize productivity surfaces and editor defaults.',
-    keywords: ['productivity', 'toolbar', 'connections', 'lorebook', 'portrait'],
-    order: 0,
-    sections: [
-      { key: 'quick_toolbar', titleKey: 'settings.quickToolbar', titleFallback: 'Quick Toolbar', keywords: ['toolbar', 'search', 'reorder'] },
-      { key: 'connections_picker', titleKey: 'settings.connectionsPicker', titleFallback: 'Connections Picker', keywords: ['connections', 'profiles', 'tags'] },
-      { key: 'lore_indicator', titleKey: 'settings.loreIndicator', titleFallback: 'Lore Indicator', keywords: ['lore', 'activated'] },
-      { key: 'portrait_dock', titleKey: 'settings.portraitDock', titleFallback: 'Portrait Dock', keywords: ['portrait', 'dock'] },
-      { key: 'lorebook_editor', titleKey: 'settings.lorebookEditor', titleFallback: 'Lorebook Editor', keywords: ['lorebook', 'editor'] },
-    ],
-  })
+  const registration = register(PRODUCTIVITY_TAB)
   const props = {
     contractVersion: 1,
     ownerToken: 'lumiverse_suite_productivity',
@@ -155,43 +157,12 @@ function createProductivitySettingsLifecycle(ctx: SuiteHostContext, generation: 
     capabilities: [],
   }
   const renderer = mount(registration.root, 'productivity.settings.workspace', props)
-  const unsubscribe = registration.onActivate(() => {
-    if (acceptingActivation) renderer.update(props)
-  })
 
   return () => {
     if (destroyed) return
     destroyed = true
-    acceptingActivation = false
     renderer.destroy()
-    unsubscribe()
     registration.destroy()
-  }
-}
-
-function removeOwnedModuleNodes(extensionUuid: string | undefined, moduleIds: readonly ModuleId[]): void {
-  if (!extensionUuid || moduleIds.length === 0 || typeof document === 'undefined') return
-
-  const ownedRoots = new Set<HTMLElement>()
-  for (const selector of ['[data-spindle-extension-root]', '[data-spindle-ext]']) {
-    document.querySelectorAll<HTMLElement>(selector).forEach(root => ownedRoots.add(root))
-  }
-
-  for (const root of ownedRoots) {
-    if (
-      root.getAttribute('data-spindle-extension-root') !== extensionUuid &&
-      root.getAttribute('data-spindle-ext') !== extensionUuid
-    ) continue
-
-    for (const moduleId of moduleIds) {
-      if (root.getAttribute('data-lumiverse-module') === moduleId) {
-        root.remove()
-        break
-      }
-      root.querySelectorAll('[data-lumiverse-module]').forEach(node => {
-        if (node.getAttribute('data-lumiverse-module') === moduleId) node.remove()
-      })
-    }
   }
 }
 
@@ -259,7 +230,6 @@ export function createSuite(
             // A failed start is already diagnosed; cleanup remains best effort.
           }
           moduleStyles.dispose()
-          removeOwnedModuleNodes(ctx.host.extensionInstallationId, [registration.module.id])
         }
       }
 
@@ -277,14 +247,10 @@ export function createSuite(
 
       // Modules stop in reverse registration order, so action owners reject and
       // deregister commands before their workspaces and subscriptions disappear.
-      const startedIds = started.map(entry => entry.module.id)
       const firstError = await stopStarted()
       try {
-        // The tab registration and its renderer are separate handles. Reject
-        // activation, destroy the renderer, unsubscribe, then remove the tab.
         destroyProductivitySettings?.()
         destroyProductivitySettings = undefined
-        removeOwnedModuleNodes(ctx.host.extensionInstallationId, startedIds)
       } finally {
         styles.disposeAll()
         bus.dispose()

@@ -1,5 +1,3 @@
-const THEME_BRIDGE_ATTRIBUTE = 'data-lumiverse-suite-theme-bridge'
-
 const themeBridgeCss = `:root {
   --lumiverse-suite-surface: var(--lumiverse-bg, #1c1826);
   --lumiverse-suite-surface-elevated: var(--lumiverse-bg-elevated, #231e30);
@@ -15,43 +13,37 @@ const themeBridgeCss = `:root {
   --lumiverse-suite-font-family: var(--lumiverse-font-family, sans-serif);
 }`
 
-interface ThemeBridgeEntry {
-  style: HTMLStyleElement
+type ThemeBridgeEntry = {
+  dispose: () => void
   references: number
 }
 
-const bridges = new WeakMap<Document, ThemeBridgeEntry>()
+const bridges = new WeakMap<object, ThemeBridgeEntry>()
+const globalBridgeKey: object = {}
 
 /**
  * Installs suite-only tokens that follow the host's active theme. The returned
  * disposer is idempotent and removes the bridge after its final owner stops.
  */
-export function installThemeBridge(document: Document): () => void {
-  let bridge = bridges.get(document)
+export function installThemeBridge(addStyle: (css: string) => () => void, owner: object = globalBridgeKey): () => void {
+  let bridge = bridges.get(owner)
 
   if (!bridge) {
-    const style = document.createElement('style')
-    style.setAttribute(THEME_BRIDGE_ATTRIBUTE, '')
-    style.textContent = themeBridgeCss
-    document.head.append(style)
-    bridge = { style, references: 0 }
-    bridges.set(document, bridge)
+    bridge = { dispose: addStyle(themeBridgeCss), references: 0 }
+    bridges.set(owner, bridge)
   }
 
   bridge.references += 1
   let disposed = false
 
   return () => {
-    if (disposed) {
-      return
-    }
-
+    if (disposed) return
     disposed = true
     bridge.references -= 1
-
-    if (bridge.references === 0) {
-      bridge.style.remove()
-      bridges.delete(document)
-    }
+    if (bridge.references > 0) return
+    bridge.dispose()
+    bridges.delete(owner)
   }
 }
+
+export const THEME_BRIDGE_CSS = themeBridgeCss
