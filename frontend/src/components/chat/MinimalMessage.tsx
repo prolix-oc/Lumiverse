@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useMessageCard } from '@/hooks/useMessageCard'
 import { useComponentOverride } from '@/hooks/useComponentOverride'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import MinimalMessageDefault, { type MinimalMessageDefaultProps } from './MinimalMessageDefault'
 import MessageContent from './MessageContent'
 import ReasoningBlock from './ReasoningBlock'
@@ -21,13 +22,14 @@ interface MinimalMessageProps {
   findQuery?: string
 }
 
-export default function MinimalMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: MinimalMessageProps) {
+function MinimalMessageNative({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: MinimalMessageProps) {
   const minimalUseFullAvatar = useStore((s) => s.minimalUseFullAvatar ?? false)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden, isContextAnchor,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
+    handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
+    editAndSendPending,
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
@@ -140,9 +142,13 @@ export default function MinimalMessage({ message, chatId, depth = 0, isSelectMod
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
-    handleFork, handlePromptBreakdown,
+    handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
+    handleFork, handlePromptBreakdown, editAndSendPending,
   }
 
   return useComponentOverride('MinimalMessage', MinimalMessageDefault, overrideProps, defaultProps, hostSlots)
+}
+
+export default function MinimalMessage(props: MinimalMessageProps) {
+  return useSpindleComponentOverride('MinimalMessage', MinimalMessageNative, props)
 }

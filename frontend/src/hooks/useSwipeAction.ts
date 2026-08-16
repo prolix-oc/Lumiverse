@@ -1,11 +1,104 @@
 import { useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { messagesApi } from '@/api/chats'
+import type { EditAndSendResult } from '@/api/chats'
 import { generateApi, type GenerateRequest } from '@/api/generate'
 import { useStore } from '@/store'
 import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import i18n from '@/i18n'
 import type { Message } from '@/types/api'
+
+let swipeGenerationNonce = 0
+
+export function findSubsequentAssistant(messages: Message[], userMessageId: string): Message | undefined {
+  const idx = messages.findIndex((m) => m.id === userMessageId)
+  if (idx < 0) return undefined
+  for (let i = idx + 1; i < messages.length; i++) {
+    if (!messages[i].is_user) return messages[i]
+  }
+  return undefined
+}
+
+export function editAndSendUsesSwipePath(result: Pick<EditAndSendResult, 'immediateAssistantId'>): boolean {
+  return typeof result.immediateAssistantId === 'string' && result.immediateAssistantId.length > 0
+}
+
+/**
+ * Start a swipe generation on a specific assistant message.
+ * Used by Edit-and-Send when a subsequent assistant already exists.
+ */
+export async function startSwipeGeneration(message: Message, chatId: string): Promise<void> {
+  const state = useStore.getState()
+  if (state.isStreaming || message.is_user) return
+
+  const nonce = ++swipeGenerationNonce
+  const {
+    beginStreaming,
+    startStreaming,
+    setStreamingError,
+    activeProfileId,
+    activePersonaId,
+    activeCharacterId,
+    getActivePresetForGeneration,
+  } = state
+
+  beginStreaming(message.id, 'swipe')
+  try {
+    const presetId = getActivePresetForGeneration() || undefined
+    const res = await generateApi.start({
+      chat_id: chatId,
+      message_id: message.id,
+      generation_type: 'swipe',
+      connection_id: activeProfileId || undefined,
+      persona_id: activePersonaId || undefined,
+      preset_id: presetId,
+      force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+    })
+    if (swipeGenerationNonce !== nonce) return
+    startStreaming(res.generationId, message.id, 'swipe')
+  } catch (err: any) {
+    if (swipeGenerationNonce !== nonce) return
+    const msg = err?.body?.error || err?.message || i18n.t('errors.failedToRegenerate')
+    setStreamingError(msg)
+    throw err
+  }
+}
+
+/**
+ * After a successful edit-and-send, pick swipe vs new-generation UX.
+ * Does not create generation targets on the client.
+ */
+export async function applyEditAndSendResult(
+  chatId: string,
+  userMessageId: string,
+  result: Pick<EditAndSendResult, 'immediateAssistantId' | 'generationId'>,
+): Promise<'swipe' | 'new_generation'> {
+  const state = useStore.getState()
+  const assistantId = result.immediateAssistantId
+    || findSubsequentAssistant(state.messages, userMessageId)?.id
+    || null
+
+  if (assistantId) {
+    const assistant = state.messages.find((m) => m.id === assistantId)
+    if (assistant) {
+      await startSwipeGeneration(assistant, chatId)
+    } else {
+      state.beginStreaming(assistantId, 'swipe')
+      if (result.generationId) {
+        state.startStreaming(result.generationId, assistantId, 'swipe')
+      }
+    }
+    return 'swipe'
+  }
+
+  // Tail: backend/dispatcher owns the new generation. `continue` skips the
+  // local stream placeholder so the client does not pre-create a target.
+  state.beginStreaming(undefined, 'continue')
+  if (result.generationId) {
+    state.startStreaming(result.generationId)
+  }
+  return 'new_generation'
+}
 
 export interface SwipeActionResult {
   handleSwipe: (direction: 'left' | 'right') => Promise<void>

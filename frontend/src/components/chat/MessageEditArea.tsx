@@ -9,6 +9,9 @@ interface MessageEditAreaProps {
   onChangeContent: (value: string) => void
   onSave: () => void
   onCancel: () => void
+  onEditAndSend?: () => void
+  messageId?: string
+  editAndSendDisabled?: boolean
   editReasoning?: string
   onChangeReasoning?: (value: string) => void
 }
@@ -75,6 +78,7 @@ function syncEditorVisibility(target: HTMLTextAreaElement | null, correctedRef: 
 
 export default function MessageEditArea({
   editContent, onChangeContent, onSave, onCancel,
+  onEditAndSend, messageId, editAndSendDisabled,
   editReasoning, onChangeReasoning,
 }: MessageEditAreaProps) {
   const { t } = useTranslation('chat')
@@ -244,9 +248,22 @@ export default function MessageEditArea({
           </button>
         </div>
       </div>
-      <div className={styles.editActions}>
+      <div
+        className={styles.editActions}
+        data-spindle-mount="message_edit_actions"
+        data-spindle-scope-key={messageId ? `message:${messageId}:edit-actions` : undefined}
+      >
         <button type="button" onClick={onCancel} className={styles.editCancelBtn}>
           {tc('actions.cancel')}
+        </button>
+        <button
+          type="button"
+          onClick={onEditAndSend}
+          className={styles.editSaveBtn}
+          aria-label={t('messageEdit.editAndSend', { defaultValue: 'Edit and Send' })}
+          disabled={editAndSendDisabled || !editContent.trim()}
+        >
+          {t('messageEdit.editAndSend', { defaultValue: 'Edit and Send' })}
         </button>
         <button type="button" onClick={onSave} className={styles.editSaveBtn}>
           {tc('actions.save')}

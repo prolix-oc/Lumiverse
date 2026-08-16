@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
+import { generateUUID } from '@/lib/uuid'
+import { applyEditAndSendResult } from '@/hooks/useSwipeAction'
 import {
   getCharacterAvatarThumbUrlById,
   getCharacterAvatarLargeUrlById,
@@ -66,6 +68,8 @@ export function useMessageCard(message: Message, chatId: string) {
   const [showReasoningEditor, setShowReasoningEditor] = useState(false)
   const hadReasoningRef = useRef(false)
   const wasEditingRef = useRef(false)
+  const editAndSendAbortRef = useRef<AbortController | null>(null)
+  const [editAndSendPending, setEditAndSendPending] = useState(false)
   const removeMessage = useStore((s) => s.removeMessage)
   const openModal = useStore((s) => s.openModal)
   const activeCharacterId = useStore((s) => s.activeCharacterId)
@@ -373,12 +377,68 @@ export function useMessageCard(message: Message, chatId: string) {
   }, [chatId, message.id, editContent, editReasoning, message.is_user, message.extra, setEditingMessageId, updateMessage, addToast, t])
 
   const handleCancelEdit = useCallback(() => {
+    editAndSendAbortRef.current?.abort()
+    editAndSendAbortRef.current = null
+    setEditAndSendPending(false)
     setEditingMessageId(null)
     setEditContent('')
     setEditReasoning('')
     setShowReasoningEditor(false)
     hadReasoningRef.current = false
   }, [setEditingMessageId])
+
+  const handleEditAndSend = useCallback(async () => {
+    if (!message.is_user || isStreaming || editAndSendPending) return
+    const cleanContent = editContent.trim()
+    if (!cleanContent) {
+      addToast({ type: 'error', message: t('emptyEditAndSend', { defaultValue: 'Message cannot be empty' }) })
+      return
+    }
+
+    editAndSendAbortRef.current?.abort()
+    const ac = new AbortController()
+    editAndSendAbortRef.current = ac
+    setEditAndSendPending(true)
+
+    const previousContent = message.content
+    updateMessage(message.id, { ...message, content: cleanContent })
+    setEditingMessageId(null)
+
+    try {
+      const expectedVersion = typeof message.extra?.version === 'number'
+        ? message.extra.version
+        : message.created_at
+      const result = await chatsApi.editAndSend(chatId, {
+        messageId: message.id,
+        content: cleanContent,
+        expectedVersion,
+        requestId: generateUUID(),
+      }, { signal: ac.signal })
+      if (ac.signal.aborted) return
+      updateMessage(result.message.id, result.message)
+      await applyEditAndSendResult(chatId, message.id, result)
+    } catch (err: any) {
+      if (ac.signal.aborted || err?.name === 'AbortError') return
+      console.error('[MessageCard] Failed to edit and send:', err)
+      updateMessage(message.id, { ...message, content: previousContent })
+      addToast({ type: 'error', message: t('failedEditAndSend', { defaultValue: 'Failed to edit and send' }) })
+    } finally {
+      if (editAndSendAbortRef.current === ac) {
+        editAndSendAbortRef.current = null
+        setEditAndSendPending(false)
+      }
+    }
+  }, [
+    addToast,
+    chatId,
+    editAndSendPending,
+    editContent,
+    isStreaming,
+    message,
+    setEditingMessageId,
+    t,
+    updateMessage,
+  ])
 
   const doDeleteMessage = useCallback(async () => {
     try {
@@ -546,7 +606,9 @@ export function useMessageCard(message: Message, chatId: string) {
     isContextAnchor,
     handleEdit,
     handleSaveEdit,
+    handleEditAndSend,
     handleCancelEdit,
+    editAndSendPending,
     handleDelete,
     handleToggleHidden,
     handleToggleContextAnchor,

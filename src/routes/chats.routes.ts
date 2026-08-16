@@ -25,6 +25,7 @@ import {
   withChatPersonaAddonState,
 } from "../services/persona-addon-states";
 import type { RegexActionEffect } from "../types/regex-script";
+import { dispatchEditAndSendRequest } from "../services/edit-and-send-dispatcher.service";
 
 async function runMessageContentProcessors(
   ctx: MessageContentProcessorCtx,
@@ -673,6 +674,49 @@ app.post("/:id/branch", async (c) => {
   const branch = svc.branchChat(userId, c.req.param("id"), body.message_id, name);
   if (!branch) return c.json({ error: "Not found or invalid message" }, 404);
   return c.json(branch, 201);
+});
+
+app.post("/:chatId/edit-and-send", async (c) => {
+  const userId = c.get("userId");
+  const chatId = c.req.param("chatId");
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json({ error: "JSON body is required" }, 400);
+
+  const messageId = (body as { messageId?: unknown }).messageId;
+  const content = (body as { content?: unknown }).content;
+  const expectedVersion = (body as { expectedVersion?: unknown }).expectedVersion;
+  const requestId = (body as { requestId?: unknown }).requestId;
+
+  if (typeof messageId !== "string" || !messageId.trim()) {
+    return c.json({ error: "messageId is required" }, 400);
+  }
+  if (typeof content !== "string") {
+    return c.json({ error: "content is required" }, 400);
+  }
+  if (typeof requestId !== "string" || !requestId.trim()) {
+    return c.json({ error: "requestId is required" }, 400);
+  }
+  if (typeof expectedVersion !== "number" || !Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return c.json({ error: "expectedVersion must be a positive integer" }, 400);
+  }
+
+  const result = svc.editAndSend(userId, chatId, {
+    messageId,
+    content,
+    expectedVersion,
+    requestId,
+  });
+  if (result.status === "not_found") return c.json({ error: result.error }, 404);
+  if (result.status === "conflict") return c.json({ error: result.error }, 409);
+  if (result.status === "bad_request") return c.json({ error: result.error }, 400);
+
+  try {
+    await dispatchEditAndSendRequest(userId, chatId, requestId);
+  } catch (err) {
+    console.warn("[chats] edit-and-send dispatch failed; outbox will retry", err);
+  }
+
+  return c.json(result.payload);
 });
 
 app.post("/reattribute-all", async (c) => {

@@ -1,5 +1,6 @@
 import { useMessageCard } from '@/hooks/useMessageCard'
 import { useComponentOverride } from '@/hooks/useComponentOverride'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import BubbleMessageDefault, { type BubbleMessageDefaultProps } from './BubbleMessageDefault'
 import MessageContent from './MessageContent'
 import ReasoningBlock from './ReasoningBlock'
@@ -21,14 +22,15 @@ interface BubbleMessageProps {
   findQuery?: string
 }
 
-export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: BubbleMessageProps) {
+function BubbleMessageNative({ message, chatId, depth = 0, isSelectMode = false, isSelected = false, onToggleSelect, findQuery = '' }: BubbleMessageProps) {
   const bubbleUserAlign = useStore((s) => s.bubbleUserAlign)
   const bubbleUseFullAvatar = useStore((s) => s.bubbleUseFullAvatar ?? false)
   const {
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isLastMessage, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, avatar, displayName, macroUserName, isHidden, isContextAnchor,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
+    handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor, handleFork,
+    editAndSendPending,
   } = useMessageCard(message, chatId)
 
   const openModal = useStore((s) => s.openModal)
@@ -145,9 +147,13 @@ export default function BubbleMessage({ message, chatId, depth = 0, isSelectMode
     isEditing, editContent, setEditContent, editReasoning, setEditReasoning, showReasoningEditor,
     isUser, isActivelyStreaming, displayContent, reasoning, reasoningDuration, reasoningStartedAt,
     tokenCount, generationMetrics, avatarUrl, fullAvatarUrl, displayAvatarUrl, displayName, macroUserName, isHidden, isContextAnchor, userLeft,
-    handleEdit, handleSaveEdit, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
-    handleFork, handlePromptBreakdown,
+    handleEdit, handleSaveEdit, handleEditAndSend, handleCancelEdit, handleDelete, handleToggleHidden, handleToggleContextAnchor,
+    handleFork, handlePromptBreakdown, editAndSendPending,
   }
 
   return useComponentOverride('BubbleMessage', BubbleMessageDefault, overrideProps, defaultProps, hostSlots)
+}
+
+export default function BubbleMessage(props: BubbleMessageProps) {
+  return useSpindleComponentOverride('BubbleMessage', BubbleMessageNative, props)
 }

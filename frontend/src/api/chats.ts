@@ -6,6 +6,21 @@ import type {
 } from '@/types/api'
 import type { RegexActionEffect } from '@/types/regex'
 
+export interface EditAndSendInput {
+  messageId: string
+  content: string
+  expectedVersion: number
+  requestId: string
+}
+
+export interface EditAndSendResult {
+  message: Message
+  /** Subsequent assistant when the edited turn is historical. */
+  immediateAssistantId?: string | null
+  /** Present when the backend already dispatched generation. */
+  generationId?: string | null
+}
+
 export type ChatAppearanceAction =
   | { type: 'avatar'; avatar_entry_id: string; character_id?: string }
   | { type: 'field'; field: 'description' | 'personality' | 'scenario'; variant_id: string | null; character_id?: string }
@@ -176,6 +191,15 @@ export const chatsApi = {
 
   getTree(chatId: string) {
     return get<ChatTreeNode>(`/chats/${chatId}/tree`)
+  },
+
+  /**
+   * Edit a user message and immediately re-prompt. The backend owns target
+   * creation / dispatch; the client must not pre-create generation targets.
+   * Historical turns return `immediateAssistantId` so the UI uses the swipe path.
+   */
+  editAndSend(chatId: string, input: EditAndSendInput, options?: RequestOptions) {
+    return post<EditAndSendResult>(`/chats/${chatId}/edit-and-send`, input, options)
   },
 
   importChat(characterId: string, exportData: { chat: any; messages: any[] }) {
