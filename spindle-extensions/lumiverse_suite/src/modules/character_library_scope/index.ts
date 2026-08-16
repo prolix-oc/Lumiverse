@@ -1,6 +1,7 @@
 import type { SuiteModule, SuiteModuleContext } from '../../suite'
 import { requireSuiteSettings, type SuiteSettingsAPI } from '../../shared/settings'
 import { PermissionBroker } from '../../shared/permissions'
+import { readExtensionInstallationId } from '../../shared/public-sdk'
 import {
   CHARACTER_LIBRARY_SCOPE_MODULE_ID,
   CHARACTER_LIBRARY_SCOPE_SETTINGS_KEY,
@@ -17,7 +18,7 @@ const SETTINGS_KEY = CHARACTER_LIBRARY_SCOPE_SETTINGS_KEY
 const CHARACTER_EDITOR_TAB_ID = 'character_library_scope'
 const LIBRARY_SCOPE_EXTENSION_KEY = '_lumiverse_library_scope'
 
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 type Method = (...args: unknown[]) => unknown
 
 
@@ -35,11 +36,11 @@ const MODULE_STYLES = String.raw`
 [data-lumiverse-module="character_library_scope"] [data-lumiverse-scope-facet]{font:inherit;min-height:30px}
 `
 
-function isRecord(value: unknown): value is UnknownRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function method(candidate: UnknownRecord | undefined, name: string): Method | undefined {
+function method(candidate: JsonRecord | undefined, name: string): Method | undefined {
   const value = candidate?.[name]
   return typeof value === 'function' ? (value as Method).bind(candidate) : undefined
 }
@@ -65,14 +66,12 @@ function sameStoredSettings(value: unknown, expected: Settings): boolean {
 }
 
 function extensionUuid(context: SuiteModuleContext): string | undefined {
-  const host = context.host as unknown as UnknownRecord
-  const descriptor = isRecord(host.host) ? host.host : host
-  return stringValue(descriptor.extensionInstallationId)
+  return readExtensionInstallationId(context.host)
 }
 
-function uiRecord(context: SuiteModuleContext): UnknownRecord | undefined {
-  const host = context.host as unknown as UnknownRecord
-  return isRecord(host.ui) ? host.ui : undefined
+function uiRecord(context: SuiteModuleContext): JsonRecord | undefined {
+  const ui = context.host.ui
+  return isRecord(ui) ? ui : undefined
 }
 
 
@@ -104,7 +103,7 @@ export function createCharacterLibraryScopeModule(): SuiteModule {
   let stopSettingsWatch: (() => void) | undefined
   let lifecycleGeneration = 0
   let activeRoot: HTMLElement | undefined
-  let activeTab: UnknownRecord | undefined
+  let activeTab: JsonRecord | undefined
   let activeDisposers: Array<() => void> = []
   let stylesActive = false
   let editorSessionKey = ''
@@ -237,7 +236,7 @@ export function createCharacterLibraryScopeModule(): SuiteModule {
     const disposers: Array<() => void> = []
     activeDisposers = disposers
 
-    const readEditorState = (): UnknownRecord | undefined => {
+    const readEditorState = (): JsonRecord | undefined => {
       try {
         const value = getState()
         return isRecord(value) ? value : undefined
@@ -246,7 +245,7 @@ export function createCharacterLibraryScopeModule(): SuiteModule {
       }
     }
 
-    const syncEditorSession = (state: UnknownRecord | undefined): string => {
+    const syncEditorSession = (state: JsonRecord | undefined): string => {
       const characterId = stringValue(state?.characterId)
       const key = state?.open === true && characterId ? characterId : ''
       if (key !== editorSessionKey) {

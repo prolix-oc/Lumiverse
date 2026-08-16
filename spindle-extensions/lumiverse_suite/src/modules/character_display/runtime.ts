@@ -6,12 +6,12 @@ import type {
   CharacterDisplaySurface,
 } from './types'
 
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 type UnknownFunction = (...args: unknown[]) => unknown
 
 type CharacterDisplayWorldBookSummary = { readonly id: string; readonly name: string }
 type ComponentHandle = {
-  readonly update?: (props: UnknownRecord) => void
+  readonly update?: (props: JsonRecord) => void
   readonly destroy?: () => void
 }
 
@@ -114,7 +114,7 @@ const METADATA_OPTIONS = [
   ['tags', 'Tags'],
 ] as const
 
-function isRecord(value: unknown): value is UnknownRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -130,7 +130,7 @@ function cloneSettings(settings: CharacterDisplaySettings): CharacterDisplaySett
   return { ...settings, visibleMetadata: [...settings.visibleMetadata] }
 }
 
-function methodOn(value: unknown, name: string): { readonly owner: UnknownRecord; readonly fn: UnknownFunction } | undefined {
+function methodOn(value: unknown, name: string): { readonly owner: JsonRecord; readonly fn: UnknownFunction } | undefined {
   if (!isRecord(value)) return undefined
   const candidate = value[name]
   return typeof candidate === 'function'
@@ -138,7 +138,7 @@ function methodOn(value: unknown, name: string): { readonly owner: UnknownRecord
     : undefined
 }
 
-function firstMethod(values: readonly unknown[], name: string): { readonly owner: UnknownRecord; readonly fn: UnknownFunction } | undefined {
+function firstMethod(values: readonly unknown[], name: string): { readonly owner: JsonRecord; readonly fn: UnknownFunction } | undefined {
   for (const value of values) {
     const found = methodOn(value, name)
     if (found) return found
@@ -165,7 +165,7 @@ function selectionName(selection: CharacterDisplaySelection | null | undefined):
   return stringValue(selection?.characterName)
 }
 
-function characterRecord(value: unknown): UnknownRecord | undefined {
+function characterRecord(value: unknown): JsonRecord | undefined {
   return isRecord(value) ? value : undefined
 }
 
@@ -226,7 +226,7 @@ function safeDestroy(handle: ComponentHandle | undefined): void {
   try { handle?.destroy?.() } catch { /* host teardown is best effort */ }
 }
 
-function safeUpdate(handle: ComponentHandle | undefined, props: UnknownRecord): void {
+function safeUpdate(handle: ComponentHandle | undefined, props: JsonRecord): void {
   try { handle?.update?.(props) } catch { /* stale host handles are ignored */ }
 }
 
@@ -276,7 +276,7 @@ export function createCharacterDisplayRuntime(options: CharacterDisplayRuntimeOp
     return candidates
   }
 
-  const findComponent = (name: ControlMethod): { readonly owner: UnknownRecord; readonly fn: UnknownFunction } | undefined => {
+  const findComponent = (name: ControlMethod): { readonly owner: JsonRecord; readonly fn: UnknownFunction } | undefined => {
     return firstMethod(componentCandidates(), name)
   }
 
@@ -398,7 +398,7 @@ export function createCharacterDisplayRuntime(options: CharacterDisplayRuntimeOp
     key: string,
     methodName: ControlMethod,
     target: HTMLElement,
-    props: UnknownRecord,
+    props: JsonRecord,
     fallback: () => ControlBinding,
   ): void => {
     const method = findComponent(methodName)
@@ -574,7 +574,7 @@ export function createCharacterDisplayRuntime(options: CharacterDisplayRuntimeOp
       setText(nodes.characterDetails, 'Character preview unavailable')
     }
   }
-  const gridProps = (): UnknownRecord => ({
+  const gridProps = (): JsonRecord => ({
     characters: thisChatCharacters.slice(0, 100),
     filterTab: settings.defaultFilter,
     sortField: settings.defaultSort,

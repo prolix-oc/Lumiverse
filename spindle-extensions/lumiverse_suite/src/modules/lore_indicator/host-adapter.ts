@@ -1,43 +1,9 @@
-import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
-
+import type { SuiteHostContext } from '../../suite'
 import type { LoreGeometryPort, LoreFloatPort, LoreOverlayPort } from './variants'
 import { clearLoreIndicatorNodes, markLoreIndicatorNode } from './mounts'
+import { asMount, readExtensionInstallationId } from '../../shared/public-sdk'
 
 type Dispose = () => void
-type UnknownRecord = Record<string, unknown>
-
-interface HostHandle {
-  root?: unknown
-  element?: unknown
-  destroy?: () => void
-  dispose?: () => void
-  activate?: () => void
-  setVisible?: (visible: boolean) => void
-  moveTo?: (x: number, y: number) => void
-  getPosition?: () => { x: number; y: number }
-  setSize?: (width: number, height: number) => void
-  onDragEnd?: (listener: (position: { x: number; y: number }) => void) => Dispose
-}
-
-interface HostUI {
-  mount?: (point: string) => unknown
-  registerDrawerTab?: (options: UnknownRecord) => HostHandle
-  registerSettingsTab?: (options: UnknownRecord) => HostHandle
-  createFloatWidget?: (options: UnknownRecord) => HostHandle
-  mountApp?: (options: UnknownRecord) => HostHandle
-  navigate?: (options: UnknownRecord) => unknown
-  openDrawerTab?: (tabId: string) => unknown
-  geometry?: UnknownRecord
-}
-
-interface HostEvents {
-  on?: (event: string, listener: (payload: unknown) => void) => unknown
-}
-
-interface RuntimeContext {
-  ui?: HostUI
-  events?: HostEvents
-}
 
 const EXTENSION_ROOT_ATTRIBUTE = 'data-spindle-extension-root'
 
@@ -70,31 +36,21 @@ export interface LoreHostAdapter {
   geometry: LoreGeometryPort
 }
 
-function runtimeContext(ctx: SpindleFrontendContext): RuntimeContext {
-  return ctx as unknown as RuntimeContext
+function elementFrom(value: unknown): HTMLElement | undefined {
+  if (value instanceof HTMLElement) return value
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as { root?: unknown; element?: unknown }
+  if (candidate.root instanceof HTMLElement) return candidate.root
+  if (candidate.element instanceof HTMLElement) return candidate.element
+  return undefined
 }
 
-function documentFor(ctx: SpindleFrontendContext): Document {
-  const value = (ctx as unknown as { document?: unknown }).document
-  return typeof Document !== 'undefined' && value instanceof Document ? value : document
-}
-
-function elementFrom(handle: HostHandle | undefined): HTMLElement | undefined {
-  const candidate = handle?.root ?? handle?.element
-  return candidate instanceof HTMLElement ? candidate : undefined
-}
-
-function destroyHandle(handle: HostHandle | undefined): void {
+function destroyHandle(handle: { destroy?: () => void; dispose?: () => void } | undefined): void {
   try {
     handle?.destroy?.()
   } finally {
     handle?.dispose?.()
   }
-}
-
-function installedExtensionUuid(ctx: SpindleFrontendContext): string | undefined {
-  const id = ctx.host.extensionInstallationId
-  return typeof id === 'string' && id.length > 0 ? id : undefined
 }
 
 function markOwnedNode(node: HTMLElement, extensionUuid: string | undefined, variant: string): HTMLElement {
@@ -105,38 +61,38 @@ function markOwnedNode(node: HTMLElement, extensionUuid: string | undefined, var
   return node
 }
 
-function ownedFallback(document: Document, parent: Element, variant: string, extensionUuid: string | undefined): HTMLElement {
-  const root = parent.appendChild(document.createElement('div'))
-  return markOwnedNode(root, extensionUuid, variant)
+type V2Geometry = {
+  layoutViewportSize?(): { width: number; height: number }
+  toLayoutPx?(value: number): number
+  layoutElementRect?(element: Element): { x?: number; y?: number; width?: number; height?: number } | null
 }
 
-function safeMount(ctx: SpindleFrontendContext, point: string): HTMLElement {
-  const ui = runtimeContext(ctx).ui
-  const mounted = ui?.mount?.(point)
+function safeMount(ctx: SuiteHostContext, point: string): HTMLElement {
+  const mounted = ctx.ui.mount(asMount(point))
   if (mounted instanceof HTMLElement) return mounted
-  return documentFor(ctx).body
+  throw new Error('LORE_INDICATOR_MOUNT_UNAVAILABLE')
 }
 
-function geometryFor(ctx: SpindleFrontendContext): LoreGeometryPort {
-  const ui = runtimeContext(ctx).ui
-  const geometry = ui?.geometry
-  const viewport = typeof geometry?.layoutViewportSize === 'function'
-    ? geometry.layoutViewportSize as () => { width: number; height: number }
-    : () => ({ width: 1280, height: 800 })
-  const rect = typeof geometry?.layoutElementRect === 'function'
-    ? geometry.layoutElementRect as (element: Element) => { x: number; y: number; width: number; height: number }
-    : () => ({ x: 0, y: 0, width: 72, height: 32 })
-  const toLayoutPx = typeof geometry?.toLayoutPx === 'function'
-    ? geometry.toLayoutPx as (value: number) => number
-    : (value: number) => value
+function geometryFor(ctx: SuiteHostContext): LoreGeometryPort {
+  const geometry = ctx.ui.geometry as V2Geometry | undefined
+  const viewport = () => geometry?.layoutViewportSize?.() ?? { width: 1280, height: 800 }
+  const rect = (element: Element) => {
+    try {
+      const measured = geometry?.layoutElementRect?.(element)
+      const x = typeof measured?.x === 'number' ? measured.x : 0
+      const y = typeof measured?.y === 'number' ? measured.y : 0
+      const width = typeof measured?.width === 'number' ? measured.width : 72
+      const height = typeof measured?.height === 'number' ? measured.height : 32
+      return { x, y, width, height }
+    } catch {
+      return { x: 0, y: 0, width: 72, height: 32 }
+    }
+  }
+  const toLayoutPx = (value: number) => geometry?.toLayoutPx?.(value) ?? value
   return {
     layoutViewportSize: viewport,
     layoutElementRect(element) {
-      try {
-        return rect(element)
-      } catch {
-        return { x: 0, y: 0, width: 72, height: 32 }
-      }
+      return rect(element)
     },
     layoutElementSize(element, fallback) {
       try {
@@ -153,88 +109,65 @@ function geometryFor(ctx: SpindleFrontendContext): LoreGeometryPort {
   }
 }
 
-export function createLoreHostAdapter(ctx: SpindleFrontendContext): LoreHostAdapter {
-  const runtime = runtimeContext(ctx)
-  const document = documentFor(ctx)
-  const extensionUuid = installedExtensionUuid(ctx)
+export function createLoreHostAdapter(ctx: SuiteHostContext): LoreHostAdapter {
+  const extensionUuid = readExtensionInstallationId(ctx)
   const geometry = geometryFor(ctx)
-
-  const register = (kind: 'drawer' | 'settings'): LoreDrawerRegistration | LoreSettingsRegistration => {
-    if (kind === 'settings') {
-      const root = document.createElement('div')
-      return { root, destroy: () => root.remove() }
-    }
-    const method = kind === 'drawer' ? runtime.ui?.registerDrawerTab : runtime.ui?.registerSettingsTab
-    const options: UnknownRecord = kind === 'drawer'
-      ? {
-          id: 'activated-lore',
-          title: 'Activated lore',
-          shortName: 'Lore',
-          description: 'Activated lore from the latest generation',
-          keywords: ['lore', 'activated', 'world info'],
-          order: 160,
-        }
-      : {
-          id: 'productivity',
-          title: 'UI Productivity',
-          shortName: 'Productivity',
-          description: 'Lore indicator controls',
-          keywords: ['lore', 'world info', 'indicator'],
-          order: 160,
-          sections: [{ key: 'loreIndicator', titleKey: 'settings.loreIndicator', titleFallback: 'Lore Indicator', keywords: ['lore', 'activated lore'] }],
-        }
-    let handle: HostHandle | undefined
-    try {
-      handle = method?.(options)
-    } catch {
-      handle = undefined
-    }
-    const root = elementFrom(handle) ?? ownedFallback(document, document.body, kind, extensionUuid)
-    markOwnedNode(root, extensionUuid, kind)
-    return {
-      root,
-      destroy() {
-        clearLoreIndicatorNodes(root, extensionUuid)
-        destroyHandle(handle)
-        if (!handle) root.remove()
-      },
-    }
-  }
 
   return {
     mount(point) {
       return safeMount(ctx, point)
     },
     registerDrawerTab() {
-      return register('drawer') as LoreDrawerRegistration
+      const handle = ctx.ui.registerDrawerTab({
+        id: 'activated-lore',
+        title: 'Activated lore',
+        shortName: 'Lore',
+        description: 'Activated lore from the latest generation',
+        keywords: ['lore', 'activated', 'world info'],
+      })
+      markOwnedNode(handle.root, extensionUuid, 'drawer')
+      return {
+        root: handle.root,
+        destroy() {
+          clearLoreIndicatorNodes(handle.root, extensionUuid)
+          handle.destroy()
+        },
+      }
     },
     registerSettingsTab() {
-      return register('settings') as LoreSettingsRegistration
+      const handle = ctx.ui.registerSettingsTab?.({
+        id: 'productivity',
+        title: 'UI Productivity',
+      })
+      if (!handle) throw new Error('LORE_INDICATOR_SETTINGS_TAB_UNAVAILABLE')
+      markOwnedNode(handle.root, extensionUuid, 'settings')
+      return {
+        root: handle.root,
+        destroy() {
+          clearLoreIndicatorNodes(handle.root, extensionUuid)
+          handle.destroy()
+        },
+      }
     },
     createFloat() {
-      let handle: HostHandle | undefined
+      let handle: ReturnType<SuiteHostContext['ui']['createFloatWidget']> | undefined
       try {
-        handle = runtime.ui?.createFloatWidget?.({
+        handle = ctx.ui.createFloatWidget({
           id: 'activated-lore',
-          key: 'lore_indicator_v2',
           title: 'Activated lore',
-          chromeless: true,
-          snapToEdge: false,
-          persistGeometry: 'lore_indicator_v2',
-          mobileClamp: false,
-        })
+        } as Parameters<SuiteHostContext['ui']['createFloatWidget']>[0])
       } catch {
         handle = undefined
       }
       const root = elementFrom(handle)
-      if (!root) return undefined
+      if (!root || !handle) return undefined
       markOwnedNode(root, extensionUuid, 'v2-compact')
       return {
         root,
-        getPosition: () => handle?.getPosition?.() ?? { x: 24, y: 24 },
-        moveTo: (x, y) => handle?.moveTo?.(x, y),
-        setSize: (width, height) => handle?.setSize?.(width, height),
-        onDragEnd: listener => handle?.onDragEnd?.(listener) ?? (() => undefined),
+        getPosition: () => ({ x: 24, y: 24 }),
+        moveTo: () => undefined,
+        setSize: () => undefined,
+        onDragEnd: () => () => undefined,
         destroy: () => {
           clearLoreIndicatorNodes(root, extensionUuid)
           destroyHandle(handle)
@@ -242,38 +175,25 @@ export function createLoreHostAdapter(ctx: SpindleFrontendContext): LoreHostAdap
       }
     },
     createOverlay() {
-      let handle: HostHandle | undefined
-      try {
-        handle = runtime.ui?.mountApp?.({ id: 'activated-lore-palette', position: 'app-overlay', chromeless: true })
-      } catch {
-        handle = undefined
-      }
-      const root = elementFrom(handle) ?? ownedFallback(document, document.body, 'v5-command-palette', extensionUuid)
-      markOwnedNode(root, extensionUuid, 'v5-command-palette')
+      const handle = ctx.ui.mountApp({ position: 'app-overlay' })
+      markOwnedNode(handle.root, extensionUuid, 'v5-command-palette')
       return {
-        root,
+        root: handle.root,
         setVisible: visible => {
-          root.hidden = !visible
-          handle?.setVisible?.(visible)
+          handle.root.hidden = !visible
         },
         destroy: () => {
-          clearLoreIndicatorNodes(root, extensionUuid)
-          destroyHandle(handle)
-          if (!handle) root.remove()
+          clearLoreIndicatorNodes(handle.root, extensionUuid)
+          handle.destroy()
         },
       }
     },
     subscribeActivation(listener) {
-      const subscribed = runtime.events?.on?.('WORLD_INFO_ACTIVATED', listener)
-      return typeof subscribed === 'function' ? subscribed as Dispose : () => undefined
+      return ctx.events.on('WORLD_INFO_ACTIVATED', listener)
     },
     openLorebook() {
       try {
-        if (typeof runtime.ui?.openDrawerTab === 'function') {
-          runtime.ui.openDrawerTab('lorebook')
-          return
-        }
-        runtime.ui?.navigate?.({ action: 'open_drawer_tab', tabId: 'lorebook' })
+        ctx.ui.requestTabLocation('lorebook', ctx.ui.getTabLocation('lorebook'))
       } catch {
         // Navigation is optional; the indicator remains usable without it.
       }

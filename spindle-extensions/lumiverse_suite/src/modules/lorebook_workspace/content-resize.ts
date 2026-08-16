@@ -1,3 +1,6 @@
+import type { ScopedHostRoot } from '../../shared/public-sdk'
+import { ownerDocumentOf } from '../../shared/public-sdk'
+
 const CONTENT_TEXTAREA_SELECTOR = '[data-world-book-entry-editor="true"][data-density="compact"] [data-world-book-identity-content="true"] [data-content-flex-region="true"] textarea'
 
 interface ContentResizeTrackingOptions {
@@ -46,12 +49,22 @@ function restoreTrackedTextarea(tracked: TrackedTextarea): void {
   tracked.wrapper.style.minHeight = tracked.previous.wrapperMinHeight
 }
 
+function ancestorMatching(start: HTMLElement, predicate: (node: HTMLElement) => boolean): HTMLElement | undefined {
+  let current: HTMLElement | null = start
+  while (current) {
+    if (predicate(current)) return current
+    current = current.parentElement
+  }
+  return undefined
+}
+
 export function installLorebookContentResizeTracking(
-  document: Document,
+  root: ScopedHostRoot,
   options: ContentResizeTrackingOptions = {},
 ): () => void {
-  const ResizeObserverConstructor = options.ResizeObserver ?? document.defaultView?.ResizeObserver
-  const MutationObserverConstructor = options.MutationObserver ?? document.defaultView?.MutationObserver
+  const view = ownerDocumentOf(root)?.defaultView
+  const ResizeObserverConstructor = options.ResizeObserver ?? view?.ResizeObserver
+  const MutationObserverConstructor = options.MutationObserver ?? view?.MutationObserver
   const layoutElementRect = options.layoutElementRect
   if (!ResizeObserverConstructor || !MutationObserverConstructor) return () => undefined
 
@@ -63,7 +76,7 @@ export function installLorebookContentResizeTracking(
     const hostHeight = layoutElementRect?.(element).height
     if (typeof hostHeight === 'number' && Number.isFinite(hostHeight) && hostHeight > 0) return hostHeight
     const rendered = element as HTMLElement
-    return typeof rendered.offsetHeight === 'number' ? rendered.offsetHeight : 0 // lumiverse-geometry-justification: fallback for hosts without the H6 geometry adapter.
+    return typeof rendered.offsetHeight === 'number' ? rendered.offsetHeight : 0
   }
 
   const textareaHeight = (textarea: HTMLTextAreaElement): number => {
@@ -75,8 +88,8 @@ export function installLorebookContentResizeTracking(
 
   const track = (textarea: HTMLTextAreaElement): void => {
     if (tracked.has(textarea)) return
-    const section = textarea.closest<HTMLElement>('[data-world-book-identity-content="true"]')
-    const field = textarea.closest<HTMLElement>('[data-content-flex-region="true"]')
+    const section = ancestorMatching(textarea, node => node.dataset.worldBookIdentityContent === 'true')
+    const field = ancestorMatching(textarea, node => node.dataset.contentFlexRegion === 'true')
     const wrapper = textarea.parentElement
     if (!section || !field || !wrapper) return
 
@@ -127,7 +140,7 @@ export function installLorebookContentResizeTracking(
     scanScheduled = false
     if (disposed) return
     const active = new Set(
-      document.querySelectorAll<HTMLTextAreaElement>(CONTENT_TEXTAREA_SELECTOR),
+      root.querySelectorAll<HTMLTextAreaElement>(CONTENT_TEXTAREA_SELECTOR),
     )
     for (const textarea of active) track(textarea)
     for (const [textarea, trackedTextarea] of tracked) {
@@ -155,7 +168,7 @@ export function installLorebookContentResizeTracking(
       trackedTextarea.applyHeight(textareaHeight(textarea))
     }
   })
-  mutationObserver.observe(document.documentElement, {
+  mutationObserver.observe(root, {
     attributes: true,
     attributeFilter: ['style'],
     childList: true,
@@ -167,7 +180,7 @@ export function installLorebookContentResizeTracking(
     if (disposed) return
     disposed = true
     mutationObserver.disconnect()
-    for (const [textarea, trackedTextarea] of tracked) {
+    for (const [, trackedTextarea] of tracked) {
       restoreTrackedTextarea(trackedTextarea)
     }
     tracked.clear()

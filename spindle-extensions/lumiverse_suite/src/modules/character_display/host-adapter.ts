@@ -6,7 +6,7 @@ import type {
   CharacterDisplaySelection,
 } from './types'
 
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 type Dispose = () => void
 type UnknownFunction = (...args: unknown[]) => unknown
 
@@ -20,7 +20,7 @@ interface StructuralStatePort {
 }
 
 interface StructuralUI {
-  mount?: UnknownFunction
+  mount?(point: string): unknown
   registerSettingsTab?: UnknownFunction
   navigate?: UnknownFunction
   openCharacter?: UnknownFunction
@@ -142,7 +142,7 @@ const EXTENSION_IDENTIFIER = 'lumiverse_suite'
 const MODULE_ID = 'character_display'
 const NOOP: Dispose = () => undefined
 
-function isRecord(value: unknown): value is UnknownRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -170,7 +170,7 @@ function id(value: unknown): string | undefined {
   return text(value, 256)
 }
 
-function valueAt(source: UnknownRecord | undefined, keys: readonly string[]): unknown {
+function valueAt(source: JsonRecord | undefined, keys: readonly string[]): unknown {
   if (!source) return undefined
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(source, key)) return source[key]
@@ -178,13 +178,13 @@ function valueAt(source: UnknownRecord | undefined, keys: readonly string[]): un
   return undefined
 }
 
-function textAt(source: UnknownRecord | undefined, keys: readonly string[], maxLength = 4096): string | undefined {
+function textAt(source: JsonRecord | undefined, keys: readonly string[], maxLength = 4096): string | undefined {
   return text(valueAt(source, keys), maxLength)
 }
 
 function elementLike(value: unknown): value is HTMLElement {
   if (!value || typeof value !== 'object') return false
-  const candidate = value as UnknownRecord
+  const candidate = value as JsonRecord
   return candidate.nodeType === 1
     || typeof candidate.append === 'function'
     || typeof candidate.appendChild === 'function'
@@ -326,7 +326,7 @@ function normalizeChats(value: unknown, limit?: number): readonly CharacterDispl
   return normalized
 }
 
-function responseOkay(response: UnknownRecord): boolean {
+function responseOkay(response: JsonRecord): boolean {
   if (response.ok === false) return false
   const status = finite(response.status)
   return status === undefined || status >= 200 && status < 300
@@ -367,7 +367,7 @@ function cloneJsonSafe(value: unknown): unknown | undefined {
   }
 }
 
-function activeChatRecord(value: unknown): UnknownRecord | undefined {
+function activeChatRecord(value: unknown): JsonRecord | undefined {
   let candidate = value
   for (let depth = 0; depth < 4; depth += 1) {
     if (!isRecord(candidate)) return undefined
@@ -552,7 +552,7 @@ function readActiveValue(ctx: CharacterDisplayRuntimeContext): unknown {
       // Optional host surface.
     }
   }
-  return valueAt(ctx as unknown as UnknownRecord, ['activeCharacterId', 'active_character_id'])
+  return valueAt(isRecord(ctx) ? ctx : undefined, ['activeCharacterId', 'active_character_id'])
 }
 
 function subscribePort(
@@ -612,8 +612,13 @@ function navigationFallback(
   return undefined
 }
 
+function toCharacterDisplayRuntime(ctx: SuiteHostContext): CharacterDisplayRuntimeContext {
+  const runtime: unknown = ctx
+  return runtime as CharacterDisplayRuntimeContext
+}
+
 export function createCharacterDisplayHostAdapter(ctx: SuiteHostContext): CharacterDisplayHostAdapter {
-  const runtime = ctx as unknown as CharacterDisplayRuntimeContext
+  const runtime = toCharacterDisplayRuntime(ctx)
   const extensionUuid = installedExtensionUuid(runtime)
   let worldBookCache: readonly CharacterDisplayWorldBookSummary[] | undefined
   let worldBookSweepPromise: Promise<readonly CharacterDisplayWorldBookSummary[]> | undefined
@@ -682,7 +687,7 @@ export function createCharacterDisplayHostAdapter(ctx: SuiteHostContext): Charac
     if ([filterTab, sortField, sortDirection, viewMode].some(value => value === undefined)) return
     throwIfAborted(signal)
     const runtimeFetcher = method(runtime, 'fetch')
-    const globalFetcher = asFunction((globalThis as unknown as UnknownRecord).fetch)
+    const globalFetcher = asFunction((globalThis as { fetch?: unknown }).fetch)
     const fetcher = runtimeFetcher ?? globalFetcher
     if (!fetcher) return
     const owner = runtimeFetcher ? runtime : globalThis
@@ -722,7 +727,7 @@ export function createCharacterDisplayHostAdapter(ctx: SuiteHostContext): Charac
     const chatId = activeChatId(activeSelector)
     if (!chatId) return []
     const runtimeFetcher = method(runtime, 'fetch')
-    const globalFetcher = asFunction((globalThis as unknown as UnknownRecord).fetch)
+    const globalFetcher = asFunction((globalThis as { fetch?: unknown }).fetch)
     const fetcher = runtimeFetcher ?? globalFetcher
     if (!fetcher) return []
     const owner = runtimeFetcher ? runtime : globalThis
@@ -793,7 +798,7 @@ export function createCharacterDisplayHostAdapter(ctx: SuiteHostContext): Charac
         }
       } else {
         const runtimeFetcher = method(runtime, 'fetch')
-        const globalFetcher = asFunction((globalThis as unknown as UnknownRecord).fetch)
+        const globalFetcher = asFunction((globalThis as { fetch?: unknown }).fetch)
         const fetcher = runtimeFetcher ?? globalFetcher
         if (!fetcher) return []
         const owner = runtimeFetcher ? runtime : globalThis
@@ -855,7 +860,7 @@ export function createCharacterDisplayHostAdapter(ctx: SuiteHostContext): Charac
     }
 
     const runtimeFetcher = method(runtime, 'fetch')
-    const globalFetcher = asFunction((globalThis as unknown as UnknownRecord).fetch)
+    const globalFetcher = asFunction((globalThis as { fetch?: unknown }).fetch)
     const fetcher = runtimeFetcher ?? globalFetcher
     if (!fetcher || signal?.aborted) return []
     const owner = runtimeFetcher ? runtime : globalThis

@@ -103,7 +103,7 @@ export interface PortraitDockHostAdapter {
   registerSettings(render: (root: HTMLElement) => void | (() => void) | { destroy(): void }): () => void
 }
 
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 type Dispose = () => void
 
 const HANDLE_NAMES = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as const
@@ -114,7 +114,7 @@ const DEFAULT_MAX_WIDTH = 720
 const DEFAULT_MAX_HEIGHT = 900
 const noop: Dispose = () => undefined
 
-function isRecord(value: unknown): value is UnknownRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -138,7 +138,7 @@ function text(value: unknown): string | undefined {
   return candidate.length > 0 && candidate.length <= 4096 ? candidate : undefined
 }
 
-function valueAt(source: UnknownRecord | undefined, keys: readonly string[]): unknown {
+function valueAt(source: JsonRecord | undefined, keys: readonly string[]): unknown {
   if (!source) return undefined
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(source, key)) return source[key]
@@ -146,15 +146,15 @@ function valueAt(source: UnknownRecord | undefined, keys: readonly string[]): un
   return undefined
 }
 
-function textAt(source: UnknownRecord | undefined, keys: readonly string[]): string | undefined {
+function textAt(source: JsonRecord | undefined, keys: readonly string[]): string | undefined {
   return text(valueAt(source, keys))
 }
 
-function idAt(source: UnknownRecord | undefined, keys: readonly string[]): string | null {
+function idAt(source: JsonRecord | undefined, keys: readonly string[]): string | null {
   return textAt(source, keys) ?? null
 }
 
-function unwrapRecord(value: unknown, keys: readonly string[]): UnknownRecord | undefined {
+function unwrapRecord(value: unknown, keys: readonly string[]): JsonRecord | undefined {
   if (!isRecord(value)) return undefined
   for (const key of keys) {
     const nested = value[key]
@@ -184,7 +184,7 @@ function normalizeAvatarChanged(value: unknown): PortraitAvatarChanged {
   }
 }
 
-function normalizedNumber(source: UnknownRecord | undefined, keys: readonly string[], fallback: number): number {
+function normalizedNumber(source: JsonRecord | undefined, keys: readonly string[], fallback: number): number {
   const candidate = finite(valueAt(source, keys))
   return candidate === undefined ? fallback : Math.max(0, candidate)
 }
@@ -242,7 +242,7 @@ function normalizeMode(value: unknown): PortraitDockMode {
 
 function isElementLike(value: unknown): value is HTMLElement {
   if (!value || typeof value !== 'object') return false
-  const candidate = value as UnknownRecord
+  const candidate = value as JsonRecord
   return candidate.nodeType === 1
     || typeof candidate.appendChild === 'function'
     || typeof candidate.append === 'function'
@@ -259,13 +259,9 @@ function documentLike(value: unknown): value is Document {
   return isRecord(value) && typeof value.createElement === 'function'
 }
 
-function documentFor(ctx: PortraitDockHostContract, owner?: HTMLElement): Document | undefined {
-  const contextDocument = isRecord(ctx) ? valueAt(ctx, ['document']) : undefined
-  if (documentLike(contextDocument)) return contextDocument
+function documentFor(_ctx: PortraitDockHostContract, owner?: HTMLElement): Document | undefined {
   const ownerDocument = owner?.ownerDocument
-  if (documentLike(ownerDocument)) return ownerDocument
-  const globalDocument = isRecord(globalThis) ? valueAt(globalThis, ['document']) : undefined
-  return documentLike(globalDocument) ? globalDocument : undefined
+  return documentLike(ownerDocument) ? ownerDocument : undefined
 }
 
 function attribute(element: HTMLElement, name: string): string | undefined {
@@ -407,7 +403,7 @@ function imageUrl(imageId: string): string {
   return `/api/v1/images/${encodeURIComponent(imageId)}`
 }
 
-function characterRecord(value: unknown): UnknownRecord | undefined {
+function characterRecord(value: unknown): JsonRecord | undefined {
   const direct = unwrapRecord(value, ['character'])
   if (!direct) return undefined
   if (isRecord(direct.data)) {
@@ -417,7 +413,7 @@ function characterRecord(value: unknown): UnknownRecord | undefined {
   return direct
 }
 
-function sourceImage(character: UnknownRecord, active: PortraitActiveState): { id: string; source: string } | null {
+function sourceImage(character: JsonRecord, active: PortraitActiveState): { id: string; source: string } | null {
   if (active.avatarImageId) {
     const extensions = isRecord(character.extensions) ? character.extensions : undefined
     const alternates = Array.isArray(extensions?.alternate_avatars)
@@ -538,10 +534,7 @@ function layoutElementRect(
 }
 
 function eventElement(value: EventTarget | null): Element | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const candidate = value as unknown as UnknownRecord
-  if (candidate.nodeType !== 1) return undefined
-  return value as unknown as Element
+  return value instanceof Element ? value : undefined
 }
 
 function hasClass(element: Element, name: string): boolean {
@@ -931,16 +924,7 @@ export function createPortraitDockHostAdapter(ctx: PortraitDockHostContract): Po
         try { root.style.setProperty(reclaimProperty, `${Math.max(0, reclaim)}px`) } catch { /* Optional style surface. */ }
       }
       if (sideLayout) {
-        const ResizeObserverCtor = (globalThis as unknown as { ResizeObserver?: ResizeObserverConstructorLike }).ResizeObserver
-        if (ResizeObserverCtor) {
-          try {
-            const observer = new ResizeObserverCtor(applyReclaim)
-            observer.observe(sideLayout.body)
-            observer.observe(sideLayout.chatInner)
-            observer.observe(root)
-            cleanup.push(once(() => observer.disconnect()))
-          } catch { /* ResizeObserver is optional on older hosts. */ }
-        }
+        cleanup.push(subscribeSelector(ctx, 'ui.layout', () => applyReclaim()))
       }
       applyReclaim()
       cleanup.push(once(() => {

@@ -1,11 +1,16 @@
-import type { SuiteModule, SuiteModuleContext } from '../../suite'
+import type { SuiteHostContext, SuiteModule, SuiteModuleContext } from '../../suite'
 import { buildSettingPath, requireSuiteSettings, type SuiteSettingsAPI } from '../../shared/settings'
+import {
+  bookIdFromScopedRow,
+  ownerDocumentOf,
+  readExtensionInstallationId,
+  type ScopedHostRoot,
+} from '../../shared/public-sdk'
 import type { LorebookTokenCountUpdatedPayload } from './types'
 
 const MODULE_ID = 'lorebook_token_counts' as const
 export const LOREBOOK_TOKEN_COUNTS_ENABLED_KEY = buildSettingPath(MODULE_ID, 'enabled')
-const ROW_SELECTOR = '[data-world-book-entry-row]'
-const BOOK_SELECTOR = '[data-world-book-entries-book-id]'
+const ROW_DECORATOR_TARGET = '[data-world-book-entry-row]'
 const BADGE_SELECTOR = '[data-lumiverse-token-count-badge]'
 const NATIVE_CELL_SELECTOR = '[data-world-book-token-cell]'
 const MAX_BATCH_SIZE = 64
@@ -17,7 +22,7 @@ const MODULE_STYLES = String.raw`
 [data-lumiverse-module="lorebook_token_counts"][data-state="error"]{color:var(--lumiverse-danger,#dc4c64)}
 `
 
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 
 interface EntrySnapshot {
   readonly id: string
@@ -33,7 +38,7 @@ interface CountResult {
   readonly model?: string
 }
 interface CountItem {
-  readonly row: HTMLElement
+  readonly row: ScopedHostRoot
   readonly badge: HTMLElement
   readonly bookId: string
   readonly entry: EntrySnapshot
@@ -55,8 +60,14 @@ interface CachedCount {
   readonly result: CountResult
 }
 
+interface DecoratedRow {
+  readonly row: ScopedHostRoot
+  readonly bookId: string
+  readonly entryId: string
+}
 
-function isRecord(value: unknown): value is UnknownRecord {
+
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -94,18 +105,6 @@ function countResult(value: unknown): CountResult | undefined {
     model: nonEmptyString(value.model),
   }
 }
-function countBatchResults(value: unknown, expectedLength: number): CountResult[] | undefined {
-  const values = Array.isArray(value)
-    ? value
-    : isRecord(value) && Array.isArray(value.results)
-      ? value.results
-      : expectedLength === 1
-        ? [value]
-        : undefined
-  if (!values || values.length !== expectedLength) return undefined
-  const results = values.map(countResult)
-  return results.every((result): result is CountResult => result !== undefined) ? results : undefined
-}
 
 function fnv1a32(text: string): string {
   let hash = 0x811c9dc5
@@ -116,23 +115,11 @@ function fnv1a32(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-function extensionUuid(context: SuiteModuleContext): string | undefined {
-  const host = context.host as unknown as UnknownRecord
-  const descriptor = isRecord(host.host) ? host.host : host
-  return nonEmptyString(descriptor.extensionInstallationId)
-}
-
 function ownedBadge(node: Element, uuid: string | undefined): node is HTMLElement {
   const element = node as HTMLElement
   if (!uuid) return element.getAttribute('data-lumiverse-module') === MODULE_ID
   return element.getAttribute('data-spindle-extension-root') === uuid
     || element.getAttribute('data-spindle-ext') === uuid
-}
-
-function removeOwnedBadges(doc: Document, uuid: string | undefined): void {
-  doc.querySelectorAll(BADGE_SELECTOR).forEach((node) => {
-    if (ownedBadge(node, uuid)) node.remove()
-  })
 }
 
 function renderBadge(badge: HTMLElement, result: CountResult): void {
@@ -143,6 +130,11 @@ function renderBadge(badge: HTMLElement, result: CountResult): void {
   badge.setAttribute('aria-label', `${result.approximate ? 'Approximately ' : ''}${result.count.toLocaleString()} tokens`)
 }
 
+async function listBookEntries(host: SuiteHostContext, bookId: string): Promise<readonly unknown[]> {
+  const listed = await host.worldBooks?.entries.list(bookId)
+  return listed?.data ?? []
+}
+
 export function createLorebookTokenCountsModule(): SuiteModule {
   let context: SuiteModuleContext | undefined
   let settings: SuiteSettingsAPI | undefined
@@ -150,42 +142,41 @@ export function createLorebookTokenCountsModule(): SuiteModule {
   let enabled = true
   let generation = 0
   let reconcileSerial = 0
-  let observer: MutationObserver | undefined
+  let decoratorHandle: { destroy(): void } | undefined
   let stopSettingsWatch: (() => void) | undefined
   let stopCountUpdates: (() => void) | undefined
   let reconcileQueued = false
   let stylesActive = false
+  const decoratedRows = new Map<ScopedHostRoot, DecoratedRow>()
   const activeCounts = new Map<string, Promise<CountResult>>()
   const cachedCounts = new Map<string, CachedCount>()
   const latestVersions = new Map<string, { readonly version: string; readonly serial: number }>()
-
-  const currentDocument = (): Document | undefined => {
-    if (typeof document !== 'undefined') return document
-    return undefined
-  }
 
   const isCurrent = (expected: number): boolean => running && enabled && generation === expected
   const countIdentity = (bookId: string, entryId: string): string => `${bookId}:${entryId}`
 
   const updateFromBus = (payload: LorebookTokenCountUpdatedPayload): void => {
-    const doc = currentDocument()
-    if (!doc || !running || !enabled) return
-    doc.querySelectorAll<HTMLElement>(BADGE_SELECTOR).forEach((badge) => {
-      if (badge.dataset.bookId !== payload.bookId || badge.dataset.entryId !== payload.entryId) return
+    if (!running || !enabled) return
+    for (const decorated of decoratedRows.values()) {
+      if (decorated.bookId !== payload.bookId || decorated.entryId !== payload.entryId) continue
+      const badge = decorated.row.querySelector<HTMLElement>(BADGE_SELECTOR)
+      if (!badge) continue
       renderBadge(badge, payload)
       const version = badge.dataset.fingerprint
       if (version) cachedCounts.set(countIdentity(payload.bookId, payload.entryId), { version, result: payload })
-    })
+    }
   }
 
-  const ensureBadge = (row: HTMLElement, bookId: string, entryId: string, uuid: string | undefined): HTMLElement => {
+  const ensureBadge = (row: ScopedHostRoot, bookId: string, entryId: string, uuid: string | undefined): HTMLElement => {
     const existing = row.querySelector<HTMLElement>(BADGE_SELECTOR)
     if (existing && ownedBadge(existing, uuid)) {
       existing.dataset.bookId = bookId
       existing.dataset.entryId = entryId
       return existing
     }
-    const badge = row.ownerDocument.createElement('span')
+    const doc = ownerDocumentOf(row)
+    if (!doc) throw new Error('TOKEN_COUNT_OWNER_DOCUMENT_UNAVAILABLE')
+    const badge = doc.createElement('span')
     badge.dataset.lumiverseTokenCountBadge = 'true'
     badge.dataset.lumiverseModule = MODULE_ID
     badge.dataset.bookId = bookId
@@ -272,30 +263,26 @@ export function createLorebookTokenCountsModule(): SuiteModule {
   }
 
   const reconcile = async (expected: number, serial: number): Promise<void> => {
-    const doc = currentDocument()
     const activeContext = context
-    if (!doc || !activeContext || !isCurrent(expected)) return
-    const groups = new Map<string, HTMLElement[]>()
-    const uuid = extensionUuid(activeContext)
-    doc.querySelectorAll<HTMLElement>(ROW_SELECTOR).forEach((row) => {
-      const owned = row.querySelector<HTMLElement>(BADGE_SELECTOR)
-      if (row.querySelector(NATIVE_CELL_SELECTOR)) {
+    if (!activeContext || !isCurrent(expected)) return
+    const groups = new Map<string, DecoratedRow[]>()
+    const uuid = readExtensionInstallationId(activeContext.host)
+    for (const decorated of decoratedRows.values()) {
+      const native = decorated.row.querySelector(NATIVE_CELL_SELECTOR)
+      const owned = decorated.row.querySelector<HTMLElement>(BADGE_SELECTOR)
+      if (native) {
         if (owned && ownedBadge(owned, uuid)) owned.remove()
-        return
+        continue
       }
-      const entryId = row.dataset.worldBookEntryRow
-      const bookRoot = row.closest<HTMLElement>(BOOK_SELECTOR)
-      const bookId = bookRoot?.dataset.worldBookEntriesBookId
-      if (!entryId || !bookId) return
-      const rows = groups.get(bookId) ?? []
-      rows.push(row)
-      groups.set(bookId, rows)
-    })
+      const rows = groups.get(decorated.bookId) ?? []
+      rows.push(decorated)
+      groups.set(decorated.bookId, rows)
+    }
 
     for (const [bookId, rows] of groups) {
       let values: readonly unknown[]
       try {
-        values = await activeContext.host.worldBooks.entries(bookId)
+        values = await listBookEntries(activeContext.host, bookId)
       } catch {
         continue
       }
@@ -307,14 +294,13 @@ export function createLorebookTokenCountsModule(): SuiteModule {
       }
 
       const workItems = new Map<string, CountWork>()
-      for (const row of rows) {
-        if (!isCurrent(expected) || !row.isConnected) continue
-        const entryId = row.dataset.worldBookEntryRow
-        const entry = entryId ? entries.get(entryId) : undefined
-        if (!entry || !entryId) continue
-        const badge = ensureBadge(row, bookId, entry.id, uuid)
+      for (const decorated of rows) {
+        if (!isCurrent(expected) || !decorated.row.isConnected) continue
+        const entry = entries.get(decorated.entryId)
+        if (!entry) continue
+        const badge = ensureBadge(decorated.row, bookId, entry.id, uuid)
         const identity = countIdentity(bookId, entry.id)
-        const version = entryVersion(entry, row.dataset.worldBookEntryRevision)
+        const version = entryVersion(entry, decorated.row.dataset.worldBookEntryRevision)
         const workKey = `${identity}:${version}`
         const latest = latestVersions.get(identity)
         if (!latest || serial >= latest.serial) latestVersions.set(identity, { version, serial })
@@ -330,7 +316,7 @@ export function createLorebookTokenCountsModule(): SuiteModule {
         }
 
         const existing = activeCounts.get(workKey)
-        const item: CountItem = { row, badge, bookId, entry, version }
+        const item: CountItem = { row: decorated.row, badge, bookId, entry, version }
         if (existing) {
           attachWork(existing, item, activeContext, expected, false)
           continue
@@ -355,22 +341,21 @@ export function createLorebookTokenCountsModule(): SuiteModule {
       }
 
       const pending = [...workItems.values()]
+      const tokens = activeContext.host.tokens
       for (let offset = 0; offset < pending.length; offset += MAX_BATCH_SIZE) {
-        if (!isCurrent(expected)) {
+        if (!isCurrent(expected) || !tokens) {
           for (const work of pending.slice(offset)) work.reject(new Error('TOKEN_COUNT_STALE'))
           return
         }
         const batch = pending.slice(offset, offset + MAX_BATCH_SIZE)
         try {
-          const raw = await activeContext.host.tokens.countTextBatch(batch.map((work) => work.text))
+          const rawResults = await Promise.all(batch.map(work => tokens.countText(work.text)))
           if (!isCurrent(expected)) {
             for (const work of batch) work.reject(new Error('TOKEN_COUNT_STALE'))
             return
           }
-          const results = countBatchResults(raw, batch.length)
-          if (!results) throw new Error('TOKEN_COUNT_UNAVAILABLE')
           batch.forEach((work, index) => {
-            const result = results[index]
+            const result = countResult(rawResults[index])
             if (!result) {
               work.reject(new Error('TOKEN_COUNT_UNAVAILABLE'))
               return
@@ -404,16 +389,51 @@ export function createLorebookTokenCountsModule(): SuiteModule {
     })
   }
 
+  const decorateRow = (element: HTMLElement): void | (() => void) => {
+    const row = element
+    const entryId = row.dataset.worldBookEntryRow
+    const bookId = bookIdFromScopedRow(row)
+    if (!entryId || !bookId) return
+    decoratedRows.set(row, { row, bookId, entryId })
+    const view = ownerDocumentOf(row)?.defaultView
+    const Observer = view?.MutationObserver
+    const observer = Observer
+      ? new Observer(() => {
+          const nextId = row.dataset.worldBookEntryRow
+          const nextBook = bookIdFromScopedRow(row)
+          if (nextId && nextBook) decoratedRows.set(row, { row, bookId: nextBook, entryId: nextId })
+          scheduleReconcile()
+        })
+      : undefined
+    observer?.observe(row, {
+      attributes: true,
+      attributeFilter: ['data-world-book-entry-row', 'data-world-book-entry-revision'],
+      childList: true,
+    })
+    scheduleReconcile()
+    return () => {
+      observer?.disconnect()
+      const badge = row.querySelector<HTMLElement>(BADGE_SELECTOR)
+      const uuid = context ? readExtensionInstallationId(context.host) : undefined
+      if (badge && ownedBadge(badge, uuid)) badge.remove()
+      decoratedRows.delete(row)
+    }
+  }
+
   const deactivate = (): void => {
     generation += 1
     reconcileSerial += 1
     reconcileQueued = false
-    observer?.disconnect()
-    observer = undefined
+    decoratorHandle?.destroy()
+    decoratorHandle = undefined
+    for (const decorated of [...decoratedRows.values()]) {
+      const badge = decorated.row.querySelector<HTMLElement>(BADGE_SELECTOR)
+      const uuid = context ? readExtensionInstallationId(context.host) : undefined
+      if (badge && ownedBadge(badge, uuid)) badge.remove()
+    }
+    decoratedRows.clear()
     activeCounts.clear()
     latestVersions.clear()
-    const doc = currentDocument()
-    if (doc && context) removeOwnedBadges(doc, extensionUuid(context))
     if (stylesActive) {
       context?.styles.clear()
       stylesActive = false
@@ -421,31 +441,18 @@ export function createLorebookTokenCountsModule(): SuiteModule {
   }
 
   const activate = (): void => {
-    const doc = currentDocument()
     const activeContext = context
-    if (!doc || !activeContext || observer || !running || !enabled) return
+    if (!activeContext || decoratorHandle || !running || !enabled) return
     generation += 1
     if (!stylesActive) {
       activeContext.styles.add(MODULE_STYLES, { scope: 'global' })
       stylesActive = true
     }
-    const Observer = doc.defaultView?.MutationObserver ?? globalThis.MutationObserver
-    const uuid = extensionUuid(activeContext)
-    observer = new Observer((records) => {
-      const relevant = records.some((record) => {
-        if (record.type === 'attributes') return true
-        if (record.target.nodeType === 1 && ownedBadge(record.target as Element, uuid)) return false
-        return [...record.addedNodes, ...record.removedNodes].some((node) => (
-          node.nodeType !== 1 || !ownedBadge(node as Element, uuid)
-        ))
-      })
-      if (relevant) scheduleReconcile()
-    })
-    observer.observe(doc.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['data-world-book-entry-row', 'data-world-book-entry-revision', 'data-world-book-entries-book-id'],
+    const register = activeContext.host.registerDomDecorator
+    if (typeof register !== 'function') return
+    decoratorHandle = register({
+      target: ROW_DECORATOR_TARGET,
+      decorate: decorateRow,
     })
     scheduleReconcile()
   }

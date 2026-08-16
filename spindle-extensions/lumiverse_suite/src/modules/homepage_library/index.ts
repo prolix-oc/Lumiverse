@@ -1,6 +1,13 @@
 import type { SuiteModule, SuiteModuleContext } from '../../suite'
 import { requireSuiteSettings, type SuiteSettingsAPI } from '../../shared/settings'
 import {
+  asMount,
+  ownerDocumentOf,
+  readExtensionInstallationId,
+  requireScopedHostRoot,
+  type ScopedHostRoot,
+} from '../../shared/public-sdk'
+import {
   defaultHomepageLibrarySettings,
   HOMEPAGE_LIBRARY_MODULE_ID,
   HOMEPAGE_LIBRARY_SETTINGS_KEY,
@@ -13,6 +20,10 @@ const MODULE_ID = HOMEPAGE_LIBRARY_MODULE_ID
 const CORE_SETTINGS_KEY = 'homepageCharacterLibrarySettings'
 const LANDING_MOUNT_POINT = 'landing_characters'
 const SURFACE_ID = 'homepage_character_library'
+const STALE_ROOT_SELECTORS = [
+  '[data-homepage-character-library-root="true"][data-spindle-ext-id="lumiverse_suite"]',
+  '[data-homepage-library-root="true"][data-spindle-ext-id="lumiverse_suite"]',
+] as const
 type Dispose = () => void
 
 function dispose(value: unknown): Dispose {
@@ -26,6 +37,12 @@ function dispose(value: unknown): Dispose {
 function isUnknownCoreError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return message === 'CORE_SETTING_UNKNOWN' || message.startsWith('CORE_SETTING_UNKNOWN:')
+}
+
+function clearStaleRoots(anchor: ScopedHostRoot): void {
+  for (const selector of STALE_ROOT_SELECTORS) {
+    for (const staleRoot of [...anchor.querySelectorAll<HTMLElement>(selector)]) staleRoot.remove()
+  }
 }
 
 export function createHomepageLibraryModule(): SuiteModule {
@@ -50,37 +67,29 @@ export function createHomepageLibraryModule(): SuiteModule {
 
   const mountPresentation = (): void => {
     if (!running || root || !context) return
-    const host = context.host as typeof context.host & {
-      ui?: { mount?: (point: string) => unknown }
-      components?: { mountHostSurface?: (target: HTMLElement, id: string, props?: Record<string, unknown>) => { destroy(): void } }
+    const host = context.host
+    let anchor: ScopedHostRoot
+    try {
+      anchor = requireScopedHostRoot(host.ui.mount(asMount(LANDING_MOUNT_POINT)), 'HOMEPAGE_LIBRARY_MOUNT_UNAVAILABLE')
+    } catch {
+      return
     }
-    const anchor = host.ui?.mount?.(LANDING_MOUNT_POINT)
-    if (!anchor || typeof (anchor as { append?: unknown }).append !== 'function') return
-    if (typeof (anchor as { querySelectorAll?: unknown }).querySelectorAll === 'function') {
-      const parent = anchor as unknown as ParentNode
-      for (const selector of [
-        '[data-homepage-character-library-root="true"][data-spindle-ext-id="lumiverse_suite"]',
-        '[data-homepage-library-root="true"][data-spindle-ext-id="lumiverse_suite"]',
-      ]) {
-        parent.querySelectorAll<HTMLElement>(selector).forEach(staleRoot => staleRoot.remove())
-      }
-    }
+    clearStaleRoots(anchor)
     if (!current.enabled) return
-    const mount = host.components?.mountHostSurface
+    const mount = host.components.mountHostSurface
     if (typeof mount !== 'function') return
-    const descriptor = (host as unknown as { host?: { extensionInstallationId?: string } }).host ?? host
-    const installedUuid = (descriptor as { extensionInstallationId?: string }).extensionInstallationId
-    const doc = (host as unknown as { document?: Document }).document ?? globalThis.document
+    const doc = ownerDocumentOf(anchor)
     if (!doc) return
     const nextRoot = doc.createElement('section')
     nextRoot.dataset.lumiverseModule = MODULE_ID
     nextRoot.dataset.homepageCharacterLibraryRoot = 'true'
     nextRoot.setAttribute('data-spindle-ext-id', 'lumiverse_suite')
+    const installedUuid = readExtensionInstallationId(host)
     if (installedUuid) {
       nextRoot.setAttribute('data-spindle-extension-root', installedUuid)
       nextRoot.setAttribute('data-spindle-ext', installedUuid)
     }
-    ;(anchor as unknown as { append(node: HTMLElement): void }).append(nextRoot)
+    anchor.append(nextRoot)
     try {
       const handle = mount(nextRoot, SURFACE_ID, {})
       if (!handle) {
@@ -108,11 +117,10 @@ export function createHomepageLibraryModule(): SuiteModule {
   }
 
   const loadSettings = async (api: SuiteSettingsAPI): Promise<HomepageLibrarySettings> => {
-    const core = (api as unknown as { core?: { get?: <T>(key: string) => T | undefined } }).core
-    privateFallback = typeof core?.get !== 'function'
+    privateFallback = typeof api.core?.get !== 'function'
     if (!privateFallback) {
       try {
-        return normalizeHomepageLibrarySettings(core!.get!(CORE_SETTINGS_KEY))
+        return normalizeHomepageLibrarySettings(api.core.get(CORE_SETTINGS_KEY))
       } catch (error) {
         if (!isUnknownCoreError(error)) throw error
         privateFallback = true
@@ -145,9 +153,8 @@ export function createHomepageLibraryModule(): SuiteModule {
             if (running) applySettings(value)
           }))
         } else {
-          const core = (api as unknown as { core?: { watch?: <T>(key: string, listener: (value: T) => void) => () => void } }).core
-          if (typeof core?.watch !== 'function') throw new Error('CORE_SETTINGS_WATCH_UNAVAILABLE')
-          stopCanonicalWatch = dispose(core.watch<unknown>(CORE_SETTINGS_KEY, value => {
+          if (typeof api.core.watch !== 'function') throw new Error('CORE_SETTINGS_WATCH_UNAVAILABLE')
+          stopCanonicalWatch = dispose(api.core.watch<unknown>(CORE_SETTINGS_KEY, value => {
             if (running) applySettings(value)
           }))
         }

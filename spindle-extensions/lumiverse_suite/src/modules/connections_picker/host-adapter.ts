@@ -143,7 +143,7 @@ export function createConnectionsPickerHostAdapter(ctx: ConnectionsPickerHostCon
       let mount: Element | undefined
       try { mount = ctx.ui?.mount?.('chat_surface_side') } catch { mount = undefined }
       if (!(mount instanceof HTMLElement)) return undefined
-      const root = document.createElement('section')
+      const root = mount.ownerDocument.createElement('section')
       mount.append(root)
       const disposeResize = disposer(ctx.ui?.geometry?.createResizeController(root, { onCommit }))
       return { root, destroy: () => { disposeResize(); root.remove() } }
@@ -151,7 +151,7 @@ export function createConnectionsPickerHostAdapter(ctx: ConnectionsPickerHostCon
     registerLauncher(onInvoke) {
       const mount = ctx.ui?.mount?.('chat_actions')
       if (!(mount instanceof HTMLElement)) return noop
-      const button = document.createElement('button')
+      const button = mount.ownerDocument.createElement('button')
       button.type = 'button'
       button.setAttribute('aria-label', 'Open connections picker')
       button.dataset.lumiverseModule = 'connections_picker'
@@ -176,18 +176,19 @@ export function createConnectionsPickerHostAdapter(ctx: ConnectionsPickerHostCon
         if (!profileId) return
         const assigned = new Set(getAssignedTagIds(profileId))
         for (const tag of getTags()) {
-          const label = document.createElement('label')
-          const input = document.createElement('input')
+          const doc = handle.root.ownerDocument
+          const label = doc.createElement('label')
+          const input = doc.createElement('input')
           input.type = 'checkbox'
           input.checked = assigned.has(tag.id)
           input.addEventListener('change', () => {
             if (input.checked) assigned.add(tag.id); else assigned.delete(tag.id)
             void setAssignedTagIds(profileId, [...assigned])
           })
-          const swatch = document.createElement('span')
+          const swatch = doc.createElement('span')
           swatch.style.backgroundColor = tag.color
           swatch.setAttribute('aria-hidden', 'true')
-          label.append(input, swatch, document.createTextNode(tag.name))
+          label.append(input, swatch, doc.createTextNode(tag.name))
           handle.root.append(label)
         }
       }

@@ -23,7 +23,7 @@ import {
   type CharacterDisplayHostAdapter,
 } from './host-adapter'
 import { createCharacterDisplayRuntime } from './runtime'
-type UnknownRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 type Dispose = () => void
 type RuntimeHandle = {
   updateSettings(settings: CharacterDisplaySettings): void
@@ -60,7 +60,7 @@ function sameValue(left: unknown, right: unknown): boolean {
 function toDispose(value: unknown): Dispose | undefined {
   if (typeof value === 'function') return value as Dispose
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const record = value as UnknownRecord
+  const record = value as JsonRecord
   const destroy = record.destroy
   if (typeof destroy === 'function') return () => { destroy.call(record) }
   const dispose = record.dispose
@@ -70,7 +70,7 @@ function toDispose(value: unknown): Dispose | undefined {
 
 function selectionValue(value: unknown): Selection {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value as UnknownRecord
+  const record = value as JsonRecord
   const characterId = typeof record.characterId === 'string' && record.characterId.length > 0
     ? record.characterId
     : null
@@ -90,13 +90,13 @@ function selectionValue(value: unknown): Selection {
 
 function scopeValue(value: unknown): 'mine' | 'shared' | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const scope = (value as UnknownRecord).scope
+  const scope = (value as JsonRecord).scope
   return scope === 'mine' || scope === 'shared' ? scope : undefined
 }
 
 function scopeLabel(value: unknown): string | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value as UnknownRecord
+  const record = value as JsonRecord
   if (record.showBadge === false) return null
   const scope = scopeValue(record)
   return scope === 'shared' ? 'Shared' : scope === 'mine' ? 'Mine' : null
@@ -198,7 +198,7 @@ export function createCharacterDisplayModule(): SuiteModule {
     if (!isCurrentActivation(activationContext, activationAdapter, activationGeneration)) return
     const surface = surfaceValue(requestedSurface)
     const source = nextValue !== null && typeof nextValue === 'object' && !Array.isArray(nextValue)
-      ? nextValue as UnknownRecord
+      ? nextValue as JsonRecord
       : undefined
     const requestedEnabled = booleanSetting(source?.enabled, enabled)
     const normalized = normalizeCharacterDisplaySettings(nextValue)
@@ -497,7 +497,7 @@ export function createCharacterDisplayModule(): SuiteModule {
       if (!isCurrentStart()) return
 
       const legacyRecord = savedLegacy !== null && typeof savedLegacy === 'object' && !Array.isArray(savedLegacy)
-        ? savedLegacy as UnknownRecord
+        ? savedLegacy as JsonRecord
         : undefined
       const legacySettings = normalizeCharacterDisplaySettings(savedLegacy)
       const nextEnabled = booleanSetting(savedEnabled, booleanSetting(legacyRecord?.enabled, true))
@@ -505,7 +505,7 @@ export function createCharacterDisplayModule(): SuiteModule {
         const normalized = normalizeCharacterDisplaySettings(value === undefined ? fallback : value)
         if (value === null || typeof value !== 'object' || Array.isArray(value)) return withEnabled(normalized, nextEnabled)
         return {
-          ...(value as UnknownRecord),
+          ...(value as JsonRecord),
           ...normalized,
           enabled: nextEnabled,
           visibleMetadata: [...normalized.visibleMetadata],

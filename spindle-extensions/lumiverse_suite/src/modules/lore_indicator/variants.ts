@@ -76,7 +76,7 @@ function ownedRoot(document: Document, mount: Element, variant: string): HTMLEle
 function ownedBodyLayer(document: Document, mount: Element, variant: string): HTMLElement {
   const root = document.createElement('div')
   markOwnedNode(root, extensionUuidFor(mount), variant)
-  document.body.append(root)
+  mount.append(root)
   root.className = 'lumiverse-lore-indicator__body-layer'
   root.dataset.layer = 'body'
   return root
@@ -139,7 +139,7 @@ export function createV2Compact(options: LoreVariantOptions): LoreVariantControl
     popover.setAttribute('role', 'dialog')
     popover.setAttribute('aria-label', 'Activated lore')
     popover.dataset.portal = 'body'
-    options.document.body.append(popover)
+    ;(options.overlay?.root ?? options.mount).append(popover)
     const viewport = options.geometry?.layoutViewportSize() ?? { width: 1280, height: 800 }
     const triggerSize = options.geometry?.layoutElementSize(root, { width: 72, height: 32 }) ?? { width: 72, height: 32 }
     const columns = Math.max(1, Math.floor((viewport.width - 24) / 240))

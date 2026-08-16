@@ -1,5 +1,12 @@
-import type { SuiteModule, SuiteModuleContext } from '../../suite'
+import type { SuiteHostContext, SuiteModule, SuiteModuleContext } from '../../suite'
 import { PermissionBroker } from '../../shared/permissions'
+import {
+  asMount,
+  ownerDocumentOf,
+  readExtensionInstallationId,
+  requireScopedHostRoot,
+  type ScopedHostRoot,
+} from '../../shared/public-sdk'
 import { requireSuiteSettings, type SuiteSettingsAPI } from '../../shared/settings'
 import {
   defaultLorebookWorkspaceSettings,
@@ -29,11 +36,10 @@ const MODULE_STYLES = String.raw`
 @media (max-width:720px){[data-lumiverse-module="lorebook_workspace"]{grid-template-columns:1fr}}
 `
 
-type UnknownRecord = Record<string, unknown>
-type UnknownMethod = (...args: unknown[]) => unknown
+type JsonRecord = Record<string, unknown>
 
 type SurfaceHandle = {
-  readonly update?: (props: UnknownRecord) => void
+  readonly update?: (props: JsonRecord) => void
   readonly destroy?: () => void
   readonly on?: (event: string, listener: (payload: unknown) => void) => (() => void)
 }
@@ -63,17 +69,8 @@ type LorebookInvocationPayload = {
   readonly invocationId?: string
 }
 
-type WorkspaceBus = {
-  on(event: typeof BOOK_SELECTED_EVENT, listener: (payload: unknown) => void): () => void
-}
-
-function isRecord(value: unknown): value is UnknownRecord {
+function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function method(record: UnknownRecord | undefined, name: string): UnknownMethod | undefined {
-  const value = record?.[name]
-  return typeof value === 'function' ? (value as UnknownMethod).bind(record) : undefined
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -81,24 +78,7 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 function extensionUuid(context: SuiteModuleContext): string | undefined {
-  const host = context.host as unknown as UnknownRecord
-  const descriptor = isRecord(host.host) ? host.host : host
-  return nonEmptyString(descriptor.extensionInstallationId)
-}
-
-function documentFor(context: SuiteModuleContext): Document | undefined {
-  const host = context.host as unknown as UnknownRecord
-  const candidate = host.document
-  if (isRecord(candidate) && typeof candidate.createElement === 'function') {
-    return candidate as unknown as Document
-  }
-  return typeof globalThis.document === 'undefined' ? undefined : globalThis.document
-}
-
-function elementLike(value: unknown): value is HTMLElement {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as { append?: unknown; remove?: unknown }
-  return typeof candidate.append === 'function' && typeof candidate.remove === 'function'
+  return readExtensionInstallationId(context.host)
 }
 
 function markOwned(node: HTMLElement, installedUuid: string | undefined): void {
@@ -282,25 +262,36 @@ export function createLorebookWorkspaceModule(): SuiteModule {
     return true
   }
 
+  const hostSurfaces = (host: SuiteHostContext) => {
+    const mount = host.ui.mount
+    const mountHostSurface = host.components.mountHostSurface
+    if (typeof mount !== 'function' || typeof mountHostSurface !== 'function') return undefined
+    return {
+      mount: (point: string) => mount(asMount(point)),
+      mountApp: host.ui.mountApp,
+      mountHostSurface,
+      geometry: host.ui.geometry,
+    }
+  }
+
   const installHostWorkspaces = (activationContext: SuiteModuleContext): void => {
     if (hostWorkspaces.length > 0) return
-    const host = activationContext.host as unknown as UnknownRecord
-    const ui = isRecord(host.ui) ? host.ui : undefined
-    const geometry = isRecord(ui?.geometry) ? ui.geometry : undefined
-    const layoutElementRect = method(geometry, 'layoutElementRect')
-    const components = isRecord(host.components) ? host.components : undefined
-    const mountPoint = method(ui, 'mount')
-    const mountApp = method(ui, 'mountApp')
-    const mountHostSurface = method(components, 'mountHostSurface')
-    const doc = documentFor(activationContext)
-    if (!mountPoint || !mountApp || !mountHostSurface || !doc) return
-    stopContentResizeTracking ??= installLorebookContentResizeTracking(doc, {
+    const surfaces = hostSurfaces(activationContext.host)
+    if (!surfaces) return
+    let halfRoot: ScopedHostRoot
+    try {
+      halfRoot = requireScopedHostRoot(surfaces.mount('lorebook_half_workspace'), 'LOREBOOK_WORKSPACE_MOUNT_UNAVAILABLE')
+    } catch {
+      return
+    }
+    const doc = ownerDocumentOf(halfRoot)
+    if (!doc) return
+    const layoutElementRect = surfaces.geometry?.layoutElementRect
+    stopContentResizeTracking ??= installLorebookContentResizeTracking(halfRoot, {
       layoutElementRect: layoutElementRect
         ? (element) => {
             const rect = layoutElementRect(element)
-            return isRecord(rect) && typeof rect.height === 'number'
-              ? { height: rect.height }
-              : { height: 0 }
+            return typeof rect.height === 'number' ? { height: rect.height } : { height: 0 }
           }
         : undefined,
     })
@@ -311,20 +302,19 @@ export function createLorebookWorkspaceModule(): SuiteModule {
         let app: AppMountHandle | undefined
         let target: HTMLElement
         if (surfaceId === HALF_WORKSPACE_SURFACE_ID) {
-          const mounted = mountPoint('lorebook_half_workspace')
-          if (!elementLike(mounted)) throw new Error('LOREBOOK_WORKSPACE_MOUNT_UNAVAILABLE')
-          target = mounted
+          target = halfRoot
           target.style.display = 'contents'
         } else {
-          app = mountApp({ position: 'app-overlay', className: `lumiverse-${surfaceId}` }) as AppMountHandle
-          if (!app || !elementLike(app.root)) throw new Error('LOREBOOK_WORKSPACE_APP_MOUNT_UNAVAILABLE')
+          if (typeof surfaces.mountApp !== 'function') continue
+          app = surfaces.mountApp({ position: 'app-overlay', className: `lumiverse-${surfaceId}` }) as AppMountHandle
+          if (!app?.root) throw new Error('LOREBOOK_WORKSPACE_APP_MOUNT_UNAVAILABLE')
           target = doc.createElement('div')
           markOwned(target, extensionUuid(activationContext))
           app.root.append(target)
         }
         const workspace: HostWorkspace = {
           surfaceId,
-          handle: mountHostSurface(target, surfaceId, {
+          handle: surfaces.mountHostSurface(target, surfaceId, {
             contractVersion: HOST_CONTRACT_VERSION,
             ownerToken,
             generation: 0,
@@ -368,10 +358,8 @@ export function createLorebookWorkspaceModule(): SuiteModule {
 
   const installActions = (activationContext: SuiteModuleContext): void => {
     if (actionDisposers.length > 0) return
-    const host = activationContext.host as unknown as UnknownRecord
-    const ui = isRecord(host.ui) ? host.ui : undefined
-    const registerInputBarAction = method(ui, 'registerInputBarAction')
-    if (!registerInputBarAction) return
+    const registerInputBarAction = activationContext.host.ui.registerInputBarAction
+    if (typeof registerInputBarAction !== 'function') return
     const actions: Array<{ id: string; label: string; tooltip: string; surfaceId: typeof HALF_WORKSPACE_SURFACE_ID | typeof ENHANCED_WORKSPACE_SURFACE_ID; after: string; order: number; icon: string }> = [
       {
         id: HALF_ACTION_ID,
@@ -405,7 +393,7 @@ export function createLorebookWorkspaceModule(): SuiteModule {
           order: descriptor.order,
           payloadVersion: 1,
           source: 'entry_table' satisfies LorebookActionSource,
-        }) as InputActionHandle
+        } as Parameters<typeof registerInputBarAction>[0]) as InputActionHandle
         const unsubscribe = action.onClick?.((payload?: unknown) => {
           const invocation = parseInvocationPayload(payload, current.bookId)
           if (!invocation) return
@@ -484,9 +472,8 @@ export function createLorebookWorkspaceModule(): SuiteModule {
     if (!await ensureEditorPermission(activationContext, expectedGeneration)) return
     if (!isCurrent(expectedGeneration, activationContext) || !selectedId || !current.bookId) return
     const target = editorTarget
-    const components = (activationContext.host as unknown as UnknownRecord).components
-    const mountHostSurface = method(isRecord(components) ? components : undefined, 'mountHostSurface')
-    if (!target || !mountHostSurface) return
+    const mountHostSurface = activationContext.host.components.mountHostSurface
+    if (!target || typeof mountHostSurface !== 'function') return
 
     const bookId = current.bookId
     const entryId = selectedId
@@ -536,17 +523,16 @@ export function createLorebookWorkspaceModule(): SuiteModule {
     const activationContext = context
     if (!activationContext || !running || !current.enabled || activeRoot || !current.bookId) return
     const expectedGeneration = lifecycleGeneration
-    const doc = documentFor(activationContext)
-    const host = activationContext.host as unknown as UnknownRecord
-    const ui = isRecord(host.ui) ? host.ui : undefined
-    const components = isRecord(host.components) ? host.components : undefined
-    const mount = method(ui, 'mount')
-    const mountHostSurface = method(components, 'mountHostSurface')
-    if (!doc || !mount || !mountHostSurface) return
-
-    let mountPoint: unknown
-    try { mountPoint = mount(WORKSPACE_MOUNT_POINT) } catch { return }
-    if (!elementLike(mountPoint)) return
+    const surfaces = hostSurfaces(activationContext.host)
+    if (!surfaces) return
+    let mountPoint: ScopedHostRoot
+    try {
+      mountPoint = requireScopedHostRoot(surfaces.mount(WORKSPACE_MOUNT_POINT), 'LOREBOOK_WORKSPACE_MOUNT_UNAVAILABLE')
+    } catch {
+      return
+    }
+    const doc = ownerDocumentOf(mountPoint)
+    if (!doc) return
 
     const root = doc.createElement('section')
     markOwned(root, extensionUuid(activationContext))
@@ -568,7 +554,7 @@ export function createLorebookWorkspaceModule(): SuiteModule {
         activationContext.styles.add(MODULE_STYLES, { scope: 'root' })
         stylesActive = true
       }
-      const mountedTable = mountHostSurface(table, TABLE_SURFACE_ID, {
+      const mountedTable = surfaces.mountHostSurface(table, TABLE_SURFACE_ID, {
         bookId: current.bookId,
       })
       if (!isRecord(mountedTable)) throw new Error('WORLD_BOOK_TABLE_SURFACE_UNAVAILABLE')
@@ -671,8 +657,7 @@ export function createLorebookWorkspaceModule(): SuiteModule {
       running = true
       starting = false
       stopSettingsWatch = settingsApi.watch<unknown>(LOREBOOK_WORKSPACE_SETTINGS_KEY, applySettings)
-      const workspaceBus = nextContext.bus as unknown as WorkspaceBus | undefined
-      stopBusListener = workspaceBus?.on(BOOK_SELECTED_EVENT, applyBookSelection)
+      stopBusListener = nextContext.bus?.on(BOOK_SELECTED_EVENT, applyBookSelection)
       if (current.enabled) {
         installHostWorkspaces(nextContext)
         installActions(nextContext)
