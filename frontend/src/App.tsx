@@ -44,8 +44,11 @@ import {
   resizeDesktopFloatingWidget,
 } from '@/lib/desktop-floating-widget'
 import styles from './App.module.css'
+import { acknowledgePendingConnectionsDeepLink } from '@/lib/uiProductivityDefaults'
 
 const CustomCSSDock = lazy(() => import('@/components/modals/CustomCSSDock'))
+
+export { acknowledgePendingConnectionsDeepLink }
 
 export default function App() {
   const { t } = useTranslation('common')
@@ -232,7 +235,10 @@ export default function App() {
       setDrawerTab('connections')
 
       if (pending.target === 'connections' && pending.connectionId) {
-        setActiveProfile(pending.connectionId)
+        void acknowledgePendingConnectionsDeepLink({
+          pending,
+          setActiveProfile,
+        })
       }
       if (pending.target === 'image-gen-connections' && pending.connectionId) {
         setActiveImageGenConnection(pending.connectionId)

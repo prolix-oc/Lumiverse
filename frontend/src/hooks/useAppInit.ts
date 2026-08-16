@@ -157,7 +157,7 @@ async function initialize(isCurrent: () => boolean): Promise<void> {
 
 /** Fan the bootstrap payload into the store, skipping any section that
  *  the backend reported as failed (the fallback pass will retry those). */
-function applyLandingBootstrap(
+export function applyLandingBootstrap(
   payload: LandingBootstrapPayload,
   errors: Record<string, string>,
   options: { skipRecentChats?: boolean } = {},
@@ -178,7 +178,7 @@ function applyLandingBootstrap(
   return appliedRecentChats
 }
 
-function applyBootstrap(
+export function applyBootstrap(
   payload: BootstrapPayload,
   errors: Record<string, string>,
   options: {

@@ -768,6 +768,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
     }
 
     set(patch as any)
+    if (Object.prototype.hasOwnProperty.call(settings, 'activeProfileId')) {
+      const raw = settings.activeProfileId
+      const id = raw == null || raw === '' ? null : String(raw)
+      get().setActiveProfile(id, 'bootstrap_reconcile')
+    }
   },
 
   setVoiceSettings: (partial) =>
@@ -1173,8 +1178,11 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
         }
       }
       const requestedActiveLoomPresetId = patch.activeLoomPresetId as string | null | undefined
+      const hasIncomingActiveProfileId = Object.prototype.hasOwnProperty.call(patch, 'activeProfileId')
+      const incomingActiveProfileId = hasIncomingActiveProfileId ? patch.activeProfileId : undefined
       if (!isCurrentLoad()) return
       delete patch.activeLoomPresetId
+      if (hasIncomingActiveProfileId) delete patch.activeProfileId
       if (Object.keys(patch).length > 0) {
         traceSettings('loadSettings:merge', {
           loadGeneration,
@@ -1207,6 +1215,13 @@ export const createSettingsSlice: StateCreator<AppStore, [], [], SettingsSlice> 
           loadGeneration,
           portraitDockAfter: portraitDockTraceSummary(get().portraitDockSettings),
         })
+        if (!isCurrentLoad()) return
+      }
+      if (hasIncomingActiveProfileId) {
+        const id = incomingActiveProfileId == null || incomingActiveProfileId === ''
+          ? null
+          : String(incomingActiveProfileId)
+        get().setActiveProfile(id, 'settings_reconcile')
         if (!isCurrentLoad()) return
       }
       if (requestedActiveLoomPresetId !== undefined && selection) {

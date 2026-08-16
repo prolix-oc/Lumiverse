@@ -55,6 +55,36 @@ export function isMobileViewportOrDevice(): boolean {
   return window.matchMedia?.('(pointer: coarse)').matches || window.innerWidth <= 600
 }
 
+export type PendingConnectionsDeepLink = {
+  target?: string
+  provider?: string
+  connectionId?: string | null
+}
+
+export async function acknowledgePendingConnectionsDeepLink(options: {
+  pending: PendingConnectionsDeepLink
+  setActiveProfile: (id: string, reason?: 'user_selection') => void
+  acknowledgeActive?: (request: { id: string | null; reason: 'user_selection' }) => void | Promise<void>
+}): Promise<void> {
+  if (options.pending.target !== 'connections' || !options.pending.connectionId) return
+  options.setActiveProfile(options.pending.connectionId, 'user_selection')
+  await options.acknowledgeActive?.({
+    id: options.pending.connectionId,
+    reason: 'user_selection',
+  })
+}
+
+export async function acknowledgeConnectionProfileSelection(options: {
+  profileId: string
+  setActiveProfile: (id: string | null, reason?: 'user_selection') => void
+  acknowledgeActive?: (request: { id: string | null; reason: 'user_selection' }) => void | Promise<void>
+  closePopover: () => void
+}): Promise<void> {
+  options.setActiveProfile(options.profileId, 'user_selection')
+  await options.acknowledgeActive?.({ id: options.profileId, reason: 'user_selection' })
+  options.closePopover()
+}
+
 export const DEFAULT_CHARACTER_DISPLAY_SETTINGS: CharacterDisplaySettings = {
   thumbnailWidth: 170,
   thumbnailHeight: 226,
@@ -67,7 +97,11 @@ export const DEFAULT_CHARACTER_DISPLAY_SETTINGS: CharacterDisplaySettings = {
   defaultFilter: 'characters',
 }
 
-export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings = {
+export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
+  quickToolbarPlacement: 'floating' | 'chat_top_dock'
+  autoFitBounds: boolean
+  v2IconOnly: boolean
+} = {
   enabled: true,
   variant: 'v1-free',
   visibleTabIds: [
@@ -121,6 +155,9 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings = {
   // The confirmed two-line card design, so an existing row backfilled with this
   // default looks exactly as it did before the setting existed.
   v2Density: 'comfortable',
+  quickToolbarPlacement: 'floating',
+  autoFitBounds: true,
+  v2IconOnly: false,
 }
 
 export const DEFAULT_CONNECTIONS_PICKER_SETTINGS: ConnectionsPickerSettings = {
@@ -145,6 +182,7 @@ export const DEFAULT_CONNECTIONS_PICKER_SETTINGS: ConnectionsPickerSettings = {
   rowGap: 7,
   sectionSpacing: 10,
   columnWidths: { profiles: 180, models: 220 },
+  modelLayout: 'grid',
 }
 
 export const DEFAULT_LORE_INDICATOR_SETTINGS: LoreIndicatorSettings = {

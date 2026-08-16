@@ -10,6 +10,7 @@ import type {
   SpindleGeometryRect,
   SpindleGeometryResizeOptions,
 } from './geometry-api'
+import { normalizeQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
 
 type GeometryContext = Omit<SpindleFrontendContext, 'ui'> & {
   ui: SpindleFrontendContext['ui'] & { geometry: SpindleGeometryAPI }
@@ -98,5 +99,14 @@ describe('H6 geometry declaration', () => {
   test('type-checks the exact loader consumer shape against the installed package base', () => {
     expect(typeof consumeH6Context).toBe('function')
     expect(publishedContextCompatibility).toBe(true)
+  })
+
+  test('normalizes quickToolbarPlacement migration and default', () => {
+    expect(normalizeQuickToolbarPlacement(undefined)).toBe('floating')
+    expect(normalizeQuickToolbarPlacement(null)).toBe('floating')
+    expect(normalizeQuickToolbarPlacement('legacy')).toBe('floating')
+    expect(normalizeQuickToolbarPlacement('invalid')).toBe('floating')
+    expect(normalizeQuickToolbarPlacement('floating')).toBe('floating')
+    expect(normalizeQuickToolbarPlacement('chat_top_dock')).toBe('chat_top_dock')
   })
 })
