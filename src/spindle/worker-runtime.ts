@@ -548,7 +548,32 @@ type RuntimeWorkerToHost =
       userId?: string;
     }
   | { type: "image_gen_generate_stream"; requestId: string; input: Record<string, unknown> }
-  | { type: "image_gen_cancel_stream"; requestId: string };
+  | { type: "image_gen_cancel_stream"; requestId: string }
+  | {
+      type: "provider_register";
+      phase: "register";
+      kind: string;
+      id: string;
+      description?: unknown;
+      broker?: {
+        url: string;
+        method?: string;
+        secretKey?: string;
+        headers?: Record<string, string>;
+        kind?: "embedding" | "tts" | "stt" | "sidecar";
+      };
+      generation?: number;
+      revision?: number;
+    }
+  | { type: "provider_unregister"; phase: "unregister"; kind: string; id: string }
+  | {
+      type: "provider_result";
+      phase: "result";
+      correlationId: string;
+      round?: number;
+      result?: unknown;
+      error?: string;
+    };
 
 type RuntimeHostToWorker =
   | HostToWorker
@@ -587,7 +612,38 @@ type RuntimeHostToWorker =
   | { type: "backend_process_lifecycle"; event: BackendProcessLifecycleEvent }
   | { type: "backend_process_message"; processId: string; payload: unknown; userId: string }
   | { type: "image_gen_stream_chunk"; requestId: string; event: ImageGenStreamEvent }
-  | { type: "image_gen_stream_error"; requestId: string; error: string };
+  | { type: "image_gen_stream_error"; requestId: string; error: string }
+  | {
+      type: "provider_invoke";
+      phase: "invoke";
+      correlationId: string;
+      round: number;
+      key: {
+        effectiveScope: string;
+        installationId: string;
+        kind: string;
+        id: string;
+      };
+      request: unknown;
+    }
+  | {
+      type: "provider_abort";
+      phase: "abort";
+      correlationId: string;
+      round: number;
+      reason?: string;
+    }
+  | {
+      type: "provider_changed";
+      phase: "changed";
+      action: "registered" | "unregistered" | "updated";
+      key: {
+        effectiveScope: string;
+        installationId: string;
+        kind: string;
+        id: string;
+      };
+    };
 
 type ImageGenStreamEvent = ImageGenStreamEventDTO;
 type ImageGenStreamInput = ImageGenStreamRequestDTO;
@@ -882,6 +938,40 @@ type RuntimeSpindleAPI = Omit<SpindleAPI, "presets" | "imageGen" | "world_books"
     openCommandPalette(options?: { userId?: string }): Promise<void>;
     closeCommandPalette(options?: { userId?: string }): Promise<void>;
   };
+  providers: {
+    register(input: {
+      kind: string;
+      id: string;
+      description?: unknown;
+      broker?: {
+        url: string;
+        method?: string;
+        secretKey?: string;
+        headers?: Record<string, string>;
+        kind?: "embedding" | "tts" | "stt" | "sidecar";
+      };
+      generation?: number;
+      revision?: number;
+    }): void;
+    unregister(kind: string, id: string): void;
+    handle(
+      kind: string,
+      id: string,
+      handler: (req: {
+        correlationId: string;
+        round: number;
+        key: { effectiveScope: string; installationId: string; kind: string; id: string };
+        request: unknown;
+        signal: AbortSignal;
+      }) => unknown | Promise<unknown>,
+    ): () => void;
+    onChanged(
+      handler: (event: {
+        action: "registered" | "unregistered" | "updated";
+        key: { effectiveScope: string; installationId: string; kind: string; id: string };
+      }) => void,
+    ): () => void;
+  };
 };
 
 // ─── State ───────────────────────────────────────────────────────────────
@@ -904,6 +994,21 @@ const streamingImageGenerations = new Map<
   { push: (event: ImageGenStreamEvent) => void; fail: (reason: unknown) => void }
 >();
 const interceptorAbortControllers = new Map<string, AbortController>();
+const providerHandlers = new Map<
+  string,
+  (req: {
+    correlationId: string;
+    round: number;
+    key: { effectiveScope: string; installationId: string; kind: string; id: string };
+    request: unknown;
+    signal: AbortSignal;
+  }) => unknown | Promise<unknown>
+>();
+const providerAbortControllers = new Map<string, AbortController>();
+const providerChangedHandlers = new Set<(event: {
+  action: "registered" | "unregistered" | "updated";
+  key: { effectiveScope: string; installationId: string; kind: string; id: string };
+}) => void>();
 let interceptHandler:
   | InterceptorHandler
   | null = null;
@@ -1449,6 +1554,39 @@ const spindleApi: RuntimeSpindleAPI = {
   unregisterTool(name: string): void {
     assertMutationAllowed("spindle.unregisterTool()");
     post({ type: "unregister_tool", name });
+  },
+
+  providers: {
+    register(input) {
+      assertMutationAllowed("spindle.providers.register()");
+      post({
+        type: "provider_register",
+        phase: "register",
+        kind: input.kind,
+        id: input.id,
+        description: input.description,
+        broker: input.broker,
+        generation: input.generation,
+        revision: input.revision,
+      });
+    },
+    unregister(kind, id) {
+      assertMutationAllowed("spindle.providers.unregister()");
+      post({ type: "provider_unregister", phase: "unregister", kind, id });
+    },
+    handle(kind, id, handler) {
+      const key = `${kind}\0${id}`;
+      providerHandlers.set(key, handler);
+      return () => {
+        if (providerHandlers.get(key) === handler) providerHandlers.delete(key);
+      };
+    },
+    onChanged(handler) {
+      providerChangedHandlers.add(handler);
+      return () => {
+        providerChangedHandlers.delete(handler);
+      };
+    },
   },
 
   generate: {
@@ -4652,6 +4790,74 @@ async function handleHostMessage(msg: RuntimeHostToWorker): Promise<void> {
             level: "error",
             message: `Command handler error (${msg.commandId}): ${err?.message ?? err}`,
           } as any);
+        }
+      }
+      break;
+    }
+
+    case "provider_invoke": {
+      const handlerKey = `${msg.key.kind}\0${msg.key.id}`;
+      const handler = providerHandlers.get(handlerKey);
+      const abortController = new AbortController();
+      providerAbortControllers.set(msg.correlationId, abortController);
+      if (!handler) {
+        post({
+          type: "provider_result",
+          phase: "result",
+          correlationId: msg.correlationId,
+          round: msg.round,
+          error: `No provider handler registered for ${msg.key.kind}/${msg.key.id}`,
+        });
+        providerAbortControllers.delete(msg.correlationId);
+        break;
+      }
+      try {
+        const result = await Promise.resolve(handler({
+          correlationId: msg.correlationId,
+          round: msg.round,
+          key: msg.key,
+          request: msg.request,
+          signal: abortController.signal,
+        }));
+        if (abortController.signal.aborted) break;
+        post({
+          type: "provider_result",
+          phase: "result",
+          correlationId: msg.correlationId,
+          round: msg.round,
+          result,
+        });
+      } catch (err: any) {
+        if (abortController.signal.aborted) break;
+        post({
+          type: "provider_result",
+          phase: "result",
+          correlationId: msg.correlationId,
+          round: msg.round,
+          error: err?.message || "Provider invocation failed",
+        });
+      } finally {
+        providerAbortControllers.delete(msg.correlationId);
+      }
+      break;
+    }
+
+    case "provider_abort": {
+      providerAbortControllers.get(msg.correlationId)?.abort(msg.reason);
+      providerAbortControllers.delete(msg.correlationId);
+      break;
+    }
+
+    case "provider_changed": {
+      for (const handler of providerChangedHandlers) {
+        try {
+          handler({ action: msg.action, key: msg.key });
+        } catch (err: any) {
+          post({
+            type: "log",
+            level: "error",
+            message: `Provider changed handler error: ${err.message}`,
+          });
         }
       }
       break;
