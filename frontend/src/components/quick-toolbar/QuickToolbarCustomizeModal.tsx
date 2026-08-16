@@ -23,6 +23,7 @@ import { ModalShell } from '@/components/shared/ModalShell'
 import { Toggle } from '@/components/shared/Toggle'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { filterActionIds, filterActions } from '@/lib/toolbarActionSearch'
+import { isAutoFitToolbarBounds, isV2IconOnly } from './quickToolbarDock'
 import { useQuickToolbarActions, type ToolbarAction } from './useQuickToolbarActions'
 import styles from './QuickToolbarCustomizeModal.module.css'
 
@@ -302,13 +303,38 @@ export default function QuickToolbarCustomizeModal({ onClose }: QuickToolbarCust
             <div className={styles.switchRow}>
               <span>Show labels</span>
               <Toggle.Switch
-                checked={anchored ? settings.v2LabelVisible !== false : settings.labelVisible}
+                checked={anchored ? settings.v2LabelVisible !== false && !isV2IconOnly(settings) : settings.labelVisible}
                 onChange={(visible) => updateSettings(
-                  anchored ? { v2LabelVisible: visible } : { labelVisible: visible },
+                  anchored
+                    ? { v2LabelVisible: visible, v2IconOnly: !visible } as typeof settings
+                    : { labelVisible: visible },
                 )}
                 aria-label="Show toolbar labels"
               />
             </div>
+            {anchored && (
+              <div className={styles.switchRow}>
+                <span>Icon-only</span>
+                <Toggle.Switch
+                  checked={isV2IconOnly(settings)}
+                  onChange={(v2IconOnly) => updateSettings({
+                    v2IconOnly,
+                    v2LabelVisible: v2IconOnly ? false : settings.v2LabelVisible,
+                  } as typeof settings)}
+                  aria-label="V2 icon-only toolbar"
+                />
+              </div>
+            )}
+            {!anchored && (
+              <div className={styles.switchRow}>
+                <span>Auto-fit toolbar bounds to content</span>
+                <Toggle.Switch
+                  checked={isAutoFitToolbarBounds(settings)}
+                  onChange={(autoFitBounds) => updateSettings({ autoFitBounds } as typeof settings)}
+                  aria-label="Auto-fit toolbar bounds to content"
+                />
+              </div>
+            )}
 
             {!anchored && (
               <>

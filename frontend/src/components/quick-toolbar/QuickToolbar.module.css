@@ -35,21 +35,22 @@
 .rootAnchored {
   position: relative;
   display: flex;
-  flex: 1 1 auto;
-  width: 100%;
+  flex: 0 0 auto;
+  width: auto;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   align-items: center;
   justify-content: center;
-  align-self: stretch;
+  align-self: center;
 }
 
 .toolbar {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: calc(6px * var(--quick-toolbar-scale, 1));
-  padding: calc(8px * var(--quick-toolbar-scale, 1)) calc(10px * var(--quick-toolbar-scale, 1));
+  gap: calc(var(--quick-toolbar-gap, 6px) * var(--quick-toolbar-scale, 1));
+  padding: calc(var(--quick-toolbar-padding-block, 8px) * var(--quick-toolbar-scale, 1)) calc(var(--quick-toolbar-padding-inline, 10px) * var(--quick-toolbar-scale, 1));
   border: 1px solid var(--lumiverse-border, rgba(148, 163, 184, 0.28));
   border-radius: 13px;
   /* One rung BELOW `.card`, which stays on `--lumiverse-surface-raised`. The two
@@ -166,9 +167,9 @@
      `.chatToolbar[data-dock-mode='strip']` and on `.topDockActions`, so cards,
      the gear and the two dock buttons are all exactly 6px apart. Nothing in this
      row may add padding or margin on top of it. */
-  gap: 6px;
-  width: 100%;
-  flex: 1 1 auto;
+  gap: var(--quick-toolbar-gap, 6px);
+  width: auto;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 100%;
   /* The content-width cap, mirroring `LoreIndicator.module.css`'s `.strip`.
@@ -195,7 +196,7 @@
   min-width: 0;
   max-width: 100%;
   flex: 0 1 auto;
-  gap: 6px;
+  gap: var(--quick-toolbar-gap, 6px);
   overflow: hidden;
   scrollbar-width: none;
 }
@@ -309,6 +310,13 @@
   border-radius: var(--lumiverse-radius);
   background: color-mix(in srgb, var(--lumiverse-primary) 14%, transparent);
   color: var(--lumiverse-primary-text, var(--lumiverse-primary));
+}
+
+.cardIconOnly {
+  min-width: 0;
+  max-width: none;
+  padding: 3px;
+  gap: 0;
 }
 
 .cardStrip .card {
@@ -518,11 +526,8 @@
 }
 
 .item {
-  /* `min-width: 0` (was `iconSize + 14`) so buttons compress instead of forcing
-     the nav to scroll; `flex: 1 1 auto` so they share any space the user drags
-     in. The floor that stops the toolbar shrinking below its content is
-     `toolbarRectBounds(natural)`, not this rule. */
-  flex: 1 1 auto;
+  /* Shrink-to-content: no artificial min box and no slack-absorbing grow. */
+  flex: 0 0 auto;
   min-width: 0;
   min-height: 0;
   display: inline-flex;
