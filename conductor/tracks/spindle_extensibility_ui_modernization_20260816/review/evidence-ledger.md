@@ -84,3 +84,85 @@ These paths are excluded from the conductor revision staging allowlist.
 - [x] Required stale scans passed with zero matches across canonical plan, artifact, and ledger.
 - [ ] Verify only conductor track files are staged.
 - [ ] Record final commit hash after amendment.
+
+## Implementation Execution Record
+
+### Wave 0 baseline (captured by orchestrator)
+- Host repo: G:\AI\All lumiverse repos\Lumiverse
+- Host branch: staging
+- Host HEAD: 614aef2307f8774613daa0ea77b7e6a79f92a38b
+- Host local identity: I-Sereya-I <309765815+I-Sereya-I@users.noreply.github.com>
+- Remotes: origin prolix-oc/Lumiverse; canonical-fork/sereya I-Sereya-I forks
+- SDK repo: G:\AI\All lumiverse repos\lumiverse-spindle-types HEAD 2eae1df512ad278928631ecf587361ec7a1f6b30 on main, clean, package 0.6.15
+- Canonical plan SHA-256 verified: 8FD6296BA2F1801137F52CB06A48B5C87AB1B5D3C95ED4F3E4F0227D0EC6663D (plan.md and artifact identical)
+- Preserved dirty baseline (exact porcelain; do not stage):
+  D frontend/dist/assets/CustomCSSDock-BLnGwYr8.js
+  D frontend/dist/assets/CustomCSSDock-CJhVPBQR.css
+  D frontend/dist/assets/CustomCSSModal-BIJQy1VU.js
+  D frontend/dist/assets/CustomCSSModal-DLCtWeoO.css
+  D frontend/dist/assets/i18n/en-yd_bDbdy.js
+  D frontend/dist/assets/i18n/fr-DC-FOKXc.js
+  D frontend/dist/assets/i18n/it-DE9yHeWy.js
+  D frontend/dist/assets/i18n/ja-DgEMa0Jx.js
+  D frontend/dist/assets/i18n/zh-C9sXFaGc.js
+  D frontend/dist/assets/i18n/zh-TW-D8d_VJNi.js
+  D frontend/dist/assets/index-BG8I37Rd.css
+  D frontend/dist/assets/index-CugirXvy.js
+  D frontend/dist/assets/useCouncilEvents-yDbhSYaL.js
+  M frontend/dist/index.html
+  M frontend/dist/sw.js
+  ?? frontend/dist/assets/CustomCSSDock-BUxUP4bv.js
+  ?? frontend/dist/assets/CustomCSSDock-CA7D-UXs.css
+  ?? frontend/dist/assets/CustomCSSModal-B_3YbS63.css
+  ?? frontend/dist/assets/CustomCSSModal-CNxtB9RR.js
+  ?? frontend/dist/assets/i18n/en-BYW51cLR.js
+  ?? frontend/dist/assets/i18n/fr-BEwA9Y82.js
+  ?? frontend/dist/assets/i18n/it-84y-O3tx.js
+  ?? frontend/dist/assets/i18n/ja-BfYq-QYb.js
+  ?? frontend/dist/assets/i18n/zh-Btu44V2Y.js
+  ?? frontend/dist/assets/i18n/zh-TW-BPWSLftQ.js
+  ?? frontend/dist/assets/index-BNrZTjeo.css
+  ?? frontend/dist/assets/index-CvR0eS9J.js
+  ?? frontend/dist/assets/useCouncilEvents-C_c_i07t.js
+  ?? scripts/e2e-diagnostics/verify-lumiverse-suite.iife.js
+
+### Authorized scope change
+- User authority 2026-08-16: final UI verification is user-owned. Agents must not implement or run Playwright, frontend/e2e/**, or .github/workflows/spindle-playwright.yml.
+- Plan Phase 6.2 / matrix 6.2 rows: DEFERRED_USER_UI
+- All other mandatory executable matrix rows remain blocking.
+
+### Active lanes (started)
+SDK 1+2, host 3,4,6,7,8,9,10,11,12,13,14,16 (gzip only), 17 auditor. Suite 15 and consumer adapters 5 wait on SDK pack + registry.
+
+## Implementation lane results (orchestrator)
+
+### SDK
+- Local commit `c6727dbbc2f31c5941c1048fd8b0004ea2fc5ab9` on lumiverse-spindle-types `main`
+- Version `0.6.16`, TypeScript `5.6.3`
+- `npm ci` / `npm run build` / `npm run build:consumer` exit `0`
+- Not published (no release authority)
+
+### Host lanes completed (reported `bun test` exits `0`)
+- Lane 6: `mount-points.test.ts` 7 pass
+- Lane 7: decorator 90 pass / 1 pre-existing stamp fail (message-widgets reserved attr) — repair in flight
+- Lane 8: override registry + settings bridges 27 pass
+- Lane 16: gzip script created; baseline JSON not written (needs detached worktree)
+- Lane 3: provider registry 15 pass; PATCH manager/main
+- Lane 4: WS projection 4+4 pass
+- Lane 13: edit-and-send backend 11 pass; PATCH generate/main
+- Lane 11: embeddings profiles 23 pass; PATCH SettingsModal UI
+- Lane 12: cortex secondary 21 pass
+- Lane 9: toolbar 18 pass; PATCH ChatView/InputArea/defaults
+- Lane 10: picker/activeProfile 38+1 pass; PATCH App/InputArea/ProductivitySettings
+- Lane 14: edit-and-send frontend 21 pass; PATCH Bubble/Minimal wiring
+- Lane 17: gap matrix produced (pre-implementation snapshot; stale vs now)
+
+### In-flight
+- Shared-file integration
+- Lane 5 consumers
+- Lane 15 suite
+- Consolidation secondary
+- Message host wiring
+
+### Deferred
+- Playwright remains `DEFERRED_USER_UI`
