@@ -6,6 +6,12 @@ import { buildActivePersonaLorebook } from '@/lib/personaLorebook'
 import { EventType } from './events'
 import { useStore } from '@/store'
 import { shouldSyncExtensionsAfterConnected } from './connected-extension-sync'
+import {
+  createProviderRegistryProjection,
+  FRONTEND_PROVIDER_SCOPE,
+  type ProviderRegistryChangedPayload,
+  type ProviderRegistryProjection,
+} from './provider-registry-projection'
 import { hasUnsavedSettings, settingsUpdateKeys, shouldReloadSettingsAfterUpdate } from '@/store/slices/settings'
 import { routeBackendMessage, routeFrontendProcessEvent, loadFrontendExtension } from '@/lib/spindle/loader'
 import { applyHostAction, type HostActionRuntime } from '@/lib/spindle/host-actions'
@@ -249,6 +255,22 @@ async function deleteEmptyGeneratedSwipe(
     console.error('[useWebSocket] Failed to delete empty generated swipe:', err)
     return messages
   }
+}
+
+let providerProjection: ProviderRegistryProjection | null = null
+
+function bindProviderProjection(userId: string | null | undefined): ProviderRegistryProjection | null {
+  if (!userId) {
+    providerProjection = null
+    return null
+  }
+  if (!providerProjection || providerProjection.authorizedUserId !== userId) {
+    providerProjection = createProviderRegistryProjection({
+      authorizedUserId: userId,
+      authorizedScope: FRONTEND_PROVIDER_SCOPE,
+    })
+  }
+  return providerProjection
 }
 
 const MACRO_VARS_PREFIX = 'metadata.macro_variables.'
@@ -613,6 +635,7 @@ export function useWebSocket() {
         if (store.getState().wsHasEverConnected) {
           pendingReconnectBundleCheckRef.current = true
         }
+        bindProviderProjection(store.getState().user?.id)?.beginReconnectResync()
       }),
       wsClient.on(WS_PONG, () => {
         store.getState().setWsRoundTripVerified(true)
@@ -1337,7 +1360,11 @@ export function useWebSocket() {
         // onopen with an empty payload, and once when the backend's CONNECTED
         // message arrives (carrying the user role). Only the second one means
         // auth has been verified server-side — gate auth-sync on `role`.
-        if (shouldSyncExtensionsAfterConnected(payload)) {
+        const providers = bindProviderProjection(store.getState().user?.id)
+        if (!shouldSyncExtensionsAfterConnected(payload)) {
+          // Local onopen: hold provider_changed until the snapshot resync.
+          providers?.beginReconnectResync()
+        } else {
           store.getState().reconcileRole(payload.role)
           store.getState().setWsAuthSynced(true)
           // Immediately verify round-trip so the overlay can dismiss without
@@ -1571,6 +1598,10 @@ export function useWebSocket() {
           const current = useStore.getState().bulkUpdateStatus
           if (current?.done) useStore.getState().setBulkUpdateStatus(null)
         }, 3000)
+      }),
+
+      wsClient.on(EventType.SPINDLE_PROVIDER_CHANGED, (payload: ProviderRegistryChangedPayload) => {
+        bindProviderProjection(store.getState().user?.id)?.applyEvent(payload)
       }),
 
       wsClient.on(EventType.SPINDLE_FRONTEND_MSG, (payload: { extensionId: string; data: unknown }) => {

@@ -82,6 +82,9 @@ export enum EventType {
   // Spindle command palette commands
   SPINDLE_COMMANDS_CHANGED = 'SPINDLE_COMMANDS_CHANGED',
 
+  // Spindle provider registry (recipient-scoped; never a system broadcast)
+  SPINDLE_PROVIDER_CHANGED = 'SPINDLE_PROVIDER_CHANGED',
+
   // Spindle UI automation (extension navigates the user to a tab/settings/etc.)
   SPINDLE_UI_NAVIGATE = 'SPINDLE_UI_NAVIGATE',
 
@@ -269,6 +272,18 @@ export interface OperatorProgressPayload {
   operation: string
   status: 'in_progress' | 'complete' | 'error'
   message: string
+}
+
+export type ProviderRegistryChangeAction = 'add' | 'remove' | 'change'
+export type ProviderRegistryAction = ProviderRegistryChangeAction | 'snapshot'
+
+export interface ProviderRegistryChangedPayload {
+  userId: string
+  scope: string
+  action: ProviderRegistryAction
+  generation: number
+  revision: number
+  payload: unknown
 }
 
 export interface SpindlePreGenerationActivityPayload {

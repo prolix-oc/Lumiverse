@@ -1,5 +1,11 @@
 import type { ServerWebSocket } from "bun";
-import { EventType, type EventMessage } from "./events";
+import {
+  EventType,
+  type EventMessage,
+  type ProviderRegistryAction,
+  type ProviderRegistryChangeAction,
+  type ProviderRegistryChangedPayload,
+} from "./events";
 
 type Listener = (event: EventMessage) => void;
 
@@ -514,3 +520,71 @@ class EventBus {
 }
 
 export const eventBus = new EventBus();
+
+export interface EmitProviderRegistryChangedArgs {
+  userId: string;
+  scope: string;
+  action: ProviderRegistryChangeAction;
+  generation: number;
+  revision: number;
+  payload: unknown;
+}
+
+export interface EmitProviderRegistrySnapshotArgs {
+  userId: string;
+  scope: string;
+  generation: number;
+  revision: number;
+  payload: unknown;
+}
+
+function isScopedProviderRecipient(userId: unknown, scope: unknown): userId is string {
+  return typeof userId === "string" && userId.trim().length > 0
+    && typeof scope === "string" && scope.trim().length > 0;
+}
+
+function emitScopedProviderRegistryEvent(
+  action: ProviderRegistryAction,
+  args: {
+    userId: string;
+    scope: string;
+    generation: number;
+    revision: number;
+    payload: unknown;
+  },
+): void {
+  if (!isScopedProviderRecipient(args.userId, args.scope)) return;
+  if (!Number.isFinite(args.generation) || !Number.isFinite(args.revision)) return;
+
+  const userId = args.userId.trim();
+  const payload: ProviderRegistryChangedPayload = {
+    userId,
+    scope: args.scope.trim(),
+    action,
+    generation: args.generation,
+    revision: args.revision,
+    payload: args.payload,
+  };
+
+  // Explicit user topic — never the implicit system fallback in emit().
+  eventBus.emit(EventType.SPINDLE_PROVIDER_CHANGED, payload, userId, {
+    topic: getUserTopic(userId),
+  });
+}
+
+/**
+ * Lane 3 registry hook. Recipient-scoped to `user:${userId}`.
+ * Never broadcasts provider registration changes on the system topic.
+ */
+export function emitProviderRegistryChanged(args: EmitProviderRegistryChangedArgs): void {
+  if (args.action !== "add" && args.action !== "remove" && args.action !== "change") return;
+  emitScopedProviderRegistryEvent(args.action, args);
+}
+
+/**
+ * Lane 3 snapshot hook for reconnect resync. Same recipient scoping as
+ * {@link emitProviderRegistryChanged}.
+ */
+export function emitProviderRegistrySnapshot(args: EmitProviderRegistrySnapshotArgs): void {
+  emitScopedProviderRegistryEvent("snapshot", args);
+}

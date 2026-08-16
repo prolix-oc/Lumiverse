@@ -142,6 +142,9 @@ export enum EventType {
   // Spindle permission changes (broadcast with extensionId so frontends can scope)
   SPINDLE_PERMISSION_CHANGED = "SPINDLE_PERMISSION_CHANGED",
 
+  // Spindle provider registry (recipient-scoped; never a system broadcast)
+  SPINDLE_PROVIDER_CHANGED = "SPINDLE_PROVIDER_CHANGED",
+
   // Spindle command palette commands
   SPINDLE_COMMANDS_CHANGED = "SPINDLE_COMMANDS_CHANGED",
 
@@ -221,6 +224,19 @@ export enum EventType {
   ROOM_ROUND_COMPLETE = "ROOM_ROUND_COMPLETE",
   /** Host-only: a fresh remote invite code (auto-rolled after one is redeemed). */
   ROOM_INVITE_CODE = "ROOM_INVITE_CODE",
+}
+
+export type ProviderRegistryChangeAction = "add" | "remove" | "change";
+export type ProviderRegistryAction = ProviderRegistryChangeAction | "snapshot";
+
+/** Recipient-scoped provider registry event. `userId` is required on the wire. */
+export interface ProviderRegistryChangedPayload {
+  userId: string;
+  scope: string;
+  action: ProviderRegistryAction;
+  generation: number;
+  revision: number;
+  payload: unknown;
 }
 
 export interface EventMessage {
