@@ -720,6 +720,14 @@
   scrollbar-gutter: stable;
 }
 
+.modelsList {
+  display: flex;
+  flex-direction: column;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .modelsGrid .modelTile {
   min-height: 32px;
 }

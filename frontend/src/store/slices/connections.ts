@@ -1,21 +1,37 @@
 import type { StateCreator } from 'zustand'
-import type { AppStore, ConnectionsSlice } from '@/types/store'
+import type { ActiveProfileSwitchReason, AppStore, ConnectionsSlice } from '@/types/store'
 import type { ConnectionProfile } from '@/types/api'
 import { settingsApi } from '@/api/settings'
 import { areReasoningSettingsEqual, normalizeReasoningSettingsForProvider } from '@/lib/reasoning-binding'
 import { REASONING_DEFAULTS, clearDirtyKey } from './settings'
 import { normalizeConnectionsOrder, reorderProfiles } from './connections-order-merge'
 
+const PERSISTED_ACTIVE_PROFILE_REASONS: ReadonlySet<ActiveProfileSwitchReason> = new Set([
+  'user_selection',
+  'profile_deleted',
+  'profile_invalidated',
+])
+
+export function shouldPersistActiveProfileId(reason: ActiveProfileSwitchReason): boolean {
+  return PERSISTED_ACTIVE_PROFILE_REASONS.has(reason)
+}
+
 export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsSlice> = (set, get) => ({
   profiles: [],
   activeProfileId: null,
 
-  setProfiles: (profiles) =>
+  setProfiles: (profiles) => {
     set((state) => ({
       profiles: reorderProfiles(profiles, normalizeConnectionsOrder(state.connectionsOrder).llm),
-    })),
-  setActiveProfile: (id) => {
+    }))
+    const activeProfileId = get().activeProfileId
+    if (activeProfileId && !profiles.some((profile) => profile.id === activeProfileId)) {
+      get().setActiveProfile(null, 'profile_invalidated')
+    }
+  },
+  setActiveProfile: (id, reason = 'user_selection') => {
     const state = get()
+    if (state.activeProfileId === id) return
     const oldProfile = state.activeProfileId
       ? state.profiles.find((p) => p.id === state.activeProfileId)
       : null
@@ -24,7 +40,9 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       : null
 
     set({ activeProfileId: id })
-    settingsApi.put('activeProfileId', id).catch(() => {})
+    if (shouldPersistActiveProfileId(reason)) {
+      settingsApi.put('activeProfileId', id).catch(() => {})
+    }
 
     // Apply or restore reasoning settings based on profile bindings
     const newBindings = newProfile?.metadata?.reasoningBindings?.settings
@@ -88,26 +106,11 @@ export const createConnectionsSlice: StateCreator<AppStore, [], [], ConnectionsS
       profiles: state.profiles.map((p) => (p.id === id ? { ...p, ...updates } : p)),
     })),
   removeProfile: (id) => {
-    const state = get()
-    const wasActive = state.activeProfileId === id
-    const removedProfile = wasActive ? state.profiles.find((p) => p.id === id) : null
-
+    const wasActive = get().activeProfileId === id
+    if (wasActive) get().setActiveProfile(null, 'profile_deleted')
     set((s) => ({
       profiles: s.profiles.filter((p) => p.id !== id),
-      activeProfileId: s.activeProfileId === id ? null : s.activeProfileId,
     }))
-
-    // If the removed profile was active and had reasoning bindings, restore defaults
-    if (wasActive && removedProfile?.metadata?.reasoningBindings?.settings) {
-      set({ reasoningSettings: { ...REASONING_DEFAULTS } } as any)
-      settingsApi.put('reasoningSettings', { ...REASONING_DEFAULTS }).catch(() => {})
-      clearDirtyKey('reasoningSettings')
-    }
-    if (wasActive && typeof removedProfile?.metadata?.reasoningBindings?.promptBias === 'string') {
-      set({ promptBias: '' } as any)
-      settingsApi.put('promptBias', '').catch(() => {})
-      clearDirtyKey('promptBias')
-    }
   },
 
   applyProfileOrder: (orderedIds) =>

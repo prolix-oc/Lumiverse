@@ -244,6 +244,30 @@ describe('H10 domain API bridge', () => {
     expect(() => domain.connections.getActive()).toThrow('domain bridge is disposed')
   })
 
+  test('keeps legacy connections.setActive synchronous while setActiveAcknowledged awaits coordinator acknowledgement', async () => {
+    const harness = createHarness()
+    harness.dependencies.requirePermission = () => {}
+    const pending = Promise.withResolvers<void>()
+    harness.dependencies.connections.acknowledgeActive = () => pending.promise
+    const domain = createFrontendDomainApi(harness.dependencies)
+
+    const syncResult = domain.connections.setActive('profile-2')
+    expect(syncResult).toBeUndefined()
+    expect(harness.state().activeProfileId).toBe('profile-2')
+
+    let settled = false
+    const acknowledged = domain.connections.setActiveAcknowledged('profile-1', 'user_selection').then((value) => {
+      settled = true
+      return value
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(harness.state().activeProfileId).toBe('profile-1')
+    pending.resolve()
+    await acknowledged
+    expect(settled).toBe(true)
+  })
+
   test('gates generation writes and checks the generation after awaits', async () => {
     const harness = createHarness()
     const domain = createFrontendDomainApi(harness.dependencies)

@@ -8,7 +8,9 @@ import type {
   WorldBook,
   WorldBookEntry,
 } from '@/types/api'
-import type { AppStore } from '@/types/store'
+import type { ActiveProfileSwitchReason, AppStore } from '@/types/store'
+
+export type { ActiveProfileSwitchReason }
 
 export interface FrontendStore {
   getState(): AppStore
@@ -27,6 +29,7 @@ export interface FrontendConnectionsAPI {
   subscribe(handler: (value: ConnectionActiveState) => void): () => void
   models(id: string): Promise<ConnectionModelsResult>
   setActive(id: string | null): void
+  setActiveAcknowledged(id: string | null, reason?: ActiveProfileSwitchReason): Promise<void>
   update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
 }
 
@@ -88,6 +91,10 @@ export interface FrontendDomainDependencies {
   connections: {
     models(id: string): Promise<ConnectionModelsResult>
     update(id: string, input: UpdateConnectionProfileInput): Promise<ConnectionProfile>
+    acknowledgeActive?(request: {
+      id: string | null
+      reason: ActiveProfileSwitchReason
+    }): Promise<void>
   }
   chats: {
     listForCharacter(characterId: string): Promise<ChatSummary[]>
@@ -302,6 +309,13 @@ export function createFrontendDomainApi(
     setActive(id) {
       requirePermission('generation', 'ctx.connections.setActive')
       dependencies.store.getState().setActiveProfile(id)
+    },
+
+    async setActiveAcknowledged(id, reason = 'user_selection') {
+      requirePermission('generation', 'ctx.connections.setActive')
+      dependencies.store.getState().setActiveProfile(id, reason)
+      await dependencies.connections.acknowledgeActive?.({ id, reason })
+      assertUsable()
     },
 
     async update(id, input) {
