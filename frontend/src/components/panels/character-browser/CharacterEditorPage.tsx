@@ -1893,6 +1893,7 @@ export default function CharacterEditorPage() {
                  {tab.label}
                 </button>
                ))}
+                <span data-spindle-mount="character_editor_tab" data-spindle-scope={`character-editor:${editingCharacterId ?? 'none'}:tab`} style={{ display: 'contents' }} />
               </div>
 
                 {/* Tab content */}

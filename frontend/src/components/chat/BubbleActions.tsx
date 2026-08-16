@@ -7,6 +7,7 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import styles from './BubbleActions.module.css'
 
 interface BubbleActionsProps {
+  messageId?: string
   onEdit: () => void
   onDelete: () => void
   onToggleHidden: () => void
@@ -28,6 +29,7 @@ interface BubbleActionsProps {
 }
 
 export default function BubbleActions({
+  messageId,
   onEdit,
   onDelete,
   onToggleHidden,
@@ -119,6 +121,9 @@ export default function BubbleActions({
       <button type="button" onClick={onDelete} title={tc('actions.delete')} aria-label={tc('actions.delete')}>
         <Trash2 size={13} />
       </button>
+      {messageId && (
+        <span data-spindle-mount="message_actions" data-spindle-scope={`message:${messageId}:actions`} style={{ display: 'contents' }} />
+      )}
     </div>
   )
 }

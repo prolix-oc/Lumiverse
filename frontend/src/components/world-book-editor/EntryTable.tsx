@@ -365,6 +365,7 @@ export interface EntryTableProps {
    * behaviour when no resolver is supplied.
    */
   resolveTokenCount?: (entry: WorldBookEntry) => ResolvedTokenCount
+  bookId?: string | null
 }
 
 /** Placeholder for rows rendered while the Tokens column is dropped — never read. */
@@ -609,6 +610,7 @@ const EntryRow = memo(function EntryRow({
           </span>
         </span>
       )}
+      <span data-spindle-mount="world_book_entry_row" data-spindle-scope={`world-book-entry:${entry.id}:row`} style={{ display: 'contents' }} />
     </div>
   )
 })
@@ -664,6 +666,7 @@ export default function EntryTable({
   onEntryPointerEnter,
   onEntryPointerLeave,
   resolveTokenCount = getTokenEstimate,
+  bookId,
 }: EntryTableProps) {
   const regionRef = useRef<HTMLDivElement>(null)
   /** Everything rendered above the virtualized rows — see the `scrollMargin` effect. */
@@ -912,6 +915,7 @@ export default function EntryTable({
 
   return (
     <div className={styles.entryTableRegion} ref={regionRef}>
+      <span data-spindle-mount="world_book_entry_table" data-spindle-scope={`world-book:${bookId ?? entries[0]?.world_book_id ?? 'none'}:entry-table`} style={{ display: 'contents' }} />
       <div
         className={styles.entryTableContent}
         style={{

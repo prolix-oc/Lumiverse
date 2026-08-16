@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { buildCommands, GROUP_ORDER, type Command, type CommandScope } from '@/lib/commands'
 import { commandGroupLabel, translateCommand } from '@/lib/i18n/resolveLabel'
 import { extensionTabsToCommands, extensionCommandsToCommands, sanitizeHiddenDrawerTabIds } from '@/lib/drawer-tab-registry'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import styles from './CommandPalette.module.css'
 
 // ── Match highlight ────────────────────────────────────────────────────────────
@@ -28,7 +29,7 @@ function highlightMatch(text: string, query: string): ReactNode {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function CommandPalette() {
+function CommandPaletteNative() {
   const { t, i18n } = useTranslation('commands')
   const isOpen = useStore((s) => s.commandPaletteOpen)
   const close = useStore((s) => s.closeCommandPalette)
@@ -319,6 +320,7 @@ export default function CommandPalette() {
 
             {/* ── Footer ── */}
             <div className={styles.footer}>
+              <span data-spindle-mount="command_palette_actions" data-spindle-scope="command-palette:actions" style={{ display: 'contents' }} />
               <span className={styles.footerHint}>
                 <kbd className={styles.kbd}>↑</kbd>
                 <kbd className={styles.kbd}>↓</kbd>
@@ -339,4 +341,8 @@ export default function CommandPalette() {
     </AnimatePresence>,
     document.body
   )
+}
+
+export default function CommandPalette() {
+  return useSpindleComponentOverride('CommandPalette', CommandPaletteNative, {})
 }

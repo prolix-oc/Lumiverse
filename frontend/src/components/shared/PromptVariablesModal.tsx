@@ -200,6 +200,7 @@ export function PromptVariablesModal({
             {t('subtitle', { token: t('tokenExample') })}
           </p>
         </div>
+        <span data-spindle-mount="prompt_variables_toolbar" data-spindle-scope="prompt-variables:active:toolbar" style={{ display: 'contents' }} />
       </div>
 
       <div className={css.body}>

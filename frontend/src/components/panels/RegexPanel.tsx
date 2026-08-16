@@ -1173,6 +1173,7 @@ function ScriptRow({
             <Trash2 size={13} />
           </Button>
         )}
+        <span data-spindle-mount="regex_entry_row" data-spindle-scope={`regex-entry:${script.id}:row`} style={{ display: 'contents' }} />
       </div>
 
       {expanded && !selectionMode && (

@@ -533,6 +533,7 @@ export default function ManageChatsModal() {
               style={{ display: 'none' }}
               onChange={handleImportStFile}
             />
+            <span data-spindle-mount="manage_chats_actions" data-spindle-scope={`manage-chats:${characterId}:actions`} style={{ display: 'contents' }} />
           </div>
 
           {bulkMode && (

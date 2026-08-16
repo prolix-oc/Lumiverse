@@ -236,6 +236,7 @@ useEffect(() => {
         {/* Drawer panel */}
         <div className={styles.drawer}>
           <div className={styles.sidebar} ref={sidebarRef} data-spindle-mount="sidebar">
+            <span data-spindle-mount="sidebar_top" data-spindle-scope="drawer:sidebar-top" style={{ display: 'contents' }} />
             <div className={clsx(
               styles.tabListWrap,
               tabListScroll.up && styles.tabListScrollUp,
@@ -260,6 +261,7 @@ useEffect(() => {
                     >
                       <Icon size={20} strokeWidth={1.5} />
                       {showTabLabels && <span className={styles.tabLabel}>{translateDrawerField(tab.id, 'shortName', tab.shortName)}</span>}
+                      <span data-spindle-mount="drawer_tab" data-spindle-scope={`drawer-tab:${tab.id}`} style={{ display: 'contents' }} />
                     </button>
                   )
                 })}
@@ -294,6 +296,7 @@ useEffect(() => {
                           )}
                           {showTabLabels && extEntry && <span className={styles.tabLabel}>{extEntry.shortName}</span>}
                           {dt.badge && <span className={styles.tabBadge}>{dt.badge}</span>}
+                          <span data-spindle-mount="drawer_tab" data-spindle-scope={`drawer-tab:${dt.id}`} style={{ display: 'contents' }} />
                         </button>
                       )
                     })}
@@ -303,6 +306,7 @@ useEffect(() => {
             </div>
 
             <div className={styles.sidebarBottom}>
+              <span data-spindle-mount="sidebar_bottom" data-spindle-scope="drawer:sidebar-bottom" style={{ display: 'contents' }} />
               <button
                 type="button"
                 className={styles.tabBtn}
@@ -335,11 +339,13 @@ useEffect(() => {
          </div>
 
         <CloseButton onClick={closeDrawer} />
+        <span data-spindle-mount="drawer_header_actions" data-spindle-scope="drawer:header-actions" style={{ display: 'contents' }} />
       </div>
             <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser' || activeTab === 'lorebook') && styles.panelContentFull)} ref={panelContentRef}>
               <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>
           </div>
+          <span data-spindle-mount="drawer_footer" data-spindle-scope="drawer:footer" style={{ display: 'contents' }} />
         </div>
       </div>
 

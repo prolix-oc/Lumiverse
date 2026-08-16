@@ -1648,7 +1648,11 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
       data-chat-scroll="true"
       data-group-chat={isGroupChat || undefined}
     >
+      <span data-spindle-mount="chat_stream_before" data-spindle-scope={`chat:${chatId}:stream-before`} style={{ display: 'contents' }} />
       {isGroupChat && <GroupChatMemberBar chatId={chatId} />}
+      {!hasRows && (
+        <span data-spindle-mount="chat_empty_state" data-spindle-scope={`chat:${chatId}:empty`} style={{ display: 'contents' }} />
+      )}
       <div
         ref={rowVirtualizer.containerRef}
         className={styles.virtualSpace}
@@ -1713,6 +1717,7 @@ export default function MessageList({ messages, chatId, isStreaming, findTarget 
           )
         })}
       </div>
+      <span data-spindle-mount="chat_stream_after" data-spindle-scope={`chat:${chatId}:stream-after`} style={{ display: 'contents' }} />
     </div>
   )
 }
@@ -1779,6 +1784,13 @@ const VirtualRow = memo(function VirtualRow({ virtualIndex, itemType, messageInd
       data-style-mode={relaxed ? 'extension-relaxed' : undefined}
       className={styles.virtualRow}
     >
+      {messageId && (
+        <span
+          data-spindle-mount="message_context_menu"
+          data-spindle-scope={`message:${messageId}:context-menu`}
+          style={{ display: 'contents' }}
+        />
+      )}
       {children}
     </div>
   )

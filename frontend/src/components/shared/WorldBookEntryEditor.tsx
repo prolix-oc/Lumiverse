@@ -282,6 +282,7 @@ export default function WorldBookEntryEditor({ entry, density = 'default', onUpd
       data-density={density}
       data-editor-scroll-owner={density === 'compact' ? 'true' : undefined}
     >
+      <span data-spindle-mount="world_book_entry_editor" data-spindle-scope={`world-book-entry:${entry.id}:editor`} style={{ display: 'contents' }} />
       {conflict && (
         <div className={styles.entryFieldGroup} role="alert" data-entry-conflict={conflict.kind}>
           <strong>{conflict.kind === 'conflict' ? 'Entry changed on the server' : 'Invalid revision precondition'}</strong>
@@ -699,6 +700,7 @@ export default function WorldBookEntryEditor({ entry, density = 'default', onUpd
           </div>
         </div>
       </DisclosureSection>
+      <span data-spindle-mount="world_book_entry_toolbar" data-spindle-scope={`world-book-entry:${entry.id}:toolbar`} style={{ display: 'contents' }} />
     </div>
   )
 }

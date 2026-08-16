@@ -4,6 +4,7 @@ import { Star, Pencil } from 'lucide-react'
 import { getCharacterAvatarThumbUrl, getCharacterAvatarLargeUrl } from '@/lib/avatarUrls'
 import { getTagColor } from '@/lib/tagColors'
 import LazyImage from '@/components/shared/LazyImage'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import type { Character, CharacterSummary } from '@/types/api'
 import styles from './CharacterCard.module.css'
 import clsx from 'clsx'
@@ -22,7 +23,7 @@ interface CharacterCardProps {
   onToggleBatch?: (id: string) => void
 }
 
-export default memo(function CharacterCard({
+function CharacterCardNative({
   character,
   isFavorite,
   isSelected,
@@ -102,6 +103,7 @@ export default memo(function CharacterCard({
             <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
           </button>
         )}
+        <span data-spindle-mount="character_browser_card_actions" data-spindle-scope={`character-card:${character.id}:actions`} style={{ display: 'contents' }} />
       </div>
       <div className={styles.info}>
         <span className={styles.name}>{character.name}</span>
@@ -130,4 +132,10 @@ export default memo(function CharacterCard({
       </div>
     </div>
   )
-})
+}
+
+function CharacterCard(props: CharacterCardProps) {
+  return useSpindleComponentOverride('CharacterCard', CharacterCardNative, props)
+}
+
+export default memo(CharacterCard)

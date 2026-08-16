@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect, useDeferredValue, type ReactNode, Fragment } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '@/i18n'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 
 import {
   DndContext,
@@ -1768,7 +1769,7 @@ interface LoomBuilderProps {
   compact?: boolean
 }
 
-export default function LoomBuilder({
+function LoomBuilderNative({
  compact = true }: LoomBuilderProps) {
   const { t: lb } = useLb()
   const { t: tc } = useTranslation('common')
@@ -2474,6 +2475,9 @@ useEffect(() => {
     return (
       <>
         {presetEditorToolbar}
+        <span data-spindle-mount="preset_editor_toolbar" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:preset-toolbar`} style={{ display: 'contents' }} />
+        <span data-spindle-mount="loom_builder_toolbar" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:builder-toolbar`} style={{ display: 'contents' }} />
+        <span data-spindle-mount="loom_builder_inspector" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:inspector`} style={{ display: 'contents' }} />
         <BlockEditor
           block={editingBlock}
           blocks={activePreset?.blocks ?? []}
@@ -2540,6 +2544,7 @@ useEffect(() => {
               {allCategoriesCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               <span className={s.toolbarButtonLabel}>{allCategoriesCollapsed ? lb('category.expandAll') : lb('category.collapseAll')}</span>
             </button>
+            <span data-spindle-mount="loom_builder_toolbar" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:builder-toolbar`} style={{ display: 'contents' }} />
           </div>
           {activePreset && isSearchVisible && (
             <div className={s.searchBarRow}>
@@ -2575,6 +2580,7 @@ useEffect(() => {
         </div>
 
         {presetEditorToolbar}
+        <span data-spindle-mount="preset_editor_toolbar" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:preset-toolbar`} style={{ display: 'contents' }} />
 
         {presetEditorTabs.length > 0 && (
           <div className={s.extensionTabRow}>
@@ -2613,6 +2619,7 @@ useEffect(() => {
               {tab.title}
             </button>
           ))}
+            <span data-spindle-mount="preset_editor_tab" data-spindle-scope={`loom:${activePreset?.id ?? activePresetId ?? 'none'}:preset-tab`} style={{ display: 'contents' }} />
       </div>
 
         {activePresetExtensionTab?.guide && (
@@ -3105,4 +3112,8 @@ useEffect(() => {
       </div>
     </PanelFadeIn>
   )
+}
+
+export default function LoomBuilder(props: LoomBuilderProps) {
+  return useSpindleComponentOverride('LoomBuilder', LoomBuilderNative, props)
 }

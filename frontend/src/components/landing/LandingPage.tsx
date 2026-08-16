@@ -22,6 +22,7 @@ import {
   BookOpen,
 } from 'lucide-react'
 import { Spinner } from '@/components/shared/Spinner'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { chatsApi, messagesApi } from '@/api/chats'
 import { charactersApi } from '@/api/characters'
 import { imagesApi } from '@/api/images'
@@ -959,6 +960,8 @@ function VirtualizedChatRows({
     <motion.div
       className={clsx(styles.virtualChats, navigatingToChat && styles.chatsLeaving)}
       data-component="LandingPageChats"
+      data-spindle-mount="landing_recent_chats"
+      data-spindle-scope="landing:recent-chats"
       ref={setContainerRef}
       variants={containerVariants}
       initial="hidden"
@@ -997,7 +1000,7 @@ const FULL_GUIDES: GuideDefinition = {
   title: 'Lumiverse Guides',
 }
 
-export default function LandingPage() {
+function LandingPageNative() {
   const { t } = useTranslation('landing')
   const { t: tc } = useTranslation('common')
   const navigate = useNavigate()
@@ -1728,7 +1731,7 @@ export default function LandingPage() {
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
       >
-        <header className={styles.header} data-component="LandingPageHeader">
+        <header className={styles.header} data-component="LandingPageHeader" data-spindle-mount="landing_header" data-spindle-scope="landing:header">
           <div className={styles.logo}>
             <div className={styles.logoIcon}>
               <div className={styles.logoGlow} />
@@ -1918,8 +1921,9 @@ export default function LandingPage() {
         </div>
 
         <main className={styles.main} ref={mainRef} data-component="LandingPageMain" data-spindle-mount="landing_main">
+          <span data-spindle-mount="landing_hero" data-spindle-scope="landing:hero" style={{ display: 'contents' }} />
           <div id={landingPageTabPanelId('characters')} role="tabpanel" aria-labelledby={landingPageTabId('characters')}
-            data-component="LandingPageCharacterPanel" data-spindle-mount="landing_characters"
+            data-component="LandingPageCharacterPanel" data-spindle-mount="landing_characters" data-spindle-scope="landing:characters"
             hidden={activeLandingTab !== 'characters' || !homepageSurfaceReady} />
           <AnimatePresence mode="wait">
             {activeLandingTab === 'characters' ? null : !settingsLoaded || (loading && items.length === 0) ? (
@@ -1977,6 +1981,7 @@ export default function LandingPage() {
               )}
             </div>
           )}
+          <span data-spindle-mount="landing_footer" data-spindle-scope="landing:footer" style={{ display: 'contents' }} />
         </main>
       </motion.div>
     </div>
@@ -1994,4 +1999,8 @@ export default function LandingPage() {
     />
   </div>
 )
+}
+
+export default function LandingPage() {
+  return useSpindleComponentOverride('LandingPageShell', LandingPageNative, {})
 }

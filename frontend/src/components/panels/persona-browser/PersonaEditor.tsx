@@ -491,6 +491,7 @@ export default function PersonaEditor({
             placeholder={t('personaEditor.shortTitle')}
           />
         </div>
+        <span data-spindle-mount="persona_editor_tab" data-spindle-scope={`persona-editor:${persona.id}:tab`} style={{ display: 'contents' }} />
       </div>
 
       {/* Description */}
