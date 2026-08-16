@@ -65,7 +65,7 @@ describe('lorebook workspace Content resize tracking', () => {
     const wrapper = textarea.parentElement!
     const field = textarea.closest<HTMLElement>('[data-content-flex-region]')!
     const section = textarea.closest<HTMLElement>('[data-world-book-identity-content]')!
-    const stop = installLorebookContentResizeTracking(document, {
+    const stop = installLorebookContentResizeTracking(document.body, {
       ResizeObserver: MockResizeObserver,
       MutationObserver: dom.window.MutationObserver,
       layoutElementRect: (element) => ({ height: element === wrapper ? 400 : 0 }),
@@ -106,7 +106,7 @@ describe('lorebook workspace Content resize tracking', () => {
     const textarea = document.querySelector<HTMLTextAreaElement>('textarea')!
     const wrapper = textarea.parentElement!
     const section = textarea.closest<HTMLElement>('[data-world-book-identity-content]')!
-    const stop = installLorebookContentResizeTracking(document, {
+    const stop = installLorebookContentResizeTracking(document.body, {
       ResizeObserver: MockResizeObserver,
       MutationObserver: dom.window.MutationObserver,
     })

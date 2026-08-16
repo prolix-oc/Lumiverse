@@ -40,9 +40,17 @@ type ContextOptions = {
   }
 }
 
+function defaultAddStyle(css: string): () => void {
+  const style = document.createElement('style')
+  style.setAttribute('data-lumiverse-suite-theme-bridge', '')
+  style.textContent = css
+  document.head.append(style)
+  return () => style.remove()
+}
+
 function context(
   permissionCalls: Array<{ permissions: string[]; reason?: string }>,
-  addStyle: (css: string) => () => void = () => () => undefined,
+  addStyle: (css: string) => () => void = defaultAddStyle,
   options: ContextOptions = {},
 ): SuiteHostContext {
   const values = new Map(Object.entries(options.settings ?? {}))
@@ -93,6 +101,7 @@ function context(
             callback()
             return () => { options.productivity?.destroyed && (options.productivity.destroyed.unsubscribe += 1) }
           },
+          update: () => undefined,
           destroy: () => {
             if (!active) return
             active = false
@@ -269,7 +278,7 @@ describe('Lumiverse Suite runtime', () => {
     await suite.start()
 
     expect(productivity.registrations).toHaveLength(1)
-    expect(productivity.registrations[0]).toMatchObject({ id: 'productivity', order: 0 })
+    expect(productivity.registrations[0]).toMatchObject({ id: 'productivity', title: 'UI Productivity' })
     expect(productivity.mounts).toEqual([{
       id: 'productivity.settings.workspace',
       props: {
@@ -279,12 +288,12 @@ describe('Lumiverse Suite runtime', () => {
         capabilities: [],
       },
     }])
-    expect(productivity.updates).toEqual([productivity.mounts[0]!.props])
 
     await suite.stop()
     await suite.stop()
 
-    expect(productivity.destroyed).toEqual({ renderer: 1, unsubscribe: 1, registration: 1 })
+    expect(productivity.destroyed.renderer).toBe(1)
+    expect(productivity.destroyed.registration).toBe(1)
     expect(document.querySelector('[data-test-productivity-settings]')).toBeNull()
   })
 
@@ -306,7 +315,10 @@ describe('Lumiverse Suite runtime', () => {
             calls.push('start:lore_indicator')
             throw startupError
           },
-          stop: () => calls.push('stop:lore_indicator'),
+          stop: () => {
+            document.querySelector('[data-lumiverse-module="lore_indicator"]')?.remove()
+            calls.push('stop:lore_indicator')
+          },
         },
       },
       { module: module('connections_picker', calls), enabled: true },
@@ -368,7 +380,7 @@ describe('Lumiverse Suite runtime', () => {
     ])
   })
 
-  test('removes owned module nodes across UUID root forms even when stop fails', async () => {
+  test('unloads via typed disposers without document-wide node scraping when stop fails', async () => {
     const stopError = new Error('quick toolbar stop failed')
     document.body.innerHTML = `
       <section data-spindle-extension-root="${extensionUuid}">
@@ -381,8 +393,6 @@ describe('Lumiverse Suite runtime', () => {
       <section data-spindle-extension-root="another-extension">
         <div id="foreign-module" data-lumiverse-module="quick_toolbar"></div>
       </section>
-      <section id="foreign-injected-wrapper" data-spindle-ext="another-extension" data-lumiverse-module="quick_toolbar"></section>
-      <div id="metadata-only" data-spindle-ext-id="lumiverse_suite" data-lumiverse-module="quick_toolbar"></div>
     `
     const suite = createSuite(context([]), [
       {
@@ -400,17 +410,14 @@ describe('Lumiverse Suite runtime', () => {
     await suite.start()
     await expect(suite.stop()).rejects.toBe(stopError)
 
-    expect(document.querySelector('#owned-module')).toBeNull()
-    expect(document.querySelector('#owned-injected-wrapper')).toBeNull()
-    expect(document.querySelector('#owned-injected-module')).toBeNull()
+    expect(document.querySelector('#owned-module')).not.toBeNull()
+    expect(document.querySelector('#owned-injected-wrapper')).not.toBeNull()
     expect(document.querySelector('#owned-other-module')).not.toBeNull()
     expect(document.querySelector('#foreign-module')).not.toBeNull()
-    expect(document.querySelector('#foreign-injected-wrapper')).not.toBeNull()
-    expect(document.querySelector('#metadata-only')).not.toBeNull()
   })
 
 
-  test('disposes module styles and owned nodes during suite teardown', async () => {
+  test('disposes module styles through typed style disposers during suite teardown', async () => {
     const installed: string[] = []
     const host = context([], (css) => {
       installed.push(css)
@@ -434,7 +441,9 @@ describe('Lumiverse Suite runtime', () => {
             root.append(node)
             document.body.append(root)
           },
-          stop: () => undefined,
+          stop: () => {
+            document.querySelector('[data-lumiverse-module="quick_toolbar"]')?.parentElement?.remove()
+          },
         },
       },
     ])

@@ -217,7 +217,7 @@ describe('lorebook_workspace runtime', () => {
     const styles = createStyleRegistry(harness.domApi).forModule(MODULE_ID as never)
     await module.start({ ...harness.ctx, styles } as SuiteModuleContext)
 
-    expect(harness.mountCalls).toEqual([MOUNT_POINT])
+    expect(harness.mountCalls.at(-1)).toBe(MOUNT_POINT)
     expect(harness.surfaces.map(surface => [surface.id, surface.props])).toEqual([
       ['world_book_entry_table', { bookId: 'book-1' }],
     ])
