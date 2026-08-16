@@ -32,7 +32,16 @@ import { ExpandableTextarea } from '@/components/shared/ExpandedTextEditor'
 import { useStore } from '@/store'
 import { spindleApi } from '@/api/spindle'
 import { connectionsApi } from '@/api/connections'
-import { embeddingsApi } from '@/api/embeddings'
+import {
+  embeddingsApi,
+  EMBEDDING_ERROR_CODES,
+  buildEmbeddingConfigUpdate,
+  isUsableProfileId,
+  redactEmbeddingErrorMessage,
+  selectFallbackChain,
+  type EmbeddingConfigWithProfiles,
+  type EmbeddingConnectionProfile,
+} from '@/api/embeddings'
 import { imagesApi } from '@/api/images'
 import { settingsApi } from '@/api/settings'
 import { notificationSoundsApi } from '@/api/notification-sounds'
@@ -214,6 +223,10 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           <div className={styles.content} ref={contentRef}>
             <SettingsView view={activeView} />
             <div
+              data-spindle-mount="settings_section"
+              data-spindle-scope={`settings-section:${activeView}:modal`}
+            />
+            <div
               className={clsx(
                 styles.extensionMountHost,
                 activeView !== 'extensions' && styles.extensionMountHostHidden
@@ -303,7 +316,9 @@ function SettingsView({ view }: { view: string }) {
   return (
     <>
       {coreContent}
-      {extensionTabs.length > 0 && <SettingsExtensionTabBodies tabs={extensionTabs} />}
+      {extensionTabs.length > 0
+        ? <SettingsExtensionTabBodies tabs={extensionTabs} />
+        : <div data-spindle-mount="settings_tab" data-settings-tab-id={view} />}
     </>
   )
 }
@@ -323,7 +338,7 @@ function SettingsExtensionTabBodies({ tabs }: { tabs: readonly SettingsTabState[
     }
   }, [tabs])
 
-  return <div ref={hostRef} data-settings-tab-id={tabs[0]?.tabId} />
+  return <div ref={hostRef} data-spindle-mount="settings_tab" data-settings-tab-id={tabs[0]?.tabId} />
 }
 
 function createId(prefix: string) {
@@ -1986,6 +2001,40 @@ const normalizeWorldBookVectorSettings = (
   }
 }
 
+const EMBEDDING_PROFILE_PROVIDERS = [
+  'openai-compatible',
+  'openai',
+  'openrouter',
+  'electronhub',
+  'bananabread',
+  'nanogpt',
+  'google_vertex',
+] as const
+
+function newEmbeddingProfileId(): string {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(16).padStart(12, '0')}0000-4aaa-8aaa-${Date.now().toString(16).slice(-12).padStart(12, '0')}`
+  return isUsableProfileId(id) ? id : `${'a'.repeat(8)}-${'a'.repeat(4)}-4aaa-8aaa-${Date.now().toString(16).slice(-12).padStart(12, '0')}`
+}
+
+function createEmbeddingProfile(from?: EmbeddingConfigWithProfiles | null): EmbeddingConnectionProfile {
+  return {
+    id: newEmbeddingProfileId(),
+    provider: from?.provider ?? 'openai-compatible',
+    model: from?.model ?? '',
+    api_url: from?.api_url ?? '',
+    dimensions: from?.dimensions ?? null,
+    enabled: true,
+  }
+}
+
+function embeddingErrorCode(err: { body?: { code?: unknown }; code?: unknown } | null | undefined): string | null {
+  const code = typeof err?.body?.code === 'string' ? err.body.code : typeof err?.code === 'string' ? err.code : null
+  if (code === EMBEDDING_ERROR_CODES.PROVIDER_UNAVAILABLE || code === EMBEDDING_ERROR_CODES.FALLBACK_EXHAUSTED) return code
+  return null
+}
+
 function EmbeddingsSettings() {
   const { t } = useTranslation('settings')
 
@@ -1993,9 +2042,11 @@ function EmbeddingsSettings() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [errorCode, setErrorCode] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState('')
-  const [cfg, setCfg] = useState<EmbeddingConfig | null>(null)
+  const [profileApiKeys, setProfileApiKeys] = useState<Record<string, string>>({})
+  const [cfg, setCfg] = useState<EmbeddingConfigWithProfiles | null>(null)
   const [worldBookSettings, setWorldBookSettings] = useState<WorldBookVectorSettings>(DEFAULT_WORLD_BOOK_VECTOR_SETTINGS)
   const [worldBookSettingsLoading, setWorldBookSettingsLoading] = useState(true)
   const [worldBookSettingsStatus, setWorldBookSettingsStatus] = useState<string | null>(null)
@@ -2009,12 +2060,16 @@ function EmbeddingsSettings() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setErrorCode(null)
     try {
       const next = await embeddingsApi.getConfig()
       setCfg(next)
       setApiKey('')
+      setProfileApiKeys({})
     } catch (err: any) {
-      setError(err?.body?.error || err?.message || t('embeddings.loadFailed'))
+      const code = embeddingErrorCode(err)
+      setErrorCode(code)
+      setError(redactEmbeddingErrorMessage(err?.body?.error || err?.message || t('embeddings.loadFailed')))
     } finally {
       setLoading(false)
     }
@@ -2084,7 +2139,7 @@ function EmbeddingsSettings() {
     return provider === 'openai-compatible' || provider === 'bananabread'
   }
 
-  const update = (patch: Partial<EmbeddingConfig>) => {
+  const update = (patch: Partial<EmbeddingConfigWithProfiles>) => {
     setCfg((current) => {
       if (!current) return current
       let nextPatch = patch
@@ -2095,7 +2150,115 @@ function EmbeddingsSettings() {
           nextPatch = { ...nextPatch, api_url: defaults.api_url }
         }
       }
-      return { ...current, ...nextPatch }
+      const next: EmbeddingConfigWithProfiles = { ...current, ...nextPatch }
+      const primaryId = isUsableProfileId(next.primaryProfileId) ? next.primaryProfileId : null
+      const shouldSyncPrimary = primaryId && (
+        nextPatch.provider !== undefined
+        || nextPatch.model !== undefined
+        || nextPatch.api_url !== undefined
+        || nextPatch.dimensions !== undefined
+      )
+      if (shouldSyncPrimary && next.connectionProfiles) {
+        next.connectionProfiles = next.connectionProfiles.map((profile) => (
+          profile.id === primaryId
+            ? {
+                ...profile,
+                provider: next.provider,
+                model: next.model,
+                api_url: next.api_url,
+                dimensions: next.dimensions,
+              }
+            : profile
+        ))
+      }
+      return next
+    })
+  }
+
+  const updateProfile = (id: string, patch: Partial<EmbeddingConnectionProfile>) => {
+    if (!isUsableProfileId(id)) return
+    setCfg((current) => {
+      if (!current) return current
+      const connectionProfiles = (current.connectionProfiles ?? []).map((profile) => (
+        profile.id === id ? { ...profile, ...patch } : profile
+      ))
+      const next: EmbeddingConfigWithProfiles = { ...current, connectionProfiles }
+      if (current.primaryProfileId === id) {
+        const primary = connectionProfiles.find((profile) => profile.id === id)
+        if (primary) {
+          if (EMBEDDING_PROFILE_PROVIDERS.includes(primary.provider as typeof EMBEDDING_PROFILE_PROVIDERS[number])
+            && primary.provider !== 'google_vertex') {
+            next.provider = primary.provider as EmbeddingConfig['provider']
+          }
+          next.model = primary.model
+          next.api_url = primary.api_url
+          next.dimensions = primary.dimensions
+        }
+      }
+      return next
+    })
+  }
+
+  const addProfile = () => {
+    setCfg((current) => {
+      if (!current) return current
+      const profile = createEmbeddingProfile(current)
+      const connectionProfiles = [...(current.connectionProfiles ?? []), profile]
+      const primaryProfileId = isUsableProfileId(current.primaryProfileId)
+        ? current.primaryProfileId
+        : profile.id
+      return { ...current, connectionProfiles, primaryProfileId }
+    })
+  }
+
+  const removeProfile = (id: string) => {
+    setCfg((current) => {
+      if (!current) return current
+      const connectionProfiles = (current.connectionProfiles ?? []).filter((profile) => profile.id !== id)
+      const remainingPrimary = connectionProfiles.find((profile) => isUsableProfileId(profile.id))
+      const primaryProfileId = current.primaryProfileId === id
+        ? (remainingPrimary?.id ?? null)
+        : (isUsableProfileId(current.primaryProfileId) ? current.primaryProfileId : remainingPrimary?.id ?? null)
+      return {
+        ...current,
+        connectionProfiles,
+        primaryProfileId,
+        fallbackProfileIds: (current.fallbackProfileIds ?? []).filter((fallbackId) => fallbackId !== id && fallbackId !== primaryProfileId),
+      }
+    })
+    setProfileApiKeys((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }
+
+  const setPrimaryProfile = (id: string) => {
+    if (!isUsableProfileId(id)) return
+    setCfg((current) => {
+      if (!current) return current
+      const profile = (current.connectionProfiles ?? []).find((entry) => entry.id === id)
+      const next: EmbeddingConfigWithProfiles = {
+        ...current,
+        primaryProfileId: id,
+        fallbackProfileIds: (current.fallbackProfileIds ?? []).filter((fallbackId) => fallbackId !== id),
+      }
+      if (profile) {
+        if (EMBEDDING_PROFILE_PROVIDERS.includes(profile.provider as typeof EMBEDDING_PROFILE_PROVIDERS[number])
+          && profile.provider !== 'google_vertex') {
+          next.provider = profile.provider as EmbeddingConfig['provider']
+        }
+        next.model = profile.model
+        next.api_url = profile.api_url
+        next.dimensions = profile.dimensions
+      }
+      return next
+    })
+  }
+
+  const setFallbackOrder = (ids: string[]) => {
+    update({
+      fallbackProfileIds: ids.filter((id) => isUsableProfileId(id)),
     })
   }
 
@@ -2122,32 +2285,27 @@ function EmbeddingsSettings() {
     if (!cfg) return
     setSaving(true)
     setError(null)
+    setErrorCode(null)
     setSuccess(null)
     try {
       const saved = await embeddingsApi.updateConfig({
-        enabled: cfg.enabled,
-        provider: cfg.provider,
-        api_url: cfg.api_url,
-        model: cfg.model,
-        dimensions: cfg.dimensions,
-        retrieval_top_k: worldBookSettings.retrievalTopK,
-        hybrid_weight_mode: cfg.hybrid_weight_mode,
-        preferred_context_size: cfg.preferred_context_size,
-        batch_size: cfg.batch_size,
-        similarity_threshold: cfg.similarity_threshold,
-        rerank_cutoff: cfg.rerank_cutoff,
-        vectorize_world_books: cfg.vectorize_world_books,
-        vectorize_chat_messages: cfg.vectorize_chat_messages,
-        vectorize_chat_documents: cfg.vectorize_chat_documents,
-        chat_memory_mode: cfg.chat_memory_mode,
-        request_timeout: cfg.request_timeout,
+        ...buildEmbeddingConfigUpdate(
+          { ...cfg, retrieval_top_k: worldBookSettings.retrievalTopK },
+          profileApiKeys,
+        ),
         api_key: apiKey.trim() ? apiKey.trim() : undefined,
       })
       setCfg(saved)
       setApiKey('')
+      setProfileApiKeys({})
       setSuccess(t('embeddings.saveSuccess'))
     } catch (err: any) {
-      setError(err?.body?.error || err?.message || t('embeddings.saveFailed'))
+      const code = embeddingErrorCode(err)
+      setErrorCode(code)
+      setError(redactEmbeddingErrorMessage(
+        err?.body?.error || err?.message || t('embeddings.saveFailed'),
+        [apiKey, ...Object.values(profileApiKeys)],
+      ))
     } finally {
       setSaving(false)
     }
@@ -2156,12 +2314,14 @@ function EmbeddingsSettings() {
   const test = async () => {
     setTesting(true)
     setError(null)
+    setErrorCode(null)
     setSuccess(null)
     try {
       const result = await embeddingsApi.testConfig('Lumiverse vector test')
       setCfg((current) => current
         ? {
             ...current,
+            ...result.config,
             dimensions: result.applied_dimensions,
             has_api_key: result.config.has_api_key,
             inherited: result.config.inherited,
@@ -2169,7 +2329,12 @@ function EmbeddingsSettings() {
         : result.config)
       setSuccess(t('embeddings.testSuccess', { dims: result.applied_dimensions }))
     } catch (err: any) {
-      setError(err?.body?.error || err?.message || t('embeddings.testFailed'))
+      const code = embeddingErrorCode(err)
+      setErrorCode(code)
+      setError(redactEmbeddingErrorMessage(
+        err?.body?.error || err?.message || t('embeddings.testFailed'),
+        [apiKey, ...Object.values(profileApiKeys)],
+      ))
     } finally {
       setTesting(false)
     }
@@ -2256,7 +2421,11 @@ function EmbeddingsSettings() {
         </p>
       )}
 
-      {error && <p className={styles.errorText}>{error}</p>}
+      {error && (
+        <p className={styles.errorText} data-embedding-error-code={errorCode ?? undefined}>
+          {errorCode ? `${errorCode}: ${error}` : error}
+        </p>
+      )}
       {success && <p className={styles.successText}>{success}</p>}
 
       <div className={styles.embeddingChecklist}>
@@ -2337,6 +2506,7 @@ function EmbeddingsSettings() {
                 <option value="electronhub">ElectronHub</option>
                 <option value="bananabread">BananaBread</option>
                 <option value="nanogpt">Nano-GPT</option>
+                <option value="google_vertex">Google Vertex</option>
               </select>
             </div>
 
@@ -2414,6 +2584,220 @@ function EmbeddingsSettings() {
             label={t('embeddings.sendDimensions')}
             hint={t('embeddings.sendDimensionsHint')}
           />
+        </div>
+      </div>
+
+      <div className={styles.settingsCard} data-embeddings-profiles>
+        <div className={styles.settingsCardHeader}>
+          <div>
+            <div className={styles.subsectionTitle}>Profiles</div>
+            <div className={styles.settingsCardTitle}>Primary and fallback connections</div>
+            <div className={styles.settingsCardMeta}>
+              Ordered fallbacks skip incompatible dimensions. Vertex uses project and region, not a host URL.
+            </div>
+          </div>
+          <Button size="sm" variant="secondary" onClick={addProfile} disabled={inherited}>
+            Add profile
+          </Button>
+        </div>
+        <div className={styles.settingsCardBody}>
+          {(() => {
+            const profiles = cfg.connectionProfiles ?? []
+            const primaryId = isUsableProfileId(cfg.primaryProfileId) ? cfg.primaryProfileId : null
+            const fallbackIds = (cfg.fallbackProfileIds ?? []).filter((id) => isUsableProfileId(id) && id !== primaryId)
+            const chain = selectFallbackChain(cfg)
+            return (
+              <>
+                <div className={styles.field}>
+                  <label className={styles.fieldLabel}>Primary profile</label>
+                  <select
+                    className={styles.select}
+                    value={primaryId ?? ''}
+                    disabled={inherited || profiles.length === 0}
+                    onChange={(event) => {
+                      const nextId = event.target.value
+                      if (isUsableProfileId(nextId)) setPrimaryProfile(nextId)
+                    }}
+                  >
+                    {profiles.length === 0 && <option value="">None</option>}
+                    {profiles.map((profile) => (
+                      isUsableProfileId(profile.id) ? (
+                        <option key={profile.id} value={profile.id}>
+                          {(profile.model || profile.provider || profile.id).trim() || profile.id}
+                        </option>
+                      ) : null
+                    ))}
+                  </select>
+                </div>
+                <p className={styles.helperText} data-fallback-chain>
+                  Fallback chain: {chain.length > 0 ? chain.map((profile) => profile.model || profile.provider || profile.id).join(' → ') : 'none'}
+                </p>
+                {profiles.map((profile) => {
+                  const usable = isUsableProfileId(profile.id)
+                  const isPrimary = usable && profile.id === primaryId
+                  const fallbackIndex = fallbackIds.indexOf(profile.id)
+                  const inFallback = fallbackIndex >= 0
+                  return (
+                    <div
+                      key={profile.id}
+                      className={styles.settingsCard}
+                      data-embedding-profile={usable ? profile.id : undefined}
+                      data-has-secret={profile.hasSecret ? 'true' : 'false'}
+                      data-primary={isPrimary || undefined}
+                    >
+                      <div className={styles.settingsCardBody}>
+                        <div className={styles.drawerRow} style={{ alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                          <Toggle.Checkbox
+                            checked={profile.enabled}
+                            disabled={inherited}
+                            onChange={(checked) => usable && updateProfile(profile.id, { enabled: checked })}
+                            label={isPrimary ? 'Primary' : 'Enabled'}
+                          />
+                          <span className={styles.helperText}>
+                            {profile.hasSecret ? 'Secret configured' : 'No secret'}
+                          </span>
+                          {!isPrimary && usable && (
+                            <Toggle.Checkbox
+                              checked={inFallback}
+                              disabled={inherited}
+                              onChange={(checked) => {
+                                setFallbackOrder(checked
+                                  ? [...fallbackIds, profile.id]
+                                  : fallbackIds.filter((id) => id !== profile.id))
+                              }}
+                              label="Use as fallback"
+                            />
+                          )}
+                          {inFallback && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={inherited || fallbackIndex === 0}
+                                onClick={() => {
+                                  const next = [...fallbackIds]
+                                  const swap = next[fallbackIndex - 1]
+                                  next[fallbackIndex - 1] = next[fallbackIndex]
+                                  next[fallbackIndex] = swap
+                                  setFallbackOrder(next)
+                                }}
+                              >
+                                Move up
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={inherited || fallbackIndex === fallbackIds.length - 1}
+                                onClick={() => {
+                                  const next = [...fallbackIds]
+                                  const swap = next[fallbackIndex + 1]
+                                  next[fallbackIndex + 1] = next[fallbackIndex]
+                                  next[fallbackIndex] = swap
+                                  setFallbackOrder(next)
+                                }}
+                              >
+                                Move down
+                              </Button>
+                            </>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="danger-ghost"
+                            disabled={inherited}
+                            onClick={() => usable && removeProfile(profile.id)}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                        <div className={styles.settingsGridTwo}>
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>{t('embeddings.provider')}</label>
+                            <select
+                              className={styles.select}
+                              value={profile.provider}
+                              disabled={inherited || !usable}
+                              onChange={(event) => updateProfile(profile.id, { provider: event.target.value })}
+                            >
+                              {EMBEDDING_PROFILE_PROVIDERS.map((provider) => (
+                                <option key={provider} value={provider}>{provider}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>{t('embeddings.model')}</label>
+                            <input
+                              className={styles.select}
+                              value={profile.model}
+                              disabled={inherited || !usable}
+                              onChange={(event) => updateProfile(profile.id, { model: event.target.value })}
+                            />
+                          </div>
+                        </div>
+                        <div className={styles.field}>
+                          <label className={styles.fieldLabel}>{t('embeddings.apiUrl')}</label>
+                          <input
+                            className={styles.select}
+                            value={profile.api_url}
+                            disabled={inherited || !usable}
+                            onChange={(event) => updateProfile(profile.id, { api_url: event.target.value })}
+                          />
+                        </div>
+                        <div className={styles.settingsGridTwo}>
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>{t('embeddings.dimensionsOptional')}</label>
+                            <NumericInput
+                              className={styles.numberInput}
+                              min={1}
+                              value={profile.dimensions ?? null}
+                              integer
+                              allowEmpty
+                              disabled={inherited || !usable}
+                              onChange={(value) => updateProfile(profile.id, { dimensions: value })}
+                            />
+                          </div>
+                          <div className={styles.field}>
+                            <label className={styles.fieldLabel}>
+                              {profile.hasSecret ? t('embeddings.apiKeyConfigured') : t('embeddings.apiKeyNotConfigured')}
+                            </label>
+                            <input
+                              className={styles.select}
+                              type="password"
+                              value={profileApiKeys[profile.id] ?? ''}
+                              placeholder={t('embeddings.apiKeyPlaceholder')}
+                              disabled={inherited || !usable}
+                              onChange={(event) => setProfileApiKeys((current) => ({ ...current, [profile.id]: event.target.value }))}
+                            />
+                          </div>
+                        </div>
+                        {profile.provider === 'google_vertex' && (
+                          <div className={styles.settingsGridTwo}>
+                            <div className={styles.field}>
+                              <label className={styles.fieldLabel}>Vertex project</label>
+                              <input
+                                className={styles.select}
+                                value={profile.vertex_project ?? ''}
+                                disabled={inherited || !usable}
+                                onChange={(event) => updateProfile(profile.id, { vertex_project: event.target.value })}
+                              />
+                            </div>
+                            <div className={styles.field}>
+                              <label className={styles.fieldLabel}>Vertex region</label>
+                              <input
+                                className={styles.select}
+                                value={profile.vertex_region ?? ''}
+                                disabled={inherited || !usable}
+                                onChange={(event) => updateProfile(profile.id, { vertex_region: event.target.value })}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )
+          })()}
         </div>
       </div>
 

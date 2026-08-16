@@ -1,16 +1,226 @@
 import { get, put, post, type RequestOptions } from './client'
 import type { EmbeddingConfig, ChatMemorySettings, WorldBookReindexResult, ConnectionModelsResult, EmbeddingModelsPreviewInput } from '@/types/api'
+import {
+  createProviderRegistryProjection,
+  FRONTEND_PROVIDER_SCOPE,
+  type ProviderRegistryChangedPayload,
+  type ProviderRegistryEntry,
+} from '@/ws/provider-registry-projection'
 
 /** Embedding operations can be slow (external API + vector DB writes). */
 const LONG: RequestOptions = { timeout: 60_000 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export const EMBEDDING_ERROR_CODES = {
+  PROVIDER_UNAVAILABLE: 'embedding_provider_unavailable',
+  FALLBACK_EXHAUSTED: 'embedding_fallback_exhausted',
+} as const
+
+export interface EmbeddingConnectionProfile {
+  id: string
+  provider: string
+  model: string
+  api_url: string
+  dimensions: number | null
+  enabled: boolean
+  vertex_region?: string
+  vertex_project?: string
+  hasSecret?: boolean
+}
+
+export interface EmbeddingConfigWithProfiles extends EmbeddingConfig {
+  connectionProfiles?: EmbeddingConnectionProfile[]
+  primaryProfileId?: string | null
+  fallbackProfileIds?: string[]
+}
+
+export function isUsableProfileId(id: unknown): id is string {
+  return typeof id === 'string' && UUID_RE.test(id)
+}
+
+export function areProfileDimensionsCompatible(
+  primary: Pick<EmbeddingConnectionProfile, 'dimensions'> | null | undefined,
+  candidate: Pick<EmbeddingConnectionProfile, 'dimensions'>,
+): boolean {
+  if (!primary) return true
+  if (primary.dimensions == null || candidate.dimensions == null) return true
+  return primary.dimensions === candidate.dimensions
+}
+
+/** Ordered enabled profiles: primary first, then fallbacks. Skips dim mismatches. */
+export function selectFallbackChain(cfg: {
+  connectionProfiles?: EmbeddingConnectionProfile[] | null
+  primaryProfileId?: string | null
+  fallbackProfileIds?: string[] | null
+}): EmbeddingConnectionProfile[] {
+  const profiles = Array.isArray(cfg.connectionProfiles) ? cfg.connectionProfiles : []
+  const byId = new Map(profiles.map((profile) => [profile.id, profile]))
+  const chain: EmbeddingConnectionProfile[] = []
+  const seen = new Set<string>()
+
+  const push = (profile: EmbeddingConnectionProfile | undefined, requireCompatWith?: EmbeddingConnectionProfile) => {
+    if (!profile || !profile.enabled || seen.has(profile.id)) return
+    if (requireCompatWith && !areProfileDimensionsCompatible(requireCompatWith, profile)) return
+    seen.add(profile.id)
+    chain.push(profile)
+  }
+
+  const primary = (cfg.primaryProfileId && byId.get(cfg.primaryProfileId)) || profiles[0]
+  push(primary)
+
+  const fallbackIds = Array.isArray(cfg.fallbackProfileIds) ? cfg.fallbackProfileIds : []
+  for (const id of fallbackIds) {
+    push(byId.get(id), chain[0])
+  }
+
+  return chain
+}
+
+export function redactEmbeddingErrorMessage(message: string, secrets: Array<string | null | undefined> = []): string {
+  let next = message.replace(/embedding-profile\/[^\s"'\\]+/gi, '[redacted]')
+  for (const secret of secrets) {
+    if (secret && secret.length > 0) next = next.split(secret).join('[redacted]')
+  }
+  return next.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+}
+
+/** Build a PUT /config payload. Never includes secret refs or secret values unless typed. */
+export function buildEmbeddingConfigUpdate(
+  cfg: EmbeddingConfigWithProfiles,
+  apiKeys: Record<string, string | undefined> = {},
+): Partial<EmbeddingConfigWithProfiles> & { api_key?: string | null; connectionProfiles?: Array<EmbeddingConnectionProfile & { api_key?: string }> } {
+  const connectionProfiles = (cfg.connectionProfiles ?? []).map((profile) => {
+    const { hasSecret: _hasSecret, ...rest } = profile
+    const api_key = apiKeys[profile.id]
+    return api_key ? { ...rest, api_key } : rest
+  })
+  return {
+    enabled: cfg.enabled,
+    provider: cfg.provider,
+    api_url: cfg.api_url,
+    model: cfg.model,
+    dimensions: cfg.dimensions,
+    send_dimensions: cfg.send_dimensions,
+    retrieval_top_k: cfg.retrieval_top_k,
+    hybrid_weight_mode: cfg.hybrid_weight_mode,
+    preferred_context_size: cfg.preferred_context_size,
+    batch_size: cfg.batch_size,
+    similarity_threshold: cfg.similarity_threshold,
+    rerank_cutoff: cfg.rerank_cutoff,
+    vectorize_world_books: cfg.vectorize_world_books,
+    vectorize_chat_messages: cfg.vectorize_chat_messages,
+    vectorize_chat_documents: cfg.vectorize_chat_documents,
+    chat_memory_mode: cfg.chat_memory_mode,
+    request_timeout: cfg.request_timeout,
+    connectionProfiles,
+    primaryProfileId: cfg.primaryProfileId ?? null,
+    fallbackProfileIds: cfg.fallbackProfileIds ?? [],
+  }
+}
+
+export type EmbeddingDriverSource = 'builtin' | 'registry'
+export type EmbeddingDriverStatus = 'ok' | 'unavailable' | 'timeout'
+
+export interface EmbeddingDriverOption {
+  id: string
+  kind: 'embedding'
+  name: string
+  source: EmbeddingDriverSource
+  status: EmbeddingDriverStatus
+}
+
+const BUILTIN_EMBEDDING_DRIVERS: EmbeddingDriverOption[] = [
+  'openai-compatible',
+  'openai',
+  'openrouter',
+  'electronhub',
+  'bananabread',
+  'nanogpt',
+  'google_vertex',
+].map((id) => ({ id, kind: 'embedding', name: id, source: 'builtin', status: 'ok' }))
+
+const embeddingListeners = new Set<() => void>()
+let embeddingProjection = createProviderRegistryProjection({
+  authorizedUserId: 'local',
+  authorizedScope: FRONTEND_PROVIDER_SCOPE,
+})
+
+function embeddingEntryDenied(entry: ProviderRegistryEntry): boolean {
+  return entry.denied === true || entry.visible === false || entry.status === 'denied'
+}
+
+function embeddingEntryStatus(entry: ProviderRegistryEntry): EmbeddingDriverStatus {
+  if (entry.status === 'timeout' || entry.availability === 'timeout') return 'timeout'
+  if (entry.status === 'unavailable' || entry.availability === 'unavailable') return 'unavailable'
+  return 'ok'
+}
+
+export function resetEmbeddingProviderProjection(userId = 'local'): void {
+  embeddingProjection = createProviderRegistryProjection({
+    authorizedUserId: userId,
+    authorizedScope: FRONTEND_PROVIDER_SCOPE,
+  })
+}
+
+export function applyEmbeddingProviderRegistryEvent(
+  event: ProviderRegistryChangedPayload,
+): 'applied' | 'queued' | 'ignored' {
+  try {
+    const result = embeddingProjection.applyEvent(event)
+    if (result === 'applied') {
+      for (const listener of embeddingListeners) listener()
+    }
+    return result
+  } catch {
+    return 'ignored'
+  }
+}
+
+export function subscribeEmbeddingProviders(listener: () => void): () => void {
+  embeddingListeners.add(listener)
+  return () => { embeddingListeners.delete(listener) }
+}
+
+export function resolveEmbeddingProviderVisibility(entry: Pick<ProviderRegistryEntry, 'status' | 'availability'>): EmbeddingDriverStatus | null {
+  if (entry.status === 'timeout' || entry.availability === 'timeout') return 'timeout'
+  if (entry.status === 'unavailable' || entry.availability === 'unavailable') return 'unavailable'
+  if (entry.status === 'ok' || entry.availability === 'ok') return 'ok'
+  return null
+}
+
+/** Built-in embedding engines plus the live frontend registry projection. */
+export function listEmbeddingDrivers(): EmbeddingDriverOption[] {
+  const extras: EmbeddingDriverOption[] = []
+  for (const entry of embeddingProjection.list()) {
+    try {
+      if (entry.kind != null && entry.kind !== 'embedding') continue
+      if (embeddingEntryDenied(entry)) continue
+      extras.push({
+        id: entry.id,
+        kind: 'embedding',
+        name: typeof entry.name === 'string' && entry.name ? entry.name : entry.id,
+        source: 'registry',
+        status: embeddingEntryStatus(entry),
+      })
+    } catch {
+      // Isolated: one bad registry row cannot hide the built-ins.
+    }
+  }
+  return [...BUILTIN_EMBEDDING_DRIVERS, ...extras]
+}
+
 export const embeddingsApi = {
   getConfig() {
-    return get<EmbeddingConfig>('/embeddings/config')
+    return get<EmbeddingConfigWithProfiles>('/embeddings/config')
   },
 
-  updateConfig(input: Partial<EmbeddingConfig> & { api_key?: string | null }) {
-    return put<EmbeddingConfig>('/embeddings/config', input)
+  providers() {
+    return get<{ providers: EmbeddingDriverOption[] }>('/embeddings/providers')
+  },
+
+  updateConfig(input: Partial<EmbeddingConfigWithProfiles> & { api_key?: string | null }) {
+    return put<EmbeddingConfigWithProfiles>('/embeddings/config', input)
   },
 
   previewModels(input: EmbeddingModelsPreviewInput) {
@@ -22,7 +232,7 @@ export const embeddingsApi = {
       success: boolean
       dimension: number
       applied_dimensions: number
-      config: EmbeddingConfig
+      config: EmbeddingConfigWithProfiles
     }>('/embeddings/test', { text }, LONG)
   },
 
