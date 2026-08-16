@@ -178,6 +178,8 @@ interface GenerateInput {
   exclude_message_id?: string;
   /** Optional abort signal — when fired, cancels an in-flight dry run. */
   signal?: AbortSignal;
+  /** Deterministic id for edit-and-send replay; when set, skip minting a new UUID. */
+  generationId?: string;
 }
 
 /** Lifecycle context passed from startGeneration → runGeneration */
@@ -1695,11 +1697,35 @@ async function resolveRawProviderAndKey(
   return { provider, apiKey: "", apiUrl: input.api_url || "", connection: null };
 }
 
+function resolveStartGenerationId(input: GenerateInput): string {
+  const requested = typeof input.generationId === "string" ? input.generationId.trim() : "";
+  return requested || crypto.randomUUID();
+}
+
+function reusableStagedSwipeIndex(message: Message): number | undefined {
+  if (!Array.isArray(message.swipes) || message.swipes.length === 0) return undefined;
+  const lastIdx = message.swipes.length - 1;
+  return message.swipes[lastIdx] === "" ? lastIdx : undefined;
+}
+
 export async function startGeneration(
   input: GenerateInput,
 ): Promise<{ generationId: string; status: string }> {
-  const generationId = crypto.randomUUID();
+  const requestedGenerationId =
+    typeof input.generationId === "string" ? input.generationId.trim() : "";
+  const generationId = resolveStartGenerationId(input);
   let genType = input.generation_type || "normal";
+
+  if (requestedGenerationId) {
+    const existing = activeGenerations.get(generationId);
+    if (existing && existing.userId === input.userId && existing.chatId === input.chat_id) {
+      return { generationId, status: "streaming" };
+    }
+    const poolEntry = pool.getPoolEntry(generationId);
+    if (poolEntry && poolEntry.userId === input.userId && poolEntry.chatId === input.chat_id) {
+      return { generationId, status: "streaming" };
+    }
+  }
 
   // Safety fallback: regenerate/continue should only target an assistant
   // message when the latest chat message is assistant-authored.
@@ -1799,9 +1825,21 @@ export async function startGeneration(
         ? chatsSvc.getMessage(input.userId, input.message_id)
         : chatsSvc.getLastAssistantMessage(input.userId, input.chat_id);
       if (target && !target.is_user) {
-        stagedSwipeOriginal = target;
-        stagedSwipe = chatsSvc.addSwipe(input.userId, target.id, "");
-        stagedSwipeId = stagedSwipe?.swipe_id;
+        const reuseIdx = requestedGenerationId ? reusableStagedSwipeIndex(target) : undefined;
+        if (reuseIdx != null) {
+          const priorIdx = reuseIdx > 0 ? reuseIdx - 1 : reuseIdx;
+          stagedSwipeOriginal = {
+            ...target,
+            swipe_id: priorIdx,
+            content: target.swipes[priorIdx] ?? target.content,
+          };
+          stagedSwipe = { ...target, swipe_id: reuseIdx };
+          stagedSwipeId = reuseIdx;
+        } else {
+          stagedSwipeOriginal = target;
+          stagedSwipe = chatsSvc.addSwipe(input.userId, target.id, "");
+          stagedSwipeId = stagedSwipe?.swipe_id;
+        }
       }
     }
 
@@ -2036,7 +2074,9 @@ export async function startGeneration(
     // has a real message ID to attach to the streaming bubble via data-message-id.
     // This eliminates the duplicate ephemeral bubble and renders tokens in-place
     // on the message card, matching the regenerate/swipe UX.
-    if (genType === "normal") {
+    // Edit-and-send supplies a durable generationId and already owns the branch
+    // target — do not pre-create a second placeholder on that path.
+    if (genType === "normal" && !requestedGenerationId) {
       const extra: Record<string, any> = {};
       if (targetCharId) extra.character_id = targetCharId;
       const stagedMsg = chatsSvc.createMessage(

@@ -63,6 +63,24 @@ await runMigrations(db);
 const { clearAllPoolEntries } = await import("./services/generation-pool.service");
 clearAllPoolEntries();
 
+try {
+  const { recoverEditAndSendOutbox } = await import("./services/edit-and-send-dispatcher.service");
+  const recovered = await recoverEditAndSendOutbox();
+  if (recovered > 0) {
+    console.log(`[startup] Recovered ${recovered} edit-and-send outbox item(s)`);
+  }
+} catch (err) {
+  console.error("[startup] edit-and-send outbox recovery failed:", err);
+}
+
+try {
+  const { providerRegistry } = await import("./spindle/provider-registry");
+  const { getSecret } = await import("./services/secrets.service");
+  providerRegistry.configure({ getSecret });
+} catch (err) {
+  console.error("[startup] provider registry secret hook failed:", err);
+}
+
 // Dynamic import: auth modules call getDb() at module level, so must load after initDatabase()
 const { seedOwner, backfillUserIds, backfillDefaultPresets, getFirstUserId } = await import("./auth/seed");
 const { operatorService } = await import("./services/operator.service");
