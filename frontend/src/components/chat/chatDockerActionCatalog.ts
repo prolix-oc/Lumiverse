@@ -2,6 +2,7 @@ import type { ComponentType } from 'react'
 import {
   BrainCircuit,
   FolderOpen,
+  ListChecks,
   Plus,
   Settings2,
   Sliders,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react'
 import { memoryCortexApi } from '@/api/memory-cortex'
 import { COMMANDS } from '@/lib/commands'
+import { useStore } from '@/store'
 
 export const CHAT_DOCKER_ACTION_IDS = [
   'chat.new',
@@ -21,6 +23,7 @@ export const CHAT_DOCKER_ACTION_IDS = [
   'chat.new-group',
   'chat.authors-note',
   'chat.recompile-memories',
+  'chat.select-messages',
 ] as const
 
 export type ChatDockerActionId = (typeof CHAT_DOCKER_ACTION_IDS)[number]
@@ -257,6 +260,20 @@ export function buildChatDockerActionCatalog(
         if (memoriesDisabled || !scope.activeChatId) return
         const warm = owners.warmMemories ?? ((chatId: string) => memoryCortexApi.warm(chatId, { force: true }))
         void warm(scope.activeChatId)
+      },
+    },
+    {
+      id: 'chat.select-messages',
+      label: 'Select messages',
+      description: 'Toggle message selection mode in the current chat.',
+      keywords: ['select', 'messages', 'bulk', 'list-checks'],
+      icon: ListChecks,
+      disabled: !hasChat,
+      hidden: false,
+      run: () => {
+        if (!hasChat) return
+        const state = useStore.getState()
+        state.setMessageSelectMode(!state.messageSelectMode)
       },
     },
   ]

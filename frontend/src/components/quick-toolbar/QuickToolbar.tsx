@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { getCharacterAvatarThumbUrl } from '@/lib/avatarUrls'
 import { isMobileViewportOrDevice, shouldHideQuickToolbarWhenOverlaid } from '@/lib/uiProductivityDefaults'
+import { readProductivityFlag } from '@/lib/spindle/productivity-feature-toggles'
 import { useLorebookWorkspaceOverlayOpen } from '@/lib/lorebookWorkspaceVisibility'
 import { usePersistentRect, type DragMode } from '@/hooks/usePersistentRect'
 import {
@@ -42,24 +43,39 @@ import {
   readUiScale,
   type CustomizerPlacement,
 } from '@/lib/quickToolbarPlacement'
-import { isSurfaceActive, type ToolbarUiState } from '@/lib/quickToolbarToggle'
+import { isToolbarActionActive, type ToolbarUiState } from '@/lib/quickToolbarToggle'
 import { canMoveWithinFiltered, filterActionIds } from '@/lib/toolbarActionSearch'
 import { useStore } from '@/store'
 import type { QuickToolbarDensity, SettingsWriteSource, SurfaceRectPrefs } from '@/types/store'
 import styles from './QuickToolbar.module.css'
 import QuickToolbarCustomizeModal from './QuickToolbarCustomizeModal'
 import {
+  acceptDockedV2BudgetSample,
+  clampLabelSize,
+  EMPTY_DOCK_BUDGET_STATE,
+  FLOATING_V2_VIEWPORT_MARGIN,
   isAutoFitToolbarBounds,
+  isFillTopDockWidth,
+  isOpaqueToolbarBackdrop,
   isV2IconOnly,
   QUICK_TOOLBAR_CHILD_FLEX,
   QUICK_TOOLBAR_DOCK_ID,
   readQuickToolbarPlacement,
+  resolveFloatingV2Rail,
   shouldUseNaturalToolbarSize,
 } from './quickToolbarDock'
 import { createCoalescedLayoutScheduler } from './toolbarLayoutBatch'
-import { createPointerHoldController, isExplicitToolbarDragTarget } from './toolbarPointerHold'
+import {
+  createPointerHoldController,
+  isExplicitToolbarDragTarget,
+  isImmediateItemDragHandle,
+  isToolbarItemDragTarget,
+  nextToolbarIconOrder,
+  toolbarActionIdFromTarget,
+} from './toolbarPointerHold'
 import { useQuickToolbarActions, type ToolbarAction } from './useQuickToolbarActions'
 import { useQuickToolbarContext } from './useQuickToolbarContext'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 
 const RESIZE_HANDLES = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
 
@@ -86,6 +102,102 @@ const RESIZE_HANDLE_CLASS: Record<(typeof RESIZE_HANDLES)[number], string> = {
 /** Below this width the popover is unusable, so the modal takes over. */
 const MODAL_ONLY_WIDTH = 760
 
+const CHAT_TOP_DOCK_MOUNT = '[data-spindle-mount="chat_top_dock"]'
+const CHAT_COLUMN_INNER = '[data-lumiverse-surface="chat-column-inner"]'
+
+/** Dock / `.chatToolbar` host. Pack width is leftover after native siblings, not this box. */
+function resolveV2FitColumn(root: HTMLElement | null): HTMLElement | null {
+  if (!root) return null
+  return root.closest<HTMLElement>(CHAT_TOP_DOCK_MOUNT) ?? root.parentElement
+}
+
+function readDockBoxSpacing(node: HTMLElement): { padding: number; gap: number } {
+  const styles = node.ownerDocument?.defaultView?.getComputedStyle?.(node)
+  if (!styles) return { padding: 0, gap: 0 }
+  const padding = (Number.parseFloat(styles.paddingLeft) || 0) + (Number.parseFloat(styles.paddingRight) || 0)
+  const gap = Number.parseFloat(styles.columnGap || styles.gap) || 0
+  return { padding, gap }
+}
+
+function isVacantDockSibling(node: HTMLElement): boolean {
+  if (node.tagName === 'BUTTON' || node.getAttribute('role') === 'button') return false
+  return !node.querySelector('button, [data-component], [data-toolbar-action], svg, img, input')
+}
+
+function remainingDockWidth(
+  root: HTMLElement,
+  column: HTMLElement,
+  toLayoutWidth: (node: HTMLElement | null, fallback: number) => number,
+): number {
+  const columnWidth = column.clientWidth || toLayoutWidth(column, 0)
+  const { padding, gap } = readDockBoxSpacing(column)
+  let reserved = 0
+  let reservedCount = 0
+  for (const child of column.children) {
+    if (!(child instanceof HTMLElement)) continue
+    if (child === root || child.contains(root)) continue
+    if (isVacantDockSibling(child)) continue
+    const width = child.clientWidth || toLayoutWidth(child, 0)
+    if (!(width > 0)) continue
+    reserved += width
+    reservedCount += 1
+  }
+  return Math.max(0, columnWidth - padding - reserved - gap * reservedCount)
+}
+
+/** Docked V2 budgets leftover rail after the native select button. */
+function measureDockedV2Budget(
+  root: HTMLElement,
+  toLayoutWidth: (node: HTMLElement | null, fallback: number) => number,
+): number {
+  const column = resolveV2FitColumn(root)
+  if (column && column !== root) {
+    const leftover = remainingDockWidth(root, column, toLayoutWidth)
+    if (leftover > 0) return leftover
+  }
+  const own = root.clientWidth
+  return own > 0 ? own : 0
+}
+
+function readViewportBox(): { left: number; top: number; width: number } {
+  if (typeof window === 'undefined') return { left: 0, top: 0, width: 0 }
+  const viewport = window.visualViewport
+  if (viewport) {
+    return {
+      left: viewport.offsetLeft || 0,
+      top: viewport.offsetTop || 0,
+      width: viewport.width || window.innerWidth || 0,
+    }
+  }
+  return { left: 0, top: 0, width: window.innerWidth || 0 }
+}
+
+function scheduleToolbarFrame(callback: FrameRequestCallback): number {
+  const raf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame
+    : typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame.bind(window)
+      : null
+  if (raf) return raf(callback)
+  if (typeof setTimeout === 'function') return setTimeout(() => callback(0), 0) as unknown as number
+  callback(0)
+  return 0
+}
+
+function cancelToolbarFrame(id: number) {
+  if (!id) return
+  const caf = typeof cancelAnimationFrame === 'function'
+    ? cancelAnimationFrame
+    : typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+      ? window.cancelAnimationFrame.bind(window)
+      : null
+  if (caf) {
+    caf(id)
+    return
+  }
+  if (typeof clearTimeout === 'function') clearTimeout(id)
+}
+
 function useToolbarIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState(isMobileViewportOrDevice)
 
@@ -104,7 +216,7 @@ function useToolbarIsMobile(): boolean {
   return isMobile
 }
 
-export function QuickToolbar() {
+function QuickToolbarNative() {
   const {
     settings,
     updateSettings,
@@ -115,6 +227,7 @@ export function QuickToolbar() {
     orderedIds,
     catalogOrder,
     moveActionWithin,
+    reorderActions,
     toggleAction,
     resetCurrentVariant,
   } = useQuickToolbarActions()
@@ -158,21 +271,22 @@ export function QuickToolbar() {
     setFailedProfilePortraitUrl(null)
   }, [profilePortraitUrl])
   /**
-   * U1: the single-slot store modal, and *only* it.
-   *
-   * `store/slices/ui.ts` keeps the screen-owning modals in `activeModal` (`:7`)
-   * and the Settings modal in a separate `settingsModalOpen` boolean (`:13`) —
-   * `openSettings` never writes `activeModal`. Reading this field therefore
-   * cannot see Settings, the drawer, the command palette or this toolbar's own
-   * customizer, which is what makes "pressing Settings buries the toolbar so it
-   * cannot be pressed again to close" structurally impossible rather than merely
-   * untested.
+   * Overlay fingerprint: `activeModal` plus Settings / drawer / character /
+   * lore. Settings never writes `activeModal`, so hide and restore cannot
+   * key off that field alone.
    */
   const activeModal = useStore((state) => state.activeModal)
+  const overlayOpen = Boolean(activeModal)
+    || settingsModalOpen
+    || drawerOpen
+    || characterEditorOpen
+    || lorebookHalfEditorOpen
+    || lorebookWorkspaceOpen
+  const enableToolbarIconReorder = useStore((state) => readProductivityFlag(state, 'enableToolbarIconReorder'))
   /**
    * Whether the user pressed the edge tab to bring the toolbar back over the
-   * modal that is currently up. Deliberately not persisted, and reset below
-   * whenever `activeModal` changes, so a restore lasts exactly one modal.
+   * overlay that is currently up. Deliberately not persisted, and reset below
+   * whenever the overlay fingerprint changes, so a restore lasts one overlay.
    */
   const [restoredOverModal, setRestoredOverModal] = useState(false)
   const uiState = useMemo<ToolbarUiState>(
@@ -186,7 +300,22 @@ export function QuickToolbar() {
   const v2 = settings.variant === 'v2-settings-adjacent'
   const dockPlacement = readQuickToolbarPlacement(settings as { quickToolbarPlacement?: unknown })
   const docked = dockPlacement === 'chat_top_dock'
+  const fillTopDockWidthEnabled = isFillTopDockWidth(settings as { fillTopDockWidth?: unknown })
+  const fillTopDockWidth = docked && fillTopDockWidthEnabled
+  const fillFloatingScreen = !docked && v2 && fillTopDockWidthEnabled
   const freePosition = !docked
+  const opaqueToolbarBackdrop = isOpaqueToolbarBackdrop(settings as { opaqueToolbarBackdrop?: unknown })
+  const isHidden = !docked && shouldHideQuickToolbarWhenOverlaid({
+    hideWhenOverlaid: settings.hideWhenOverlaid,
+    isMobile,
+    modalRestoreHandle: settings.modalRestoreHandle === true,
+    activeModal,
+    settingsModalOpen,
+    drawerOpen,
+    characterEditorOpen,
+    lorebookHalfEditorOpen,
+    lorebookWorkspaceOpen,
+  }) && !(restoredOverModal && overlayOpen)
   const anchored = v2
   const iconSize = anchored ? settings.v2IconSize : settings.iconSize
   const orientation = anchored ? 'horizontal' : settings.orientation
@@ -206,12 +335,17 @@ export function QuickToolbar() {
   const naturalWidth = natural.width
   const naturalHeight = natural.height
   const autoFitBounds = isAutoFitToolbarBounds(settings as { autoFitBounds?: unknown })
+  const v2IconOnly = anchored && isV2IconOnly(settings as { v2IconOnly?: unknown; v2LabelVisible?: unknown })
   const contentMetricsKey = `${iconSize}:${anchored ? settings.v2LabelTextSize : settings.labelTextSize}:${anchored ? settings.v2LabelVisible !== false : settings.labelVisible}`
   const metricsAtPinRef = useRef(contentMetricsKey)
   const useNaturalSize = shouldUseNaturalToolbarSize({
     autoFitBounds,
     contentMetricsChanged: metricsAtPinRef.current !== contentMetricsKey,
+    natural: { width: naturalWidth, height: naturalHeight },
   })
+  // Hug floor is the measured icon row. The old 32+18 chrome floor sat taller
+  // than the pill and blocked N/S shrink from reaching content height.
+  const hugMinHeight = naturalHeight
   // Per-orientation extents, one shared position. A single rect made a flip
   // render the *union* of both orientations' boxes: `clampSurfaceRect` raises
   // the new main axis to its measured minimum and never lowers the stale cross
@@ -222,11 +356,12 @@ export function QuickToolbar() {
     return resolveToolbarRect(
       useNaturalSize ? { ...selected, width: 0, height: 0 } : selected,
       { width: naturalWidth, height: naturalHeight },
+      hugMinHeight,
     )
-  }, [settings, orientation, naturalWidth, naturalHeight, useNaturalSize])
+  }, [settings, orientation, naturalWidth, naturalHeight, useNaturalSize, hugMinHeight])
   const bounds = useMemo(
-    () => toolbarRectBounds({ width: naturalWidth, height: naturalHeight }),
-    [naturalWidth, naturalHeight],
+    () => toolbarRectBounds({ width: naturalWidth, height: naturalHeight }, hugMinHeight),
+    [naturalWidth, naturalHeight, hugMinHeight],
   )
 
   const handleCommit = useCallback((next: SurfaceRectPrefs, source: SettingsWriteSource) => {
@@ -256,7 +391,7 @@ export function QuickToolbar() {
     // handles' maths and the painted transform can never disagree. Without it a
     // 90°-rotated toolbar's east handle still consumed only `dx`, so dragging it
     // in the direction it visibly points did nothing.
-    rotationDeg: freePosition ? settings.rotationDeg : 0,
+    rotationDeg: anchored ? 0 : (freePosition ? settings.rotationDeg : 0),
     snapToEdge: settings.snapToEdge,
     onCommit: handleCommit,
   })
@@ -282,8 +417,55 @@ export function QuickToolbar() {
     })
   }
 
+  const itemPendingIdRef = useRef<string | null>(null)
+  const itemDraggingIdRef = useRef<string | null>(null)
+  const orderedIdsRef = useRef(orderedIds)
+  orderedIdsRef.current = orderedIds
+  const reorderActionsRef = useRef(reorderActions)
+  reorderActionsRef.current = reorderActions
+
+  const itemHoldRef = useRef<ReturnType<typeof createPointerHoldController> | null>(null)
+  if (itemHoldRef.current === null) {
+    itemHoldRef.current = createPointerHoldController(() => {
+      const id = itemPendingIdRef.current
+      if (!id) return
+      itemDraggingIdRef.current = id
+      eventSuppressClickRef.current = true
+      setDraggingActionId(id)
+    })
+  }
+
+  const beginItemReorder = (id: string) => {
+    itemPendingIdRef.current = id
+    itemDraggingIdRef.current = id
+    eventSuppressClickRef.current = true
+    setDraggingActionId(id)
+  }
+
+  const applyItemReorderFromPointer = (event: { target: EventTarget | null; clientX: number; clientY: number }) => {
+    const dragId = itemDraggingIdRef.current
+    if (!dragId) return
+    const overId = toolbarActionIdFromTarget(event.target)
+      ?? toolbarActionIdFromTarget(document.elementFromPoint(event.clientX, event.clientY))
+    if (!overId) return
+    const next = nextToolbarIconOrder(orderedIdsRef.current, dragId, overId)
+    if (!next) return
+    reorderActionsRef.current(next)
+  }
+
+  const endItemReorder = () => {
+    itemHoldRef.current?.cancel()
+    itemPendingIdRef.current = null
+    itemDraggingIdRef.current = null
+    setDraggingActionId(null)
+  }
+
   const beginExplicitDrag = useCallback((mode: DragMode, event: ReactPointerEvent) => {
     holdRef.current?.cancel()
+    itemHoldRef.current?.cancel()
+    itemPendingIdRef.current = null
+    itemDraggingIdRef.current = null
+    setDraggingActionId(null)
     beginDrag(mode, event)
   }, [beginDrag])
 
@@ -321,7 +503,10 @@ export function QuickToolbar() {
 
   const measureNaturalRef = useRef(measureNatural)
   measureNaturalRef.current = measureNatural
-  const measureV2FitRef = useRef<() => void>(() => {})
+  const measureV2FitRef = useRef<(isRetry?: boolean) => void>(() => {})
+  const v2FitRetryRafRef = useRef(0)
+  const dockBudgetRef = useRef({ ...EMPTY_DOCK_BUDGET_STATE })
+  const floatingRailRef = useRef({ x: FLOATING_V2_VIEWPORT_MARGIN, y: 0, width: 0 })
   const anchoredRef = useRef(anchored)
   anchoredRef.current = anchored
   const layoutBatchRef = useRef(createCoalescedLayoutScheduler(() => {
@@ -354,10 +539,14 @@ export function QuickToolbar() {
   useEffect(() => () => {
     layoutBatchRef.current.cancel()
     holdRef.current?.cancel()
+    itemHoldRef.current?.cancel()
+    if (v2FitRetryRafRef.current) cancelToolbarFrame(v2FitRetryRafRef.current)
   }, [])
 
   const [fitReady, setFitReady] = useState(false)
+  const [v2FitPaintWidth, setV2FitPaintWidth] = useState(0)
   const [visibleActionIds, setVisibleActionIds] = useState<string[]>([])
+  const [draggingActionId, setDraggingActionId] = useState<string | null>(null)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [overflowQuery, setOverflowQuery] = useState('')
   const [overflowPlacement, setOverflowPlacement] = useState<{
@@ -370,57 +559,111 @@ export function QuickToolbar() {
   } | null>(null)
 
   /** Measures real pill widths, then exposes only the configured prefix that fits. */
-  const measureV2Fit = useCallback(() => {
+  const measureV2Fit = useCallback((isRetry = false) => {
     if (!anchored) return
     const toolbar = toolbarRef.current
-    if (!toolbar) return
+    const root = rootRef.current
+    if (!toolbar || !root) return
     const uiScale = readUiScale()
     const toLayoutWidth = (node: HTMLElement | null, fallback: number) => {
       const renderedWidth = node?.getBoundingClientRect().width ?? 0
       return renderedWidth > 0 ? renderedWidth / uiScale : fallback
     }
-    // `clientWidth` is a layout-space measurement. Every rect-derived width is
-    // divided by the UI zoom so the fit calculation never mixes coordinate spaces.
-    const toolbarWidth = toolbar.clientWidth || toLayoutWidth(toolbar, 0)
-    if (!(toolbarWidth > 0)) {
-      const next = actions.map((action) => action.id)
-      setVisibleActionIds((previous) => previous.length === next.length && previous.every((id, index) => id === next[index]) ? previous : next)
-      setFitReady(true)
-      return
-    }
+    const viewportWidth = typeof window !== 'undefined'
+      ? Math.max(0, (window.visualViewport ? window.visualViewport.width : window.innerWidth) || 0)
+      : 0
+    const viewportAvailable = Math.max(0, (viewportWidth - 2 * FLOATING_V2_VIEWPORT_MARGIN) / uiScale)
+    const persistWidth = persistentRect.rect.width
     const customizeWidth = toLayoutWidth(customizeButtonRef.current, 36)
     const overflowWidth = toLayoutWidth(overflowButtonRef.current, 56)
     const gap = 6
     const widths = actions.map((action) => {
       const measured = toLayoutWidth(measureButtonRefs.current.get(action.id) ?? null, 0)
-      return measured > 0 ? measured : Math.max(72, action.label.length * 7 + 48)
+      const estimated = v2IconOnly ? 44 : Math.max(72, action.label.length * 7 + 48)
+      return measured > 0 ? measured : Math.min(190, estimated)
     })
     const cardTotal = (count: number) => widths.slice(0, count).reduce((sum, width) => sum + width, 0) + Math.max(0, count - 1) * gap
-    const fitsAll = cardTotal(actions.length) + gap + customizeWidth <= toolbarWidth
-    const available = toolbarWidth - customizeWidth - gap - (fitsAll ? 0 : overflowWidth + gap)
+    const hugAll = cardTotal(actions.length) + (actions.length > 0 ? gap : 0) + customizeWidth
+    const floatingV2 = Boolean(freePosition && anchored)
+    const dockEl = typeof document !== 'undefined'
+      ? document.querySelector<HTMLElement>(CHAT_TOP_DOCK_MOUNT)
+      : null
+    const columnEl = typeof document !== 'undefined'
+      ? document.querySelector<HTMLElement>(CHAT_COLUMN_INNER)
+      : null
+    const rail = resolveFloatingV2Rail({
+      fill: fillFloatingScreen,
+      uiScale,
+      dockRect: dockEl?.getBoundingClientRect() ?? null,
+      columnRect: columnEl?.getBoundingClientRect() ?? null,
+      viewport: readViewportBox(),
+    })
+    floatingRailRef.current = rail
+    const rawDockBudget = floatingV2 ? 0 : measureDockedV2Budget(root, toLayoutWidth)
+    if (!floatingV2) {
+      dockBudgetRef.current = acceptDockedV2BudgetSample(rawDockBudget, dockBudgetRef.current)
+    }
+    const budget = floatingV2
+      ? (autoFitBounds ? rail.width : viewportAvailable)
+      : dockBudgetRef.current.accepted
+    if (!(budget > 0) && !(freePosition && viewportAvailable > 0)) {
+      if (!isRetry) {
+        if (v2FitRetryRafRef.current) cancelToolbarFrame(v2FitRetryRafRef.current)
+        v2FitRetryRafRef.current = scheduleToolbarFrame(() => {
+          v2FitRetryRafRef.current = 0
+          measureV2FitRef.current(true)
+        })
+      }
+      setFitReady(true)
+      return
+    }
+    const fitsAll = hugAll <= budget
+    const packBudget = fitsAll ? Math.max(budget, hugAll) : budget
+    const available = packBudget - customizeWidth - gap - (fitsAll ? 0 : overflowWidth + gap)
     let count = 0
     while (count < actions.length && cardTotal(count + 1) <= Math.max(0, available)) count += 1
-    const next = actions.slice(0, fitsAll ? actions.length : count).map((action) => action.id)
+    const showAll = fitsAll
+    const leftover = !showAll && count < actions.length
+    const next = showAll
+      ? actions.map((action) => action.id)
+      : actions.slice(0, count).map((action) => action.id)
     setVisibleActionIds((previous) => previous.length === next.length && previous.every((id, index) => id === next[index]) ? previous : next)
     setFitReady(true)
-    if (fitsAll) setOverflowOpen(false)
-  }, [actions, anchored])
+    if (showAll) setOverflowOpen(false)
+    if (freePosition && (anchored || autoFitBounds || persistWidth === 0)) {
+      const packedWidth = showAll
+        ? hugAll
+        : cardTotal(count) + (count > 0 ? gap : 0) + customizeWidth + (leftover ? overflowWidth + gap : 0)
+      const painted = (floatingV2 && autoFitBounds) ? rail.width : packedWidth
+      setV2FitPaintWidth((previous) => previous === painted ? previous : painted)
+    }
+  }, [actions, anchored, autoFitBounds, fillFloatingScreen, freePosition, persistentRect.rect.width, v2IconOnly])
   measureV2FitRef.current = measureV2Fit
 
   useLayoutEffect(() => {
     if (!anchored) return
+    if (isHidden) return
     setFitReady(false)
     measureV2Fit()
+    const secondPass = scheduleToolbarFrame(() => measureV2FitRef.current())
     const observer = new ResizeObserver(() => layoutBatchRef.current.schedule())
     if (toolbarRef.current) observer.observe(toolbarRef.current)
     if (measureRailRef.current) observer.observe(measureRailRef.current)
+    if (freePosition) {
+      if (rootRef.current) observer.observe(rootRef.current)
+    } else {
+      const column = resolveV2FitColumn(rootRef.current)
+      if (column) observer.observe(column)
+      if (rootRef.current && rootRef.current !== column) observer.observe(rootRef.current)
+    }
     const onResize = () => layoutBatchRef.current.schedule()
     window.addEventListener('resize', onResize)
     return () => {
+      cancelToolbarFrame(secondPass)
       observer.disconnect()
       window.removeEventListener('resize', onResize)
     }
-  }, [actions.length, anchored, iconSize, settings.v2LabelTextSize, settings.v2LabelVisible, measureV2Fit])
+  }, [actions.length, anchored, autoFitBounds, freePosition, iconSize, settings.v2LabelTextSize, settings.v2LabelVisible, measureV2Fit, isHidden])
 
   const overflowActionIds = useMemo(
     () => actions.map((action) => action.id).filter((id) => !visibleActionIds.includes(id)),
@@ -560,11 +803,11 @@ export function QuickToolbar() {
     }
   }, [customizing])
 
-  // One restore per modal: switching straight from one screen-owning modal to
-  // another, or closing the last one, puts the toolbar back under the guard.
+  // One restore per overlay: switching surfaces, or closing the last one,
+  // puts the toolbar back under the guard.
   useEffect(() => {
     setRestoredOverModal(false)
-  }, [activeModal])
+  }, [activeModal, settingsModalOpen, drawerOpen, characterEditorOpen, lorebookHalfEditorOpen, lorebookWorkspaceOpen])
 
   /**
    * The rows the popover renders — the whole catalog under the query, so a
@@ -596,12 +839,14 @@ export function QuickToolbar() {
 
   if (!settings.enabled || actions.length === 0) return null
 
+  const stretchPinnedHeight = !autoFitBounds && !useNaturalSize && naturalHeight > 0
+    && persistentRect.rect.height > naturalHeight
+
   // Normalised rather than read straight through: an imported or hand-edited row
   // can carry anything, and an unknown density must render the shipped look
   // instead of dropping every `[data-density]` rule on the floor.
   const v2Density: QuickToolbarDensity = settings.v2Density === 'compact' ? 'compact' : 'comfortable'
   const labelTextSize = anchored ? settings.v2LabelTextSize : settings.labelTextSize
-  const v2IconOnly = anchored && isV2IconOnly(settings as { v2IconOnly?: unknown; v2LabelVisible?: unknown })
   const labelVisible = v2IconOnly ? false : anchored ? settings.v2LabelVisible !== false : settings.labelVisible
   const showProfilePortrait = profilePortraitUrl !== null && profilePortraitUrl !== failedProfilePortraitUrl
   const gripGlyph = Math.round(GRIP_GLYPH * scale)
@@ -612,14 +857,14 @@ export function QuickToolbar() {
     // The *rendered* metrics. Icons are React props rather than CSS, so the same
     // scaled number is passed to every glyph below; only the boxes read the var.
     '--quick-toolbar-icon-size': `${renderedIconSize}px`,
-    '--quick-toolbar-label-size': `${labelTextSize * scale}px`,
+    '--quick-toolbar-label-size': `${clampLabelSize(labelTextSize * scale)}px`,
     '--quick-toolbar-gap': `${Number.isFinite(configuredGap) ? configuredGap : 6}px`,
-    '--quick-toolbar-padding-block': `${Number.isFinite(configuredPadding) ? configuredPadding : 8}px`,
+    '--quick-toolbar-padding-block': `${Number.isFinite(configuredPadding) ? configuredPadding : 4}px`,
     '--quick-toolbar-padding-inline': `${Number.isFinite(configuredPadding) ? configuredPadding : 10}px`,
     '--quick-toolbar-opacity': settings.opacity,
     // Padding and gap scale off this; it is 1 for V2, which never scaled.
     '--quick-toolbar-scale': scale,
-    '--quick-toolbar-rotation': `${freePosition ? settings.rotationDeg : 0}deg`,
+    '--quick-toolbar-rotation': `${anchored ? 0 : (freePosition ? settings.rotationDeg : 0)}deg`,
   } as CSSProperties
 
   const visibleAnchoredActions = actions.filter((action) => visibleActionIds.includes(action.id))
@@ -631,7 +876,7 @@ export function QuickToolbar() {
     const Icon = action.icon
     const context = cardContext[action.id]
     const closable = action.surface.kind !== 'command'
-    const active = closable && isSurfaceActive(action.surface, uiState)
+    const active = isToolbarActionActive(action, uiState)
     const hasProfilePortrait = action.id === 'profile' && showProfilePortrait
     return (
       <button
@@ -642,11 +887,13 @@ export function QuickToolbar() {
         type="button"
         className={clsx(styles.card, active && styles.cardActive, hasProfilePortrait && styles.cardProfile, v2IconOnly && styles.cardIconOnly)}
         data-toolbar-action={measuring ? undefined : action.id}
+        data-toolbar-item-drag-handle={measuring ? undefined : ''}
+        data-dragging={!measuring && draggingActionId === action.id ? '' : undefined}
         style={{ flex: QUICK_TOOLBAR_CHILD_FLEX }}
         onClick={measuring ? undefined : action.run}
         disabled={measuring ? undefined : action.disabled}
         aria-hidden={measuring || undefined}
-        aria-pressed={measuring ? undefined : closable ? active : undefined}
+        aria-pressed={measuring ? undefined : (typeof action.active === 'boolean' || closable) ? active : undefined}
         tabIndex={measuring ? -1 : undefined}
         aria-label={action.label}
         title={context ? `${action.label} — ${context}` : action.label}
@@ -696,6 +943,33 @@ export function QuickToolbar() {
     </button>
   )
 
+  const uiScale = readUiScale()
+  const viewportWidth = typeof window !== 'undefined'
+    ? (window.visualViewport ? window.visualViewport.width : window.innerWidth)
+    : 0
+  const layoutViewportWidth = viewportWidth > 0 && uiScale > 0 ? viewportWidth / uiScale : viewportWidth
+
+  const renderedWidth = (freePosition && anchored)
+    ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
+    : persistentRect.rect.width
+
+  const floatingRail = floatingRailRef.current
+  const autoFitFloatingV2 = Boolean(freePosition && anchored && autoFitBounds)
+  const clampedX = autoFitFloatingV2
+    ? floatingRail.x
+    : freePosition && layoutViewportWidth > 0
+      ? Math.max(
+          FLOATING_V2_VIEWPORT_MARGIN,
+          Math.min(persistentRect.rect.x, Math.max(FLOATING_V2_VIEWPORT_MARGIN, layoutViewportWidth - renderedWidth - FLOATING_V2_VIEWPORT_MARGIN))
+        )
+      : persistentRect.rect.x
+  const paintedY = autoFitFloatingV2 ? floatingRail.y : persistentRect.rect.y
+  const paintedWidth = autoFitFloatingV2
+    ? floatingRail.width
+    : (freePosition && anchored)
+      ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
+      : persistentRect.rect.width
+
   const tree = (
     <div
       ref={rootRef}
@@ -706,18 +980,48 @@ export function QuickToolbar() {
       data-quick-toolbar-dock={QUICK_TOOLBAR_DOCK_ID}
       data-quick-toolbar-placement={dockPlacement}
       data-quick-toolbar-variant={anchored ? 'v2' : 'v1'}
+      data-fill-top-dock={docked ? (fillTopDockWidth ? '1' : '0') : undefined}
+      data-opaque-backdrop={opaqueToolbarBackdrop ? '1' : undefined}
       data-dead-space="0"
       className={clsx(styles.root, freePosition ? styles.rootFree : styles.rootAnchored)}
       onPointerDown={(event) => {
-        if (!freePosition || isExplicitToolbarDragTarget(event.target)) return
+        if (isExplicitToolbarDragTarget(event.target)) {
+          itemHoldRef.current?.cancel()
+          return
+        }
+        const itemId = toolbarActionIdFromTarget(event.target)
+        if (itemId && isToolbarItemDragTarget(event.target)) {
+          if (!enableToolbarIconReorder) return
+          holdRef.current?.cancel()
+          itemPendingIdRef.current = itemId
+          if (isImmediateItemDragHandle(event.target)) {
+            beginItemReorder(itemId)
+            return
+          }
+          itemHoldRef.current?.start(event)
+          return
+        }
+        if (!freePosition) return
+        itemHoldRef.current?.cancel()
         holdRef.current?.start(event)
       }}
-      onPointerMove={(event) => holdRef.current?.move(event)}
-      onPointerUp={() => {
-        const result = holdRef.current?.finish()
-        if (result?.held) eventSuppressClickRef.current = true
+      onPointerMove={(event) => {
+        holdRef.current?.move(event)
+        itemHoldRef.current?.move(event)
+        applyItemReorderFromPointer(event)
       }}
-      onPointerCancel={() => holdRef.current?.cancel()}
+      onPointerUp={() => {
+        holdRef.current?.finish()
+        const itemHeld = itemHoldRef.current?.finish()
+        if (itemHeld?.held) eventSuppressClickRef.current = true
+        itemPendingIdRef.current = null
+        itemDraggingIdRef.current = null
+        setDraggingActionId(null)
+      }}
+      onPointerCancel={() => {
+        holdRef.current?.cancel()
+        endItemReorder()
+      }}
       onClickCapture={(event) => {
         if (!eventSuppressClickRef.current) return
         eventSuppressClickRef.current = false
@@ -727,11 +1031,17 @@ export function QuickToolbar() {
       style={freePosition ? ({
         // Consumed by `.rootFree` as left/top/width/height, the way
         // `ResizablePanelFrame` does it — the rect *is* the rendered box, so the
-        // handles, the measurement and the persisted value all agree.
-        '--quick-toolbar-x': `${persistentRect.rect.x}px`,
-        '--quick-toolbar-y': `${persistentRect.rect.y}px`,
-        '--quick-toolbar-width': `${persistentRect.rect.width}px`,
-        '--quick-toolbar-height': `${persistentRect.rect.height}px`,
+        // handles, the measurement and the persisted value all agree. Auto-fit
+        // and an unpinned/natural height paint `max-content` so the pill hugs
+        // the icon row; N/S extra chrome is only painted when the user pinned
+        // a taller box.
+        '--quick-toolbar-x': `${clampedX}px`,
+        '--quick-toolbar-y': `${paintedY}px`,
+        '--quick-toolbar-width': (freePosition && anchored)
+          ? (paintedWidth > 0 ? `${paintedWidth}px` : 'max-content')
+          : `${persistentRect.rect.width}px`,
+        '--quick-toolbar-height': stretchPinnedHeight ? `${persistentRect.rect.height}px` : 'max-content',
+        '--quick-toolbar-nav-height': stretchPinnedHeight ? '100%' : 'auto',
         '--quick-toolbar-natural-width': `${natural.width}px`,
         '--quick-toolbar-natural-height': `${natural.height}px`,
         '--quick-toolbar-action-count': actions.length + 1,
@@ -764,12 +1074,19 @@ export function QuickToolbar() {
         >
           <div className={styles.cardScroller}>
             {visibleAnchoredActions.map((action) => (
-              <span key={action.id} className={styles.cardSlot}>{renderV2Action(action)}</span>
+              <span
+                key={action.id}
+                className={styles.cardSlot}
+                data-dragging={draggingActionId === action.id ? '' : undefined}
+              >
+                {renderV2Action(action)}
+              </span>
             ))}
           </div>
           <div ref={measureRailRef} className={styles.measureRail} aria-hidden="true">
             {actions.map((action) => <span key={action.id}>{renderV2Action(action, true)}</span>)}
           </div>
+          {(freePosition || fillTopDockWidth) && <div className={styles.fillDockSpacer} aria-hidden="true" />}
           {overflowActionIds.length > 0 && (
             <button
               ref={overflowButtonRef}
@@ -803,17 +1120,19 @@ export function QuickToolbar() {
           {actions.map((action) => {
             const Icon = action.icon
             const closable = action.surface.kind !== 'command'
-            const active = closable && isSurfaceActive(action.surface, uiState)
+            const active = isToolbarActionActive(action, uiState)
             return (
               <button
                 key={action.id}
                 type="button"
                 data-toolbar-action={action.id}
+                data-toolbar-item-drag-handle=""
+                data-dragging={draggingActionId === action.id ? '' : undefined}
                 className={clsx(styles.item, active && styles.itemActive)}
                 style={{ flex: QUICK_TOOLBAR_CHILD_FLEX }}
                 onClick={action.run}
                 disabled={action.disabled}
-                aria-pressed={closable ? active : undefined}
+                aria-pressed={(typeof action.active === 'boolean' || closable) ? active : undefined}
                 title={action.label}
                 aria-label={action.label}
               >
@@ -966,7 +1285,7 @@ export function QuickToolbar() {
                 checked={labelVisible}
                 onChange={(event) => updateSettings(
                   anchored
-                    ? { v2LabelVisible: event.target.checked, v2IconOnly: !event.target.checked } as Partial<typeof settings>
+                    ? { v2LabelVisible: event.target.checked }
                     : { labelVisible: event.target.checked },
                 )}
               />
@@ -1173,20 +1492,14 @@ export function QuickToolbar() {
   // `--lcs-top-dock-height`, so dropping it would reflow the chat column every
   // time any modal opened.
   if (docked) return tree
-  if (shouldHideQuickToolbarWhenOverlaid({
-    hideWhenOverlaid: settings.hideWhenOverlaid,
-    isMobile,
-    activeModal,
-    settingsModalOpen,
-    drawerOpen,
-    characterEditorOpen,
-    lorebookHalfEditorOpen,
-    lorebookWorkspaceOpen,
-  }) && !(activeModal && restoredOverModal)) {
-    return settings.modalRestoreHandle === true
-      && Boolean(activeModal)
+  if (isHidden) {
+    return settings.modalRestoreHandle === true && overlayOpen && !restoredOverModal
       ? createPortal(restoreTab, document.body)
       : null
   }
   return createPortal(tree, document.body)
+}
+
+export function QuickToolbar() {
+  return useSpindleComponentOverride('QuickToolbar', QuickToolbarNative, {})
 }

@@ -12,6 +12,21 @@ mock.module('@/api/memory-cortex', () => ({
   },
 }))
 
+const storeState = {
+  messageSelectMode: false,
+  selectedMessageIds: ['msg-1', 'msg-2'],
+  setMessageSelectMode(enabled: boolean) {
+    this.messageSelectMode = enabled
+    this.selectedMessageIds = []
+  },
+}
+
+mock.module('@/store', () => ({
+  useStore: {
+    getState: () => storeState,
+  },
+}))
+
 const {
   buildChatDockerActionCatalog,
   CHAT_DOCKER_ACTION_IDS,
@@ -174,6 +189,26 @@ describe('chatDockerActionCatalog', () => {
     }).find((action) => action.id === 'chat.recompile-memories')
     ready?.run()
     expect(warmed).toEqual([{ chatId: 'chat-9', force: true }])
+  })
+
+  test('catalog exposes chat.select-messages once and toggles the existing select-mode setter', () => {
+    storeState.messageSelectMode = false
+    storeState.selectedMessageIds = ['msg-1', 'msg-2']
+
+    const catalog = buildChatDockerActionCatalog({
+      scope: { activeChatId: 'chat-1' },
+    })
+    const matches = catalog.filter((action) => action.id === 'chat.select-messages')
+    expect(matches).toHaveLength(1)
+    expect(matches[0].disabled).toBe(false)
+    matches[0].run()
+    expect(storeState.messageSelectMode).toBe(true)
+    expect(storeState.selectedMessageIds).toEqual([])
+
+    storeState.selectedMessageIds = ['msg-3']
+    matches[0].run()
+    expect(storeState.messageSelectMode).toBe(false)
+    expect(storeState.selectedMessageIds).toEqual([])
   })
 
   test('every default action appears exactly once in V1 V2 and the customizer', () => {

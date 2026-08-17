@@ -16,6 +16,7 @@ const config = {
   queryGeneration: {
     primary: { connectionProfileId: "primary-conn", model: "primary-model" },
     secondary: { connectionProfileId: "secondary-conn", model: "secondary-model" },
+    fallbacks: [{ connectionProfileId: "tertiary-conn", model: "tertiary-model" }],
   },
   memorySummarization: {
     primary: { connectionProfileId: "primary-conn", model: "primary-model" },
@@ -221,7 +222,10 @@ describe("MemoryCortexSettings secondary fallback", () => {
     }
 
     expect(host.querySelector('[data-testid="cortex-query-secondary-connection"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="cortex-query-fallback-1"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="cortex-summary-secondary-connection"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="cortex-query-add-fallback"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="cortex-summary-add-fallback"]')).not.toBeNull();
     expect(host.querySelector('[data-cortex-sidecar-state="unavailable"]')).not.toBeNull();
   });
 });

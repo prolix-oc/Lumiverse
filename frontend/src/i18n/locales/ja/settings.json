@@ -1394,6 +1394,8 @@
     "checkWorldBook": "ワールドブックのベクトル化が有効になりました",
     "checkWorldBookDesc": "伝承本のエントリにインデックスを付け、ベクターで検索できるようになります。",
     "connection": "繋がり",
+    "connectionNone": "なし（直接カスタム設定）",
+    "modelBrowseHint": "接続プロファイルを選択するか、空白のままにして直接カスタム設定を使用します。",
     "providerModel": "プロバイダーとモデル",
     "enable": "埋め込みを有効にする",
     "provider": "供給者",

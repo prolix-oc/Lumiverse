@@ -56,8 +56,10 @@ export interface CortexModelEndpoint {
 
 export interface CortexModelFallbackPair {
   primary: CortexModelEndpoint;
-  /** Null means no secondary is configured. Empty / omitted secondary is preserved as null. */
+  /** First extra hop. Null means no secondary is configured. Kept as the first of `fallbacks` for compat. */
   secondary: CortexModelEndpoint | null;
+  /** Additional hops after `secondary`. Empty / omitted means only primary + optional secondary. */
+  fallbacks?: CortexModelEndpoint[];
 }
 
 export interface SidecarReliabilityConfig {
@@ -132,13 +134,13 @@ export interface MemoryCortexConfig {
   consolidation: ConsolidationConfig;
 
   /**
-   * Per-chunk query / extraction sidecar: primary then optional secondary
-   * before sidecarReliability.fallback (heuristic | skip).
+   * Per-chunk query / extraction sidecar: primary then secondary then extra
+   * fallbacks before sidecarReliability.fallback (heuristic | skip).
    */
   queryGeneration: CortexModelFallbackPair;
   /**
-   * Consolidation / memory-summary sidecar: primary then optional secondary
-   * before sidecarReliability.fallback (heuristic | skip).
+   * Consolidation / memory-summary sidecar: primary then secondary then extra
+   * fallbacks before sidecarReliability.fallback (heuristic | skip).
    */
   memorySummarization: CortexModelFallbackPair;
 
@@ -444,8 +446,8 @@ export function putCortexConfig(
   if (update.sidecar && !update.queryGeneration && !update.memorySummarization) {
     const migrated = migrateSidecarIntoEndpointPairs(
       update.sidecar,
-      { secondary: current.queryGeneration.secondary },
-      { secondary: current.memorySummarization.secondary },
+      { secondary: current.queryGeneration.secondary, fallbacks: current.queryGeneration.fallbacks },
+      { secondary: current.memorySummarization.secondary, fallbacks: current.memorySummarization.fallbacks },
     );
     next.queryGeneration = migrated.queryGeneration;
     next.memorySummarization = migrated.memorySummarization;
@@ -506,17 +508,33 @@ export function normalizeCortexModelEndpoint(
   return { connectionProfileId, model };
 }
 
+/** Secondary first, then extra `fallbacks`, de-duplicated by connection id. */
+export function listCortexFallbackEndpoints(
+  pair: Pick<CortexModelFallbackPair, "secondary" | "fallbacks"> | null | undefined,
+): CortexModelEndpoint[] {
+  const extras: CortexModelEndpoint[] = [];
+  const seen = new Set<string>();
+  const push = (input: Partial<CortexModelEndpoint> | null | undefined) => {
+    const endpoint = normalizeCortexModelEndpoint(input, emptyCortexModelEndpoint());
+    if (!endpoint.connectionProfileId || seen.has(endpoint.connectionProfileId)) return;
+    seen.add(endpoint.connectionProfileId);
+    extras.push(endpoint);
+  };
+  push(pair?.secondary);
+  for (const extra of pair?.fallbacks ?? []) push(extra);
+  return extras;
+}
+
 export function normalizeCortexModelFallbackPair(
   input: Partial<CortexModelFallbackPair> | null | undefined,
   migratedPrimary: CortexModelEndpoint,
 ): CortexModelFallbackPair {
   const primary = normalizeCortexModelEndpoint(input?.primary, migratedPrimary);
-  if (!input || !("secondary" in input) || input.secondary == null) {
-    return { primary, secondary: null };
-  }
-  const secondary = normalizeCortexModelEndpoint(input.secondary, emptyCortexModelEndpoint());
-  if (!secondary.connectionProfileId) return { primary, secondary: null };
-  return { primary, secondary };
+  const extras = listCortexFallbackEndpoints(input);
+  const fallbacks = extras.slice(1);
+  return fallbacks.length > 0
+    ? { primary, secondary: extras[0] ?? null, fallbacks }
+    : { primary, secondary: extras[0] ?? null };
 }
 
 /** Sidecar profile/model is the legacy primary; migrate into both pairs. */
@@ -535,19 +553,22 @@ export function migrateSidecarIntoEndpointPairs(
   };
 }
 
+function cloneCortexModelFallbackPair(pair: CortexModelFallbackPair): CortexModelFallbackPair {
+  const fallbacks = (pair.fallbacks ?? []).map((endpoint) => ({ ...endpoint }));
+  return {
+    primary: { ...pair.primary },
+    secondary: pair.secondary ? { ...pair.secondary } : null,
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+}
+
 export function listCortexSidecarEndpoints(config: MemoryCortexConfig): {
   queryGeneration: CortexModelFallbackPair;
   memorySummarization: CortexModelFallbackPair;
 } {
   return {
-    queryGeneration: {
-      primary: { ...config.queryGeneration.primary },
-      secondary: config.queryGeneration.secondary ? { ...config.queryGeneration.secondary } : null,
-    },
-    memorySummarization: {
-      primary: { ...config.memorySummarization.primary },
-      secondary: config.memorySummarization.secondary ? { ...config.memorySummarization.secondary } : null,
-    },
+    queryGeneration: cloneCortexModelFallbackPair(config.queryGeneration),
+    memorySummarization: cloneCortexModelFallbackPair(config.memorySummarization),
   };
 }
 
@@ -582,9 +603,9 @@ function firstConfiguredConnectionId(
 export function getCortexSidecarConnectionId(config: MemoryCortexConfig): string | null {
   return firstConfiguredConnectionId(
     config.queryGeneration?.primary,
-    config.queryGeneration?.secondary,
+    ...listCortexFallbackEndpoints(config.queryGeneration),
     config.memorySummarization?.primary,
-    config.memorySummarization?.secondary,
+    ...listCortexFallbackEndpoints(config.memorySummarization),
     {
       connectionProfileId: config.sidecar?.connectionProfileId ?? null,
       model: config.sidecar?.model ?? null,

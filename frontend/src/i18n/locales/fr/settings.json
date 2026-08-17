@@ -1394,6 +1394,8 @@
     "checkWorldBook": "La vectorisation des livres du monde est activée",
     "checkWorldBookDesc": "Autorise les entrées du livre d'histoire. indexé et recherché avec des vecteurs.",
     "connection": "Connexion",
+    "connectionNone": "Aucun (configuration personnalisée directe)",
+    "modelBrowseHint": "Sélectionnez un profil de connexion ou laissez vide pour une configuration personnalisée directe.",
     "providerModel": "Fournisseur et modèle",
     "enable": "Activer les intégrations",
     "provider": "Fournisseur",

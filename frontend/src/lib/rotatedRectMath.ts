@@ -29,4 +29,6 @@ export function resizeRectFromHandle(rect: RectLike, handle: RotatedResizeHandle
   }
   const next = { x, y, width, height }; return options.bounds ? clampRectToBounds(next, options.bounds) : next
 }
+/** Screen-space resize: on-screen outward drag grows the box. Do not pre-rotate via toLocalDelta — at ±180° that flips dx/dy and shrinks. */
+export function resizeRectFromScreenDelta(rect: RectLike, handle: RotatedResizeHandle, delta: Vec2 | { x: number; y: number }, rotationDeg = 0, options: ResizeRectOptions = {}): RectLike { return compensateRotatedAnchor(rect, resizeRectFromHandle(rect, handle, delta, options), handle, rotationDeg) }
 export const resizeRect = resizeRectFromHandle

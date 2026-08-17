@@ -13,7 +13,7 @@ export const NO_AUTHORITY_CTX_MEMBERS = [
   'ctx.ui.events.getKeyboardState', 'ctx.ui.events.onKeyboardChange',
   'ctx.ui.events.bindActionHandlers',
   'ctx.ui.mount', 'ctx.ui.registerDrawerTab', 'ctx.ui.registerSettingsTab', 'ctx.ui.registerInputBarAction',
-  'ctx.ui.registerCssComponent', 'ctx.ui.registerComponentOverride', 'ctx.ui.registerHostIntentHandler',
+  'ctx.ui.registerCssComponent', 'ctx.ui.registerComponentOverride', 'ctx.ui.registerDomDecorator', 'ctx.ui.registerHostIntentHandler',
   'ctx.ui.getBuiltInTabTitle', 'ctx.ui.getTabLocation', 'ctx.ui.showContextMenu',
   'ctx.ui.showModal', 'ctx.ui.showConfirm',
   'ctx.components.mountTextInput', 'ctx.components.mountTextArea', 'ctx.components.mountNumericInput',

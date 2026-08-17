@@ -439,7 +439,7 @@ export default function BubbleMessageDefault({
               onChangeContent={setEditContent}
               onSave={handleSaveEdit}
               onCancel={handleCancelEdit}
-              onEditAndSend={handleEditAndSend}
+              onEditAndSend={isUser ? handleEditAndSend : undefined}
               messageId={message.id}
               editAndSendDisabled={editAndSendPending}
               editReasoning={showReasoningEditor ? editReasoning : undefined}

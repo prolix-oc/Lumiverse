@@ -16,6 +16,7 @@ export interface CortexModelEndpoint {
 export interface CortexModelFallbackPair {
   primary: CortexModelEndpoint;
   secondary: CortexModelEndpoint | null;
+  fallbacks?: CortexModelEndpoint[];
 }
 
 export interface CortexConfig {
@@ -327,10 +328,12 @@ export interface CortexHealthReport {
     queryGeneration?: {
       primary: CortexSidecarEndpointHealth;
       secondary: CortexSidecarEndpointHealth | null;
+      fallbacks?: CortexSidecarEndpointHealth[];
     };
     memorySummarization?: {
       primary: CortexSidecarEndpointHealth;
       secondary: CortexSidecarEndpointHealth | null;
+      fallbacks?: CortexSidecarEndpointHealth[];
     };
     connectivity: CortexProbeStatus;
   };
@@ -434,10 +437,20 @@ export function migrateSidecarIntoEndpointPairs(
           model: input.primary.model ?? migratedPrimary.model,
         }
       : { ...migratedPrimary };
-    if (!input || !("secondary" in input) || input.secondary == null || !input.secondary.connectionProfileId) {
-      return { primary, secondary: null };
-    }
-    return { primary, secondary: normalizeCortexModelEndpoint(input.secondary) };
+    const extras: CortexModelEndpoint[] = [];
+    const seen = new Set<string>();
+    const push = (raw: unknown) => {
+      const endpoint = normalizeCortexModelEndpoint(raw);
+      if (!endpoint.connectionProfileId || seen.has(endpoint.connectionProfileId)) return;
+      seen.add(endpoint.connectionProfileId);
+      extras.push(endpoint);
+    };
+    push(input?.secondary);
+    for (const extra of input?.fallbacks ?? []) push(extra);
+    const fallbacks = extras.slice(1);
+    return fallbacks.length > 0
+      ? { primary, secondary: extras[0] ?? null, fallbacks }
+      : { primary, secondary: extras[0] ?? null };
   };
   return {
     queryGeneration: normalizePair(queryGeneration),

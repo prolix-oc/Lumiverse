@@ -264,6 +264,8 @@ export interface Message {
   parent_message_id: string | null;
   branch_id: string | null;
   created_at: number;
+  /** Optimistic-concurrency token from messages.revision (server default 1). */
+  revision?: number;
 }
 
 export interface ChatMessageSearchMatch {

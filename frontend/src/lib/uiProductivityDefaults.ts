@@ -22,32 +22,76 @@ export const DEFAULT_SURFACE_RECT: SurfaceRectPrefs = {
   height: 420,
 }
 
-export function shouldHideQuickToolbarWhenOverlaid({
-  hideWhenOverlaid,
-  isMobile,
-  activeModal,
-  settingsModalOpen,
-  drawerOpen,
-  characterEditorOpen,
-  lorebookHalfEditorOpen,
-  lorebookWorkspaceOpen,
-}: {
-  hideWhenOverlaid: boolean | undefined
-  isMobile: boolean
+export type QuickToolbarOverlayState = {
   activeModal: unknown
   settingsModalOpen: boolean
   drawerOpen: boolean
   characterEditorOpen: boolean
   lorebookHalfEditorOpen: boolean
   lorebookWorkspaceOpen: boolean
-}) {
-  const overlayOpen = Boolean(activeModal)
+}
+
+export function isQuickToolbarOverlayOpen({
+  activeModal,
+  settingsModalOpen,
+  drawerOpen,
+  characterEditorOpen,
+  lorebookHalfEditorOpen,
+  lorebookWorkspaceOpen,
+}: QuickToolbarOverlayState): boolean {
+  return Boolean(activeModal)
     || settingsModalOpen
     || drawerOpen
     || characterEditorOpen
     || lorebookHalfEditorOpen
     || lorebookWorkspaceOpen
-  return overlayOpen && (hideWhenOverlaid ?? isMobile)
+}
+
+export function quickToolbarOverlayFingerprint({
+  activeModal,
+  settingsModalOpen,
+  drawerOpen,
+  characterEditorOpen,
+  lorebookHalfEditorOpen,
+  lorebookWorkspaceOpen,
+}: QuickToolbarOverlayState): string {
+  return [
+    activeModal ?? '',
+    settingsModalOpen ? 'settings' : '',
+    drawerOpen ? 'drawer' : '',
+    characterEditorOpen ? 'character' : '',
+    lorebookHalfEditorOpen ? 'lore-half' : '',
+    lorebookWorkspaceOpen ? 'lore-workspace' : '',
+  ].join('|')
+}
+
+export function shouldHideQuickToolbarWhenOverlaid({
+  hideWhenOverlaid,
+  isMobile,
+  modalRestoreHandle,
+  ...overlay
+}: QuickToolbarOverlayState & {
+  hideWhenOverlaid: boolean | undefined
+  isMobile: boolean
+  modalRestoreHandle?: boolean
+}) {
+  return isQuickToolbarOverlayOpen(overlay)
+    && ((hideWhenOverlaid ?? isMobile) || modalRestoreHandle === true)
+}
+
+export function resolveQuickToolbarOverlayPresentation(
+  input: QuickToolbarOverlayState & {
+    hideWhenOverlaid: boolean | undefined
+    isMobile: boolean
+    modalRestoreHandle: boolean
+    restoredOverModal: boolean
+  },
+): 'toolbar' | 'restore-tab' | 'hidden' {
+  const overlayOpen = isQuickToolbarOverlayOpen(input)
+  if (input.restoredOverModal && overlayOpen) return 'toolbar'
+  if (!shouldHideQuickToolbarWhenOverlaid(input)) return 'toolbar'
+  if (input.modalRestoreHandle && overlayOpen && !input.restoredOverModal) return 'restore-tab'
+  return 'hidden'
 }
 
 export function isMobileViewportOrDevice(): boolean {
@@ -101,6 +145,10 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   quickToolbarPlacement: 'floating' | 'chat_top_dock'
   autoFitBounds: boolean
   v2IconOnly: boolean
+  fillTopDockWidth: boolean
+  hideInChatTopDock: boolean
+  showNativeSelectMessages: boolean
+  opaqueToolbarBackdrop: boolean
 } = {
   enabled: true,
   variant: 'v1-free',
@@ -158,6 +206,11 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   quickToolbarPlacement: 'floating',
   autoFitBounds: true,
   v2IconOnly: false,
+  fillTopDockWidth: true,
+  // Off by default. Dock-chrome hide only — floating placement is unaffected.
+  hideInChatTopDock: false,
+  showNativeSelectMessages: true,
+  opaqueToolbarBackdrop: false,
 }
 
 export const DEFAULT_CONNECTIONS_PICKER_SETTINGS: ConnectionsPickerSettings = {
@@ -354,6 +407,10 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   characterTabDisplaySettings: DEFAULT_CHARACTER_TAB_DISPLAY_SETTINGS,
   portraitDockSettings: DEFAULT_PORTRAIT_DOCK_SETTINGS,
   lorebookEditorSettings: DEFAULT_LOREBOOK_EDITOR_SETTINGS,
+  showEmbeddingFallbackUi: true,
+  showCortexSecondaryUi: true,
+  showEditAndSend: true,
+  enableToolbarIconReorder: true,
 })
 
 export function migrateProductivitySetting(key: string, value: unknown): unknown {

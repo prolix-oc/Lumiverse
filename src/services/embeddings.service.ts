@@ -1711,6 +1711,44 @@ export function revokeEmbeddingRegistryProvider(
   return removed;
 }
 
+export type HostEmbeddingDriver = Omit<ProviderDescriptor, "kind" | "id"> & Partial<HostScopeContext> & {
+  installationId?: string;
+};
+
+function hostScopeFromEmbeddingDriver(driver: HostEmbeddingDriver): HostScopeContext & { installationId: string } {
+  const installationId = typeof driver.installationId === "string" && driver.installationId.trim()
+    ? driver.installationId.trim()
+    : "host";
+  const installScope = driver.installScope === "user" || driver.installScope === "operator" || driver.installScope === "system"
+    ? driver.installScope
+    : "system";
+  return {
+    installationId,
+    installScope,
+    installedByUserId: driver.installedByUserId,
+    authenticatedSubject: driver.authenticatedSubject,
+  };
+}
+
+export function registerEmbeddingDriver(id: string, driver: HostEmbeddingDriver): () => void {
+  const host = hostScopeFromEmbeddingDriver(driver);
+  providerRegistry.register({
+    kind: "embedding",
+    id,
+    description: driver.description ?? driver,
+    broker: driver.broker,
+    generation: driver.generation,
+    revision: driver.revision,
+    owner: driver.owner,
+  }, host);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    providerRegistry.unregister({ kind: "embedding", id }, host);
+  };
+}
+
 function normalizeEmbeddingApiUrlForModelListing(rawUrl: string): string {
   const trimmed = rawUrl.trim().replace(/\/+$/, "");
   if (!trimmed) return "";

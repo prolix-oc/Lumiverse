@@ -19,6 +19,7 @@ import {
   BookOpen,
   Heart,
   MessageSquareQuote,
+  Plus,
 } from "lucide-react";
 import { Toggle } from "@/components/shared/Toggle";
 import NumericInput from "@/components/shared/NumericInput";
@@ -27,13 +28,13 @@ import {
   memoryCortexApi,
   resolveCortexSidecarVisibility,
   type CortexConfig,
+  type CortexModelEndpoint,
   type CortexModelFallbackPair,
   type CortexUsageStats,
 } from "@/api/memory-cortex";
-import { fetchConnectionModels } from "@/api/connectionModels";
-import ModelCombobox from "@/components/panels/connection-manager/ModelCombobox";
-import ConnectionSelect from "@/components/shared/ConnectionSelect";
+import SidecarConnectionPicker from "@/components/shared/SidecarConnectionPicker";
 import { getReasoningBindingSummary } from "@/lib/reasoning-binding";
+import { readProductivityFlag } from "@/lib/spindle/productivity-feature-toggles";
 import { wsClient } from "@/ws/client";
 import { EventType } from "@/ws/events";
 import styles from "./MemoryCortexSettings.module.css";
@@ -79,10 +80,149 @@ function formatRebuildStatusLine(
   return parts.join(" · ") || fallback;
 }
 
+function emptyCortexEndpoint(): CortexModelEndpoint {
+  return { connectionProfileId: null, model: null };
+}
+
+function extrasFromPair(pair: CortexModelFallbackPair): CortexModelEndpoint[] {
+  return [
+    ...(pair.secondary ? [pair.secondary] : []),
+    ...(pair.fallbacks ?? []),
+  ];
+}
+
+function pairFromPrimaryAndExtras(
+  primary: CortexModelEndpoint,
+  extras: CortexModelEndpoint[],
+): CortexModelFallbackPair {
+  const cleaned: CortexModelEndpoint[] = [];
+  const seen = new Set<string>();
+  for (const extra of extras) {
+    const id = extra.connectionProfileId;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    cleaned.push({ connectionProfileId: id, model: extra.model ?? null });
+  }
+  const fallbacks = cleaned.slice(1);
+  return {
+    primary,
+    secondary: cleaned[0] ?? null,
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+}
+
+function CortexFallbackList({
+  pair,
+  onChange,
+  firstTestId,
+  extraTestIdPrefix,
+  addTestId,
+  firstLabel,
+  extraLabel,
+  addLabel,
+  hint,
+}: {
+  pair: CortexModelFallbackPair;
+  onChange: (pair: CortexModelFallbackPair) => void;
+  firstTestId: string;
+  extraTestIdPrefix: string;
+  addTestId: string;
+  firstLabel: string;
+  extraLabel: (n: number) => string;
+  addLabel: string;
+  hint: string;
+}) {
+  const { t } = useTranslation("settings");
+  const [drafts, setDrafts] = useState<Array<{ key: string; endpoint: CortexModelEndpoint }>>([]);
+  const configured = extrasFromPair(pair);
+  const rows: Array<{ key: string; endpoint: CortexModelEndpoint; draft: boolean }> = [
+    ...configured.map((endpoint) => ({
+      key: endpoint.connectionProfileId || "secondary",
+      endpoint,
+      draft: false,
+    })),
+    ...drafts.map((draft) => ({ key: draft.key, endpoint: draft.endpoint, draft: true })),
+  ];
+  const display = rows.length > 0
+    ? rows
+    : [{ key: "empty", endpoint: emptyCortexEndpoint(), draft: false }];
+
+  const commit = (next: CortexModelEndpoint[]) => {
+    const persisted: CortexModelEndpoint[] = [];
+    const leftover: Array<{ key: string; endpoint: CortexModelEndpoint }> = [];
+    next.forEach((endpoint, index) => {
+      if (endpoint.connectionProfileId) {
+        persisted.push(endpoint);
+        return;
+      }
+      leftover.push({ key: `draft-${index}-${leftover.length}`, endpoint });
+    });
+    onChange(pairFromPrimaryAndExtras(pair.primary, persisted));
+    setDrafts(leftover);
+  };
+
+  return (
+    <>
+      {display.map((row, index) => (
+        <SidecarConnectionPicker
+          key={row.key}
+          label={t("memoryCortex.connection")}
+          ariaLabel={index === 0 ? firstLabel : extraLabel(index + 1)}
+          placeholder={t("memoryCortex.connectionNone")}
+          connectionProfileId={row.endpoint.connectionProfileId}
+          model={row.endpoint.model}
+          onConnectionChange={(id) => {
+            const next = display.map((entry) => entry.endpoint);
+            next[index] = { connectionProfileId: id, model: null };
+            commit(next);
+          }}
+          onModelChange={(value) => {
+            const next = display.map((entry) => entry.endpoint);
+            if (!next[index]?.connectionProfileId) return;
+            next[index] = { ...next[index], model: value };
+            commit(next);
+          }}
+          testId={index === 0 ? firstTestId : `${extraTestIdPrefix}-${index}`}
+          hint={hint}
+          onRemove={display.length > 1 || !!row.endpoint.connectionProfileId
+            ? () => commit(display.map((entry) => entry.endpoint).filter((_, i) => i !== index))
+            : undefined}
+          removeLabel={t("memoryCortex.removeFallback", { defaultValue: "Remove fallback" })}
+          removeTestId={index === 0 ? `${extraTestIdPrefix}-remove` : `${extraTestIdPrefix}-remove-${index}`}
+        />
+      ))}
+      <div className={styles.addFallbackRow}>
+        <button
+          type="button"
+          className={styles.addBtn}
+          data-testid={addTestId}
+          onClick={() => {
+            if (configured.length === 0 && drafts.length === 0) {
+              setDrafts([
+                { key: "draft-0", endpoint: emptyCortexEndpoint() },
+                { key: "draft-1", endpoint: emptyCortexEndpoint() },
+              ]);
+              return;
+            }
+            setDrafts((current) => [
+              ...current,
+              { key: `draft-${Date.now()}-${current.length}`, endpoint: emptyCortexEndpoint() },
+            ]);
+          }}
+        >
+          <Plus size={12} />
+          {addLabel}
+        </button>
+      </div>
+    </>
+  );
+}
+
 export default function MemoryCortexSettings() {
   const { t } = useTranslation("settings");
   const addToast = useStore((s) => s.addToast);
   const openModal = useStore((s) => s.openModal);
+  const showCortexSecondaryUi = useStore((s) => readProductivityFlag(s, "showCortexSecondaryUi"));
 
   const presetDescriptions = useMemo((): Record<PresetMode, { label: string; desc: string; icon: typeof Zap }> => ({
     simple: {
@@ -138,12 +278,6 @@ export default function MemoryCortexSettings() {
 
   // Connection profiles for sidecar picker
   const profiles = useStore((s) => s.profiles);
-  const [sidecarModels, setSidecarModels] = useState<string[]>([]);
-  const [sidecarModelLabels, setSidecarModelLabels] = useState<Record<string, string>>({});
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [secondaryModels, setSecondaryModels] = useState<Record<string, string[]>>({});
-  const [secondaryModelLabels, setSecondaryModelLabels] = useState<Record<string, Record<string, string>>>({});
-  const [secondaryModelsLoading, setSecondaryModelsLoading] = useState<Record<string, boolean>>({});
   const [sidecarVisibility, setSidecarVisibility] = useState<"ok" | "unavailable" | "timeout" | null>(null);
 
   // Active chat for stats (if available)
@@ -166,41 +300,6 @@ export default function MemoryCortexSettings() {
   const handleOpenDiagnostics = useCallback(() => {
     openModal("memoryCortexDiagnostics", { chatId: activeChatId || null });
   }, [activeChatId, openModal]);
-
-  // Fetch models when sidecar connection changes
-  const fetchModels = useCallback(async (connectionId: string | null) => {
-    if (!connectionId) {
-      setSidecarModels([]);
-      setSidecarModelLabels({});
-      return;
-    }
-    setModelsLoading(true);
-    try {
-      const result = await fetchConnectionModels('llm', connectionId);
-      setSidecarModels(result.models);
-      setSidecarModelLabels(result.labels);
-    } catch {
-      setSidecarModels([]);
-      setSidecarModelLabels({});
-    } finally {
-      setModelsLoading(false);
-    }
-  }, []);
-
-  const fetchSecondaryModels = useCallback(async (connectionId: string | null) => {
-    if (!connectionId) return;
-    setSecondaryModelsLoading((prev) => ({ ...prev, [connectionId]: true }));
-    try {
-      const result = await fetchConnectionModels("llm", connectionId);
-      setSecondaryModels((prev) => ({ ...prev, [connectionId]: result.models }));
-      setSecondaryModelLabels((prev) => ({ ...prev, [connectionId]: result.labels }));
-    } catch {
-      setSecondaryModels((prev) => ({ ...prev, [connectionId]: [] }));
-      setSecondaryModelLabels((prev) => ({ ...prev, [connectionId]: {} }));
-    } finally {
-      setSecondaryModelsLoading((prev) => ({ ...prev, [connectionId]: false }));
-    }
-  }, []);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -285,22 +384,6 @@ export default function MemoryCortexSettings() {
     return () => unsub();
   }, [activeChatId, addToast, loadStats, t]);
   useEffect(() => {
-    if (config?.sidecar?.connectionProfileId) {
-      fetchModels(config.sidecar.connectionProfileId);
-    }
-  }, [config?.sidecar?.connectionProfileId, fetchModels]);
-  useEffect(() => {
-    const ids = [
-      config?.queryGeneration?.secondary?.connectionProfileId,
-      config?.memorySummarization?.secondary?.connectionProfileId,
-    ].filter((id): id is string => !!id);
-    for (const id of ids) void fetchSecondaryModels(id);
-  }, [
-    config?.queryGeneration?.secondary?.connectionProfileId,
-    config?.memorySummarization?.secondary?.connectionProfileId,
-    fetchSecondaryModels,
-  ]);
-  useEffect(() => {
     let cancelled = false;
     const profileId = config?.sidecar?.connectionProfileId
       || config?.queryGeneration?.primary?.connectionProfileId
@@ -350,10 +433,12 @@ export default function MemoryCortexSettings() {
     const nextQuery: CortexModelFallbackPair = {
       primary,
       secondary: config?.queryGeneration?.secondary ?? null,
+      fallbacks: config?.queryGeneration?.fallbacks,
     };
     const nextSummary: CortexModelFallbackPair = {
       primary,
       secondary: config?.memorySummarization?.secondary ?? null,
+      fallbacks: config?.memorySummarization?.fallbacks,
     };
     return {
       sidecar: { ...config!.sidecar, connectionProfileId, model },
@@ -643,136 +728,50 @@ export default function MemoryCortexSettings() {
                   : t("memoryCortex.sidecarReasoningGlobal")}
               </div>
             )}
-            <div className={styles.infoRow}>
-              <span className={styles.infoLabel}>{t("memoryCortex.connection")}</span>
-              <ConnectionSelect
-                kind="llm"
-                value={config.sidecar.connectionProfileId || ""}
-                onChange={(value) => {
-                  const id = value || null;
-                  updateConfig({
-                    ...withPrimaryEndpoint(id, null),
-                    entityExtractionMode: id ? "sidecar" : "heuristic",
-                    salienceScoringMode: id ? "sidecar" : "heuristic",
-                    consolidation: { ...config.consolidation, useSidecar: !!id },
-                  });
-                  fetchModels(id);
-                }}
-                clearable
-                clearLabel={t("memoryCortex.connectionNone")}
-                placeholder={t("memoryCortex.connectionNone")}
-                ariaLabel={t("memoryCortex.connection")}
-              />
-            </div>
+            <SidecarConnectionPicker
+              label={t("memoryCortex.connection")}
+              ariaLabel={t("memoryCortex.connection")}
+              connectionProfileId={config.sidecar.connectionProfileId}
+              model={config.sidecar.model}
+              onConnectionChange={(id) => {
+                updateConfig({
+                  ...withPrimaryEndpoint(id, null),
+                  entityExtractionMode: id ? "sidecar" : "heuristic",
+                  salienceScoringMode: id ? "sidecar" : "heuristic",
+                  consolidation: { ...config.consolidation, useSidecar: !!id },
+                });
+              }}
+              onModelChange={(value) => updateConfig(withPrimaryEndpoint(config.sidecar.connectionProfileId, value))}
+              testId="cortex-sidecar-connection"
+              hint={t("memoryCortex.modelBrowseHint")}
+            />
             {config.sidecar.connectionProfileId && (
               <>
-                <div className={styles.infoRow}>
-                  <span className={styles.infoLabel}>{t("memoryCortex.modelOverride")}</span>
-                  <div className={styles.modelPicker}>
-                    <ModelCombobox
-                      value={config.sidecar.model || ""}
-                      onChange={(value) => updateConfig(withPrimaryEndpoint(config.sidecar.connectionProfileId, value || null))}
-                      models={sidecarModels}
-                      modelLabels={sidecarModelLabels}
-                      loading={modelsLoading}
-                      onRefresh={() => fetchModels(config.sidecar.connectionProfileId)}
-                      autoRefreshOnFocus
-                      refreshKey={config.sidecar.connectionProfileId || ""}
-                      placeholder={t("memoryCortex.modelPlaceholder")}
-                      emptyMessage={t("memoryCortex.noModels")}
-                      browseHint={t("memoryCortex.modelBrowseHint")}
-                    />
-                  </div>
-                </div>
-                <div className={styles.infoRow} data-testid="cortex-query-secondary-connection">
-                  <span className={styles.infoLabel}>{t("memoryCortex.querySecondaryConnection", { defaultValue: "Extraction secondary" })}</span>
-                  <ConnectionSelect
-                    kind="llm"
-                    value={queryGeneration.secondary?.connectionProfileId || ""}
-                    onChange={(value) => {
-                      const id = value || null;
-                      updateEndpointPair("queryGeneration", {
-                        primary: queryGeneration.primary,
-                        secondary: id ? { connectionProfileId: id, model: null } : null,
-                      });
-                      fetchSecondaryModels(id);
-                    }}
-                    clearable
-                    clearLabel={t("memoryCortex.connectionNone")}
-                    placeholder={t("memoryCortex.connectionNone")}
-                    ariaLabel={t("memoryCortex.querySecondaryConnection", { defaultValue: "Extraction secondary" })}
-                  />
-                </div>
-                {queryGeneration.secondary?.connectionProfileId && (
-                  <div className={styles.infoRow} data-testid="cortex-query-secondary-model">
-                    <span className={styles.infoLabel}>{t("memoryCortex.querySecondaryModel", { defaultValue: "Extraction secondary model" })}</span>
-                    <div className={styles.modelPicker}>
-                      <ModelCombobox
-                        value={queryGeneration.secondary.model || ""}
-                        onChange={(value) => updateEndpointPair("queryGeneration", {
-                          primary: queryGeneration.primary,
-                          secondary: {
-                            connectionProfileId: queryGeneration.secondary!.connectionProfileId,
-                            model: value || null,
-                          },
-                        })}
-                        models={secondaryModels[queryGeneration.secondary.connectionProfileId] ?? []}
-                        modelLabels={secondaryModelLabels[queryGeneration.secondary.connectionProfileId] ?? {}}
-                        loading={!!secondaryModelsLoading[queryGeneration.secondary.connectionProfileId]}
-                        onRefresh={() => fetchSecondaryModels(queryGeneration.secondary!.connectionProfileId)}
-                        autoRefreshOnFocus
-                        refreshKey={queryGeneration.secondary.connectionProfileId}
-                        placeholder={t("memoryCortex.modelPlaceholder")}
-                        emptyMessage={t("memoryCortex.noModels")}
-                        browseHint={t("memoryCortex.modelBrowseHint")}
-                      />
-                    </div>
-                  </div>
+                {showCortexSecondaryUi && (
+                <CortexFallbackList
+                  pair={queryGeneration}
+                  onChange={(next) => updateEndpointPair("queryGeneration", next)}
+                  firstTestId="cortex-query-secondary-connection"
+                  extraTestIdPrefix="cortex-query-fallback"
+                  addTestId="cortex-query-add-fallback"
+                  firstLabel={t("memoryCortex.querySecondaryConnection", { defaultValue: "Extraction secondary" })}
+                  extraLabel={(n) => t("memoryCortex.queryFallbackConnection", { defaultValue: "Extraction fallback {{n}}", n })}
+                  addLabel={t("memoryCortex.addFallback", { defaultValue: "Add fallback" })}
+                  hint={t("memoryCortex.modelBrowseHint")}
+                />
                 )}
-                <div className={styles.infoRow} data-testid="cortex-summary-secondary-connection">
-                  <span className={styles.infoLabel}>{t("memoryCortex.summarySecondaryConnection", { defaultValue: "Summary secondary" })}</span>
-                  <ConnectionSelect
-                    kind="llm"
-                    value={memorySummarization.secondary?.connectionProfileId || ""}
-                    onChange={(value) => {
-                      const id = value || null;
-                      updateEndpointPair("memorySummarization", {
-                        primary: memorySummarization.primary,
-                        secondary: id ? { connectionProfileId: id, model: null } : null,
-                      });
-                      fetchSecondaryModels(id);
-                    }}
-                    clearable
-                    clearLabel={t("memoryCortex.connectionNone")}
-                    placeholder={t("memoryCortex.connectionNone")}
-                    ariaLabel={t("memoryCortex.summarySecondaryConnection", { defaultValue: "Summary secondary" })}
-                  />
-                </div>
-                {memorySummarization.secondary?.connectionProfileId && (
-                  <div className={styles.infoRow} data-testid="cortex-summary-secondary-model">
-                    <span className={styles.infoLabel}>{t("memoryCortex.summarySecondaryModel", { defaultValue: "Summary secondary model" })}</span>
-                    <div className={styles.modelPicker}>
-                      <ModelCombobox
-                        value={memorySummarization.secondary.model || ""}
-                        onChange={(value) => updateEndpointPair("memorySummarization", {
-                          primary: memorySummarization.primary,
-                          secondary: {
-                            connectionProfileId: memorySummarization.secondary!.connectionProfileId,
-                            model: value || null,
-                          },
-                        })}
-                        models={secondaryModels[memorySummarization.secondary.connectionProfileId] ?? []}
-                        modelLabels={secondaryModelLabels[memorySummarization.secondary.connectionProfileId] ?? {}}
-                        loading={!!secondaryModelsLoading[memorySummarization.secondary.connectionProfileId]}
-                        onRefresh={() => fetchSecondaryModels(memorySummarization.secondary!.connectionProfileId)}
-                        autoRefreshOnFocus
-                        refreshKey={memorySummarization.secondary.connectionProfileId}
-                        placeholder={t("memoryCortex.modelPlaceholder")}
-                        emptyMessage={t("memoryCortex.noModels")}
-                        browseHint={t("memoryCortex.modelBrowseHint")}
-                      />
-                    </div>
-                  </div>
+                {showCortexSecondaryUi && (
+                <CortexFallbackList
+                  pair={memorySummarization}
+                  onChange={(next) => updateEndpointPair("memorySummarization", next)}
+                  firstTestId="cortex-summary-secondary-connection"
+                  extraTestIdPrefix="cortex-summary-fallback"
+                  addTestId="cortex-summary-add-fallback"
+                  firstLabel={t("memoryCortex.summarySecondaryConnection", { defaultValue: "Summary secondary" })}
+                  extraLabel={(n) => t("memoryCortex.summaryFallbackConnection", { defaultValue: "Summary fallback {{n}}", n })}
+                  addLabel={t("memoryCortex.addFallback", { defaultValue: "Add fallback" })}
+                  hint={t("memoryCortex.modelBrowseHint")}
+                />
                 )}
                 <div className={styles.infoRow}>
                   <span className={styles.infoLabel}>{t("memoryCortex.temperature")}</span>

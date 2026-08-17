@@ -117,7 +117,39 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).not.toContain('Toolbar height')
   })
 
-  test('keeps overlay hiding controls out of V2 Adjacent', () => {
+  test('exposes fill, native select-messages, and opaque backdrop; hide-in-dock is gone', () => {
+    const previous = state.quickToolbarSettings
+    state.quickToolbarSettings = {
+      ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings,
+      quickToolbarPlacement: 'floating',
+    }
+    const floating = renderToStaticMarkup(<ProductivitySettings />)
+    expect(floating).not.toContain('Hide toolbar in chat top bar')
+    expect(floating).not.toContain('quick-hide-in-chat-top-dock')
+    expect(floating).not.toContain('Fill chat top bar width')
+    expect(floating).toContain('Fill the entire top of the screen')
+    expect(floating).toContain('quick-fill-top-dock-width')
+    expect(floating).toContain('Show select-messages on chat top bar')
+    expect(floating).toContain('quick-show-native-select-messages')
+    expect(floating).toContain('Opaque toolbar backdrop')
+    expect(floating).toContain('quick-opaque-toolbar-backdrop')
+
+    state.quickToolbarSettings = {
+      ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings,
+      quickToolbarPlacement: 'chat_top_dock',
+    }
+    const docked = renderToStaticMarkup(<ProductivitySettings />)
+    state.quickToolbarSettings = previous
+
+    expect(docked).not.toContain('Hide toolbar in chat top bar')
+    expect(docked).not.toContain('quick-hide-in-chat-top-dock')
+    expect(docked).toContain('Fill chat top bar width')
+    expect(docked).toContain('quick-fill-top-dock-width')
+    expect(docked).toContain('quick-show-native-select-messages')
+    expect(docked).toContain('quick-opaque-toolbar-backdrop')
+  })
+
+  test('exposes overlay hide and restore on V2 Adjacent floating', () => {
     const previous = state.quickToolbarSettings
     state.quickToolbarSettings = {
       ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings,
@@ -127,7 +159,11 @@ describe('canonical Productivity settings renderer', () => {
     const markup = renderToStaticMarkup(<ProductivitySettings />)
     state.quickToolbarSettings = previous
 
-    expect(markup).not.toContain('Hide when overlaid')
+    expect(markup).toContain('Hide when overlaid')
+    expect(markup).toContain('Restore tab over full-screen dialogs')
+    expect(markup).toContain('quick-v2-hide-when-overlaid')
+    expect(markup).toContain('quick-v2-modal-restore')
+    expect(markup).not.toContain('Vertical orientation')
   })
 
   test('renders Lore Indicator launch-target controls', () => {

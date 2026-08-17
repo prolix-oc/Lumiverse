@@ -1394,6 +1394,8 @@
     "checkWorldBook": "已啟用世界書向量化",
     "checkWorldBookDesc": "允許用向量索引與搜索世界書條目。",
     "connection": "連接",
+    "connectionNone": "無（直接自訂設定）",
+    "modelBrowseHint": "選取連線設定檔，或留空以使用直接自訂設定。",
     "providerModel": "提供商與模型",
     "enable": "啟用嵌入",
     "provider": "提供商",

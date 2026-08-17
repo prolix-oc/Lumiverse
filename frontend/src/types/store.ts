@@ -516,6 +516,8 @@ export interface QuickToolbarSettings {
   rectVersion: number
   /** Undefined keeps the responsive default: hide only on mobile overlays. */
   hideWhenOverlaid?: boolean
+  /** Dock-chrome hide only. Undefined/false keeps the docked toolbar in `chat_top_dock`. */
+  hideInChatTopDock?: boolean
   modalRestoreHandle: boolean
   v2IconSize: number
   v2LabelTextSize: number
@@ -524,6 +526,12 @@ export interface QuickToolbarSettings {
   quickToolbarPlacement?: 'floating' | 'chat_top_dock'
   autoFitBounds?: boolean
   v2IconOnly?: boolean
+  /** Stretch docked V2 across leftover `.chatToolbar` width. Default on. */
+  fillTopDockWidth?: boolean
+  /** Native ChatView ListChecks. Default on (`!== false`). */
+  showNativeSelectMessages?: boolean
+  /** Opaque plate behind the Quick Toolbar box. Default off. */
+  opaqueToolbarBackdrop?: boolean
 }
 
 export interface ConnectionsPickerSettings {
@@ -728,6 +736,10 @@ export interface SettingsSlice {
   characterTabDisplaySettings: CharacterTabDisplaySettings
   portraitDockSettings: PortraitDockSettings
   lorebookEditorSettings: LorebookEditorSettings
+  showEmbeddingFallbackUi: boolean
+  showCortexSecondaryUi: boolean
+  showEditAndSend: boolean
+  enableToolbarIconReorder: boolean
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void

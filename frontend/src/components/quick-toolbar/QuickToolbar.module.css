@@ -3,6 +3,24 @@
   pointer-events: auto;
 }
 
+.root[data-opaque-backdrop='1'] {
+  isolation: isolate;
+}
+
+.root[data-opaque-backdrop='1']::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--lumiverse-bg-opaque);
+}
+
+.root[data-opaque-backdrop='1'] > * {
+  position: relative;
+  z-index: 1;
+}
+
 /*
  * The rect *is* the toolbar's box. The rendered box, the persisted value and the
  * eight resize handles therefore agree by construction — the previous rule sized
@@ -15,7 +33,7 @@
   left: var(--quick-toolbar-x, 0px);
   top: var(--quick-toolbar-y, 0px);
   width: var(--quick-toolbar-width, auto);
-  height: var(--quick-toolbar-height, auto);
+  height: var(--quick-toolbar-height, max-content);
   z-index: var(--z-quick-toolbar-floating, 10005);
   display: flex;
   /* Moved off `.toolbar` so the grip and all eight handles rotate *with* the
@@ -45,12 +63,48 @@
   align-self: center;
 }
 
+/* V1 docked: fill the rail so the icon group centres as a unit. */
+.rootAnchored[data-quick-toolbar-variant='v1'] {
+  flex: 1 1 auto;
+  align-self: stretch;
+  width: 100%;
+  height: 100%;
+  justify-content: center;
+}
+
+/* Docked V2 uses the leftover flex column; never the full chatToolbar width. */
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+}
+
+/* Opt-out: hug packed cards instead of stretching the leftover rail. */
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'][data-fill-top-dock='0'] {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 100%;
+}
+
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2']:not([data-fill-top-dock='0']) .cardStrip {
+  width: 100%;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+}
+
+.fillDockSpacer {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-self: stretch;
+}
+
 .toolbar {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: calc(var(--quick-toolbar-gap, 6px) * var(--quick-toolbar-scale, 1));
-  padding: calc(var(--quick-toolbar-padding-block, 8px) * var(--quick-toolbar-scale, 1)) calc(var(--quick-toolbar-padding-inline, 10px) * var(--quick-toolbar-scale, 1));
+  padding: calc(var(--quick-toolbar-padding-block, 4px) * var(--quick-toolbar-scale, 1)) calc(var(--quick-toolbar-padding-inline, 10px) * var(--quick-toolbar-scale, 1));
   border: 1px solid var(--lumiverse-border, rgba(148, 163, 184, 0.28));
   border-radius: 13px;
   /* One rung BELOW `.card`, which stays on `--lumiverse-surface-raised`. The two
@@ -69,11 +123,12 @@
   overflow: hidden;
 }
 
-/* The nav fills the persisted rect. Without this the rect had no visual effect
-   at all: the nav sized itself from its own content and ignored the box. */
+/* Hug the icon row by default. Stretch height only when TSX paints a pinned
+   `--quick-toolbar-nav-height: 100%` after the user grew N/S chrome. */
 .rootFree .toolbar {
   width: 100%;
-  height: 100%;
+  height: var(--quick-toolbar-nav-height, auto);
+  align-items: center;
 }
 
 /* One synchronous frame-less read of the nav's *natural* extent. The component
@@ -209,6 +264,14 @@
   display: inline-flex;
   flex: 0 0 auto;
   min-width: 0;
+  transition: transform 160ms ease;
+}
+
+/* Keep the slot in flow so neighbors slide; lift lives on the card transform. */
+.cardSlot[data-dragging],
+.cardSlot:has([data-dragging]) {
+  position: relative;
+  z-index: 8;
 }
 
 .measureRail {
@@ -269,7 +332,9 @@
   transition:
     background var(--lumiverse-transition-fast, 120ms),
     border-color var(--lumiverse-transition-fast, 120ms),
-    color var(--lumiverse-transition-fast, 120ms);
+    color var(--lumiverse-transition-fast, 120ms),
+    transform 160ms ease,
+    box-shadow 160ms ease;
 }
 
 /*
@@ -535,7 +600,7 @@
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 6px 7px;
+  padding: 2px 6px;
   border: 1px solid transparent;
   border-radius: 9px;
   background: transparent;
@@ -573,6 +638,22 @@
   transform: translateX(1px);
 }
 
+.card[data-dragging],
+.item[data-dragging],
+.item[data-dragging]:hover,
+.item[data-dragging]:focus-visible,
+.toolbarVertical .item[data-dragging],
+.toolbarVertical .item[data-dragging]:hover,
+.toolbarVertical .item[data-dragging]:focus-visible {
+  z-index: 8;
+  cursor: grabbing;
+  transform: scale(1.04);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.38),
+    0 0 0 1px color-mix(in srgb, var(--lumiverse-primary, #6366f1) 35%, transparent);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
 /*
  * The trailing gear, promoted to a card-height bordered sibling as the confirmed
  * design shows. It used to be a 26px transparent glyph with a 5px radius next to
@@ -583,9 +664,11 @@
  * (0,1,0), so source order is the only thing that lets it win.
  */
 .cardStripSettings {
+  box-sizing: border-box;
   flex: 0 0 auto;
   width: max(36px, calc(var(--quick-toolbar-icon-size, 16px) + 8px));
   min-width: max(36px, calc(var(--quick-toolbar-icon-size, 16px) + 8px));
+  /* Height includes the 1px border. Same formula as `.cardStrip .card`. */
   height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
   min-height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
   padding: 0;
@@ -595,15 +678,35 @@
   border-color: var(--lumiverse-border-hover);
   border-radius: var(--lumiverse-radius-md);
   color: var(--lumiverse-text-muted);
+  /* Strip / toolbar stay `overflow: hidden`; chrome must not clip its own glyph. */
+  overflow: visible;
 }
 
 .overflowButton {
+  box-sizing: border-box;
   width: auto;
-  min-width: 56px;
+  min-width: 0;
   flex-direction: row;
+  align-items: center;
   gap: 4px;
   padding: 0 8px;
   font-size: 11px;
+  overflow: visible;
+}
+
+/* Same clamp as `.cardStrip .cardIcon > svg`. Lucide `size` is presentational. */
+.cardStripSettings > svg {
+  display: block;
+  width: var(--quick-toolbar-icon-size, 16px);
+  height: var(--quick-toolbar-icon-size, 16px);
+  max-width: 100%;
+  max-height: 100%;
+  flex: 0 0 auto;
+}
+
+.overflowButton > span {
+  flex: 0 0 auto;
+  line-height: 1;
 }
 
 .overflowPopover {
@@ -1100,10 +1203,9 @@
 }
 
 /*
- * Inset bands, never negative offsets. The toolbar carries 8px of padding, so an
- * 8px band *inside* the edge can never cover a button — while the space outside
- * the box stays completely free for the drag grip, which is what
- * `.resize_n { top: -4px }` was competing for.
+ * Inset bands, never negative offsets. Padding-block fallback is 4px; the 8px
+ * handle band stays inset so the space outside the box stays free for the drag
+ * grip, which is what `.resize_n { top: -4px }` was competing for.
  */
 .resize_n,
 .resize_s {

@@ -148,6 +148,12 @@ import {
   type SpindleComponentOverrideHandle,
   type SpindleComponentOverrideRegistrationInput,
 } from './component-override-registry'
+import {
+  DATA_SPINDLE_MOUNT_ATTR,
+  DATA_SPINDLE_SCOPE_ATTR,
+  getDomDecoratorService,
+  type DecoratorOptions,
+} from './dom-decorator-service'
 import { registerHostIntentHandler, type HostIntentHandler, type JsonValue } from './host-intent-registry'
 
 declare const __APP_VERSION__: string
@@ -281,6 +287,7 @@ type FrontendExtensionUI = Omit<SpindleFrontendContext['ui'], 'createFloatWidget
   requestDockPanel(options: FrontendDockPanelOptions): SpindleDockPanelHandle
   registerCssComponent(options: SpindleCssComponentRegistrationOptions): () => void
   registerComponentOverride(options: Omit<SpindleComponentOverrideRegistrationInput, 'owner' | 'generation'>): SpindleComponentOverrideHandle
+  registerDomDecorator(options: Omit<DecoratorOptions, 'owner' | 'generation'>): () => void
   registerHostIntentHandler<T extends JsonValue = JsonValue>(name: string, handler: (detail: T) => boolean): () => void
 }
 
@@ -636,6 +643,11 @@ async function doLoadFrontendExtension(
     throw new Error(`PERMISSION_DENIED:${permission} - ${member} requires the ${permission} permission`)
   }
   const bundleUrl = getFrontendBundleUrl(extensionId, manifest)
+  const decoratorService = getDomDecoratorService({ extensionId, generation })
+  const unloadDomDecorators = () => {
+    decoratorService.unloadGeneration(extensionId, generation)
+    decoratorService.flush()
+  }
   const eventUnsubs: (() => void)[] = []
   const trackEventUnsubscribe = (unsubscribe: () => void): (() => void) => {
     let active = true
@@ -820,6 +832,7 @@ async function doLoadFrontendExtension(
     }
     clearCssComponentsForExtension(extensionId, generation)
     clearComponentOverridesForOwner(extensionId, generation)
+    unloadDomDecorators()
     try {
       clearPresetEditorSubscriptions()
       clearCharacterEditorSubscriptions()
@@ -1249,6 +1262,7 @@ async function doLoadFrontendExtension(
 
     let mountSyncActive = true
     let mountRetryTimer: ReturnType<typeof setTimeout> | null = null
+    const registeredDecoratorAnchors = new Set<Element>()
     const attachMountRoots = () => {
       if (!mountSyncActive) return
       if (document.body.hasAttribute('data-chat-chrome-entering')) {
@@ -1268,12 +1282,37 @@ async function doLoadFrontendExtension(
           target.appendChild(root)
         }
       }
+      for (const node of [...registeredDecoratorAnchors]) {
+        if (node.isConnected) continue
+        decoratorService.unregisterAnchor(node)
+        registeredDecoratorAnchors.delete(node)
+      }
+      const hosts = document.querySelectorAll(`[${DATA_SPINDLE_MOUNT_ATTR}][${DATA_SPINDLE_SCOPE_ATTR}]`)
+      for (const host of hosts) {
+        const mount = host.getAttribute(DATA_SPINDLE_MOUNT_ATTR)
+        const scope = host.getAttribute(DATA_SPINDLE_SCOPE_ATTR)
+        if (!mount || !scope?.trim()) continue
+        decoratorService.registerAnchor({
+          mount,
+          scope,
+          owner: extensionId,
+          generation,
+          node: host,
+        })
+        registeredDecoratorAnchors.add(host)
+      }
     }
 
     const mountObserver = new MutationObserver(() => {
       attachMountRoots()
     })
-    mountObserver.observe(document.body, { childList: true, subtree: true })
+    mountObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [DATA_SPINDLE_MOUNT_ATTR, DATA_SPINDLE_SCOPE_ATTR],
+    })
+    attachMountRoots()
 
     const cleanupMountInfra = () => {
       mountSyncActive = false
@@ -1282,6 +1321,8 @@ async function doLoadFrontendExtension(
         mountRetryTimer = null
       }
       mountObserver.disconnect()
+      unloadDomDecorators()
+      registeredDecoratorAnchors.clear()
       for (const dismiss of [...modalDisposers]) {
         try { dismiss() } catch { /* no-op */ }
       }
@@ -1491,6 +1532,14 @@ async function doLoadFrontendExtension(
           })
           trackEventUnsubscribe(() => handle.destroy())
           return handle
+        },
+        registerDomDecorator(options) {
+          assertFrontendActive()
+          return trackEventUnsubscribe(decoratorService.registerDecorator({
+            ...options,
+            owner: extensionId,
+            generation,
+          }))
         },
         registerHostIntentHandler<T extends JsonValue = JsonValue>(name: string, handler: (detail: T) => boolean) {
           assertFrontendActive()
@@ -2182,6 +2231,7 @@ async function doLoadFrontendExtension(
         clearTabMobilityHandle(extensionId, generation)
         clearCssComponentsForExtension(extensionId, generation)
         clearComponentOverridesForOwner(extensionId, generation)
+        unloadDomDecorators()
         forgetExtensionIdentity(extensionId)
         identityRegistered = false
 

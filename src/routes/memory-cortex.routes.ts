@@ -761,8 +761,10 @@ function collectConfiguredSidecarEndpoints(cortexConfig: memoryCortex.MemoryCort
   return [
     listed.queryGeneration.primary.connectionProfileId ? listed.queryGeneration.primary : legacyPrimary,
     listed.queryGeneration.secondary,
+    ...(listed.queryGeneration.fallbacks ?? []),
     listed.memorySummarization.primary,
     listed.memorySummarization.secondary,
+    ...(listed.memorySummarization.fallbacks ?? []),
   ].filter((endpoint): endpoint is { connectionProfileId: string | null; model: string | null } =>
     !!endpoint?.connectionProfileId,
   );
@@ -808,25 +810,39 @@ export function describeCortexSidecarHealth(
   userId: string,
   cortexConfig: memoryCortex.MemoryCortexConfig,
 ): {
-  queryGeneration: { primary: CortexSidecarEndpointHealth; secondary: CortexSidecarEndpointHealth | null };
-  memorySummarization: { primary: CortexSidecarEndpointHealth; secondary: CortexSidecarEndpointHealth | null };
+  queryGeneration: {
+    primary: CortexSidecarEndpointHealth;
+    secondary: CortexSidecarEndpointHealth | null;
+    fallbacks: CortexSidecarEndpointHealth[];
+  };
+  memorySummarization: {
+    primary: CortexSidecarEndpointHealth;
+    secondary: CortexSidecarEndpointHealth | null;
+    fallbacks: CortexSidecarEndpointHealth[];
+  };
   availability: "ok" | "unavailable";
 } {
   const listed = memoryCortex.listCortexSidecarEndpoints(cortexConfig);
   const queryPrimary = inspectCortexSidecarEndpoint(userId, listed.queryGeneration.primary);
+  const queryFallbacks = (listed.queryGeneration.fallbacks ?? []).map((endpoint) =>
+    inspectCortexSidecarEndpoint(userId, endpoint),
+  );
   const querySecondary = listed.queryGeneration.secondary
     ? inspectCortexSidecarEndpoint(userId, listed.queryGeneration.secondary)
     : null;
   const summaryPrimary = inspectCortexSidecarEndpoint(userId, listed.memorySummarization.primary);
+  const summaryFallbacks = (listed.memorySummarization.fallbacks ?? []).map((endpoint) =>
+    inspectCortexSidecarEndpoint(userId, endpoint),
+  );
   const summarySecondary = listed.memorySummarization.secondary
     ? inspectCortexSidecarEndpoint(userId, listed.memorySummarization.secondary)
     : null;
-  const anyReady = [queryPrimary, querySecondary, summaryPrimary, summarySecondary].some((item) => item?.ready);
-  const anyConfigured = [queryPrimary, querySecondary, summaryPrimary, summarySecondary]
-    .some((item) => item?.connectionProfileId);
+  const inspected = [queryPrimary, querySecondary, ...queryFallbacks, summaryPrimary, summarySecondary, ...summaryFallbacks];
+  const anyReady = inspected.some((item) => item?.ready);
+  const anyConfigured = inspected.some((item) => item?.connectionProfileId);
   return {
-    queryGeneration: { primary: queryPrimary, secondary: querySecondary },
-    memorySummarization: { primary: summaryPrimary, secondary: summarySecondary },
+    queryGeneration: { primary: queryPrimary, secondary: querySecondary, fallbacks: queryFallbacks },
+    memorySummarization: { primary: summaryPrimary, secondary: summarySecondary, fallbacks: summaryFallbacks },
     availability: !anyConfigured || anyReady ? (anyReady ? "ok" : "unavailable") : "unavailable",
   };
 }

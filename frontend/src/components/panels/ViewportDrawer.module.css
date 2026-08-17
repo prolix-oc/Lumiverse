@@ -367,6 +367,14 @@
   min-width: 0;
 }
 
+.headerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
 .guideButton {
   width: 26px;
   height: 26px;

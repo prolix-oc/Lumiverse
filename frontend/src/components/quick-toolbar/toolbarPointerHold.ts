@@ -45,6 +45,7 @@ export function createPointerHoldController(
   const finish = () => {
     const result = { held, clientX: point.clientX, clientY: point.clientY }
     clearTimer()
+    held = false
     return result
   }
 
@@ -54,4 +55,38 @@ export function createPointerHoldController(
 export function isExplicitToolbarDragTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
   return Boolean(target.closest('[data-toolbar-drag-handle], [data-toolbar-resize-handle]'))
+}
+
+export function isToolbarItemDragTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  return Boolean(target.closest('[data-toolbar-item-drag-handle], [data-toolbar-action]'))
+}
+
+export function toolbarActionIdFromTarget(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null
+  return target.closest('[data-toolbar-action]')?.getAttribute('data-toolbar-action') ?? null
+}
+
+/** Dedicated item handle only — same node as the action still uses the 1000ms hold so clicks fire. */
+export function isImmediateItemDragHandle(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  const handle = target.closest('[data-toolbar-item-drag-handle]')
+  if (!handle) return false
+  return handle !== target.closest('[data-toolbar-action]')
+}
+
+/** Next persistable icon order after dragging `activeId` onto `overId`. */
+export function nextToolbarIconOrder(
+  orderedIds: readonly string[],
+  activeId: string,
+  overId: string,
+): string[] | null {
+  if (activeId === overId) return null
+  const from = orderedIds.indexOf(activeId)
+  const to = orderedIds.indexOf(overId)
+  if (from < 0 || to < 0) return null
+  const next = [...orderedIds]
+  const [moved] = next.splice(from, 1)
+  next.splice(to, 0, moved)
+  return next
 }

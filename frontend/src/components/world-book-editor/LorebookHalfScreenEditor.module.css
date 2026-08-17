@@ -93,7 +93,7 @@
  * rely on. Repeating the class makes the override deterministic.
  */
 .halfFloatingFrame.halfFloatingFrame {
-  z-index: 60;
+  z-index: 10006;
 }
 
 /*
@@ -116,7 +116,7 @@
   .halfScreenHost {
     position: relative;
     inset: auto;
-    z-index: auto;
+    z-index: 10006;
     width: 100% !important;
     max-width: 100%;
     min-width: 0;
@@ -131,7 +131,7 @@
   .halfScreenHost[data-force-half-screen='true'] {
     position: relative;
     inset: auto;
-    z-index: auto;
+    z-index: 10006;
     width: 100% !important;
     max-width: 100%;
   }

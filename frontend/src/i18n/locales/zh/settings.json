@@ -1310,6 +1310,8 @@
     "checkWorldBook": "已启用世界书向量化",
     "checkWorldBookDesc": "允许用向量索引与搜索世界书条目。",
     "connection": "连接",
+    "connectionNone": "无（直接自定义配置）",
+    "modelBrowseHint": "选择连接配置文件，或留空以使用直接自定义配置。",
     "providerModel": "提供商与模型",
     "enable": "启用嵌入",
     "provider": "提供商",

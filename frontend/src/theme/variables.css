@@ -33,6 +33,7 @@
 
   /* Dark purple-tinted backgrounds */
   --lumiverse-bg: rgba(28, 24, 38, 0.95);
+  --lumiverse-bg-opaque: rgb(28 24 38);
   --lumiverse-bg-elevated: rgba(35, 30, 48, 0.9);
   --lumiverse-bg-hover: rgba(45, 40, 58, 0.9);
   --lumiverse-bg-dark: rgba(0, 0, 0, 0.15);

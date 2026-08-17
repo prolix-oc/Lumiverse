@@ -165,7 +165,8 @@ describe('P12 chat dock preservation contracts', () => {
     const toolbarCss = await readSource('../quick-toolbar/QuickToolbar.module.css')
 
     expect(chatCss).toMatch(/\.chatToolbar\s*\{[\s\S]*?justify-content:\s*flex-start;[\s\S]*?padding:\s*6px 8px;[\s\S]*?gap:\s*6px;/)
-    expect(chatCss).toMatch(/\.toolbarBtn\s*\{[\s\S]*?order:\s*2;[\s\S]*?margin-left:\s*auto;/)
+    expect(chatCss).toMatch(/\.toolbarBtn\s*\{[\s\S]*?order:\s*0;/)
+    expect(chatCss).not.toMatch(/\.toolbarBtn\s*\{[\s\S]*?margin-left:\s*auto;/)
     expect(toolbarCss).toMatch(/\.cardStrip\s*\{[^}]*?justify-content:\s*center;/)
   })
 })

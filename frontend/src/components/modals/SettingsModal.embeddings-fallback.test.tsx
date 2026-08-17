@@ -110,6 +110,15 @@ describe('SettingsModal embeddings fallback helpers', () => {
         api_key: 'sa-json',
       }),
     )
+    expect(sent.connectionProfiles?.map((profile) => ({
+      id: profile.id,
+      dimensions: profile.dimensions,
+    }))).toEqual([
+      { id: PRIMARY_ID, dimensions: 1536 },
+      { id: FALLBACK_ID, dimensions: 768 },
+      { id: VERTEX_ID, dimensions: 1536 },
+    ])
+    expect(sent.dimensions).toBe(1536)
     expect(JSON.stringify(sent)).not.toContain('embedding-profile/')
     expect(JSON.stringify(sent)).not.toContain('hasSecret')
   })

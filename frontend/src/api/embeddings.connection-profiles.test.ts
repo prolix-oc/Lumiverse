@@ -17,8 +17,10 @@ const {
   buildEmbeddingConfigUpdate,
   embeddingsApi,
   isUsableProfileId,
+  projectConnectionProfiles,
   redactEmbeddingErrorMessage,
   selectFallbackChain,
+  selectedEmbeddingProfileIds,
 } = await import('./embeddings')
 
 const PRIMARY_ID = '11111111-1111-4111-8111-111111111111'
@@ -102,6 +104,15 @@ describe('embeddings API connection profiles', () => {
       id: PRIMARY_ID,
       api_key: 'sk-new',
     }))
+    expect(payload.connectionProfiles?.map((profile) => ({
+      id: profile.id,
+      dimensions: profile.dimensions,
+    }))).toEqual([
+      { id: PRIMARY_ID, dimensions: 1536 },
+      { id: FALLBACK_ID, dimensions: 1536 },
+      { id: INCOMPAT_ID, dimensions: 768 },
+    ])
+    expect(payload.dimensions).toBe(1536)
   })
 
   test('selectFallbackChain preserves unknown providers and skips incompatible dimensions', () => {
@@ -114,6 +125,49 @@ describe('embeddings API connection profiles', () => {
   test('rejects a literal default profile id', () => {
     expect(isUsableProfileId('default')).toBe(false)
     expect(isUsableProfileId(PRIMARY_ID)).toBe(true)
+  })
+
+  test('projectConnectionProfiles snapshots selected Connections and keeps prior orphans', () => {
+    expect(selectedEmbeddingProfileIds({
+      primaryProfileId: PRIMARY_ID,
+      fallbackProfileIds: [PRIMARY_ID, FALLBACK_ID, 'default'],
+    })).toEqual([PRIMARY_ID, FALLBACK_ID])
+
+    const snapshots = projectConnectionProfiles(
+      [
+        {
+          id: PRIMARY_ID,
+          provider: 'openai',
+          model: 'text-embedding-3-large',
+          api_url: 'https://api.openai.com/v1',
+          metadata: { dimensions: 3072, vertex_region: 'us-east1' },
+        },
+      ],
+      [PRIMARY_ID, FALLBACK_ID],
+      cfg.connectionProfiles,
+    )
+
+    expect(snapshots).toEqual([
+      expect.objectContaining({
+        id: PRIMARY_ID,
+        provider: 'openai',
+        model: 'text-embedding-3-large',
+        api_url: 'https://api.openai.com/v1',
+        dimensions: 3072,
+        enabled: true,
+        vertex_region: 'us-east1',
+      }),
+      expect.objectContaining({
+        id: FALLBACK_ID,
+        provider: 'future-vendor',
+        api_url: 'https://fallback.test/v1/embeddings',
+        vertex_project: 'proj',
+      }),
+    ])
+    expect(JSON.stringify(buildEmbeddingConfigUpdate({
+      ...cfg,
+      connectionProfiles: snapshots,
+    }))).not.toContain('hasSecret')
   })
 
   test('redacts secret refs from fallback error copy', () => {

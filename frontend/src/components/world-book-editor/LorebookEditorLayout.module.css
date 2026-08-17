@@ -17,6 +17,7 @@
  * content-sized, so `contain: inline-size` cannot collapse it.
  */
 .workspace {
+  position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -25,6 +26,7 @@
   overflow: hidden;
   color: var(--lumiverse-text);
   background: var(--lumiverse-bg);
+  isolation: isolate;
   container-type: inline-size;
   container-name: lbWorkspace;
 }
@@ -41,6 +43,10 @@
 }
 
 .workspaceHeader {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  flex-wrap: wrap;
   min-height: 58px;
   justify-content: space-between;
   gap: 12px;
@@ -50,6 +56,7 @@
 }
 
 .headerIdentity {
+  flex: 1 1 12rem;
   gap: 10px;
   min-width: 0;
 }
@@ -73,6 +80,7 @@
 }
 
 .headerActions {
+  flex: 1 1 auto;
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
@@ -120,8 +128,11 @@
 }
 
 .panes {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
   min-height: 0;
 }
@@ -150,11 +161,22 @@
 }
 
 /* The pane clips; the entry editor inside owns its own scrolling so the content
-   field can flex-fill whatever height is left over. */
+   field can flex-fill whatever height is left over. Grow into leftover row
+   space with a hard 280px floor so a stored --lorebook-inspector-width cannot
+   collapse this pane to an empty void on typical desktop / half widths. */
 .inspectorPane {
-  flex: 1 1 var(--lorebook-inspector-width);
-  min-width: 220px;
+  flex: 1 1 auto;
+  min-width: 280px;
   overflow: hidden;
+}
+
+.inspectorBody {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 .splitter {
@@ -757,9 +779,12 @@
 
 .empty {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 9px;
+  min-height: 0;
   padding: 24px;
   color: var(--lumiverse-text-dim);
   text-align: center;
@@ -790,7 +815,7 @@
 
 .halfWorkspace .inspectorPane {
   flex: 1 1 auto;
-  min-width: 210px;
+  min-width: 280px;
 }
 
 .halfWorkspace .workspaceHeader {
@@ -809,7 +834,7 @@
 
 .halfWorkspace .headerActions {
   gap: 5px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .halfWorkspace .headerActions button {
@@ -843,14 +868,34 @@
  */
 
 /*
+ * Empty mount is `display: contents` so it does not become a flex item. Once
+ * the suite injects its two-column grid, collapse the box so it cannot steal
+ * width from `.panes` (cards-left / empty-right).
+ */
+.spindleWorkspaceMount:empty {
+  display: contents;
+}
+
+.spindleWorkspaceMount:not(:empty) {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  flex: 0 0 0;
+}
+
+/*
  * The pane ladder, keyed on `.workspace`'s own inline size.
  *
  * | tier     | inline size | what collapses                          |
  * |----------|-------------|-----------------------------------------|
  * | wide     | >= 1040     | nothing — books + entries + inspector    |
- * | standard | 760-1039    | books pane (and its splitter) hidden     |
- * | narrow   | 520-759     | panes stack, inspector under the list    |
+ * | standard | 520-1039    | books pane hidden; entries + inspector   |
  * | stacked  | < 520       | splitter hidden, panes 50/50             |
+ *
+ * Desktop half (~720) and windowed full (~560+) stay side-by-side. Stacking
+ * at 759 used to hide the inspector under the list on those widths.
  *
  * Tiers are cumulative, exactly like nested media queries.
  *
@@ -869,47 +914,40 @@
   .workspace .booksPane + .splitter {
     display: none;
   }
-}
-
-@container lbWorkspace (max-width: 759px) {
-  .workspace .panes {
-    flex-direction: column;
-  }
-
-  .workspace .entriesPane,
-  .workspace .inspectorPane {
-    width: 100%;
-    flex: 1 1 50%;
-  }
-
-  .workspace .splitter {
-    width: 100%;
-    height: 7px;
-    flex-basis: 7px;
-    cursor: row-resize;
-  }
 
   .workspace .workspaceHeader {
     align-items: flex-start;
   }
 
   .workspace .headerActions {
-    justify-content: flex-start;
+    justify-content: flex-end;
+  }
+
+  .workspace .inspectorPane,
+  .workspace.halfWorkspace .inspectorPane {
+    flex: 1 1 auto;
+    min-width: 280px;
   }
 }
 
 @container lbWorkspace (max-width: 519px) {
+  .workspace .panes {
+    flex-direction: column;
+  }
+
   /* No splitter, so a drag can never produce a width that is meaningless in the
      collapsed layout. */
   .workspace .splitter {
     display: none;
   }
 
-  /* The 200/220px floors exist to stop the splitter dragging a pane to nothing.
+  /* The 200/280px floors exist to stop the splitter dragging a pane to nothing.
      With the splitter gone they only force the horizontal overflow this whole
      ladder exists to remove. */
   .workspace .entriesPane,
-  .workspace .inspectorPane {
+  .workspace .inspectorPane,
+  .workspace.halfWorkspace .inspectorPane {
+    width: 100%;
     min-width: 0;
     flex: 1 1 50%;
   }

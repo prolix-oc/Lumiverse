@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useStore } from '@/store'
 import { messagesApi, chatsApi } from '@/api/chats'
-import { generateUUID } from '@/lib/uuid'
-import { applyEditAndSendResult } from '@/hooks/useSwipeAction'
+import { generateApi } from '@/api/generate'
+import { findSubsequentAssistant, startSwipeGeneration } from '@/hooks/useSwipeAction'
+import { shouldForceLoomRuntimePreset } from '@/lib/loom/runtimeProfile'
 import {
   getCharacterAvatarThumbUrlById,
   getCharacterAvatarLargeUrlById,
@@ -388,57 +389,66 @@ export function useMessageCard(message: Message, chatId: string) {
   }, [setEditingMessageId])
 
   const handleEditAndSend = useCallback(async () => {
-    if (!message.is_user || isStreaming || editAndSendPending) return
+    if (!message.is_user || editAndSendPending || isStreaming) return
     const cleanContent = editContent.trim()
     if (!cleanContent) {
       addToast({ type: 'error', message: t('emptyEditAndSend', { defaultValue: 'Message cannot be empty' }) })
       return
     }
 
-    editAndSendAbortRef.current?.abort()
-    const ac = new AbortController()
-    editAndSendAbortRef.current = ac
     setEditAndSendPending(true)
-
+    setEditingMessageId(null)
     const previousContent = message.content
     updateMessage(message.id, { ...message, content: cleanContent })
-    setEditingMessageId(null)
 
     try {
-      const expectedVersion = typeof message.extra?.version === 'number'
-        ? message.extra.version
-        : message.created_at
-      const result = await chatsApi.editAndSend(chatId, {
-        messageId: message.id,
-        content: cleanContent,
-        expectedVersion,
-        requestId: generateUUID(),
-      }, { signal: ac.signal })
-      if (ac.signal.aborted) return
-      updateMessage(result.message.id, result.message)
-      await applyEditAndSendResult(chatId, message.id, result)
+      const updated = await messagesApi.update(chatId, message.id, { content: cleanContent })
+      updateMessage(message.id, updated)
+
+      const currentMessages = useStore.getState().messages
+      const assistantMessage = findSubsequentAssistant(currentMessages, message.id)
+
+      if (assistantMessage) {
+        try {
+          await startSwipeGeneration(assistantMessage, chatId)
+        } catch (err: any) {
+          addToast({ type: 'error', message: err?.message || t('failedEditAndSend', { defaultValue: 'Failed to edit and send' }) })
+        }
+      } else {
+        const state = useStore.getState()
+        const {
+          beginStreaming,
+          startStreaming,
+          setStreamingError,
+          activeProfileId,
+          activePersonaId,
+          activeCharacterId,
+          getActivePresetForGeneration,
+        } = state
+        beginStreaming(undefined, 'continue')
+        try {
+          const presetId = getActivePresetForGeneration() || undefined
+          const genRes = await generateApi.start({
+            chat_id: chatId,
+            generation_type: 'continue',
+            connection_id: activeProfileId || undefined,
+            persona_id: activePersonaId || undefined,
+            preset_id: presetId,
+            force_preset_id: shouldForceLoomRuntimePreset(presetId, chatId, activeCharacterId, activeProfileId),
+          })
+          startStreaming(genRes.generationId, undefined, 'continue')
+        } catch (err: any) {
+          setStreamingError(err?.message || 'Failed to start generation')
+        }
+      }
     } catch (err: any) {
-      if (ac.signal.aborted || err?.name === 'AbortError') return
       console.error('[MessageCard] Failed to edit and send:', err)
       updateMessage(message.id, { ...message, content: previousContent })
       addToast({ type: 'error', message: t('failedEditAndSend', { defaultValue: 'Failed to edit and send' }) })
     } finally {
-      if (editAndSendAbortRef.current === ac) {
-        editAndSendAbortRef.current = null
-        setEditAndSendPending(false)
-      }
+      setEditAndSendPending(false)
     }
-  }, [
-    addToast,
-    chatId,
-    editAndSendPending,
-    editContent,
-    isStreaming,
-    message,
-    setEditingMessageId,
-    t,
-    updateMessage,
-  ])
+  }, [chatId, editAndSendPending, editContent, isStreaming, message, t, updateMessage, addToast, setEditingMessageId])
 
   const doDeleteMessage = useCallback(async () => {
     try {

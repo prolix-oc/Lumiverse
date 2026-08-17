@@ -33,6 +33,7 @@ import {
   setConnectionProfileFavoriteModels,
 } from '@/lib/connectionsPicker'
 import { DEFAULT_CONNECTIONS_PICKER_SETTINGS } from '@/lib/uiProductivityDefaults'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
 import { useStore } from '@/store'
 import type { ConnectionModelsResult, ConnectionProfile } from '@/types/api'
 import type { ConnectionsPickerVariant, SurfaceRectPrefs } from '@/types/store'
@@ -131,7 +132,7 @@ function loadVariantRects() {
   }
 }
 
-export function ConnectionsPicker({ open, onClose, anchorElement }: ConnectionsPickerProps) {
+function ConnectionsPickerNative({ open, onClose, anchorElement }: ConnectionsPickerProps) {
   const storedSettings = useStore((s) => s.connectionsPickerSettings)
   const settings = useMemo(() => ({
     ...DEFAULT_CONNECTIONS_PICKER_SETTINGS,
@@ -582,35 +583,54 @@ export function ConnectionsPicker({ open, onClose, anchorElement }: ConnectionsP
       <div className={styles.modelsHeading}>
         <h3>Models</h3>
         {selectedProfile && <span>{selectedProfile.provider}</span>}
-        <button
-          type="button"
-          className={styles.headerButton}
-          onClick={() => { if (selectedProfileId) void loadModels(selectedProfileId, true) }}
-          title="Refresh models"
-          aria-label="Refresh models"
-        >
-          <RefreshCw size={14} />
-        </button>
-        <button
-          type="button"
-          className={clsx(styles.headerButton, modelLayout === 'grid' && styles.variantButtonActive)}
-          onClick={() => updateSettings({ modelLayout: 'grid' })}
-          title="Grid layout"
-          aria-label="Grid layout"
-          aria-pressed={modelLayout === 'grid'}
-        >
-          <LayoutGrid size={14} />
-        </button>
-        <button
-          type="button"
-          className={clsx(styles.headerButton, modelLayout === 'list' && styles.variantButtonActive)}
-          onClick={() => updateSettings({ modelLayout: 'list' })}
-          title="List layout"
-          aria-label="List layout"
-          aria-pressed={modelLayout === 'list'}
-        >
-          <List size={14} />
-        </button>
+        <label className={styles.modelsHeadingSearch}>
+          <Search size={13} aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || !query) return
+              event.preventDefault()
+              setQuery('')
+            }}
+            placeholder="Search models..."
+            aria-label="Search models"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <div className={styles.modelsHeadingActions}>
+          <button
+            type="button"
+            className={styles.headerButton}
+            onClick={() => { if (selectedProfileId) void loadModels(selectedProfileId, true) }}
+            title="Refresh models"
+            aria-label="Refresh models"
+          >
+            <RefreshCw size={14} />
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.headerButton, modelLayout === 'grid' && styles.variantButtonActive)}
+            onClick={() => updateSettings({ modelLayout: 'grid' })}
+            title="Grid layout"
+            aria-label="Grid layout"
+            aria-pressed={modelLayout === 'grid'}
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button
+            type="button"
+            className={clsx(styles.headerButton, modelLayout === 'list' && styles.variantButtonActive)}
+            onClick={() => updateSettings({ modelLayout: 'list' })}
+            title="List layout"
+            aria-label="List layout"
+            aria-pressed={modelLayout === 'list'}
+          >
+            <List size={14} />
+          </button>
+        </div>
       </div>
       {modelsLoading && <div className={styles.empty} data-models-loading="true"><LoaderCircle className={styles.spinner} size={18} /> Loading models...</div>}
       {!modelsLoading && models.length > 0 && (
@@ -1031,4 +1051,8 @@ export function ConnectionsPicker({ open, onClose, anchorElement }: ConnectionsP
     </div>,
     document.body,
   )
+}
+
+export function ConnectionsPicker(props: ConnectionsPickerProps) {
+  return useSpindleComponentOverride('ConnectionsPicker', ConnectionsPickerNative, props)
 }

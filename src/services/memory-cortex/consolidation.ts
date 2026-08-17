@@ -26,7 +26,7 @@ import type {
   CortexModelFallbackPair,
   SidecarReliabilityConfig,
 } from "./config";
-import { getCortexConfig } from "./config";
+import { getCortexConfig, listCortexFallbackEndpoints } from "./config";
 import { scoreChunkHeuristic } from "./salience-heuristic";
 
 type ConsolidationGenerateRawFn = (opts: {
@@ -134,11 +134,13 @@ export function collectMemorySummarizationTargets(
   if (primaryId) {
     targets.push({ connectionProfileId: primaryId, model: primaryModel, role: "primary" });
   }
-  const secondary = pair?.secondary;
-  if (secondary?.connectionProfileId && secondary.connectionProfileId !== primaryId) {
+  const seen = new Set<string>(primaryId ? [primaryId] : []);
+  for (const extra of listCortexFallbackEndpoints(pair)) {
+    if (!extra.connectionProfileId || seen.has(extra.connectionProfileId)) continue;
+    seen.add(extra.connectionProfileId);
     targets.push({
-      connectionProfileId: secondary.connectionProfileId,
-      model: secondary.model,
+      connectionProfileId: extra.connectionProfileId,
+      model: extra.model,
       role: "secondary",
     });
   }

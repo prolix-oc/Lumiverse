@@ -5,6 +5,8 @@ export function listSttProviders(userId?: string) {
   return sttConnectionsSvc.listProviders(userId);
 }
 
+export { registerSttEngine, type HostSttEngine } from "./stt-connections.service";
+
 /** Secret key pattern for LLM connections (matches connections.service.ts) */
 function connectionSecretKey(id: string): string {
   return sttConnectionsSvc.sttConnectionSecretKey(id);

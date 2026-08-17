@@ -18,6 +18,7 @@ import { router } from '@/router'
 import { useStore } from '@/store'
 import type { QuickToolbarSettings } from '@/types/store'
 import type { InputBarActionState } from '@/store/slices/spindle-placement'
+import { nextToolbarIconOrder } from './toolbarPointerHold'
 
 export type ToolbarActionIcon = ComponentType<{ size?: number; strokeWidth?: number; className?: string }>
 
@@ -57,6 +58,11 @@ export interface ToolbarAction {
   run: () => void
   disabled?: boolean
   hidden?: boolean
+  /**
+   * Explicit pressed state. When defined, toolbar render uses this for
+   * `aria-pressed` / active styling even if `surface.kind === 'command'`.
+   */
+  active?: boolean
 }
 
 /** The view the catalog-root "Settings" button opens. */
@@ -90,7 +96,7 @@ const EXTENSION_QUICK_TOOLBAR_ACTION_IDS = new Set([
 ])
 
 /** Ids from the confirmed toolbar designs, used when nothing has been customised. */
-export const DESIGN_DEFAULT_IDS = [...CHAT_DOCKER_ACTION_IDS]
+export const DESIGN_DEFAULT_IDS = CHAT_DOCKER_ACTION_IDS.filter((id) => id !== 'chat.select-messages')
 /** The previous built-in defaults. Treated as "untouched" so they upgrade cleanly. */
 const PREVIOUS_DESIGN_DEFAULT_IDS = ['profile', 'connections', 'council', 'lorebook', 'presets', 'settings']
 const PREVIOUS_SUITE_DEFAULT_IDS = [
@@ -165,6 +171,7 @@ export function useQuickToolbarActions() {
   const activeChatId = useStore((s) => s.activeChatId)
   const isGroupChat = useStore((s) => s.isGroupChat)
   const activeLoomPresetId = useStore((s) => s.activeLoomPresetId)
+  const messageSelectMode = useStore((s) => s.messageSelectMode)
   const openModal = useStore((s) => s.openModal)
   useSyncExternalStore(subscribeChatDockerActionOwners, getChatDockerActionOwners, getChatDockerActionOwners)
   const openDrawer = useStore((s) => s.openDrawer)
@@ -296,7 +303,9 @@ export function useQuickToolbarActions() {
       },
     }).map((action) => ({
       id: action.id,
-      label: action.label,
+      label: action.id === 'chat.select-messages' && messageSelectMode
+        ? 'Exit selection mode'
+        : action.label,
       description: action.description,
       keywords: action.keywords,
       icon: action.icon,
@@ -304,6 +313,7 @@ export function useQuickToolbarActions() {
       run: action.run,
       disabled: action.disabled,
       hidden: action.hidden,
+      active: action.id === 'chat.select-messages' ? Boolean(messageSelectMode) : undefined,
     }))
     const catalog: ToolbarAction[] = [
       ...chatDockerActions,
@@ -330,6 +340,7 @@ export function useQuickToolbarActions() {
     extensionDrawerTabs,
     inputBarActions,
     isGroupChat,
+    messageSelectMode,
     openModal,
     runSurface,
     userRole,
@@ -411,6 +422,12 @@ export function useQuickToolbarActions() {
     updateSettings({ iconOrder: ids.filter((id) => visibleIds.includes(id)) })
   }, [updateSettings, visibleIds])
 
+  const reorderActionPair = useCallback((activeId: string, overId: string) => {
+    const next = nextToolbarIconOrder(orderedIds, activeId, overId)
+    if (!next) return
+    reorderActions(next)
+  }, [orderedIds, reorderActions])
+
   /**
    * The chevron write path for a list that is being filtered by a search box.
    *
@@ -487,6 +504,7 @@ export function useQuickToolbarActions() {
     moveAction,
     moveActionWithin,
     reorderActions,
+    reorderActionPair,
     toggleAction,
     resetCurrentVariant,
   }

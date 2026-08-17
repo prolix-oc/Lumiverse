@@ -11,6 +11,9 @@ const BOOK_ID = 'book-1'
 
 let dom: JSDOM
 let originalDocument: Document | undefined
+let originalWindow: Window & typeof globalThis | undefined
+let originalHTMLElement: typeof HTMLElement | undefined
+let originalElement: typeof Element | undefined
 let originalMutationObserver: typeof MutationObserver | undefined
 
 function flush(): Promise<void> {
@@ -112,12 +115,27 @@ function appendBookRow(decorate: { fn?: (element: HTMLElement) => void | (() => 
 beforeEach(() => {
   dom = new JSDOM('<!doctype html><body></body>')
   originalDocument = globalThis.document
+  originalWindow = globalThis.window
+  originalHTMLElement = globalThis.HTMLElement
+  originalElement = globalThis.Element
   originalMutationObserver = globalThis.MutationObserver
-  Object.assign(globalThis, { document: dom.window.document, MutationObserver: dom.window.MutationObserver })
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    MutationObserver: dom.window.MutationObserver,
+  })
 })
 
 afterEach(() => {
-  Object.assign(globalThis, { document: originalDocument, MutationObserver: originalMutationObserver })
+  Object.assign(globalThis, {
+    window: originalWindow,
+    document: originalDocument,
+    HTMLElement: originalHTMLElement,
+    Element: originalElement,
+    MutationObserver: originalMutationObserver,
+  })
   dom.window.close()
 })
 

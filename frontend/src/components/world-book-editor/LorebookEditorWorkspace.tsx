@@ -683,7 +683,11 @@ export default function LorebookEditorWorkspace({
           )}
         </div>
       </header>
-      <span data-spindle-mount="lorebook_workspace" data-spindle-scope={`lorebook:${selectedBookId ?? 'none'}:workspace`} style={{ display: 'contents' }} />
+      <span
+        data-spindle-mount="lorebook_workspace"
+        data-spindle-scope={`lorebook:${selectedBookId ?? 'none'}:workspace`}
+        className={styles.spindleWorkspaceMount}
+      />
 
       <div className={styles.panes} ref={panesRef}>
         {variant === 'full' && (
@@ -829,30 +833,32 @@ export default function LorebookEditorWorkspace({
             <span>Editing Entry</span>
             <span>{savedAt ? 'Saved' : ''}</span>
           </div>
-          {selectedEntry ? (
-            <>
-              {conflicts[selectedEntry.id] && (
-                <div className={styles.conflictBanner} role="alert">
-                  <strong>Newer server revision detected.</strong>
-                  <span>Your unsaved draft is preserved.</span>
-                  <button type="button" onClick={() => void resolveConflict(selectedEntry.id, true)}>Reapply draft</button>
-                  <button type="button" onClick={() => void resolveConflict(selectedEntry.id, false)}>Use server version</button>
-                </div>
-              )}
-              {/* Keyed on id + conflict state only. Including the revision remounted
-                  the editor on every background save — including the automatic token
-                  estimate — which reset local field state mid-edit. */}
-              <WorldBookEntryEditor
-                key={`${selectedEntry.id}:${conflicts[selectedEntry.id] ? 'conflict' : 'clean'}`}
-                entry={selectedEntry}
-                onUpdate={debouncedSaveEntry}
-                onImmediateUpdate={saveEntry}
-                density="compact"
-              />
-            </>
-          ) : (
-            <div className={styles.empty}>Select an entry to edit.</div>
-          )}
+          <div className={styles.inspectorBody}>
+            {selectedEntry ? (
+              <>
+                {conflicts[selectedEntry.id] && (
+                  <div className={styles.conflictBanner} role="alert">
+                    <strong>Newer server revision detected.</strong>
+                    <span>Your unsaved draft is preserved.</span>
+                    <button type="button" onClick={() => void resolveConflict(selectedEntry.id, true)}>Reapply draft</button>
+                    <button type="button" onClick={() => void resolveConflict(selectedEntry.id, false)}>Use server version</button>
+                  </div>
+                )}
+                {/* Keyed on id + conflict state only. Including the revision remounted
+                    the editor on every background save — including the automatic token
+                    estimate — which reset local field state mid-edit. */}
+                <WorldBookEntryEditor
+                  key={`${selectedEntry.id}:${conflicts[selectedEntry.id] ? 'conflict' : 'clean'}`}
+                  entry={selectedEntry}
+                  onUpdate={debouncedSaveEntry}
+                  onImmediateUpdate={saveEntry}
+                  density="compact"
+                />
+              </>
+            ) : (
+              <div className={styles.empty}>Select an entry to edit.</div>
+            )}
+          </div>
         </aside>
       </div>
     </section>

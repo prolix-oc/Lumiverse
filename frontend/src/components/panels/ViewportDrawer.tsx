@@ -319,28 +319,30 @@ useEffect(() => {
           </div>
 
           <div className={styles.panel}>
-           <div className={styles.panelHeader}>
-            <div className={styles.panelHeaderMain}>
-             <h2 className={styles.panelTitle}>
-               {activeTabTitle}
-             </h2>
+            <div className={styles.panelHeader}>
+              <div className={styles.panelHeaderMain}>
+                <h2 className={styles.panelTitle}>
+                  {activeTabTitle}
+                </h2>
 
-              {activeTabConfig.guide && (
-             <button
-               type="button"
-               className={styles.guideButton}
-               onClick={() => setGuideOpen(true)}
-               aria-label={`Open guide for ${activeTabTitle}`}
-               title="Open guide"
-             >
-               <CircleHelp size={15} strokeWidth={1.7} />
-            </button>
-           )}
-         </div>
+                {activeTabConfig.guide && (
+                  <button
+                    type="button"
+                    className={styles.guideButton}
+                    onClick={() => setGuideOpen(true)}
+                    aria-label={`Open guide for ${activeTabTitle}`}
+                    title="Open guide"
+                  >
+                    <CircleHelp size={15} strokeWidth={1.7} />
+                  </button>
+                )}
+              </div>
 
-        <CloseButton onClick={closeDrawer} />
-        <span data-spindle-mount="drawer_header_actions" data-spindle-scope="drawer:header-actions" style={{ display: 'contents' }} />
-      </div>
+              <span className={styles.headerActions}>
+                <span data-spindle-mount="drawer_header_actions" data-spindle-scope="drawer:header-actions" style={{ display: 'contents' }} />
+              </span>
+              <CloseButton onClick={closeDrawer} />
+            </div>
             <div className={clsx(styles.panelContent, (activeTab === 'loom' || activeTab === 'lumi' || activeTab === 'browser' || activeTab === 'lorebook') && styles.panelContentFull)} ref={panelContentRef}>
               <TabPanelContent tabId={activeTab} location={{ kind: 'main-drawer' }} />
             </div>

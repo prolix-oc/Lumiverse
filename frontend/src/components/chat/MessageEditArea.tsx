@@ -2,6 +2,9 @@ import { Brain, Maximize2 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react'
 import { useTranslation } from 'react-i18next'
 import ExpandedTextEditor from '@/components/shared/ExpandedTextEditor'
+import { useSpindleComponentOverride } from '@/lib/spindle/use-spindle-component-override'
+import { readProductivityFlag } from '@/lib/spindle/productivity-feature-toggles'
+import { useStore } from '@/store'
 import styles from './MessageEditArea.module.css'
 
 interface MessageEditAreaProps {
@@ -76,7 +79,7 @@ function syncEditorVisibility(target: HTMLTextAreaElement | null, correctedRef: 
   }
 }
 
-export default function MessageEditArea({
+function MessageEditAreaNative({
   editContent, onChangeContent, onSave, onCancel,
   onEditAndSend, messageId, editAndSendDisabled,
   editReasoning, onChangeReasoning,
@@ -84,6 +87,7 @@ export default function MessageEditArea({
   const { t } = useTranslation('chat')
   const { t: tc } = useTranslation('common')
   const { t: ts } = useTranslation('shared', { keyPrefix: 'expandedTextEditor' })
+  const showEditAndSend = useStore((state) => readProductivityFlag(state, 'showEditAndSend'))
   const hasReasoning = editReasoning != null && onChangeReasoning != null
   const contentRef = useRef<HTMLTextAreaElement>(null)
   const reasoningRef = useRef<HTMLTextAreaElement>(null)
@@ -256,6 +260,7 @@ export default function MessageEditArea({
         <button type="button" onClick={onCancel} className={styles.editCancelBtn}>
           {tc('actions.cancel')}
         </button>
+        {showEditAndSend && Boolean(onEditAndSend) && (
         <button
           type="button"
           onClick={onEditAndSend}
@@ -265,6 +270,7 @@ export default function MessageEditArea({
         >
           {t('messageEdit.editAndSend', { defaultValue: 'Edit and Send' })}
         </button>
+        )}
         <button type="button" onClick={onSave} className={styles.editSaveBtn}>
           {tc('actions.save')}
         </button>
@@ -292,4 +298,8 @@ export default function MessageEditArea({
       )}
     </div>
   )
+}
+
+export default function MessageEditArea(props: MessageEditAreaProps) {
+  return useSpindleComponentOverride('MessageEditArea', MessageEditAreaNative, props)
 }

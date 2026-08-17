@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeDatabase, getDb, initDatabase } from "../../db/connection";
 import {
+  collectMemorySummarizationTargets,
   decideMemorySummarizationFallback,
   generateConsolidationSummary,
   maybeConsolidate,
@@ -107,6 +108,24 @@ function listConsolidations(): Array<{ summary: string; title: string | null }> 
     .query("SELECT summary, title FROM memory_consolidations")
     .all() as Array<{ summary: string; title: string | null }>;
 }
+
+describe("collectMemorySummarizationTargets extra fallbacks", () => {
+  test("walks secondary then extra fallbacks after primary", () => {
+    const targets = collectMemorySummarizationTargets({
+      primary: { connectionProfileId: "primary-conn", model: "primary-model" },
+      secondary: { connectionProfileId: "secondary-conn", model: "secondary-model" },
+      fallbacks: [
+        { connectionProfileId: "tertiary-conn", model: "tertiary-model" },
+        { connectionProfileId: "primary-conn", model: "ignored-dup" },
+      ],
+    });
+    expect(targets.map((target) => `${target.role}:${target.connectionProfileId}`)).toEqual([
+      "primary:primary-conn",
+      "secondary:secondary-conn",
+      "secondary:tertiary-conn",
+    ]);
+  });
+});
 
 describe("generateConsolidationSummary secondary fallback", () => {
   test("uses primary when the first generate succeeds", async () => {

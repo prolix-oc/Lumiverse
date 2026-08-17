@@ -647,8 +647,21 @@ class DomDecoratorServiceImpl implements DomDecoratorService {
     for (const work of mounts) work()
   }
 
+  private hasDecorator(registration: AnchorRegistration): boolean {
+    for (const decorator of this.decoratorsById.values()) {
+      if (decorator.disposed) continue
+      if (decorator.options.owner !== registration.owner) continue
+      if (decorator.options.generation !== registration.generation) continue
+      if (decorator.options.mount !== registration.mount) continue
+      if (decorator.options.instanceKey !== undefined && decorator.options.instanceKey !== registration.instanceKey) continue
+      return true
+    }
+    return false
+  }
+
   private mountAnchor(registration: AnchorRegistration): void {
     if (!this.anchorsByLiveAnchorId.has(registration.liveAnchorId)) return
+    if (!this.hasDecorator(registration)) return
     const rootRecord = this.ensureRoot(registration)
     if (rootRecord.root.parentElement !== registration.node) {
       registration.node.appendChild(rootRecord.root)

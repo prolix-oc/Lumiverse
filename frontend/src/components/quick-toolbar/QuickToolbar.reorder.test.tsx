@@ -5,7 +5,7 @@ import { act } from 'react'
 import type { Root, createRoot as CreateRoot } from 'react-dom/client'
 import { JSDOM } from 'jsdom'
 import { QUICK_TOOLBAR_POINTER_HOLD_MS } from './quickToolbarDock'
-import { createPointerHoldController } from './toolbarPointerHold'
+import { createPointerHoldController, nextToolbarIconOrder } from './toolbarPointerHold'
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'https://lumiverse.test/',
@@ -52,7 +52,10 @@ mock.module('@/lib/quickToolbarPlacement', () => ({
   placeCustomizer: () => ({ left: 0, top: 0, maxHeight: 400, side: 'below', caret: 14 }),
   readUiScale: () => 1,
 }))
-mock.module('@/lib/quickToolbarToggle', () => ({ isSurfaceActive: () => false }))
+mock.module('@/lib/quickToolbarToggle', () => ({
+  isSurfaceActive: () => false,
+  isToolbarActionActive: (action: { active?: boolean }) => action.active === true,
+}))
 mock.module('@/lib/toolbarActionSearch', () => ({
   canMoveWithinFiltered: () => false,
   filterActionIds: (ids: string[]) => ids,
@@ -74,6 +77,10 @@ function countActionId(actions: ReadonlyArray<{ id: string }>, id: string): numb
 }
 
 const startDragMock = mock(() => undefined)
+const reorderActionsMock = mock((ids: Array<(typeof CHAT_DOCKER_ACTION_IDS)[number]>) => {
+  settings.iconOrder = ids
+})
+const actionRunMock = mock(() => undefined)
 mock.module('@/hooks/usePersistentRect', () => ({
   usePersistentRect: ({ rect }: { rect: { x: number; y: number; width: number; height: number } }) => ({
     rect,
@@ -105,7 +112,7 @@ const settings = {
   v2Density: 'comfortable',
   v2IconOnly: true,
   autoFitBounds: true,
-  quickToolbarPlacement: 'floating' as const,
+  quickToolbarPlacement: 'floating' as 'floating' | 'chat_top_dock',
 }
 
 const catalogActions = CHAT_DOCKER_ACTION_IDS.map((id) => ({
@@ -114,7 +121,7 @@ const catalogActions = CHAT_DOCKER_ACTION_IDS.map((id) => ({
   description: id,
   icon: () => <span data-icon={id} />,
   surface: { kind: 'command' as const },
-  run: () => undefined,
+  run: actionRunMock,
 }))
 
 mock.module('./useQuickToolbarActions', () => ({
@@ -128,6 +135,7 @@ mock.module('./useQuickToolbarActions', () => ({
     orderedIds: catalogActions.map((action) => action.id),
     catalogOrder: catalogActions.map((action) => action.id),
     moveActionWithin: () => undefined,
+    reorderActions: reorderActionsMock,
     toggleAction: () => undefined,
     resetCurrentVariant: () => undefined,
   }),
@@ -167,6 +175,11 @@ beforeAll(async () => {
 afterEach(() => {
   document.body.replaceChildren()
   startDragMock.mockClear()
+  reorderActionsMock.mockClear()
+  actionRunMock.mockClear()
+  settings.variant = 'v1-free'
+  settings.quickToolbarPlacement = 'floating'
+  settings.iconOrder = [...CHAT_DOCKER_ACTION_IDS]
 })
 
 afterAll(() => {
@@ -178,8 +191,8 @@ afterAll(() => {
 })
 
 describe('QuickToolbar reorder and hold drag', () => {
-  test('starts pointer drag only after 2000ms', async () => {
-    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(2000)
+  test('starts pointer drag only after 1000ms', async () => {
+    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(1000)
     const held: Array<{ clientX: number; clientY: number }> = []
     const pending: Array<{ at: number; fn: () => void }> = []
     let now = 0
@@ -196,10 +209,10 @@ describe('QuickToolbar reorder and hold drag', () => {
 
     const hold = createPointerHoldController((point) => { held.push(point) })
     hold.start({ clientX: 10, clientY: 12 })
-    now = 1999
+    now = 999
     pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
     expect(held).toEqual([])
-    now = 2000
+    now = 1000
     pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
     expect(held).toEqual([{ clientX: 10, clientY: 12 }])
 
@@ -224,23 +237,137 @@ describe('QuickToolbar reorder and hold drag', () => {
     await act(async () => root.unmount())
   })
 
-  test('every default action appears exactly once in V1 V2 and the customizer', async () => {
+  test('reorders live icons after 1000ms hold and does not suppress an unheld click', async () => {
+    expect(nextToolbarIconOrder(CHAT_DOCKER_ACTION_IDS, 'chat.new', 'chat.manage')).toEqual([
+      'chat.manage',
+      'chat.new',
+      ...CHAT_DOCKER_ACTION_IDS.slice(2),
+    ])
+
+    const pending: Array<{ at: number; fn: () => void }> = []
+    let now = 0
+    const previousSetTimeout = globalThis.setTimeout
+    const previousClearTimeout = globalThis.clearTimeout
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+      pending.push({ at: now + Number(ms ?? 0), fn })
+      return pending.length
+    }) as typeof setTimeout
+    globalThis.clearTimeout = ((id: number) => {
+      const index = Number(id) - 1
+      if (pending[index]) pending[index].fn = () => undefined
+    }) as typeof clearTimeout
+
     const host = document.createElement('div')
+    Object.defineProperty(host, 'clientWidth', { configurable: true, value: 960 })
     document.body.append(host)
     const root: Root = createRoot(host)
-
-    for (const variant of ['v1-free', 'v2-settings-adjacent'] as const) {
-      settings.variant = variant
+    try {
       await act(async () => {
         root.render(<QuickToolbar />)
         await Promise.resolve()
       })
-      const rendered = [...document.querySelectorAll('[data-toolbar-action]')].map((node) => node.getAttribute('data-toolbar-action') ?? '')
-      for (const id of CHAT_DOCKER_ACTION_IDS) {
-        expect(countActionId(rendered.map((item) => ({ id: item })), id)).toBe(1)
-      }
-    }
 
-    await act(async () => root.unmount())
+      const first = document.querySelector('[data-toolbar-action="chat.new"]') as HTMLElement
+      const second = document.querySelector('[data-toolbar-action="chat.manage"]') as HTMLElement
+      expect(first).toBeTruthy()
+      expect(second).toBeTruthy()
+      expect(first.hasAttribute('data-toolbar-item-drag-handle')).toBe(true)
+
+      first.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 10, clientY: 10 }))
+      first.dispatchEvent(new dom.window.PointerEvent('pointerup', { bubbles: true, clientX: 10, clientY: 10 }))
+      first.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      expect(actionRunMock).toHaveBeenCalled()
+      expect(reorderActionsMock).not.toHaveBeenCalled()
+      expect(startDragMock).not.toHaveBeenCalled()
+      actionRunMock.mockClear()
+
+      first.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12 }))
+      now = 999
+      pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
+      expect(reorderActionsMock).not.toHaveBeenCalled()
+      expect(startDragMock).not.toHaveBeenCalled()
+      await act(async () => {
+        now = 1000
+        pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
+      })
+      expect(startDragMock).not.toHaveBeenCalled()
+      expect(first.getAttribute('data-dragging')).toBe('')
+      second.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, clientX: 40, clientY: 12 }))
+      expect(reorderActionsMock).toHaveBeenCalledWith([
+        'chat.manage',
+        'chat.new',
+        ...CHAT_DOCKER_ACTION_IDS.slice(2),
+      ])
+      await act(async () => {
+        first.dispatchEvent(new dom.window.PointerEvent('pointerup', { bubbles: true, clientX: 40, clientY: 12 }))
+        first.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(actionRunMock).not.toHaveBeenCalled()
+
+      settings.variant = 'v2-settings-adjacent'
+      settings.quickToolbarPlacement = 'chat_top_dock'
+      reorderActionsMock.mockClear()
+      await act(async () => {
+        root.render(<QuickToolbar />)
+        await Promise.resolve()
+        const raf = typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame
+          : typeof window.requestAnimationFrame === 'function'
+            ? window.requestAnimationFrame.bind(window)
+            : null
+        if (raf) await new Promise<void>((resolve) => { raf(() => resolve()) })
+      })
+      const v2First = document.querySelector('[data-toolbar-action="chat.new"]') as HTMLElement
+      const v2Second = document.querySelector('[data-toolbar-action="chat.manage"]') as HTMLElement
+      expect(v2First).toBeTruthy()
+      expect(v2Second).toBeTruthy()
+      v2First.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 8, clientY: 8 }))
+      await act(async () => {
+        now = 2000
+        pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
+      })
+      expect(startDragMock).not.toHaveBeenCalled()
+      expect(v2First.getAttribute('data-dragging')).toBe('')
+      v2Second.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, clientX: 48, clientY: 8 }))
+      expect(reorderActionsMock).toHaveBeenCalledWith([
+        'chat.manage',
+        'chat.new',
+        ...CHAT_DOCKER_ACTION_IDS.slice(2),
+      ])
+    } finally {
+      globalThis.setTimeout = previousSetTimeout
+      globalThis.clearTimeout = previousClearTimeout
+      await act(async () => root.unmount())
+    }
+  })
+
+  test('every default action appears exactly once in V1 V2 and the customizer', async () => {
+    const host = document.createElement('div')
+    const previousBodyWidth = Object.getOwnPropertyDescriptor(document.body, 'clientWidth')
+    const previousRect = dom.window.HTMLElement.prototype.getBoundingClientRect
+    Object.defineProperty(document.body, 'clientWidth', { configurable: true, value: 960 })
+    dom.window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      return { x: 0, y: 0, width: 40, height: 32, top: 0, left: 0, right: 40, bottom: 32, toJSON() { return this } }
+    }
+    document.body.append(host)
+    const root: Root = createRoot(host)
+    try {
+      for (const variant of ['v1-free', 'v2-settings-adjacent'] as const) {
+        settings.variant = variant
+        await act(async () => {
+          root.render(<QuickToolbar />)
+          await Promise.resolve()
+        })
+        const rendered = [...document.querySelectorAll('[data-toolbar-action]')].map((node) => node.getAttribute('data-toolbar-action') ?? '')
+        for (const id of CHAT_DOCKER_ACTION_IDS) {
+          expect(countActionId(rendered.map((item) => ({ id: item })), id)).toBe(1)
+        }
+      }
+    } finally {
+      await act(async () => root.unmount())
+      dom.window.HTMLElement.prototype.getBoundingClientRect = previousRect
+      if (previousBodyWidth) Object.defineProperty(document.body, 'clientWidth', previousBodyWidth)
+      else Reflect.deleteProperty(document.body, 'clientWidth')
+    }
   })
 })

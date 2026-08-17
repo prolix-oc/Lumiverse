@@ -15,7 +15,10 @@
     var(--lumiverse-bg-elevated, rgba(28, 24, 38, 0.95));
   border: 1px solid var(--lumiverse-border);
   border-radius: var(--lcs-radius, 14px);
-  overflow: hidden;
+  /* Visible so the type field cannot be clipped by the glass pill or by
+     extension nodes that used to share the input row. Corners still clip via
+     child radii; drop overlay is inset-absolute. */
+  overflow: visible;
   /* Paint containment plus a stacked overlay can produce stale WebRender tiles
      under Firefox's fractional CSS zoom. Layout/style containment retains the
      useful isolation without forcing the composer into its own paint surface. */
@@ -97,8 +100,31 @@
 .actionBar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 0 2px;
+  min-width: 0;
+}
+
+.composerReorderUnit {
+  display: contents;
+}
+
+.composerReorderUnit[data-dragging] .actionBtn,
+.composerReorderUnit[data-dragging] .actionDivider {
+  opacity: 0.72;
+}
+
+.extensionToolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
+}
+
+.extensionToolbar:empty {
+  display: none;
 }
 
 .actionDivider {
@@ -113,6 +139,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 30px;
   height: 26px;
   border: none;
@@ -584,12 +611,27 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  min-width: 0;
+}
+
+.inputToolsSlot {
+  display: flex;
+  align-items: flex-end;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 28%;
+  overflow: hidden;
+}
+
+.inputToolsSlot:empty {
+  display: none;
 }
 
 .inputWrapper {
-  flex: 1;
+  flex: 1 1 auto;
   display: flex;
   align-items: flex-end;
+  min-width: 8rem;
   min-height: 40px;
   max-height: 180px;
   border-radius: var(--lcs-radius, 14px);
@@ -1167,5 +1209,276 @@
 
   .sttRecordingWave {
     height: 38px;
+  }
+}
+
+/* ── Composer action-bar customizer (InputAreaCustomizeModal) ── */
+.customizeModal {
+  width: min(560px, calc(100vw - 32px));
+  padding: 0;
+  overflow: hidden;
+  box-shadow:
+    var(--lumiverse-shadow-xl),
+    0 0 40px var(--lumiverse-primary-020);
+}
+
+.customizeHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--lumiverse-border);
+}
+
+.customizeTitle {
+  margin: 0;
+  color: var(--lumiverse-text);
+  font-size: calc(16px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.customizeSubtitle {
+  margin: 6px 0 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+}
+
+.customizeBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(64vh, 640px);
+  padding: 16px 24px 20px;
+  overflow-y: auto;
+}
+
+.customizeSectionHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.customizeSectionTitle {
+  margin: 0;
+  color: var(--lumiverse-text-secondary, var(--lumiverse-text-muted));
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.customizeSectionDescription {
+  margin: 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.45;
+}
+
+.customizeSearchField {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 3px;
+  padding: 7px 9px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius);
+  background: var(--lumiverse-fill-subtle);
+  color: var(--lumiverse-text-dim);
+}
+
+.customizeSearchField:focus-within {
+  border-color: var(--lumiverse-primary);
+  box-shadow: 0 0 0 1px var(--lumiverse-primary);
+}
+
+.customizeSearchField svg {
+  flex-shrink: 0;
+}
+
+.customizeSearchField input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--lumiverse-text);
+  font: inherit;
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+}
+
+.customizeSearchField input::placeholder {
+  color: var(--lumiverse-text-dim);
+}
+
+.customizeList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.customizeEmptyState {
+  margin: 0;
+  padding: 16px 12px;
+  border: 1px dashed var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-lg);
+  color: var(--lumiverse-text-dim);
+  font-size: calc(12px * var(--lumiverse-font-scale, 1));
+  text-align: center;
+}
+
+.customizeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--lumiverse-border);
+  border-radius: var(--lumiverse-radius-lg);
+  background: var(--lumiverse-surface-raised);
+  touch-action: manipulation;
+}
+
+.customizeRowDisabled {
+  opacity: 0.58;
+}
+
+.customizeRowDragging {
+  z-index: 5;
+  background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-surface-raised));
+  box-shadow:
+    var(--lumiverse-shadow-md),
+    0 0 0 1px var(--lumiverse-primary);
+}
+
+.customizeDragHandle {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 22px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--lumiverse-radius-sm);
+  background: transparent;
+  color: var(--lumiverse-text-dim);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.customizeDragHandle:hover:not(:disabled) {
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-text);
+}
+
+.customizeDragHandle:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.customizeDragHandle:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.customizeIconWrap {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--lumiverse-radius-md);
+  background: var(--lumiverse-primary-015);
+  color: var(--lumiverse-primary);
+}
+
+.customizeCopy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.customizeRowTitle {
+  overflow: hidden;
+  color: var(--lumiverse-text);
+  font-size: calc(13.5px * var(--lumiverse-font-scale, 1));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customizeRowDescription {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 2px 0 0;
+  color: var(--lumiverse-text-dim);
+  font-size: calc(11.5px * var(--lumiverse-font-scale, 1));
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.customizeFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--lumiverse-border);
+}
+
+.customizeResetButton,
+.customizeDoneButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: var(--lumiverse-radius);
+  font: inherit;
+  font-size: calc(12.5px * var(--lumiverse-font-scale, 1));
+  cursor: pointer;
+}
+
+.customizeResetButton {
+  border: 1px solid var(--lumiverse-border);
+  background: transparent;
+  color: var(--lumiverse-text-muted);
+}
+
+.customizeResetButton:hover {
+  background: var(--lumiverse-fill-hover);
+  color: var(--lumiverse-text);
+}
+
+.customizeDoneButton {
+  border: 1px solid transparent;
+  background: var(--lumiverse-primary);
+  color: var(--lumiverse-primary-contrast, #fff);
+  font-weight: 600;
+}
+
+.customizeDragHandle:focus-visible,
+.customizeResetButton:focus-visible,
+.customizeDoneButton:focus-visible {
+  outline: 2px solid var(--lumiverse-primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .customizeBody {
+    max-height: min(70vh, 720px);
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .customizeHeader,
+  .customizeFooter {
+    padding-left: 14px;
+    padding-right: 14px;
   }
 }

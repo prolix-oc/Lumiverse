@@ -3,6 +3,23 @@
   max-height: calc(85vh / var(--lumiverse-ui-scale, 1));
 }
 
+/*
+ * Enhanced workspace overlay. ResizablePanelFrame is position:fixed / z-index 50;
+ * this backdrop is the stacking context that lifts the whole editor above
+ * --z-quick-toolbar-floating (10005). Stay under LoreIndicator (10010). 10012
+ * is forbidden by lore-indicator tests.
+ */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10006;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+  background: var(--lumiverse-modal-backdrop, rgba(3, 5, 9, 0.72));
+}
+
 .fullscreen {
   position: fixed;
   inset: 0;
@@ -10,7 +27,11 @@
   height: var(--app-scaled-viewport-height, calc(100dvh / var(--lumiverse-ui-scale, 1)));
   max-height: none;
   border-radius: 0;
-  z-index: 10002;
+  z-index: 10006;
+}
+
+.modal.fullscreen {
+  z-index: 10006;
 }
 
 .header {

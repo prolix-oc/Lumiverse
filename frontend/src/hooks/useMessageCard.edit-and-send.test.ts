@@ -4,16 +4,11 @@ import { act, createElement } from 'react'
 import type { Root } from 'react-dom/client'
 import type { Message } from '@/types/api'
 
-const editAndSend = mock(() => Promise.resolve({
-  message: {} as Message,
-  immediateAssistantId: null as string | null,
-  generationId: null as string | null,
-}))
+const editAndSend = mock(() => Promise.resolve({}))
 const generateStart = mock(() => Promise.resolve({ generationId: 'gen-swipe' }))
 const beginStreaming = mock(() => {})
 const startStreaming = mock(() => {})
 const setStreamingError = mock(() => {})
-const generateUUID = mock(() => 'req-fixed')
 const addToast = mock(() => {})
 const updateMessage = mock((id: string, next: Message) => {
   storeState.messages = storeState.messages.map((m) => (m.id === id ? { ...m, ...next } : m))
@@ -42,6 +37,7 @@ function msg(partial: Partial<Message> & Pick<Message, 'id' | 'is_user'>): Messa
 
 const user = msg({ id: 'user-1', is_user: true, content: 'hello' })
 const assistant = msg({ id: 'asst-1', is_user: false, content: 'hi', index_in_chat: 1 })
+const messagesUpdate = mock(() => Promise.resolve({ ...user, content: 'rewritten' }))
 
 const storeState = {
   editingMessageId: 'user-1' as string | null,
@@ -54,6 +50,7 @@ const storeState = {
   characters: [] as Array<{ id: string; name: string }>,
   isStreaming: false,
   messages: [user] as Message[],
+  activeProfileId: 'profile-1',
   activePersonaId: null as string | null,
   personas: [] as Array<{ id: string; name: string }>,
   mpRoomId: null as string | null,
@@ -64,6 +61,7 @@ const storeState = {
   activeChatAvatarId: null,
   activeChatMetadata: null as Record<string, unknown> | null,
   setActiveChatMetadata: mock(() => {}),
+  setActiveChat: mock(() => {}),
   chatSheldDisplayMode: 'minimal',
   regeneratingMessageId: null as string | null,
   streamingSwipeId: null as number | null,
@@ -93,7 +91,7 @@ mock.module('react-i18next', () => ({
 }))
 mock.module('@/api/chats', () => ({
   chatsApi: { editAndSend, patchMetadata: mock(), branch: mock() },
-  messagesApi: { update: mock(), delete: mock(), deleteSwipe: mock() },
+  messagesApi: { update: messagesUpdate, delete: mock(), deleteSwipe: mock() },
 }))
 mock.module('@/api/generate', () => ({
   generateApi: { start: generateStart },
@@ -104,7 +102,6 @@ mock.module('@/lib/loom/runtimeProfile', () => ({
 mock.module('@/i18n', () => ({
   default: { t: (key: string) => key },
 }))
-mock.module('@/lib/uuid', () => ({ generateUUID }))
 mock.module('@/lib/avatarUrls', () => ({
   getCharacterAvatarThumbUrlById: () => '',
   getCharacterAvatarLargeUrlById: () => '',
@@ -176,20 +173,18 @@ async function unmount(root: Root): Promise<void> {
 describe('useMessageCard edit-and-send', () => {
   beforeEach(() => {
     editAndSend.mockClear()
+    messagesUpdate.mockClear()
     generateStart.mockClear()
     beginStreaming.mockClear()
     startStreaming.mockClear()
     addToast.mockClear()
     updateMessage.mockClear()
     setEditingMessageId.mockClear()
+    storeState.setActiveChat.mockClear()
     storeState.isStreaming = false
     storeState.editingMessageId = 'user-1'
     storeState.messages = [user]
-    editAndSend.mockResolvedValue({
-      message: { ...user, content: 'rewritten' },
-      immediateAssistantId: null,
-      generationId: null,
-    })
+    messagesUpdate.mockResolvedValue({ ...user, content: 'rewritten' })
   })
 
   afterEach(async () => {
@@ -203,7 +198,7 @@ describe('useMessageCard edit-and-send', () => {
     }
   })
 
-  test('tail: posts edit-and-send and applies the new-generation path', async () => {
+  test('tail: updates in place and continues generation', async () => {
     await renderHook(user)
     await act(async () => {
       hookSurface.setEditContent('rewritten')
@@ -213,25 +208,20 @@ describe('useMessageCard edit-and-send', () => {
       await hookSurface.handleEditAndSend()
     })
 
-    expect(editAndSend).toHaveBeenCalledTimes(1)
-    expect(editAndSend).toHaveBeenCalledWith('chat-1', {
-      messageId: 'user-1',
-      content: 'rewritten',
-      expectedVersion: 42,
-      requestId: 'req-fixed',
-    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    expect(generateStart).not.toHaveBeenCalled()
+    expect(messagesUpdate).toHaveBeenCalledWith('chat-1', 'user-1', { content: 'rewritten' })
+    expect(generateStart).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 'chat-1',
+      generation_type: 'continue',
+    }))
     expect(beginStreaming).toHaveBeenCalledWith(undefined, 'continue')
+    expect(startStreaming).toHaveBeenCalledWith('gen-swipe', undefined, 'continue')
     expect(storeState.editingMessageId).toBeNull()
+    expect(editAndSend).not.toHaveBeenCalled()
+    expect(storeState.setActiveChat).not.toHaveBeenCalled()
   })
 
-  test('historical: forwards immediateAssistantId so swipe path can run', async () => {
+  test('historical: swipes the subsequent assistant after update', async () => {
     storeState.messages = [user, assistant]
-    editAndSend.mockResolvedValue({
-      message: { ...user, content: 'rewritten' },
-      immediateAssistantId: 'asst-1',
-      generationId: null,
-    })
     await renderHook(user)
     await act(async () => {
       hookSurface.setEditContent('rewritten')
@@ -241,12 +231,15 @@ describe('useMessageCard edit-and-send', () => {
       await hookSurface.handleEditAndSend()
     })
 
+    expect(messagesUpdate).toHaveBeenCalledWith('chat-1', 'user-1', { content: 'rewritten' })
     expect(generateStart).toHaveBeenCalledWith(expect.objectContaining({
       chat_id: 'chat-1',
       message_id: 'asst-1',
       generation_type: 'swipe',
     }))
     expect(beginStreaming).toHaveBeenCalledWith('asst-1', 'swipe')
+    expect(editAndSend).not.toHaveBeenCalled()
+    expect(storeState.setActiveChat).not.toHaveBeenCalled()
   })
 
   test('empty: does not call the API', async () => {
@@ -259,37 +252,24 @@ describe('useMessageCard edit-and-send', () => {
       await hookSurface.handleEditAndSend()
     })
 
-    expect(editAndSend).not.toHaveBeenCalled()
+    expect(messagesUpdate).not.toHaveBeenCalled()
     expect(generateStart).not.toHaveBeenCalled()
     expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
   })
 
-  test('cancellation: aborting via cancel ignores a late success', async () => {
-    let resolveEdit: (value: unknown) => void = () => {}
-    editAndSend.mockReturnValueOnce(new Promise((resolve) => { resolveEdit = resolve }))
-
+  test('cancel-before-send: cancel never calls APIs', async () => {
     await renderHook(user)
     await act(async () => {
       hookSurface.setEditContent('rewritten')
       await Promise.resolve()
     })
-
-    let pending!: Promise<void>
-    await act(async () => {
-      pending = hookSurface.handleEditAndSend()
-    })
     await act(async () => {
       hookSurface.handleCancelEdit()
     })
-    resolveEdit({
-      message: { ...user, content: 'rewritten' },
-      immediateAssistantId: null,
-    })
-    await act(async () => {
-      await pending
-    })
 
+    expect(messagesUpdate).not.toHaveBeenCalled()
     expect(generateStart).not.toHaveBeenCalled()
+    expect(editAndSend).not.toHaveBeenCalled()
     expect(beginStreaming).not.toHaveBeenCalled()
   })
 
@@ -297,7 +277,7 @@ describe('useMessageCard edit-and-send', () => {
     const errorSpy = mock(() => {})
     const originalError = console.error
     console.error = errorSpy as typeof console.error
-    editAndSend.mockRejectedValueOnce(new Error('conflict'))
+    messagesUpdate.mockRejectedValueOnce(new Error('conflict'))
     await renderHook(user)
     await act(async () => {
       hookSurface.setEditContent('rewritten')

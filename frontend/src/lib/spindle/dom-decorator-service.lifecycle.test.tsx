@@ -76,8 +76,18 @@ describe('dom decorator service lifecycle', () => {
     flushDomDecoratorWork()
     expect(registration.scope).toBe('chat:c1:toolbar')
     expect(registration.liveAnchorId).toMatch(/^live-anchor:/)
-    expect(host.querySelector('[data-spindle-extension-root]')).toBeTruthy()
+    expect(host.querySelector('[data-spindle-extension-root]')).toBeNull()
     expect(counters(1).registrations).toBe(1)
+    expect(counters(1).roots).toBe(0)
+
+    service.registerDecorator({
+      mount: 'chat_toolbar',
+      owner: OWNER,
+      generation: 1,
+      html: '<span data-toolbar="1"></span>',
+    })
+    flushDomDecoratorWork()
+    expect(host.querySelector('[data-spindle-extension-root]')).toBeTruthy()
     expect(counters(1).roots).toBe(1)
 
     service.unregisterAnchor(host)
@@ -263,7 +273,8 @@ describe('dom decorator service lifecycle', () => {
     flushDomDecoratorWork()
     expect(second.liveAnchorId).not.toBe(first.liveAnchorId)
     expect(counters(2).registrations).toBe(1)
-    expect(counters(2).roots).toBe(1)
+    expect(counters(2).roots).toBe(0)
+    expect(host.querySelector('[data-spindle-extension-root]')).toBeNull()
     expect(counters(1).roots).toBe(0)
   })
 
@@ -282,6 +293,12 @@ describe('dom decorator service lifecycle', () => {
       owner: OWNER,
       generation: 1,
       node: host,
+    })
+    service.registerDecorator({
+      mount: 'landing_header',
+      owner: OWNER,
+      generation: 1,
+      html: '<span data-legacy="1"></span>',
     })
     flushDomDecoratorWork()
     expect(counters(1).roots).toBe(1)
@@ -356,6 +373,18 @@ describe('dom decorator service lifecycle', () => {
     document.body.append(a, b)
     service.registerAnchor({ mount: 'chat_top_dock', scope: 'chat:c1:top-dock', owner: OWNER, generation: 7, node: a })
     service.registerAnchor({ mount: 'chat_bottom_dock', scope: 'chat:c1:bottom-dock', owner: OWNER, generation: 7, node: b })
+    service.registerDecorator({
+      mount: 'chat_top_dock',
+      owner: OWNER,
+      generation: 7,
+      html: '<span data-dock="top"></span>',
+    })
+    service.registerDecorator({
+      mount: 'chat_bottom_dock',
+      owner: OWNER,
+      generation: 7,
+      html: '<span data-dock="bottom"></span>',
+    })
     flushDomDecoratorWork()
     expect(counters(7).roots).toBe(2)
     service.unloadGeneration(OWNER, 7)
@@ -380,6 +409,12 @@ describe('dom decorator service lifecycle', () => {
       node: second,
     })
     service.unregisterAnchor(second)
+    service.registerDecorator({
+      mount: 'drawer_footer',
+      owner: OWNER,
+      generation: 1,
+      html: '<span data-drawer="footer"></span>',
+    })
     expect(rafCalls).toBe(1)
     flushDomDecoratorWork()
     expect(first.querySelector('[data-spindle-extension-root]')).toBeTruthy()

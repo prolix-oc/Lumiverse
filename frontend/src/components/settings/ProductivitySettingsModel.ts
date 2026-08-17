@@ -11,7 +11,7 @@ export const PRODUCTIVITY_SETTING_KEYS = [
 export type ProductivitySettingKey = typeof PRODUCTIVITY_SETTING_KEYS[number]
 
 export const PRODUCTIVITY_CONTROL_DEFINITIONS = {
-  quickToolbarSettings: ['enabled', 'variant', 'visibleTabIds', 'iconOrder', 'iconSize', 'labelVisible', 'labelTextSize', 'scale', 'orientation', 'rotationDeg', 'opacity', 'snapToEdge', 'rect', 'hideWhenOverlaid'],
+  quickToolbarSettings: ['enabled', 'variant', 'visibleTabIds', 'iconOrder', 'iconSize', 'labelVisible', 'labelTextSize', 'scale', 'orientation', 'rotationDeg', 'opacity', 'snapToEdge', 'rect', 'hideWhenOverlaid', 'fillTopDockWidth', 'showNativeSelectMessages', 'opaqueToolbarBackdrop'],
   connectionsPickerSettings: ['enabled', 'variant', 'launcherEnabled', 'launcherIconSize', 'opacity', 'thumbnailSize', 'density', 'showFavorites', 'showRecent', 'showSearch', 'showModelMetadata', 'profileTags', 'visibleTagIds', 'favoriteProfileIds', 'recentProfileIds', 'rowPadding', 'rowGap', 'sectionSpacing', 'columnWidths'],
   loreIndicatorSettings: ['enabled', 'variant', 'v2ActivationMode', 'v2BookDisplay', 'v5Keybind', 'visibleMetadata', 'iconSize', 'textSize', 'entryTypeAppearance', 'v4Items', 'v4Spacing', 'editorLaunchTarget'],
   homepageCharacterLibrarySettings: ['enabled', 'thumbnailWidth', 'thumbnailHeight', 'density', 'footerMode', 'visibleMetadata', 'tagRows', 'viewMode', 'defaultSort', 'defaultFilter', 'maxVisibleTags', 'showNameBackground', 'panelWidth', 'panelImageHeight', 'panelPinned', 'lastSelectedCharacterId'],

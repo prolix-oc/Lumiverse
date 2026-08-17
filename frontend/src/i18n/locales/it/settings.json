@@ -1310,6 +1310,8 @@
     "checkWorldBook": "Vettorizzazione world book abilitata",
     "checkWorldBookDesc": "Permette le voci del libro storia da indicizzare e cercare con i vettori.",
     "connection": "Connessione",
+    "connectionNone": "Nessuna (configurazione personalizzata diretta)",
+    "modelBrowseHint": "Seleziona un profilo di connessione o lascia vuoto per la configurazione personalizzata diretta.",
     "providerModel": "Fornitore e modello",
     "enable": "Abilita embedding",
     "provider": "Fornitore",

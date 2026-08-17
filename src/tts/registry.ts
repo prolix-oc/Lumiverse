@@ -194,3 +194,41 @@ export function revokeTtsRegistryProvider(
   }
   return removed;
 }
+
+export type HostTtsEngine = Omit<ProviderDescriptor, "kind" | "id"> & Partial<HostScopeContext> & {
+  installationId?: string;
+};
+
+function hostScopeFromTtsEngine(engine: HostTtsEngine): HostScopeContext & { installationId: string } {
+  const installationId = typeof engine.installationId === "string" && engine.installationId.trim()
+    ? engine.installationId.trim()
+    : "host";
+  const installScope = engine.installScope === "user" || engine.installScope === "operator" || engine.installScope === "system"
+    ? engine.installScope
+    : "system";
+  return {
+    installationId,
+    installScope,
+    installedByUserId: engine.installedByUserId,
+    authenticatedSubject: engine.authenticatedSubject,
+  };
+}
+
+export function registerTtsEngine(id: string, engine: HostTtsEngine): () => void {
+  const host = hostScopeFromTtsEngine(engine);
+  providerRegistry.register({
+    kind: "tts",
+    id,
+    description: engine.description ?? engine,
+    broker: engine.broker,
+    generation: engine.generation,
+    revision: engine.revision,
+    owner: engine.owner,
+  }, host);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    providerRegistry.unregister({ kind: "tts", id }, host);
+  };
+}

@@ -53,6 +53,19 @@ export function isSurfaceActive(surface: ToolbarSurface, ui: ToolbarUiState): bo
 }
 
 /**
+ * Rendered pressed state. An explicit `active` flag wins even for commands,
+ * so select-mode (and similar) can show `aria-pressed` without inventing a
+ * drawer/settings surface. Undefined `active` keeps the existing surface rule.
+ */
+export function isToolbarActionActive(
+  action: { active?: boolean; surface: ToolbarSurface },
+  ui: ToolbarUiState,
+): boolean {
+  if (typeof action.active === 'boolean') return action.active
+  return isSurfaceActive(action.surface, ui)
+}
+
+/**
  * Second press on the *same* surface closes it; a press on a *different* tab or
  * view switches to it and never closes. A command re-runs — it is an imperative
  * verb, and any idempotency is the command's own contract.

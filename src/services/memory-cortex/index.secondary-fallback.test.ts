@@ -56,6 +56,37 @@ describe("runQueryGenerationSidecar", () => {
     expect(calls).toEqual(["primary:primary-conn"]);
   });
 
+  test("fails over to tertiary after primary and secondary exhaust", async () => {
+    const calls: string[] = [];
+    const decision = await runQueryGenerationSidecar({
+      userId: "user-1",
+      config: configWith({
+        queryGeneration: {
+          primary: { connectionProfileId: "primary-conn", model: "primary-model" },
+          secondary: { connectionProfileId: "secondary-conn", model: "secondary-model" },
+          fallbacks: [{ connectionProfileId: "tertiary-conn", model: "tertiary-model" }],
+        },
+        sidecarReliability: {
+          ...DEFAULT_CORTEX_CONFIG.sidecarReliability,
+          fallback: "heuristic",
+          maxRetries: 0,
+          retryDelayMs: 0,
+        },
+      }),
+      extract: async (target) => {
+        calls.push(target.connectionProfileId);
+        if (target.connectionProfileId !== "tertiary-conn") throw new Error("503 upstream");
+        return { ok: true };
+      },
+    });
+
+    expect(decision.status).toBe("ok");
+    expect(decision.role).toBe("secondary");
+    expect(decision.persist).toBe(true);
+    expect(decision.useHeuristic).toBe(false);
+    expect(calls).toEqual(["primary-conn", "secondary-conn", "tertiary-conn"]);
+  });
+
   test("fails over to secondary after primary retries exhaust", async () => {
     const calls: string[] = [];
     const decision = await runQueryGenerationSidecar({

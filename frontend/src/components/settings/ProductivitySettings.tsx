@@ -4,10 +4,28 @@ import { Toggle } from '@/components/shared/Toggle'
 import { persistKey } from '@/store/slices/settings'
 import { DEFAULT_HOMEPAGE_CHARACTER_LIBRARY_SETTINGS, PRODUCTIVITY_DEFAULTS, isMobileViewportOrDevice } from '@/lib/uiProductivityDefaults'
 import { bindProductivitySetting, normalizeColor, parseProductivityNumber, reorderItems, type ProductivitySettingKey } from './ProductivitySettingsModel'
-import { ChevronDown, ChevronUp, Plus, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2 } from 'lucide-react'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { DESIGN_DEFAULT_IDS, useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
-import { isAutoFitToolbarBounds, isV2IconOnly, readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
+import { isAutoFitToolbarBounds, isFillTopDockWidth, isOpaqueToolbarBackdrop, isShowNativeSelectMessages, isV2IconOnly, readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
 import { canMoveWithinFiltered, filterActionIds, moveWithinFiltered } from '@/lib/toolbarActionSearch'
+import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { connectionsApi } from '@/api/connections'
 import { getConnectionProfileTagIds } from '@/lib/connectionsPicker'
 import { useTokenizerAvailability } from '@/hooks/useTokenCounts'
@@ -15,6 +33,7 @@ import { ENTRY_METADATA_VERSION } from '@/lib/lorebookEntryColumns'
 import { getCharacterAvatarLargeUrlById } from '@/lib/avatarUrls'
 import { getHomepageCardMetadata, getHomepageVisibleTags } from '@/lib/characterDisplaySettings'
 import type { Character } from '@/types/api'
+import ProductivityFeatureToggles from './ProductivityFeatureToggles'
 import styles from './ProductivitySettings.module.css'
 
 type Blob = Record<string, any>
@@ -161,6 +180,35 @@ function ReorderList({ label, items, getLabel, onChange }: { label: string; item
   return <div className={styles.reorder}><h4>{label}</h4>{items.map((item, index) => <div className={styles.reorderRow} key={item.id ?? `${getLabel(item)}-${index}`}><span>{getLabel(item)}</span><button type="button" disabled={index === 0} onClick={() => onChange(reorderItems(items, index, index - 1))} aria-label={`Move ${getLabel(item)} up`}>↑</button><button type="button" disabled={index === items.length - 1} onClick={() => onChange(reorderItems(items, index, index + 1))} aria-label={`Move ${getLabel(item)} down`}>↓</button></div>)}</div>
 }
 
+function SortableActionRow({
+  id,
+  label,
+  visible,
+  onToggle,
+  canMoveUp,
+  canMoveDown,
+  onMove,
+}: {
+  id: string
+  label: string
+  visible: boolean
+  onToggle: (id: string) => void
+  canMoveUp: boolean
+  canMoveDown: boolean
+  onMove: (id: string, direction: -1 | 1) => void
+}) {
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({ id, disabled: !visible })
+  const { setNodeRef, style } = useScaledSortableStyle({ setNodeRef: setSortableRef, transform, transition, isDragging })
+
+  return <div ref={setNodeRef} style={style} className={isDragging ? `${styles.reorderRow} ${styles.reorderRowDragging}` : styles.reorderRow}>
+    <button type="button" className={styles.dragHandle} title={visible ? 'Drag to reorder' : 'Enable this icon to reorder it'} aria-label={`Drag ${label}`} disabled={!visible} {...attributes} {...listeners}><GripVertical size={16} /></button>
+    <input type="checkbox" aria-label={label} checked={visible} onChange={() => onToggle(id)} />
+    <span>{label}</span>
+    <button type="button" disabled={!canMoveUp} onClick={() => onMove(id, -1)} aria-label={`Move ${label} up`}><ChevronUp size={14} /></button>
+    <button type="button" disabled={!canMoveDown} onClick={() => onMove(id, 1)} aria-label={`Move ${label} down`}><ChevronDown size={14} /></button>
+  </div>
+}
+
 function CardHeader({ id, title, description, action, cardId }: { id: string; title: string; description: string; action?: ReactNode; cardId: string }) {
   return <div className={styles.cardHeader}><div><h3 id={id}>{title}</h3><p>{description}</p></div><div className={styles.cardHeaderAction} data-spindle-mount="settings_card_actions" data-spindle-scope={`settings-card-actions:productivity:${cardId}`} {...(action ? { 'data-productivity-card-header-action': '' } : {})}>{action}</div></div>
 }
@@ -215,9 +263,22 @@ export default function ProductivitySettings() {
   }, [actionById, orderedIds, quick.iconOrder, quick.visibleTabIds])
   const filteredToolbarIds = useMemo(() => filterActionIds(toolbarIds, actionById, toolbarQuery), [actionById, toolbarIds, toolbarQuery])
   const filteredVisibleIds = useMemo(() => filterActionIds(orderedIds, actionById, toolbarQuery), [actionById, orderedIds, toolbarQuery])
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
   const moveToolbar = (id: string, direction: -1 | 1) => {
     const next = moveWithinFiltered(orderedIds, filteredVisibleIds, id, direction)
     if (next !== orderedIds) reorderActions(next)
+  }
+  const handleToolbarDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const from = orderedIds.indexOf(String(active.id))
+    const to = orderedIds.indexOf(String(over.id))
+    if (from < 0 || to < 0) return
+    reorderActions(arrayMove(orderedIds, from, to))
   }
   const removeTag = (id: string) => {
     update('connectionsPickerSettings', {
@@ -287,11 +348,24 @@ export default function ProductivitySettings() {
   })
 
   return <section className={styles.panel}>
+    <ProductivityFeatureToggles />
 
     <section className={styles.card} aria-labelledby="productivity-quick-title" data-spindle-mount="settings_section" data-spindle-scope="settings-section:productivity:quick"><CardHeader id="productivity-quick-title" cardId="quick" title={labels.quickToolbarSettings} description="Choose a confirmed variant and persist its layout." action={<Toggle.Switch checked={quick.enabled !== false} onChange={(enabled) => update('quickToolbarSettings', { enabled })} aria-label="Enable Quick Toolbar" title="Enable Quick Toolbar" />} /><div className={styles.cardBody}>
       <div className={styles.quickToolbarControls} data-productivity-layout="quick-toolbar-controls">
         <SegmentedField label="Variant" value={quick.variant} options={[['v1-free', 'V1 Free'], ['v2-settings-adjacent', 'V2 Adjacent']]} onChange={(variant) => update('quickToolbarSettings', { variant })} />
         <SegmentedField label="Placement" value={readQuickToolbarPlacement(quick)} options={[['floating', 'Floating'], ['chat_top_dock', 'Chat top dock']]} onChange={(quickToolbarPlacement) => update('quickToolbarSettings', { quickToolbarPlacement })} />
+        <CheckField
+          className={styles.quickToolbarCheck}
+          id="quick-fill-top-dock-width"
+          label={readQuickToolbarPlacement(quick) === 'chat_top_dock' ? 'Fill chat top bar width' : 'Fill the entire top of the screen'}
+          checked={isFillTopDockWidth(quick)}
+          onChange={(fillTopDockWidth) => update('quickToolbarSettings', { fillTopDockWidth })}
+          hint={readQuickToolbarPlacement(quick) === 'chat_top_dock'
+            ? 'Stretch the docked toolbar across the remaining top bar after native chat buttons.'
+            : 'Stretch a floating V2 auto-fit rail across the window top.'}
+        />
+        <CheckField className={styles.quickToolbarCheck} id="quick-show-native-select-messages" label="Show select-messages on chat top bar" checked={isShowNativeSelectMessages(quick)} onChange={(showNativeSelectMessages) => update('quickToolbarSettings', { showNativeSelectMessages })} hint="Keep the native ListChecks button on the chat top bar." />
+        <CheckField className={styles.quickToolbarCheck} id="quick-opaque-toolbar-backdrop" label="Opaque toolbar backdrop" checked={isOpaqueToolbarBackdrop(quick)} onChange={(opaqueToolbarBackdrop) => update('quickToolbarSettings', { opaqueToolbarBackdrop })} hint="Paint a solid plate behind the Quick Toolbar so chat text does not show through." />
         <CheckField className={styles.quickToolbarCheck} id="quick-auto-fit-bounds" label="Auto-fit toolbar bounds to content" checked={isAutoFitToolbarBounds(quick)} onChange={(autoFitBounds) => update('quickToolbarSettings', { autoFitBounds })} />
         <div className={styles.quickToolbarSliderPair} data-productivity-layout="quick-toolbar-slider-pair">
           <NumberField id="quick-icon-size" label="Icon size" value={quick.variant === 'v2-settings-adjacent' ? quick.v2IconSize : quick.iconSize} onChange={(value) => update('quickToolbarSettings', quick.variant === 'v2-settings-adjacent' ? { v2IconSize: value } : { iconSize: value })} min={16} max={36} suffix="px" />
@@ -302,8 +376,8 @@ export default function ProductivitySettings() {
           <RangeField id="quick-opacity" label="Opacity" value={Math.round(quick.opacity * 100)} onChange={(opacity) => update('quickToolbarSettings', { opacity: opacity / 100 })} min={30} max={100} step={1} format={(value) => `${value}%`} />
         </div>
         {quick.variant === 'v2-settings-adjacent' && <small id="quick-scale-v2-hint" className={styles.quickToolbarPairHint}>V2 never scales - it is anchored in the chat dock. Use Icon size and Label size instead.</small>}
-        {quick.variant === 'v2-settings-adjacent' ? <><SegmentedField label="Card density" value={quick.v2Density ?? 'comfortable'} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} onChange={(v2Density) => update('quickToolbarSettings', { v2Density })} /><CheckField className={styles.quickToolbarCheck} id="quick-labels" label="Show labels" checked={!isV2IconOnly(quick) && quick.v2LabelVisible !== false} onChange={(v2LabelVisible) => update('quickToolbarSettings', { v2LabelVisible, v2IconOnly: !v2LabelVisible })} /><CheckField className={styles.quickToolbarCheck} id="quick-v2-icon-only" label="Icon-only" checked={isV2IconOnly(quick)} onChange={(v2IconOnly) => update('quickToolbarSettings', { v2IconOnly, v2LabelVisible: v2IconOnly ? false : true })} /></> : <><RangeField id="quick-rotation" label="Rotation" value={quick.rotationDeg} onChange={(rotationDeg) => update('quickToolbarSettings', { rotationDeg })} min={-180} max={180} step={1} format={(value) => `${value} degrees`} /><CheckField id="quick-labels" label="Show labels" checked={Boolean(quick.labelVisible)} onChange={(labelVisible) => update('quickToolbarSettings', { labelVisible })} /><CheckField id="quick-snap" label="Snap to edge" checked={Boolean(quick.snapToEdge)} onChange={(snapToEdge) => update('quickToolbarSettings', { snapToEdge })} /><CheckField id="quick-resize-handles" label="Show resize handles" checked={quick.resizeHandlesEnabled !== false} onChange={(resizeHandlesEnabled) => update('quickToolbarSettings', { resizeHandlesEnabled })} /><CheckField id="quick-vertical-orientation" label="Vertical orientation" checked={quick.orientation === 'vertical'} onChange={(vertical) => update('quickToolbarSettings', { orientation: vertical ? 'vertical' : 'horizontal' })} /><CheckField id="quick-hide-when-overlaid" label="Hide when overlaid" checked={quick.hideWhenOverlaid ?? isMobileViewportOrDevice()} onChange={(hideWhenOverlaid) => update('quickToolbarSettings', { hideWhenOverlaid })} hint="When unset, this follows the mobile default." /><CheckField id="quick-modal-restore" label="Restore tab over full-screen dialogs" checked={quick.modalRestoreHandle === true} onChange={(modalRestoreHandle) => update('quickToolbarSettings', { modalRestoreHandle })} hint="The quick toolbar hides itself while a full-screen editor or dialog is open. Turn this on to leave a small tab at the screen edge that brings it back without closing the dialog." /></>}
-        <div className={styles.reorder}><h4>Visible icons and order</h4><label className={styles.searchField}><Search size={14} /><input value={toolbarQuery} onChange={(event) => setToolbarQuery(event.target.value)} placeholder="Search icons..." aria-label="Search icons" /></label>{filteredToolbarIds.map((id) => { const action = actionById.get(id); if (!action) return null; const visible = visibleIds.includes(id); return <div className={styles.reorderRow} key={id}><input type="checkbox" aria-label={action.label} checked={visible} onChange={() => toggleAction(id)} /><span>{action.label}</span><button type="button" disabled={!canMoveWithinFiltered(orderedIds, filteredVisibleIds, id, -1)} onClick={() => moveToolbar(id, -1)} aria-label={`Move ${action.label} up`}><ChevronUp size={14} /></button><button type="button" disabled={!canMoveWithinFiltered(orderedIds, filteredVisibleIds, id, 1)} onClick={() => moveToolbar(id, 1)} aria-label={`Move ${action.label} down`}><ChevronDown size={14} /></button></div> })}{filteredToolbarIds.length === 0 && <div className={styles.cardMeta}>No icons match &ldquo;{toolbarQuery.trim()}&rdquo;.</div>}</div>
+        {quick.variant === 'v2-settings-adjacent' ? <><SegmentedField label="Card density" value={quick.v2Density ?? 'comfortable'} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} onChange={(v2Density) => update('quickToolbarSettings', { v2Density })} /><CheckField className={styles.quickToolbarCheck} id="quick-labels" label="Show labels" checked={!isV2IconOnly(quick) && quick.v2LabelVisible !== false} onChange={(v2LabelVisible) => update('quickToolbarSettings', { v2LabelVisible })} /><CheckField className={styles.quickToolbarCheck} id="quick-v2-icon-only" label="Icon-only" checked={isV2IconOnly(quick)} onChange={(v2IconOnly) => update('quickToolbarSettings', { v2IconOnly, v2LabelVisible: v2IconOnly ? false : true })} /><CheckField className={styles.quickToolbarCheck} id="quick-v2-hide-when-overlaid" label="Hide when overlaid" checked={quick.hideWhenOverlaid ?? isMobileViewportOrDevice()} onChange={(hideWhenOverlaid) => update('quickToolbarSettings', { hideWhenOverlaid })} hint="When unset, this follows the mobile default." /><CheckField className={styles.quickToolbarCheck} id="quick-v2-modal-restore" label="Restore tab over full-screen dialogs" checked={quick.modalRestoreHandle === true} onChange={(modalRestoreHandle) => update('quickToolbarSettings', { modalRestoreHandle })} hint="The quick toolbar hides itself while a full-screen editor or dialog is open. Turn this on to leave a small tab at the screen edge that brings it back without closing the dialog." /></> : <><RangeField id="quick-rotation" label="Rotation" value={quick.rotationDeg} onChange={(rotationDeg) => update('quickToolbarSettings', { rotationDeg })} min={-180} max={180} step={1} format={(value) => `${value} degrees`} /><CheckField id="quick-labels" label="Show labels" checked={Boolean(quick.labelVisible)} onChange={(labelVisible) => update('quickToolbarSettings', { labelVisible })} /><CheckField id="quick-snap" label="Snap to edge" checked={Boolean(quick.snapToEdge)} onChange={(snapToEdge) => update('quickToolbarSettings', { snapToEdge })} /><CheckField id="quick-resize-handles" label="Show resize handles" checked={quick.resizeHandlesEnabled !== false} onChange={(resizeHandlesEnabled) => update('quickToolbarSettings', { resizeHandlesEnabled })} /><CheckField id="quick-vertical-orientation" label="Vertical orientation" checked={quick.orientation === 'vertical'} onChange={(vertical) => update('quickToolbarSettings', { orientation: vertical ? 'vertical' : 'horizontal' })} /><CheckField id="quick-hide-when-overlaid" label="Hide when overlaid" checked={quick.hideWhenOverlaid ?? isMobileViewportOrDevice()} onChange={(hideWhenOverlaid) => update('quickToolbarSettings', { hideWhenOverlaid })} hint="When unset, this follows the mobile default." /><CheckField id="quick-modal-restore" label="Restore tab over full-screen dialogs" checked={quick.modalRestoreHandle === true} onChange={(modalRestoreHandle) => update('quickToolbarSettings', { modalRestoreHandle })} hint="The quick toolbar hides itself while a full-screen editor or dialog is open. Turn this on to leave a small tab at the screen edge that brings it back without closing the dialog." /></>}
+        <div className={styles.reorder}><h4>Visible icons and order</h4><label className={styles.searchField}><Search size={14} /><input value={toolbarQuery} onChange={(event) => setToolbarQuery(event.target.value)} placeholder="Search icons..." aria-label="Search icons" /></label><DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleToolbarDragEnd}><SortableContext items={filteredVisibleIds} strategy={verticalListSortingStrategy}>{filteredToolbarIds.map((id) => { const action = actionById.get(id); if (!action) return null; const visible = visibleIds.includes(id); return <SortableActionRow key={id} id={id} label={action.label} visible={visible} onToggle={toggleAction} canMoveUp={canMoveWithinFiltered(orderedIds, filteredVisibleIds, id, -1)} canMoveDown={canMoveWithinFiltered(orderedIds, filteredVisibleIds, id, 1)} onMove={moveToolbar} /> })}</SortableContext></DndContext>{filteredToolbarIds.length === 0 && <div className={styles.cardMeta}>No icons match &ldquo;{toolbarQuery.trim()}&rdquo;.</div>}</div>
       </div>
       <button type="button" className={styles.resetButton} onClick={() => update('quickToolbarSettings', PRODUCTIVITY_DEFAULTS.quickToolbarSettings)}>Reset all toolbar settings</button>
     </div></section>

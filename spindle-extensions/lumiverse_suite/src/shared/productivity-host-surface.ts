@@ -38,6 +38,7 @@ type SurfaceModuleOptions<T> = {
   readonly mountPoint: (settings: T) => string
   readonly normalize: (value: unknown) => T
   readonly enabled: (settings: T) => boolean
+  readonly shouldMountSurface?: (settings: T, coreSettings: unknown) => boolean
   readonly launcher?: {
     readonly surfaceId: 'connections_picker.launcher'
     readonly mountPoint: (settings: T) => string
@@ -225,8 +226,14 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
     })
   }
 
+  let coreSettings: unknown
+
   const mountSurface = (host: NonNullable<ReturnType<typeof hostApi>>) => {
     if (!settings || (options.surfaceId === 'connections_picker.panel' && !panelOpen)) {
+      clearSurface()
+      return
+    }
+    if (options.shouldMountSurface && !options.shouldMountSurface(settings, coreSettings)) {
       clearSurface()
       return
     }
@@ -338,6 +345,7 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
         privateFound: saved !== undefined,
         portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(saved) : undefined,
       })
+      coreSettings = canonical
       const source = canonical ?? saved
       // Extension schemas only describe the fields they actively consume. Keep
       // the rest of the host-owned blob intact so a newer core field survives
@@ -402,13 +410,21 @@ export function createProductivityHostSurfaceModule<T>(options: SurfaceModuleOpt
             stopLegacyWatch = () => undefined
           }
           const next = { ...(record(value) ?? {}), ...options.normalize(value) } as T
+          const nextCore = value
+          const mountBefore = !options.shouldMountSurface || !settings
+            ? true
+            : options.shouldMountSurface(settings, coreSettings)
+          const mountAfter = !options.shouldMountSurface
+            ? true
+            : options.shouldMountSurface(next, nextCore)
           const unchanged = sameValue(settings, next)
+          coreSettings = nextCore
           traceSettings('module:canonical-watch', {
             moduleId: options.id,
             unchanged,
             portraitDock: options.settingsKey === 'portraitDockSettings' ? portraitDockSummary(next) : undefined,
           })
-          if (unchanged) return
+          if (unchanged && mountBefore === mountAfter) return
           settings = next
           reconcile()
         })

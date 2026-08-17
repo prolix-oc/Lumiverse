@@ -67,6 +67,35 @@ describe("memory cortex primary/secondary config", () => {
     expect(normalized.memorySummarization.secondary).toBeNull();
   });
 
+  test("normalizes extra fallbacks after secondary without inventing hops", () => {
+    const normalized = normalizeCortexConfig({
+      sidecar: {
+        ...DEFAULT_CORTEX_CONFIG.sidecar,
+        connectionProfileId: "primary-conn",
+        model: "primary-model",
+      },
+      queryGeneration: {
+        primary: { connectionProfileId: "primary-conn", model: "primary-model" },
+        secondary: { connectionProfileId: "secondary-conn", model: "secondary-model" },
+        fallbacks: [
+          { connectionProfileId: "secondary-conn", model: "dup" },
+          { connectionProfileId: "tertiary-conn", model: "tertiary-model" },
+          { connectionProfileId: null, model: "ignored" },
+        ],
+      },
+    });
+
+    expect(normalized.queryGeneration.secondary).toEqual({
+      connectionProfileId: "secondary-conn",
+      model: "secondary-model",
+    });
+    expect(normalized.queryGeneration.fallbacks).toEqual([
+      { connectionProfileId: "tertiary-conn", model: "tertiary-model" },
+    ]);
+    expect(normalized.memorySummarization.secondary).toBeNull();
+    expect(normalized.memorySummarization.fallbacks).toBeUndefined();
+  });
+
   test("shouldUseCortexSidecar accepts queryGeneration primary without a sidecar field", () => {
     const config = normalizeCortexConfig({
       entityExtractionMode: "sidecar",

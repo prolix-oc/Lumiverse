@@ -103,11 +103,15 @@
 .listHeader { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .listHeader small { display: block; margin-top: 2px; color: var(--lumiverse-text-dim); font-size: calc(11px * var(--lumiverse-font-scale, 1)); }
 .reorderRow { display: grid; grid-template-columns: 18px minmax(0, 1fr) 28px 28px; align-items: center; gap: 7px; padding: 7px 8px; background: var(--lumiverse-fill-subtle); border: 1px solid var(--lumiverse-border); border-radius: 8px; }
+.quickToolbarControls .reorderRow { grid-template-columns: 22px 18px minmax(0, 1fr) 28px 28px; }
 .reorderRow span { min-width: 0; overflow-wrap: anywhere; }
+.reorderRowDragging { z-index: 5; background: color-mix(in srgb, var(--lumiverse-primary) 8%, var(--lumiverse-fill-subtle)); box-shadow: 0 0 0 1px var(--lumiverse-primary); }
 .tagRow { display: grid; grid-template-columns: auto minmax(24px, auto) minmax(0, 1fr) auto auto auto; align-items: center; gap: 7px; padding: 7px 8px; background: var(--lumiverse-fill-subtle); border: 1px solid var(--lumiverse-border); border-radius: 8px; }
 .reorderRow button, .tagRow button { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; padding: 0; }
 .reorderRow button:hover:not(:disabled), .tagRow button:hover:not(:disabled) { background: var(--lumiverse-fill); color: var(--lumiverse-text); }
 .reorderRow button:disabled, .tagRow button:disabled { opacity: 0.3; cursor: default; }
+.reorderRow .dragHandle { width: 22px; height: 28px; cursor: grab; touch-action: none; user-select: none; color: var(--lumiverse-text-dim); }
+.reorderRow .dragHandle:active:not(:disabled) { cursor: grabbing; }
 .loreStripRow { display: grid; grid-template-columns: 18px minmax(120px, 1fr) minmax(105px, 140px) 28px 28px 28px; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); }
 .loreStripRow select { min-width: 0; padding: 6px 8px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill); color: var(--lumiverse-text); }
 .loreStripRow > button { display: inline-flex; width: 28px; height: 28px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--lumiverse-text-muted); cursor: pointer; }

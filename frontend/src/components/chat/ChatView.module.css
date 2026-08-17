@@ -141,16 +141,35 @@
   position: relative;
   display: flex;
   flex: 1 1 auto;
+  flex-direction: row;
+  justify-content: center;
+  align-items: stretch;
   min-width: 0;
   max-width: 100%;
+  width: 100%;
 }
 
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]),
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]) > :global([data-surface-id='quick_toolbar.workspace']) {
   display: flex;
   flex: 1 1 auto;
+  flex-direction: row;
+  justify-content: center;
+  align-items: stretch;
   min-width: 0;
   max-width: 100%;
+  width: 100%;
+}
+
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']:empty),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-spindle-extension-root]:empty),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]:empty),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]) > :global([data-surface-id='quick_toolbar.workspace']:not(:has(*))) {
+  display: contents;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
 }
 
 .chatColumnInner[data-chat-chrome-entering] .chatToolbar,
@@ -353,13 +372,43 @@
   padding: 6px 8px;
   gap: 6px;
   flex-shrink: 0;
+  width: 100%;
+  align-self: stretch;
   background: var(--lcs-glass-bg, var(--lumiverse-bg-elevated));
   border-bottom: 1px solid var(--lcs-glass-border, var(--lumiverse-border));
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
+/* Native V1 is a direct child; strip centering never applies. */
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-variant='v1']) {
+  margin-inline: auto;
+  align-self: stretch;
+  height: 100%;
+}
+
+/* V2 occupies leftover rail after the reserved native select button. */
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-variant='v2']) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Empty spindle strip between native controls and QuickToolbar must not eat the rail. */
+.chatToolbar > :global([data-spindle-extension-root]:empty),
+.chatToolbar > :global([data-spindle-extension-root]:not(:has(*))),
+.chatToolbar :global([data-surface-id='quick_toolbar.workspace']:not(:has(*))) {
+  display: contents;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .toolbarBtn {
   display: flex;
+  flex: 0 0 auto;
+  order: 0;
   align-items: center;
   justify-content: center;
   width: 28px;
@@ -371,8 +420,6 @@
   cursor: pointer;
   transition: all var(--lumiverse-transition-fast, 120ms);
   opacity: 0.6;
-  order: 2;
-  margin-left: auto;
 }
 
 .toolbarBtn:hover {

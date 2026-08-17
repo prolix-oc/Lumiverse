@@ -52,8 +52,15 @@ describe('P8 productivity panel model', () => {
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.connectionsPickerSettings).toContain('profileTags')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('iconOrder')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('hideWhenOverlaid')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('fillTopDockWidth')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('showNativeSelectMessages')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('opaqueToolbarBackdrop')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).not.toContain('hideInChatTopDock')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.loreIndicatorSettings).toContain('editorLaunchTarget')
     expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.hideWhenOverlaid).toBeUndefined()
+    expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.hideInChatTopDock).toBe(false)
+    expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.showNativeSelectMessages).toBe(true)
+    expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.opaqueToolbarBackdrop).toBe(false)
   })
 
   test('parses precise numeric edits without escaping the control range', () => {

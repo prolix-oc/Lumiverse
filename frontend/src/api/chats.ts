@@ -14,11 +14,12 @@ export interface EditAndSendInput {
 }
 
 export interface EditAndSendResult {
-  message: Message
-  /** Subsequent assistant when the edited turn is historical. */
+  branchChatId: string
+  editedMessageId: string
   immediateAssistantId?: string | null
-  /** Present when the backend already dispatched generation. */
+  generationCursor?: { generationId: string; chatId: string; requestId: string; mode: string }
   generationId?: string | null
+  message?: Message
 }
 
 export type ChatAppearanceAction =

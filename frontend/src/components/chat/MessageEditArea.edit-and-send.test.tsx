@@ -7,10 +7,29 @@ mock.module('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: { defaultValue?: string }) => opts?.defaultValue ?? key,
   }),
+  initReactI18next: { type: '3rdParty', init: () => {} },
+  Trans: ({ children }: { children?: unknown }) => children ?? null,
+}))
+mock.module('@/i18n', () => ({
+  default: { t: (key: string) => key },
 }))
 
 mock.module('@/components/shared/ExpandedTextEditor', () => ({
   default: () => null,
+  ExpandableTextarea: () => null,
+}))
+mock.module('@/store', () => ({
+  useStore: (selector: (state: Record<string, unknown>) => unknown) => selector({}),
+}))
+mock.module('@/lib/spindle/productivity-feature-toggles', () => ({
+  readProductivityFlag: () => true,
+}))
+mock.module('@/lib/spindle/use-spindle-component-override', () => ({
+  useSpindleComponentOverride: (_name: string, Component: (props: Record<string, unknown>) => unknown, props: Record<string, unknown>) =>
+    createElement(Component as never, props as never),
+}))
+mock.module('./MessageEditArea.module.css', () => ({
+  default: new Proxy({}, { get: (_t, k) => String(k) }),
 }))
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -126,6 +145,11 @@ describe('MessageEditArea edit-and-send', () => {
       button.click()
     })
     expect(onEditAndSend).not.toHaveBeenCalled()
+  })
+
+  test('hides Edit and Send when onEditAndSend is omitted', async () => {
+    const host = await render({ messageId: 'user-1' })
+    expect(host.querySelector('button[aria-label="Edit and Send"]')).toBeNull()
   })
 
   test('Cancel does not send and stays available while pending', async () => {

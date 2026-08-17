@@ -19,6 +19,7 @@ import { getDb } from "../../db/connection";
 import {
   getCortexConfig,
   isCortexEnabledForChat,
+  listCortexFallbackEndpoints,
   listCortexSidecarEndpoints,
   putCortexConfig,
   shouldUseCortexSidecar,
@@ -81,7 +82,9 @@ export {
   commitSidecarRegistryProvider,
   revokeSidecarRegistryProvider,
   publishSidecarProviderRegistryChanged,
+  registerSidecarEndpoint,
   type CortexSidecarProviderInfo,
+  type HostSidecarEndpoint,
 } from "./sidecar-adapter";
 export type {
   MemoryCortexConfig,
@@ -1177,11 +1180,13 @@ export function collectQueryGenerationTargets(
   if (primaryId) {
     targets.push({ connectionProfileId: primaryId, model: primaryModel, role: "primary" });
   }
-  const secondary = pair.secondary;
-  if (secondary?.connectionProfileId && secondary.connectionProfileId !== primaryId) {
+  const seen = new Set<string>(primaryId ? [primaryId] : []);
+  for (const extra of listCortexFallbackEndpoints(pair)) {
+    if (!extra.connectionProfileId || seen.has(extra.connectionProfileId)) continue;
+    seen.add(extra.connectionProfileId);
     targets.push({
-      connectionProfileId: secondary.connectionProfileId,
-      model: secondary.model,
+      connectionProfileId: extra.connectionProfileId,
+      model: extra.model,
       role: "secondary",
     });
   }

@@ -86,9 +86,16 @@ export const TOOLBAR_MAX: Size = { width: 920, height: 640 }
  */
 export const TOOLBAR_SNAP_THRESHOLD = 24
 
+/** Floor for a visible floating toolbar. Matches the V2 card `min-height: 32px`. */
+export const TOOLBAR_VISIBLE_MIN_HEIGHT = 32
+
 /** A finite, non-negative reading of an axis; anything else means "unknown". */
 function axis(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function visibleHeightFloor(value?: number): number {
+  return Math.max(TOOLBAR_VISIBLE_MIN_HEIGHT, axis(value ?? 0))
 }
 
 /**
@@ -104,10 +111,19 @@ export function isAutoRect(rect: SurfaceRect): boolean {
  * Substitutes the measured natural size on whichever axes are auto. Each axis
  * is decided independently, so a half-pinned rect (dragged wide, auto height)
  * keeps the width the user chose. An explicit rect passes through untouched.
+ *
+ * Height never resolves to 0 for a painted floating box: a wiped auto sentinel
+ * plus an unmeasured `natural` would otherwise become `--quick-toolbar-height:
+ * 0px`. When `natural.height` is known it is the hug size; `minHeight` is only
+ * the unmeasured fallback and must not raise a measured row (no 32+18 chrome).
  */
-export function resolveToolbarRect(rect: SurfaceRect, natural: Size): SurfaceRect {
+export function resolveToolbarRect(
+  rect: SurfaceRect,
+  natural: Size,
+  minHeight: number = TOOLBAR_VISIBLE_MIN_HEIGHT,
+): SurfaceRect {
   const width = axis(rect.width) || axis(natural.width)
-  const height = axis(rect.height) || axis(natural.height)
+  const height = axis(rect.height) || axis(natural.height) || visibleHeightFloor(minHeight)
   return { x: rect.x, y: rect.y, width, height }
 }
 
@@ -174,10 +190,18 @@ export function withToolbarPosition(
  * An inverted clamp corrupts `clampSurfaceRect` (`usePersistentRect.ts:38`),
  * whose `Math.min(Math.max(w, minWidth), maxWidth)` silently returns `maxWidth`
  * — i.e. a toolbar narrower than its own buttons — when `maxWidth < minWidth`.
+ *
+ * `minHeight` is the measured icon row when `natural.height` is known, so N/S
+ * shrink can reach hug. An unmeasured natural used to publish `{ minHeight: 0 }`,
+ * which made a 0-height box legal in `clampSurfaceRect`; only then does the
+ * fallback floor apply.
  */
-export function toolbarRectBounds(natural: Size): ToolbarRectBounds {
+export function toolbarRectBounds(
+  natural: Size,
+  minHeightFloor: number = TOOLBAR_VISIBLE_MIN_HEIGHT,
+): ToolbarRectBounds {
   const minWidth = axis(natural.width)
-  const minHeight = axis(natural.height)
+  const minHeight = axis(natural.height) || visibleHeightFloor(minHeightFloor)
   return {
     minWidth,
     minHeight,

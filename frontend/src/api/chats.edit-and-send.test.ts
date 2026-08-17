@@ -13,21 +13,26 @@ mock.module('./client', () => ({
 
 const { chatsApi } = await import('./chats')
 
-const edited = {
-  id: 'msg-1',
-  chat_id: 'chat-1',
-  index_in_chat: 0,
-  is_user: true,
-  name: 'User',
-  content: 'rewritten',
-  send_date: 1,
-  swipe_id: 0,
-  swipes: ['rewritten'],
-  swipe_dates: [1],
-  extra: {},
-  parent_message_id: null,
-  branch_id: null,
-  created_at: 42,
+function serverEditAndSend(partial: {
+  branchChatId?: string
+  editedMessageId?: string
+  immediateAssistantId?: string | null
+  generationId?: string
+  mode?: string
+} = {}) {
+  const branchChatId = partial.branchChatId ?? 'chat-1'
+  const editedMessageId = partial.editedMessageId ?? 'msg-1'
+  return {
+    branchChatId,
+    editedMessageId,
+    immediateAssistantId: partial.immediateAssistantId ?? null,
+    generationCursor: {
+      generationId: partial.generationId ?? 'gen-1',
+      chatId: branchChatId,
+      requestId: 'req-1',
+      mode: partial.mode ?? 'continue',
+    },
+  }
 }
 
 describe('chatsApi.editAndSend', () => {
@@ -36,7 +41,7 @@ describe('chatsApi.editAndSend', () => {
   })
 
   test('posts /chats/:chatId/edit-and-send with the contract body', async () => {
-    const response = { message: edited, immediateAssistantId: null, generationId: 'gen-1' }
+    const response = serverEditAndSend({ generationId: 'gen-1' })
     post.mockResolvedValueOnce(response)
 
     const input = {
@@ -51,7 +56,12 @@ describe('chatsApi.editAndSend', () => {
   })
 
   test('historical response preserves immediateAssistantId for the swipe path', async () => {
-    const response = { message: edited, immediateAssistantId: 'asst-2', generationId: null }
+    const response = serverEditAndSend({
+      branchChatId: 'chat-9',
+      immediateAssistantId: 'asst-2',
+      generationId: '',
+      mode: 'swipe',
+    })
     post.mockResolvedValueOnce(response)
 
     await expect(chatsApi.editAndSend('chat-9', {
@@ -64,7 +74,7 @@ describe('chatsApi.editAndSend', () => {
 
   test('forwards AbortSignal so the caller can cancel', async () => {
     const signal = new AbortController().signal
-    post.mockResolvedValueOnce({ message: edited })
+    post.mockResolvedValueOnce(serverEditAndSend())
 
     await chatsApi.editAndSend('chat-1', {
       messageId: 'msg-1',

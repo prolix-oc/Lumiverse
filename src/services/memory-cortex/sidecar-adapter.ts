@@ -74,8 +74,10 @@ export function listCortexSidecarProviders(options?: {
     const configured = [
       endpoints.queryGeneration.primary,
       endpoints.queryGeneration.secondary,
+      ...(endpoints.queryGeneration.fallbacks ?? []),
       endpoints.memorySummarization.primary,
       endpoints.memorySummarization.secondary,
+      ...(endpoints.memorySummarization.fallbacks ?? []),
     ];
     for (const endpoint of configured) {
       if (!endpoint?.connectionProfileId) continue;
@@ -168,6 +170,44 @@ export function revokeSidecarRegistryProvider(
     });
   }
   return removed;
+}
+
+export type HostSidecarEndpoint = Omit<ProviderDescriptor, "kind" | "id"> & Partial<HostScopeContext> & {
+  installationId?: string;
+};
+
+function hostScopeFromSidecarEndpoint(endpoint: HostSidecarEndpoint): HostScopeContext & { installationId: string } {
+  const installationId = typeof endpoint.installationId === "string" && endpoint.installationId.trim()
+    ? endpoint.installationId.trim()
+    : "host";
+  const installScope = endpoint.installScope === "user" || endpoint.installScope === "operator" || endpoint.installScope === "system"
+    ? endpoint.installScope
+    : "system";
+  return {
+    installationId,
+    installScope,
+    installedByUserId: endpoint.installedByUserId,
+    authenticatedSubject: endpoint.authenticatedSubject,
+  };
+}
+
+export function registerSidecarEndpoint(id: string, endpoint: HostSidecarEndpoint): () => void {
+  const host = hostScopeFromSidecarEndpoint(endpoint);
+  providerRegistry.register({
+    kind: "sidecar",
+    id,
+    description: endpoint.description ?? endpoint,
+    broker: endpoint.broker,
+    generation: endpoint.generation,
+    revision: endpoint.revision,
+    owner: endpoint.owner,
+  }, host);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    providerRegistry.unregister({ kind: "sidecar", id }, host);
+  };
 }
 
 export type CortexGenerateRawFn = (opts: {

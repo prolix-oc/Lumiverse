@@ -39,6 +39,99 @@ export function isUsableProfileId(id: unknown): id is string {
   return typeof id === 'string' && UUID_RE.test(id)
 }
 
+/** Store Connection fields needed to snapshot an embedding profile. */
+export interface EmbeddingConnectionSource {
+  id: string
+  provider: string
+  model?: string
+  api_url?: string
+  has_api_key?: boolean
+  metadata?: Record<string, unknown> | null
+}
+
+function optionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function optionalPositiveInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value)
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
+  }
+  return null
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+/** Ordered unique usable ids: primary first, then fallbacks. */
+export function selectedEmbeddingProfileIds(cfg: {
+  primaryProfileId?: string | null
+  fallbackProfileIds?: string[] | null
+}): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  const push = (id: unknown) => {
+    if (!isUsableProfileId(id) || seen.has(id)) return
+    seen.add(id)
+    ids.push(id)
+  }
+  push(cfg.primaryProfileId)
+  for (const id of cfg.fallbackProfileIds ?? []) push(id)
+  return ids
+}
+
+/**
+ * Project selected Connections into PUT-compatible embedding snapshots.
+ * Prefers live store rows (id + provider/model/url/dims). Keeps a prior
+ * snapshot only when that id is still selected but missing from the slice.
+ */
+export function projectConnectionProfiles(
+  connections: EmbeddingConnectionSource[],
+  selectedIds: string[],
+  previous: EmbeddingConnectionProfile[] | null | undefined = [],
+): EmbeddingConnectionProfile[] {
+  const byId = new Map(connections.map((connection) => [connection.id, connection]))
+  const prevById = new Map((previous ?? []).map((profile) => [profile.id, profile]))
+  const snapshots: EmbeddingConnectionProfile[] = []
+  const seen = new Set<string>()
+
+  for (const id of selectedIds) {
+    if (!isUsableProfileId(id) || seen.has(id)) continue
+    const connection = byId.get(id)
+    const prev = prevById.get(id)
+    if (connection) {
+      const meta = metadataRecord(connection.metadata)
+      const snapshot: EmbeddingConnectionProfile = {
+        id: connection.id,
+        provider: connection.provider,
+        model: connection.model ?? prev?.model ?? '',
+        api_url: connection.api_url ?? prev?.api_url ?? '',
+        dimensions: optionalPositiveInt(meta.dimensions) ?? prev?.dimensions ?? null,
+        enabled: prev?.enabled ?? true,
+      }
+      const vertex_region = optionalTrimmedString(meta.vertex_region) ?? prev?.vertex_region
+      const vertex_project = optionalTrimmedString(meta.vertex_project) ?? prev?.vertex_project
+      if (vertex_region) snapshot.vertex_region = vertex_region
+      if (vertex_project) snapshot.vertex_project = vertex_project
+      snapshots.push(snapshot)
+      seen.add(id)
+      continue
+    }
+    if (prev) {
+      snapshots.push({
+        ...prev,
+        enabled: prev.enabled ?? true,
+      })
+      seen.add(id)
+    }
+  }
+
+  return snapshots
+}
+
 export function areProfileDimensionsCompatible(
   primary: Pick<EmbeddingConnectionProfile, 'dimensions'> | null | undefined,
   candidate: Pick<EmbeddingConnectionProfile, 'dimensions'>,

@@ -170,6 +170,7 @@ export default function ConnectionSelect({
       clearable={clearable}
       clearLabel={clearLabel}
       triggerClassName={triggerClassName}
+      triggerIcon={!value ? <ProviderIcon kind={kind} provider="custom" fill /> : undefined}
       leadingClassName={styles.leadingSlot}
       showSelectedSublabel
     />
