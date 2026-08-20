@@ -958,9 +958,9 @@ export default function ChatView() {
       else anchor.removeAttribute('data-spindle-occupied')
     }
 
-    const syncDockRequest = (anchor: HTMLElement, resolve: (request: unknown) => string) => {
+    const syncDockRequest = (anchor: HTMLElement, resolve: (request: unknown) => string, defaultRequest: string | null = null) => {
       const child = findExtensionChild(anchor)
-      const request = resolve(child?.getAttribute('data-dock-request') ?? null)
+      const request = resolve(child?.getAttribute('data-dock-request') ?? defaultRequest)
       if (anchor.getAttribute('data-dock-request') !== request) anchor.setAttribute('data-dock-request', request)
       if (child && child.getAttribute('data-dock-request') !== request) child.setAttribute('data-dock-request', request)
     }
@@ -976,7 +976,7 @@ export default function ChatView() {
       syncOccupied(chatTopDock)
       if (composerAbove) syncOccupied(composerAbove)
       syncDockRequest(chatColumnTop, (request) => effectiveQuickToolbarDockRequest(request, quickToolbarSettings))
-      syncDockRequest(chatTopDock, (request) => effectiveQuickToolbarDockRequest(request, quickToolbarSettings))
+      syncDockRequest(chatTopDock, (request) => effectiveQuickToolbarDockRequest(request, quickToolbarSettings), dockQuickToolbar || keepFloatingDockHost ? 'strip' : 'floating')
       if (composerAbove) syncDockRequest(composerAbove, chatLoreDockMode)
       syncTopDockHeight()
     }

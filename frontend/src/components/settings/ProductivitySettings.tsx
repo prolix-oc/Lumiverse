@@ -377,6 +377,14 @@ export default function ProductivitySettings() {
           <NumberField id="quick-label-size" label="Label size" value={quick.variant === 'v2-settings-adjacent' ? quick.v2LabelTextSize : quick.labelTextSize} onChange={(value) => update('quickToolbarSettings', quick.variant === 'v2-settings-adjacent' ? { v2LabelTextSize: value } : { labelTextSize: value })} min={9} max={18} suffix="px" />
         </div>
         <div className={styles.quickToolbarSliderPair} data-productivity-layout="quick-toolbar-slider-pair">
+          <NumberField id="quick-card-width" label="Card width" value={quick.cardWidth ?? 0} onChange={(cardWidth) => update('quickToolbarSettings', { cardWidth })} min={0} max={360} suffix="px" />
+          <NumberField id="quick-card-padding" label="Card padding" value={quick.cardPadding ?? 8} onChange={(cardPadding) => update('quickToolbarSettings', { cardPadding })} min={2} max={32} suffix="px" />
+        </div>
+        <div className={styles.quickToolbarSliderPair} data-productivity-layout="quick-toolbar-slider-pair">
+          <NumberField id="quick-card-max-width" label="Card max width" value={quick.cardMaxWidth ?? 190} onChange={(cardMaxWidth) => update('quickToolbarSettings', { cardMaxWidth })} min={60} max={500} suffix="px" />
+          <NumberField id="quick-card-gap" label="Card icon gap" value={quick.cardGap ?? 8} onChange={(cardGap) => update('quickToolbarSettings', { cardGap })} min={2} max={24} suffix="px" />
+        </div>
+        <div className={styles.quickToolbarSliderPair} data-productivity-layout="quick-toolbar-slider-pair">
           <RangeField id="quick-scale" label="Scale" value={Math.round(quick.scale * 100)} onChange={(scale) => update('quickToolbarSettings', { scale: scale / 100 })} min={60} max={160} step={1} disabled={quick.variant === 'v2-settings-adjacent'} descriptionId={quick.variant === 'v2-settings-adjacent' ? 'quick-scale-v2-hint' : undefined} format={(value) => `${value}%`} className={quick.variant === 'v2-settings-adjacent' ? styles.quickToolbarDisabledField : undefined} />
           <RangeField id="quick-opacity" label="Opacity" value={Math.round(quick.opacity * 100)} onChange={(opacity) => update('quickToolbarSettings', { opacity: opacity / 100 })} min={30} max={100} step={1} format={(value) => `${value}%`} />
         </div>

@@ -26,6 +26,11 @@ export interface SpindleSettingsTabOptions {
   readonly description?: string
   readonly keywords?: readonly string[]
   readonly sections?: readonly SpindleSettingsTabSection[]
+  /**
+   * Relative tab position: 'top', 'bottom', 'after-display', 'before-chat',
+   * 'after-<tabId>', 'before-<tabId>', or any specific tab identifier.
+   */
+  readonly position?: string
   /** Body order among registrants sharing a tab. Defaults to 100. */
   readonly order?: number
 }
@@ -46,6 +51,7 @@ export interface ExtensionSettingsTabRegistration {
   readonly description?: string
   readonly keywords: readonly string[]
   readonly sections: readonly SpindleSettingsTabSection[]
+  readonly position?: string
   readonly order: number
   /** Monotonic host sequence; this is the dynamic metadata authority tie-breaker. */
   readonly sequence: number
@@ -90,6 +96,7 @@ interface MutableRegistration {
   description?: string
   keywords: string[]
   sections: SpindleSettingsTabSection[]
+  position?: string
   order: number
   sequence: number
   activationHandlers: Set<() => void>
@@ -176,6 +183,7 @@ function snapshot(registration: MutableRegistration): ExtensionSettingsTabRegist
     description: registration.description,
     keywords: [...registration.keywords],
     sections: registration.sections.map((section) => ({ ...section, keywords: [...section.keywords] })),
+    position: registration.position,
     order: registration.order,
     sequence: registration.sequence,
   }
@@ -253,6 +261,7 @@ export function registerExtensionSettingsTab(
     description: optionalString(options.description),
     keywords: stringList(options.keywords, MAX_KEYWORDS_PER_REGISTRATION, 100),
     sections: normalizeSections(options.sections),
+    position: optionalString(options.position, 100),
     order: Number.isFinite(options.order) ? options.order! : 100,
     sequence: ++registrationSequence,
     activationHandlers: new Set(),
@@ -336,6 +345,49 @@ export function hasExtensionSettingsTab(tabId: string): boolean {
   return registrationIdsByTab.has(tabId)
 }
 
+function insertTabAtPosition(
+  joined: JoinedSettingsTabEntry[],
+  entry: JoinedSettingsTabEntry,
+  pos?: string,
+  isProductivity?: boolean,
+): void {
+  if (pos === 'top') {
+    joined.unshift(entry)
+    return
+  }
+  if (pos === 'bottom') {
+    joined.push(entry)
+    return
+  }
+  if (pos && pos.startsWith('before-')) {
+    const targetId = pos.slice(7)
+    const targetIdx = joined.findIndex((tab) => tab.id === targetId)
+    if (targetIdx !== -1) {
+      joined.splice(targetIdx, 0, entry)
+      return
+    }
+  }
+  if (pos) {
+    const targetId = pos.startsWith('after-') ? pos.slice(6) : (pos === 'display' ? 'display' : pos)
+    const targetIdx = joined.findIndex((tab) => tab.id === targetId)
+    if (targetIdx !== -1) {
+      joined.splice(targetIdx + 1, 0, entry)
+      return
+    }
+  }
+  // Fallback:
+  if (isProductivity) {
+    const displayIdx = joined.findIndex((tab) => tab.id === 'display')
+    if (displayIdx !== -1) {
+      joined.splice(displayIdx + 1, 0, entry)
+    } else {
+      joined.push(entry)
+    }
+  } else {
+    joined.push(entry)
+  }
+}
+
 /**
  * Join live extension bodies into the role-filtered core registry. Core metadata
  * and role remain authoritative. A dynamic id uses its earliest live registrant
@@ -346,6 +398,7 @@ export function joinExtensionSettingsTabs(
   userRole?: string,
   allCoreTabs: readonly SettingsTabEntry[] = coreTabs,
   hiddenRegistrationIds?: ReadonlySet<string>,
+  productivityTabPosition: string = 'after-display',
 ): JoinedSettingsTabEntry[] {
   const coreById = new Map(allCoreTabs.map((tab) => [tab.id, tab]))
   const visibleCoreIds = new Set(coreTabs.map((tab) => tab.id))
@@ -371,6 +424,7 @@ export function joinExtensionSettingsTabs(
     })
   }
 
+  const extensionEntries: JoinedSettingsTabEntry[] = []
   for (const [tabId] of registrationIdsByTab) {
     if (seen.has(tabId)) continue
     const declaredCore = coreById.get(tabId)
@@ -387,9 +441,9 @@ export function joinExtensionSettingsTabs(
       registration.sequence < first.sequence ? registration : first
     )
     if (!owner) continue
-    joined.push({
+    extensionEntries.push({
       id: tabId,
-      shortName: owner.shortName ?? owner.title ?? tabId,
+      shortName: owner.shortName ?? (tabId === 'productivity' ? 'Productivity' : (owner.title ?? tabId)),
       tabName: owner.title ?? tabId,
       tabDescription: owner.description ?? `Open ${owner.title ?? tabId} extension settings`,
       tabIcon: Puzzle,
@@ -398,6 +452,20 @@ export function joinExtensionSettingsTabs(
       component: () => null,
       sections: mergedSections(undefined, registrations),
     })
+  }
+
+  for (const entry of extensionEntries) {
+    const allRegistrations = registrationsForTab(entry.id)
+    const owner = allRegistrations.length > 0
+      ? allRegistrations.reduce((first, registration) =>
+          registration.sequence < first.sequence ? registration : first
+        )
+      : undefined
+    const isProd = entry.id === 'productivity'
+    const pos = isProd
+      ? (productivityTabPosition || owner?.position || 'after-display')
+      : owner?.position
+    insertTabAtPosition(joined, entry, pos, isProd)
   }
 
   return joined

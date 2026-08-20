@@ -63,13 +63,24 @@
   align-self: center;
 }
 
-/* V1 docked: fill the rail so the icon group centres as a unit. */
+/* V1 docked: fill the rail so the icon group centres as a unit and expands symmetrically. */
 .rootAnchored[data-quick-toolbar-variant='v1'] {
   flex: 1 1 auto;
   align-self: stretch;
   width: 100%;
   height: 100%;
+  display: flex;
   justify-content: center;
+  align-items: center;
+}
+
+.rootAnchored[data-quick-toolbar-variant='v1'] .toolbarHorizontal {
+  width: auto;
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-inline: auto;
 }
 
 /* Docked V2 uses the leftover flex column; never the full chatToolbar width. */
@@ -80,17 +91,71 @@
   max-width: 100%;
 }
 
-/* Opt-out: hug packed cards instead of stretching the leftover rail. */
-.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'][data-fill-top-dock='0'] {
-  flex: 0 0 auto;
-  width: max-content;
-  max-width: 100%;
+/* Option B: Container Proportional Fill (Bounded to Column Width, Zero Trailing Waste) */
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start !important;
+  align-self: stretch !important;
 }
 
-.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2']:not([data-fill-top-dock='0']) .cardStrip {
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardStrip {
   width: 100%;
   flex: 1 1 auto;
   justify-content: flex-start;
+  align-self: stretch;
+}
+
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardScroller {
+  width: 100% !important;
+  max-width: 100% !important;
+  display: flex !important;
+  justify-content: stretch !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 6px !important;
+}
+
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex: 1 1 0px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot .card,
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot button,
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot a,
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot [role='button'] {
+  width: 100% !important;
+  max-width: none !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 0 !important;
+  padding: 2px 6px !important;
+  gap: 4px !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  text-align: center !important;
+}
+
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot button span,
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot a span,
+.rootAnchored[data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2'] .cardSlot [role='button'] span {
+  text-align: center !important;
 }
 
 .fillDockSpacer {
@@ -103,11 +168,71 @@
   padding: 0 !important;
 }
 
+/* Option A: Full-Screen Breakout Proportional Fill (Zero Edge Waste) */
 .rootFree[data-fill-screen='1'] {
+  position: fixed !important;
+  top: 0 !important;
   left: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  z-index: var(--z-quick-toolbar-floating, 10005) !important;
+  background: var(--lcs-glass-bg, rgba(24, 24, 27, 0.94)) !important;
+  backdrop-filter: blur(12px) !important;
+  border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
+  box-sizing: border-box !important;
+  padding: 0 4px !important;
   margin: 0 !important;
   --quick-toolbar-x: 0px;
 }
+
+.rootFree[data-fill-screen='1'] .cardScroller {
+  width: 100% !important;
+  max-width: 100% !important;
+  display: flex !important;
+  justify-content: stretch !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 6px !important;
+}
+
+.rootFree[data-fill-screen='1'] .cardSlot {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex: 1 1 0px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.rootFree[data-fill-screen='1'] .cardSlot .card,
+.rootFree[data-fill-screen='1'] .cardSlot button {
+  width: 100% !important;
+  max-width: none !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 0 !important;
+  padding: 0 8px !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  text-align: center !important;
+}
+
+.rootFree[data-fill-screen='1'] .cardSlot .card span,
+.rootFree[data-fill-screen='1'] .cardSlot button span {
+  text-align: center !important;
+}
+
 .rootFree[data-autofit='1']:not([data-fill-screen='1']) {
   width: max-content !important;
   max-width: 100%;
@@ -317,17 +442,46 @@
   width: 100%;
   min-width: 0;
   flex: 1 1 auto;
+  justify-content: flex-start;
 }
 
-/* Cards and slots remain intrinsic in every mode; only the strip owns rail fill. */
+.root[data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1'] .cardScroller {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+/* In fill modes (Option A & B), card slots and buttons expand proportionally to consume the rail */
 .root[data-fill-screen='1'] .cardSlot,
 .root[data-fill-top-dock='1'] .cardSlot {
-  flex: 0 0 auto;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex: 1 1 0px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 .root[data-fill-screen='1'] .cardSlot .card,
 .root[data-fill-top-dock='1'] .cardSlot .card {
-  width: auto;
+  width: var(--quick-toolbar-card-width, 100%) !important;
+  max-width: var(--quick-toolbar-card-max-width, none) !important;
+  flex: 1 1 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: var(--quick-toolbar-card-min-width, 0) !important;
+  padding: 2px var(--quick-toolbar-card-padding-inline, 6px) !important;
+  gap: var(--quick-toolbar-card-gap, 4px) !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis !important;
+  text-align: center !important;
 }
 
 .cardScroller:empty {
@@ -337,6 +491,7 @@
 .cardSlot {
   display: inline-flex;
   flex: 0 0 auto;
+  width: max-content;
   min-width: 0;
   transition: transform 160ms ease;
 }
@@ -385,12 +540,13 @@
      their content asks for and the strip scrolls instead, which is what the
      `mask-image` above has always been there to announce. */
   flex: 0 0 auto;
+  width: var(--quick-toolbar-card-width, max-content);
   align-items: center;
-  gap: 8px;
-  min-width: calc(var(--quick-toolbar-icon-size, 28px) + 24px);
-  max-width: 190px;
+  gap: var(--quick-toolbar-card-gap, 8px);
+  min-width: var(--quick-toolbar-card-min-width, calc(var(--quick-toolbar-icon-size, 28px) + 24px));
+  max-width: var(--quick-toolbar-card-max-width, 190px);
   min-height: calc(var(--quick-toolbar-icon-size, 28px) + 20px);
-  padding: 5px 9px 5px 6px;
+  padding: 5px var(--quick-toolbar-card-padding-inline, 9px) 5px var(--quick-toolbar-card-padding-inline, 6px);
   border: 1px solid var(--lumiverse-border-hover);
   /* Never a literal: `theme/engine.ts` recomputes every radius token from the
      user's radius-scale, so the old `11px` silently opted out of that setting
@@ -457,16 +613,16 @@
 }
 
 .cardStrip .card {
-  min-width: 0;
-  width: max-content;
-  max-width: 190px;
+  min-width: var(--quick-toolbar-card-min-width, 0);
+  width: var(--quick-toolbar-card-width, max-content);
+  max-width: var(--quick-toolbar-card-max-width, 190px);
   /* V2 owns a compact rail at the 16px minimum, but the setting's full
      16-36px range must remain real. Growing the pill with its glyph prevents
      a larger SVG from bleeding outside the card or clipping against the dock. */
   min-height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
   height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
-  padding: 3px 8px;
-  gap: 6px;
+  padding: 3px var(--quick-toolbar-card-padding-inline, 8px);
+  gap: var(--quick-toolbar-card-gap, 6px);
   border-radius: 8px;
 }
 
@@ -581,11 +737,12 @@
  * the test helpers parse this sheet with a flat `^selector\s*\{([^}]*)\}`.
  */
 .cardStrip[data-density='compact'] .card {
-  gap: 6px;
-  max-width: 170px;
+  gap: var(--quick-toolbar-card-gap, 6px);
+  width: var(--quick-toolbar-card-width, max-content);
+  max-width: var(--quick-toolbar-card-max-width, 170px);
   min-height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
   height: max(32px, calc(var(--quick-toolbar-icon-size, 16px) + 12px));
-  padding: 3px 8px;
+  padding: 3px var(--quick-toolbar-card-padding-inline, 8px);
 }
 
 .cardStrip[data-density='compact'] .cardIcon {

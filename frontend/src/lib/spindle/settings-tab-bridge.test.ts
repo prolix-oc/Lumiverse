@@ -197,4 +197,54 @@ describe('Spindle settings tab bridge', () => {
     expect(notifications).toBe(1)
     expect(getExtensionSettingsTabRegistrations('disposable-tab')).toEqual([])
   })
+
+  test('positions productivity tab behind display by default and respects custom position', () => {
+    register('prod-test', 'extension.productivity', { id: 'productivity', title: 'UI Productivity', shortName: 'Productivity' })
+    const tabs: SettingsTabEntry[] = [
+      { id: 'account', shortName: 'Account', tabName: 'Account', tabDescription: 'Account', tabIcon: (() => null) as never, keywords: [], component: () => null },
+      { id: 'display', shortName: 'Display', tabName: 'Display', tabDescription: 'Display', tabIcon: (() => null) as never, keywords: [], component: () => null },
+      { id: 'chat', shortName: 'Chat', tabName: 'Chat', tabDescription: 'Chat', tabIcon: (() => null) as never, keywords: [], component: () => null },
+      { id: 'extensions', shortName: 'Extensions', tabName: 'Extensions', tabDescription: 'Extensions', tabIcon: (() => null) as never, keywords: [], component: () => null },
+    ]
+
+    // Default: after display
+    const defaultJoined = joinExtensionSettingsTabs(tabs)
+    expect(defaultJoined.map((t) => t.id)).toEqual(['account', 'display', 'productivity', 'chat', 'extensions'])
+
+    // Top
+    const topJoined = joinExtensionSettingsTabs(tabs, undefined, tabs, undefined, 'top')
+    expect(topJoined.map((t) => t.id)).toEqual(['productivity', 'account', 'display', 'chat', 'extensions'])
+
+    // After Chat
+    const chatJoined = joinExtensionSettingsTabs(tabs, undefined, tabs, undefined, 'after-chat')
+    expect(chatJoined.map((t) => t.id)).toEqual(['account', 'display', 'chat', 'productivity', 'extensions'])
+
+    // Bottom
+    const bottomJoined = joinExtensionSettingsTabs(tabs, undefined, tabs, undefined, 'bottom')
+    expect(bottomJoined.map((t) => t.id)).toEqual(['account', 'display', 'chat', 'extensions', 'productivity'])
+  })
+
+  test('positions generic spindle extension settings tabs by requested position', () => {
+    register('ext-pos-1', 'ext.one', { id: 'ext-one', title: 'Extension One', position: 'after-account' })
+    register('ext-pos-2', 'ext.two', { id: 'ext-two', title: 'Extension Two', position: 'before-chat' })
+    register('ext-pos-3', 'ext.three', { id: 'ext-three', title: 'Extension Three', position: 'top' })
+    register('ext-pos-4', 'ext.four', { id: 'ext-four', title: 'Extension Four', position: 'bottom' })
+
+    const tabs: SettingsTabEntry[] = [
+      { id: 'account', shortName: 'Account', tabName: 'Account', tabDescription: 'Account', tabIcon: (() => null) as never, keywords: [], component: () => null },
+      { id: 'display', shortName: 'Display', tabName: 'Display', tabDescription: 'Display', tabIcon: (() => null) as never, keywords: [], component: () => null },
+      { id: 'chat', shortName: 'Chat', tabName: 'Chat', tabDescription: 'Chat', tabIcon: (() => null) as never, keywords: [], component: () => null },
+    ]
+
+    const joined = joinExtensionSettingsTabs(tabs)
+    expect(joined.map((t) => t.id)).toEqual([
+      'ext-three',
+      'account',
+      'ext-one',
+      'display',
+      'ext-two',
+      'chat',
+      'ext-four',
+    ])
+  })
 })

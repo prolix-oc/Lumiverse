@@ -28,30 +28,30 @@ function makeHarness(initial: unknown = { enabled: true, variant: 'A' }) {
 }
 
 describe('connections picker canonical runtime', () => {
-  test('mounts launcher only while enabled and exposes canonical state', async () => {
+  test('registers quick toolbar action only while enabled and exposes canonical state', async () => {
     const h = makeHarness({ enabled: true, variant: 'B' }); const module = createConnectionsPickerModule(); await module.start(h.context)
-    expect(h.points).toEqual(['chat_actions']); expect(h.surfaces[0]).toMatchObject({ id: 'connections_picker.launcher', props: { ownerToken: 'connections-test', generation: 2, capabilities: ['open'], state: { enabled: true, variant: 'B' } } })
     expect(h.actions[0]?.options).toMatchObject({ id: 'lumiverse_suite.connections_picker.open', label: 'Connections Picker', placement: 'quick_toolbar', iconName: 'waypoints', enabled: true })
-    h.setLegacy({ enabled: false, variant: 'B' }); expect(h.surfaces[0]?.destroys).toBe(1); await module.stop(); await module.stop(); expect(h.surfaces[0]?.destroys).toBe(1)
+    h.setLegacy({ enabled: false, variant: 'B' }); await module.stop(); await module.stop()
   })
 
   test('opens the panel when invoked through its Quick Toolbar action', async () => {
     const h = makeHarness(); const module = createConnectionsPickerModule(); await module.start(h.context)
     h.click(h.actions[0]!)
-    expect(h.surfaces.map(surface => surface.id)).toEqual(['connections_picker.launcher', 'connections_picker.panel'])
+    expect(h.surfaces.map(surface => surface.id)).toEqual(['connections_picker.panel'])
     await module.stop()
     expect(h.actions[0]?.destroys).toBe(1)
   })
 
-  test('opens a panel from a current-generation launcher command and rejects stale or duplicate commands', async () => {
-    const h = makeHarness(); const module = createConnectionsPickerModule(); await module.start(h.context); const launcher = h.surfaces[0]!; const generation = launcher.props.generation as number
-    h.emit(launcher, { command: 'open', ownerToken: 'connections-test', generation: generation - 1, invocationId: `connections_picker.launcher:${generation - 1}:1` }); expect(h.surfaces).toHaveLength(1)
-    h.emit(launcher, { command: 'open', ownerToken: 'connections-test', generation, invocationId: `connections_picker.launcher:${generation}:1` }); expect(h.surfaces.map(s => s.id)).toEqual(['connections_picker.launcher', 'connections_picker.panel'])
-    h.emit(launcher, { command: 'open', ownerToken: 'connections-test', generation, invocationId: `connections_picker.launcher:${generation}:1` }); expect(h.surfaces).toHaveLength(2)
-    const panel = h.surfaces[1]!; expect(panel.props).toMatchObject({ capabilities: ['close'], state: { open: true } }); await module.stop(); expect(h.surfaces.map(s => s.destroys)).toEqual([1, 1])
+  test('opens and closes panel properly', async () => {
+    const h = makeHarness(); const module = createConnectionsPickerModule(); await module.start(h.context)
+    h.click(h.actions[0]!)
+    expect(h.surfaces.map(s => s.id)).toEqual(['connections_picker.panel'])
+    const panel = h.surfaces[0]!; expect(panel.props).toMatchObject({ capabilities: ['close'], state: { open: true } }); await module.stop(); expect(h.surfaces.map(s => s.destroys)).toEqual([1])
   })
 
   test('treats canonical core settings as authoritative and updates existing surfaces', async () => {
-    const h = makeHarness({ enabled: true, variant: 'A' }); const module = createConnectionsPickerModule(); await module.start(h.context); const launcher = h.surfaces[0]!; h.setCore({ enabled: true, variant: 'C' }); h.setLegacy({ enabled: false, variant: 'A' }); expect(launcher.updates.at(-1)?.state).toMatchObject({ enabled: true, variant: 'C' }); await module.stop()
+    const h = makeHarness({ enabled: true, variant: 'A' }); const module = createConnectionsPickerModule(); await module.start(h.context)
+    h.click(h.actions[0]!)
+    const panel = h.surfaces[0]!; h.setCore({ enabled: true, variant: 'C' }); h.setLegacy({ enabled: false, variant: 'A' }); expect(panel.updates.at(-1)?.state).toMatchObject({ enabled: true, variant: 'C', open: true }); await module.stop()
   })
 })

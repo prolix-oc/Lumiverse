@@ -10,10 +10,6 @@ export function createConnectionsPickerModule() {
     normalize: normalizeConnectionsPickerSettings,
     enabled: settings => settings.enabled,
     mountPoint: () => 'chat_actions',
-    launcher: {
-      surfaceId: 'connections_picker.launcher',
-      mountPoint: () => 'chat_actions',
-    },
     quickToolbarAction: {
       id: 'lumiverse_suite.connections_picker.open',
       label: 'Connections Picker',

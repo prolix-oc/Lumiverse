@@ -537,6 +537,7 @@ export function createSettingsTabHandle(
         iconSvg: metadata.iconSvg,
         keywords: [...metadata.keywords],
         sections: metadata.sections.map((section) => ({ ...section, keywords: [...section.keywords] })),
+        position: metadata.position,
         order: metadata.order,
         sequence: metadata.sequence,
         root,

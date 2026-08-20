@@ -133,17 +133,10 @@
   position: relative;
 }
 
-/* The chat messages keep their normal max-width, but the quick-toolbar dock is
-   global top chrome. Let only that first row span the available chat column so
-   adjacent V2 can consume the space the user selected without widening message
-   content, the composer, or other chat surfaces. */
-.chatColumnInner:has(> .chatToolbar [data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1']) {
-  max-width: none;
-}
-
-.chatColumnInner:has(> .chatToolbar [data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1']) > :not(.chatToolbar):not(button) {
-  width: min(100%, var(--lumiverse-chat-content-width, 100%));
-  align-self: center;
+/* The chat top dock spans 100% of the chatColumnInner container */
+.chatColumnInner > .chatToolbar {
+  width: 100%;
+  align-self: stretch;
 }
 
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied][data-dock-request='floating']) {
@@ -393,25 +386,29 @@
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.chatToolbar[data-dock-request='strip']:has(> button:not([hidden]), > [data-component='QuickToolbar']),
-.chatToolbar[data-dock-request='strip'][data-spindle-occupied] {
+.chatToolbar[data-dock-request='strip'],
+.chatToolbar[data-spindle-occupied] {
   min-height: 41px;
 }
 
 /* A retained host may remain mounted while its canonical workspace is empty
-   during a placement transition. It must not paint a blank top-dock rail. */
-.chatToolbar[data-dock-request='strip']:not(:has(> button:not([hidden]), > [data-component='QuickToolbar'])):not([data-spindle-occupied]) {
+   during a placement transition. It must not paint a blank top-dock rail when floating. */
+.chatToolbar[data-dock-request='floating']:not(:has(> button:not([hidden]), > [data-component='QuickToolbar'])):not([data-spindle-occupied]),
+.chatToolbar:not([data-dock-request]):not(:has(> button:not([hidden]), > [data-component='QuickToolbar'])):not([data-spindle-occupied]) {
   display: contents;
   min-height: 0;
   padding: 0;
   border: 0;
 }
 
-/* Native V1 is a direct child; strip centering never applies. */
+/* Native V1 centers in the rail and expands symmetrically */
 .chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-variant='v1']) {
   margin-inline: auto;
   align-self: stretch;
   height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 /* V2 occupies leftover rail after the reserved native select button. */
@@ -431,29 +428,60 @@
   min-width: 0;
   max-width: 0;
   height: auto;
+  min-height: 0;
   overflow: hidden;
   pointer-events: none;
 }
 
+.chatToolbar:has([data-component='QuickToolbar']) {
+  padding: 4px 6px;
+  width: 100%;
+}
+
+/* When fill-top-dock is 1, expand the original .chatToolbar edge-to-edge across the entire screen */
+.chatToolbar:has([data-component='QuickToolbar'][data-fill-top-dock='1']),
+.chatColumnInner > [data-spindle-mount='chat_top_dock']:has([data-component='QuickToolbar'][data-fill-top-dock='1']) {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  z-index: 9999 !important;
+  background: rgba(24, 24, 27, 0.94) !important;
+  backdrop-filter: blur(12px) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45) !important;
+  box-sizing: border-box !important;
+  padding: 0 4px !important;
+  margin: 0 !important;
+}
+
+.chatColumnInner:has(.chatToolbar [data-component='QuickToolbar'][data-fill-top-dock='1']) {
+  padding-top: var(--lcs-top-dock-height, 41px);
+}
+
 .chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']),
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) {
-  flex: 1 1 auto;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
 }
 
-.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0']),
-.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0']) {
-  flex: 0 0 auto;
-  width: max-content;
-  max-width: 100%;
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2']) > nav,
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v2']) > nav {
+  width: 100% !important;
+  justify-content: flex-start !important;
 }
 
-.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) > nav,
-.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) > nav {
-  width: 100%;
-  justify-content: flex-start;
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v1']) > nav,
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-quick-toolbar-variant='v1']) > nav {
+  width: auto !important;
+  max-width: 100% !important;
+  margin-inline: auto !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
 }
 
 .toolbarBtn {

@@ -467,18 +467,7 @@ function StandardProductivityHostSurface({
       content = readQuickToolbarPlacement(quickToolbarSettings) === 'chat_top_dock' ? <></> : <QuickToolbar />
       break
     case 'connections_picker.launcher':
-      content = (
-        <button
-          type="button"
-          className={inputStyles.actionBtn}
-          data-lumiverse-connections-launcher="true"
-          onClick={() => emitCommand('open')}
-          title="Connections"
-          aria-label="Connections"
-        >
-          <Waypoints size={14} />
-        </button>
-      )
+      content = <></>
       break
     case 'connections_picker.panel':
       content = <ConnectionsPicker open={state?.open !== false} onClose={() => emitCommand('close')} anchorElement={connectionsAnchor} />

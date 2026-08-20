@@ -1,3 +1,4 @@
+import { SETTINGS_TABS } from '@/lib/settings-tab-registry'
 import { useStore } from '@/store'
 import { persistKey } from '@/store/slices/settings'
 import {
@@ -26,15 +27,31 @@ const FLAG_COPY: Record<ProductivityFeatureFlag, { title: string; description: s
   },
 }
 
+const TAB_LOCATION_OPTIONS = [
+  { value: 'after-display', label: 'After Display & Layout (Default)' },
+  { value: 'top', label: 'Top (First in list)' },
+  { value: 'after-account', label: 'After Account' },
+  ...SETTINGS_TABS.filter((tab) => tab.id !== 'account' && tab.id !== 'display').map((tab) => ({
+    value: `after-${tab.id}`,
+    label: `After ${tab.shortName || tab.tabName}`,
+  })),
+  { value: 'bottom', label: 'Bottom (End of list)' },
+] as const
+
 export default function ProductivityFeatureToggles() {
   const showEmbeddingFallbackUi = useStore((state) => readProductivityFlag(state, 'showEmbeddingFallbackUi'))
   const showCortexSecondaryUi = useStore((state) => readProductivityFlag(state, 'showCortexSecondaryUi'))
   const showEditAndSend = useStore((state) => readProductivityFlag(state, 'showEditAndSend'))
   const enableToolbarIconReorder = useStore((state) => readProductivityFlag(state, 'enableToolbarIconReorder'))
+  const productivityTabPosition = useStore((state) => (state as any).productivityTabPosition ?? 'after-display')
   const flags = { showEmbeddingFallbackUi, showCortexSecondaryUi, showEditAndSend, enableToolbarIconReorder }
   const setFlag = (key: ProductivityFeatureFlag, value: boolean) => {
     useStore.setState({ [key]: value } as Record<ProductivityFeatureFlag, boolean>)
     persistKey(key, value, 'user-interaction')
+  }
+  const setTabPosition = (value: string) => {
+    useStore.setState({ productivityTabPosition: value } as any)
+    persistKey('productivityTabPosition', value, 'user-interaction')
   }
 
   return (
@@ -46,11 +63,27 @@ export default function ProductivityFeatureToggles() {
     >
       <div className={styles.cardHeader}>
         <div>
-          <h3 id="productivity-feature-toggles-title">Optional surfaces</h3>
-          <p>Hide extra fallback and edit-send controls without removing their settings.</p>
+          <h3 id="productivity-feature-toggles-title">Optional surfaces & navigation</h3>
+          <p>Configure tab placement in settings navigation, fallback controls, and edit-send.</p>
         </div>
       </div>
       <div className={styles.cardBody}>
+        <div className={styles.field} style={{ gridColumn: '1 / -1' }}>
+          <label htmlFor="productivity-tab-position">Productivity tab location</label>
+          <select
+            id="productivity-tab-position"
+            aria-label="Productivity tab location"
+            value={productivityTabPosition}
+            onChange={(event) => setTabPosition(event.target.value)}
+          >
+            {TAB_LOCATION_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <small>Choose where the Productivity tab appears in the settings sidebar (defaults to behind Display &amp; Layout).</small>
+        </div>
         {PRODUCTIVITY_FEATURE_FLAGS.map((key) => {
           const copy = FLAG_COPY[key]
           return (

@@ -76,6 +76,7 @@ export function installLorebookContentResizeTracking(
     const hostHeight = layoutElementRect?.(element).height
     if (typeof hostHeight === 'number' && Number.isFinite(hostHeight) && hostHeight > 0) return hostHeight
     const rendered = element as HTMLElement
+    // lumiverse-geometry-justification: textarea measurement fallback when host layoutElementRect is unavailable
     return typeof rendered.offsetHeight === 'number' ? rendered.offsetHeight : 0
   }
 

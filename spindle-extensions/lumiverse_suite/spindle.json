@@ -1,10 +1,10 @@
 {
-  "version": "1.0.0",
+  "version": "2.0.0",
   "name": "Lumiverse Suite",
   "identifier": "lumiverse_suite",
-  "author": "Lumiverse contributors",
-  "github": "https://github.com/prolix-oc/Lumiverse",
-  "homepage": "https://github.com/prolix-oc/Lumiverse",
+  "author": "Sereya",
+  "github": "https://github.com/I-Sereya-I/lumiverse_suite",
+  "homepage": "https://github.com/I-Sereya-I/lumiverse_suite",
   "description": "The unified Lumiverse productivity and interface feature suite.",
   "dev_mode": true,
   "permissions": [
@@ -18,3 +18,4 @@
   "entry_frontend": "dist/frontend.js",
   "minimum_lumiverse_version": "0.1.0"
 }
+

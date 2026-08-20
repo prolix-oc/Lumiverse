@@ -539,6 +539,16 @@ export interface QuickToolbarSettings {
   opaqueToolbarBackdrop?: boolean
   /** Optional solid backdrop color for the opaque toolbar plate. */
   backdropColor?: string
+  /** Card width override in px (0 or undefined for auto content width). */
+  cardWidth?: number
+  /** Card minimum width override in px. */
+  cardMinWidth?: number
+  /** Card maximum width override in px. */
+  cardMaxWidth?: number
+  /** Card padding-inline (space between text and border) in px. */
+  cardPadding?: number
+  /** Card gap (space between icon, text, chevron) in px. */
+  cardGap?: number
 }
 
 export interface ConnectionsPickerSettings {
@@ -747,6 +757,7 @@ export interface SettingsSlice {
   showCortexSecondaryUi: boolean
   showEditAndSend: boolean
   enableToolbarIconReorder: boolean
+  productivityTabPosition: string
   hydrateStartupSettings: (settings: StartupSettings) => void
   setVoiceSettings: (partial: Partial<VoiceSettings>) => void
   setWallpaper: (settings: Partial<WallpaperSettings>) => void

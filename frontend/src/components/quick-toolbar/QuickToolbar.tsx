@@ -57,6 +57,7 @@ import {
   isAutoFitToolbarBounds,
   isFillTopDockWidth,
   isOpaqueToolbarBackdrop,
+  isShowNativeSelectMessages,
   isV2IconOnly,
   QUICK_TOOLBAR_CHILD_FLEX,
   QUICK_TOOLBAR_DOCK_ID,
@@ -956,10 +957,24 @@ function QuickToolbarNative() {
     '--quick-toolbar-label-size': `${clampLabelSize(labelTextSize * scale)}px`,
     '--quick-toolbar-gap': `${Number.isFinite(configuredGap) ? configuredGap : 6}px`,
     '--quick-toolbar-padding-block': `${Number.isFinite(configuredPadding) ? configuredPadding : 4}px`,
-    '--quick-toolbar-padding-inline': `${Number.isFinite(configuredPadding) ? configuredPadding : 10}px`,
     '--quick-toolbar-opacity': settings.opacity,
     ...(typeof backdropColor === 'string' && backdropColor.trim().length > 0
       ? { '--quick-toolbar-backdrop-color': backdropColor }
+      : {}),
+    ...(settings.cardWidth && settings.cardWidth > 0
+      ? { '--quick-toolbar-card-width': `${settings.cardWidth}px` }
+      : {}),
+    ...(settings.cardMinWidth && settings.cardMinWidth > 0
+      ? { '--quick-toolbar-card-min-width': `${settings.cardMinWidth}px` }
+      : {}),
+    ...(settings.cardMaxWidth && settings.cardMaxWidth > 0
+      ? { '--quick-toolbar-card-max-width': `${settings.cardMaxWidth}px` }
+      : {}),
+    ...(settings.cardPadding !== undefined && settings.cardPadding > 0
+      ? { '--quick-toolbar-card-padding-inline': `${settings.cardPadding}px` }
+      : {}),
+    ...(settings.cardGap !== undefined && settings.cardGap > 0
+      ? { '--quick-toolbar-card-gap': `${settings.cardGap}px` }
       : {}),
     // Padding and gap scale off this; it is 1 for V2, which never scaled.
     '--quick-toolbar-scale': scale,
@@ -1063,13 +1078,15 @@ function QuickToolbarNative() {
   const clampedX = fillFloatingRail
     ? 0
     : autoFitFloatingV2
-      ? floatingRail.x
-    : freePosition && layoutViewportWidth > 0
-      ? Math.max(
-          edgeInset,
-          Math.min(persistentRect.rect.x, Math.max(edgeInset, layoutViewportWidth - renderedWidth - edgeInset))
-        )
-      : persistentRect.rect.x
+      ? (layoutViewportWidth > 0 && renderedWidth > 0
+          ? Math.max(0, Math.min(floatingRail.x, Math.max(0, layoutViewportWidth - renderedWidth)))
+          : floatingRail.x)
+      : freePosition && layoutViewportWidth > 0
+        ? Math.max(
+            edgeInset,
+            Math.min(persistentRect.rect.x, Math.max(edgeInset, layoutViewportWidth - renderedWidth - edgeInset))
+          )
+        : persistentRect.rect.x
   const paintedY = fillFloatingRail || autoFitFloatingV2 ? floatingRail.y : persistentRect.rect.y
   const paintedWidth = fillFloatingRail || autoFitFloatingV2 || packedUnpinnedFloatingV2
     ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
@@ -1409,6 +1426,28 @@ function QuickToolbarNative() {
                   } as Partial<typeof settings>)}
                 />
               </label>
+            )}
+            {docked && (
+              <>
+                <label className={styles.toggleRow}>
+                  <span>Fill chat top bar width</span>
+                  <input
+                    type="checkbox"
+                    checked={fillTopDockWidth}
+                    onChange={(event) => updateSettings({ fillTopDockWidth: event.target.checked } as Partial<typeof settings>)}
+                  />
+                </label>
+                <label htmlFor="quick-show-native-select-messages" className={styles.toggleRow}>
+                  <input
+                    id="quick-show-native-select-messages"
+                    aria-label="Show select-messages on chat top bar"
+                    type="checkbox"
+                    checked={isShowNativeSelectMessages(settings)}
+                    onChange={(event) => updateSettings({ showNativeSelectMessages: event.target.checked } as Partial<typeof settings>)}
+                  />
+                  <span>Show select-messages on chat top bar</span>
+                </label>
+              </>
             )}
             {freePosition && (
               <label className={styles.toggleRow}>

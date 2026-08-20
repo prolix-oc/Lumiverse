@@ -72,6 +72,7 @@ export interface SettingsTabState {
   iconSvg?: string
   keywords: string[]
   sections: SettingsTabSectionState[]
+  position?: string
   order: number
   sequence: number
   root: HTMLElement

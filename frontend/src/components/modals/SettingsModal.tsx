@@ -87,12 +87,13 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const settingsScrollTarget = useStore((s) => s.settingsScrollTarget)
   const user = useStore((s) => s.user)
   const settingsTabs = useStore((s) => s.settingsTabs)
+  const productivityTabPosition = useStore((s) => (s as any).productivityTabPosition ?? 'after-display')
   const [activeView, setActiveView] = useState(settingsActiveView || 'display')
 
   const VIEWS = useMemo(() => {
     void settingsTabs
-    return getVisibleSettingsTabs(user?.role)
-  }, [settingsTabs, user?.role])
+    return getVisibleSettingsTabs(user?.role, productivityTabPosition)
+  }, [settingsTabs, user?.role, productivityTabPosition])
 
   const contentRef = useRef<HTMLDivElement>(null)
   const navNonce = useRef(0)

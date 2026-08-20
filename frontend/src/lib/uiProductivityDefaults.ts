@@ -222,6 +222,11 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   showNativeSelectMessages: true,
   opaqueToolbarBackdrop: false,
   backdropColor: DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR,
+  cardWidth: 0,
+  cardMinWidth: 0,
+  cardMaxWidth: 190,
+  cardPadding: 8,
+  cardGap: 8,
   // chat-column-relative geometry and are reset once during hydration.
   v2ViewportGeometryVersion: 2,
 }
@@ -428,6 +433,7 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   showCortexSecondaryUi: true,
   showEditAndSend: true,
   enableToolbarIconReorder: true,
+  productivityTabPosition: 'after-display',
 })
 
 export function migrateProductivitySetting(key: string, value: unknown): unknown {
