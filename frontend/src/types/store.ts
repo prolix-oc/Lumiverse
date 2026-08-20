@@ -523,6 +523,11 @@ export interface QuickToolbarSettings {
   v2LabelTextSize: number
   v2LabelVisible: boolean
   v2Density: QuickToolbarDensity
+  /** Optional V2 chrome overrides used by the host surface. */
+  gap?: number
+  padding?: number
+  /** One-time migration marker for stale V2 floating rail rectangles. */
+  v2ViewportGeometryVersion?: 2
   quickToolbarPlacement?: 'floating' | 'chat_top_dock'
   autoFitBounds?: boolean
   v2IconOnly?: boolean
@@ -530,8 +535,10 @@ export interface QuickToolbarSettings {
   fillTopDockWidth?: boolean
   /** Native ChatView ListChecks. Default on (`!== false`). */
   showNativeSelectMessages?: boolean
-  /** Opaque plate behind the Quick Toolbar box. Default off. */
+  /** Paint a solid backdrop behind the toolbar when enabled. */
   opaqueToolbarBackdrop?: boolean
+  /** Optional solid backdrop color for the opaque toolbar plate. */
+  backdropColor?: string
 }
 
 export interface ConnectionsPickerSettings {

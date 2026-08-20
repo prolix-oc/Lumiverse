@@ -117,20 +117,21 @@ describe('canonical Productivity settings renderer', () => {
     expect(markup).not.toContain('Toolbar height')
   })
 
-  test('exposes fill, native select-messages, and opaque backdrop; hide-in-dock is gone', () => {
+  test('exposes floating dock-host, fill, native select-messages, and opaque backdrop controls', () => {
     const previous = state.quickToolbarSettings
     state.quickToolbarSettings = {
       ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings,
       quickToolbarPlacement: 'floating',
     }
     const floating = renderToStaticMarkup(<ProductivitySettings />)
-    expect(floating).not.toContain('Hide toolbar in chat top bar')
-    expect(floating).not.toContain('quick-hide-in-chat-top-dock')
+    expect(floating).toContain('Keep chat top dock enabled while floating')
+    expect(floating).toContain('quick-keep-dock-enabled-when-floating')
     expect(floating).not.toContain('Fill chat top bar width')
     expect(floating).toContain('Fill the entire top of the screen')
     expect(floating).toContain('quick-fill-top-dock-width')
-    expect(floating).toContain('Show select-messages on chat top bar')
-    expect(floating).toContain('quick-show-native-select-messages')
+    expect(floating).toContain('Stretch across window top')
+    expect(floating).not.toContain('Show select-messages on chat top bar')
+    expect(floating).not.toContain('quick-show-native-select-messages')
     expect(floating).toContain('Opaque toolbar backdrop')
     expect(floating).toContain('quick-opaque-toolbar-backdrop')
 
@@ -141,12 +142,42 @@ describe('canonical Productivity settings renderer', () => {
     const docked = renderToStaticMarkup(<ProductivitySettings />)
     state.quickToolbarSettings = previous
 
-    expect(docked).not.toContain('Hide toolbar in chat top bar')
-    expect(docked).not.toContain('quick-hide-in-chat-top-dock')
+    expect(docked).not.toContain('Keep chat top dock enabled while floating')
+    expect(docked).not.toContain('quick-keep-dock-enabled-when-floating')
     expect(docked).toContain('Fill chat top bar width')
     expect(docked).toContain('quick-fill-top-dock-width')
+    expect(docked).toContain('Stretch across remaining chat top bar')
+    expect(docked).toContain('Show select-messages on chat top bar')
     expect(docked).toContain('quick-show-native-select-messages')
     expect(docked).toContain('quick-opaque-toolbar-backdrop')
+    expect(docked).toContain('id="quick-toolbar-backdrop-color"')
+    expect(docked).toContain('aria-label="Toolbar backdrop color"')
+  })
+  test('persists native toolbar backdrop color changes', async () => {
+    const previous = state.quickToolbarSettings
+    state.quickToolbarSettings = { ...PRODUCTIVITY_DEFAULTS.quickToolbarSettings, backdropColor: '#123456' }
+    persistedKeys.length = 0
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => { root.render(<ProductivitySettings />); await Promise.resolve() })
+
+    const picker = host.querySelector<HTMLInputElement>('#quick-toolbar-backdrop-color')
+    expect(picker?.value).toBe('#123456')
+    await act(async () => {
+      if (picker) {
+        picker.value = '#abcdef'
+        picker.dispatchEvent(new Event('input', { bubbles: true }))
+        picker.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      await Promise.resolve()
+    })
+
+    expect(state.quickToolbarSettings.backdropColor).toBe('#ABCDEF')
+    expect(persistedKeys.at(-1)).toMatchObject({ key: 'quickToolbarSettings', value: expect.objectContaining({ backdropColor: '#ABCDEF' }) })
+    await act(async () => { root.unmount(); await Promise.resolve() })
+    host.remove()
+    state.quickToolbarSettings = previous
   })
 
   test('exposes overlay hide and restore on V2 Adjacent floating', () => {

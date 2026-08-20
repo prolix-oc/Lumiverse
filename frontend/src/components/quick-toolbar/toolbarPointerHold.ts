@@ -67,7 +67,7 @@ export function toolbarActionIdFromTarget(target: EventTarget | null): string | 
   return target.closest('[data-toolbar-action]')?.getAttribute('data-toolbar-action') ?? null
 }
 
-/** Dedicated item handle only — same node as the action still uses the 1000ms hold so clicks fire. */
+/** Dedicated item handle only — same node as the action still uses the hold so clicks fire. */
 export function isImmediateItemDragHandle(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
   const handle = target.closest('[data-toolbar-item-drag-handle]')

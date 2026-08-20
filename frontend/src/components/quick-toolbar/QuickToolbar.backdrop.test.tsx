@@ -193,13 +193,13 @@ describe('QuickToolbar opaque backdrop', () => {
     await act(async () => on.root.unmount())
   })
 
-  test('plate uses --lumiverse-bg-opaque and stays confined to the QT root', async () => {
+  test('plate uses custom fallback backdrop and stays confined to the QT root', async () => {
     const css = await Bun.file(resolve(import.meta.dir, 'QuickToolbar.module.css')).text()
     const theme = await Bun.file(resolve(import.meta.dir, '../../theme/variables.css')).text()
 
     expect(theme).toContain('--lumiverse-bg-opaque: rgb(28 24 38)')
     expect(css).toContain(".root[data-opaque-backdrop='1']::before")
-    expect(css).toContain('background: var(--lumiverse-bg-opaque)')
+    expect(css).toContain('background: var(--quick-toolbar-backdrop-color, var(--lumiverse-bg-opaque))')
     expect(css).toMatch(/\.root\[data-opaque-backdrop='1'\]::before\s*\{[\s\S]*?inset:\s*0;/)
     expect(css).not.toMatch(/body\[data-opaque-backdrop/)
     expect(css).not.toMatch(/html\[data-opaque-backdrop/)

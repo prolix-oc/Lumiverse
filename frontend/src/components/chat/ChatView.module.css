@@ -133,6 +133,19 @@
   position: relative;
 }
 
+/* The chat messages keep their normal max-width, but the quick-toolbar dock is
+   global top chrome. Let only that first row span the available chat column so
+   adjacent V2 can consume the space the user selected without widening message
+   content, the composer, or other chat surfaces. */
+.chatColumnInner:has(> .chatToolbar [data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1']) {
+  max-width: none;
+}
+
+.chatColumnInner:has(> .chatToolbar [data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1']) > :not(.chatToolbar):not(button) {
+  width: min(100%, var(--lumiverse-chat-content-width, 100%));
+  align-self: center;
+}
+
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied][data-dock-request='floating']) {
   justify-content: flex-start;
 }
@@ -164,6 +177,7 @@
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']:empty),
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-spindle-extension-root]:empty),
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]:empty),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]:has(> [data-surface-id='quick_toolbar.workspace']:not(:has(*)))),
 .chatColumnInner > :global([data-spindle-mount='chat_top_dock'][data-spindle-occupied]) > :global([data-dock-request='strip']) > :global([data-spindle-host-surface]) > :global([data-surface-id='quick_toolbar.workspace']:not(:has(*))) {
   display: contents;
   flex: 0 0 0;
@@ -379,6 +393,20 @@
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
+.chatToolbar[data-dock-request='strip']:has(> button:not([hidden]), > [data-component='QuickToolbar']),
+.chatToolbar[data-dock-request='strip'][data-spindle-occupied] {
+  min-height: 41px;
+}
+
+/* A retained host may remain mounted while its canonical workspace is empty
+   during a placement transition. It must not paint a blank top-dock rail. */
+.chatToolbar[data-dock-request='strip']:not(:has(> button:not([hidden]), > [data-component='QuickToolbar'])):not([data-spindle-occupied]) {
+  display: contents;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* Native V1 is a direct child; strip centering never applies. */
 .chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-variant='v1']) {
   margin-inline: auto;
@@ -392,17 +420,40 @@
   min-width: 0;
 }
 
-/* Empty spindle strip between native controls and QuickToolbar must not eat the rail. */
+/* Empty spindle wrappers must not collapse the host-owned top-dock rail or create a visible second rail. */
 .chatToolbar > :global([data-spindle-extension-root]:empty),
 .chatToolbar > :global([data-spindle-extension-root]:not(:has(*))),
-.chatToolbar :global([data-surface-id='quick_toolbar.workspace']:not(:has(*))) {
+.chatToolbar :global([data-surface-id='quick_toolbar.workspace']:not(:has(*))),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) > :global([data-spindle-extension-root]:not(:has(button, a, input, select, textarea, [role='button'], svg, img, canvas, [data-toolbar-action], [data-component]))) {
   display: contents;
   flex: 0 0 0;
   width: 0;
   min-width: 0;
   max-width: 0;
+  height: auto;
   overflow: hidden;
   pointer-events: none;
+}
+
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+}
+
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0']),
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0']) {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 100%;
+}
+
+.chatToolbar > :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) > nav,
+.chatColumnInner > :global([data-spindle-mount='chat_top_dock']) :global([data-component='QuickToolbar'][data-quick-toolbar-placement='chat_top_dock']) > nav {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .toolbarBtn {

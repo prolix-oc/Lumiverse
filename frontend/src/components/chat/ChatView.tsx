@@ -23,7 +23,7 @@ import WallpaperLayer from '@/components/shared/WallpaperLayer'
 import useSwipeKeyboard from '@/hooks/useSwipeKeyboard'
 import useEditKeyboard from '@/hooks/useEditKeyboard'
 import useIsMobile from '@/hooks/useIsMobile'
-import { chatLoreDockMode, chatTopDockMode } from '@/lib/chatSurfaceLayout'
+import { chatLoreDockMode, chatTopDockMode, effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 import { measureLayoutHeight } from '@/lib/uiScale'
 import { resolveCouncilForChat } from '@/hooks/useCouncilProfiles'
 import MessageList from './MessageList'
@@ -37,6 +37,7 @@ import ExpressionDisplay from './expressions/ExpressionDisplay'
 import FloatingAvatarViewer from './FloatingAvatarViewer'
 import { QuickToolbar } from '../quick-toolbar/QuickToolbar'
 import { isShowNativeSelectMessages, readQuickToolbarPlacement } from '../quick-toolbar/quickToolbarDock'
+import { keepDockEnabledWhenFloating } from '@/lib/uiProductivityDefaults'
 import { wsClient } from '@/ws/client'
 import { EventType } from '@/ws/events'
 import type { SpindlePreGenerationActivityPayload } from '@/types/ws-events'
@@ -71,7 +72,13 @@ function prefersReducedMotion(): boolean {
 function findExtensionChild(anchor: HTMLElement): Element | null {
   for (const child of anchor.children) {
     const marked = child.hasAttribute('data-spindle-extension-root') || child.hasAttribute('data-spindle-ext')
-    const hasMountedContent = child.children.length > 0 || Boolean(child.textContent?.trim())
+    // A retained extension root can contain the canonical host-surface wrapper
+    // even when that surface intentionally renders no content. Inspect the
+    // surface's contents, not the wrapper itself, otherwise delegated
+    // chat_top_dock leaves an invisible host claiming the rail after reload.
+    const surface = child.querySelector<HTMLElement>('[data-surface-id]')
+    const contentRoot = surface ?? child
+    const hasMountedContent = contentRoot.children.length > 0 || Boolean(contentRoot.textContent?.trim())
     if (marked && hasMountedContent) return child
   }
   return null
@@ -222,7 +229,13 @@ export default function ChatView() {
   const portraitPanelSide = useStore((s) => s.portraitPanelSide)
   const [portraitSurfaceOccupied, setPortraitSurfaceOccupied] = useState(false)
   const quickToolbarSettings = useStore((s) => s.quickToolbarSettings)
-  const dockQuickToolbar = readQuickToolbarPlacement(quickToolbarSettings) === 'chat_top_dock'
+  const quickToolbarPlacement = readQuickToolbarPlacement(quickToolbarSettings)
+  const dockQuickToolbar = quickToolbarPlacement === 'chat_top_dock'
+  const keepFloatingDockHost = quickToolbarPlacement === 'floating' && keepDockEnabledWhenFloating(quickToolbarSettings)
+  const chatTopDockRequest = effectiveQuickToolbarDockRequest(
+    dockQuickToolbar || keepFloatingDockHost ? 'strip' : 'floating',
+    quickToolbarSettings,
+  )
   useEffect(() => {
     const readOccupied = () => {
       // The extension root can survive a ChatView transition while its new mount
@@ -946,12 +959,14 @@ export default function ChatView() {
     }
 
     const syncDockRequest = (anchor: HTMLElement, resolve: (request: unknown) => string) => {
-      const request = resolve(findExtensionChild(anchor)?.getAttribute('data-dock-request') ?? null)
+      const child = findExtensionChild(anchor)
+      const request = resolve(child?.getAttribute('data-dock-request') ?? null)
       if (anchor.getAttribute('data-dock-request') !== request) anchor.setAttribute('data-dock-request', request)
+      if (child && child.getAttribute('data-dock-request') !== request) child.setAttribute('data-dock-request', request)
     }
 
     const syncTopDockHeight = () => {
-      const height = findExtensionChild(chatTopDock) ? measureLayoutHeight(chatTopDock) : 0
+      const height = measureLayoutHeight(chatTopDock)
       chatColumnInner.style.setProperty('--lcs-top-dock-height', `${height}px`)
     }
 
@@ -960,8 +975,8 @@ export default function ChatView() {
       syncOccupied(chatColumnTop)
       syncOccupied(chatTopDock)
       if (composerAbove) syncOccupied(composerAbove)
-      syncDockRequest(chatColumnTop, chatTopDockMode)
-      syncDockRequest(chatTopDock, chatTopDockMode)
+      syncDockRequest(chatColumnTop, (request) => effectiveQuickToolbarDockRequest(request, quickToolbarSettings))
+      syncDockRequest(chatTopDock, (request) => effectiveQuickToolbarDockRequest(request, quickToolbarSettings))
       if (composerAbove) syncDockRequest(composerAbove, chatLoreDockMode)
       syncTopDockHeight()
     }
@@ -999,7 +1014,7 @@ export default function ChatView() {
       chatColumnInner.style.removeProperty('--lcs-top-dock-height')
       chatComposerAboveRef.current = null
     }
-  }, [chatId])
+  }, [chatId, quickToolbarSettings])
 
   if (!chatId) return null
 
@@ -1100,10 +1115,11 @@ export default function ChatView() {
             <div data-spindle-mount="chat_header_left" data-spindle-scope={`chat:${chatId}:header-left`} style={{ display: 'contents' }} />
             <div data-spindle-mount="chat_header_center" data-spindle-scope={`chat:${chatId}:header-center`} style={{ display: 'contents' }} />
             <div data-spindle-mount="chat_header_right" data-spindle-scope={`chat:${chatId}:header-right`} style={{ display: 'contents' }} />
-            <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-spindle-scope={`chat:${chatId}:top-dock`} data-dock-request="floating">
+            <div ref={chatTopDockRef} className={styles.chatToolbar} data-spindle-mount="chat_top_dock" data-spindle-scope={`chat:${chatId}:top-dock`} data-dock-request={chatTopDockRequest}>
               {isShowNativeSelectMessages(quickToolbarSettings) && (
                 <button
                   type="button"
+                  hidden={!(dockQuickToolbar || keepFloatingDockHost)}
                   className={clsx(styles.toolbarBtn, messageSelectMode && styles.toolbarBtnActive)}
                   onClick={toggleSelectMode}
                   title={messageSelectMode ? t('chatView.exitSelectionMode') : t('chatView.selectMessages')}

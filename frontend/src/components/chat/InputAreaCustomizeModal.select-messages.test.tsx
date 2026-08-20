@@ -42,6 +42,8 @@ describe('composer selectMessages catalog and migration', () => {
     expect(matches).toHaveLength(1)
     expect(matches[0].icon).toBe(ListChecks)
     expect(COMPOSER_ACTION_IDS).toContain('selectMessages')
+    expect(COMPOSER_ACTION_IDS).toContain('connectionsPicker')
+    expect(COMPOSER_ACTION_CATALOG.some((action) => action.id === 'connectionsPicker' && action.label === 'Connections Picker')).toBe(true)
 
     const pristine = loadComposerActionBar()
     expect(pristine.order).toContain('selectMessages')

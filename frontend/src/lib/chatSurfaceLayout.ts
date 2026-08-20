@@ -1,5 +1,13 @@
+import { keepDockEnabledWhenFloating } from '@/lib/uiProductivityDefaults'
+import { readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
+
 export type ChatTopDockMode = 'floating' | 'strip'
 export type ChatLoreDockMode = 'hidden' | 'floating' | 'strip'
+
+type QuickToolbarDockSettings = {
+  quickToolbarPlacement?: unknown
+  hideInChatTopDock?: unknown
+}
 
 const finiteNonNegative = (value: unknown, fallback = 0): number =>
   typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : fallback
@@ -11,6 +19,26 @@ const finiteSum = (left: number, right: number): number => {
 
 export function chatTopDockMode(request: unknown): ChatTopDockMode {
   return request === 'strip' ? 'strip' : 'floating'
+}
+
+/**
+ * Resolve the effective top-dock request for Quick Toolbar ownership.
+ *
+ * A docked toolbar always needs the strip rail. A floating toolbar may retain
+ * that rail only while the legacy hide flag allows it. Invalid requests fail
+ * closed to floating.
+ */
+export function effectiveQuickToolbarDockRequest(
+  requested: unknown,
+  settings: QuickToolbarDockSettings | null | undefined,
+): ChatTopDockMode {
+  const placement = readQuickToolbarPlacement(settings)
+  if (requested === 'strip' && (placement === 'chat_top_dock' || keepDockEnabledWhenFloating(
+    settings ? { hideInChatTopDock: settings.hideInChatTopDock === true } : undefined,
+  ))) {
+    return 'strip'
+  }
+  return 'floating'
 }
 
 export function chatLoreDockMode(request: unknown): ChatLoreDockMode {

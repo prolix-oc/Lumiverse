@@ -141,6 +141,15 @@ export const DEFAULT_CHARACTER_DISPLAY_SETTINGS: CharacterDisplaySettings = {
   defaultFilter: 'characters',
 }
 
+export const DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR = '#1C1826'
+
+export function normalizeQuickToolbarBackdropColor(value: unknown): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed.toUpperCase()
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) return `#${trimmed.slice(1).split('').map((char) => char + char).join('')}`.toUpperCase()
+  return DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR
+}
+
 export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   quickToolbarPlacement: 'floating' | 'chat_top_dock'
   autoFitBounds: boolean
@@ -149,6 +158,7 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   hideInChatTopDock: boolean
   showNativeSelectMessages: boolean
   opaqueToolbarBackdrop: boolean
+  backdropColor: string
 } = {
   enabled: true,
   variant: 'v1-free',
@@ -211,6 +221,14 @@ export const DEFAULT_QUICK_TOOLBAR_SETTINGS: QuickToolbarSettings & {
   hideInChatTopDock: false,
   showNativeSelectMessages: true,
   opaqueToolbarBackdrop: false,
+  backdropColor: DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR,
+  // chat-column-relative geometry and are reset once during hydration.
+  v2ViewportGeometryVersion: 2,
+}
+
+/** Positive adapter for the legacy persisted inverse flag. */
+export function keepDockEnabledWhenFloating(settings: Pick<QuickToolbarSettings, 'hideInChatTopDock'> | null | undefined): boolean {
+  return settings?.hideInChatTopDock !== true
 }
 
 export const DEFAULT_CONNECTIONS_PICKER_SETTINGS: ConnectionsPickerSettings = {
@@ -407,7 +425,6 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
   characterTabDisplaySettings: DEFAULT_CHARACTER_TAB_DISPLAY_SETTINGS,
   portraitDockSettings: DEFAULT_PORTRAIT_DOCK_SETTINGS,
   lorebookEditorSettings: DEFAULT_LOREBOOK_EDITOR_SETTINGS,
-  showEmbeddingFallbackUi: true,
   showCortexSecondaryUi: true,
   showEditAndSend: true,
   enableToolbarIconReorder: true,
@@ -416,7 +433,24 @@ export const PRODUCTIVITY_DEFAULTS = freezeDeep({
 export function migrateProductivitySetting(key: string, value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const row = { ...(value as Record<string, unknown>) }
-  if (key === 'quickToolbarSettings' && row.variant === 'v3-adaptive') row.variant = 'v1-free'
+  if (key === 'quickToolbarSettings') {
+    if (Object.prototype.hasOwnProperty.call(row, 'backdropColor')) row.backdropColor = normalizeQuickToolbarBackdropColor(row.backdropColor)
+    if (row.variant === 'v3-adaptive') row.variant = 'v1-free'
+    // V2 floating rows written before the viewport-rail fix commonly contain
+    // the old centered chat-column rectangle (for example x=554, width=763).
+    // Preserve the user's position, but release the stale width so the current
+    // fit code can measure the real viewport. The marker makes this one-shot.
+    const rect = row.rect
+    if (
+      row.variant === 'v2-settings-adjacent'
+      && row.v2ViewportGeometryVersion !== 2
+      && rect && typeof rect === 'object' && !Array.isArray(rect)
+      && Number((rect as Record<string, unknown>).width) > 0
+    ) {
+      row.rect = { ...(rect as Record<string, unknown>), width: 0, height: 0 }
+      row.v2ViewportGeometryVersion = 2
+    }
+  }
   if (key === 'loreIndicatorSettings') {
     row.entryTypeAppearance = normalizeLoreIndicatorEntryTypeAppearance(row.entryTypeAppearance)
   }

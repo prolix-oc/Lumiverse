@@ -32,6 +32,7 @@ mock.module('@/components/shared/ModalShell', () => ({ ModalShell: ({ children }
 mock.module('@/components/shared/Toggle', () => ({ Toggle: { Switch: () => null } }))
 mock.module('@/lib/dndUiScale', () => ({ useScaledSortableStyle: () => ({ setNodeRef: () => undefined, style: {} }) }))
 mock.module('@/lib/toolbarActionSearch', () => ({
+  canMoveWithinFiltered: () => false,
   filterActionIds: (ids: string[]) => ids,
   filterActions: (actions: unknown[]) => actions,
 }))
@@ -134,7 +135,7 @@ function installHoldClock() {
 
 describe('InputArea action bar live reorder', () => {
   test('hold completes before reorder, clicks work before hold, and wrappers stay exclusive', async () => {
-    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(1000)
+    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(500)
     saveComposerActionBar({
       order: ['home', 'regen', 'continue', 'selectMessages'],
       hidden: ['selectMessages'],
@@ -174,10 +175,10 @@ describe('InputArea action bar live reorder', () => {
 
       clicks.length = 0
       regenBtn.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12 }))
-      clock.flush(999)
+      clock.flush(499)
       expect(regen.getAttribute('data-dragging')).toBeNull()
       await act(async () => {
-        clock.flush(1000)
+        clock.flush(500)
       })
       expect(regen.getAttribute('data-dragging')).toBe('')
       await act(async () => {
@@ -210,6 +211,7 @@ describe('InputArea action bar live reorder', () => {
       'home',
       'continue',
       'regen',
+      'connectionsPicker',
     ])
     await act(async () => root.unmount())
 
@@ -228,6 +230,7 @@ describe('InputArea action bar live reorder', () => {
       'regen',
       'home',
       'continue',
+      'connectionsPicker',
     ])
     await act(async () => root2.unmount())
   })

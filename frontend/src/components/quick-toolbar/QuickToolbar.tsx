@@ -129,7 +129,11 @@ function remainingDockWidth(
   column: HTMLElement,
   toLayoutWidth: (node: HTMLElement | null, fallback: number) => number,
 ): number {
-  const columnWidth = column.clientWidth || toLayoutWidth(column, 0)
+  // `clientWidth` is reported in the element's CSS layout space while measured
+  // children are normalized through `toLayoutWidth` (which removes UI zoom).
+  // Mixing the two made the dock budget shrink/grow by the zoom factor and left
+  // a phantom blank rail at non-100% UI scale.
+  const columnWidth = toLayoutWidth(column, column.clientWidth)
   const { padding, gap } = readDockBoxSpacing(column)
   let reserved = 0
   let reservedCount = 0
@@ -216,6 +220,18 @@ function useToolbarIsMobile(): boolean {
   return isMobile
 }
 
+function readOptionalToolbarNumber(settings: object, key: 'gap' | 'padding'): number {
+  if (!(key in settings)) return Number.NaN
+  const value = Reflect.get(settings, key)
+  return typeof value === 'number' ? value : Number(value)
+}
+
+function readOptionalToolbarColor(settings: object): string | undefined {
+  if (!('backdropColor' in settings)) return undefined
+  const value = Reflect.get(settings, 'backdropColor')
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
 function QuickToolbarNative() {
   const {
     settings,
@@ -244,6 +260,7 @@ function QuickToolbarNative() {
   const [natural, setNatural] = useState<Size>({ width: 0, height: 0 })
   const rootRef = useRef<HTMLDivElement | null>(null)
   const toolbarRef = useRef<HTMLElement | null>(null)
+  const cardScrollerRef = useRef<HTMLDivElement | null>(null)
   const measureRailRef = useRef<HTMLDivElement | null>(null)
   const measureButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const customizeButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -360,8 +377,16 @@ function QuickToolbarNative() {
     )
   }, [settings, orientation, naturalWidth, naturalHeight, useNaturalSize, hugMinHeight])
   const bounds = useMemo(
-    () => toolbarRectBounds({ width: naturalWidth, height: naturalHeight }, hugMinHeight),
-    [naturalWidth, naturalHeight, hugMinHeight],
+    () => {
+      const viewportWidth = typeof window !== 'undefined'
+        ? Math.max(0, (window.visualViewport?.width || window.innerWidth) || 0)
+        : 0
+      const maxWidth = anchored && freePosition && viewportWidth > 0
+        ? viewportWidth / (readUiScale() || 1)
+        : undefined
+      return toolbarRectBounds({ width: naturalWidth, height: naturalHeight }, hugMinHeight, maxWidth)
+    },
+    [anchored, freePosition, naturalWidth, naturalHeight, hugMinHeight],
   )
 
   const handleCommit = useCallback((next: SurfaceRectPrefs, source: SettingsWriteSource) => {
@@ -506,6 +531,7 @@ function QuickToolbarNative() {
   const measureV2FitRef = useRef<(isRetry?: boolean) => void>(() => {})
   const v2FitRetryRafRef = useRef(0)
   const dockBudgetRef = useRef({ ...EMPTY_DOCK_BUDGET_STATE })
+  const dockFitModeRef = useRef(`${docked}:${fillTopDockWidth}`)
   const floatingRailRef = useRef({ x: FLOATING_V2_VIEWPORT_MARGIN, y: 0, width: 0 })
   const anchoredRef = useRef(anchored)
   anchoredRef.current = anchored
@@ -546,6 +572,7 @@ function QuickToolbarNative() {
   const [fitReady, setFitReady] = useState(false)
   const [v2FitPaintWidth, setV2FitPaintWidth] = useState(0)
   const [visibleActionIds, setVisibleActionIds] = useState<string[]>([])
+  const lastValidV2FitRef = useRef({ visibleActionIds: [] as string[], paintWidth: 0 })
   const [draggingActionId, setDraggingActionId] = useState<string | null>(null)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [overflowQuery, setOverflowQuery] = useState('')
@@ -557,6 +584,18 @@ function QuickToolbarNative() {
     side: CustomizerPlacement['side']
     caret: number
   } | null>(null)
+
+  useLayoutEffect(() => {
+    const nextMode = `${docked}:${fillTopDockWidth}`
+    if (dockFitModeRef.current === nextMode) return
+    dockFitModeRef.current = nextMode
+    dockBudgetRef.current = { ...EMPTY_DOCK_BUDGET_STATE }
+    lastValidV2FitRef.current = { visibleActionIds: [], paintWidth: 0 }
+    setFitReady(false)
+    setVisibleActionIds([])
+    setV2FitPaintWidth(0)
+    if (anchored) layoutBatchRef.current.schedule()
+  }, [anchored, docked, fillTopDockWidth])
 
   /** Measures real pill widths, then exposes only the configured prefix that fits. */
   const measureV2Fit = useCallback((isRetry = false) => {
@@ -572,18 +611,33 @@ function QuickToolbarNative() {
     const viewportWidth = typeof window !== 'undefined'
       ? Math.max(0, (window.visualViewport ? window.visualViewport.width : window.innerWidth) || 0)
       : 0
-    const viewportAvailable = Math.max(0, (viewportWidth - 2 * FLOATING_V2_VIEWPORT_MARGIN) / uiScale)
+    const viewportAvailable = Math.max(0, viewportWidth / uiScale)
     const persistWidth = persistentRect.rect.width
     const customizeWidth = toLayoutWidth(customizeButtonRef.current, 36)
     const overflowWidth = toLayoutWidth(overflowButtonRef.current, 56)
-    const gap = 6
+    const toolbarStyles = toolbarRef.current ? window.getComputedStyle(toolbarRef.current) : null
+    const configuredGap = readOptionalToolbarNumber(settings, 'gap')
+    const fallbackGap = Number.isFinite(configuredGap) ? configuredGap : 6
+    const gap = toolbarStyles
+      ? (Number.parseFloat(toolbarStyles.columnGap || toolbarStyles.gap) || fallbackGap)
+      : fallbackGap
+    const configuredPadding = readOptionalToolbarNumber(settings, 'padding')
+    const fallbackPadding = Number.isFinite(configuredPadding) ? configuredPadding : 10
+    const toolbarChromeWidth = toolbarStyles
+      ? [
+          toolbarStyles.paddingLeft,
+          toolbarStyles.paddingRight,
+          toolbarStyles.borderLeftWidth,
+          toolbarStyles.borderRightWidth,
+        ].reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0)
+      : fallbackPadding * 2 + 2
     const widths = actions.map((action) => {
       const measured = toLayoutWidth(measureButtonRefs.current.get(action.id) ?? null, 0)
       const estimated = v2IconOnly ? 44 : Math.max(72, action.label.length * 7 + 48)
       return measured > 0 ? measured : Math.min(190, estimated)
     })
     const cardTotal = (count: number) => widths.slice(0, count).reduce((sum, width) => sum + width, 0) + Math.max(0, count - 1) * gap
-    const hugAll = cardTotal(actions.length) + (actions.length > 0 ? gap : 0) + customizeWidth
+    const hugAll = toolbarChromeWidth + cardTotal(actions.length) + (actions.length > 0 ? gap : 0) + customizeWidth
     const floatingV2 = Boolean(freePosition && anchored)
     const dockEl = typeof document !== 'undefined'
       ? document.querySelector<HTMLElement>(CHAT_TOP_DOCK_MOUNT)
@@ -604,7 +658,9 @@ function QuickToolbarNative() {
       dockBudgetRef.current = acceptDockedV2BudgetSample(rawDockBudget, dockBudgetRef.current)
     }
     const budget = floatingV2
-      ? (autoFitBounds ? rail.width : viewportAvailable)
+      ? (fillFloatingScreen
+        ? rail.width
+        : (autoFitBounds || persistWidth === 0 ? rail.width : persistWidth))
       : dockBudgetRef.current.accepted
     if (!(budget > 0) && !(freePosition && viewportAvailable > 0)) {
       if (!isRetry) {
@@ -614,12 +670,24 @@ function QuickToolbarNative() {
           measureV2FitRef.current(true)
         })
       }
-      setFitReady(true)
+      // A mount/setting transition can briefly expose a zero-width rail. Keep
+      // the prior cards and painted width visible until a usable sample arrives;
+      // clearing them here produced the blank dock on disable/re-enable.
+      const snapshot = lastValidV2FitRef.current
+      if (snapshot.visibleActionIds.length > 0) {
+        setVisibleActionIds((previous) => previous.length === snapshot.visibleActionIds.length
+          && previous.every((id, index) => id === snapshot.visibleActionIds[index])
+          ? previous
+          : snapshot.visibleActionIds)
+      }
+      if (snapshot.paintWidth > 0) {
+        setV2FitPaintWidth((previous) => previous === snapshot.paintWidth ? previous : snapshot.paintWidth)
+      }
       return
     }
     const fitsAll = hugAll <= budget
     const packBudget = fitsAll ? Math.max(budget, hugAll) : budget
-    const available = packBudget - customizeWidth - gap - (fitsAll ? 0 : overflowWidth + gap)
+    const available = packBudget - toolbarChromeWidth - customizeWidth - gap - (fitsAll ? 0 : overflowWidth + gap)
     let count = 0
     while (count < actions.length && cardTotal(count + 1) <= Math.max(0, available)) count += 1
     const showAll = fitsAll
@@ -627,15 +695,19 @@ function QuickToolbarNative() {
     const next = showAll
       ? actions.map((action) => action.id)
       : actions.slice(0, count).map((action) => action.id)
+    const nextPaintWidth = freePosition && fillFloatingScreen
+      ? rail.width
+      : freePosition && (autoFitBounds || persistWidth === 0)
+        ? (showAll
+          ? hugAll
+          : toolbarChromeWidth + cardTotal(count) + (count > 0 ? gap : 0) + customizeWidth + (leftover ? overflowWidth + gap : 0))
+        : 0
+    lastValidV2FitRef.current = { visibleActionIds: next, paintWidth: nextPaintWidth }
     setVisibleActionIds((previous) => previous.length === next.length && previous.every((id, index) => id === next[index]) ? previous : next)
     setFitReady(true)
     if (showAll) setOverflowOpen(false)
-    if (freePosition && (anchored || autoFitBounds || persistWidth === 0)) {
-      const packedWidth = showAll
-        ? hugAll
-        : cardTotal(count) + (count > 0 ? gap : 0) + customizeWidth + (leftover ? overflowWidth + gap : 0)
-      const painted = (floatingV2 && autoFitBounds) ? rail.width : packedWidth
-      setV2FitPaintWidth((previous) => previous === painted ? previous : painted)
+    if (nextPaintWidth > 0) {
+      setV2FitPaintWidth((previous) => previous === nextPaintWidth ? previous : nextPaintWidth)
     }
   }, [actions, anchored, autoFitBounds, fillFloatingScreen, freePosition, persistentRect.rect.width, v2IconOnly])
   measureV2FitRef.current = measureV2Fit
@@ -663,12 +735,35 @@ function QuickToolbarNative() {
       observer.disconnect()
       window.removeEventListener('resize', onResize)
     }
-  }, [actions.length, anchored, autoFitBounds, freePosition, iconSize, settings.v2LabelTextSize, settings.v2LabelVisible, measureV2Fit, isHidden])
+  }, [actions.length, anchored, autoFitBounds, fillFloatingScreen, freePosition, iconSize, settings.enabled, settings.v2LabelTextSize, settings.v2LabelVisible, measureV2Fit, isHidden])
 
   const overflowActionIds = useMemo(
     () => actions.map((action) => action.id).filter((id) => !visibleActionIds.includes(id)),
     [actions, visibleActionIds],
   )
+
+  // Measurement copies can become stale when action context/labels resolve
+  // after the initial fit. Trim only the escaping suffix from the painted
+  // prefix; the normal observer will expand it again when the rail grows.
+  useLayoutEffect(() => {
+    if (!anchored || !fitReady || visibleActionIds.length === 0) return
+    const scroller = cardScrollerRef.current
+    if (!scroller) return
+    const scrollerRect = scroller.getBoundingClientRect()
+    if (!(scrollerRect.width > 0)) return
+    const cards = [...scroller.querySelectorAll<HTMLElement>('[data-toolbar-action]')]
+    const escapeIndex = cards.findIndex((card) => {
+      const cardRect = card.getBoundingClientRect()
+      return cardRect.left < scrollerRect.left - 1 || cardRect.right > scrollerRect.right + 1
+    })
+    if (escapeIndex < 0) return
+    const retained = visibleActionIds.slice(0, escapeIndex)
+    lastValidV2FitRef.current = { ...lastValidV2FitRef.current, visibleActionIds: retained }
+    setVisibleActionIds((current) => current.length === retained.length
+      && current.every((id, index) => id === retained[index])
+      ? current
+      : retained)
+  }, [anchored, fitReady, visibleActionIds])
   const filteredOverflowIds = useMemo(
     () => filterActionIds(overflowActionIds, actionById, overflowQuery),
     [actionById, overflowActionIds, overflowQuery],
@@ -849,10 +944,11 @@ function QuickToolbarNative() {
   const labelTextSize = anchored ? settings.v2LabelTextSize : settings.labelTextSize
   const labelVisible = v2IconOnly ? false : anchored ? settings.v2LabelVisible !== false : settings.labelVisible
   const showProfilePortrait = profilePortraitUrl !== null && profilePortraitUrl !== failedProfilePortraitUrl
+  const configuredGap = readOptionalToolbarNumber(settings, 'gap')
+  const configuredPadding = readOptionalToolbarNumber(settings, 'padding')
+  const backdropColor = readOptionalToolbarColor(settings)
   const gripGlyph = Math.round(GRIP_GLYPH * scale)
   const chevronGlyph = Math.round(CHEVRON_GLYPH * scale)
-  const configuredGap = Number((settings as { gap?: number }).gap)
-  const configuredPadding = Number((settings as { padding?: number }).padding)
   const toolbarStyle = {
     // The *rendered* metrics. Icons are React props rather than CSS, so the same
     // scaled number is passed to every glyph below; only the boxes read the var.
@@ -862,12 +958,18 @@ function QuickToolbarNative() {
     '--quick-toolbar-padding-block': `${Number.isFinite(configuredPadding) ? configuredPadding : 4}px`,
     '--quick-toolbar-padding-inline': `${Number.isFinite(configuredPadding) ? configuredPadding : 10}px`,
     '--quick-toolbar-opacity': settings.opacity,
+    ...(typeof backdropColor === 'string' && backdropColor.trim().length > 0
+      ? { '--quick-toolbar-backdrop-color': backdropColor }
+      : {}),
     // Padding and gap scale off this; it is 1 for V2, which never scaled.
     '--quick-toolbar-scale': scale,
     '--quick-toolbar-rotation': `${anchored ? 0 : (freePosition ? settings.rotationDeg : 0)}deg`,
   } as CSSProperties
 
-  const visibleAnchoredActions = actions.filter((action) => visibleActionIds.includes(action.id))
+  const retainedVisibleActionIds = !fitReady && visibleActionIds.length === 0
+    ? lastValidV2FitRef.current.visibleActionIds
+    : visibleActionIds
+  const visibleAnchoredActions = actions.filter((action) => retainedVisibleActionIds.includes(action.id))
   const pinOverflowAction = (id: string) => {
     updateSettings({ iconOrder: [id, ...orderedIds.filter((candidate) => candidate !== id)] })
   }
@@ -939,36 +1041,39 @@ function QuickToolbarNative() {
       {anchored
         ? <SlidersHorizontal size={renderedIconSize} aria-hidden="true" />
         : <MoreHorizontal size={renderedIconSize} aria-hidden="true" />}
-      {labelVisible && !anchored && <span className={styles.itemLabel}>More</span>}
     </button>
   )
-
   const uiScale = readUiScale()
   const viewportWidth = typeof window !== 'undefined'
     ? (window.visualViewport ? window.visualViewport.width : window.innerWidth)
     : 0
   const layoutViewportWidth = viewportWidth > 0 && uiScale > 0 ? viewportWidth / uiScale : viewportWidth
+  const floatingRail = floatingRailRef.current
 
-  const renderedWidth = (freePosition && anchored)
+  const autoFitFloatingV2 = Boolean(freePosition && anchored && autoFitBounds)
+  const fillFloatingRail = Boolean(freePosition && anchored && fillFloatingScreen)
+  // An unpinned manual V2 surface starts with the width sentinel 0. Once fit
+  // measurement has a packed result, publish it instead of leaving CSS to
+  // paint max-content indefinitely; the sentinel remains a transient fallback.
+  const packedUnpinnedFloatingV2 = Boolean(freePosition && anchored && persistentRect.rect.width <= 0)
+  const renderedWidth = (freePosition && anchored && (autoFitFloatingV2 || fillFloatingRail || packedUnpinnedFloatingV2))
     ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
     : persistentRect.rect.width
-
-  const floatingRail = floatingRailRef.current
-  const autoFitFloatingV2 = Boolean(freePosition && anchored && autoFitBounds)
-  const clampedX = autoFitFloatingV2
-    ? floatingRail.x
+  const edgeInset = 0
+  const clampedX = fillFloatingRail
+    ? 0
+    : autoFitFloatingV2
+      ? floatingRail.x
     : freePosition && layoutViewportWidth > 0
       ? Math.max(
-          FLOATING_V2_VIEWPORT_MARGIN,
-          Math.min(persistentRect.rect.x, Math.max(FLOATING_V2_VIEWPORT_MARGIN, layoutViewportWidth - renderedWidth - FLOATING_V2_VIEWPORT_MARGIN))
+          edgeInset,
+          Math.min(persistentRect.rect.x, Math.max(edgeInset, layoutViewportWidth - renderedWidth - edgeInset))
         )
       : persistentRect.rect.x
-  const paintedY = autoFitFloatingV2 ? floatingRail.y : persistentRect.rect.y
-  const paintedWidth = autoFitFloatingV2
-    ? floatingRail.width
-    : (freePosition && anchored)
-      ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
-      : persistentRect.rect.width
+  const paintedY = fillFloatingRail || autoFitFloatingV2 ? floatingRail.y : persistentRect.rect.y
+  const paintedWidth = fillFloatingRail || autoFitFloatingV2 || packedUnpinnedFloatingV2
+    ? (v2FitPaintWidth > 0 ? v2FitPaintWidth : persistentRect.rect.width)
+    : persistentRect.rect.width
 
   const tree = (
     <div
@@ -981,6 +1086,9 @@ function QuickToolbarNative() {
       data-quick-toolbar-placement={dockPlacement}
       data-quick-toolbar-variant={anchored ? 'v2' : 'v1'}
       data-fill-top-dock={docked ? (fillTopDockWidth ? '1' : '0') : undefined}
+      data-autofit={autoFitBounds ? '1' : '0'}
+      data-fill-screen={fillFloatingScreen ? '1' : '0'}
+      data-dragging-action={draggingActionId || undefined}
       data-opaque-backdrop={opaqueToolbarBackdrop ? '1' : undefined}
       data-dead-space="0"
       className={clsx(styles.root, freePosition ? styles.rootFree : styles.rootAnchored)}
@@ -1072,7 +1180,7 @@ function QuickToolbarNative() {
           aria-label="Quick access toolbar"
           style={toolbarStyle}
         >
-          <div className={styles.cardScroller}>
+          <div ref={cardScrollerRef} className={styles.cardScroller}>
             {visibleAnchoredActions.map((action) => (
               <span
                 key={action.id}
@@ -1086,7 +1194,6 @@ function QuickToolbarNative() {
           <div ref={measureRailRef} className={styles.measureRail} aria-hidden="true">
             {actions.map((action) => <span key={action.id}>{renderV2Action(action, true)}</span>)}
           </div>
-          {(freePosition || fillTopDockWidth) && <div className={styles.fillDockSpacer} aria-hidden="true" />}
           {overflowActionIds.length > 0 && (
             <button
               ref={overflowButtonRef}
@@ -1447,7 +1554,7 @@ function QuickToolbarNative() {
       {/* One switch for the handles *and* their blue hover dots, which are
           `::after` on `.resizeHandle`. The drag grip is deliberately unaffected:
           turning the handles off must not strand the toolbar where it sits. */}
-      {freePosition && settings.resizeHandlesEnabled !== false && RESIZE_HANDLES.map((handle) => (
+      {freePosition && (settings.resizeHandlesEnabled !== false || (anchored && !autoFitBounds)) && RESIZE_HANDLES.map((handle) => (
         <button
           key={handle}
           type="button"

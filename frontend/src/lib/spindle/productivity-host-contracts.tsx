@@ -6,6 +6,7 @@ import { useStore } from '@/store'
 import type { HostSurfaceJsonValue, HostSurfaceRenderContext } from './host-surface-registry'
 import { QuickToolbar } from '@/components/quick-toolbar/QuickToolbar'
 import { readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
+import { effectiveQuickToolbarDockRequest } from '@/lib/chatSurfaceLayout'
 import { ConnectionsPicker } from '@/components/connections-picker/ConnectionsPicker'
 import LoreIndicator from '@/components/lore-indicator/LoreIndicator'
 import PortraitDock from '@/components/chat/PortraitDock'
@@ -423,7 +424,6 @@ function StandardProductivityHostSurface({
   const surfaceRootRef = useRef<HTMLElement | null>(null)
   const [connectionsAnchor, setConnectionsAnchor] = useState<HTMLElement | null>(null)
   const quickToolbarSettings = useStore((store) => store.quickToolbarSettings)
-  const toolbarPlacement = readQuickToolbarPlacement(quickToolbarSettings)
 
   useLayoutEffect(() => {
     const root = surfaceRootRef.current?.closest<HTMLElement>(
@@ -431,14 +431,14 @@ function StandardProductivityHostSurface({
     )
     if (!root) return
     const dockRequest = surfaceId === 'quick_toolbar.workspace'
-      ? toolbarPlacement === 'chat_top_dock' ? 'strip' : 'floating'
+      ? effectiveQuickToolbarDockRequest('strip', quickToolbarSettings)
       : surfaceId === 'activated_lore.indicator' ? 'strip' : null
     if (!dockRequest) return
     root.setAttribute('data-dock-request', dockRequest)
     return () => {
       if (root.getAttribute('data-dock-request') === dockRequest) root.removeAttribute('data-dock-request')
     }
-  }, [surfaceId, toolbarPlacement])
+  }, [quickToolbarSettings, surfaceId])
 
   useLayoutEffect(() => {
     if (surfaceId !== 'connections_picker.panel' || typeof document === 'undefined') return
@@ -464,7 +464,7 @@ function StandardProductivityHostSurface({
       content = <ProductivitySettings />
       break
     case 'quick_toolbar.workspace':
-      content = toolbarPlacement === 'chat_top_dock' ? <></> : <QuickToolbar />
+      content = readQuickToolbarPlacement(quickToolbarSettings) === 'chat_top_dock' ? <></> : <QuickToolbar />
       break
     case 'connections_picker.launcher':
       content = (

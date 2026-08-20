@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Lumiverse Quick Toolbar Diagnostics",
+  "version": "1.1.1",
+  "description": "Persistent, read-only diagnostics for the Lumiverse Quick Toolbar.",
+  "permissions": [
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:7860/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Lumiverse Quick Toolbar Diagnostics",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:7860/*"],
+      "js": ["probe.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

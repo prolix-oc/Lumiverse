@@ -2,8 +2,8 @@ export const QUICK_TOOLBAR_PLACEMENTS = ['floating', 'chat_top_dock'] as const
 
 export type QuickToolbarDockPlacement = (typeof QUICK_TOOLBAR_PLACEMENTS)[number]
 
-/** Press-and-hold (ms) before a toolbar/item pointer starts a drag. Was 2000ms. */
-export const QUICK_TOOLBAR_POINTER_HOLD_MS = 1000
+/** Press-and-hold (ms) before a toolbar/item pointer starts a drag. Was 1000ms. */
+export const QUICK_TOOLBAR_POINTER_HOLD_MS = 500
 export const QUICK_TOOLBAR_CHILD_FLEX = '0 0 auto'
 export const QUICK_TOOLBAR_DOCK_ID = 'chat_top_dock'
 
@@ -56,7 +56,8 @@ export function isOpaqueToolbarBackdrop(settings: {
   return settings?.opaqueToolbarBackdrop === true
 }
 
-export const FLOATING_V2_VIEWPORT_MARGIN = 24
+/** Floating fill is edge-to-edge. Manual drag clamps to the viewport, not a 24px inset. */
+export const FLOATING_V2_VIEWPORT_MARGIN = 0
 
 export type DockBudgetSampleState = {
   accepted: number
@@ -106,11 +107,19 @@ export function resolveFloatingV2Rail(args: {
 }): { x: number; y: number; width: number } {
   const scale = args.uiScale > 0 ? args.uiScale : 1
   const viewportRail = {
-    x: (args.viewport.left + FLOATING_V2_VIEWPORT_MARGIN) / scale,
+    x: args.viewport.left / scale,
     y: args.viewport.top / scale,
-    width: Math.max(0, (args.viewport.width - 2 * FLOATING_V2_VIEWPORT_MARGIN) / scale),
+    width: Math.max(0, args.viewport.width / scale),
   }
-  if (args.fill) return viewportRail
+  // Full-screen fill deliberately paints the viewport. Its explicit opt-out
+  // keeps the original dock/column rail available for floating V2 auto-fit.
+  if (args.fill) {
+    return {
+      x: 0,
+      y: args.viewport.top / scale,
+      width: Math.max(0, args.viewport.width / scale),
+    }
+  }
   if (args.dockRect && args.dockRect.width > 0) {
     return {
       x: args.dockRect.left / scale,
@@ -126,6 +135,17 @@ export function resolveFloatingV2Rail(args: {
     }
   }
   return viewportRail
+}
+
+/** Resolve the JS-measured paint width for floating V2 without CSS viewport units. */
+export function resolveFloatingV2PaintWidth(args: {
+  fill: boolean
+  railWidth: number
+  contentWidth: number
+}): number {
+  const railWidth = Number.isFinite(args.railWidth) && args.railWidth > 0 ? args.railWidth : 0
+  const contentWidth = Number.isFinite(args.contentWidth) && args.contentWidth > 0 ? args.contentWidth : 0
+  return args.fill ? railWidth : Math.min(railWidth || contentWidth, contentWidth || railWidth)
 }
 
 export const TOOLBAR_LABEL_SIZE_MIN = 9

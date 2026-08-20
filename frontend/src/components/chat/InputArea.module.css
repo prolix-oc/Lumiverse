@@ -110,9 +110,29 @@
   display: contents;
 }
 
+.composerReorderUnit[data-toolbar-item-drag-handle] .actionBtn,
+.composerReorderUnit .actionBtn {
+  cursor: grab;
+}
+
+.composerReorderUnit .actionBtn:active:not([data-dragging]) {
+  transform: scale(0.97);
+}
+
 .composerReorderUnit[data-dragging] .actionBtn,
 .composerReorderUnit[data-dragging] .actionDivider {
-  opacity: 0.72;
+  opacity: 1;
+  cursor: grabbing;
+  transform: scale(1.05) translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  outline: 2px solid var(--lumiverse-primary);
+  z-index: 100;
+  position: relative;
+}
+
+.actionBar button[aria-label='Customize composer'],
+.composerCustomizeGear {
+  cursor: pointer !important;
 }
 
 .extensionToolbar {

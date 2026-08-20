@@ -12,6 +12,10 @@ node_modules/
 stream-deck/logs/
 .tmp/
 .claude/
+.omp/
+.omx/
+.playwright-mcp/
+graphify-out/
 vendor/lancedb-android/upstream/
 vendor/lancedb-android/build/
 vendor/lancedb-android/out/

@@ -199,13 +199,19 @@ export function withToolbarPosition(
 export function toolbarRectBounds(
   natural: Size,
   minHeightFloor: number = TOOLBAR_VISIBLE_MIN_HEIGHT,
+  maxWidthOverride?: number,
 ): ToolbarRectBounds {
   const minWidth = axis(natural.width)
   const minHeight = axis(natural.height) || visibleHeightFloor(minHeightFloor)
   return {
     minWidth,
     minHeight,
-    maxWidth: Math.max(TOOLBAR_MAX.width, minWidth),
+    maxWidth: Math.max(
+      Number.isFinite(maxWidthOverride) && (maxWidthOverride as number) > 0
+        ? (maxWidthOverride as number)
+        : TOOLBAR_MAX.width,
+      minWidth,
+    ),
     maxHeight: Math.max(TOOLBAR_MAX.height, minHeight),
   }
 }

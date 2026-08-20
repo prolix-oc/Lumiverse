@@ -103,6 +103,10 @@ async function buildFrontend(): Promise<void> {
   console.log(`Building frontend into ${basename(stagedDir)}...`)
   const proc = Bun.spawn([resolveViteRuntime(), viteCli, 'build', '--outDir', stagedDir, '--emptyOutDir'], {
     cwd: frontendDir,
+    env: {
+      ...process.env,
+      VITE_BUILD_ID: `lumiverse-${Date.now()}`,
+    },
     stdin: 'ignore',
     stdout: 'inherit',
     stderr: 'inherit',

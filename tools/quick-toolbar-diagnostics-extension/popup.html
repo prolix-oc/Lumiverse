@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Toolbar Diagnostics</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Quick Toolbar Diagnostics</h1>
+        <output id="status">No report loaded</output>
+      </header>
+      <label for="label">Optional capture label</label>
+      <input id="label" placeholder="Automatically derived from live state" maxlength="80">
+      <section class="actions" aria-label="Diagnostic actions">
+        <button id="capture" type="button">Capture</button>
+        <button id="mark" type="button">Capture + mark</button>
+        <button id="reset" type="button">Reset SW/cache + reload</button>
+      </section>
+      <section class="actions secondary" aria-label="Report actions">
+        <button id="copy" type="button">Copy history JSON</button>
+        <button id="save" type="button">Save history JSON</button>
+        <button id="clear" type="button">Clear history</button>
+      </section>
+      <pre id="summary">Open a Lumiverse chat on localhost:7860.</pre>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

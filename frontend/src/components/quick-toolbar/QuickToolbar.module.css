@@ -13,7 +13,7 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: var(--lumiverse-bg-opaque);
+  background: var(--quick-toolbar-backdrop-color, var(--lumiverse-bg-opaque));
 }
 
 .root[data-opaque-backdrop='1'] > * {
@@ -94,9 +94,60 @@
 }
 
 .fillDockSpacer {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  flex: 0 0 0 !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.rootFree[data-fill-screen='1'] {
+  left: 0 !important;
+  margin: 0 !important;
+  --quick-toolbar-x: 0px;
+}
+.rootFree[data-autofit='1']:not([data-fill-screen='1']) {
+  width: max-content !important;
+  max-width: 100%;
+  margin: 0 !important;
+}
+
+.rootFree[data-autofit='1']:not([data-fill-screen='1']) > .toolbar {
+  width: max-content !important;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+
+.rootFree .cardStrip {
+  justify-content: flex-start;
+}
+
+.root[data-quick-toolbar-placement='chat_top_dock'] {
   flex: 1 1 auto;
-  min-width: 0;
-  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+}
+
+.root[data-quick-toolbar-placement='chat_top_dock'] > .toolbar {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* Keep the explicit opt-out meaningful after the top-dock host stretch rule
+   above. Fill-on owns the rail; fill-off owns only the packed card width. */
+.root[data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0'] {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 100%;
+}
+
+.root[data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='0'] > .toolbar {
+  width: max-content;
+  max-width: 100%;
+  justify-content: flex-start;
 }
 
 .toolbar {
@@ -249,11 +300,34 @@
 .cardScroller {
   display: flex;
   min-width: 0;
+  width: auto;
   max-width: 100%;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   gap: var(--quick-toolbar-gap, 6px);
   overflow: hidden;
   scrollbar-width: none;
+}
+
+/* Fill-on owns only the rail; cards and slots retain intrinsic widths so
+   heterogeneous content remains visibly heterogeneous. */
+
+/* The strip owns the available dock rail. The scroller may clip only inside
+   that rail; overflow and customize stay fixed trailing siblings. */
+.root[data-quick-toolbar-placement='chat_top_dock'][data-fill-top-dock='1'] .cardStrip {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Cards and slots remain intrinsic in every mode; only the strip owns rail fill. */
+.root[data-fill-screen='1'] .cardSlot,
+.root[data-fill-top-dock='1'] .cardSlot {
+  flex: 0 0 auto;
+}
+
+.root[data-fill-screen='1'] .cardSlot .card,
+.root[data-fill-top-dock='1'] .cardSlot .card {
+  width: auto;
 }
 
 .cardScroller:empty {
@@ -289,13 +363,11 @@
 .measureRail > span {
   display: inline-flex;
   flex: 0 0 auto;
-  margin-right: 6px;
+  margin-right: var(--quick-toolbar-gap, 6px);
 }
 
-.cardStrip[data-fit='pending'] .cardScroller,
-.cardStrip[data-fit='pending'] .overflowButton {
-  visibility: hidden;
-}
+/* Pending only reports that a fresh measurement is in flight. The previously
+   accepted fit stays painted until that measurement can replace it. */
 
 /*
  * Honest overflow, the `GroupChatMemberBar` way: a side only fades when content
@@ -638,20 +710,39 @@
   transform: translateX(1px);
 }
 
+[data-toolbar-item-drag-handle] {
+  cursor: grab;
+}
+
+[data-toolbar-item-drag-handle]:active:not([data-dragging]) {
+  transform: scale(0.97);
+}
+
 .card[data-dragging],
 .item[data-dragging],
 .item[data-dragging]:hover,
 .item[data-dragging]:focus-visible,
 .toolbarVertical .item[data-dragging],
 .toolbarVertical .item[data-dragging]:hover,
-.toolbarVertical .item[data-dragging]:focus-visible {
-  z-index: 8;
+.toolbarVertical .item[data-dragging]:focus-visible,
+.cardSlot[data-dragging] .card,
+.root[data-dragging-action] [data-dragging] {
+  z-index: 100;
   cursor: grabbing;
-  transform: scale(1.04);
-  box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.38),
-    0 0 0 1px color-mix(in srgb, var(--lumiverse-primary, #6366f1) 35%, transparent);
+  transform: scale(1.05) translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  outline: 2px solid var(--lumiverse-primary);
   transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.root[data-dragging-action],
+.root[data-dragging-action] * {
+  cursor: grabbing;
+}
+
+button[aria-label='Customize toolbar'],
+.cardStripSettings {
+  cursor: pointer !important;
 }
 
 /*

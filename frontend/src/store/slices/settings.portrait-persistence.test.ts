@@ -38,6 +38,56 @@ afterEach(() => {
 })
 
 describe('portrait dock persistence', () => {
+  test('promotes a quick-toolbar compatibility row when canonical storage is absent', async () => {
+    const initial = store().quickToolbarSettings
+    const privateKey = 'spindle:lumiverse_suite:quick_toolbar:quickToolbarSettings'
+    const saved = {
+      ...initial,
+      variant: 'v2-settings-adjacent' as const,
+      quickToolbarPlacement: 'floating' as const,
+      autoFitBounds: false,
+      fillTopDockWidth: false,
+      rect: { x: 100, y: 6, width: 1500, height: 32 },
+      v2ViewportGeometryVersion: 2 as const,
+    }
+    const rows = new Map<string, unknown>([[privateKey, saved]])
+    database(rows)
+
+    const restored = store()
+    await restored.loadSettings()
+    await flushSettingsNow()
+
+    expect(restored.quickToolbarSettings).toEqual(saved)
+    expect(rows.get('quickToolbarSettings')).toEqual(saved)
+    expect(rows.get(privateKey)).toEqual(saved)
+  })
+
+  test('canonical quick-toolbar settings win over a stale compatibility row after reload', async () => {
+    const initial = store().quickToolbarSettings
+    const canonical = {
+      ...initial,
+      variant: 'v2-settings-adjacent' as const,
+      quickToolbarPlacement: 'floating' as const,
+      autoFitBounds: false,
+      fillTopDockWidth: true,
+      rect: { x: 100, y: 6, width: 1500, height: 32 },
+      v2ViewportGeometryVersion: 2 as const,
+    }
+    const privateKey = 'spindle:lumiverse_suite:quick_toolbar:quickToolbarSettings'
+    const rows = new Map<string, unknown>([
+      ['quickToolbarSettings', canonical],
+      [privateKey, { ...canonical, autoFitBounds: true, fillTopDockWidth: false, rect: { x: 554, y: 6, width: 763, height: 33 } }],
+    ])
+    database(rows)
+
+    const restored = store()
+    await restored.loadSettings()
+    await flushSettingsNow()
+
+    expect(restored.quickToolbarSettings).toEqual(canonical)
+    expect(rows.get(privateKey)).toEqual(canonical)
+  })
+
   test('restores canonical open state and geometry after reload', async () => {
     const rows = new Map<string, unknown>()
     database(rows)

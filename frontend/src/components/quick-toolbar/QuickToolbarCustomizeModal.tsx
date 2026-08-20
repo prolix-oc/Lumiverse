@@ -311,6 +311,16 @@ export default function QuickToolbarCustomizeModal({ onClose }: QuickToolbarCust
                 aria-label="Show toolbar labels"
               />
             </div>
+            {readQuickToolbarPlacement(settings) === 'floating' && (
+              <div className={styles.switchRow}>
+                <span>Keep chat top dock enabled while floating</span>
+                <Toggle.Switch
+                  checked={settings.hideInChatTopDock !== true}
+                  onChange={(keepDockEnabled) => updateSettings({ hideInChatTopDock: !keepDockEnabled } as typeof settings)}
+                  aria-label="Keep chat top dock enabled while floating"
+                />
+              </div>
+            )}
             {anchored && (
               <div className={styles.switchRow}>
                 <span>Icon-only</span>
@@ -348,14 +358,16 @@ export default function QuickToolbarCustomizeModal({ onClose }: QuickToolbarCust
                   : 'Fill the entire top of the screen'}
               />
             </div>
-            <div className={styles.switchRow}>
-              <span>Show select-messages on chat top bar</span>
-              <Toggle.Switch
-                checked={isShowNativeSelectMessages(settings)}
-                onChange={(showNativeSelectMessages) => updateSettings({ showNativeSelectMessages } as typeof settings)}
-                aria-label="Show select-messages on chat top bar"
-              />
-            </div>
+            {readQuickToolbarPlacement(settings) === 'chat_top_dock' && (
+              <div className={styles.switchRow}>
+                <span>Show select-messages on chat top bar</span>
+                <Toggle.Switch
+                  checked={isShowNativeSelectMessages(settings)}
+                  onChange={(showNativeSelectMessages) => updateSettings({ showNativeSelectMessages } as typeof settings)}
+                  aria-label="Show select-messages on chat top bar"
+                />
+              </div>
+            )}
             <div className={styles.switchRow}>
               <span>Opaque toolbar backdrop</span>
               <Toggle.Switch

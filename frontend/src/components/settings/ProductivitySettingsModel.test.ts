@@ -4,6 +4,8 @@ import {
   DEFAULT_QUICK_TOOLBAR_SETTINGS,
   normalizeLoreIndicatorEntryTypeAppearance,
   PRODUCTIVITY_DEFAULTS,
+  keepDockEnabledWhenFloating,
+  migrateProductivitySetting,
 } from '@/lib/uiProductivityDefaults'
 import { bindProductivitySetting, parseProductivityNumber, PRODUCTIVITY_CONTROL_DEFINITIONS, PRODUCTIVITY_SETTING_KEYS, moveVisibleToolbarItem, normalizeColor, previewForSetting, reorderItems, setToolbarItemVisibility } from './ProductivitySettingsModel'
 
@@ -55,12 +57,15 @@ describe('P8 productivity panel model', () => {
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('fillTopDockWidth')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('showNativeSelectMessages')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('opaqueToolbarBackdrop')
-    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).not.toContain('hideInChatTopDock')
+    expect(PRODUCTIVITY_CONTROL_DEFINITIONS.quickToolbarSettings).toContain('hideInChatTopDock')
     expect(PRODUCTIVITY_CONTROL_DEFINITIONS.loreIndicatorSettings).toContain('editorLaunchTarget')
     expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.hideWhenOverlaid).toBeUndefined()
     expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.hideInChatTopDock).toBe(false)
     expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.showNativeSelectMessages).toBe(true)
     expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.opaqueToolbarBackdrop).toBe(false)
+    expect(DEFAULT_QUICK_TOOLBAR_SETTINGS.backdropColor).toBe('#1C1826')
+    expect(keepDockEnabledWhenFloating({ hideInChatTopDock: false })).toBe(true)
+    expect(keepDockEnabledWhenFloating({ hideInChatTopDock: true })).toBe(false)
   })
 
   test('parses precise numeric edits without escaping the control range', () => {
@@ -93,5 +98,9 @@ describe('P8 productivity panel model', () => {
       keyword: { color: '#3B82F6', icon: 'key' },
       vector: { color: '#8B5CF6', icon: 'search' },
     })
+  })
+  test('normalizes legacy quick toolbar backdrop colors to the safe default', () => {
+    expect(migrateProductivitySetting('quickToolbarSettings', { opaqueToolbarBackdrop: true, backdropColor: '#abc' })).toMatchObject({ backdropColor: '#AABBCC' })
+    expect(migrateProductivitySetting('quickToolbarSettings', { backdropColor: 'not-a-color' })).toMatchObject({ backdropColor: '#1C1826' })
   })
 })

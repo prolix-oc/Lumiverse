@@ -191,8 +191,8 @@ afterAll(() => {
 })
 
 describe('QuickToolbar reorder and hold drag', () => {
-  test('starts pointer drag only after 1000ms', async () => {
-    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(1000)
+  test('starts pointer drag only after 500ms', async () => {
+    expect(QUICK_TOOLBAR_POINTER_HOLD_MS).toBe(500)
     const held: Array<{ clientX: number; clientY: number }> = []
     const pending: Array<{ at: number; fn: () => void }> = []
     let now = 0
@@ -209,10 +209,10 @@ describe('QuickToolbar reorder and hold drag', () => {
 
     const hold = createPointerHoldController((point) => { held.push(point) })
     hold.start({ clientX: 10, clientY: 12 })
-    now = 999
+    now = 499
     pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
     expect(held).toEqual([])
-    now = 1000
+    now = 500
     pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
     expect(held).toEqual([{ clientX: 10, clientY: 12 }])
 
@@ -237,7 +237,7 @@ describe('QuickToolbar reorder and hold drag', () => {
     await act(async () => root.unmount())
   })
 
-  test('reorders live icons after 1000ms hold and does not suppress an unheld click', async () => {
+  test('reorders live icons after 500ms hold and does not suppress an unheld click', async () => {
     expect(nextToolbarIconOrder(CHAT_DOCKER_ACTION_IDS, 'chat.new', 'chat.manage')).toEqual([
       'chat.manage',
       'chat.new',
@@ -282,12 +282,12 @@ describe('QuickToolbar reorder and hold drag', () => {
       actionRunMock.mockClear()
 
       first.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, clientX: 12, clientY: 12 }))
-      now = 999
+      now = 499
       pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
       expect(reorderActionsMock).not.toHaveBeenCalled()
       expect(startDragMock).not.toHaveBeenCalled()
       await act(async () => {
-        now = 1000
+        now = 500
         pending.filter((timer) => timer.at <= now).forEach((timer) => timer.fn())
       })
       expect(startDragMock).not.toHaveBeenCalled()

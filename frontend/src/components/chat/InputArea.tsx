@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks } from 'lucide-react'
+import { Send, RotateCw, CornerDownLeft, Square, FilePlus, Eye, UserCircle, Compass, MessageSquareQuote, Wrench, UsersRound, UserPlus, Settings2, Home, MoreHorizontal, FolderOpen, Paperclip, X, StickyNote, Crown, ScrollText, MessageSquare, BrainCircuit, Drama, Layers, FileText, Braces, Globe, Plus, Mic, Link2, LoaderCircle, Sliders, SlidersHorizontal, Search, ListChecks, Waypoints } from 'lucide-react'
 import { IconPlaylistAdd } from '@tabler/icons-react'
 import { useStore } from '@/store'
 import { sendRoomAction } from '@/ws/relayClient'
@@ -3205,6 +3205,24 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               <Link2 size={14} />
             </button>
           ),
+          connectionsPicker: (() => {
+            const picker = qtActionById.get('lumiverse_suite.connections_picker.open')
+            return (
+              <button
+                type="button"
+                className={clsx(styles.actionBtn, picker?.active && styles.actionBtnActive)}
+                data-lumiverse-connections-launcher="true"
+                onClick={() => {
+                  if (picker && !picker.disabled) picker.run()
+                }}
+                title="Connections Picker"
+                aria-label="Connections Picker"
+                disabled={picker?.disabled}
+              >
+                <Waypoints size={14} />
+              </button>
+            )
+          })(),
           altFields: altFieldsButton,
           addons: activePersonaId ? (
             <button
@@ -3288,6 +3306,7 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               enableReorder={enableToolbarIconReorder}
               renderUnit={(id) => {
                 if (isComposerActionId(id)) return composerActions[id]
+                if (fromComposerExtraId(id) === 'lumiverse_suite.connections_picker.open') return composerActions.connectionsPicker
                 const action = qtActionById.get(fromComposerExtraId(id))
                 if (!action || action.hidden) return null
                 const Icon = action.icon
@@ -3309,11 +3328,12 @@ function InputAreaNative({ chatId, onNavigateHome, onOpenChatFind }: InputAreaPr
               <span data-spindle-mount="chat_actions" data-spindle-scope={`chat:${chatId}:actions`} style={{ display: 'contents' }} />
               <button
                 type="button"
-                className={clsx(styles.actionBtn, customizeOpen && styles.actionBtnActive)}
+                className={clsx(styles.actionBtn, styles.composerCustomizeGear, customizeOpen && styles.actionBtnActive)}
                 onClick={() => setCustomizeOpen(true)}
                 title="Customize composer"
                 aria-label="Customize composer"
                 aria-expanded={customizeOpen}
+                data-composer-pinned="customize"
               >
                 <SlidersHorizontal size={14} />
               </button>

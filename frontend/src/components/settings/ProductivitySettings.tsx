@@ -2,8 +2,7 @@ import { useStore } from '@/store'
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Toggle } from '@/components/shared/Toggle'
 import { persistKey } from '@/store/slices/settings'
-import { DEFAULT_HOMEPAGE_CHARACTER_LIBRARY_SETTINGS, PRODUCTIVITY_DEFAULTS, isMobileViewportOrDevice } from '@/lib/uiProductivityDefaults'
-import { bindProductivitySetting, normalizeColor, parseProductivityNumber, reorderItems, type ProductivitySettingKey } from './ProductivitySettingsModel'
+import { DEFAULT_HOMEPAGE_CHARACTER_LIBRARY_SETTINGS, DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR, PRODUCTIVITY_DEFAULTS, isMobileViewportOrDevice } from '@/lib/uiProductivityDefaults'
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2 } from 'lucide-react'
 import {
   DndContext,
@@ -24,6 +23,7 @@ import {
 } from '@dnd-kit/sortable'
 import { DESIGN_DEFAULT_IDS, useQuickToolbarActions } from '@/components/quick-toolbar/useQuickToolbarActions'
 import { isAutoFitToolbarBounds, isFillTopDockWidth, isOpaqueToolbarBackdrop, isShowNativeSelectMessages, isV2IconOnly, readQuickToolbarPlacement } from '@/components/quick-toolbar/quickToolbarDock'
+import { keepDockEnabledWhenFloating } from '@/lib/uiProductivityDefaults'
 import { canMoveWithinFiltered, filterActionIds, moveWithinFiltered } from '@/lib/toolbarActionSearch'
 import { useScaledSortableStyle } from '@/lib/dndUiScale'
 import { connectionsApi } from '@/api/connections'
@@ -35,6 +35,7 @@ import { getHomepageCardMetadata, getHomepageVisibleTags } from '@/lib/character
 import type { Character } from '@/types/api'
 import ProductivityFeatureToggles from './ProductivityFeatureToggles'
 import styles from './ProductivitySettings.module.css'
+import { bindProductivitySetting, normalizeColor, parseProductivityNumber, reorderItems, type ProductivitySettingKey } from './ProductivitySettingsModel'
 
 type Blob = Record<string, any>
 
@@ -354,6 +355,7 @@ export default function ProductivitySettings() {
       <div className={styles.quickToolbarControls} data-productivity-layout="quick-toolbar-controls">
         <SegmentedField label="Variant" value={quick.variant} options={[['v1-free', 'V1 Free'], ['v2-settings-adjacent', 'V2 Adjacent']]} onChange={(variant) => update('quickToolbarSettings', { variant })} />
         <SegmentedField label="Placement" value={readQuickToolbarPlacement(quick)} options={[['floating', 'Floating'], ['chat_top_dock', 'Chat top dock']]} onChange={(quickToolbarPlacement) => update('quickToolbarSettings', { quickToolbarPlacement })} />
+        {readQuickToolbarPlacement(quick) === 'floating' && <CheckField className={styles.quickToolbarCheck} id="quick-keep-dock-enabled-when-floating" label="Keep chat top dock enabled while floating" checked={keepDockEnabledWhenFloating(quick)} onChange={(keepDockEnabledWhenFloating) => update('quickToolbarSettings', { hideInChatTopDock: !keepDockEnabledWhenFloating })} hint="Keep the original chat dock host available while the toolbar floats." />}
         <CheckField
           className={styles.quickToolbarCheck}
           id="quick-fill-top-dock-width"
@@ -361,11 +363,14 @@ export default function ProductivitySettings() {
           checked={isFillTopDockWidth(quick)}
           onChange={(fillTopDockWidth) => update('quickToolbarSettings', { fillTopDockWidth })}
           hint={readQuickToolbarPlacement(quick) === 'chat_top_dock'
-            ? 'Stretch the docked toolbar across the remaining top bar after native chat buttons.'
-            : 'Stretch a floating V2 auto-fit rail across the window top.'}
+            ? 'Stretch across remaining chat top bar'
+            : 'Stretch across window top'}
         />
-        <CheckField className={styles.quickToolbarCheck} id="quick-show-native-select-messages" label="Show select-messages on chat top bar" checked={isShowNativeSelectMessages(quick)} onChange={(showNativeSelectMessages) => update('quickToolbarSettings', { showNativeSelectMessages })} hint="Keep the native ListChecks button on the chat top bar." />
+        {readQuickToolbarPlacement(quick) === 'chat_top_dock' && (
+          <CheckField className={styles.quickToolbarCheck} id="quick-show-native-select-messages" label="Show select-messages on chat top bar" checked={isShowNativeSelectMessages(quick)} onChange={(showNativeSelectMessages) => update('quickToolbarSettings', { showNativeSelectMessages })} hint="Keep the native ListChecks button on the chat top bar." />
+        )}
         <CheckField className={styles.quickToolbarCheck} id="quick-opaque-toolbar-backdrop" label="Opaque toolbar backdrop" checked={isOpaqueToolbarBackdrop(quick)} onChange={(opaqueToolbarBackdrop) => update('quickToolbarSettings', { opaqueToolbarBackdrop })} hint="Paint a solid plate behind the Quick Toolbar so chat text does not show through." />
+        <Field id="quick-toolbar-backdrop-color" label="Toolbar backdrop color"><input id="quick-toolbar-backdrop-color" type="color" value={normalizeColor(quick.backdropColor, DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR)} onChange={(event) => update('quickToolbarSettings', { backdropColor: normalizeColor(event.target.value, DEFAULT_QUICK_TOOLBAR_BACKDROP_COLOR) })} aria-label="Toolbar backdrop color" /></Field>
         <CheckField className={styles.quickToolbarCheck} id="quick-auto-fit-bounds" label="Auto-fit toolbar bounds to content" checked={isAutoFitToolbarBounds(quick)} onChange={(autoFitBounds) => update('quickToolbarSettings', { autoFitBounds })} />
         <div className={styles.quickToolbarSliderPair} data-productivity-layout="quick-toolbar-slider-pair">
           <NumberField id="quick-icon-size" label="Icon size" value={quick.variant === 'v2-settings-adjacent' ? quick.v2IconSize : quick.iconSize} onChange={(value) => update('quickToolbarSettings', quick.variant === 'v2-settings-adjacent' ? { v2IconSize: value } : { iconSize: value })} min={16} max={36} suffix="px" />

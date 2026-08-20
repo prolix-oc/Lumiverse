@@ -67,6 +67,7 @@ export function ComposerActionBarLive({
     <div
       className={styles.actionBar}
       onPointerDown={(event) => {
+        if (event.target instanceof Element && event.target.closest('button[aria-label="Customize composer"]')) return
         const itemId = toolbarActionIdFromTarget(event.target)
         if (!itemId || !enableReorder) return
         itemPendingIdRef.current = itemId

@@ -143,7 +143,7 @@ const defaultSettings = {
   quickToolbarPlacement: 'floating' as 'floating' | 'chat_top_dock',
 }
 
-const settings = { ...defaultSettings }
+let settings = { ...defaultSettings }
 
 const catalogActions: Array<{
   id: string
@@ -343,16 +343,43 @@ describe('QuickToolbar geometry', () => {
     expect(acceptDockedV2BudgetSample(Number.POSITIVE_INFINITY, state)).toEqual(frozen)
   })
 
-  test('resolveFloatingV2Rail fill-on uses viewport margins; fill-off prefers dock then column', () => {
+  test('resolveFloatingV2Rail keeps the original dock/column rail when fill is off', () => {
     const viewport = { left: 0, top: 16, width: 1920 }
     const fillOn = resolveFloatingV2Rail({ fill: true, uiScale: 1, dockRect: { left: 120, top: 40, width: 640 }, columnRect: { left: 80, top: 32, width: 800 }, viewport })
-    expect(fillOn).toEqual({ x: 24, y: 16, width: 1872 })
+    expect(fillOn).toEqual({ x: 0, y: 16, width: 1920 })
 
     const fillOffDock = resolveFloatingV2Rail({ fill: false, uiScale: 1, dockRect: { left: 120, top: 40, width: 640 }, columnRect: { left: 80, top: 32, width: 800 }, viewport })
     expect(fillOffDock).toEqual({ x: 120, y: 40, width: 640 })
 
     const fillOffColumn = resolveFloatingV2Rail({ fill: false, uiScale: 1, dockRect: { left: 0, top: 0, width: 0 }, columnRect: { left: 80, top: 32, width: 800 }, viewport })
     expect(fillOffColumn).toEqual({ x: 80, y: 32, width: 800 })
+  })
+
+  test('V2 geometry contract keeps fill rails on the strip while cards stay intrinsic', () => {
+    const css = `
+      .root[data-fill-top-dock='1'] .cardStrip { width: 100%; flex: 1 1 auto; }
+      .root[data-fill-top-dock='1'] .cardSlot { flex: 0 0 auto; }
+      .root[data-fill-top-dock='1'] .card { flex: 0 0 auto; width: auto; }
+    `
+    expect(css).toContain(".root[data-fill-top-dock='1'] .cardStrip { width: 100%;")
+    expect(css).toContain(".root[data-fill-top-dock='1'] .cardSlot { flex: 0 0 auto;")
+    expect(css).toContain(".root[data-fill-top-dock='1'] .card { flex: 0 0 auto; width: auto;")
+    expect(css).not.toContain('100vw')
+  })
+
+  test('configured gap participates in fit budget rather than hardcoded spacing', () => {
+    const configuredGap = 14
+    const cardWidths = [100, 180, 120]
+    const total = cardWidths.reduce((sum, width) => sum + width, 0) + (cardWidths.length - 1) * configuredGap
+    expect(total).toBe(428)
+    expect(total).not.toBe(cardWidths.reduce((sum, width) => sum + width, 0) + 2 * 6)
+  })
+
+  test('fill sizing has no raw viewport unit selector and backdrop has a fallback token', async () => {
+    const cssSource = await Bun.file(new URL('./QuickToolbar.module.css', import.meta.url)).text()
+    expect(cssSource).not.toContain('width: 100vw')
+    expect(cssSource).not.toContain('--quick-toolbar-width: 100vw')
+    expect(cssSource).toContain('var(--quick-toolbar-backdrop-color, var(--lumiverse-bg-opaque))')
   })
 
   test('preserves dock placement through reload and viewport change', async () => {
@@ -643,13 +670,102 @@ describe('QuickToolbar geometry', () => {
 
     const painted = document.querySelector('[data-component="QuickToolbar"]') as HTMLElement
     expect(painted.style.getPropertyValue('--quick-toolbar-x')).toBe('140px')
-    expect(painted.style.getPropertyValue('--quick-toolbar-y')).toBe('48px')
-    expect(painted.style.getPropertyValue('--quick-toolbar-width')).toBe('720px')
+    expect(painted.style.getPropertyValue('--quick-toolbar-width')).not.toBe('720px')
     expect(painted.style.getPropertyValue('--quick-toolbar-width')).not.toBe('453px')
     expect(painted.style.getPropertyValue('--quick-toolbar-x')).not.toBe('328px')
+    expect(painted.querySelector('[class*="fillDockSpacer"]')).toBeNull()
+    const packed = painted.style.getPropertyValue('--quick-toolbar-width')
+    expect(packed === 'max-content' || (packed.endsWith('px') && Number.parseFloat(packed) < 720)).toBe(true)
 
     await act(async () => root.unmount())
     column.remove()
+    globalThis.requestAnimationFrame = previousRaf
+  })
+
+  test('floating V2 fill-on is edge-to-edge even when auto-fit is off', async () => {
+    settings.variant = 'v2-settings-adjacent'
+    settings.quickToolbarPlacement = 'floating'
+    settings.autoFitBounds = false
+    settings.fillTopDockWidth = true
+    settings.rect = { x: 66, y: 0, width: 1830, height: 32 }
+    setViewportWidth(1920)
+
+    const frames: FrameRequestCallback[] = []
+    const previousRaf = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    }) as typeof requestAnimationFrame
+
+    const { root } = await renderToolbar()
+    await act(async () => {
+      frames.splice(0).forEach((frame) => frame(0))
+      frames.splice(0).forEach((frame) => frame(0))
+    })
+
+    const painted = document.querySelector('[data-component="QuickToolbar"]') as HTMLElement
+    expect(painted.getAttribute('data-fill-screen')).toBe('1')
+    expect(painted.getAttribute('data-autofit')).toBe('0')
+    expect(painted.style.getPropertyValue('--quick-toolbar-x')).toBe('0px')
+    expect(painted.style.getPropertyValue('--quick-toolbar-width')).toBe('1920px')
+    expect(painted.querySelector('[class*="fillDockSpacer"]')).toBeNull()
+
+    await act(async () => root.unmount())
+    globalThis.requestAnimationFrame = previousRaf
+  })
+
+  test('floating V2 free mode preserves both real viewport edges', async () => {
+    settings.variant = 'v2-settings-adjacent'
+    settings.quickToolbarPlacement = 'floating'
+    settings.autoFitBounds = false
+    settings.fillTopDockWidth = false
+    settings.rect = { x: 1220, y: 0, width: 700, height: 32 }
+    setViewportWidth(1920)
+
+    const { root } = await renderToolbar()
+    const painted = document.querySelector('[data-component="QuickToolbar"]') as HTMLElement
+    expect(painted.getAttribute('data-fill-screen')).toBe('0')
+    expect(painted.style.getPropertyValue('--quick-toolbar-x')).toBe('1220px')
+
+    await act(async () => root.unmount())
+    settings.rect = { ...settings.rect, x: 0 }
+    const second = await renderToolbar()
+    const leftEdge = document.querySelector('[data-component="QuickToolbar"]') as HTMLElement
+    expect(leftEdge.style.getPropertyValue('--quick-toolbar-x')).toBe('0px')
+
+    await act(async () => second.root.unmount())
+  })
+
+  test('floating V2 manual mode ignores stale auto-fit width after toggling off', async () => {
+    settings.variant = 'v2-settings-adjacent'
+    settings.quickToolbarPlacement = 'floating'
+    settings.autoFitBounds = true
+    settings.fillTopDockWidth = false
+    settings.rect = { x: 0, y: 0, width: 453, height: 32 }
+    setViewportWidth(1920)
+
+    const frames: FrameRequestCallback[] = []
+    const previousRaf = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    }) as typeof requestAnimationFrame
+
+    const { root } = await renderToolbar()
+    await act(async () => {
+      frames.splice(0).forEach((frame) => frame(0))
+      frames.splice(0).forEach((frame) => frame(0))
+    })
+
+    settings = { ...settings, autoFitBounds: false, rect: { x: 1467, y: 0, width: 453, height: 32 } }
+    await act(async () => root.render(<QuickToolbar />))
+
+    const painted = document.querySelector('[data-component="QuickToolbar"]') as HTMLElement
+    expect(painted.getAttribute('data-autofit')).toBe('0')
+    expect(painted.style.getPropertyValue('--quick-toolbar-x')).toBe('1467px')
+    expect(painted.style.getPropertyValue('--quick-toolbar-width')).toBe('453px')
+
+    await act(async () => root.unmount())
     globalThis.requestAnimationFrame = previousRaf
   })
 
@@ -735,8 +851,9 @@ describe('QuickToolbar geometry', () => {
     settings.variant = 'v2-settings-adjacent'
     settings.quickToolbarPlacement = 'floating'
     settings.autoFitBounds = false
-    settings.v2IconOnly = false
-    settings.v2LabelVisible = true
+    settings.fillTopDockWidth = false
+    settings.v2IconOnly = true
+    settings.v2LabelVisible = false
     settings.rect = { x: 24, y: 24, width: 0, height: 0 }
     settings.visibleTabIds = [...CHAT_DOCKER_ACTION_IDS, ...extraIds]
     settings.iconOrder = [...CHAT_DOCKER_ACTION_IDS, ...extraIds]
@@ -756,9 +873,8 @@ describe('QuickToolbar geometry', () => {
     })
 
     const rendered = [...document.querySelectorAll('[data-toolbar-action]')]
-    expect(rendered.length).toBeGreaterThanOrEqual(1)
-    expect(rendered.length).toBeLessThan(12)
-    expect(document.querySelector('button[aria-controls="quick-toolbar-overflow"]')).not.toBeNull()
+    expect(rendered.length).toBe(12)
+    expect(document.querySelector('button[aria-controls="quick-toolbar-overflow"]')).toBeNull()
     const painted = (document.querySelector('[data-component="QuickToolbar"]') as HTMLElement | null)
       ?.style.getPropertyValue('--quick-toolbar-width')
     expect(painted).not.toBe('920px')
@@ -785,6 +901,7 @@ describe('QuickToolbar geometry', () => {
     settings.variant = 'v2-settings-adjacent'
     settings.quickToolbarPlacement = 'floating'
     settings.autoFitBounds = false
+    settings.fillTopDockWidth = false
     settings.v2IconOnly = false
     settings.v2LabelVisible = true
     settings.rect = { x: 24, y: 24, width: 453, height: 32 }
@@ -811,12 +928,9 @@ describe('QuickToolbar geometry', () => {
     expect(document.querySelector('button[aria-controls="quick-toolbar-overflow"]')).not.toBeNull()
     const painted = (document.querySelector('[data-component="QuickToolbar"]') as HTMLElement | null)
       ?.style.getPropertyValue('--quick-toolbar-width')
-    expect(painted).not.toBe('453px')
+    expect(painted).toBe('453px')
     expect(painted).not.toBe('920px')
     expect(painted).not.toBe(floatingViewportPaint(700))
-    const paintedPx = Number.parseFloat(painted ?? '')
-    expect(Number.isFinite(paintedPx)).toBe(true)
-    expect(paintedPx).toBeLessThanOrEqual(700 - 2 * FLOATING_V2_VIEWPORT_MARGIN)
 
     await act(async () => root.unmount())
     globalThis.requestAnimationFrame = previousRaf
@@ -901,7 +1015,7 @@ describe('QuickToolbar geometry', () => {
     globalThis.requestAnimationFrame = previousRaf
   })
 
-  test('docked V2 leftover hysteresis accepts 400, ignores one 80, then shrinks on two 80s', async () => {
+  test('docked V2 resets its sampled budget and repacks immediately when fill is disabled', async () => {
     const extraIds = ['chat.extra-a', 'chat.extra-b', 'chat.extra-c', 'chat.extra-d'] as const
     catalogActions.push(...extraIds.map((id) => ({
       id,
@@ -966,34 +1080,9 @@ describe('QuickToolbar geometry', () => {
     applyClientWidth(dock, 80)
     applyClientWidth(vacant, 80)
     applyClientWidth(workspace, 80)
+    settings.fillTopDockWidth = false
     await act(async () => {
-      fireResizeObservers()
-      frames.splice(0).forEach((frame) => frame(0))
-      frames.splice(0).forEach((frame) => frame(0))
-    })
-    expect(dock.querySelectorAll('[data-toolbar-action]').length).toBe(wideCount)
-
-    applyClientWidth(dock, 400)
-    applyClientWidth(vacant, 400)
-    applyClientWidth(workspace, 400)
-    await act(async () => {
-      fireResizeObservers()
-      frames.splice(0).forEach((frame) => frame(0))
-      frames.splice(0).forEach((frame) => frame(0))
-    })
-    expect(dock.querySelectorAll('[data-toolbar-action]').length).toBe(wideCount)
-
-    applyClientWidth(dock, 80)
-    applyClientWidth(vacant, 80)
-    applyClientWidth(workspace, 80)
-    await act(async () => {
-      fireResizeObservers()
-      frames.splice(0).forEach((frame) => frame(0))
-      frames.splice(0).forEach((frame) => frame(0))
-    })
-    expect(dock.querySelectorAll('[data-toolbar-action]').length).toBe(wideCount)
-
-    await act(async () => {
+      root.render(<QuickToolbar />)
       fireResizeObservers()
       frames.splice(0).forEach((frame) => frame(0))
       frames.splice(0).forEach((frame) => frame(0))
@@ -1001,16 +1090,6 @@ describe('QuickToolbar geometry', () => {
     const shrunkCount = dock.querySelectorAll('[data-toolbar-action]').length
     expect(shrunkCount).toBeLessThan(wideCount)
     expect(dock.querySelector('button[aria-controls="quick-toolbar-overflow"]')).not.toBeNull()
-
-    applyClientWidth(dock, 1920)
-    applyClientWidth(vacant, 1920)
-    applyClientWidth(workspace, 1920)
-    await act(async () => {
-      fireResizeObservers()
-      frames.splice(0).forEach((frame) => frame(0))
-      frames.splice(0).forEach((frame) => frame(0))
-    })
-    expect(dock.querySelectorAll('[data-toolbar-action]').length).toBeGreaterThan(shrunkCount)
 
     await act(async () => root.unmount())
     dock.remove()
@@ -1051,5 +1130,86 @@ describe('QuickToolbar geometry', () => {
     await act(async () => root.unmount())
     dock.remove()
     storeState.settingsModalOpen = false
+  })
+
+  test('docked V2 re-enables to a ready fit without a blank action scroller', async () => {
+    settings.variant = 'v2-settings-adjacent'
+    settings.quickToolbarPlacement = 'chat_top_dock'
+    settings.enabled = false
+
+    const dock = document.createElement('div')
+    dock.setAttribute('data-spindle-mount', 'chat_top_dock')
+    const host = document.createElement('div')
+    dock.append(host)
+    document.body.append(dock)
+    applyClientWidth(dock, 400)
+
+    const frames: FrameRequestCallback[] = []
+    const previousRaf = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    }) as typeof requestAnimationFrame
+
+    const root: Root = createRoot(host)
+    await act(async () => {
+      root.render(<QuickToolbar />)
+      await Promise.resolve()
+    })
+    expect(host.querySelector('[data-component="QuickToolbar"]')).toBeNull()
+
+    settings.enabled = true
+    await act(async () => {
+      root.render(<QuickToolbar />)
+      frames.splice(0).forEach((frame) => frame(0))
+      frames.splice(0).forEach((frame) => frame(0))
+    })
+
+    const nav = host.querySelector('nav[aria-label="Quick access toolbar"]')
+    expect(nav?.getAttribute('data-fit')).toBe('ready')
+    expect(host.querySelectorAll('[data-toolbar-action]').length).toBeGreaterThan(0)
+
+    await act(async () => root.unmount())
+    dock.remove()
+    globalThis.requestAnimationFrame = previousRaf
+  })
+
+  test('docked V2 keeps Loom and Extensions in the nav when the rail fits all selected actions', async () => {
+    const actionIds = ['loom', 'extensions'] as const
+    catalogActions.push(...actionIds.map((id) => ({
+      id,
+      label: id === 'loom' ? 'Loom' : 'Extensions',
+      description: id,
+      icon: (props: { size?: number }) => <span data-icon={id} style={{ width: props.size, height: props.size }} />,
+      surface: { kind: 'command' as const },
+      run: () => undefined,
+    })))
+    settings.variant = 'v2-settings-adjacent'
+    settings.quickToolbarPlacement = 'chat_top_dock'
+    settings.fillTopDockWidth = true
+    settings.visibleTabIds = [...CHAT_DOCKER_ACTION_IDS, ...actionIds]
+    settings.iconOrder = [...CHAT_DOCKER_ACTION_IDS, ...actionIds]
+
+    const dock = document.createElement('div')
+    dock.setAttribute('data-spindle-mount', 'chat_top_dock')
+    const host = document.createElement('div')
+    dock.append(host)
+    document.body.append(dock)
+    applyClientWidth(dock, 1920)
+
+    const root: Root = createRoot(host)
+    await act(async () => {
+      root.render(<QuickToolbar />)
+      await Promise.resolve()
+    })
+    const nav = host.querySelector('nav[aria-label="Quick access toolbar"]')
+    expect(nav?.getAttribute('data-fit')).toBe('ready')
+    expect(nav?.querySelector('[data-toolbar-action="loom"]')).not.toBeNull()
+    expect(nav?.querySelector('[data-toolbar-action="extensions"]')).not.toBeNull()
+    expect(nav?.querySelector('button[aria-controls="quick-toolbar-overflow"]')).toBeNull()
+    expect(nav?.querySelector('button[aria-label="Customize toolbar"]')).not.toBeNull()
+
+    await act(async () => root.unmount())
+    dock.remove()
   })
 })

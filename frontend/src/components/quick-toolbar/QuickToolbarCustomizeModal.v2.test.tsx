@@ -167,7 +167,9 @@ describe('QuickToolbarCustomizeModal V2', () => {
 
     expect(host.textContent).toContain('Auto-fit toolbar bounds to content')
     expect(host.textContent).toContain('Fill the entire top of the screen')
+    expect(host.textContent).toContain('Keep chat top dock enabled while floating')
     expect(host.textContent).not.toContain('Fill chat top bar width')
+    expect(host.textContent).not.toContain('Show select-messages on chat top bar')
     expect(host.textContent).not.toContain('Scale')
     expect(host.textContent).not.toContain('Rotation')
     expect(host.textContent).not.toContain('Snap to edge')
@@ -183,6 +185,8 @@ describe('QuickToolbarCustomizeModal V2', () => {
     const { host, root } = await renderModal()
 
     expect(host.textContent).toContain('Fill chat top bar width')
+    expect(host.textContent).not.toContain('Keep chat top dock enabled while floating')
+    expect(host.textContent).toContain('Show select-messages on chat top bar')
     expect(host.textContent).not.toContain('Fill the entire top of the screen')
     expect(host.textContent).not.toContain('Auto-fit toolbar bounds to content')
     expect(host.textContent).not.toContain('Scale')

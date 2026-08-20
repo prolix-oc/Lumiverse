@@ -1,0 +1,100 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #171a21;
+  color: #f4f6fb;
+}
+
+body {
+  width: 360px;
+  margin: 0;
+  background: #171a21;
+}
+
+main {
+  padding: 14px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+#status {
+  color: #aab4c5;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+label {
+  display: block;
+  margin-bottom: 5px;
+  color: #aab4c5;
+  font-size: 11px;
+}
+
+input,
+button {
+  box-sizing: border-box;
+  border: 1px solid #3b4558;
+  border-radius: 4px;
+  background: #222938;
+  color: inherit;
+  font: inherit;
+}
+
+input {
+  width: 100%;
+  padding: 7px 8px;
+  margin-bottom: 10px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.actions button:first-child {
+  grid-column: 1 / -1;
+}
+
+.secondary button {
+  font-size: 11px;
+}
+
+button {
+  min-height: 32px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #6e9cff;
+}
+
+#reset {
+  grid-column: 1 / -1;
+  border-color: #9b6a48;
+}
+
+pre {
+  max-height: 300px;
+  margin: 12px 0 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid #30394a;
+  background: #10131a;
+  color: #dce4f2;
+  font: 11px/1.4 ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
